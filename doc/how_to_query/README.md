@@ -264,6 +264,9 @@ Contains metadata about processes that have sent telemetry data.
 | `parent_process_id` | `Utf8` | Parent process identifier |
 | `properties` | `Map` | Additional process metadata |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
+| `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
+| `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- from the authenticated ingestion credential, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` when the credential carried none; server-written, never `NULL` (see [Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#audience)) |
 
 #### `streams`
 Contains information about data streams within processes.
@@ -277,7 +280,9 @@ Contains information about data streams within processes.
 | `tags` | Various | Stream tags |
 | `properties` | Various | Stream properties |
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
+| `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 #### `blocks`
 Core table containing telemetry block metadata with joined process and stream information.
@@ -300,6 +305,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `streams.tags` | `List<Utf8>` | Stream tags |
 | `streams.properties` | `List<Struct>` | Stream properties |
 | `streams.insert_time` | `Timestamp(Nanosecond)` | Stream insertion time |
+| `streams.format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `processes.start_time` | `Timestamp(Nanosecond)` | Process start time |
 | `processes.start_ticks` | `Int64` | Process start ticks |
 | `processes.tsc_frequency` | `Int64` | Time stamp counter frequency |
@@ -312,6 +318,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.insert_time` | `Timestamp(Nanosecond)` | Process insertion time |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `List<Struct>` | Process properties |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 #### `async_events`
 Asynchronous span events for tracking async operations.
@@ -367,6 +374,7 @@ Numerical measurements and counters.
 | `value` | `Float64` | Metric value |
 | `properties` | `List<Struct>` | Metric-specific properties |
 | `process_properties` | `List<Struct>` | Process-specific properties |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 #### `log_entries`
 Text-based log entries with levels and structured data.
@@ -386,6 +394,21 @@ Text-based log entries with levels and structured data.
 | `msg` | `Utf8` | Log message |
 | `properties` | `List<Struct>` | Log-specific properties |
 | `process_properties` | `List<Struct>` | Process-specific properties |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
+
+#### `log_stats`
+Materialized view providing aggregated log statistics by process, minute, level, and target. See
+[Schema Reference](../../mkdocs/docs/query-guide/schema-reference.md#log_stats) for the full field
+table.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time_bin` | `Timestamp(Nanosecond)` | 1-minute time bucket for aggregation |
+| `process_id` | `Dictionary(Int32, Utf8)` | Process identifier |
+| `level` | `Int32` | Log level |
+| `target` | `Dictionary(Int32, Utf8)` | Module/target that generated the logs |
+| `count` | `Int64` | Number of log entries in this aggregation |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process; never `NULL` |
 
 ### Data Types
 

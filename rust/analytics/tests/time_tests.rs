@@ -22,6 +22,7 @@ fn test_make_time_converter_from_latest_timing() {
         start_ticks: 0,
         parent_process_id: None,
         properties: Arc::new(properties_jsonb),
+        audience: Arc::from("public"),
     };
 
     let last_block_end_ticks = 1_000_000; // 1M ticks
@@ -65,6 +66,7 @@ fn test_make_time_converter_with_tsc_frequency() {
         start_ticks: 0,
         parent_process_id: None,
         properties: Arc::new(properties_jsonb),
+        audience: Arc::from("public"),
     };
 
     // When TSC frequency is available, last_block timing should be ignored

@@ -153,8 +153,8 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knobs
-    /// (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by Prong A
+    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knob
+    /// (`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by Prong A
     /// (`OwnershipRewrite`, #1370, AbAC Stage 2). Mirrors `with_read_policy`: wins on
     /// every `build_and_serve` branch, overriding that branch's own default
     /// (`IsolationConfig::from_env("")` on the `use_default_auth` branch, `IsolationConfig::default()`
@@ -241,7 +241,14 @@ impl FlightSqlServerBuilder {
         let view_factory = if let Some(factory_fn) = self.view_factory_fn {
             Arc::new(factory_fn(lakehouse.runtime().clone(), data_lake).await?)
         } else {
-            Arc::new(default_view_factory(lakehouse.runtime().clone(), data_lake).await?)
+            Arc::new(
+                default_view_factory(
+                    lakehouse.runtime().clone(),
+                    data_lake,
+                    lakehouse.default_audience(),
+                )
+                .await?,
+            )
         };
 
         let partition_provider =

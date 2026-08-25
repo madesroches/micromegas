@@ -68,11 +68,13 @@ export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 # with an opaque 500.
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 
-# Default write audience for newly-minted/imported ingestion keys, when a
-# mint/import request supplies none (`import` falls back further to
-# `public`; `mint` is a 400 if neither this nor the request resolves one) --
-# see mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
-export MICROMEGAS_DEFAULT_KEY_AUDIENCE="public"
+# The deployment's default audience: what a mint/import request that supplies
+# no `audience` gets, and the audience data written by a credential with no
+# bound audience is *read* as (nothing on the write side stamps this default;
+# see mkdocs/docs/admin/authentication.md#audience-stamping-and-the-default).
+# Defaults to `public` when unset -- see
+# mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
+export MICROMEGAS_DEFAULT_AUDIENCE="public"
 
 # Self-service ingestion key mint (AbAC Stage 6, #1374) -- off by default, so
 # upgrading keeps today's admin-only mint behavior until explicitly enabled.

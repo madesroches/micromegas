@@ -39,7 +39,8 @@ SELECT process_id,
        first_value("processes.properties") as properties,
        max(insert_time) as last_update_time,
        max(end_ticks) as last_block_end_ticks,
-       max(end_time) as last_block_end_time
+       max(end_time) as last_block_end_time,
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM blocks
 GROUP BY process_id
         ;"#,
@@ -61,7 +62,8 @@ SELECT process_id,
        first_value("properties") as properties,
        max(last_update_time) as last_update_time,
        max(last_block_end_ticks) as last_block_end_ticks,
-       max(last_block_end_time) as last_block_end_time
+       max(last_block_end_time) as last_block_end_time,
+       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
 FROM {source}
 GROUP BY process_id
         ;"#,

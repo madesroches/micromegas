@@ -29,6 +29,7 @@ binary as its entrypoint.
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). The ingestion role itself does **not** read it: a process whose credential carries no audience is stamped with nothing, and the default is applied where the audience is read, by the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)). One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags
@@ -70,25 +71,33 @@ instead — see [API Keys](api-keys.md).
 
 ## What gets stamped
 
-Every process ingestion registers is stamped with a `micromegas.audience` property,
-server-written from the authenticated credential — never trusted from the client payload. This
-is what makes the analytics-side audience filter ([Authentication](authentication.md)) a real
-security boundary instead of a client-asserted label.
+A process registered under a credential that carries a write audience is stamped with a
+`micromegas.audience` property, server-written from that credential — never trusted from the
+client payload. This is what makes the analytics-side audience filter
+([Authentication](authentication.md)) a real security boundary instead of a client-asserted
+label.
 
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process a key registers is stamped with that audience.
-- **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no audience at
-  all. Data ingested under them stays **unstamped** — readable under the analytics side's
-  `{prefix}_UNSTAMPED_AUDIENCE` fallback label, which defaults to `public` unless an operator
-  opts back into fail-closed (invisible to every audience-scoped reader) by setting it to an
-  empty string (see [Authentication](authentication.md)).
-- **No auth provider configured** (`--disable-auth`): also unstamped, same as above.
+- **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no bound audience
+  of their own. A process registered under one is stamped with nothing.
+- **No auth provider configured** (`--disable-auth`): stamped with nothing, for the same reason.
+
+Ingestion writes no audience of its own, and there is no startup backfill: a process with no
+stamp keeps none in Postgres, permanently. The deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
+(default `public`) is applied on the **read** side instead — see
+[Authentication → The default audience](authentication.md#audience-stamping-and-the-default)
+— so such a process is materialized and enforced under that label without anything being
+written back to `processes`. Nothing about a rolling upgrade needs sequencing on this account.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
 property a client sends is dropped at ingestion and logged (`warn!`), naming the key. In
 particular, a native client that used to self-stamp `micromegas.audience` directly no longer has
-any effect — its data becomes unstamped instead, unless its credential is switched to a DB
-ingestion key bound to the audience it wants to keep.
+any effect — its data gets the deployment default instead, unless its credential is switched to a
+DB ingestion key bound to the audience it wants to keep. A deployment switching from no bound
+audiences to keyed ingestion (or simply adopting a non-`public` default) sees its OTLP-derived
+`process_id`s churn once, the same shape as switching ingestion keys to a new audience — see
+[Authentication → Audience stamping and the default](authentication.md#audience-stamping-and-the-default).
 
 ## Health and readiness
 

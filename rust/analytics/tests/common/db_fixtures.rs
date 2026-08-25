@@ -10,7 +10,6 @@ use chrono::TimeDelta;
 use micromegas_analytics::lakehouse::batch_update::regenerate_partition_range;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
-use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::response_writer::Logger;
@@ -100,23 +99,4 @@ pub async fn reset_global_view(
     .with_context(|| "retiring overlapping partitions before regeneration")?;
     tr.commit().await.with_context(|| "commit")?;
     regenerate_global_view(lakehouse, view, insert_range, logger).await
-}
-
-/// A `CallerContext` scoped to `read_scope`, with `unstamped_audience` naming the escape hatch
-/// that makes an unstamped process/row visible when it's in the caller's own scope.
-pub fn caller_with_unstamped_audience(
-    read_scope: ReadScope,
-    unstamped_audience: &str,
-) -> CallerContext {
-    CallerContext {
-        read_scope,
-        is_admin: false,
-        isolation_config: Arc::new(IsolationConfig {
-            unstamped_audience: Some(unstamped_audience.to_string()),
-            public_view_sets: vec![],
-        }),
-        admin_principal_possible: true,
-        identity: None,
-        grant_selectors: Arc::from([]),
-    }
 }

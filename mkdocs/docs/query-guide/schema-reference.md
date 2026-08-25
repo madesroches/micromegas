@@ -44,6 +44,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -74,6 +75,7 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -115,6 +117,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `streams.tags` | `List<Utf8>` | Stream tags |
 | `streams.properties` | `Dictionary(Int32, Binary)` | Stream properties (JSONB format) |
 | `streams.insert_time` | `Timestamp(Nanosecond)` | When stream was inserted |
+| `streams.format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 
 **Joined Process Fields:**
 
@@ -132,6 +135,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.insert_time` | `Timestamp(Nanosecond)` | When process was inserted |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `Dictionary(Int32, Binary)` | Process properties (JSONB format) |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -167,6 +171,7 @@ Text-based log entries with levels and structured data.
 | `msg` | `Utf8` | Log message |
 | `properties` | `Dictionary(Int32, Binary)` | Log-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 #### Log Levels
 
@@ -209,6 +214,7 @@ Materialized view providing aggregated log statistics by process, minute, level,
 | `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
 | `target` | `Dictionary(Int32, Utf8)` | Module/target that generated the logs |
 | `count` | `Int64` | Number of log entries in this aggregation |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Key Features:**
 - Pre-aggregated by 1-minute intervals for efficient time-series queries
@@ -281,6 +287,7 @@ Numerical measurements and counters.
 | `value` | `Float64` | Metric value |
 | `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -610,6 +617,22 @@ ORDER BY image_count DESC;
 ```
 
 ## Data Types
+
+### Audience
+
+`audience` is a documented, stable column on `processes`, `streams`, `blocks`, `log_entries`,
+`log_stats`, and `measures` -- the audience of the owning process, written server-side from the
+authenticated ingestion credential, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` when the
+credential carried none. Never client-settable, and never `NULL`: the default is applied where
+the audience is read out of the metadata database, so a process that was never stamped still
+materializes under a real label.
+
+`Dictionary(Int32, Utf8)` on all six views -- it compares against string literals normally.
+
+It is **not a filter a query needs to apply**: enforcement happens unconditionally underneath
+every query, and a caller only ever sees rows whose audience is within their own read scope. The
+column exists for observability -- "whose data is this, how much of each" -- not as a
+user-authored access check.
 
 ### Properties
 

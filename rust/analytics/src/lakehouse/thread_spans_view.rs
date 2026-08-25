@@ -379,7 +379,7 @@ impl View for ThreadSpansView {
             last_block_end_time,
         )
         .with_context(|| "make_time_converter_from_latest_timing")?;
-        let blocks_view = BlocksView::new()?;
+        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
         // ThreadSpansView builds cross-block call trees and declares ScanOrdering::Concatenated
         // over `begin` (see get_scan_output_ordering below), so its JIT partitions must be
         // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs.

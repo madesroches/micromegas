@@ -10,7 +10,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datafusion::{arrow::datatypes::Schema, prelude::*};
+use datafusion::{
+    arrow::{compute::cast, datatypes::Schema, record_batch::RecordBatch},
+    prelude::*,
+};
 use futures::TryStreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
@@ -31,6 +34,12 @@ pub struct MetadataPartitionSpec {
     pub insert_range: TimeRange,
     pub record_count: i64,
     pub data_sql: Arc<String>,
+    /// Bound as `$3` when `data_sql` runs -- the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
+    /// (#1482), which `BlocksView`'s `COALESCE` resolves a never-stamped process's missing
+    /// audience to. `None` for a `data_sql` that references only `$1`/`$2`; `BlocksView` is the
+    /// only view that uses this module, so in practice it is always `Some`. Note the separate
+    /// `source_count_query` deliberately does **not** get this bind -- it has no `$3`.
+    pub default_audience: Option<Arc<str>>,
     pub compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     /// The sort guarantee this partition's rows will carry, per the caller's `data_sql`'s
     /// `ORDER BY` (e.g. `Some(["insert_time"])` for `BlocksView`). Recorded on `Partition` as-is.
@@ -47,6 +56,7 @@ pub async fn fetch_metadata_partition_spec(
     insert_range: TimeRange,
     compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     sort_order: Option<Vec<String>>,
+    default_audience: Option<Arc<str>>,
 ) -> Result<MetadataPartitionSpec> {
     //todo: extract this query to allow join (instead of source_table)
     let row = instrument_named!(
@@ -64,6 +74,7 @@ pub async fn fetch_metadata_partition_spec(
         insert_range,
         record_count: row.try_get("count").with_context(|| "reading count")?,
         data_sql,
+        default_audience,
         compute_time_bounds,
         sort_order,
     })
@@ -85,16 +96,67 @@ fn estimate_row_bytes(row: &PgRow) -> usize {
     total
 }
 
+/// Aligns a Postgres-inferred batch to the declared file schema's column *types*, casting column
+/// by column where they differ. `sql_arrow_bridge`'s mapping is keyed on the Postgres type name
+/// alone, so it cannot know that a `TEXT` column is declared as something narrower downstream:
+/// `blocks.audience` is `Dictionary(Int32, Utf8)` in the file schema (matching every other view's
+/// audience column) but arrives as plain `Utf8`.
+///
+/// Positional, matching how the parquet writer zips declared fields against batch columns with no
+/// name check (see `write_partition::check_non_nullable_columns`). Nullability and field metadata
+/// come from the *batch*, never from the declared schema, so this stays a pure type alignment and
+/// leaves the `NOT NULL` verdict to the write path's own guard.
+pub fn cast_to_file_schema(batch: RecordBatch, file_schema: &Schema) -> Result<RecordBatch> {
+    let batch_schema = batch.schema();
+    let mut fields = Vec::with_capacity(batch_schema.fields().len());
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    let mut any_cast = false;
+    for (i, field) in batch_schema.fields().iter().enumerate() {
+        let column = batch.column(i);
+        match file_schema.fields().get(i) {
+            Some(declared) if declared.data_type() != field.data_type() => {
+                columns.push(cast(column, declared.data_type()).with_context(|| {
+                    format!(
+                        "casting column {i} ({}) from {:?} to the declared {:?}",
+                        field.name(),
+                        field.data_type(),
+                        declared.data_type()
+                    )
+                })?);
+                fields.push(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(declared.data_type().clone()),
+                ));
+                any_cast = true;
+            }
+            _ => {
+                columns.push(column.clone());
+                fields.push(field.clone());
+            }
+        }
+    }
+    if !any_cast {
+        return Ok(batch);
+    }
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+        .with_context(|| "rebuilding the batch after casting to the declared file schema")
+}
+
 /// Converts the accumulated chunk to a `RecordBatch`, computes its event-time bounds, and sends
 /// it as a `PartitionRowSet`. Clears `chunk` in place for reuse by the next flush.
 async fn flush_chunk(
     chunk: &mut Vec<PgRow>,
     ctx: &SessionContext,
+    file_schema: &Schema,
     compute_time_bounds: &Arc<dyn DataFrameTimeBounds>,
     tx: &Sender<Result<PartitionRowSet, anyhow::Error>>,
 ) -> Result<()> {
-    let record_batch =
-        rows_to_record_batch(chunk).with_context(|| "converting rows to record batch")?;
+    let record_batch = cast_to_file_schema(
+        rows_to_record_batch(chunk).with_context(|| "converting rows to record batch")?,
+        file_schema,
+    )?;
     chunk.clear();
     let event_time_range = compute_time_bounds
         .get_time_bounds(
@@ -151,10 +213,13 @@ impl PartitionSpec for MetadataPartitionSpec {
         let stream_result: Result<()> = instrument_named!(
             async {
                 if self.record_count > 0 {
-                    let mut rows = sqlx::query(&self.data_sql)
+                    let mut query = sqlx::query(&self.data_sql)
                         .bind(self.insert_range.begin)
-                        .bind(self.insert_range.end)
-                        .fetch(&lake.db_pool);
+                        .bind(self.insert_range.end);
+                    if let Some(default_audience) = self.default_audience.as_deref() {
+                        query = query.bind(default_audience.to_owned());
+                    }
+                    let mut rows = query.fetch(&lake.db_pool);
                     let ctx = SessionContext::new();
                     let mut chunk: Vec<PgRow> = Vec::new();
                     let mut chunk_bytes = 0usize;
@@ -162,12 +227,26 @@ impl PartitionSpec for MetadataPartitionSpec {
                         chunk_bytes += estimate_row_bytes(&row);
                         chunk.push(row);
                         if chunk_bytes >= SOURCE_BYTES_PER_BATCH {
-                            flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+                            flush_chunk(
+                                &mut chunk,
+                                &ctx,
+                                &self.schema,
+                                &self.compute_time_bounds,
+                                &tx,
+                            )
+                            .await?;
                             chunk_bytes = 0;
                         }
                     }
                     if !chunk.is_empty() {
-                        flush_chunk(&mut chunk, &ctx, &self.compute_time_bounds, &tx).await?;
+                        flush_chunk(
+                            &mut chunk,
+                            &ctx,
+                            &self.schema,
+                            &self.compute_time_bounds,
+                            &tx,
+                        )
+                        .await?;
                     }
                 }
                 Ok(())

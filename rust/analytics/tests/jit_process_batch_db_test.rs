@@ -186,7 +186,7 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::none())
+        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -243,11 +243,11 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let whole_range = TimeRange::new(base_hour, base_hour + TimeDelta::hours(4));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -262,7 +262,7 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     );
 
     let process_meta = Arc::new(
-        find_process(&lake.db_pool, &process_id)
+        find_process(&lake.db_pool, &process_id, &lakehouse.default_audience())
             .await
             .with_context(|| "find_process")?,
     );

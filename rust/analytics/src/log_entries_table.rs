@@ -80,6 +80,16 @@ pub fn log_table_schema() -> Schema {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
+        // Appended last (#1482): the owning process's audience, dictionary-encoded like
+        // `process_id` in this same schema. Non-nullable because both producers of this column
+        // resolve a never-stamped process to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here
+        // (`blocks_view.rs`'s `data_sql` for the global instances, `metadata::find_process` for
+        // the per-process JIT ones).
+        Field::new(
+            "audience",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
     ])
 }
 
@@ -98,6 +108,7 @@ pub struct LogEntriesRecordBuilder {
     msgs: StringBuilder,
     properties: PropertySetJsonbDictionaryBuilder,
     process_properties: BinaryDictionaryBuilder<Int32Type>,
+    audiences: StringDictionaryBuilder<Int32Type>,
 }
 
 impl LogEntriesRecordBuilder {
@@ -116,6 +127,7 @@ impl LogEntriesRecordBuilder {
             msgs: StringBuilder::new(),
             properties: PropertySetJsonbDictionaryBuilder::new(capacity),
             process_properties: BinaryDictionaryBuilder::new(),
+            audiences: StringDictionaryBuilder::new(),
         }
     }
 
@@ -154,6 +166,7 @@ impl LogEntriesRecordBuilder {
         self.msgs.append_value(row.msg);
         self.properties.append_property_set(&row.properties)?;
         self.process_properties.append(&*row.process.properties)?;
+        self.audiences.append(&*row.process.audience)?;
         Ok(())
     }
 
@@ -191,6 +204,7 @@ impl LogEntriesRecordBuilder {
         self.computers.append_n(&process.computer, entry_count)?;
         self.process_properties
             .append_n(&**process.properties, entry_count)?;
+        self.audiences.append_n(&*process.audience, entry_count)?;
 
         Ok(())
     }
@@ -212,6 +226,7 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.msgs.finish()),
                 Arc::new(self.properties.finish()?),
                 Arc::new(self.process_properties.finish()),
+                Arc::new(self.audiences.finish()),
             ],
         )
         .with_context(|| "building record batch")

@@ -107,7 +107,7 @@ pub async fn materialize_range(
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range_for_view(
             &lakehouse.lake().db_pool,
@@ -161,8 +161,9 @@ async fn test_cpu_usage_view(
     lake: Arc<DataLakeConnection>,
     cpu_usage_view: Arc<SqlBatchView>,
 ) -> Result<()> {
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let mut view_factory = default_view_factory(runtime.clone(), lake.clone()).await?;
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let mut view_factory =
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?;
     view_factory.add_global_view(cpu_usage_view.clone());
     let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -231,11 +232,20 @@ async fn histo_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let default_audience_lakehouse =
+        Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
     let cpu_usage_view = Arc::new(
         make_cpu_usage_per_process_per_minute_view(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
+            Arc::new(
+                default_view_factory(
+                    runtime.clone(),
+                    lake.clone(),
+                    default_audience_lakehouse.default_audience(),
+                )
+                .await?,
+            ),
         )
         .await?,
     );

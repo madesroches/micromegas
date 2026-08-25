@@ -57,7 +57,7 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     ));
     let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
     let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
-    Arc::new(LakehouseContext::new(lake, runtime))
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
 }
 
 /// Never actually invoked by a plan-shape-only test (no `.collect()`, so `get_time_bounds` is
@@ -141,6 +141,79 @@ impl View for NoBranchView {
     }
 }
 
+/// A minimal view carrying a `process_id` column but no `audience` column of its own -- stands
+/// in for `net_spans`/`otel_spans`/`images` (#1482 §4: those three still take the semi-join
+/// branch, since they haven't gained the physical column). Otherwise identical in spirit to
+/// [`NoBranchView`].
+#[derive(Debug)]
+struct ProcessIdOnlyView {
+    view_set_name: Arc<String>,
+    view_instance_id: Arc<String>,
+    schema: Arc<Schema>,
+}
+
+impl ProcessIdOnlyView {
+    fn new() -> Self {
+        Self {
+            view_set_name: Arc::new("test_process_id_only".to_string()),
+            view_instance_id: Arc::new("global".to_string()),
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "process_id",
+                DataType::Utf8,
+                false,
+            )])),
+        }
+    }
+}
+
+#[async_trait]
+impl View for ProcessIdOnlyView {
+    fn get_view_set_name(&self) -> Arc<String> {
+        self.view_set_name.clone()
+    }
+
+    fn get_view_instance_id(&self) -> Arc<String> {
+        self.view_instance_id.clone()
+    }
+
+    async fn make_batch_partition_spec(
+        &self,
+        _lakehouse: Arc<LakehouseContext>,
+        _existing_partitions: Arc<PartitionCache>,
+        _insert_range: TimeRange,
+    ) -> Result<Arc<dyn PartitionSpec>> {
+        anyhow::bail!("not exercised by plan-shape-only tests")
+    }
+
+    fn get_file_schema_hash(&self) -> Vec<u8> {
+        vec![1]
+    }
+
+    fn get_file_schema(&self) -> Arc<Schema> {
+        self.schema.clone()
+    }
+
+    async fn jit_update(
+        &self,
+        _lakehouse: Arc<LakehouseContext>,
+        _query_range: Option<TimeRange>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>> {
+        Ok(vec![])
+    }
+
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(UnusedTimeBounds)
+    }
+
+    fn get_update_group(&self) -> Option<i32> {
+        None
+    }
+}
+
 /// Builds a `ViewFactory` registering real `processes`/`streams` (required by Design §2 for
 /// `OwnershipRewrite` to be constructed at all under a restricted `ReadScope`), `blocks` (a
 /// process_id-**column** view, used below as the "public view set"), [`NoBranchView`] (the
@@ -148,7 +221,8 @@ impl View for NoBranchView {
 /// only via `view_instance(...)`, never as a global table, so they are registered with
 /// `add_view_set` rather than as a global view, mirroring `view_factory.rs::default_view_factory`).
 async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory> {
-    let blocks_view = Arc::new(BlocksView::new().expect("BlocksView::new"));
+    let blocks_view =
+        Arc::new(BlocksView::new(lakehouse.default_audience()).expect("BlocksView::new"));
     let processes_view = Arc::new(
         make_processes_view(
             lakehouse.runtime().clone(),
@@ -168,11 +242,13 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
         .expect("make_streams_view"),
     );
     let no_branch_view: Arc<dyn View> = Arc::new(NoBranchView::new());
+    let process_id_only_view: Arc<dyn View> = Arc::new(ProcessIdOnlyView::new());
     let mut factory = ViewFactory::new(vec![
         processes_view,
         streams_view,
         blocks_view.clone(),
         no_branch_view,
+        process_id_only_view,
     ]);
     // `AsyncEventsViewMaker`/`ThreadSpansViewMaker` only consult the `ViewFactory` they're given
     // from `jit_update` (materialization -- never reached by these plan-shape-only tests, which
@@ -249,7 +325,6 @@ fn scope(audiences: &[&str]) -> ReadScope {
 #[tokio::test]
 async fn public_view_set_plans_with_no_injected_predicate() {
     let config = IsolationConfig {
-        unstamped_audience: None,
         public_view_sets: vec!["blocks".to_string()],
     };
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM blocks")
@@ -263,18 +338,45 @@ async fn public_view_set_plans_with_no_injected_predicate() {
 }
 
 #[tokio::test]
-async fn non_public_process_id_column_view_plans_with_an_injected_semi_join() {
+async fn non_public_process_id_only_view_plans_with_an_injected_semi_join() {
+    // §4: a view that carries a `process_id` column but no `audience` column of its own (e.g.
+    // net_spans/otel_spans/images in the real system, `test_process_id_only` here) still goes
+    // through the semi-join. `streams`/`processes`/`blocks` all carry `audience` directly now
+    // (#1482) and take the new §5 branch instead -- see the tests below.
     let config = IsolationConfig::default();
-    let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
-        .await
-        .expect("a non-public process_id-column view must plan");
+    let plan = optimized_plan(
+        scope(&["user:a"]),
+        config,
+        "SELECT * FROM test_process_id_only",
+    )
+    .await
+    .expect("a process_id-only view must plan");
     let plan_text = format!("{plan}");
     assert!(
         plan_text.contains("LeftSemi Join")
-            && plan_text.contains("CAST(__streams__partitions.process_id AS Utf8)"),
-        "a non-public process_id-column view must plan with `DecorrelatePredicateSubquery` \
-         turning the injected `IN (subquery)` into a `LeftSemi Join` on the outer scan's own \
-         qualified, cast `process_id` column, got:\n{plan_text}"
+            && plan_text.contains("CAST(test_process_id_only.process_id AS Utf8)"),
+        "a process_id-only view (no `audience` column) must plan with \
+         `DecorrelatePredicateSubquery` turning the injected `IN (subquery)` into a `LeftSemi \
+         Join` on the outer scan's own qualified, cast `process_id` column, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn streams_plans_with_a_direct_audience_filter_no_join() {
+    // §5 (#1482): `streams` now carries a physical `audience` column, so it is filtered
+    // directly -- no semi-join, no `property_get`, no per-process aggregate.
+    let config = IsolationConfig::default();
+    let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
+        .await
+        .expect("streams must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("Filter")
+            && plan_text.contains("audience")
+            && !plan_text.contains("LeftSemi Join")
+            && !plan_text.contains("property_get"),
+        "streams must plan with a bare Filter on its own `audience` column, no join and no \
+         property_get, got:\n{plan_text}"
     );
 }
 
@@ -304,30 +406,29 @@ async fn empty_audience_set_plans_a_literal_false_predicate() {
     let plan_text = format!("{plan}");
     assert!(
         plan_text.contains("EmptyRelation"),
-        "an empty ReadScope::Audiences must plan a lit(false) predicate over the \
-         per-process-audience subquery; the optimizer folds that constant-false filter, plus the \
-         resulting empty `LeftSemi Join` right side, all the way down to an `EmptyRelation` -- not \
-         an unfiltered scan, got:\n{plan_text}"
+        "an empty ReadScope::Audiences must plan a lit(false) predicate directly on `streams`' \
+         own `audience` column (#1482 §5); the optimizer folds that constant-false filter all \
+         the way down to an `EmptyRelation` -- not an unfiltered scan, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
-async fn processes_own_scan_plans_with_an_injected_semi_join() {
-    // §3: `processes`'s own scan uses the same `process_id IN (subquery)` construction as §4,
-    // filtered against the shared `per_process_audience` aggregate built from
-    // `__processes__partitions` -- not an unfiltered scan of the audience source itself.
+async fn processes_own_scan_plans_with_a_direct_audience_filter_no_join() {
+    // §5 (#1482): `processes` -- the audience source itself -- now carries the physical
+    // `audience` column too, and is the *first* member of the new column-carrying branch rather
+    // than a special case (the old §3 self-referential semi-join is gone entirely).
     let config = IsolationConfig::default();
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
         .await
         .expect("processes' own scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("LeftSemi Join")
-            && plan_text
-                .contains("__processes__partitions.process_id = __correlated_sq_1.process_id"),
-        "processes' own scan (§3) must plan with `DecorrelatePredicateSubquery` turning the \
-         injected `IN (subquery)` into a self-referential `LeftSemi Join` on the outer scan's own \
-         qualified `process_id` column, not an unfiltered scan, got:\n{plan_text}"
+        plan_text.contains("Filter")
+            && plan_text.contains("audience")
+            && !plan_text.contains("LeftSemi Join")
+            && !plan_text.contains("property_get"),
+        "processes' own scan must plan with a bare Filter on its own `audience` column, no \
+         self-referential join and no property_get, got:\n{plan_text}"
     );
 }
 
@@ -412,32 +513,47 @@ async fn real_view_factory_covers_every_registered_view_set() {
 
     let lakehouse = make_offline_lakehouse_context().await;
     let inventory_view_factory = Arc::new(
-        default_view_factory(lakehouse.runtime().clone(), lakehouse.lake().clone())
-            .await
-            .expect("default_view_factory"),
+        default_view_factory(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            lakehouse.default_audience(),
+        )
+        .await
+        .expect("default_view_factory"),
     );
 
-    // Global instances (§3/§4), implicitly available with no view_instance(...) call.
-    let mut queries: Vec<String> = inventory_view_factory
+    // Global instances, implicitly available with no view_instance(...) call. Keyed on whether
+    // the view's own file schema carries `audience` (#1482 §5) -- the same schema
+    // introspection `OwnershipRewrite::predicate_for` itself uses -- to know which shape each
+    // query must plan with.
+    let mut queries: Vec<(String, bool)> = inventory_view_factory
         .get_global_views()
         .iter()
-        .map(|view| format!("SELECT * FROM {}", view.get_view_set_name()))
+        .map(|view| {
+            let has_audience = view.get_file_schema().field_with_name("audience").is_ok();
+            (
+                format!("SELECT * FROM {}", view.get_view_set_name()),
+                has_audience,
+            )
+        })
         .collect();
     // view_instance(...)-reachable view sets, keyed on either process_id or stream_id. Only
-    // `thread_spans` is stream-scoped (§6); every other view set here is process-scoped (§3-§5),
-    // matching the distinction the per-branch tests above already draw.
-    for view_set_name in inventory_view_factory.get_view_sets().keys() {
+    // `thread_spans` is stream-scoped (§thread_spans); every other view set here is
+    // process-scoped, matching the distinction the per-branch tests above already draw.
+    for (view_set_name, maker) in inventory_view_factory.get_view_sets() {
         let instance_id = if view_set_name.as_str() == "thread_spans" {
             stream_id
         } else {
             process_id
         };
-        queries.push(format!(
-            "SELECT * FROM view_instance('{view_set_name}', '{instance_id}')"
+        let has_audience = maker.get_schema().field_with_name("audience").is_ok();
+        queries.push((
+            format!("SELECT * FROM view_instance('{view_set_name}', '{instance_id}')"),
+            has_audience,
         ));
     }
 
-    for sql in &queries {
+    for (sql, has_audience) in &queries {
         let config = IsolationConfig::default();
         let plan = optimized_plan_with_factory(
             lakehouse.clone(),
@@ -455,11 +571,24 @@ async fn real_view_factory_covers_every_registered_view_set() {
             )
         });
         let plan_text = format!("{plan}");
-        assert!(
-            plan_text.contains("LeftSemi Join"),
-            "real default_view_factory() query `{sql}` must plan with an injected audience \
-             filter (LeftSemi Join after DecorrelatePredicateSubquery), not an unfiltered scan, \
-             got:\n{plan_text}"
-        );
+        if *has_audience {
+            // §5 (#1482): a view carrying the physical `audience` column is filtered directly --
+            // no join, no property_get. This is the regression test for the optimization itself.
+            assert!(
+                plan_text.contains("Filter")
+                    && plan_text.contains("audience")
+                    && !plan_text.contains("LeftSemi Join")
+                    && !plan_text.contains("property_get"),
+                "real default_view_factory() query `{sql}` carries an `audience` column and must \
+                 plan with a bare Filter on it, no join, got:\n{plan_text}"
+            );
+        } else {
+            assert!(
+                plan_text.contains("LeftSemi Join"),
+                "real default_view_factory() query `{sql}` has no `audience` column and must \
+                 plan with an injected semi-join / EXISTS filter (LeftSemi Join after \
+                 DecorrelatePredicateSubquery), not an unfiltered scan, got:\n{plan_text}"
+            );
+        }
     }
 }

@@ -79,10 +79,12 @@ async fn materialize_all_views_isolates_same_group_failures() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
 
     let update_group = 4242;
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let first_view: Arc<dyn View> = Arc::new(
         make_failing_view(
             runtime.clone(),

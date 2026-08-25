@@ -33,6 +33,7 @@ pub fn make_process_metadata(
         start_ticks: process_info.start_ticks,
         parent_process_id: process_info.parent_process_id,
         properties: Arc::new(properties_jsonb),
+        audience: Arc::from("public"),
     }
 }
 

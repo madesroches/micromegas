@@ -249,9 +249,10 @@ async fn main() -> Result<()> {
     // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12; grant map rewrite
     // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
     // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
-    // `OwnershipRewrite` (#1370, AbAC Stage 2) -- `MICROMEGAS_UNSTAMPED_AUDIENCE` defaults to
-    // `public` (`IsolationConfig::from_env`), so legacy, never-stamped data stays visible unless
-    // an operator opts back into fail-closed by setting it to an empty string.
+    // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
+    // (#1482) -- a process whose credential carried no audience resolves to
+    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) where the audience is read out of
+    // Postgres, so there is no separate query-time unstamped fallback to configure here.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
         // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`
@@ -354,8 +355,12 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let retention_days = args.retention_days;
         join_set.spawn(async move {
-            let view_factory =
-                default_view_factory(lh.runtime().clone(), lh.lake().clone()).await?;
+            let view_factory = default_view_factory(
+                lh.runtime().clone(),
+                lh.lake().clone(),
+                lh.default_audience(),
+            )
+            .await?;
             let views_to_update = get_global_views_with_update_group(&view_factory);
             daemon(lh, views_to_update, retention_days, shutdown, grace_c).await
         });

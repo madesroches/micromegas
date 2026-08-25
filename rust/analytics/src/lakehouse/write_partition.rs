@@ -680,6 +680,44 @@ pub struct RowSetTrackingResult {
     pub max_sort_key_time: Option<DateTime<Utc>>,
 }
 
+/// Guards a declared non-nullable field against a `NULL` slipping through undetected (#1482 §1).
+///
+/// The parquet writer does not enforce declared nullability itself: for a required top-level
+/// leaf, `ArrowLevels` has no definition levels, so `write_leaf` treats every index as non-null
+/// and a `NULL` in the batch is silently written as the type's default value (e.g. `""` for
+/// `Utf8`) rather than rejected. Builder-based views already catch this via
+/// `RecordBatch::try_new`'s own nullability check; what this guard adds is coverage for the two
+/// kinds of batch that bypass that check -- `blocks` (`rows_to_record_batch`, whose schema is
+/// inferred from Postgres and never compared to the declared one) and every DataFusion-produced
+/// batch (`SqlBatchView` transforms, every merge). One `null_count()` per declared non-nullable
+/// column per batch.
+fn check_non_nullable_columns(batch: &RecordBatch, file_schema: &Schema, desc: &str) -> Result<()> {
+    // Positional, not by-name (Current State): the parquet writer zips the declared schema's
+    // fields against the batch's columns by position with no name check, and a batch's column
+    // names need not match the declared schema's at all (e.g. `blocks`, whose batch is built
+    // from Postgres column aliases while the declared schema uses `processes.foo`-style names).
+    // A by-name lookup would therefore silently skip the check for exactly the view that needs
+    // it most.
+    for (i, field) in file_schema.fields().iter().enumerate() {
+        if field.is_nullable() {
+            continue;
+        }
+        let Some(column) = batch.columns().get(i) else {
+            continue;
+        };
+        if column.null_count() > 0 {
+            anyhow::bail!(
+                "writing partition {desc}: column {} ({:?}) is declared NOT NULL but the batch \
+                 carries {} null value(s)",
+                i,
+                field.name(),
+                column.null_count()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Writes rows from the stream and tracks event time ranges.
 ///
 /// Also folds a running `max_sort_key_time` across every received `PartitionRowSet`: the
@@ -693,6 +731,7 @@ pub struct RowSetTrackingResult {
 pub async fn write_rows_and_track_times(
     rb_stream: &mut Receiver<Result<PartitionRowSet, anyhow::Error>>,
     arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
+    file_schema: &Schema,
     logger: &Arc<dyn Logger>,
     desc: &str,
 ) -> Result<RowSetTrackingResult> {
@@ -724,6 +763,7 @@ pub async fn write_rows_and_track_times(
                 all_some_sort_key_time = false;
             }
         }
+        check_non_nullable_columns(&row_set.rows, file_schema, desc)?;
         arrow_writer
             .write(&row_set.rows)
             .await
@@ -938,7 +978,15 @@ pub async fn write_partition_from_rows(
     let RowSetTrackingResult {
         event_time_range,
         max_sort_key_time,
-    } = match write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await {
+    } = match write_rows_and_track_times(
+        &mut rb_stream,
+        &mut arrow_writer,
+        &file_schema,
+        &logger,
+        &desc,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             // The writer is dropped without close/abort on this error path, which can

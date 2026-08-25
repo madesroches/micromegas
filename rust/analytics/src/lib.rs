@@ -11,6 +11,9 @@ pub mod arrow_utils;
 pub mod async_block_processing;
 /// In-memory async events in arrow format
 pub mod async_events_table;
+/// The single `micromegas.audience` property constant and SQL fragment shared by the writer and
+/// both enforcement prongs (#1482)
+pub mod audience;
 /// Transforms thread events into call trees
 pub mod call_tree;
 /// Removal of old data

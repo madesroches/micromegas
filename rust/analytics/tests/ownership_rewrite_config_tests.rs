@@ -10,10 +10,18 @@
 //! (`MICROMEGAS_UNSTAMPED_AUDIENCE`/`MICROMEGAS_PUBLIC_VIEW_SETS`) are not otherwise touched by
 //! any test in this repo (checked via grep), but are still cleared by `EnvGuard` since this
 //! file's tests are the only ones that set them.
+//!
+//! `unstamped_audience`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are removed outright (#1482 §4): the
+//! audience column is now physical and non-nullable on every global view, and a never-stamped
+//! process resolves to the deployment default where the audience is read, so there is no more
+//! query-time "unstamped" fallback to configure. What used to be several parsing cases for that
+//! knob collapses to one: setting it at all (prefixed or unprefixed, including to an empty
+//! string) is now a startup error naming its replacement,
+//! `MICROMEGAS_DEFAULT_AUDIENCE` (the deployment default audience).
 
 #![cfg(test)]
 
-use micromegas_analytics::lakehouse::read_scope::{DEFAULT_UNSTAMPED_AUDIENCE, IsolationConfig};
+use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use serial_test::serial;
 
 const PREFIX: &str = "MICROMEGAS_1370_CONFIG_TESTS";
@@ -50,12 +58,6 @@ fn unset_vars_resolve_to_default() {
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
     let config = IsolationConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(
-        config.unstamped_audience,
-        Some(DEFAULT_UNSTAMPED_AUDIENCE.to_string()),
-        "a genuinely unset unstamped-audience var must resolve to the built-in default, not None \
-         -- an operator opts back into fail-closed by setting the var to an empty string"
-    );
     assert!(
         config.public_view_sets.is_empty(),
         "an unset public-view-sets var must resolve to no public view sets"
@@ -64,50 +66,7 @@ fn unset_vars_resolve_to_default() {
 
 #[test]
 #[serial]
-fn all_whitespace_unstamped_audience_is_the_explicit_opt_out() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "   ");
-        std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
-        std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
-        std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
-    }
-    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(
-        config.unstamped_audience, None,
-        "an explicitly blank value must resolve to None (fail-closed), distinct from a var left \
-         genuinely unset (which resolves to the built-in default) -- this is how an operator \
-         opts back out of the default"
-    );
-}
-
-#[test]
-#[serial]
-fn malformed_unstamped_audience_is_rejected() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        // `"everyone"` (once the case this test covered, back under the `user:`/`group:`
-        // prefix model) is a *valid* audience name under `[A-Za-z0-9_-]` -- `"a:b"` is a
-        // still-invalid example under the relaxed charset (`:` is outside it).
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "a:b");
-        std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
-        std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
-        std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
-    }
-    let err = IsolationConfig::from_env(PREFIX)
-        .expect_err("an audience outside [A-Za-z0-9_-] must be rejected, not silently ignored");
-    let msg = err.to_string();
-    assert!(
-        msg.contains(PREFIXED_UNSTAMPED_VAR) && msg.contains("a:b"),
-        "expected the error to name the offending var and value, got: {msg}"
-    );
-}
-
-#[test]
-#[serial]
-fn well_formed_unstamped_audience_is_accepted() {
+fn a_set_unstamped_audience_var_is_a_startup_error() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
@@ -116,46 +75,47 @@ fn well_formed_unstamped_audience_is_accepted() {
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(config.unstamped_audience, Some("everyone".to_string()));
-}
-
-#[test]
-#[serial]
-fn prefixed_unstamped_audience_wins_over_unprefixed_fallback() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "prefixed");
-        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "unprefixed");
-        std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
-        std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
-    }
-    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(
-        config.unstamped_audience,
-        Some("prefixed".to_string()),
-        "the prefixed var must win over the unprefixed fallback when both are set"
+    let err = IsolationConfig::from_env(PREFIX)
+        .expect_err("a set *_UNSTAMPED_AUDIENCE must be rejected, not silently ignored");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(PREFIXED_UNSTAMPED_VAR) && msg.contains("MICROMEGAS_DEFAULT_AUDIENCE"),
+        "expected the error to name the offending var and its replacement, got: {msg}"
     );
 }
 
 #[test]
 #[serial]
-fn unprefixed_unstamped_audience_used_when_prefixed_is_unset() {
+fn an_empty_string_unstamped_audience_var_is_still_a_startup_error() {
+    // Even the "opt into fail-closed" spelling from the removed knob's era must fail loudly, not
+    // be silently treated as unset.
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(PREFIXED_UNSTAMPED_VAR, "");
+        std::env::remove_var(UNPREFIXED_UNSTAMPED_VAR);
+        std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
+        std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
+    }
+    let err = IsolationConfig::from_env(PREFIX)
+        .expect_err("an explicitly-set empty *_UNSTAMPED_AUDIENCE must still be rejected");
+    assert!(err.to_string().contains(PREFIXED_UNSTAMPED_VAR));
+}
+
+#[test]
+#[serial]
+fn unprefixed_unstamped_audience_var_is_also_a_startup_error() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
         std::env::remove_var(PREFIXED_UNSTAMPED_VAR);
-        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "unprefixed");
+        std::env::set_var(UNPREFIXED_UNSTAMPED_VAR, "everyone");
         std::env::remove_var(PREFIXED_PUBLIC_VIEW_SETS_VAR);
         std::env::remove_var(UNPREFIXED_PUBLIC_VIEW_SETS_VAR);
     }
-    let config = IsolationConfig::from_env(PREFIX).expect("from_env");
-    assert_eq!(
-        config.unstamped_audience,
-        Some("unprefixed".to_string()),
-        "the unprefixed fallback must be used only when the prefixed var is genuinely unset"
-    );
+    let err = IsolationConfig::from_env(PREFIX)
+        .expect_err("the unprefixed fallback spelling must be rejected too");
+    assert!(err.to_string().contains(UNPREFIXED_UNSTAMPED_VAR));
 }
 
 #[test]

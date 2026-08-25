@@ -1,6 +1,6 @@
 //! Shared prefixed-env-var resolution, used by every `{prefix}_*`-with-fallback knob in this
 //! crate (`{prefix}_API_KEYS`, `{prefix}_ADMINS`, `{prefix}_OIDC_CONFIG`,
-//! `{prefix}_AUDIENCE_GRANTS`, `{prefix}_DEFAULT_KEY_AUDIENCE`, and the four
+//! `{prefix}_AUDIENCE_GRANTS`, `{prefix}_DEFAULT_AUDIENCE`, and the four
 //! `{prefix}_API_KEY_CACHE_*` knobs).
 //!
 //! `micromegas_analytics::lakehouse::read_scope` keeps its own copy of this exact function
@@ -12,7 +12,7 @@
 /// prefixed name is unset, or always when `prefix` is empty.
 ///
 /// `suffix` is passed **without** the `MICROMEGAS_` prefix (e.g. `"API_KEYS"`, `"ADMINS"`,
-/// `"OIDC_CONFIG"`, `"DEFAULT_KEY_AUDIENCE"`).
+/// `"OIDC_CONFIG"`, `"DEFAULT_AUDIENCE"`).
 pub fn resolve_prefixed_var(prefix: &str, suffix: &str) -> String {
     if prefix.is_empty() {
         format!("MICROMEGAS_{suffix}")

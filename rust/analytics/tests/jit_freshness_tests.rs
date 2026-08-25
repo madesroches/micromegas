@@ -59,6 +59,7 @@ fn make_block(insert_time: DateTime<Utc>, nb_objects: i32) -> Arc<PartitionSourc
         start_ticks: 0,
         parent_process_id: None,
         properties: Arc::new(vec![]),
+        audience: Arc::from("public"),
     });
     Arc::new(PartitionSourceBlock {
         block,

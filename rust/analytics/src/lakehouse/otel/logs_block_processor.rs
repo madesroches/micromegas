@@ -91,6 +91,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
         let mut msgs = StringBuilder::new();
         let mut properties = BinaryDictionaryBuilder::<Int32Type>::new();
         let mut process_properties = BinaryDictionaryBuilder::<Int32Type>::new();
+        let mut audiences = StringDictionaryBuilder::<Int32Type>::new();
 
         let mut min_time = i64::MAX;
         let mut max_time = i64::MIN;
@@ -199,6 +200,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 msgs.append_value(&msg);
                 properties.append(&props_jsonb)?;
                 process_properties.append(&**process.properties)?;
+                audiences.append(&*process.audience)?;
 
                 nb_appended += 1;
             }
@@ -236,6 +238,7 @@ impl BlockProcessor for OtelLogsBlockProcessor {
                 Arc::new(msgs.finish()),
                 Arc::new(properties.finish()),
                 Arc::new(process_properties.finish()),
+                Arc::new(audiences.finish()),
             ],
         )
         .with_context(|| "building OTel log_entries batch")?;

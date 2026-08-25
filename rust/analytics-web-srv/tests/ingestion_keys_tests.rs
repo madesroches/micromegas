@@ -161,12 +161,12 @@ fn delete_request(uri: &str) -> Request<Body> {
 fn resolve_audience_uses_the_explicit_request_value_over_the_knob() {
     let state = IngestionKeysState {
         pool: None,
-        default_audience: Some("knob-audience".to_string()),
+        default_audience: "knob-audience".to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
     };
-    let resolved = resolve_audience(&state, Some("explicit-audience"), None).expect("resolve");
+    let resolved = resolve_audience(&state, Some("explicit-audience")).expect("resolve");
     assert_eq!(resolved, "explicit-audience");
 }
 
@@ -174,43 +174,32 @@ fn resolve_audience_uses_the_explicit_request_value_over_the_knob() {
 fn resolve_audience_falls_back_to_the_knob_when_no_explicit_value() {
     let state = IngestionKeysState {
         pool: None,
-        default_audience: Some("knob-audience".to_string()),
+        default_audience: "knob-audience".to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
     };
-    let resolved = resolve_audience(&state, None, None).expect("resolve");
+    let resolved = resolve_audience(&state, None).expect("resolve");
     assert_eq!(resolved, "knob-audience");
 }
 
+/// The deployment default is `public` unless configured, on both routes (#1482): there is no
+/// "neither explicit nor knob" case left to fail, so the only 400 this function still raises is
+/// for a malformed *explicit* audience.
 #[test]
-fn resolve_audience_mint_errors_when_neither_explicit_nor_knob_is_set() {
+fn resolve_audience_falls_back_to_public_by_default_on_either_route() {
     let state = IngestionKeysState {
         pool: None,
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
     };
-    let result = resolve_audience(&state, None, None);
-    assert!(
-        result.is_err(),
-        "mint's fallback is None: an unresolved audience must be a BadRequest, never a silent default"
+    assert_eq!(
+        resolve_audience(&state, None).expect("resolve"),
+        PUBLIC_AUDIENCE
     );
-}
-
-#[test]
-fn resolve_audience_import_falls_back_to_public_when_neither_explicit_nor_knob_is_set() {
-    let state = IngestionKeysState {
-        pool: None,
-        default_audience: None,
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
-    };
-    let resolved =
-        resolve_audience(&state, None, Some(PUBLIC_AUDIENCE)).expect("import falls back");
-    assert_eq!(resolved, PUBLIC_AUDIENCE);
+    assert!(resolve_audience(&state, Some("not valid!")).is_err());
 }
 
 /// A missing field or an empty string both count as absent.
@@ -218,13 +207,12 @@ fn resolve_audience_import_falls_back_to_public_when_neither_explicit_nor_knob_i
 fn resolve_audience_treats_an_empty_string_request_as_absent() {
     let state = IngestionKeysState {
         pool: None,
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
     };
-    let resolved =
-        resolve_audience(&state, Some(""), Some(PUBLIC_AUDIENCE)).expect("import falls back");
+    let resolved = resolve_audience(&state, Some("")).expect("falls back to the default");
     assert_eq!(resolved, PUBLIC_AUDIENCE);
 }
 
@@ -233,12 +221,12 @@ fn resolve_audience_treats_an_empty_string_request_as_absent() {
 fn resolve_audience_rejects_an_invalid_explicit_value() {
     let state = IngestionKeysState {
         pool: None,
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: false,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
     };
-    let result = resolve_audience(&state, Some("not valid!"), None);
+    let result = resolve_audience(&state, Some("not valid!"));
     assert!(result.is_err());
 }
 
@@ -253,7 +241,7 @@ async fn mint_403_for_non_admin() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -276,7 +264,7 @@ async fn mint_403_for_non_admin_before_body_is_parsed_even_with_malformed_json()
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -290,17 +278,17 @@ async fn mint_403_for_non_admin_before_body_is_parsed_even_with_malformed_json()
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// With neither an explicit `audience` nor `default_audience` configured, a non-admin caller is
-/// still a plain 400 from `resolve_audience` (§4) -- not the claim path (§4a), since there is no
-/// explicit audience to claim. `self_service_mint_enabled: true` here so `MintGate` lets the
-/// request past the knob check and actually reach `resolve_audience`; no DB access either way,
-/// since `resolve_audience` fails before any query runs.
+/// A malformed `audience` from a non-admin caller is a plain 400 from `resolve_audience` (§4) --
+/// not the claim path (§4a), which is only reached once the format check passes.
+/// `self_service_mint_enabled: true` here so `MintGate` lets the request past the knob check and
+/// actually reach `resolve_audience`; no DB access either way, since `resolve_audience` fails
+/// before any query runs.
 #[tokio::test]
-async fn mint_400_for_non_admin_with_no_requested_audience_and_no_default() {
+async fn mint_400_for_non_admin_with_a_malformed_audience() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -308,7 +296,10 @@ async fn mint_400_for_non_admin_with_no_requested_audience_and_no_default() {
         non_admin_user(),
     );
     let response = app
-        .oneshot(post_request("/api/ingestion-api-keys", r#"{"name": "x"}"#))
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "x", "audience": "not valid!"}"#,
+        ))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -319,7 +310,7 @@ async fn list_403_for_non_admin() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -338,7 +329,7 @@ async fn revoke_403_for_non_admin() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -360,7 +351,7 @@ async fn import_403_for_non_admin() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -386,7 +377,7 @@ async fn mint_400_for_empty_name() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -405,7 +396,7 @@ async fn import_400_for_empty_key() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -427,7 +418,7 @@ async fn list_400_for_negative_limit() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -448,7 +439,7 @@ async fn mint_400_for_invalid_audience() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(lazy_pool()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -465,33 +456,6 @@ async fn mint_400_for_invalid_audience() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-/// With neither an explicit `audience` nor `MICROMEGAS_DEFAULT_KEY_AUDIENCE` configured, `mint`
-/// is a 400 whose body names the knob an operator needs to set.
-#[tokio::test]
-async fn mint_400_names_the_default_audience_knob() {
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(lazy_pool()),
-            default_audience: None,
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(post_request("/api/ingestion-api-keys", r#"{"name": "x"}"#))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body = json_body(response).await;
-    let message = body["message"].as_str().expect("message present");
-    assert!(
-        message.contains("MICROMEGAS_DEFAULT_KEY_AUDIENCE"),
-        "expected the 400 body to name the knob, got: {message}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // NotConfigured 503 — `IngestionKeysState { pool: None, .. }` never touches
 // the pool, so this needs no live DB either, same harness as every other
@@ -506,7 +470,7 @@ async fn mint_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: None,
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -525,7 +489,7 @@ async fn list_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: None,
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -544,7 +508,7 @@ async fn revoke_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: None,
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -566,7 +530,7 @@ async fn import_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: None,
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -634,7 +598,7 @@ async fn live_mint_list_revoke_round_trip() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -707,7 +671,7 @@ async fn live_import_is_idempotent() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -776,7 +740,7 @@ async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -823,7 +787,7 @@ async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -869,7 +833,7 @@ async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: Some(audience.clone()),
+            default_audience: audience.clone(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -943,7 +907,7 @@ async fn live_mint_succeeds_for_non_admin_with_a_matching_grant_no_claim_attempt
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -991,7 +955,7 @@ async fn live_mint_claims_a_fresh_audience_then_denies_a_second_caller() {
 
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: true,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
@@ -1058,7 +1022,7 @@ async fn live_concurrent_claims_for_the_same_fresh_audience_never_double_claim()
 
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: true,
         max_claims_per_caller: 25,
         max_keys_per_caller: 100,
@@ -1104,7 +1068,7 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_public_audience() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -1169,7 +1133,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 1,
             max_keys_per_caller: 100,
@@ -1196,7 +1160,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 2,
             max_keys_per_caller: 100,
@@ -1239,7 +1203,7 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     let audience = format!("self-service-claim-then-delete-{}", uuid::Uuid::new_v4());
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: true,
         max_claims_per_caller: 1,
         max_keys_per_caller: 100,
@@ -1347,7 +1311,7 @@ async fn live_claim_survives_pre_existing_mint_grants_on_other_audiences() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 1,
             max_keys_per_caller: 100,
@@ -1404,7 +1368,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 25,
             max_keys_per_caller: 1,
@@ -1430,7 +1394,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 25,
             max_keys_per_caller: 2,

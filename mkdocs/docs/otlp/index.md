@@ -103,7 +103,7 @@ one — and a resource attribute value crafted to contain a raw `\x1F` byte cann
 audience's `process_id` either, since the two hashes no longer share a namespace or a joined
 string. With no write audience (an env-keyring key, OIDC, or no auth provider at all) `key` is
 hashed directly under `NS_OTEL_PROCESS_V1`, byte-identical to before this stage. See
-[Authentication → Write-Side Stamping](../admin/authentication.md#write-side-stamping-abac-stage-5)
+[Authentication → Audience stamping and the default](../admin/authentication.md#audience-stamping-and-the-default)
 for what carries a write audience and what doesn't.
 
 The formula was extended in-place under the same `NS_OTEL_PROCESS_V1` namespace UUID —

@@ -69,11 +69,13 @@ SELECT * FROM list_partitions();
 | `max_sort_key_time` | Timestamp | Recorded true maximum of the view's leading sort column across the partition's rows (e.g. `begin` for `thread_spans`), or `NULL` if not recorded |
 
 !!! note "Audience-filtered for a restricted caller"
-    Under a `ReadScope::Audiences` session (auth enabled, non-admin), rows are filtered to the
-    caller's own audiences: a `view_instance_id` row is kept only if its owning process/stream
-    resolves to a readable audience, and a `'global'` row (no single audience) is kept only under
-    `MICROMEGAS_UNSTAMPED_AUDIENCE`, a matching `MICROMEGAS_PUBLIC_VIEW_SETS` entry, or
-    `ReadScope::All`. See [Authentication](authentication.md#audience-filtering-activation).
+    Under a `ReadScope::Audiences` session (auth enabled), rows are filtered to the caller's own
+    audiences: a `view_instance_id` row is kept only if its owning process/stream resolves to a
+    readable audience, and a `'global'` row (a multi-audience partition, no single audience to
+    check) is kept only when its view set is on `MICROMEGAS_PUBLIC_VIEW_SETS`, the caller passes
+    the lakehouse admin gate (the same boolean gating `retire_partitions`/`regenerate_partitions`
+    below — #1482), or the caller holds `ReadScope::All`. See
+    [Authentication](authentication.md#audience-filtering-activation).
 
 **Example**:
 ```sql

@@ -216,9 +216,9 @@ class WebClient:
         "imported", "audience"}`.
 
         `audience` (#1372, AbAC Stage 4) is omitted from the request body when
-        `None`, so the server applies its own default
-        (`MICROMEGAS_DEFAULT_KEY_AUDIENCE`, falling back to `public`) rather
-        than receiving an explicit `null`.
+        `None`, so the server applies its own deployment default
+        (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) rather than
+        receiving an explicit `null`.
         """
         payload = {"name": name, "key": key}
         if audience is not None:

@@ -34,7 +34,12 @@ async fn main() -> Result<()> {
 
     let lakehouse = LakehouseContext::from_env().await?;
     let data_lake = lakehouse.lake().clone();
-    let view_factory = default_view_factory(lakehouse.runtime().clone(), data_lake.clone()).await?;
+    let view_factory = default_view_factory(
+        lakehouse.runtime().clone(),
+        data_lake.clone(),
+        lakehouse.default_audience(),
+    )
+    .await?;
     let views_to_update = get_global_views_with_update_group(&view_factory);
     let grace = args.common.grace();
     daemon(

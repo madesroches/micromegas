@@ -20,6 +20,7 @@
 //! |target        |Utf8                         | category or module name of the log entry                  |
 //! |level         |int32                        | verbosity level (Fatal=1, Error=2, Warning=3, Info=4, Debug=5, Trace=6)|                                           |
 //! |msg           |Utf8                         | message                                                   |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! ### log_entries view instances
 //!
@@ -40,6 +41,7 @@
 //! |name          |Utf8                         | name of the measure                                       |
 //! |unit          |Utf8                         | unit of measure                                           |
 //! |value         |Float64                      | value measured                                            |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //!
 //! ### measures view instances
@@ -47,6 +49,20 @@
 //! The implicit use of the `measures` table corresponds to the 'global' instance, which contains the metrics of all the processes.
 //!
 //! Except the 'global' instance, the instance_id refers to any process_id. `view_instance('measures', process_id)` contains that process's metrics. Process-specific views are materialized just-in-time and can provide much better query performance compared to the 'global' instance.
+//!
+//! ## log_stats
+//!
+//! Materialized aggregate of `log_entries` by process, minute, level, and target -- one global
+//! instance, implicitly available (no `view_instance(...)` form).
+//!
+//! | field        | type                        | description                                                |
+//! |------------- |-----------------------------|------------------------------------------------------------|
+//! |time_bin      |UTC Timestamp (nanoseconds)  | 1-minute time bucket for aggregation                        |
+//! |process_id    |Dictionary(Int32, Utf8)      | process unique id                                          |
+//! |level         |Int32                        | log level (see `log_entries` above)                        |
+//! |target        |Dictionary(Int32, Utf8)      | category or module name of the aggregated logs             |
+//! |count         |Int64                        | number of log entries in this aggregation                  |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! ## thread_spans
 //!
@@ -140,6 +156,10 @@
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the process metedata was received |
 //! |parent_process_id |Utf8                     | unique id of the parent process                            |
 //! |properties | Array of {key: utf8, value: utf8} | self-reported metadata by the process                   |
+//! |last_update_time |UTC Timestamp (nanoseconds) | when this process's data was last updated                |
+//! |last_block_end_ticks |Int64                   | tick count when the last block ended                       |
+//! |last_block_end_time |UTC Timestamp (nanoseconds) | timestamp when the last block ended                     |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the process -- server-written, never `NULL`    |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -154,6 +174,9 @@
 //! |tags          | Array of utf8               | Purpose of the stream, can contain "log", "metrics" or "cpu" |
 //! |properties | Array of {key: utf8, value: utf8} | self-reported stream metadata by the process            |
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the stream metedata was received |
+//! |format        |Utf8                         | stream payload format (e.g. for OTLP support)              |
+//! |last_update_time |UTC Timestamp (nanoseconds) | when this stream's data was last updated                 |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -176,6 +199,8 @@
 //! |streams.objects_metadata|Binary             | memory layout of the events                                |
 //! |streams.tags  | Array of utf8               | Purpose of the stream, can contain "log", "metrics" or "cpu" |
 //! |streams.properties | Array of {key: utf8, value: utf8} | self-reported stream metadata by the process            |
+//! |streams.insert_time |UTC Timestamp (nanoseconds) | server-side timestamp when the stream metedata was received |
+//! |streams.format |Utf8                          | stream payload format (e.g. for OTLP support)              |
 //! |processes.start_time    |UTC Timestamp (nanoseconds)  | when the process started (as reported by the instrumented process) |
 //! |processes.start_ticks   |Int64                        | tick count associated with start_time                      |
 //! |processes.tsc frequency |Int64                        | number of ticks per second                                 |
@@ -185,6 +210,10 @@
 //! |processes.computer      |Utf8                         | name of the computer or vm                                 |
 //! |processes.distro        |Utf8                         | name of operating system                                   |
 //! |processes.cpu_brand     |Utf8                         | identifies the cpu                                         |
+//! |processes.insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the process metedata was received |
+//! |processes.parent_process_id |Utf8                     | unique id of the parent process (nullable in practice)      |
+//! |processes.properties | Array of {key: utf8, value: utf8} | self-reported metadata by the process                  |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -266,11 +295,18 @@ impl ViewFactory {
 }
 
 /// Creates the default `ViewFactory` with all built-in views.
+///
+/// `default_audience` is the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), which the
+/// `blocks` view binds when it materializes. Callers source it from
+/// `LakehouseContext::default_audience` so every role that builds a factory bakes the same value
+/// into partitions -- notably the maintenance role, which is the one that actually materializes
+/// the six global views.
 pub async fn default_view_factory(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
+    default_audience: Arc<str>,
 ) -> Result<ViewFactory> {
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(default_audience)?);
     let processes_view = Arc::new(
         make_processes_view(
             runtime.clone(),

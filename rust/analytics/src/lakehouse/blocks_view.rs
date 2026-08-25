@@ -11,6 +11,7 @@ use super::{
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
+use crate::audience::coalesced_audience_subselect;
 use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -51,16 +52,26 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
+    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped process materializes under
+    /// (#1482). Carried from `LakehouseContext::default_audience` by every constructor call.
+    default_audience: Arc<str>,
     ordered_merger: Arc<dyn PartitionMerger>,
     plain_merger: Arc<dyn PartitionMerger>,
 }
 
 impl BlocksView {
-    pub fn new() -> Result<Self> {
-        let data_sql = Arc::new(String::from(
+    /// `default_audience` is the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`, sourced from
+    /// `LakehouseContext::default_audience`. It is the first of #1482's three read sites and the
+    /// only one whose resolved value is *baked into a partition*: every row of one materialization
+    /// sees the same bound value, so a never-stamped process is labelled consistently within a
+    /// partition. Two partitions materialized under different configured defaults can disagree --
+    /// changing the default requires regenerating the six views over the affected range.
+    pub fn new(default_audience: Arc<str>) -> Result<Self> {
+        let data_sql = Arc::new(format!(
             r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time, streams.format,
-           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
+           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties,
+           {audience_subselect} AS audience
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
          AND blocks.process_id = processes.process_id
@@ -68,6 +79,7 @@ impl BlocksView {
          AND blocks.insert_time < $2
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
+            audience_subselect = coalesced_audience_subselect("processes.properties", 3),
         ));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let schema = Arc::new(blocks_view_schema());
@@ -96,6 +108,7 @@ impl BlocksView {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
+            default_audience,
             ordered_merger,
             plain_merger,
         })
@@ -141,6 +154,7 @@ impl View for BlocksView {
                 insert_range,
                 self.get_time_bounds(),
                 Some(insert_time_sort_order()),
+                Some(self.default_audience.clone()),
             )
             .await
             .with_context(|| "fetch_metadata_partition_spec")?,
@@ -295,10 +309,29 @@ pub fn blocks_view_schema() -> Schema {
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             false,
         ),
-        Field::new("processes.parent_process_id", DataType::Utf8, false),
+        // Nullable, not because the Postgres column is (no `processes`/`streams`/`blocks` column
+        // is `NOT NULL`) but because it is `NULL` in practice for every OTLP process and every
+        // root native process (`parent_process_id: Option<Uuid>`). The write path's nullability
+        // guard (`write_partition.rs`) checks declared-non-nullable columns against the batch, so
+        // a wrongly-`false` declaration here would reject essentially every fresh partition.
+        Field::new("processes.parent_process_id", DataType::Utf8, true),
         Field::new(
             "processes.properties",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            false,
+        ),
+        // Appended last (#1482): the audience of the owning process, extracted once here from
+        // Postgres and propagated structurally into every downstream view. Non-nullable because
+        // `data_sql` wraps the extraction in `COALESCE(..., $3)` (see `audience.rs`), so a process
+        // that was never stamped materializes under the deployment default rather than as a NULL.
+        // Dictionary-encoded like every other view's audience column (`log_entries_table.rs`,
+        // `metrics_table.rs`, `log_stats_view.rs`): one distinct value per partition in practice.
+        // `sql_arrow_bridge` delivers it as plain `Utf8` (its mapping is keyed on the Postgres
+        // type name), so `metadata_partition_spec::cast_to_file_schema` casts it to this declared
+        // type before the write.
+        Field::new(
+            "audience",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
     ])
@@ -306,5 +339,5 @@ pub fn blocks_view_schema() -> Schema {
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![3] // Bumped from vec![2] for streams.format column (OTLP support)
+    vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column (#1482)
 }

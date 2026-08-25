@@ -62,7 +62,7 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     ));
     let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
     let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
-    Arc::new(LakehouseContext::new(lake, runtime))
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
 }
 
 /// Builds a `ViewFactory` registering real `processes`/`streams` global views (mirroring
@@ -78,7 +78,8 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
 async fn make_view_factory_with_processes_and_streams(
     lakehouse: &LakehouseContext,
 ) -> Arc<ViewFactory> {
-    let blocks_view = Arc::new(BlocksView::new().expect("BlocksView::new"));
+    let blocks_view =
+        Arc::new(BlocksView::new(lakehouse.default_audience()).expect("BlocksView::new"));
     let processes_view = Arc::new(
         make_processes_view(
             lakehouse.runtime().clone(),
