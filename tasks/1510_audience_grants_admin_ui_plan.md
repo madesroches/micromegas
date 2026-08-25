@@ -299,23 +299,38 @@ see or re-share it; the confirm dialog says so (§8).
 
 Two changes in `ingestion_keys.rs`:
 
-1. **Admins take the claim path for a brand-new audience.** In `mint_key`, when the caller is an
-   admin, the requested audience is explicit, not a reserved name (`public` / the default
-   audience), and the ownership predicate (:544-550) says no grant row and no key row exist,
-   call `try_claim_and_mint` instead of the plain insert — with the per-caller claim and key
-   bounds skipped for admins, as they are today on the plain path. The admin gets the key **and**
-   their own `user:<email>` `mint` + `read` rows in one transaction, which is what
+1. **Admins take a claim attempt for a brand-new audience, decided separately from
+   `resolve_audience`.** For an admin, `AudienceMintPolicy::resolve_audience` always returns `Ok`
+   (:404-408), so `mint_key` never reaches the `Err` arm the non-admin lazy-claim branch
+   (:409-432) hangs off — the admin path cannot reuse that hook. Instead, once `resolve_audience`
+   succeeds for an admin with an explicit, non-reserved audience, `mint_key` runs the same
+   ownership check `try_claim_and_mint` uses internally (:544-550: no grant row and no key row on
+   any axis) as its own, separate query — it has to be a second query, since that predicate is
+   only evaluated after the advisory lock inside `try_claim_and_mint` (:509-522) and isn't
+   available to `mint_key` beforehand. If the audience looks unclaimed, call `try_claim_and_mint`;
+   otherwise mint proceeds on the plain insert exactly as today.
+2. **`try_claim_and_mint` gets an admin mode that never turns a claim attempt into a mint
+   failure.** Called for an admin, its in-lock recheck can still disagree with the pre-check —
+   the row now exists (403, :552-559), the advisory lock is contended (409 `CLAIM_CONTENDED`,
+   :514-522), or `"user:" + email` exceeds the 255-byte selector bound (403, :533-538) — and
+   today each of those is a hard failure. For an admin, all three fall through to the ordinary
+   insert instead of erroring: the claim is best-effort, `claimed` comes back `false`, and the
+   admin still gets their key. A genuine DB error still propagates as 500. Per-caller claim and
+   key bounds stay skipped for admins, as they are today on the plain path.
+3. **`MintResponse` gains `claimed: bool`** (appended, additive JSON): `true` only when this call
+   actually created the audience's first grant rows — the admin gets their key **and** their own
+   `user:<email>` `mint` + `read` rows in one transaction, which is what
    `setup_telemetry.py:291-301` does client-side today (an admin who mints into a fresh audience
-   cannot otherwise read what their own key uploads). An admin minting into an *existing* audience
-   is unchanged. An admin with no email cannot be granted a `user:` row, so that case stays on
-   the plain path — the pre-existing gap, now server-side and logged.
-2. **`MintResponse` gains `claimed: bool`** (appended, additive JSON): `true` when this call
-   created the audience's first grant rows. The web dialog uses it to say "you claimed
-   `<audience>` and now hold `read` and `mint` on it" rather than silently adding two rows to the
-   page; the CLI no longer needs to infer it.
+   cannot otherwise read what their own key uploads). The web dialog uses `claimed` to say "you
+   claimed `<audience>` and now hold `read` and `mint` on it" rather than silently adding two rows
+   to the page; the CLI no longer needs to infer it.
+
+An admin minting into an *existing* audience is unchanged (the pre-check finds it already claimed
+and the plain insert runs directly). An admin with no email cannot be granted a `user:` row, so
+that case also stays on the plain path — the pre-existing gap, now server-side and logged.
 
 `MintGate`, bounds, the lazy-claim branch for non-admins, `CLAIM_CONTENDED` and the reserved-name
-rule are unchanged.
+rule for non-admins are unchanged.
 
 ### 5. Frontend: `src/lib/audience-grants-api.ts` (new)
 
@@ -373,7 +388,11 @@ for everyone, and from an eighth Admin card for admins (§9). One route file, lo
 State:
 
 ```
-listQuery = useStreamQuery()          // LIST_GRANTS_SQL, dataSource from useDefaultDataSource
+listQuery = useStreamQuery()          // LIST_GRANTS_SQL, dataSource from a page-local DataSourceField
+dataSource, setDataSource             // useDataSourceState() (QueryDenyListPage's pattern, not
+                                       // useDefaultDataSource) — data sources are arbitrary
+                                       // flight-SQL endpoints (`data-sources-api.ts`), so the list
+                                       // can point anywhere; REST writes below do not follow it
 grants: AudienceGrant[]               // decoded on isComplete; the complete visible set
 me: MyAudiences | null                // from fetchMyAudiences; null while loading or on 403
 selfServiceOff: boolean               // fetchMyAudiences returned 403 (non-admin, knob off)
@@ -405,8 +424,10 @@ filter is the one control allowed to hide whole rows.
    *"The audiences you can read from and mint into, and who shares them with you."* Primary
    actions: **Mint ingestion key** (everyone, hidden when `selfServiceOff` and not admin) and
    **Add grant** (admin only; a non-admin adds grants from a card, where the pair is fixed).
-2. Filter bar: **Find** and **Axis** (Both / read / mint), client-side. Summary line *"N grants
-   across M audiences"* — totals for the loaded set, never narrowed by filters.
+2. Filter bar: **Find**, **Axis** (Both / read / mint), and a `DataSourceField`
+   (`useDataSourceState`, `QueryDenyListPage`'s pattern) — Find and Axis are client-side; changing
+   the data source re-runs `loadGrants` against the newly selected service. Summary line *"N
+   grants across M audiences"* — totals for the loaded set, never narrowed by filters.
 3. Standing notes:
    - **Propagation**: read grants take effect within `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`
      (default 60 s) because reads are served from a whole-table snapshot; mint grants and the
@@ -414,6 +435,12 @@ filter is the one control allowed to hide whole rows.
    - **Scope**: `public` is always readable by every authenticated principal — no row needed.
    - **Env-map grants**: read access may also come from the `MICROMEGAS_AUDIENCE_GRANTS` startup
      map; those grants are not shown here and cannot be shared from here.
+   - **Data source vs. writes**: Share, Remove, Revoke, and Mint always call this deployment's
+     own REST routes, which read and write only its own `audience_grants` store — they are not
+     scoped by the `DataSourceField` above. When the selected data source is not this
+     deployment's default, the summary line is replaced by a warning that reads and writes may be
+     against different stores, so a write's `loadGrants` reload can appear to silently drop the
+     change.
    - **Non-admin, knob off** (replaces the mint/share controls): *"Self-service is disabled on
      this deployment. You can see your grants here; ask an admin to change them."*
 4. `ErrorBanner` (`onRetry={loadGrants}`) for the list query's error (`listQuery.error.message`)
@@ -527,8 +554,12 @@ has, now in the browser.
 
 `audience_grants.rs`'s module doc (currently "every handler `AdminUser`-gated except one")
 is rewritten for the policy in §3. `key_management_disabled_router` is unchanged: under
-`--disable-auth` the page's REST calls get 503 and the banner says so; the SQL list returns zero
-rows (empty selectors, `is_admin` false), which the page shows as its empty state.
+`--disable-auth` the page's REST calls still get 503 and the banner says so. The SQL list does
+**not** go empty: `is_admin(metadata)` (`user_attribution.rs:81-90`) returns `true` when the
+`x-auth-is-admin` header is absent, which is the documented `--disable-auth` convention, and §2's
+registration takes the `GrantVisibility::All` branch before `grant_selectors` ever matters — so
+`list_audience_grants()` returns every row in the store. The page therefore shows the full grant
+list under `--disable-auth`, not its empty state, while every write still 503s.
 
 ## Mockups
 
@@ -631,7 +662,10 @@ Modified:
   filterable, complete result set and the query path already has one; writes want structured
   status codes and reasons the UDTF log-stream shape can't give. The page pays with two error
   paths (`listQuery.error` vs `AudienceGrantError`), which the Query Deny List page already
-  demonstrates is manageable.
+  demonstrates is manageable. Unlike the deny-list precedent — SQL on both sides, so reads and
+  writes always agree — the write half here is fixed to this deployment's own store while the
+  read half follows the page's `DataSourceField`, so the two can disagree whenever a non-default
+  source is selected; mitigated with the explicit warning in §6 rather than hidden.
 - **Deleting the JSON list route instead of keeping it beside the UDTF.** Two read paths would
   drift; the only clients were the CLI `list` subcommand and `setup_telemetry`'s emptiness check,
   both handled here. Anyone scripting against it moves to `micromegas-query`.
@@ -735,7 +769,8 @@ list tests removed; `test_setup_telemetry.py`: admin branch no longer calls list
 (delete `test_admin_audience_check_pages_through_ingestion_keys`), `run()` never calls
 `create_audience_grant`, the progress line reports `claimed`.
 
-**Manual** — monolith with `--disable-auth` (503 banner, empty list); real OIDC: as admin,
+**Manual** — monolith with `--disable-auth` (writes 503, list shows the entire grant store since
+`--disable-auth` is treated as admin, not an empty list); real OIDC: as admin,
 mint into a fresh audience from the page and see the two new rows; as a non-admin with the knob
 on, claim, share with a group, have the group member see and remove their own access, revoke the
 share; cross-check with `micromegas-query --all "SELECT * FROM list_audience_grants()"` as both
