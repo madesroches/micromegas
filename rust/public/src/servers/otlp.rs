@@ -140,20 +140,6 @@ fn success_response<M: Message + serde::Serialize>(msg: M, encoding: Encoding) -
         .expect("building OTLP success response")
 }
 
-/// Resolves the write audience before `service` is moved into the per-signal
-/// `handler::ingest_*` call, mapping a rejected (malformed) `bound_audience` to the same 403
-/// shape `OtelError::Denied` already produces for an audience conflict.
-fn resolve_write_audience_or_deny(
-    service: &WebIngestionService,
-    ctx: Option<&Extension<AuthContext>>,
-    signal: micromegas_otel_ingestion::error::Signal,
-) -> Result<micromegas_ingestion::write_audience::WriteAudience, OtelError> {
-    resolve_write_audience(ctx, service.default_audience()).map_err(|e| OtelError::Denied {
-        signal,
-        message: e.to_string(),
-    })
-}
-
 async fn logs_handler(
     Extension(service): Extension<Arc<WebIngestionService>>,
     ctx: Option<Extension<AuthContext>>,
@@ -164,14 +150,7 @@ async fn logs_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = match resolve_write_audience_or_deny(
-        &service,
-        ctx.as_ref(),
-        micromegas_otel_ingestion::error::Signal::Logs,
-    ) {
-        Ok(a) => a,
-        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
-    };
+    let audience = resolve_write_audience(ctx.as_ref());
     match handler::ingest_logs(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
@@ -188,14 +167,7 @@ async fn metrics_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = match resolve_write_audience_or_deny(
-        &service,
-        ctx.as_ref(),
-        micromegas_otel_ingestion::error::Signal::Metrics,
-    ) {
-        Ok(a) => a,
-        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
-    };
+    let audience = resolve_write_audience(ctx.as_ref());
     match handler::ingest_metrics(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
@@ -212,14 +184,7 @@ async fn traces_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = match resolve_write_audience_or_deny(
-        &service,
-        ctx.as_ref(),
-        micromegas_otel_ingestion::error::Signal::Traces,
-    ) {
-        Ok(a) => a,
-        Err(e) => return OtlpHttpError::Otel(e).into_otlp_response(encoding),
-    };
+    let audience = resolve_write_audience(ctx.as_ref());
     match handler::ingest_traces(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),

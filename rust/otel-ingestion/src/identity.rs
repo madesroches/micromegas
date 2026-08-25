@@ -45,16 +45,15 @@ const SEPARATOR_STR: &str = "\x1F";
 
 /// Identity inputs beyond the OTLP payload itself (AbAC Stage 5, #1373, §4).
 ///
-/// Every process gets an audience, always (#1482 §0), so this struct deliberately has no
-/// `Default`: `<&str>::default()` is `""`, and an empty audience folded silently into every id
-/// is exactly the kind of silent default `CLAUDE.md`'s "compiler enumerates every call site" rule
-/// exists to prevent. Every production construction site is a full struct literal.
-#[derive(Debug, Clone, Copy)]
+/// `Default` reproduces pre-Stage-5 ids byte for byte -- both fields are no-ops when absent, so
+/// an unstamped deployment (or any call site that hasn't been threaded with a real audience yet)
+/// sees zero id churn.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityContext<'a> {
     /// Authenticated write audience. Folded into `process_id` and `block_id` so two audiences
     /// posting identical resources/payloads never collapse onto one process or dedup against
-    /// each other.
-    pub audience: &'a str,
+    /// each other. `None` reproduces pre-Stage-5 ids byte for byte.
+    pub audience: Option<&'a str>,
     /// Webhook-only: canonicalized incoming header bytes (formerly `extra_hash_input`).
     pub extra_hash_input: &'a [u8],
 }
@@ -206,17 +205,18 @@ pub fn is_degenerate_resource(attrs: &[KeyValue]) -> bool {
 /// the same pattern used when `process.owner` was added. Long-term stability of `process_id`
 /// values is not a design goal; re-deriving existing ids is always acceptable.
 ///
-/// `ctx.audience` (AbAC Stage 5, #1373, §4) domain-separates the hash: it derives a per-audience
-/// namespace UUID (`NS_OTEL_PROCESS_V1` salted with the audience) and hashes the joined field key
-/// under *that* namespace, rather than appending the audience string onto the joined key with the
-/// same `\x1F` separator that joins the 31 fields above. Concatenating into the shared-separator
-/// string would let a crafted resource-attribute value ending in `\x1F<victim-audience>`
-/// reproduce the exact byte string a real stamped request would hash, defeating the audience
-/// scoping this exists to provide -- OTLP attribute values are arbitrary UTF-8, and `norm` only
-/// trims and lower-cases, it does not escape `\x1F`. This is what stops two audiences sending
-/// identical resource attributes (the same containerized app in two tenants, a degenerate
-/// resource, a CloudWatch namespace) from silently colliding on one `process_id`, including via a
-/// crafted attribute value.
+/// `ctx.audience` (AbAC Stage 5, #1373, §4) domain-separates the hash, **only when `Some`**: a
+/// present audience derives a per-audience namespace UUID (`NS_OTEL_PROCESS_V1` salted with the
+/// audience) and hashes the joined field key under *that* namespace, rather than appending the
+/// audience string onto the joined key with the same `\x1F` separator that joins the 31 fields
+/// above. Concatenating into the shared-separator string would let a crafted resource-attribute
+/// value ending in `\x1F<victim-audience>` reproduce the exact byte string a real stamped
+/// request would hash, defeating the audience scoping this exists to provide -- OTLP attribute
+/// values are arbitrary UTF-8, and `norm` only trims and lower-cases, it does not escape `\x1F`.
+/// With `ctx.audience: None` the id is `Uuid::new_v5(&NS_OTEL_PROCESS_V1, key)`, byte-identical
+/// to before this stage. This is what stops two audiences sending identical resource attributes
+/// (the same containerized app in two tenants, a degenerate resource, a CloudWatch namespace)
+/// from silently colliding on one `process_id`, including via a crafted attribute value.
 pub fn process_id_from_resource(resource: Option<&Resource>, ctx: IdentityContext) -> Uuid {
     let attrs = resource.map(|r| r.attributes.as_slice()).unwrap_or(&[]);
 
@@ -259,8 +259,13 @@ pub fn process_id_from_resource(resource: Option<&Resource>, ctx: IdentityContex
     ];
 
     let key = fields.join(SEPARATOR_STR);
-    let audience_ns = Uuid::new_v5(&NS_OTEL_PROCESS_V1, ctx.audience.as_bytes());
-    Uuid::new_v5(&audience_ns, key.as_bytes())
+    match ctx.audience {
+        Some(audience) => {
+            let audience_ns = Uuid::new_v5(&NS_OTEL_PROCESS_V1, audience.as_bytes());
+            Uuid::new_v5(&audience_ns, key.as_bytes())
+        }
+        None => Uuid::new_v5(&NS_OTEL_PROCESS_V1, key.as_bytes()),
+    }
 }
 
 /// Derives `stream_id` from `(process_id, signal)`. Max three streams per process.

@@ -1,7 +1,7 @@
 //! DB-backed tests for `OwnershipRewrite` (#1370, AbAC Stage 2) -- the issue's own acceptance
 //! criteria: seed processes stamped with different `micromegas.audience` properties (plus one
-//! stamped with the deployment's *default* ingestion audience, per #1482 §0 -- there is no
-//! unstamped state any more) through the real ingestion pipeline, materialize the `blocks`/
+//! never stamped at all, which #1482's read-side `COALESCE` resolves to
+//! `MICROMEGAS_DEFAULT_AUDIENCE`) through the real ingestion pipeline, materialize the `blocks`/
 //! `processes`/`streams` batch views `OwnershipRewrite` reads its audience mapping from, then
 //! assert a session's visible rows differ by `CallerContext.read_scope` -- cross-audience denial,
 //! same-audience visibility, `ReadScope::All` sees everything, and (the coverage a naive
@@ -77,10 +77,15 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) -- plus its cpu/log streams and one block
-/// each, through the real ingestion pipeline (`WebIngestionService`, the same entry point a real
-/// client hits).
-async fn seed_process(ingestion: &WebIngestionService, audience: &str) -> Result<ProcessFixture> {
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left never stamped if `None` --
+/// plus its cpu/log streams and one block each, through the real ingestion pipeline
+/// (`WebIngestionService`, the same entry point a real client hits). A `None` process carries no
+/// `micromegas.audience` property in Postgres at all; #1482's read-side `COALESCE` resolves it to
+/// `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) when the audience is read out.
+async fn seed_process(
+    ingestion: &WebIngestionService,
+    audience: Option<&str>,
+) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
@@ -241,16 +246,16 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new_for_test(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone());
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     // Seed three processes *before* any block/view materialization: A and B are stamped with
-    // different audiences, C is stamped with the deployment's default ingestion audience
-    // (`public`) -- exercising the write-side default rather than a query-time escape hatch
-    // (#1482 §0: there is no unstamped state any more).
-    let process_a = seed_process(&ingestion, "team-a").await?;
-    let process_b = seed_process(&ingestion, "team-b").await?;
-    let process_c = seed_process(&ingestion, "public").await?;
+    // different audiences, C is never stamped at all -- exercising #1482's read-side default,
+    // which resolves C's missing property to `MICROMEGAS_DEFAULT_AUDIENCE` (`public` here) at
+    // every site the audience is read out of Postgres.
+    let process_a = seed_process(&ingestion, Some("team-a")).await?;
+    let process_b = seed_process(&ingestion, Some("team-b")).await?;
+    let process_c = seed_process(&ingestion, None).await?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);
@@ -510,9 +515,9 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         "ReadScope::All must see the same thread_spans rows as the owning audience"
     );
 
-    // --- Default-audience process C: visible to a caller holding the default audience,
-    // invisible to one that does not (#1482 §0 -- there is no query-time escape hatch any more,
-    // the default is a write-time stamp like any other audience).
+    // --- Never-stamped process C: materialized as the default audience, so it is visible to a
+    // caller holding that default and invisible to one that does not (#1482's addendum -- the
+    // default is resolved by `COALESCE` where the audience is read, not stamped at write time).
     let processes_c_sql = format!(
         "SELECT * FROM processes WHERE process_id = '{}'",
         process_c.process_id
@@ -527,8 +532,9 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         )
         .await?,
         0,
-        "a default-audience process must stay invisible to a caller whose scope doesn't \
-         include 'public', however unrelated to A/B its own scope is"
+        "a never-stamped process resolves to the default audience, so it must stay invisible \
+         to a caller whose scope doesn't include 'public', however unrelated to A/B its own \
+         scope is"
     );
     assert_eq!(
         row_count(
@@ -540,7 +546,8 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         )
         .await?,
         1,
-        "a caller holding the default audience ('public') must see the default-audience process"
+        "a caller holding the default audience ('public') must see the never-stamped process, \
+         which materializes under that default"
     );
 
     // --- The `audience` column itself (#1482): present, non-NULL, and carrying the expected
@@ -573,6 +580,30 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
             format!(
                 "SELECT audience FROM view_instance('log_entries', '{}') WHERE audience = 'team-a'",
                 process_a.process_id
+            ),
+            1,
+        ),
+        // The never-stamped process carries the resolved default, non-`NULL`, on both the
+        // materialized `blocks` path and the JIT `find_process` path -- the two read sites the
+        // addendum's `COALESCE` covers.
+        (
+            format!(
+                "SELECT audience FROM processes WHERE process_id = '{}' AND audience = 'public'",
+                process_c.process_id
+            ),
+            1,
+        ),
+        (
+            format!(
+                "SELECT audience FROM blocks WHERE process_id = '{}' AND audience = 'public'",
+                process_c.process_id
+            ),
+            2, // cpu + log blocks
+        ),
+        (
+            format!(
+                "SELECT audience FROM view_instance('log_entries', '{}') WHERE audience = 'public'",
+                process_c.process_id
             ),
             1,
         ),

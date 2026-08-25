@@ -22,15 +22,6 @@ use micromegas_otel_ingestion::identity::IdentityContext;
 use micromegas_otel_ingestion::proto::ExportMetricsServiceRequest;
 use prost::Message;
 
-/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no
-/// `Default` any more, so tests that don't care what the audience is use this fixed one.
-fn default_ctx() -> IdentityContext<'static> {
-    IdentityContext {
-        audience: "public",
-        extra_hash_input: &[],
-    }
-}
-
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -74,7 +65,7 @@ fn single_record_round_trips_a_real_otlp_metrics_protobuf() {
         .expect("decode record as ExportMetricsServiceRequest");
     assert_eq!(decoded, req);
 
-    let blocks = split_metrics(decoded, default_ctx()).expect("split_metrics");
+    let blocks = split_metrics(decoded, IdentityContext::default()).expect("split_metrics");
     assert_eq!(blocks.len(), 1);
 }
 

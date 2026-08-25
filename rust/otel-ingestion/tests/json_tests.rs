@@ -13,15 +13,6 @@ use micromegas_otel_ingestion::proto::{
     ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest,
 };
 
-/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no
-/// `Default` any more, so tests that don't care what the audience is use this fixed one.
-fn default_ctx() -> IdentityContext<'static> {
-    IdentityContext {
-        audience: "public",
-        extra_hash_input: &[],
-    }
-}
-
 /// Serializing a proto-built request to JSON then back must produce identical blocks.
 #[test]
 fn logs_json_round_trip_matches_proto() {
@@ -35,11 +26,11 @@ fn logs_json_round_trip_matches_proto() {
         ],
     );
     let json_bytes = serde_json::to_vec(&req).expect("serialize to JSON");
-    let proto_blocks = split_logs(req, default_ctx()).unwrap();
+    let proto_blocks = split_logs(req, IdentityContext::default()).unwrap();
 
     let req_from_json: ExportLogsServiceRequest =
         serde_json::from_slice(&json_bytes).expect("deserialize from JSON");
-    let json_blocks = split_logs(req_from_json, default_ctx()).unwrap();
+    let json_blocks = split_logs(req_from_json, IdentityContext::default()).unwrap();
 
     assert_eq!(proto_blocks.len(), json_blocks.len());
     assert_eq!(
@@ -70,7 +61,7 @@ fn logs_canonical_json_fixture_parses() {
         }]
     }"#;
     let req: ExportLogsServiceRequest = serde_json::from_str(json).unwrap();
-    let blocks = split_logs(req, default_ctx()).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].nb_records, 1);
     assert_eq!(
@@ -105,7 +96,7 @@ fn traces_canonical_json_fixture_parses() {
         }]
     }"#;
     let req: ExportTraceServiceRequest = serde_json::from_str(json).unwrap();
-    let blocks = split_traces(req, default_ctx()).unwrap();
+    let blocks = split_traces(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 1);
     assert_eq!(
         blocks[0].begin_time.timestamp_nanos_opt().unwrap(),
@@ -122,7 +113,7 @@ fn traces_canonical_json_fixture_parses() {
 fn string_encoded_timestamp_accepted() {
     let json = r#"{"resourceLogs":[{"resource":{},"scopeLogs":[{"logRecords":[{"timeUnixNano":"1700000000000000000","severityNumber":9,"body":{"stringValue":"ts-test"}}]}]}]}"#;
     let req: ExportLogsServiceRequest = serde_json::from_str(json).unwrap();
-    let blocks = split_logs(req, default_ctx()).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(
         blocks[0].begin_time.timestamp_nanos_opt().unwrap(),
         1_700_000_000_000_000_000
@@ -136,7 +127,7 @@ fn bare_number_timestamp_accepted() {
     let json = r#"{"resourceLogs":[{"resource":{},"scopeLogs":[{"logRecords":[{"timeUnixNano":1700000000000000000,"severityNumber":9,"body":{"stringValue":"ts-test"}}]}]}]}"#;
     let req: ExportLogsServiceRequest = serde_json::from_str(json)
         .expect("opentelemetry-proto 0.32 accepts bare-number timeUnixNano");
-    let blocks = split_logs(req, default_ctx()).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(
         blocks[0].begin_time.timestamp_nanos_opt().unwrap(),
         1_700_000_000_000_000_000
@@ -147,12 +138,24 @@ fn bare_number_timestamp_accepted() {
 #[test]
 fn empty_json_requests_yield_no_blocks() {
     let req: ExportLogsServiceRequest = serde_json::from_str(r#"{"resourceLogs":[]}"#).unwrap();
-    assert!(split_logs(req, default_ctx()).unwrap().is_empty());
+    assert!(
+        split_logs(req, IdentityContext::default())
+            .unwrap()
+            .is_empty()
+    );
 
     let req: ExportMetricsServiceRequest =
         serde_json::from_str(r#"{"resourceMetrics":[]}"#).unwrap();
-    assert!(split_metrics(req, default_ctx()).unwrap().is_empty());
+    assert!(
+        split_metrics(req, IdentityContext::default())
+            .unwrap()
+            .is_empty()
+    );
 
     let req: ExportTraceServiceRequest = serde_json::from_str(r#"{"resourceSpans":[]}"#).unwrap();
-    assert!(split_traces(req, default_ctx()).unwrap().is_empty());
+    assert!(
+        split_traces(req, IdentityContext::default())
+            .unwrap()
+            .is_empty()
+    );
 }

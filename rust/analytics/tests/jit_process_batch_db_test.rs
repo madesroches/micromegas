@@ -180,13 +180,13 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new_for_test(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone());
 
     let process_id = Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 

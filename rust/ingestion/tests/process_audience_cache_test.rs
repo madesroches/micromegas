@@ -24,7 +24,7 @@ fn make_test_service() -> WebIngestionService {
         .acquire_timeout(Duration::from_millis(50))
         .connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
-    WebIngestionService::new_for_test(DataLakeConnection::new(pool, blob_storage))
+    WebIngestionService::new(DataLakeConnection::new(pool, blob_storage))
 }
 
 /// A cache hit (same `process_id`, same audience as the one already confirmed conflict-free)
@@ -34,7 +34,7 @@ fn make_test_service() -> WebIngestionService {
 async fn cache_hit_skips_the_database() {
     let service = make_test_service();
     let process_id = Uuid::new_v4();
-    let audience = WriteAudience::new("team-a").expect("valid audience");
+    let audience = WriteAudience::new(Some("team-a")).expect("valid audience");
 
     service.prime_process_audience_cache_for_test(process_id, audience.clone());
 
@@ -52,8 +52,8 @@ async fn cache_hit_skips_the_database() {
 async fn cache_miss_falls_through_to_the_database() {
     let service = make_test_service();
     let process_id = Uuid::new_v4();
-    let cached_audience = WriteAudience::new("team-a").expect("valid audience");
-    let incoming_audience = WriteAudience::new("team-b").expect("valid audience");
+    let cached_audience = WriteAudience::new(Some("team-a")).expect("valid audience");
+    let incoming_audience = WriteAudience::new(Some("team-b")).expect("valid audience");
 
     service.prime_process_audience_cache_for_test(process_id, cached_audience);
 
@@ -65,4 +65,17 @@ async fn cache_miss_falls_through_to_the_database() {
         "a cache miss must attempt the database-backed check, which must fail against an \
          unreachable database -- got {result:?}"
     );
+}
+
+/// No audience at all never queries the database regardless of cache state, matching pre-cache
+/// behavior (see the guard's early return before it ever consults the cache).
+#[tokio::test]
+async fn no_incoming_audience_skips_the_database() {
+    let service = make_test_service();
+    let process_id = Uuid::new_v4();
+
+    service
+        .check_process_audience_conflict_for_test(process_id, &WriteAudience::none())
+        .await
+        .expect("an unstamped request must succeed without querying the database");
 }

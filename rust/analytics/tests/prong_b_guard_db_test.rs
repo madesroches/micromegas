@@ -64,7 +64,9 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) -- plus its cpu stream and one block,
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left never stamped if `None`
+/// (#1482's read-side `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its
+/// cpu stream and one block,
 /// through the real ingestion pipeline. See `ownership_rewrite_db_test.rs`'s identical-in-spirit
 /// helper for why stamping happens before any block is materialized (irrelevant to Prong B,
 /// which reads Postgres directly, but kept for consistency and because this file shares its
@@ -72,7 +74,7 @@ struct ProcessFixture {
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
-    audience: &str,
+    audience: Option<&str>,
 ) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
@@ -237,12 +239,12 @@ async fn setup() -> Result<Fixtures> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new_for_test(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone());
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
-    let process_a = seed_process(&ingestion, &lake.db_pool, "team-a").await?;
-    let process_b = seed_process(&ingestion, &lake.db_pool, "team-b").await?;
-    let process_c = seed_process(&ingestion, &lake.db_pool, "public").await?;
+    let process_a = seed_process(&ingestion, &lake.db_pool, Some("team-a")).await?;
+    let process_b = seed_process(&ingestion, &lake.db_pool, Some("team-b")).await?;
+    let process_c = seed_process(&ingestion, &lake.db_pool, None).await?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);

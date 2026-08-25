@@ -9,15 +9,6 @@ use micromegas_otel_ingestion::proto::any_value::Value as AvValue;
 use micromegas_otel_ingestion::proto::{AnyValue, KeyValue, Resource};
 use uuid::Uuid;
 
-/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no `Default`
-/// any more, so tests that don't care what the audience is use this fixed one.
-fn default_ctx() -> IdentityContext<'static> {
-    IdentityContext {
-        audience: "public",
-        extra_hash_input: &[],
-    }
-}
-
 fn kv(key: &str, value: &str) -> KeyValue {
     KeyValue {
         key: key.to_string(),
@@ -52,8 +43,8 @@ fn process_id_is_stable() {
         ("service.name", "claude-code"),
     ]);
     assert_eq!(
-        process_id_from_resource(Some(&r1), default_ctx()),
-        process_id_from_resource(Some(&r2), default_ctx())
+        process_id_from_resource(Some(&r1), IdentityContext::default()),
+        process_id_from_resource(Some(&r2), IdentityContext::default())
     );
 }
 
@@ -62,8 +53,8 @@ fn process_id_differs_per_pid() {
     let a = resource_with(&[("service.name", "claude-code"), ("process.pid", "1")]);
     let b = resource_with(&[("service.name", "claude-code"), ("process.pid", "2")]);
     assert_ne!(
-        process_id_from_resource(Some(&a), default_ctx()),
-        process_id_from_resource(Some(&b), default_ctx())
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -80,8 +71,8 @@ fn process_id_differs_per_owner() {
         ("process.owner", "bob"),
     ]);
     assert_ne!(
-        process_id_from_resource(Some(&a), default_ctx()),
-        process_id_from_resource(Some(&b), default_ctx())
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -92,8 +83,8 @@ fn process_id_owner_uses_user_name_fallback() {
     let canonical = resource_with(&[("host.name", "h"), ("process.owner", "alice")]);
     let fallback = resource_with(&[("host.name", "h"), ("user.name", "alice")]);
     assert_eq!(
-        process_id_from_resource(Some(&canonical), default_ctx()),
-        process_id_from_resource(Some(&fallback), default_ctx())
+        process_id_from_resource(Some(&canonical), IdentityContext::default()),
+        process_id_from_resource(Some(&fallback), IdentityContext::default())
     );
 }
 
@@ -133,8 +124,8 @@ fn process_id_normalizes_host_case() {
     let a = resource_with(&[("host.name", "Foo"), ("service.name", "svc")]);
     let b = resource_with(&[("host.name", "FOO"), ("service.name", "svc")]);
     assert_eq!(
-        process_id_from_resource(Some(&a), default_ctx()),
-        process_id_from_resource(Some(&b), default_ctx())
+        process_id_from_resource(Some(&a), IdentityContext::default()),
+        process_id_from_resource(Some(&b), IdentityContext::default())
     );
 }
 
@@ -214,8 +205,8 @@ fn strindex_value_on_identity_key_hashes_as_absent() {
     };
     let without = resource_with(&[("host.name", "h")]);
     assert_eq!(
-        process_id_from_resource(Some(&with_strindex), default_ctx()),
-        process_id_from_resource(Some(&without), default_ctx())
+        process_id_from_resource(Some(&with_strindex), IdentityContext::default()),
+        process_id_from_resource(Some(&without), IdentityContext::default())
     );
 }
 
@@ -236,18 +227,15 @@ fn windows_and_wsl_differ() {
         ("os.type", "linux"),
     ]);
     assert_ne!(
-        process_id_from_resource(Some(&windows), default_ctx()),
-        process_id_from_resource(Some(&wsl), default_ctx())
+        process_id_from_resource(Some(&windows), IdentityContext::default()),
+        process_id_from_resource(Some(&wsl), IdentityContext::default())
     );
 }
 
 #[test]
 fn process_id_is_stable_with_new_fields() {
-    // Regression lock: a canonical resource with known values, hashed under the fixed "public"
-    // audience `default_ctx()` uses, must always hash to this UUID. Update this constant only if
-    // the formula is intentionally changed -- it was last updated for #1482, which folds every
-    // audience (including the deployment default) into a per-audience namespace UUID, so this
-    // constant is no longer the bare pre-#1373 hash.
+    // Regression lock: a canonical resource with known values must always hash to this UUID.
+    // Update this constant only if the formula is intentionally changed.
     let r = resource_with(&[
         ("host.name", "my-host"),
         ("service.name", "my-service"),
@@ -261,8 +249,8 @@ fn process_id_is_stable_with_new_fields() {
         ("process.runtime.name", "rustc"),
         ("process.runtime.version", "1.88.0"),
     ]);
-    let id = process_id_from_resource(Some(&r), default_ctx());
-    assert_eq!(id.to_string(), "6e13795f-7094-5238-919a-c1c0674105c4");
+    let id = process_id_from_resource(Some(&r), IdentityContext::default());
+    assert_eq!(id.to_string(), "92267645-021b-5d0f-960b-c74719552658");
 }
 
 #[test]
@@ -283,8 +271,8 @@ fn interned_key_is_ignored_in_identity() {
     };
     let without = resource_with(&[("host.name", "h")]);
     assert_eq!(
-        process_id_from_resource(Some(&with_interned), default_ctx()),
-        process_id_from_resource(Some(&without), default_ctx())
+        process_id_from_resource(Some(&with_interned), IdentityContext::default()),
+        process_id_from_resource(Some(&without), IdentityContext::default())
     );
 }
 
@@ -294,30 +282,45 @@ fn interned_key_is_ignored_in_identity() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn process_id_none_audience_matches_default_context() {
+    // `IdentityContext { audience: None, .. }` must be byte-identical to `::default()` -- the
+    // no-churn guarantee for unstamped deployments.
+    let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
+    let none_ctx = IdentityContext {
+        audience: None,
+        extra_hash_input: &[],
+    };
+    assert_eq!(
+        process_id_from_resource(Some(&r), none_ctx),
+        process_id_from_resource(Some(&r), IdentityContext::default())
+    );
+}
+
+#[test]
 fn two_audiences_over_the_same_resource_derive_distinct_process_ids() {
     // The core collision this stage closes: the same containerized app in two tenants (or a
     // degenerate resource, or a CloudWatch namespace) must not collapse onto one process_id
     // once two different audiences are posting it.
     let r = resource_with(&[("host.name", "shared-host"), ("service.name", "shared-svc")]);
     let ctx_a = IdentityContext {
-        audience: "team-a",
+        audience: Some("team-a"),
         extra_hash_input: &[],
     };
     let ctx_b = IdentityContext {
-        audience: "team-b",
+        audience: Some("team-b"),
         extra_hash_input: &[],
     };
-    let ctx_default = default_ctx();
+    let unstamped = IdentityContext::default();
     let id_a = process_id_from_resource(Some(&r), ctx_a);
     let id_b = process_id_from_resource(Some(&r), ctx_b);
-    let id_default = process_id_from_resource(Some(&r), ctx_default);
+    let id_unstamped = process_id_from_resource(Some(&r), unstamped);
     assert_ne!(
         id_a, id_b,
         "distinct audiences must derive distinct process_id"
     );
     assert_ne!(
-        id_a, id_default,
-        "a stamped audience must derive a different process_id than the default audience"
+        id_a, id_unstamped,
+        "a stamped audience must derive a different process_id than the unstamped default"
     );
 }
 
@@ -325,7 +328,7 @@ fn two_audiences_over_the_same_resource_derive_distinct_process_ids() {
 fn process_id_same_audience_is_stable() {
     let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
     let ctx = IdentityContext {
-        audience: "team-a",
+        audience: Some("team-a"),
         extra_hash_input: &[],
     };
     assert_eq!(
@@ -339,16 +342,16 @@ fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
     // Before the audience was domain-separated via a per-audience namespace UUID, the audience
     // was appended to the joined field key with the same unescaped `\x1F` `SEPARATOR` that joins
     // the 31 resource-attribute fields. OTLP attribute values are arbitrary UTF-8 and `norm` only
-    // trims + lower-cases -- it does not reject or escape `\x1F` -- so a differently-audienced
-    // caller could craft a resource attribute whose value ends in `\x1F<victim-audience>` and
-    // reproduce byte-for-byte the joined key + audience suffix a genuinely stamped request for
-    // that audience would hash, forging the victim's process_id.
+    // trims + lower-cases -- it does not reject or escape `\x1F` -- so an unstamped (or
+    // differently-audienced) caller could craft a resource attribute whose value ends in
+    // `\x1F<victim-audience>` and reproduce byte-for-byte the joined key + audience suffix a
+    // genuinely stamped request for that audience would hash, forging the victim's process_id.
     //
     // Craft that exact scenario: the victim is a real `victim-team`-stamped producer whose last
-    // identifying field (`process.runtime.description`) is `"real-runtime"`; the attacker is a
-    // differently-audienced caller whose corresponding field is
-    // `"real-runtime\x1Fvictim-team"` -- under the old concatenation scheme this made the
-    // attacker's joined key byte-identical to the victim's stamped one.
+    // identifying field (`process.runtime.description`) is `"real-runtime"`; the attacker is an
+    // unstamped caller whose corresponding field is `"real-runtime\x1Fvictim-team"` -- under the
+    // old concatenation scheme this made the attacker's un-stamped joined key byte-identical to
+    // the victim's stamped one.
     let shared_fields: &[(&str, &str)] =
         &[("host.name", "shared-host"), ("service.name", "shared-svc")];
 
@@ -356,7 +359,7 @@ fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
     victim_pairs.push(("process.runtime.description", "real-runtime"));
     let victim_resource = resource_with(&victim_pairs);
     let victim_ctx = IdentityContext {
-        audience: "victim-team",
+        audience: Some("victim-team"),
         extra_hash_input: &[],
     };
     let victim_id = process_id_from_resource(Some(&victim_resource), victim_ctx);
@@ -364,18 +367,19 @@ fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
     let mut attacker_pairs = shared_fields.to_vec();
     attacker_pairs.push(("process.runtime.description", "real-runtime\x1Fvictim-team"));
     let attacker_resource = resource_with(&attacker_pairs);
-    let attacker_id = process_id_from_resource(Some(&attacker_resource), default_ctx());
+    let attacker_id =
+        process_id_from_resource(Some(&attacker_resource), IdentityContext::default());
 
     assert_ne!(
         victim_id, attacker_id,
-        "a crafted resource attribute containing a raw separator byte must not let a \
-         differently-audienced request forge a stamped audience's process_id"
+        "a crafted resource attribute containing a raw separator byte must not let an \
+         unstamped request forge a stamped audience's process_id"
     );
 
     // Same crafted attribute, but the attacker also claims a *different* audience than the
     // victim's -- must still not collide.
     let attacker_ctx = IdentityContext {
-        audience: "attacker-team",
+        audience: Some("attacker-team"),
         extra_hash_input: &[],
     };
     let attacker_id_other_audience =

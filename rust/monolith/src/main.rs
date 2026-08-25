@@ -28,10 +28,8 @@ use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
-use micromegas::ingestion::audience_backfill::backfill_default_audience;
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
-use micromegas::ingestion::write_audience::WriteAudience;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion;
@@ -252,9 +250,9 @@ async fn main() -> Result<()> {
     // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
     // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
     // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
-    // (#1482) -- every process is stamped with an audience at write time
-    // (`MICROMEGAS_DEFAULT_AUDIENCE` defaults to `public` on the ingestion side), so
-    // there is no more query-time unstamped fallback to configure here.
+    // (#1482) -- a process whose credential carried no audience resolves to
+    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) where the audience is read out of
+    // Postgres, so there is no separate query-time unstamped fallback to configure here.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
         // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`
@@ -309,20 +307,13 @@ async fn main() -> Result<()> {
             .lake()
             .as_ref()
             .clone();
-        // Every process gets an audience, always (#1482 §0): resolve the deployment's default
-        // ingestion audience once at startup and idempotently backfill it onto any legacy
-        // `processes` row that was never stamped, before the listener binds. This block does
-        // not open its own DB connection -- it reuses the shared lakehouse's `db_pool` cloned
-        // above.
-        let default_audience = WriteAudience::default_from_env()?;
-        backfill_default_audience(&lake.db_pool, &default_audience).await?;
         let shutdown = fanout.subscribe();
         let listen_addr = args.listen_endpoint_http;
         let grace_c = grace;
         let auth = ingestion_auth;
-        join_set.spawn(async move {
-            serve_ingestion(listen_addr, lake, auth, shutdown, grace_c, default_audience).await
-        });
+        join_set.spawn(
+            async move { serve_ingestion(listen_addr, lake, auth, shutdown, grace_c).await },
+        );
     }
 
     // ── FlightSQL ──────────────────────────────────────────────────────────

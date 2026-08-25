@@ -3,7 +3,6 @@
 // crate-specific lint exceptions:
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
-pub mod audience_backfill;
 pub mod data_lake_config;
 pub mod data_lake_connection;
 pub mod remote_data_lake;

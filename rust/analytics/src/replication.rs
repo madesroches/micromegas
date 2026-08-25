@@ -7,7 +7,6 @@ use datafusion::arrow::array::{
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::PutIfAbsent;
-use micromegas_telemetry::property_names::PROPERTY_AUDIENCE;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -117,17 +116,6 @@ async fn ingest_processes(
             };
             let properties_map =
                 extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
-            // §0.4: replication is the one production path that writes `processes` rows without
-            // going through the stamping writer or the startup backfill. It must reject rather
-            // than invent -- a foreign lake's data has an owner the destination should not guess,
-            // and this role has no business carrying the ingestion default-audience knob. The
-            // operator's fix is to upgrade the *source* lake first.
-            if !properties_map.contains_key(PROPERTY_AUDIENCE) {
-                anyhow::bail!(
-                    "process_id={process_id}: replicated process has no {PROPERTY_AUDIENCE} \
-                     property -- upgrade the source lake first (#1482 §0.4)"
-                );
-            }
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
             instrument_named!(
                 sqlx::query(

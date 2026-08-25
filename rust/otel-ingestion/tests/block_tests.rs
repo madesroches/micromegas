@@ -8,15 +8,6 @@ use micromegas_otel_ingestion::proto::{
     any_value::Value as AvValue,
 };
 
-/// Every process carries an audience, always (#1482 §0) -- `IdentityContext` has no
-/// `Default` any more, so tests that don't care what the audience is use this fixed one.
-fn default_ctx() -> IdentityContext<'static> {
-    IdentityContext {
-        audience: "public",
-        extra_hash_input: &[],
-    }
-}
-
 fn s_kv(k: &str, v: &str) -> KeyValue {
     KeyValue {
         key: k.into(),
@@ -67,7 +58,7 @@ fn split_logs_one_block_per_resource() {
             resource_logs("svc-b", vec![empty_log_record(1_700_000_001_000_000_000)]),
         ],
     };
-    let blocks = split_logs(req, default_ctx()).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert_eq!(blocks.len(), 2);
     assert_ne!(blocks[0].process_id, blocks[1].process_id);
     assert_eq!(blocks[0].nb_records, 1);
@@ -86,7 +77,7 @@ fn split_logs_skips_empty_resource() {
             schema_url: String::new(),
         }],
     };
-    let blocks = split_logs(req, default_ctx()).unwrap();
+    let blocks = split_logs(req, IdentityContext::default()).unwrap();
     assert!(blocks.is_empty());
 }
 
@@ -97,14 +88,14 @@ fn block_id_changes_when_payload_changes() {
         ExportLogsServiceRequest {
             resource_logs: vec![mk("a")],
         },
-        default_ctx(),
+        IdentityContext::default(),
     )
     .unwrap();
     let b = split_logs(
         ExportLogsServiceRequest {
             resource_logs: vec![mk("b")],
         },
-        default_ctx(),
+        IdentityContext::default(),
     )
     .unwrap();
     assert_ne!(a[0].block.block_id, b[0].block.block_id);
