@@ -232,6 +232,8 @@ async fn histo_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let default_audience_lakehouse =
+        Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
     let cpu_usage_view = Arc::new(
         make_cpu_usage_per_process_per_minute_view(
             runtime.clone(),
@@ -240,7 +242,7 @@ async fn histo_view_test() -> Result<()> {
                 default_view_factory(
                     runtime.clone(),
                     lake.clone(),
-                    Arc::from(micromegas_analytics::audience::DEFAULT_AUDIENCE),
+                    default_audience_lakehouse.default_audience(),
                 )
                 .await?,
             ),

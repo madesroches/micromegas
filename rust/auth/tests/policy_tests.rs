@@ -734,9 +734,8 @@ fn default_audience_from_env_valid_value_is_returned() {
 }
 
 /// A whitespace-padded value is trimmed before validation and storage -- matching
-/// `IsolationConfig::from_env`'s trim-then-validate order in `read_scope.rs`, and
-/// `WriteAudience::default_from_env`'s on the ingestion side. The trim is `warn!`-logged, which is
-/// not asserted here (the log sink is process-wide).
+/// `micromegas_analytics::audience::default_audience_from_env`'s trim-then-validate order. The
+/// trim is `warn!`-logged, which is not asserted here (the log sink is process-wide).
 #[test]
 #[serial]
 fn default_audience_from_env_whitespace_padded_value_is_trimmed() {

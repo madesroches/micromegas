@@ -499,6 +499,8 @@ async fn sql_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let default_audience_lakehouse =
+        Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
     let log_summary_view_merge = Arc::new(
         make_log_entries_levels_per_process_minute_view_with_custom_merge(
             runtime.clone(),
@@ -507,7 +509,7 @@ async fn sql_view_test() -> Result<()> {
                 default_view_factory(
                     runtime.clone(),
                     lake.clone(),
-                    Arc::from(micromegas_analytics::audience::DEFAULT_AUDIENCE),
+                    default_audience_lakehouse.default_audience(),
                 )
                 .await?,
             ),
@@ -524,7 +526,7 @@ async fn sql_view_test() -> Result<()> {
                 default_view_factory(
                     runtime.clone(),
                     lake.clone(),
-                    Arc::from(micromegas_analytics::audience::DEFAULT_AUDIENCE),
+                    default_audience_lakehouse.default_audience(),
                 )
                 .await?,
             ),

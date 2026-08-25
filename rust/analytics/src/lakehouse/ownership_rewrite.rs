@@ -18,7 +18,9 @@
 //! ## The physical `audience` column (#1482)
 //!
 //! `blocks`, `processes`, `streams`, `log_entries`, `measures`, and `log_stats` each carry a
-//! physical, non-nullable `audience` column -- extracted once from Postgres at the `blocks`
+//! physical `audience` column -- declared non-nullable on `blocks`/`log_entries`/`measures`, and
+//! non-null by construction (though declared nullable in their inferred `SqlBatchView` schema) on
+//! `processes`/`streams`/`log_stats` -- extracted once from Postgres at the `blocks`
 //! view's materialization and propagated structurally into every downstream view, the same way
 //! `processes.properties` already does. Those six views are consequently filtered with a bare
 //! `Filter` on that column (§5 below): no semi-join, no `property_get`, no per-process aggregate.
@@ -185,8 +187,9 @@ impl OwnershipRewrite {
     /// its behavior to DataFusion (`ReadScope::Audiences` can legitimately resolve to an empty
     /// set -- a caller matching no grant resolves to `{public}`, but a bare-array read-only
     /// audience with no matching selector contributes nothing). No `coalesce` here: the column is
-    /// `NOT NULL` (#1482), because the extraction sites already coalesced a never-stamped
-    /// process's missing property to the deployment default before it was materialized.
+    /// non-null by construction (#1482), because the extraction sites already coalesced a
+    /// never-stamped process's missing property to the deployment default before it was
+    /// materialized.
     fn resolved_predicate(&self) -> Expr {
         let audiences = self.audiences();
         if audiences.is_empty() {
@@ -202,8 +205,9 @@ impl OwnershipRewrite {
     }
 
     /// §5 (new, #1482): `audience IN (caller audiences)`; `false` for an empty set (fail-closed,
-    /// as [`Self::resolved_predicate`] already does). The column is `NOT NULL`, so there is no
-    /// unstamped case.
+    /// as [`Self::resolved_predicate`] already does). The column is declared `NOT NULL` on
+    /// `blocks`/`log_entries`/`measures` and non-null by construction (though declared nullable)
+    /// on `processes`/`streams`/`log_stats`, so there is no unstamped case either way.
     fn audience_column_predicate(&self, table_name: &TableReference, field: &Field) -> Expr {
         let audiences = self.audiences();
         if audiences.is_empty() {

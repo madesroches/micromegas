@@ -248,8 +248,9 @@ Two consequences worth knowing before you flip this stage on:
 
 - **OTLP `process_id` re-derivation.** OTLP-derived identity (`process_id`, and therefore
   `block_id`) is now audience-scoped, so two audiences posting identical resource attributes
-  never collapse onto one process — but a deployment that starts stamping (or a previously
-  deployment that begins binding audiences to its ingestion keys) re-derives every OTLP producer's
+  never collapse onto one process — but a deployment that starts stamping (or a deployment that
+  previously bound no audiences and begins binding them to its ingestion keys) re-derives every
+  OTLP producer's
   `process_id` the moment it does. The same logical process appears as a new row; its
   pre-upgrade data keeps the old id, now permanently labelled with whatever default was in effect
   at upgrade time. Rotating an ingestion key to a different audience likewise splits a long-lived
