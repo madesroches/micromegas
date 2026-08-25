@@ -16,7 +16,10 @@ taken on explicit direction, reshape it:
    `POST /api/query-stream` path **Admin → Query Deny List** already uses. The paginated JSON
    `GET /api/audience-grants` route is deleted. This removes the whole class of "the page groups
    by audience but only holds one page of rows" problems without inventing a streamed REST
-   transport, and makes the same data queryable from `micromegas-query` for ad-hoc auditing.
+   transport, and makes the same data queryable from `micromegas-query` for ad-hoc auditing. The
+   one exception is the new Audience Access page's own list, which reads a small unpaginated REST
+   route instead (Design §3, §6) — its writes are fixed to this deployment's own store, so its
+   read has to be too, which a selectable or default flight-SQL data source can't promise.
 2. **Writes stay REST.** `POST` / `DELETE /api/audience-grants` keep their structured answers
    (201 vs 200 "already existed", 404, 403 with a reason) that the `(time, msg)` shape of a
    mutating UDTF handles badly. Their gate widens from `AdminUser` to `AuthenticatedUser` plus a
@@ -183,7 +186,10 @@ The selector-list construction is shared by three consumers — this site, `my_a
 (`audience_grants.rs:547-559`), and the new write policy (§3) — so it becomes
 `pub fn caller_selectors(caller: &AuthContext) -> Vec<String>` in `rust/auth/src/policy.rs`
 next to `selector_matches`, and `my_audiences` switches to it. Semantics are identical to what
-`my_audiences` builds today; `selector_matches` stays private and unchanged.
+`my_audiences` builds today, including the leading `"*"` (`audience_grants.rs:547`);
+`selector_matches` stays private and unchanged. The write policy (§3) is the one consumer that
+must strip that leading `"*"` before binding the result — a `*` grant is not something a caller
+individually holds, so it must not stand in for a hold check.
 
 ### 2. Query path: `list_audience_grants()`
 
@@ -262,12 +268,17 @@ deleted. A shared pre-check for both handlers:
 
 1. `selector` must be `user:…` or `group:…`. `*` is refused with 403 — a user who can read an
    audience must not be able to open it to every authenticated principal.
-2. The caller must **hold** `(audience, axis)`: `SELECT EXISTS(SELECT 1 FROM audience_grants
-   WHERE audience=$1 AND axis=$2 AND selector = ANY($3))` with `$3` = `caller_selectors(&caller)`.
-   Otherwise 403 "you have no `<axis>` grant on `<audience>` to share". Delegation is per axis:
-   read lets you share read, mint lets you share mint; neither confers the other. Holding via a
-   `group:` row counts; holding via the env map does not (the web server does not load the env
-   map, and the page already says env-map grants are invisible here).
+2. The caller must **hold** `(audience, axis)` **via an identity selector**: `SELECT
+   EXISTS(SELECT 1 FROM audience_grants WHERE audience=$1 AND axis=$2 AND selector = ANY($3))`
+   with `$3` = `caller_selectors(&caller)` **with its leading `"*"` filtered out**. A `*` row on
+   the pair makes it publicly readable/mintable, but must not let every authenticated user plant
+   durable `user:`/`group:` rows on that pair: those rows would outlive the `*` grant once an
+   admin deletes it, silently re-widening access the admin thought they'd just closed. A caller
+   who can act only through a `*` row gets the same 403 "you have no `<axis>` grant on
+   `<audience>` to share" as one with no matching row at all. Delegation is per axis: read lets
+   you share read, mint lets you share mint; neither confers the other. Holding via a `group:` row
+   counts; holding via the env map does not (the web server does not load the env map, and the
+   page already says env-map grants are invisible here).
 3. Then the same `insert_or_get` as today, `created_by` = email ?? subject. 201 / 200 semantics
    unchanged.
 
@@ -294,6 +305,17 @@ the "except for admins" in the direction is read as *the self-removal rule is th
 delete permission; admins are not restricted by it*, and admin access does not depend on grant
 rows anyway. A user who removes their own last `read` row on an audience loses the ability to
 see or re-share it; the confirm dialog says so (§8).
+
+**List, for the page itself (REST, not the UDTF).** New `GET
+{base_path}/api/audience-grants/visible`, `AuthenticatedUser`, no admin gate and no
+`self_service_mint_enabled` check (viewing your own grants works even when the knob is off, §6) —
+built the same way `my_audiences` already is: no pagination, reading `AudienceGrantsState.pool`
+directly. Admin: `SELECT audience, axis, selector, created_at, created_by FROM audience_grants
+ORDER BY audience, axis, selector`. Non-admin: the same `EXISTS`-joined visibility query §2 gives
+`list_audience_grants()`, bound to `caller_selectors(&caller)` (the unfiltered list — `*` is fine
+here, unlike the write hold-check). This exists only so `AudienceAccessPage` (§6) can read from
+the exact pool its own writes hit; `list_audience_grants()` is unaffected and is still how
+`micromegas-query` and other SQL clients read the store (§11, Decision 1).
 
 ### 4. Mint route: server-side claim for admins, `claimed` in the response
 
@@ -346,12 +368,18 @@ export interface AudienceGrant {
 }
 
 /** `SELECT audience, axis, selector, created_at, created_by FROM list_audience_grants()` —
- *  explicit column list matching decodeAudienceGrants, as buildListDenialsSql does. */
+ *  explicit column list matching decodeAudienceGrants, as buildListDenialsSql does. Not used by
+ *  `AudienceAccessPage` itself (§6 reads via `fetchVisibleGrants` below); kept for any future
+ *  SQL-console-style consumer, mirroring the query `micromegas-query` runs. */
 export const LIST_GRANTS_SQL: string
 export function decodeAudienceGrants(table: Table): AudienceGrant[]
 
 /** Server's raw JSON for one grant, as POST returns it. */
 export interface AudienceGrantResponse { audience; axis; selector; created_at: string; created_by }
+
+/** GET /api/audience-grants/visible (§3) — this deployment's own store, unpaginated, decoded
+ *  straight from JSON (no Arrow). What `AudienceAccessPage` actually calls to list grants. */
+export function fetchVisibleGrants(): Promise<AudienceGrant[]>
 
 export class AudienceGrantError extends Error { constructor(public code: string, message: string, public status: number) }
 
@@ -370,13 +398,14 @@ export const MAX_SELECTOR_BYTES = 255          // a BYTE bound — use TextEncod
 export function validateSelector(selector: string): string | null
 ```
 
-Create/delete/my-audiences are plain `authenticatedFetch` in `data-sources-api.ts`'s shape:
-`createAudienceGrant` reads `response.status === 201` before awaiting the body;
+Create/delete/my-audiences/visible are plain `authenticatedFetch` in `data-sources-api.ts`'s
+shape: `createAudienceGrant` reads `response.status === 201` before awaiting the body;
 `deleteAudienceGrant` never calls `.json()` on a 204; every key component goes through
-`encodeURIComponent`. The list is **not** here — it's a SQL string the page hands to
-`useStreamQuery`, exactly as `query-deny-list-api.ts` does. Minting reuses
-`mintIngestionApiKey` from `ingestion-api-keys-api.ts`; `MintApiKeyResponse` in
-`api-keys-shared.ts` gains `claimed?: boolean`.
+`encodeURIComponent`. `fetchVisibleGrants` is what the page calls to list grants (§6) — unlike
+`QueryDenyListPage`, this page's list is REST, not a SQL string handed to `useStreamQuery`, since
+its writes are fixed to one store and its read must be too (§6, "Reading through this
+deployment"). Minting reuses `mintIngestionApiKey` from `ingestion-api-keys-api.ts`;
+`MintApiKeyResponse` in `api-keys-shared.ts` gains `claimed?: boolean`.
 
 ### 6. Frontend: `src/routes/AudienceAccessPage.tsx` (new)
 
@@ -388,12 +417,14 @@ for everyone, and from an eighth Admin card for admins (§9). One route file, lo
 State:
 
 ```
-listQuery = useStreamQuery()          // LIST_GRANTS_SQL, dataSource from a page-local DataSourceField
-dataSource, setDataSource             // useDataSourceState() (QueryDenyListPage's pattern, not
-                                       // useDefaultDataSource) — data sources are arbitrary
-                                       // flight-SQL endpoints (`data-sources-api.ts`), so the list
-                                       // can point anywhere; REST writes below do not follow it
-grants: AudienceGrant[]               // decoded on isComplete; the complete visible set
+listQuery = useVisibleGrants()        // wraps `fetchVisibleGrants()` in useStreamQuery's minimal
+                                       // { isComplete, error, rowCount } shape (so items 4 and 6
+                                       // below need no special-casing) but calls REST, not SQL —
+                                       // see "Reading through this deployment" below. No page-local
+                                       // DataSourceField: unlike Query Deny List, this page's
+                                       // writes can reach only one store, so its read must never
+                                       // be able to point anywhere else
+grants: AudienceGrant[]               // listQuery.grants once isComplete; the complete visible set
 me: MyAudiences | null                // from fetchMyAudiences; null while loading or on 403
 selfServiceOff: boolean               // fetchMyAudiences returned 403 (non-admin, knob off)
 isAdmin = user?.is_admin              // from useAuth(); server is the authority, this is UX
@@ -404,11 +435,11 @@ deleteTarget: AudienceGrant | null; isDeleting; deleteError
 mint: { open, prefillAudience? }; mintError; isMinting; mintedKey: MintApiKeyResponse | null
 ```
 
-`loadGrants` = `listQuery.execute({ sql: LIST_GRANTS_SQL, dataSource })`, invoked on mount, on
-`PageLayout onRefresh`, and after every successful write (download state, don't patch locally).
-Results decoded in an effect on `[listQuery.isComplete, listQuery.error]`, the
-`QueryDenyListPage` way. `fetchMyAudiences` runs once on mount and again after a mint that
-returned `claimed: true` (the mintable set changed).
+`loadGrants` = `listQuery.execute()`, invoked on mount, on `PageLayout onRefresh`, and after every
+successful write (download state, don't patch locally) — no SQL string, no data source to pass;
+`useVisibleGrants` always calls `fetchVisibleGrants()`. Results land in `listQuery.grants` on
+`isComplete`, already typed — no Arrow decode. `fetchMyAudiences` runs once on mount and again
+after a mint that returned `claimed: true` (the mintable set changed).
 
 **Grouping** (`useMemo` over `grants` + `findText`): bucket by `audience`, then `axis`. Audiences
 by `localeCompare`; within an axis `*` first, then alphabetically. `findText` decides only which
@@ -424,9 +455,8 @@ filter is the one control allowed to hide whole rows.
    *"The audiences you can read from and mint into, and who shares them with you."* Primary
    actions: **Mint ingestion key** (everyone, hidden when `selfServiceOff` and not admin) and
    **Add grant** (admin only; a non-admin adds grants from a card, where the pair is fixed).
-2. Filter bar: **Find**, **Axis** (Both / read / mint), and a `DataSourceField`
-   (`useDataSourceState`, `QueryDenyListPage`'s pattern) — Find and Axis are client-side; changing
-   the data source re-runs `loadGrants` against the newly selected service. Summary line *"N
+2. Filter bar: **Find** and **Axis** (Both / read / mint) — both client-side; no data-source
+   control (there is only one store to show, see the standing note below). Summary line *"N
    grants across M audiences"* — totals for the loaded set, never narrowed by filters.
 3. Standing notes:
    - **Propagation**: read grants take effect within `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`
@@ -435,12 +465,20 @@ filter is the one control allowed to hide whole rows.
    - **Scope**: `public` is always readable by every authenticated principal — no row needed.
    - **Env-map grants**: read access may also come from the `MICROMEGAS_AUDIENCE_GRANTS` startup
      map; those grants are not shown here and cannot be shared from here.
-   - **Data source vs. writes**: Share, Remove, Revoke, and Mint always call this deployment's
-     own REST routes, which read and write only its own `audience_grants` store — they are not
-     scoped by the `DataSourceField` above. When the selected data source is not this
-     deployment's default, the summary line is replaced by a warning that reads and writes may be
-     against different stores, so a write's `loadGrants` reload can appear to silently drop the
-     change.
+   - **Reading through this deployment.** Query Deny List deliberately lets an admin point at any
+     registered data source, because its rule table lives wherever the query runs — reads and
+     writes always land on the same service there. This page can't offer that: Share, Remove,
+     Revoke, and Mint always call this deployment's own REST routes, which read and write only
+     `AudienceGrantsState`'s pool — a specific Postgres connection, not something an arbitrary
+     flight-SQL data source is guaranteed to also be. Rather than read through
+     `list_audience_grants()` and a data source that could silently point at a different
+     deployment's lake, `useVisibleGrants` calls the REST `GET .../audience-grants/visible` (§3),
+     which runs the same visibility rule directly against `AudienceGrantsState.pool` — the exact
+     pool `create_grant`/`delete_grant` use. There is no `DataSourceField` and no data source to
+     pick: the page's read and every one of its writes are, by construction, the same connection,
+     so a chip's `×` can never act on a store other than the one rendering the chip.
+     `list_audience_grants()` (§2) is unaffected and stays how `micromegas-query` and other SQL
+     clients audit the store (§11); this page simply doesn't route its own display through it.
    - **Non-admin, knob off** (replaces the mint/share controls): *"Self-service is disabled on
      this deployment. You can see your grants here; ask an admin to change them."*
 4. `ErrorBanner` (`onRetry={loadGrants}`) for the list query's error (`listQuery.error.message`)
@@ -594,7 +632,8 @@ shape for date-ordered auditing, which `list_audience_grants()` now covers from 
 **Phase 3 — REST writes + mint**
 
 5. `audience_grants.rs`: delete `list_grants` and its types/constants; `AuthenticatedUser` on
-   create/delete with the §3 policy; module doc. Router loses the `GET` on the collection path.
+   create/delete with the §3 policy; add `GET .../visible` (§3); module doc. Router loses the old
+   paginated `GET` on the collection path, gains `GET .../visible`.
 6. `ingestion_keys.rs`: admin claim path + `claimed` on `MintResponse` (§4).
 7. `tests/audience_grants_tests.rs`: drop list tests; add non-admin cases (knob off → 403;
    `*` → 403; not held → 403; held via `group:` → 201; own-row delete → 204; other's row →
@@ -645,7 +684,8 @@ Modified:
 - `rust/analytics/tests/common/db_fixtures.rs`, `lakehouse_admin_gate_test.rs`,
   `ownership_rewrite_db_test.rs`, `ownership_rewrite_public_view_set_tests.rs`,
   `prong_b_guard_db_test.rs`
-- `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`
+- `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`, `stream_query.rs`
+  (`$self` data-source sentinel, §6)
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs`, `ingestion_keys_tests.rs`
 - `analytics-web-app/src/lib/api-keys-shared.ts`, `src/components/ApiKeysAdminPage.tsx`,
   `src/components/layout/Header.tsx`, `src/routes/AdminPage.tsx`, `src/router.tsx`
@@ -653,19 +693,24 @@ Modified:
 - `python/micromegas/tests/cli/test_grants.py`, `tests/cli/test_setup_telemetry.py`,
   `tests/test_web_client.py`
 - `mkdocs/docs/admin/web-app.md`, `authentication.md`, `api-keys.md`,
-  `mkdocs/docs/query-guide/python-api.md`, `mkdocs/docs/admin/functions-reference.md`
+  `mkdocs/docs/admin/functions-reference.md`, `mkdocs/docs/query-guide/python-api.md`,
+  `mkdocs/docs/query-guide/functions-reference.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
 
-- **SQL for reads, REST for writes.** One resource, two transports. Reads want a streamed,
-  filterable, complete result set and the query path already has one; writes want structured
-  status codes and reasons the UDTF log-stream shape can't give. The page pays with two error
-  paths (`listQuery.error` vs `AudienceGrantError`), which the Query Deny List page already
-  demonstrates is manageable. Unlike the deny-list precedent — SQL on both sides, so reads and
-  writes always agree — the write half here is fixed to this deployment's own store while the
-  read half follows the page's `DataSourceField`, so the two can disagree whenever a non-default
-  source is selected; mitigated with the explicit warning in §6 rather than hidden.
+- **SQL for reads, REST for writes — except this page's own list, which is REST too.** Reads
+  generally want a streamed, filterable result set and the query path already has one
+  (`list_audience_grants()`, kept for `micromegas-query` and other SQL clients, §11); writes want
+  structured status codes the UDTF log-stream shape can't give. But this page's writes are fixed
+  to one store (`AudienceGrantsState`'s pool) while a flight-SQL data source is not, so its own
+  list goes through a small new REST GET (`/audience-grants/visible`, §3) against that same pool
+  instead of through the UDTF and a data source — the one exception to "reads go through SQL,"
+  made because for this specific page the two transports would otherwise disagree about which
+  store is on screen (§6, "Reading through this deployment"). The cost is a second, small
+  implementation of the visibility rule (a REST handler alongside the UDTF's `scan`) instead of
+  one; both apply the same `WHERE` shape from §2/§3, so a future change to the rule has two call
+  sites to update, not one.
 - **Deleting the JSON list route instead of keeping it beside the UDTF.** Two read paths would
   drift; the only clients were the CLI `list` subcommand and `setup_telemetry`'s emptiness check,
   both handled here. Anyone scripting against it moves to `micromegas-query`.
@@ -717,9 +762,18 @@ Modified:
   `## Web app admin pages` gains a pointer to the non-admin page.
 - `mkdocs/docs/query-guide/python-api.md` — `### micromegas-grants`: two subcommands, list via
   `micromegas-query`; `### micromegas-setup-telemetry`: admin bullet updated (server claims).
+- `mkdocs/docs/query-guide/functions-reference.md` — add `list_audience_grants()` to the Table
+  Functions section, alongside `list_partitions()`, `list_view_sets()`, `process_spans()`, and the
+  rest of the non-admin-gated UDTFs it already documents: schema, no arguments, and the visibility
+  rule (admin sees every row; a non-admin sees every grant on the pairs they hold). This is the
+  reference a non-admin actually has reason to open — §11 tells them to list their grants with
+  `micromegas-query --all "SELECT * FROM list_audience_grants()"`, and §2 registers the function
+  outside the admin gate, so filing it only under "Admin SQL Functions"
+  (`mkdocs/mkdocs.yml:145`) leaves the non-admin path undocumented for the audience that needs it.
 - `mkdocs/docs/admin/functions-reference.md` — `list_audience_grants()` next to
-  `list_query_denials()`: schema, no arguments, the visibility rule, and that it is registered
-  for every caller (not admin-gated).
+  `list_query_denials()`, as a short entry that cross-links to the query-guide entry above rather
+  than duplicating it: schema, no arguments, and a pointer to
+  `query-guide/functions-reference.md#list_audience_grants` for the full visibility-rule writeup.
 - `CHANGELOG.md` `## Unreleased`:
   - **Web App:** the Audience Access page (`/audiences`) for every authenticated user.
   - **Analytics:** `list_audience_grants()` table function, caller-scoped.
@@ -740,17 +794,20 @@ plans for admin and non-admin alike (`NON_MUTATING_CALLS`); `list_audience_grant
 (no email, groups, both). `rust/analytics-web-srv`: handler tests via
 `build_handler_router_with_user_and_groups` for every §3 branch (knob off, `*` refused, not
 held, held via `user:`, held via `group:`, own-row delete, created-by delete, 403 vs 404), plus
-admin behavior unchanged; `ingestion_keys_tests.rs` for §4.
+admin behavior unchanged; `GET .../visible` for admin-sees-all, non-admin-sees-held-pairs (mirroring
+`list_audience_grants_db_test.rs`'s cases), and that it works with the knob off; `ingestion_keys_tests.rs`
+for §4.
 
-**Frontend** (vitest + Testing Library, `QueryDenyListPage.test.tsx`'s harness: mock `@/lib/auth`,
-`@/hooks/usePageTitle`, `@/components/layout`, `@/hooks/useDefaultDataSource`,
-`@/components/DataSourceSelector`, and `streamQuery` via `vi.hoisted`; `tableFromArrays` tables
-with ns timestamps; `global.fetch` for the REST calls):
+**Frontend** (vitest + Testing Library, `QueryDenyListPage.test.tsx`'s harness minus its
+data-source and `streamQuery` mocks (this page has no `DataSourceField` and reads via REST, not
+flight-SQL, §6): mock `@/lib/auth`, `@/hooks/usePageTitle`, `@/components/layout`; `global.fetch`
+for both the list read and the write calls):
 
 `audience-grants-api.test.ts` — `LIST_GRANTS_SQL` names the five columns; a table decodes to
-`AudienceGrant[]` with `Date`s; create 201/200 → `created`; delete encodes every component and
-resolves on 204; 403/404 → `AudienceGrantError` with code/status/message; `fetchMyAudiences`
-403 → `AudienceGrantError`; `validateSelector` byte bound.
+`AudienceGrant[]` with `Date`s; `fetchVisibleGrants` decodes a JSON array to `AudienceGrant[]`
+and surfaces a non-2xx as `AudienceGrantError`; create 201/200 → `created`; delete encodes every
+component and resolves on 204; 403/404 → `AudienceGrantError` with code/status/message;
+`fetchMyAudiences` 403 → `AudienceGrantError`; `validateSelector` byte bound.
 
 `AudienceAccessPage.test.tsx` —
 - Admin: grouping/sorting/counts; Add grant from header with `*` allowed; delete on any chip;
@@ -783,7 +840,10 @@ principals; knob off as non-admin.
    holds: the CLIs are new, `list` moves to `micromegas-query`, and `setup_telemetry`'s only
    list use is replaced by a server-side claim. The `admin_principal_possible` fallback that
    made an admin-gated SQL function unattractive is moot — the function is registered for
-   everyone and scoped inside.
+   everyone and scoped inside. One exception: `AudienceAccessPage` itself reads via the small
+   REST `GET .../audience-grants/visible` (§3) instead of `list_audience_grants()`, because its
+   writes are fixed to this deployment's own store and a flight-SQL data source is not — see §6,
+   "Reading through this deployment."
 2. **"Except for admins" on self-removal** is read as: the own-row rule is the *non-admin's*
    delete permission; admins are not bound by it and keep unconditional delete. Admin access
    does not derive from grant rows, so an admin deleting their own row changes nothing about
