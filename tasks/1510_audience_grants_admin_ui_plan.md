@@ -178,8 +178,12 @@ Add one field to `CallerContext` (`read_scope.rs`):
 pub grant_selectors: Arc<[String]>,
 ```
 
-`internal()` / `maintenance()` set it empty. `flight_sql_service_impl.rs:609` fills it from the
-`Some(auth_ctx)` it already matched at :596. The five test fixtures gain the field (the compiler
+`internal()` / `maintenance()` set it empty. At `flight_sql_service_impl.rs:609` the `auth_ctx`
+bound in the `Some(auth_ctx)` arm at :596 has already gone out of scope by the time the
+`CallerContext` literal is built, so the site re-reads `ext.get::<AuthContext>()` (or hoists the
+lookup above the `read_scope` match) and fills `grant_selectors` via `.map(caller_selectors)
+.unwrap_or_default()`, defaulting to empty when the extension is absent. The five test fixtures
+gain the field (the compiler
 enumerates them — the `CallerContext` doc's stated reason for having no `Default`).
 
 The selector-list construction is shared by three consumers — this site, `my_audiences`
@@ -238,7 +242,7 @@ with `$1` = `grant_selectors`. This is deliberately wider than "rows whose selec
 if you may read `team-alpha`, you may see who else may — which is exactly the "who can see this
 audience" question the page exists to answer, and it is the same set you are allowed to modify
 (§3), so the page never shows a share/revoke control over a row you cannot see the siblings of.
-An empty selector list (`--disable-auth`, internal callers) yields zero rows. An API-key caller
+An empty selector list (internal, maintenance callers) yields zero rows. An API-key caller
 has no email or groups, so it sees only pairs that carry a `*` grant.
 
 This function is unconditional: it cannot read `analytics-web-srv`'s `self_service_mint_enabled`
@@ -253,9 +257,9 @@ TTL snapshot — so a reload after a REST write always shows the write. `stream_
 `BLOCKED_FUNCTIONS` needs no change (read-only function).
 
 **What it does not show.** Effective read access is the DB table ∪ the `MICROMEGAS_AUDIENCE_GRANTS`
-env map ∪ `public` (`policy.rs:475-504`). This function is the DB table only; the page states the
-other two as standing notes (§6). Exposing the resolved `read_scope` as a second function is a
-cheap follow-up, not part of this change (Trade-offs).
+env map ∪ `public` ∪ per-key `read_audiences` (`policy.rs:475-504`). This function is the DB table
+only; the page states the other three as standing notes (§6). Exposing the resolved `read_scope`
+as a second function is a cheap follow-up, not part of this change (Trade-offs).
 
 ### 3. REST writes: from admin-only to a self-service policy
 
@@ -275,7 +279,9 @@ bytes before being rejected — and `MintGate` was created for the exact same
 `self_service_mint_enabled` knob to preserve that ordering. Replacing `AdminUser` with a plain
 `AuthenticatedUser` extractor and moving the knob check into the handler body, where
 `Json<CreateGrantRequest>` has already been parsed, would silently drop that guarantee.
-`list_grants`, `ListQuery`, `GrantListEntry`, `DEFAULT_LIMIT` and `MAX_LIMIT` are deleted.
+`list_grants`, `ListQuery`, `DEFAULT_LIMIT` and `MAX_LIMIT` are deleted; `GrantListEntry` is kept
+(renamed `VisibleGrantRow` if that reads better) as the row type for the new `GET .../visible`
+route (§3, below), which selects the same five columns.
 
 `GrantGate` calling `AuthenticatedUser::from_request_parts` needs somewhere to convert that
 call's `Unauthenticated` rejection, exactly as `MintGate` does. `IngestionKeyError` already
@@ -286,8 +292,9 @@ parameter and lets axum render the rejection directly, but `GrantGate`'s `?`-bas
 does not have that luxury. So `AudienceGrantError` gains its own `Unauthenticated` variant (401,
 `{code:"UNAUTHENTICATED"}`) and matching `From<Unauthenticated>` impl. This is a new variant on
 an already-`pub`, not-`#[non_exhaustive]` enum re-exported through `pub mod audience_grants`, so
-it is recorded as a published-enum addition in the CHANGELOG (Documentation), alongside the
-`GrantGate`/`AdminUser` gate-widening note.
+it is recorded as a published-enum addition in the CHANGELOG (Documentation), next to the
+`GrantGate`/`AdminUser` gate-widening note (which is not itself a breaking-change entry — see
+Documentation).
 
 `GrantGate` yields the caller's `AuthContext` and handles only the knob half of the pre-check:
 
@@ -323,19 +330,21 @@ is not worth a lock.
 
 **Delete (non-admin).** The row must be one of:
 
-- the caller's **own** row: `selector = 'user:<email>'` (an email is required; a caller without
-  one gets 403). This is "remove my access". It is not offered for `group:` or `*` rows — those
-  would affect other principals. **There are no negative grants**: a user whose access comes
-  from a `group:` row (or `*`) cannot opt out of it — the store only records who is let in, and
-  a member cannot edit a row that admits the whole group. Removing your own `user:` row only
-  removes that one path; if a group or `*` row still covers you, you still hold the pair and
-  still see it on the page.
+- the caller's **own** row: `selector = 'user:<email>'`, when the caller has an email. This is
+  "remove my access". It is not offered for `group:` or `*` rows — those would affect other
+  principals. **There are no negative grants**: a user whose access comes from a `group:` row
+  (or `*`) cannot opt out of it — the store only records who is let in, and a member cannot edit
+  a row that admits the whole group. Removing your own `user:` row only removes that one path; if
+  a group or `*` row still covers you, you still hold the pair and still see it on the page.
 - a row the caller **created**: `created_by = <email ?? subject>`. This is the counterpart of
   sharing: a mistaken share must be revocable by the person who made it, not only by an admin.
 
 Implemented as `DELETE … WHERE audience=$1 AND axis=$2 AND selector=$3 AND (selector = $4 OR
-created_by = $5)`; if zero rows, a follow-up `SELECT EXISTS` picks **404** (no such row) or
-**403** (exists, not yours). Admins keep unconditional delete, including of their own rows —
+created_by = $5)` when the caller has an email, with `$4 = 'user:<email>'`; when the caller has
+no email, the own-row arm is dropped from the predicate entirely rather than bound to a sentinel
+— `DELETE … WHERE audience=$1 AND axis=$2 AND selector=$3 AND created_by = $4` — leaving only the
+`created_by = subject` arm. If zero rows, a follow-up `SELECT EXISTS` picks **404** (no such row)
+or **403** (exists, not yours). Admins keep unconditional delete, including of their own rows —
 the "except for admins" in the direction is read as *the self-removal rule is the non-admin's
 delete permission; admins are not restricted by it*, and admin access does not depend on grant
 rows anyway. A user who removes their own last `read` row on an audience loses the ability to
@@ -511,7 +520,8 @@ filter is the one control allowed to hide whole rows.
      rows on this page are live.
    - **Scope**: `public` is always readable by every authenticated principal — no row needed.
    - **Env-map grants**: read access may also come from the `MICROMEGAS_AUDIENCE_GRANTS` startup
-     map; those grants are not shown here and cannot be shared from here.
+     map or a per-key `read_audiences` list; neither is shown here and neither can be shared from
+     here.
    - **Reading through this deployment.** Query Deny List deliberately lets an admin point at any
      registered data source, because its rule table lives wherever the query runs — reads and
      writes always land on the same service there. This page can't offer that: Share, Remove,
@@ -526,27 +536,29 @@ filter is the one control allowed to hide whole rows.
      so a chip's `×` can never act on a store other than the one rendering the chip.
      `list_audience_grants()` (§2) is unaffected and stays how `micromegas-query` and other SQL
      clients audit the store (§11); this page simply doesn't route its own display through it.
-   - **Non-admin, knob off** (replaces the mint/share controls): *"Self-service is disabled on
-     this deployment. You can see your grants here; ask an admin to change them."*
+   - **Non-admin, knob off** (replaces the mint, share, and removal controls): *"Self-service is
+     disabled on this deployment. You can see your grants here; ask an admin to change them."*
 4. `ErrorBanner` (`onRetry={loadGrants}`) for the list query's error (`listQuery.error.message`)
    and for write failures that are not dialog-scoped.
 5. One card per audience: header = audience (monospace) + grant count; then a `read` row and a
    `mint` row, each an axis badge + selector chips + a **Share** button (`+ Share read access` /
-   `+ Share mint access`). Share is shown when `isAdmin`, or when some chip on the row is
-   `user:<myEmail>` — **not** when the only chip is `*`: by §3 the create hold-check strips the
-   leading `"*"` before binding, so a caller who can see a pair only through a `*` grant gets the
-   same 403 as one with no matching row at all, and offering Share there would be a button that
-   always fails server-side. A row held only through a `group:` chip the page cannot attribute to
-   the caller also shows Share (the page cannot see the caller's groups, so it cannot rule this
-   in or out from chips alone); the server remains the authority and a 403 renders inline in the
-   dialog. Visible-but-not-shareable is a real, intentional state for a `*`-only pair: the caller
-   can see who else the pair is granted to, but cannot add to it themselves.
+   `+ Share mint access`). Share is shown when `isAdmin`, or when `!selfServiceOff` and some chip
+   on the row is `user:<myEmail>` — **not** when the only chip is `*`: by §3 the create hold-check
+   strips the leading `"*"` before binding, so a caller who can see a pair only through a `*`
+   grant gets the same 403 as one with no matching row at all, and offering Share there would be
+   a button that always fails server-side. A row held only through a `group:` chip the page
+   cannot attribute to the caller also shows Share (the page cannot see the caller's groups, so
+   it cannot rule this in or out from chips alone); the server remains the authority and a 403
+   renders inline in the dialog. Visible-but-not-shareable is a real, intentional state for a
+   `*`-only pair: the caller can see who else the pair is granted to, but cannot add to it
+   themselves.
    - Chip: selector (monospace) over `created_by · created_at`. A `*` chip has a red-tinted
      border and the words *any authenticated principal*. A chip whose selector is
      `user:<myEmail>` is marked **you**.
-   - Chip delete `×` is shown when `isAdmin`, or when `selector === 'user:' + myEmail`
-     (**Remove my access**), or when `createdBy === myEmail` (**Revoke**). `aria-label` names the
-     action and the triple. Other chips have no control for a non-admin.
+   - Chip delete `×` is shown when `isAdmin`, or when `!selfServiceOff` and
+     (`selector === 'user:' + myEmail` (**Remove my access**) or `createdBy === myEmail`
+     (**Revoke**)). `aria-label` names the action and the triple. Other chips have no control
+     for a non-admin.
    - An axis with no grants shows *"No mint grants — nobody can issue ingestion keys stamped with
      this audience."* (admin) — for a non-admin an empty axis simply doesn't render, since by §2
      they wouldn't see the audience through that axis anyway.
@@ -638,7 +650,10 @@ has, now in the browser.
   `(args.audience, False)` — no list calls; `_audience_has_existing_keys` and `_KEY_PAGE_SIZE`
   are deleted; `run()`'s post-mint grant-writing step (:291-301) is deleted, since the server
   now claims for admins (§4). The tuple return collapses to a single value. The stderr progress
-  line gains *"claimed audience <a>"* when `result.get("claimed")`.
+  line gains *"claimed audience <a>"* when `result.get("claimed")`. Deleting that grant-writing
+  step leaves `email = my_audiences.get("email")` unused at `setup_telemetry.py:248`; it is
+  removed too. Removing `cli/grants.py`'s `list` subcommand leaves its `json` import unused;
+  removed as well.
 
 ### 12. Server module docs and `--disable-auth`
 
@@ -739,7 +754,7 @@ Created:
 
 Modified:
 
-- `rust/auth/src/policy.rs`
+- `rust/auth/src/policy.rs`, `tests/policy_tests.rs`
 - `rust/analytics/src/lakehouse/read_scope.rs`, `query.rs`, `mod.rs`
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - `rust/analytics/tests/common/db_fixtures.rs`, `lakehouse_admin_gate_test.rs`,
@@ -835,18 +850,18 @@ Modified:
   `## Web app admin pages` gains a pointer to the non-admin page.
 - `mkdocs/docs/query-guide/python-api.md` — `### micromegas-grants`: two subcommands, list via
   `micromegas-query`; `### micromegas-setup-telemetry`: admin bullet updated (server claims).
-- `mkdocs/docs/query-guide/functions-reference.md` — add `list_audience_grants()` to the Table
-  Functions section, alongside `list_partitions()`, `list_view_sets()`, `process_spans()`, and the
-  rest of the non-admin-gated UDTFs it already documents: schema, no arguments, and the visibility
-  rule (admin sees every row; a non-admin sees every grant on the pairs they hold). This is the
-  reference a non-admin actually has reason to open — §11 tells them to list their grants with
-  `micromegas-query --all "SELECT * FROM list_audience_grants()"`, and §2 registers the function
-  outside the admin gate, so filing it only under "Admin SQL Functions"
-  (`mkdocs/mkdocs.yml:145`) leaves the non-admin path undocumented for the audience that needs it.
 - `mkdocs/docs/admin/functions-reference.md` — `list_audience_grants()` next to
-  `list_query_denials()`, as a short entry that cross-links to the query-guide entry above rather
-  than duplicating it: schema, no arguments, and a pointer to
-  `query-guide/functions-reference.md#list_audience_grants` for the full visibility-rule writeup.
+  `list_query_denials()`, following the existing shape (`list_partitions()`,
+  `list_view_sets()`): the full entry — schema, no arguments, and the visibility rule (admin sees
+  every row; a non-admin sees every grant on the pairs they hold).
+- `mkdocs/docs/query-guide/functions-reference.md` — `list_audience_grants()` marked 🔧
+  (non-admin-gated) alongside `list_partitions()` and `list_view_sets()`: a short stub — one line
+  on what it lists — ending "See [Admin Functions Reference](../admin/functions-reference.md) for
+  details," matching how those two entries already point at the admin doc. This is the reference
+  a non-admin actually has reason to open — §11 tells them to list their grants with
+  `micromegas-query --all "SELECT * FROM list_audience_grants()"`, and §2 registers the function
+  outside the admin gate, so leaving it out of the query-guide page entirely would undocument the
+  non-admin path for the audience that needs it.
 - `CHANGELOG.md` `## Unreleased` — amended in place, not layered with new "removed" bullets: the
   `GET`/`POST`/`DELETE {base_path}/api/audience-grants` (#1489), `micromegas-grants`
   `create`/`list`/`delete` + `WebClient.list_audience_grants` (#1489), and
@@ -857,12 +872,13 @@ Modified:
   - The **Web App** bullet for #1489 drops the `GET` collection route entirely (it never ships)
     and describes `POST`/`DELETE` as gated by the new self-service policy (§3: admin unrestricted;
     non-admin needs `MICROMEGAS_SELF_SERVICE_MINT` on, an identity selector, and a held pair) plus
-    the new `GET .../audience-grants/visible` route backing the page's own list. **Minor breaking
-    change** stays only on the gate widening from `AdminUser` to the new `GrantGate` extractor —
-    a genuine published-Rust-API change — not on the removed `GET` route, which never released.
-    The same note also covers `AudienceGrantError` gaining an `Unauthenticated` variant and its
-    `From<Unauthenticated>` impl (§3) — a second, smaller published-enum addition `GrantGate`
-    needs to compile.
+    the new `GET .../audience-grants/visible` route backing the page's own list. The gate widening
+    from `AdminUser` to the new `GrantGate` extractor is described as an HTTP authorization-surface
+    change, not a **Minor breaking change** — `create_grant`/`delete_grant` are private handlers
+    and `GrantGate`, like `MintGate`, is a private extractor, so nothing published changes shape.
+    **Minor breaking change** does stay on `AudienceGrantError` gaining an `Unauthenticated`
+    variant and its `From<Unauthenticated>` impl (§3) — a published-enum addition re-exported
+    through `pub mod audience_grants`.
   - A new **Analytics** bullet documents `list_audience_grants()` (§2) — this one really is new,
     not an amendment.
   - The **Python** bullet for #1489 drops `list` from the CLI subcommands and
