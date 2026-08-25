@@ -41,10 +41,17 @@ vi.mock('@/components/layout', () => ({
   PageLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
-function renderPage() {
+// Page size for the pagination tests. Small on purpose: a "full page" case
+// has to return exactly `pageSize` rows for the Next button to appear, and
+// rendering the real default (the server's 500-row max) in jsdom is
+// noticeably slower — using a small page size here keeps this file's test
+// time roughly 6x faster.
+const TEST_PAGE_SIZE = 3
+
+function renderPage(pageSize?: number) {
   return render(
     <MemoryRouter>
-      <IngestionApiKeysPage />
+      <IngestionApiKeysPage pageSize={pageSize} />
     </MemoryRouter>
   )
 }
@@ -65,6 +72,22 @@ describe('IngestionApiKeysPage', () => {
     await waitFor(() =>
       expect(screen.getByText(/No ingestion API keys yet/i)).toBeInTheDocument()
     )
+  })
+
+  it('lists at the server max limit by default', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+    } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    // No `pageSize` prop — the route renders the page this way, and it must
+    // ask for the server's max rather than letting `limit` fall back to the
+    // server's lower `DEFAULT_LIMIT` of 100, which silently truncates.
+    renderPage()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toContain(`limit=${MAX_INGESTION_API_KEYS_LIST_LIMIT}`)
   })
 
   it('lists existing keys from the list response', async () => {
@@ -239,26 +262,26 @@ describe('IngestionApiKeysPage', () => {
     expect(screen.getByText(/won't be shown again/i)).toBeInTheDocument()
   })
 
-  it('shows a Next button when the list returns exactly the max limit', async () => {
+  it('shows a Next button when the list returns exactly one full page', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
+      json: () => Promise.resolve(makeKeys(TEST_PAGE_SIZE)),
     } as unknown as Response) as unknown as typeof fetch
 
-    renderPage()
+    renderPage(TEST_PAGE_SIZE)
 
     await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument()
   })
 
-  it('shows no Next button when the list returns fewer than the max limit', async () => {
+  it('shows no Next button when the list returns fewer than a full page', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve(makeKeys(1)),
+      json: () => Promise.resolve(makeKeys(TEST_PAGE_SIZE - 1)),
     } as unknown as Response) as unknown as typeof fetch
 
-    renderPage()
+    renderPage(TEST_PAGE_SIZE)
 
     await waitFor(() => expect(screen.getByText('key-0')).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument()
@@ -269,7 +292,7 @@ describe('IngestionApiKeysPage', () => {
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
+        json: () => Promise.resolve(makeKeys(TEST_PAGE_SIZE)),
       } as unknown as Response)
       .mockResolvedValueOnce({
         ok: true,
@@ -277,14 +300,14 @@ describe('IngestionApiKeysPage', () => {
       } as unknown as Response)
     global.fetch = fetchMock as unknown as typeof fetch
 
-    renderPage()
+    renderPage(TEST_PAGE_SIZE)
 
     const nextButton = await screen.findByRole('button', { name: 'Next' })
     fireEvent.click(nextButton)
 
     await waitFor(() => {
       const [url] = fetchMock.mock.calls[1]
-      expect(url).toContain(`offset=${MAX_INGESTION_API_KEYS_LIST_LIMIT}`)
+      expect(url).toContain(`offset=${TEST_PAGE_SIZE}`)
     })
 
     expect(await screen.findByRole('button', { name: 'Previous' })).toBeInTheDocument()
@@ -296,7 +319,7 @@ describe('IngestionApiKeysPage', () => {
       // Initial load: page 1, full page (so Next is shown).
       .mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(makeKeys(MAX_INGESTION_API_KEYS_LIST_LIMIT)),
+        json: () => Promise.resolve(makeKeys(TEST_PAGE_SIZE)),
       } as unknown as Response)
       // Load after clicking Next: page 2.
       .mockResolvedValueOnce({
@@ -321,7 +344,7 @@ describe('IngestionApiKeysPage', () => {
       } as unknown as Response)
     global.fetch = fetchMock as unknown as typeof fetch
 
-    renderPage()
+    renderPage(TEST_PAGE_SIZE)
 
     const nextButton = await screen.findByRole('button', { name: 'Next' })
     fireEvent.click(nextButton)

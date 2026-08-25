@@ -22,7 +22,6 @@ const ingestionApiKeysPageConfig: ApiKeysAdminPageConfig = {
   loadErrorMessage: 'Failed to load ingestion API keys',
   revokeConfirmMessage: (name) =>
     `Are you sure you want to revoke "${name}"? Any client using this key will lose access once the revocation propagates.`,
-  maxListLimit: MAX_INGESTION_API_KEYS_LIST_LIMIT,
   ErrorClass: IngestionApiKeyError,
   listKeys: listIngestionApiKeys,
   mintKey: mintIngestionApiKey,
@@ -30,7 +29,18 @@ const ingestionApiKeysPageConfig: ApiKeysAdminPageConfig = {
   showAudience: true,
 }
 
-export default function IngestionApiKeysPage() {
+export interface IngestionApiKeysPageProps {
+  /**
+   * Rows per page. Defaults to the server's max list limit; the route renders
+   * this component with no props, so only tests ever pass a smaller size (to
+   * exercise paging without rendering a full page of rows).
+   */
+  pageSize?: number
+}
+
+export default function IngestionApiKeysPage({
+  pageSize = MAX_INGESTION_API_KEYS_LIST_LIMIT,
+}: IngestionApiKeysPageProps) {
   return (
     <Suspense
       fallback={
@@ -45,7 +55,7 @@ export default function IngestionApiKeysPage() {
         </AuthGuard>
       }
     >
-      <ApiKeysAdminPage config={ingestionApiKeysPageConfig} />
+      <ApiKeysAdminPage config={ingestionApiKeysPageConfig} pageSize={pageSize} />
     </Suspense>
   )
 }

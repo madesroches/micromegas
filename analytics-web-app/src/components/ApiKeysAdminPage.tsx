@@ -1,8 +1,9 @@
 // Shared content for the analytics/ingestion API-key admin pages
 // (`AnalyticsApiKeysPage.tsx` and `IngestionApiKeysPage.tsx`). Both pages are
 // identical in markup and behavior apart from copy (title/subtitle/
-// placeholder/revoke-confirm wording), the max page-size constant, and which
-// API-client functions/error class they call — all supplied via `config`.
+// placeholder/revoke-confirm wording) and which API-client functions/error
+// class they call — all supplied via `config` — plus the `pageSize` prop each
+// page defaults to its own server max limit.
 // Each page keeps its own outer `<Suspense fallback={<AuthGuard>...}>`
 // wrapper (see `AnalyticsApiKeysPage.tsx`); this component owns the
 // `<AuthGuard><PageLayout>` wrapping for the loaded content itself, since
@@ -41,9 +42,8 @@ export interface ApiKeysAdminPageConfig {
   loadErrorMessage: string
   /** `revokeConfirmMessage(name)` — the target key's name may be undefined while the dialog is closing. */
   revokeConfirmMessage: (name: string | undefined) => string
-  maxListLimit: number
   ErrorClass: ApiKeyErrorConstructor
-  listKeys: (includeRevoked: boolean, offset: number) => Promise<ApiKeyListEntry[]>
+  listKeys: (includeRevoked: boolean, offset: number, limit: number) => Promise<ApiKeyListEntry[]>
   mintKey: (name: string, audience?: string) => Promise<MintApiKeyResponse>
   revokeKey: (keyId: string) => Promise<unknown>
   /**
@@ -54,7 +54,22 @@ export interface ApiKeysAdminPageConfig {
   showAudience?: boolean
 }
 
-export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig }) {
+export interface ApiKeysAdminPageProps {
+  config: ApiKeysAdminPageConfig
+  /**
+   * Rows per page: the `limit` sent on every list call, the step the
+   * Previous/Next buttons move `offset` by, and the row count a full page is
+   * recognized by. One value for all three — a list call that asked for a
+   * different limit than the paging UI compares against would show a Next
+   * button onto a page that doesn't exist (or hide one that does).
+   *
+   * Each page defaults it to the server's max limit; it's a prop so callers
+   * (tests included) can page at a size that doesn't mean rendering 500 rows.
+   */
+  pageSize: number
+}
+
+export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
   usePageTitle(config.title)
 
   const [keys, setKeys] = useState<ApiKeyListEntry[]>([])
@@ -76,21 +91,21 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
     setIsLoading(true)
     setError(null)
     try {
-      const data = await config.listKeys(true, offset)
+      const data = await config.listKeys(true, offset, pageSize)
       setKeys(data)
     } catch (err) {
       setError(err instanceof config.ErrorClass ? err.message : config.loadErrorMessage)
     } finally {
       setIsLoading(false)
     }
-  }, [offset, config])
+  }, [offset, pageSize, config])
 
   const goToPreviousPage = () => {
-    setOffset((current) => Math.max(0, current - config.maxListLimit))
+    setOffset((current) => Math.max(0, current - pageSize))
   }
 
   const goToNextPage = () => {
-    setOffset((current) => current + config.maxListLimit)
+    setOffset((current) => current + pageSize)
   }
 
   useEffect(() => {
@@ -357,7 +372,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                   ))}
                 </tbody>
               </table>
-              {(offset > 0 || keys.length === config.maxListLimit) && (
+              {(offset > 0 || keys.length === pageSize) && (
                 <div className="flex items-center justify-between border-t border-theme-border bg-app-panel px-4 py-2.5">
                   {offset > 0 ? (
                     <Button variant="outline" size="sm" onClick={goToPreviousPage}>
@@ -366,7 +381,7 @@ export function ApiKeysAdminPage({ config }: { config: ApiKeysAdminPageConfig })
                   ) : (
                     <span />
                   )}
-                  {keys.length === config.maxListLimit ? (
+                  {keys.length === pageSize ? (
                     <Button variant="outline" size="sm" onClick={goToNextPage}>
                       Next
                     </Button>

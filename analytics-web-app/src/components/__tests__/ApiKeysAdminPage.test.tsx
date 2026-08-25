@@ -32,7 +32,6 @@ function makeConfig(overrides: Partial<ApiKeysAdminPageConfig>): ApiKeysAdminPag
     emptyStateText: 'No test keys yet.',
     loadErrorMessage: 'Failed to load test keys',
     revokeConfirmMessage: (name) => `Revoke "${name}"?`,
-    maxListLimit: 20,
     ErrorClass: TestApiKeyError,
     listKeys: vi.fn().mockResolvedValue([]),
     mintKey: vi.fn(),
@@ -44,7 +43,7 @@ function makeConfig(overrides: Partial<ApiKeysAdminPageConfig>): ApiKeysAdminPag
 function renderPage(config: ApiKeysAdminPageConfig) {
   return render(
     <MemoryRouter>
-      <ApiKeysAdminPage config={config} />
+      <ApiKeysAdminPage config={config} pageSize={20} />
     </MemoryRouter>
   )
 }
