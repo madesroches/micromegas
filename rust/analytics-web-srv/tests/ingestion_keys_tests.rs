@@ -740,7 +740,7 @@ async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -787,7 +787,7 @@ async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -833,7 +833,7 @@ async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: Some(audience.clone()),
+            default_audience: audience.clone(),
             self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
@@ -1203,7 +1203,7 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     let audience = format!("self-service-claim-then-delete-{}", uuid::Uuid::new_v4());
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
-        default_audience: None,
+        default_audience: PUBLIC_AUDIENCE.to_string(),
         self_service_mint_enabled: true,
         max_claims_per_caller: 1,
         max_keys_per_caller: 100,
@@ -1311,7 +1311,7 @@ async fn live_claim_survives_pre_existing_mint_grants_on_other_audiences() {
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool.clone()),
-            default_audience: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
             self_service_mint_enabled: true,
             max_claims_per_caller: 1,
             max_keys_per_caller: 100,
