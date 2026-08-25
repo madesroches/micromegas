@@ -295,11 +295,18 @@ impl ViewFactory {
 }
 
 /// Creates the default `ViewFactory` with all built-in views.
+///
+/// `default_audience` is the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), which the
+/// `blocks` view binds when it materializes. Callers source it from
+/// `LakehouseContext::default_audience` so every role that builds a factory bakes the same value
+/// into partitions -- notably the maintenance role, which is the one that actually materializes
+/// the six global views.
 pub async fn default_view_factory(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
+    default_audience: Arc<str>,
 ) -> Result<ViewFactory> {
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(default_audience)?);
     let processes_view = Arc::new(
         make_processes_view(
             runtime.clone(),

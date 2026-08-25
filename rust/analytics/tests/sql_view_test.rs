@@ -279,7 +279,7 @@ pub async fn materialize_range(
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range_for_view(
             &lakehouse.lake().db_pool,
@@ -356,8 +356,9 @@ async fn test_log_summary_view(
     lake: Arc<DataLakeConnection>,
     log_summary_view: Arc<SqlBatchView>,
 ) -> Result<()> {
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let mut view_factory = default_view_factory(runtime.clone(), lake.clone()).await?;
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let mut view_factory =
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?;
     view_factory.add_global_view(log_summary_view.clone());
     let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -502,7 +503,14 @@ async fn sql_view_test() -> Result<()> {
         make_log_entries_levels_per_process_minute_view_with_custom_merge(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
+            Arc::new(
+                default_view_factory(
+                    runtime.clone(),
+                    lake.clone(),
+                    Arc::from(micromegas_analytics::audience::DEFAULT_AUDIENCE),
+                )
+                .await?,
+            ),
         )
         .await?,
     );
@@ -512,7 +520,14 @@ async fn sql_view_test() -> Result<()> {
         make_log_entries_levels_per_process_minute_view(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
+            Arc::new(
+                default_view_factory(
+                    runtime.clone(),
+                    lake.clone(),
+                    Arc::from(micromegas_analytics::audience::DEFAULT_AUDIENCE),
+                )
+                .await?,
+            ),
         )
         .await?,
     );

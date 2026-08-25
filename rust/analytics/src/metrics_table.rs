@@ -84,8 +84,10 @@ pub fn metrics_table_schema() -> Schema {
             false,
         ),
         // Appended last (#1482): the owning process's audience, dictionary-encoded like
-        // `process_id` in this same schema. Never `NULL` in practice -- every process carries
-        // one, always.
+        // `process_id` in this same schema. Non-nullable because both producers of this column
+        // resolve a never-stamped process to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here
+        // (`blocks_view.rs`'s `data_sql` for the global instances, `metadata::find_process` for
+        // the per-process JIT ones).
         Field::new(
             "audience",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

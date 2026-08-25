@@ -71,10 +71,11 @@
 //!
 //! ## `micromegas.audience` is server-written and authenticated (AbAC Stage 5, #1373; #1482)
 //!
-//! Every process is stamped with `micromegas.audience` at registration -- from the authenticated
-//! credential's `AuthContext.bound_audience` when present, or the deployment's
-//! `MICROMEGAS_DEFAULT_AUDIENCE` otherwise (#1482 §0) -- so there is no more unstamped
-//! state: a client can neither assert, suppress, nor omit the stamp. Registration
+//! A process is stamped with `micromegas.audience` at registration from the authenticated
+//! credential's `AuthContext.bound_audience`, and a client can neither assert nor forge that
+//! stamp. A credential carrying no audience stamps nothing; the resulting missing property is
+//! resolved to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*
+//! (#1482), so the column this rewrite filters on is non-null either way. Registration
 //! (`insert_process`/`register_otel_process`) rejects a same-`process_id`, different-audience
 //! re-registration outright -- needed because the OTLP `process_id` derivation formula is public,
 //! so without this guard a credential could pre-register (via the native path) the exact
@@ -183,8 +184,9 @@ impl OwnershipRewrite {
     /// fail-closed reading of "caller has no audiences" rather than emitting `IN ()` and leaving
     /// its behavior to DataFusion (`ReadScope::Audiences` can legitimately resolve to an empty
     /// set -- a caller matching no grant resolves to `{public}`, but a bare-array read-only
-    /// audience with no matching selector contributes nothing). No `coalesce` any more: the
-    /// column is `NOT NULL` (#1482 §0), so there is no unstamped case to fall back for.
+    /// audience with no matching selector contributes nothing). No `coalesce` here: the column is
+    /// `NOT NULL` (#1482), because the extraction sites already coalesced a never-stamped
+    /// process's missing property to the deployment default before it was materialized.
     fn resolved_predicate(&self) -> Expr {
         let audiences = self.audiences();
         if audiences.is_empty() {

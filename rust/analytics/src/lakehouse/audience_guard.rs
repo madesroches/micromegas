@@ -19,9 +19,10 @@
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
 //! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
 //! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more
-//! (#1482 §0): every process carries an audience, always, so `Unknown` now covers both "no such
-//! row" and (post-backfill) "a row that violates the invariant" -- both deny, on the same
-//! fail-closed reasoning. An id ambiguous between a `process_id` and a `stream_id`
+//! (#1482): a process whose credential carried no audience keeps no property in Postgres, and
+//! `owner_query_sql`'s `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every
+//! *existing* id has a real owning audience. `Unknown` therefore means "no such row" -- deny, on
+//! the same fail-closed reasoning as before. An id ambiguous between a `process_id` and a `stream_id`
 //! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
 //! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
 //! denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`] map it to a query
@@ -46,11 +47,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-/// What a resolution attempt found. Every process carries an audience, always (#1482 §0), so
-/// `Unknown` is the only "not a real, readable audience" state left: it covers "no such row"
-/// (not yet ingested, or retention already deleted it, plan §11) *and* -- after the startup
-/// backfill -- a row that somehow violates the invariant. Both deny, on the same fail-closed
-/// reasoning.
+/// What a resolution attempt found. Every *existing* process resolves to an audience -- its own
+/// if it was stamped, `MICROMEGAS_DEFAULT_AUDIENCE` if it was not (#1482) -- so `Unknown` is the
+/// only "not a real, readable audience" state left, and it means "no such row" (not yet
+/// ingested, or retention already deleted it, plan §11). Deny, fail-closed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerAudience {
     Unknown,
@@ -103,11 +103,10 @@ pub const DEFAULT_AUDIENCE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// resolved audience is independently readable. `Process`/`Block` queries never produce more than
 /// one row per id, so this never triggers for them.
 ///
-/// A `None` audience (the property missing from the row) maps to [`OwnerAudience::Unknown`], not
-/// a distinct state: after #1482 §0's write-side default and startup backfill, every process
-/// carries the property, so its absence here means an invariant violation (a straggler old
-/// replica, or something writing to `processes` bypassing ingestion) -- fail-closed, exactly like
-/// "no such row".
+/// A `None` audience maps to [`OwnerAudience::Unknown`], not a distinct state. With
+/// `owner_query_sql`'s `COALESCE` in place (#1482) a `None` is unreachable for a row that exists
+/// -- a missing property resolves to the default instead -- so this arm is a safety net against a
+/// bug in that expression, and it denies exactly like "no such row".
 fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAudience> {
     let mut by_id: HashMap<Uuid, Vec<OwnerAudience>> = HashMap::new();
     for (id, audience) in rows {
@@ -140,16 +139,23 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 
 /// The SQL shape for each [`IdKind`]. `LEFT JOIN LATERAL` (not an inner `unnest` in the `FROM`
 /// list) keeps a row in the result even when its `properties` carry no `AUDIENCE_PROPERTY` --
-/// which, after #1482 §0, is only possible for an invariant-violating row (a straggler old
-/// replica, or something bypassing ingestion); an inner unnest would instead silently drop such
-/// a row from the result, and [`merge_owner_rows`] would then treat it as "no such id" rather
-/// than "id exists, `Unknown` owner" -- distinct code paths that happen to agree on the verdict
-/// (deny) but not on the reasoning. `$2` is [`AUDIENCE_PROPERTY`]; `$1` is the batch of ids to
-/// resolve, bound as a `uuid[]` array so `resolve_many` is always one query.
+/// the ordinary case for a process registered under a credential that carried none. `COALESCE`
+/// then resolves that to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), so such a
+/// process has a real owning audience here rather than a distinct "unstamped" state. The
+/// `LEFT JOIN` still matters: an inner unnest would drop the row entirely, and
+/// [`merge_owner_rows`] would then report "no such id" for an id that does exist -- the same
+/// verdict (deny) reached by the wrong reasoning.
+///
+/// `$1` is the batch of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one
+/// query; `$2` is [`AUDIENCE_PROPERTY`]; `$3` is the default audience.
+///
+/// This site reads Postgres live, so it always resolves the *current* default -- unlike Prong A,
+/// which reads whatever default was configured when the partition was materialized. The two
+/// agree except across a default change that has not been followed by a regeneration pass.
 fn owner_query_sql(kind: IdKind) -> &'static str {
     match kind {
         IdKind::Process => {
-            "SELECT p.process_id AS id, a.value AS audience
+            "SELECT p.process_id AS id, COALESCE(a.value, $3) AS audience
              FROM processes p
              LEFT JOIN LATERAL (
                  SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
@@ -157,7 +163,7 @@ fn owner_query_sql(kind: IdKind) -> &'static str {
              WHERE p.process_id = ANY($1::uuid[])"
         }
         IdKind::Block => {
-            "SELECT b.block_id AS id, a.value AS audience
+            "SELECT b.block_id AS id, COALESCE(a.value, $3) AS audience
              FROM blocks b
              JOIN processes p ON p.process_id = b.process_id
              LEFT JOIN LATERAL (
@@ -166,14 +172,14 @@ fn owner_query_sql(kind: IdKind) -> &'static str {
              WHERE b.block_id = ANY($1::uuid[])"
         }
         IdKind::ProcessOrStream => {
-            "SELECT p.process_id AS id, a.value AS audience
+            "SELECT p.process_id AS id, COALESCE(a.value, $3) AS audience
              FROM processes p
              LEFT JOIN LATERAL (
                  SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
              ) a ON TRUE
              WHERE p.process_id = ANY($1::uuid[])
              UNION ALL
-             SELECT s.stream_id AS id, a.value AS audience
+             SELECT s.stream_id AS id, COALESCE(a.value, $3) AS audience
              FROM streams s
              JOIN processes p ON p.process_id = s.process_id
              LEFT JOIN LATERAL (
@@ -188,10 +194,12 @@ async fn fetch_owner_rows(
     pool: &sqlx::Pool<sqlx::Postgres>,
     ids: &[Uuid],
     kind: IdKind,
+    default_audience: &str,
 ) -> anyhow::Result<Vec<(Uuid, Option<String>)>> {
     let rows = sqlx::query(owner_query_sql(kind))
         .bind(ids)
         .bind(AUDIENCE_PROPERTY)
+        .bind(default_audience)
         .fetch_all(pool)
         .await
         .with_context(|| format!("resolving owning process' audience for {kind:?}"))?;
@@ -210,15 +218,28 @@ async fn fetch_owner_rows(
 pub struct AudienceIndex {
     pool: sqlx::Pool<sqlx::Postgres>,
     cache: moka::future::Cache<(IdKind, Uuid), OwnerAudience>,
+    /// The audience a never-stamped process resolves to (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482),
+    /// bound into every `owner_query_sql` execution. Carried from `LakehouseContext` so this
+    /// prong and the materialization path share one resolved value.
+    default_audience: Arc<str>,
 }
 
 impl AudienceIndex {
-    pub fn new(pool: sqlx::Pool<sqlx::Postgres>, max_entries: u64, ttl: Duration) -> Self {
+    pub fn new(
+        pool: sqlx::Pool<sqlx::Postgres>,
+        max_entries: u64,
+        ttl: Duration,
+        default_audience: Arc<str>,
+    ) -> Self {
         let cache = moka::future::Cache::builder()
             .max_capacity(max_entries)
             .time_to_live(ttl)
             .build();
-        Self { pool, cache }
+        Self {
+            pool,
+            cache,
+            default_audience,
+        }
     }
 
     /// Resolves a single id. A thin wrapper over [`Self::resolve_many`] -- always at least as
@@ -249,7 +270,7 @@ impl AudienceIndex {
         if misses.is_empty() {
             return Ok(result);
         }
-        let rows = fetch_owner_rows(&self.pool, &misses, kind).await?;
+        let rows = fetch_owner_rows(&self.pool, &misses, kind, &self.default_audience).await?;
         let resolved = merge_owner_rows(rows);
         for id in misses {
             let owner = resolved.get(&id).cloned().unwrap_or(OwnerAudience::Unknown);

@@ -259,7 +259,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
 
     // Materialize `blocks` (snapshots `processes.properties` from Postgres into the blocks
     // partitions), then `processes`/`streams` (the `SqlBatchView`s `OwnershipRewrite` reads its
@@ -267,7 +267,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     // demand at query time the way the per-process JIT views below are).
     let insert_begin = (Utc::now() - TimeDelta::hours(1)).duration_trunc(TimeDelta::hours(1))?;
     let insert_range = TimeRange::new(insert_begin, insert_begin + TimeDelta::hours(3));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     reset_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -298,7 +298,9 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
 
     // The full default factory: `processes`/`streams` (just materialized above) plus every
     // per-process/per-stream JIT view set (`log_entries`, `async_events`, `thread_spans`, ...).
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
 
     // --- `processes`, directly -----------------------------------------------------------
     let processes_a_sql = format!(

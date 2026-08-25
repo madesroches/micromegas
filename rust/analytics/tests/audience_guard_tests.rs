@@ -6,10 +6,11 @@
 //! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`. Both
 //! predate this file and already exercise the pieces this stage added to them.
 //!
-//! `OwnerAudience::Unstamped` is gone (#1482 §0/§4): every process is stamped at write time, so a
-//! resolved `None` audience (an invariant violation, not a state to special-case) maps to
-//! `OwnerAudience::Unknown` in `merge_owner_rows` -- always denied under `ReadScope::Audiences`,
-//! the same as "no such id". That mapping itself is private and DB-backed
+//! `OwnerAudience::Unstamped` is gone (#1482 §4): a process with no audience property resolves to
+//! `MICROMEGAS_DEFAULT_AUDIENCE` in `owner_query_sql`'s `COALESCE`, so it is an ordinary
+//! `Audience(..)` rather than a state to special-case, and a resolved `None` -- now reachable only
+//! for an id with no row at all -- maps to `OwnerAudience::Unknown` in `merge_owner_rows`, always
+//! denied under `ReadScope::Audiences`. That mapping itself is private and DB-backed
 //! (`fetch_owner_rows`/`merge_owner_rows`); see `prong_b_guard_db_test.rs` for end-to-end coverage
 //! against a real row with no audience property. What's covered here is the pure half:
 //! `is_readable` already denies `Unknown` unconditionally under `ReadScope::Audiences`.
@@ -29,7 +30,12 @@ use uuid::Uuid;
 fn unroutable_index() -> Arc<AudienceIndex> {
     let pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
         .expect("connect_lazy should not touch the network");
-    Arc::new(AudienceIndex::new(pool, 100_000, Duration::from_secs(300)))
+    Arc::new(AudienceIndex::new(
+        pool,
+        100_000,
+        Duration::from_secs(300),
+        Arc::from("public"),
+    ))
 }
 
 fn audiences(names: &[&str]) -> ReadScope {

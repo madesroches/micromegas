@@ -194,7 +194,9 @@ impl IsolationConfig {
     /// deployment built from `main` between the two changes might be -- for a fail-closed
     /// posture, silently dropping the knob would be exactly the kind of silent behavior change
     /// this project's env-var conventions exist to avoid. The fix named in the error is
-    /// `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that replaces it (#1482 §0).
+    /// `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that replaces it (#1482).
+    /// That knob lives on `LakehouseContext`, not here: it is a property of the lake's contents,
+    /// needed by the maintenance daemon, which never builds an `IsolationConfig`.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
         if std::env::var(&unstamped_var).is_ok() {

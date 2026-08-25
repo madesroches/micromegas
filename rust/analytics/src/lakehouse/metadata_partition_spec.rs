@@ -34,6 +34,12 @@ pub struct MetadataPartitionSpec {
     pub insert_range: TimeRange,
     pub record_count: i64,
     pub data_sql: Arc<String>,
+    /// Bound as `$3` when `data_sql` runs -- the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
+    /// (#1482), which `BlocksView`'s `COALESCE` resolves a never-stamped process's missing
+    /// audience to. `None` for a `data_sql` that references only `$1`/`$2`; `BlocksView` is the
+    /// only view that uses this module, so in practice it is always `Some`. Note the separate
+    /// `source_count_query` deliberately does **not** get this bind -- it has no `$3`.
+    pub default_audience: Option<Arc<str>>,
     pub compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     /// The sort guarantee this partition's rows will carry, per the caller's `data_sql`'s
     /// `ORDER BY` (e.g. `Some(["insert_time"])` for `BlocksView`). Recorded on `Partition` as-is.
@@ -50,6 +56,7 @@ pub async fn fetch_metadata_partition_spec(
     insert_range: TimeRange,
     compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     sort_order: Option<Vec<String>>,
+    default_audience: Option<Arc<str>>,
 ) -> Result<MetadataPartitionSpec> {
     //todo: extract this query to allow join (instead of source_table)
     let row = instrument_named!(
@@ -67,6 +74,7 @@ pub async fn fetch_metadata_partition_spec(
         insert_range,
         record_count: row.try_get("count").with_context(|| "reading count")?,
         data_sql,
+        default_audience,
         compute_time_bounds,
         sort_order,
     })
@@ -205,10 +213,13 @@ impl PartitionSpec for MetadataPartitionSpec {
         let stream_result: Result<()> = instrument_named!(
             async {
                 if self.record_count > 0 {
-                    let mut rows = sqlx::query(&self.data_sql)
+                    let mut query = sqlx::query(&self.data_sql)
                         .bind(self.insert_range.begin)
-                        .bind(self.insert_range.end)
-                        .fetch(&lake.db_pool);
+                        .bind(self.insert_range.end);
+                    if let Some(default_audience) = self.default_audience.as_deref() {
+                        query = query.bind(default_audience.to_owned());
+                    }
+                    let mut rows = query.fetch(&lake.db_pool);
                     let ctx = SessionContext::new();
                     let mut chunk: Vec<PgRow> = Vec::new();
                     let mut chunk_bytes = 0usize;

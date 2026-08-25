@@ -241,7 +241,14 @@ impl FlightSqlServerBuilder {
         let view_factory = if let Some(factory_fn) = self.view_factory_fn {
             Arc::new(factory_fn(lakehouse.runtime().clone(), data_lake).await?)
         } else {
-            Arc::new(default_view_factory(lakehouse.runtime().clone(), data_lake).await?)
+            Arc::new(
+                default_view_factory(
+                    lakehouse.runtime().clone(),
+                    data_lake,
+                    lakehouse.default_audience(),
+                )
+                .await?,
+            )
         };
 
         let partition_provider =

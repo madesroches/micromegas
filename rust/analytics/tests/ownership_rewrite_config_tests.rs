@@ -11,8 +11,9 @@
 //! any test in this repo (checked via grep), but are still cleared by `EnvGuard` since this
 //! file's tests are the only ones that set them.
 //!
-//! `unstamped_audience`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are removed outright (#1482 §0/§4): the
-//! audience column is now physical and non-nullable on every global view, so there is no more
+//! `unstamped_audience`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are removed outright (#1482 §4): the
+//! audience column is now physical and non-nullable on every global view, and a never-stamped
+//! process resolves to the deployment default where the audience is read, so there is no more
 //! query-time "unstamped" fallback to configure. What used to be several parsing cases for that
 //! knob collapses to one: setting it at all (prefixed or unprefixed, including to an empty
 //! string) is now a startup error naming its replacement,

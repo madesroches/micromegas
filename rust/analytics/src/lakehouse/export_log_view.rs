@@ -115,7 +115,7 @@ impl ExportLogView {
         max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
-        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
         let ctx = make_session_context(
             lakehouse,
             null_part_provider,

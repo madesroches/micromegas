@@ -252,7 +252,7 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     ));
     let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
     let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
-    Arc::new(LakehouseContext::new(lake, runtime))
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
 }
 
 fn make_ordered_merger(query: &str) -> QueryMerger {

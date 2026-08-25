@@ -119,13 +119,17 @@ impl View for ImagesView {
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         let process = Arc::new(
-            find_process(&lakehouse.lake().db_pool, &self.process_id)
-                .await
-                .with_context(|| "find_process")?,
+            find_process(
+                &lakehouse.lake().db_pool,
+                &self.process_id,
+                &lakehouse.default_audience(),
+            )
+            .await
+            .with_context(|| "find_process")?,
         );
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
-        let blocks_view = BlocksView::new()?;
+        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
         let all_partitions = generate_process_jit_partitions(
             &JitPartitionConfig::default(),
             lakehouse.clone(),

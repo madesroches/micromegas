@@ -6,6 +6,7 @@ use super::migration::migrate_lakehouse;
 use super::query_deny_list::QueryDenyList;
 use super::reader_factory::ReaderFactory;
 use super::runtime::make_runtime_env;
+use crate::audience::default_audience_from_env;
 use anyhow::Context;
 use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -38,6 +39,13 @@ pub struct LakehouseContext {
     /// holder of a `LakehouseContext` (maintenance daemon, tests) keeps an empty snapshot and
     /// `check` never denies anything.
     query_denials: Arc<QueryDenyList>,
+    /// The audience a never-stamped process is read as (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482).
+    /// Resolved once here and handed to all three sites that read an audience out of Postgres --
+    /// `BlocksView`'s `data_sql`, `metadata::find_process`, and [`AudienceIndex`]'s
+    /// `owner_query_sql` -- so one process can never resolve two different defaults depending on
+    /// which path reached it. It lives here rather than on `IsolationConfig` because the
+    /// maintenance daemon needs it and never builds one of those.
+    default_audience: Arc<str>,
 }
 
 impl LakehouseContext {
@@ -52,7 +60,7 @@ impl LakehouseContext {
             .await
             .with_context(|| "migrate_lakehouse")?;
         let runtime = Arc::new(make_runtime_env()?);
-        Ok(Arc::new(Self::new(lake, runtime)))
+        Ok(Arc::new(Self::new(lake, runtime)?))
     }
 
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
@@ -67,11 +75,15 @@ impl LakehouseContext {
             .await
             .with_context(|| "migrate_lakehouse")?;
         let runtime = Arc::new(make_runtime_env()?);
-        Ok(Arc::new(Self::new(data_lake, runtime)))
+        Ok(Arc::new(Self::new(data_lake, runtime)?))
     }
 
     /// Creates a new lakehouse context with a default-sized metadata cache.
-    pub fn new(lake: Arc<DataLakeConnection>, runtime: Arc<RuntimeEnv>) -> Self {
+    ///
+    /// Fails if `MICROMEGAS_DEFAULT_AUDIENCE` is set to a malformed value -- every caller is a
+    /// startup path, so a typo in that knob stops the role rather than silently relabelling
+    /// legacy data (see [`default_audience_from_env`]).
+    pub fn new(lake: Arc<DataLakeConnection>, runtime: Arc<RuntimeEnv>) -> Result<Self> {
         let metadata_cache_mb = match std::env::var("MICROMEGAS_METADATA_CACHE_MB") {
             Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
                 warn!(
@@ -83,6 +95,7 @@ impl LakehouseContext {
         };
 
         let metadata_cache = Arc::new(MetadataCache::new(metadata_cache_mb * 1024 * 1024));
+        let default_audience: Arc<str> = Arc::from(default_audience_from_env()?.as_str());
 
         let reader_factory = Arc::new(ReaderFactory::new(
             micromegas_object_cache::l1_wrap(lake.blob_storage.inner(), "lakehouse"),
@@ -92,23 +105,29 @@ impl LakehouseContext {
             lake.db_pool.clone(),
             DEFAULT_AUDIENCE_CACHE_ENTRIES,
             DEFAULT_AUDIENCE_CACHE_TTL,
+            default_audience.clone(),
         ));
         let query_denials = Arc::new(QueryDenyList::new(lake.db_pool.clone()));
-        Self {
+        Ok(Self {
             lake,
             metadata_cache,
             runtime,
             reader_factory,
             audience_index,
             query_denials,
-        }
+            default_audience,
+        })
     }
 
     /// Creates a new lakehouse context with a custom metadata cache.
+    ///
+    /// Takes `default_audience` rather than re-reading the environment: a context built this way
+    /// must resolve the same default as the one it is derived from (see the field's doc comment).
     pub fn with_caches(
         lake: Arc<DataLakeConnection>,
         runtime: Arc<RuntimeEnv>,
         metadata_cache: Arc<MetadataCache>,
+        default_audience: Arc<str>,
     ) -> Self {
         let reader_factory = Arc::new(ReaderFactory::new(
             micromegas_object_cache::l1_wrap(lake.blob_storage.inner(), "lakehouse"),
@@ -118,6 +137,7 @@ impl LakehouseContext {
             lake.db_pool.clone(),
             DEFAULT_AUDIENCE_CACHE_ENTRIES,
             DEFAULT_AUDIENCE_CACHE_TTL,
+            default_audience.clone(),
         ));
         let query_denials = Arc::new(QueryDenyList::new(lake.db_pool.clone()));
         Self {
@@ -127,7 +147,14 @@ impl LakehouseContext {
             reader_factory,
             audience_index,
             query_denials,
+            default_audience,
         }
+    }
+
+    /// Returns the audience a never-stamped process is read as
+    /// (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482).
+    pub fn default_audience(&self) -> Arc<str> {
+        self.default_audience.clone()
     }
 
     /// Returns the data lake connection.

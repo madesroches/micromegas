@@ -217,9 +217,9 @@ async fn row_count(
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
 
-/// Shared fixture setup: three processes (A/B stamped with different audiences, C stamped with
-/// the deployment's default ingestion audience, `public` -- #1482 §0, there is no unstamped
-/// state any more), with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
+/// Shared fixture setup: three processes (A/B stamped with different audiences, C never stamped
+/// at all, which `owner_query_sql`'s `COALESCE` resolves to `MICROMEGAS_DEFAULT_AUDIENCE`,
+/// `public` here -- #1482), with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
 /// `get_process_thread_list` and `perfetto_trace_chunks`' `get_process_exe`, which read those
 /// views under the witness's internal caller regardless of the outer caller's scope -- see
 /// `tasks/1371_udtf_udf_guards_plan.md` §6).
@@ -248,11 +248,11 @@ async fn setup() -> Result<Fixtures> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
 
     let insert_begin = (Utc::now() - TimeDelta::hours(1)).duration_trunc(TimeDelta::hours(1))?;
     let insert_range = TimeRange::new(insert_begin, insert_begin + TimeDelta::hours(3));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     reset_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -281,7 +281,9 @@ async fn setup() -> Result<Fixtures> {
     )
     .await?;
 
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
 
     Ok(Fixtures {
         lakehouse,

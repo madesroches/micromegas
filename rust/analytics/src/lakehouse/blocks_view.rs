@@ -11,7 +11,7 @@ use super::{
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
-use crate::audience::audience_subselect;
+use crate::audience::coalesced_audience_subselect;
 use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -52,12 +52,21 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
+    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped process materializes under
+    /// (#1482). Carried from `LakehouseContext::default_audience` by every constructor call.
+    default_audience: Arc<str>,
     ordered_merger: Arc<dyn PartitionMerger>,
     plain_merger: Arc<dyn PartitionMerger>,
 }
 
 impl BlocksView {
-    pub fn new() -> Result<Self> {
+    /// `default_audience` is the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`, sourced from
+    /// `LakehouseContext::default_audience`. It is the first of #1482's three read sites and the
+    /// only one whose resolved value is *baked into a partition*: every row of one materialization
+    /// sees the same bound value, so a never-stamped process is labelled consistently within a
+    /// partition. Two partitions materialized under different configured defaults can disagree --
+    /// changing the default requires regenerating the six views over the affected range.
+    pub fn new(default_audience: Arc<str>) -> Result<Self> {
         let data_sql = Arc::new(format!(
             r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time, streams.format,
@@ -70,7 +79,7 @@ impl BlocksView {
          AND blocks.insert_time < $2
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
-            audience_subselect = audience_subselect("processes.properties"),
+            audience_subselect = coalesced_audience_subselect("processes.properties", 3),
         ));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let schema = Arc::new(blocks_view_schema());
@@ -99,6 +108,7 @@ impl BlocksView {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
+            default_audience,
             ordered_merger,
             plain_merger,
         })
@@ -144,6 +154,7 @@ impl View for BlocksView {
                 insert_range,
                 self.get_time_bounds(),
                 Some(insert_time_sort_order()),
+                Some(self.default_audience.clone()),
             )
             .await
             .with_context(|| "fetch_metadata_partition_spec")?,
@@ -310,8 +321,9 @@ pub fn blocks_view_schema() -> Schema {
             false,
         ),
         // Appended last (#1482): the audience of the owning process, extracted once here from
-        // Postgres and propagated structurally into every downstream view. Never `NULL` in
-        // practice -- every process carries one, always (see `audience.rs`, `audience_backfill.rs`).
+        // Postgres and propagated structurally into every downstream view. Non-nullable because
+        // `data_sql` wraps the extraction in `COALESCE(..., $3)` (see `audience.rs`), so a process
+        // that was never stamped materializes under the deployment default rather than as a NULL.
         // Dictionary-encoded like every other view's audience column (`log_entries_table.rs`,
         // `metrics_table.rs`, `log_stats_view.rs`): one distinct value per partition in practice.
         // `sql_arrow_bridge` delivers it as plain `Utf8` (its mapping is keyed on the Postgres
@@ -327,5 +339,5 @@ pub fn blocks_view_schema() -> Schema {
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![5] // Bumped from vec![4] for the dictionary-encoded `audience` column (#1482)
+    vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column (#1482)
 }

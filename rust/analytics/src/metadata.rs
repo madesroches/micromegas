@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
-    audience::audience_subselect,
+    audience::coalesced_audience_subselect,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
@@ -50,8 +50,11 @@ pub struct ProcessMetadata {
     pub start_ticks: i64,
     pub parent_process_id: Option<uuid::Uuid>,
     pub properties: SharedJsonbSerialized,
-    /// The owning process's audience (#1482 §3) -- always present, never empty. Appended last:
-    /// a required field with no default, so the compiler enumerates every construction site.
+    /// The owning process's audience (#1482) -- always present, never empty. A process whose
+    /// credential carried no audience keeps no property in Postgres; every producer of this
+    /// struct resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so the
+    /// `Option` stops at the database boundary. Appended last: a required field with no default,
+    /// so the compiler enumerates every construction site.
     pub audience: Arc<str>,
 }
 
@@ -233,9 +236,10 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
     let properties_map = micromegas_telemetry::property::into_hashmap(properties);
     let serialized_properties = serialize_properties_to_jsonb(&properties_map)
         .with_context(|| "serializing process properties to JSONB")?;
-    // A NULL here (`try_get` on a String column) is a `try_get` error -- correct, per #1482 §0:
-    // every process carries an audience, always, after the write-side default and the startup
-    // backfill.
+    // A NULL here (`try_get` on a String column) is a `try_get` error, and that is correct: both
+    // producers of this row -- `find_process` and the `blocks` view's `data_sql` -- wrap the
+    // audience extraction in `COALESCE(..., <default>)` (#1482), so a NULL can only mean a bug in
+    // that expression or a query that bypassed it, never a legitimately never-stamped process.
     let audience: String = row.try_get("audience")?;
 
     Ok(ProcessMetadata {
@@ -256,10 +260,17 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
 }
 
 /// Finds a process by its ID and returns it as ProcessMetadata with pre-serialized JSONB properties.
+///
+/// The second of #1482's three read sites: `default_audience` is bound as `$2` and resolves a
+/// never-stamped process's missing property, so `view_instance('log_entries'|'measures'|'images'|
+/// 'otel_spans', <process_id>)` works for such a process instead of failing in `jit_update` when
+/// `process_metadata_from_row` reads a NULL audience. Callers source it from
+/// `LakehouseContext::default_audience`.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: &sqlx::types::Uuid,
+    default_audience: &str,
 ) -> Result<ProcessMetadata> {
     let sql = format!(
         "SELECT process_id,
@@ -277,10 +288,13 @@ pub async fn find_process(
                 {audience_subselect} AS audience
          FROM processes
          WHERE process_id = $1;",
-        audience_subselect = audience_subselect("properties"),
+        audience_subselect = coalesced_audience_subselect("properties", 2),
     );
     let row = instrument_named!(
-        sqlx::query(&sql).bind(process_id).fetch_one(pool),
+        sqlx::query(&sql)
+            .bind(process_id)
+            .bind(default_audience)
+            .fetch_one(pool),
         "sql_select_process"
     )
     .await

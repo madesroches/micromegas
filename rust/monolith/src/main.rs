@@ -355,8 +355,12 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let retention_days = args.retention_days;
         join_set.spawn(async move {
-            let view_factory =
-                default_view_factory(lh.runtime().clone(), lh.lake().clone()).await?;
+            let view_factory = default_view_factory(
+                lh.runtime().clone(),
+                lh.lake().clone(),
+                lh.default_audience(),
+            )
+            .await?;
             let views_to_update = get_global_views_with_update_group(&view_factory);
             daemon(lh, views_to_update, retention_days, shutdown, grace_c).await
         });

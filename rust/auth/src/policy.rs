@@ -58,18 +58,18 @@ pub fn is_valid_audience(aud: &str) -> bool {
 /// left for an empty string to mean, so a blank value is a misconfiguration, not an opt-out.
 ///
 /// Leading/trailing whitespace is trimmed and `warn!`-logged, the same way
-/// `micromegas_ingestion::write_audience::WriteAudience::default_from_env` -- the other reader of
-/// this same variable -- handles it, so one env value can never be accepted by one role and
-/// rejected by the other. Trimming keeps a value a deployment template rendered with stray
+/// `micromegas_analytics::audience::default_audience_from_env` -- the other reader of this same
+/// variable -- handles it, so one env value can never be accepted by one role and rejected by
+/// the other. Trimming keeps a value a deployment template rendered with stray
 /// padding working; the warning stays because padding is far more likely a templating slip than
 /// an intention.
 ///
 /// One knob, one meaning: the audience anything that arrives without one gets. It is what
 /// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes, and
-/// the same value `micromegas_ingestion::write_audience::WriteAudience::default_from_env` stamps
-/// onto data written by a credential with no bound audience -- the two used to be
-/// `MICROMEGAS_DEFAULT_KEY_AUDIENCE` and `MICROMEGAS_DEFAULT_INGESTION_AUDIENCE`, a distinction
-/// that only ever made an operator configure the same value twice.
+/// the same value `micromegas_analytics::audience::default_audience_from_env` resolves a
+/// never-stamped process to on the read side (#1482) -- the key-minting half used to be a
+/// separate `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, a distinction that only ever made an operator
+/// configure the same value twice.
 pub fn default_audience_from_env(prefix: &str) -> Result<String> {
     let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {

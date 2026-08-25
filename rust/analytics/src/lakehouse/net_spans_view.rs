@@ -347,7 +347,7 @@ impl View for NetSpansView {
         )
         .with_context(|| "make_time_converter_from_latest_timing")?;
 
-        let blocks_view = BlocksView::new()?;
+        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
         // NetSpansView builds cross-block net span trees, so its JIT partitions must be
         // event-time ordered, not insert-time ordered -- see BlockOrder::EventTime's docs. (Unlike
         // ThreadSpansView, NetSpansView declares no ScanOrdering::Concatenated today, so it does

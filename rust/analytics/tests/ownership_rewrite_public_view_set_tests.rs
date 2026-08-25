@@ -57,7 +57,7 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
     ));
     let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
     let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
-    Arc::new(LakehouseContext::new(lake, runtime))
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
 }
 
 /// Never actually invoked by a plan-shape-only test (no `.collect()`, so `get_time_bounds` is
@@ -221,7 +221,8 @@ impl View for ProcessIdOnlyView {
 /// only via `view_instance(...)`, never as a global table, so they are registered with
 /// `add_view_set` rather than as a global view, mirroring `view_factory.rs::default_view_factory`).
 async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory> {
-    let blocks_view = Arc::new(BlocksView::new().expect("BlocksView::new"));
+    let blocks_view =
+        Arc::new(BlocksView::new(lakehouse.default_audience()).expect("BlocksView::new"));
     let processes_view = Arc::new(
         make_processes_view(
             lakehouse.runtime().clone(),
@@ -512,9 +513,13 @@ async fn real_view_factory_covers_every_registered_view_set() {
 
     let lakehouse = make_offline_lakehouse_context().await;
     let inventory_view_factory = Arc::new(
-        default_view_factory(lakehouse.runtime().clone(), lakehouse.lake().clone())
-            .await
-            .expect("default_view_factory"),
+        default_view_factory(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            lakehouse.default_audience(),
+        )
+        .await
+        .expect("default_view_factory"),
     );
 
     // Global instances, implicitly available with no view_instance(...) call. Keyed on whether

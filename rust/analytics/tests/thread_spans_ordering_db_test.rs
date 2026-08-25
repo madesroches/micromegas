@@ -237,8 +237,10 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let part_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
@@ -254,7 +256,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // `regenerate_global_view` for the same reason.
     let insert_begin = (Utc::now() - TimeDelta::hours(3)).duration_trunc(TimeDelta::hours(1))?;
     let insert_range = TimeRange::new(insert_begin, insert_begin + TimeDelta::hours(5));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     reset_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -488,8 +490,10 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let part_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
@@ -503,7 +507,7 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     // leave this stream undiscoverable).
     let hour_start = Utc::now().duration_trunc(TimeDelta::hours(1))?;
     let insert_range = TimeRange::new(hour_start, hour_start + TimeDelta::hours(1));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -734,14 +738,16 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -949,14 +955,16 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -1164,14 +1172,16 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -1421,8 +1431,10 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     // A single range covering both t0's hour and "now"'s hour (t0 is at most 20 minutes before
@@ -1438,7 +1450,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -1690,14 +1702,16 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -1958,14 +1972,16 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_begin = t0.duration_trunc(TimeDelta::hours(1))?;
     let materialize_range =
         TimeRange::new(materialize_begin, materialize_begin + TimeDelta::hours(2));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),
@@ -2161,12 +2177,14 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?);
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
+    let view_factory = Arc::new(
+        default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let materialize_range = TimeRange::new(base_hour, base_hour + TimeDelta::hours(4));
-    let blocks_view = Arc::new(BlocksView::new()?);
+    let blocks_view = Arc::new(BlocksView::new(lakehouse.default_audience())?);
     regenerate_global_view(
         lakehouse.clone(),
         blocks_view.clone(),

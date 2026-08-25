@@ -153,7 +153,7 @@ impl View for AsyncEventsView {
         );
 
         // Use process-based partition generation to get all streams for this process
-        let blocks_view = BlocksView::new()?;
+        let blocks_view = BlocksView::new(lakehouse.default_audience())?;
         let all_partitions = generate_process_jit_partitions(
             &JitPartitionConfig::default(),
             lakehouse.clone(),
