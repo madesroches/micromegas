@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option A — Audience Grants (flat table)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-warning: #ffb300;
+    --accent-error: #f87171;
+    --radius: 0.5rem;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .page { padding: 24px; max-width: 1200px; }
+  .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-muted); margin-bottom: 16px; }
+  .breadcrumb a { color: var(--accent-link); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; }
+  .subtitle { margin: 4px 0 0; color: var(--text-secondary); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent-link); color: #fff; border: 1px solid transparent;
+    border-radius: calc(var(--radius) - 2px); padding: 8px 14px;
+    font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--accent-link-hover); }
+  .btn.outline { background: transparent; color: var(--text-primary); border-color: var(--border-color); }
+  .btn.outline:hover { border-color: var(--border-hover); background: var(--card-bg); }
+  .btn.sm { padding: 5px 10px; font-size: 13px; }
+
+  .filters {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+    padding: 14px 16px; margin-bottom: 8px;
+    border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--panel-bg);
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+  input[type=text], select, textarea {
+    background: var(--app-bg); border: 1px solid var(--border-color);
+    border-radius: calc(var(--radius) - 2px); padding: 8px 12px;
+    font: inherit; font-size: 13px; color: var(--text-primary); outline: none; min-width: 220px;
+  }
+  input::placeholder { color: var(--text-secondary); }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent-link); }
+  .hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+  .filter-hint { margin: 0 0 20px 2px; font-size: 12px; color: var(--text-muted); }
+
+  .notice {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 10px 14px; margin-bottom: 20px;
+    border: 1px solid rgba(255,179,0,0.35); background: rgba(255,179,0,0.08);
+    border-radius: var(--radius); font-size: 13px; color: var(--text-secondary);
+  }
+  .notice svg { flex: none; margin-top: 2px; color: var(--accent-warning); }
+
+  .table-wrap { border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--panel-bg); }
+  th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted);
+  }
+  th.right, td.right { text-align: right; }
+  td { padding: 10px 16px; border-top: 1px solid var(--border-color); color: var(--text-secondary); font-size: 13px; }
+  tbody tr:hover { background: rgba(21,101,192,0.05); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-primary); }
+  .aud { color: var(--text-primary); font-weight: 500; }
+  .badge {
+    display: inline-flex; align-items: center; padding: 2px 8px;
+    border-radius: calc(var(--radius) - 4px); font-size: 11.5px; font-weight: 500;
+  }
+  .badge.read { background: rgba(21,101,192,0.18); color: #7ab0f0; }
+  .badge.mint { background: rgba(255,179,0,0.15); color: var(--accent-warning); }
+  .badge.wild { background: rgba(248,113,113,0.14); color: var(--accent-error); }
+  .icon-btn {
+    background: none; border: none; padding: 6px; border-radius: calc(var(--radius) - 4px);
+    color: var(--text-muted); cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--accent-error); background: rgba(248,113,113,0.1); }
+  .pager {
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid var(--border-color); background: var(--panel-bg); padding: 10px 16px;
+  }
+
+  .section-label {
+    margin: 40px 0 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  .empty {
+    border: 1px solid var(--border-color); border-radius: var(--radius);
+    padding: 56px 24px; text-align: center; color: var(--text-muted);
+  }
+  .empty svg { opacity: 0.4; margin-bottom: 12px; }
+  .empty p { margin: 0 0 16px; }
+
+  /* dialog */
+  .dialog-stage {
+    position: relative; border: 1px solid var(--border-color); border-radius: var(--radius);
+    background: rgba(0,0,0,0.5); padding: 32px; display: flex; justify-content: center;
+  }
+  .dialog { width: 100%; max-width: 460px; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: var(--radius); box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+  .dialog-head { padding: 12px 16px; border-bottom: 1px solid var(--border-color); }
+  .dialog-head h2 { margin: 0; font-size: 17px; font-weight: 500; }
+  .dialog-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  .dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); }
+  .dialog-body input[type=text] { width: 100%; min-width: 0; }
+  .seg { display: inline-flex; border: 1px solid var(--border-color); border-radius: calc(var(--radius) - 2px); overflow: hidden; }
+  .seg button {
+    background: transparent; border: none; padding: 7px 14px; font: inherit; font-size: 13px;
+    color: var(--text-secondary); cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--border-color); }
+  .seg button[aria-pressed="true"] { background: rgba(21,101,192,0.18); color: var(--text-primary); font-weight: 500; }
+  .selector-row { display: flex; gap: 8px; align-items: center; }
+  .selector-row input { flex: 1; }
+  .preview {
+    margin-top: 6px; padding: 7px 10px; border: 1px dashed var(--border-color);
+    border-radius: calc(var(--radius) - 4px); background: var(--app-bg);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-primary);
+  }
+  .inline-error {
+    padding: 10px 12px; border: 1px solid rgba(248,113,113,0.3); background: rgba(248,113,113,0.1);
+    border-radius: calc(var(--radius) - 2px); color: var(--accent-error); font-size: 13px;
+  }
+  .note { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="breadcrumb"><a href="#">Admin</a><span>/</span><span>Audience Grants</span></div>
+
+  <div class="header">
+    <div>
+      <h1>Audience Grants</h1>
+      <p class="subtitle">Who can read from, and mint into, each audience.</p>
+    </div>
+    <button class="btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>
+      Add Grant
+    </button>
+  </div>
+
+  <div class="filters">
+    <div class="field">
+      <label for="f-aud">Audience</label>
+      <input id="f-aud" type="text" placeholder="team-alpha" value="">
+    </div>
+    <div class="field">
+      <label for="f-axis">Axis</label>
+      <select id="f-axis" style="min-width:140px">
+        <option>All</option>
+        <option>read</option>
+        <option>mint</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-sel">Selector contains</label>
+      <input id="f-sel" type="text" placeholder="alice@example.com">
+    </div>
+    <button class="btn outline">Apply</button>
+  </div>
+  <p class="filter-hint">Audience and axis filter server-side (audience is an exact match, not a prefix). “Selector contains” filters the rows already loaded on this page.</p>
+
+  <div class="notice">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <span><strong>Read</strong> grants take effect within the grant-cache TTL (<code>MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS</code>, 60&nbsp;s by default) on each query service. <strong>Mint</strong> grants are read per request and take effect immediately.</span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Audience</th>
+          <th>Axis</th>
+          <th>Selector</th>
+          <th>Created by</th>
+          <th>Created</th>
+          <th class="right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="aud">alice-laptop</span></td>
+          <td><span class="badge mint">mint</span></td>
+          <td class="mono">user:alice@example.com</td>
+          <td>alice@example.com</td>
+          <td style="white-space:nowrap">2026-08-21 14:02:11</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+        <tr>
+          <td><span class="aud">alice-laptop</span></td>
+          <td><span class="badge read">read</span></td>
+          <td class="mono">user:alice@example.com</td>
+          <td>alice@example.com</td>
+          <td style="white-space:nowrap">2026-08-21 14:02:11</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+        <tr>
+          <td><span class="aud">payments-svc</span></td>
+          <td><span class="badge read">read</span></td>
+          <td class="mono">group:payments-oncall</td>
+          <td>ops@example.com</td>
+          <td style="white-space:nowrap">2026-08-19 09:41:57</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+        <tr>
+          <td><span class="aud">team-alpha</span></td>
+          <td><span class="badge read">read</span></td>
+          <td class="mono">group:eng</td>
+          <td>ops@example.com</td>
+          <td style="white-space:nowrap">2026-08-14 17:20:03</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+        <tr>
+          <td><span class="aud">team-alpha</span></td>
+          <td><span class="badge mint">mint</span></td>
+          <td class="mono">group:eng-leads</td>
+          <td>ops@example.com</td>
+          <td style="white-space:nowrap">2026-08-14 17:19:48</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+        <tr>
+          <td><span class="aud">unstamped-legacy</span></td>
+          <td><span class="badge read">read</span></td>
+          <td class="mono">*&nbsp; <span class="badge wild" style="margin-left:6px">everyone</span></td>
+          <td>ops@example.com</td>
+          <td style="white-space:nowrap">2026-08-02 11:05:30</td>
+          <td class="right"><button class="icon-btn" title="Delete grant" aria-label="Delete grant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="pager">
+      <span></span>
+      <button class="btn outline sm">Next</button>
+    </div>
+  </div>
+
+  <p class="section-label">Empty state</p>
+  <div class="empty">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    <p>No audience grants yet. Every authenticated principal can already read <code>public</code>; add a grant to open up a named audience.</p>
+    <button class="btn" style="margin:0 auto">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>
+      Add Grant
+    </button>
+  </div>
+
+  <p class="section-label">Add Grant dialog</p>
+  <div class="dialog-stage">
+    <div class="dialog">
+      <div class="dialog-head"><h2>Add Audience Grant</h2></div>
+      <div class="dialog-body">
+        <div>
+          <label for="d-aud">Audience</label>
+          <input id="d-aud" type="text" placeholder="team-alpha" value="alice-laptop" style="margin-top:4px">
+          <p class="note">Letters, digits, <code>_</code> and <code>-</code>, up to 255 characters.</p>
+        </div>
+        <div>
+          <label>Axis</label>
+          <div style="margin-top:4px">
+            <div class="seg">
+              <button aria-pressed="true">Read</button>
+              <button aria-pressed="false">Mint</button>
+            </div>
+          </div>
+          <p class="note">Read: may query data stamped with this audience. Mint: may issue ingestion keys stamped with it. A read grant never confers mint.</p>
+        </div>
+        <div>
+          <label>Selector</label>
+          <div style="margin-top:4px" class="selector-row">
+            <div class="seg">
+              <button aria-pressed="false">Everyone</button>
+              <button aria-pressed="true">User</button>
+              <button aria-pressed="false">Group</button>
+            </div>
+            <input type="text" placeholder="alice@example.com" value="alice@example.com">
+          </div>
+          <div class="preview">user:alice@example.com</div>
+          <p class="note">Matched against the caller's OIDC <code>email</code> claim. There is no user directory here — enter the claim value verbatim.</p>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn outline">Cancel</button>
+        <button class="btn">Add grant</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="section-label">Add Grant dialog — server validation error</p>
+  <div class="dialog-stage">
+    <div class="dialog">
+      <div class="dialog-head"><h2>Add Audience Grant</h2></div>
+      <div class="dialog-body">
+        <div class="inline-error">invalid audience "alice laptop": must match [A-Za-z0-9_-]{1,255}</div>
+        <div>
+          <label for="d-aud2">Audience</label>
+          <input id="d-aud2" type="text" value="alice laptop" style="margin-top:4px">
+        </div>
+        <div>
+          <label>Axis</label>
+          <div style="margin-top:4px"><div class="seg"><button aria-pressed="true">Read</button><button aria-pressed="false">Mint</button></div></div>
+        </div>
+        <div>
+          <label>Selector</label>
+          <div style="margin-top:4px" class="selector-row">
+            <div class="seg"><button aria-pressed="true">Everyone</button><button aria-pressed="false">User</button><button aria-pressed="false">Group</button></div>
+            <input type="text" value="" placeholder="(not used for Everyone)" disabled>
+          </div>
+          <div class="preview">*</div>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn outline">Cancel</button>
+        <button class="btn">Add grant</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
