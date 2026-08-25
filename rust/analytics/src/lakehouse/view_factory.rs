@@ -159,7 +159,7 @@
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this process's data was last updated                |
 //! |last_block_end_ticks |Int64                   | tick count when the last block ended                       |
 //! |last_block_end_time |UTC Timestamp (nanoseconds) | timestamp when the last block ended                     |
-//! |audience      |Utf8                         | audience of the process -- server-written, never `NULL`    |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the process -- server-written, never `NULL`    |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -176,7 +176,7 @@
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the stream metedata was received |
 //! |format        |Utf8                         | stream payload format (e.g. for OTLP support)              |
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this stream's data was last updated                 |
-//! |audience      |Utf8                         | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -213,7 +213,7 @@
 //! |processes.insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the process metedata was received |
 //! |processes.parent_process_id |Utf8                     | unique id of the parent process (nullable in practice)      |
 //! |processes.properties | Array of {key: utf8, value: utf8} | self-reported metadata by the process                  |
-//! |audience      |Utf8                         | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!

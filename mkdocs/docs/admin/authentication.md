@@ -325,8 +325,10 @@ mint authority. Selectors:
 
 - **`public` is always readable**, by every authenticated principal, whether
   or not it appears in the map at all — writing `{"public": ["*"]}` changes
-  nothing, but an operator who omits it doesn't accidentally hide legacy
-  (unstamped, coalesced-to-`public`) data either.
+  nothing. This built-in rule doesn't extend to legacy data, though: the
+  startup backfill stamps it with the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
+  (not necessarily `public`), so its visibility is governed by whatever grants
+  exist for that audience.
 - **There is no self-audience rule.** A caller is never granted an audience
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary
