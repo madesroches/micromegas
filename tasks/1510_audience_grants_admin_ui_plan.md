@@ -252,17 +252,33 @@ cheap follow-up, not part of this change (Trade-offs).
 
 ### 3. REST writes: from admin-only to a self-service policy
 
-`create_grant` and `delete_grant` switch their extractor from `AdminUser(ValidatedUser)` to
-`AuthenticatedUser(AuthContext)` (`auth/handlers.rs:604-617`, which carries `email`, `groups`,
-`is_admin`). `list_grants`, `ListQuery`, `GrantListEntry`, `DEFAULT_LIMIT` and `MAX_LIMIT` are
-deleted. A shared pre-check for both handlers:
+`create_grant` and `delete_grant` switch their extractor from `AdminUser(ValidatedUser)` to a new
+`GrantGate(AuthContext)`, a `FromRequestParts` extractor modeled directly on `ingestion_keys.rs`'s
+`MintGate` (:290-316): it calls `AuthenticatedUser::from_request_parts` first, then — for a
+non-admin — checks `self_service_mint_enabled` on the layered `AudienceGrantsState` extension and
+rejects with 403 `FORBIDDEN` "self-service grant management is disabled" before the handler body
+ever runs. This is the same knob that already gates `my_audiences` and the mint route (sharing an
+audience is the second half of the self-service feature it introduced — claim an audience, then
+let your team in — so it rides the same switch rather than adding a
+`MICROMEGAS_SELF_SERVICE_GRANTS` sibling), and putting the check in a `FromRequestParts` gate
+rather than in the handler body is not a style choice: `auth/handlers.rs:558-563` documents why
+`AdminUser` itself is an extractor and not an in-body check — doing the admin check after the
+body parses would let a non-admin caller force the server to buffer up to `DefaultBodyLimit`
+bytes before being rejected — and `MintGate` was created for the exact same
+`self_service_mint_enabled` knob to preserve that ordering. Replacing `AdminUser` with a plain
+`AuthenticatedUser` extractor and moving the knob check into the handler body, where
+`Json<CreateGrantRequest>` has already been parsed, would silently drop that guarantee.
+`list_grants`, `ListQuery`, `GrantListEntry`, `DEFAULT_LIMIT` and `MAX_LIMIT` are deleted.
+
+`GrantGate` yields the caller's `AuthContext` and handles only the knob half of the pre-check:
 
 - **Admin** → exactly today's behavior, no further checks.
 - **Non-admin, self-service knob off** → 403 `FORBIDDEN` "self-service grant management is
-  disabled" — the same `self_service_mint_enabled` flag that already gates `my_audiences` and
-  the mint route. Sharing an audience is the second half of the self-service feature the knob
-  introduced (claim an audience, then let your team in), so it rides the same switch rather
-  than adding a `MICROMEGAS_SELF_SERVICE_GRANTS` sibling.
+  disabled", raised by `GrantGate` itself before the body is read.
+
+Everything below — the per-pair hold/ownership checks — genuinely needs the parsed body (the
+`audience`/`axis`/`selector` in `CreateGrantRequest`, or the query-string triple for delete) and
+so stays in the handler, run after `GrantGate` has already admitted the request.
 
 **Create (non-admin).** After the existing shape validation:
 
@@ -367,13 +383,6 @@ export interface AudienceGrant {
   createdBy: string
 }
 
-/** `SELECT audience, axis, selector, created_at, created_by FROM list_audience_grants()` —
- *  explicit column list matching decodeAudienceGrants, as buildListDenialsSql does. Not used by
- *  `AudienceAccessPage` itself (§6 reads via `fetchVisibleGrants` below); kept for any future
- *  SQL-console-style consumer, mirroring the query `micromegas-query` runs. */
-export const LIST_GRANTS_SQL: string
-export function decodeAudienceGrants(table: Table): AudienceGrant[]
-
 /** Server's raw JSON for one grant, as POST returns it. */
 export interface AudienceGrantResponse { audience; axis; selector; created_at: string; created_by }
 
@@ -418,9 +427,10 @@ State:
 
 ```
 listQuery = useVisibleGrants()        // wraps `fetchVisibleGrants()` in useStreamQuery's minimal
-                                       // { isComplete, error, rowCount } shape (so items 4 and 6
-                                       // below need no special-casing) but calls REST, not SQL —
-                                       // see "Reading through this deployment" below. No page-local
+                                       // { isComplete, error } shape (so item 4 below needs no
+                                       // special-casing) but calls REST, not SQL, and is an
+                                       // all-or-nothing read with no progressive rowCount — see
+                                       // "Reading through this deployment" below. No page-local
                                        // DataSourceField: unlike Query Deny List, this page's
                                        // writes can reach only one store, so its read must never
                                        // be able to point anywhere else
@@ -485,11 +495,15 @@ filter is the one control allowed to hide whole rows.
    and for write failures that are not dialog-scoped.
 5. One card per audience: header = audience (monospace) + grant count; then a `read` row and a
    `mint` row, each an axis badge + selector chips + a **Share** button (`+ Share read access` /
-   `+ Share mint access`). Share is shown when `isAdmin`, or when the caller holds that pair
-   (some chip on the row matches `*`, `user:<myEmail>`, or a group — the page cannot see the
-   caller's groups, so **it shows Share on every row the caller can see**: by §2 a non-admin
-   only sees pairs they hold, which makes the two conditions equivalent; the server remains the
-   authority and a 403 renders inline in the dialog).
+   `+ Share mint access`). Share is shown when `isAdmin`, or when some chip on the row is
+   `user:<myEmail>` — **not** when the only chip is `*`: by §3 the create hold-check strips the
+   leading `"*"` before binding, so a caller who can see a pair only through a `*` grant gets the
+   same 403 as one with no matching row at all, and offering Share there would be a button that
+   always fails server-side. A row held only through a `group:` chip the page cannot attribute to
+   the caller also shows Share (the page cannot see the caller's groups, so it cannot rule this
+   in or out from chips alone); the server remains the authority and a 403 renders inline in the
+   dialog. Visible-but-not-shareable is a real, intentional state for a `*`-only pair: the caller
+   can see who else the pair is granted to, but cannot add to it themselves.
    - Chip: selector (monospace) over `created_by · created_at`. A `*` chip has a red-tinted
      border and the words *any authenticated principal*. A chip whose selector is
      `user:<myEmail>` is marked **you**.
@@ -500,7 +514,8 @@ filter is the one control allowed to hide whole rows.
      this audience."* (admin) — for a non-admin an empty axis simply doesn't render, since by §2
      they wouldn't see the audience through that axis anyway.
    - React key = `${audience} ${axis} ${selector}`.
-6. Loading: spinner + *"Loading grants… N rows"* from `listQuery.rowCount`; cards render only on
+6. Loading: a plain spinner + *"Loading grants…"* — `fetchVisibleGrants()` is one REST call with
+   no progressive results, so there is no row count to show mid-flight; cards render only on
    `isComplete`, so a grouping is never transiently under-counted.
 7. Empty states — admin: *"No audience grants yet. Every authenticated principal can already read
    `public`; add a grant to open up a named audience."* + Add grant. Non-admin: *"You hold no
@@ -591,13 +606,17 @@ has, now in the browser.
 ### 12. Server module docs and `--disable-auth`
 
 `audience_grants.rs`'s module doc (currently "every handler `AdminUser`-gated except one")
-is rewritten for the policy in §3. `key_management_disabled_router` is unchanged: under
-`--disable-auth` the page's REST calls still get 503 and the banner says so. The SQL list does
-**not** go empty: `is_admin(metadata)` (`user_attribution.rs:81-90`) returns `true` when the
+is rewritten for the policy in §3. `key_management_disabled_router` (`web_server.rs:309-334`)
+registers `{base_path}/api/audience-grants` **and** a `{base_path}/api/audience-grants/{{*rest}}`
+wildcard under `--disable-auth`, both answered by the fixed 503 `key_management_disabled` handler
+— so the page's own list read, `GET .../audience-grants/visible` (§3), 503s exactly like its
+writes do, and the page renders the same disabled banner for the list as for a failed write; it
+never reaches its populated state under `--disable-auth`. `list_audience_grants()` itself is
+unaffected by this: `is_admin(metadata)` (`user_attribution.rs:81-90`) returns `true` when the
 `x-auth-is-admin` header is absent, which is the documented `--disable-auth` convention, and §2's
 registration takes the `GrantVisibility::All` branch before `grant_selectors` ever matters — so
-`list_audience_grants()` returns every row in the store. The page therefore shows the full grant
-list under `--disable-auth`, not its empty state, while every write still 503s.
+`micromegas-query --all "SELECT * FROM list_audience_grants()"` still returns every row in the
+store under `--disable-auth`, even though the web page cannot show them.
 
 ## Mockups
 
@@ -631,9 +650,9 @@ shape for date-ordered auditing, which `list_audience_grants()` now covers from 
 
 **Phase 3 — REST writes + mint**
 
-5. `audience_grants.rs`: delete `list_grants` and its types/constants; `AuthenticatedUser` on
-   create/delete with the §3 policy; add `GET .../visible` (§3); module doc. Router loses the old
-   paginated `GET` on the collection path, gains `GET .../visible`.
+5. `audience_grants.rs`: delete `list_grants` and its types/constants; new `GrantGate` extractor
+   on create/delete with the §3 policy; add `GET .../visible` (§3); module doc. Router loses the
+   old paginated `GET` on the collection path, gains `GET .../visible`.
 6. `ingestion_keys.rs`: admin claim path + `claimed` on `MintResponse` (§4).
 7. `tests/audience_grants_tests.rs`: drop list tests; add non-admin cases (knob off → 403;
    `*` → 403; not held → 403; held via `group:` → 201; own-row delete → 204; other's row →
@@ -684,8 +703,7 @@ Modified:
 - `rust/analytics/tests/common/db_fixtures.rs`, `lakehouse_admin_gate_test.rs`,
   `ownership_rewrite_db_test.rs`, `ownership_rewrite_public_view_set_tests.rs`,
   `prong_b_guard_db_test.rs`
-- `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`, `stream_query.rs`
-  (`$self` data-source sentinel, §6)
+- `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs`, `ingestion_keys_tests.rs`
 - `analytics-web-app/src/lib/api-keys-shared.ts`, `src/components/ApiKeysAdminPage.tsx`,
   `src/components/layout/Header.tsx`, `src/routes/AdminPage.tsx`, `src/router.tsx`
@@ -737,8 +755,10 @@ Modified:
 - **No `read_audiences()` function yet.** The effective scope (with env map and `public`) stays a
   standing note. Exposing `CallerContext::read_scope` as a one-column function is cheap and
   independent; deferred to keep this change to one new SQL surface.
-- **Cards render only on `isComplete`.** Costs progressive paint on a huge store; buys a grouping
-  that is never transiently wrong. The row counter keeps the wait legible.
+- **Cards render only on `isComplete`.** `fetchVisibleGrants()` is a single REST call, all-or-
+  nothing by construction — there is no progressive paint to trade away, unlike the streamed
+  `useStreamQuery` path Query Deny List uses. Rendering only on completion still buys a grouping
+  that is never transiently wrong; it just costs nothing extra to do so here.
 - **The `/admin/ingestion-keys` page keeps its own mint dialog.** Two mint entry points, one
   admin-only with the key table, one self-service on this page. Merging them is a separate
   cleanup.
@@ -774,17 +794,31 @@ Modified:
   `list_query_denials()`, as a short entry that cross-links to the query-guide entry above rather
   than duplicating it: schema, no arguments, and a pointer to
   `query-guide/functions-reference.md#list_audience_grants` for the full visibility-rule writeup.
-- `CHANGELOG.md` `## Unreleased`:
-  - **Web App:** the Audience Access page (`/audiences`) for every authenticated user.
-  - **Analytics:** `list_audience_grants()` table function, caller-scoped.
-  - **Auth:** **Minor breaking change** — `GET /api/audience-grants` removed (use
-    `list_audience_grants()`); `POST`/`DELETE /api/audience-grants` now accept non-admins under
-    the self-service policy when `MICROMEGAS_SELF_SERVICE_MINT` is on; admins minting into a
-    brand-new audience now receive their own `read`/`mint` grant rows and `MintResponse` gains
-    `claimed`; `CallerContext` gains `grant_selectors` (Rust API).
-  - **Python:** **Minor breaking change** — `WebClient.list_audience_grants` and
-    `micromegas-grants list` removed; `micromegas-setup-telemetry` no longer writes grants
-    client-side.
+- `CHANGELOG.md` `## Unreleased` — amended in place, not layered with new "removed" bullets: the
+  `GET`/`POST`/`DELETE {base_path}/api/audience-grants` (#1489), `micromegas-grants`
+  `create`/`list`/`delete` + `WebClient.list_audience_grants` (#1489), and
+  `micromegas-setup-telemetry`'s client-side admin grant write (#1374) bullets all describe
+  surface that has never shipped in a release, so there is nothing to migrate from and no
+  "Minor breaking change" removal notice belongs on any of them — each is simply rewritten to
+  describe the surface this plan actually ships:
+  - The **Web App** bullet for #1489 drops the `GET` collection route entirely (it never ships)
+    and describes `POST`/`DELETE` as gated by the new self-service policy (§3: admin unrestricted;
+    non-admin needs `MICROMEGAS_SELF_SERVICE_MINT` on, an identity selector, and a held pair) plus
+    the new `GET .../audience-grants/visible` route backing the page's own list. **Minor breaking
+    change** stays only on the gate widening from `AdminUser` to the new `GrantGate` extractor —
+    a genuine published-Rust-API change — not on the removed `GET` route, which never released.
+  - A new **Analytics** bullet documents `list_audience_grants()` (§2) — this one really is new,
+    not an amendment.
+  - The **Python** bullet for #1489 drops `list` from the CLI subcommands and
+    `list_audience_grants` from the `WebClient` methods it documents, leaving `create`/`delete`
+    and their matching methods — a plain edit to what ships, not a breaking-change note.
+  - The **Python** bullet for #1374 (`micromegas-setup-telemetry`) drops the sentence about an
+    admin's grant rows being written client-side via the admin grants API, replacing it with a
+    note that the mint route now claims a brand-new audience for an admin caller server-side (§4)
+    and that `MintResponse` gains `claimed`.
+  - `CallerContext` gaining `grant_selectors` (§1) is recorded as **Minor breaking change** (Rust
+    API, struct-literal construction sites) wherever `CallerContext` is next documented in this
+    section.
 
 ## Testing Strategy
 
@@ -803,8 +837,7 @@ data-source and `streamQuery` mocks (this page has no `DataSourceField` and read
 flight-SQL, §6): mock `@/lib/auth`, `@/hooks/usePageTitle`, `@/components/layout`; `global.fetch`
 for both the list read and the write calls):
 
-`audience-grants-api.test.ts` — `LIST_GRANTS_SQL` names the five columns; a table decodes to
-`AudienceGrant[]` with `Date`s; `fetchVisibleGrants` decodes a JSON array to `AudienceGrant[]`
+`audience-grants-api.test.ts` — `fetchVisibleGrants` decodes a JSON array to `AudienceGrant[]`
 and surfaces a non-2xx as `AudienceGrantError`; create 201/200 → `created`; delete encodes every
 component and resolves on 204; 403/404 → `AudienceGrantError` with code/status/message;
 `fetchMyAudiences` 403 → `AudienceGrantError`; `validateSelector` byte bound.
@@ -826,8 +859,10 @@ list tests removed; `test_setup_telemetry.py`: admin branch no longer calls list
 (delete `test_admin_audience_check_pages_through_ingestion_keys`), `run()` never calls
 `create_audience_grant`, the progress line reports `claimed`.
 
-**Manual** — monolith with `--disable-auth` (writes 503, list shows the entire grant store since
-`--disable-auth` is treated as admin, not an empty list); real OIDC: as admin,
+**Manual** — monolith with `--disable-auth` (the page's list read 503s exactly like its writes,
+so it shows the disabled banner, not a populated list — `list_audience_grants()` is still
+queryable directly with `micromegas-query --all "SELECT * FROM list_audience_grants()"` and
+returns every row since `--disable-auth` is treated as admin); real OIDC: as admin,
 mint into a fresh audience from the page and see the two new rows; as a non-admin with the knob
 on, claim, share with a group, have the group member see and remove their own access, revoke the
 share; cross-check with `micromegas-query --all "SELECT * FROM list_audience_grants()"` as both
