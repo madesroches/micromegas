@@ -235,8 +235,7 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
 ///
 /// `requested`: a missing field or an empty string counts as absent (the empty string is not a
 /// name -- it fails [`is_valid_audience`] either way); anything else is taken **verbatim**, no
-/// case folding. `fallback`: `None` for `mint` (an unresolved mint is a `BadRequest`, never a
-/// silent `public`), `Some(PUBLIC_AUDIENCE)` for `import` (continuity with the v6 backfill).
+/// case folding.
 ///
 /// Resolution order: `requested` → `state.default_audience`, which is itself never absent
 /// (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset), so this always resolves *something* and

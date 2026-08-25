@@ -97,7 +97,7 @@ any effect — its data gets the deployment default instead, unless its credenti
 DB ingestion key bound to the audience it wants to keep. A deployment switching from no bound
 audiences to keyed ingestion (or simply adopting a non-`public` default) sees its OTLP-derived
 `process_id`s churn once, the same shape as switching ingestion keys to a new audience — see
-[Authentication → Write-Side Stamping](authentication.md#write-side-stamping-abac-stage-5-extended-by-1482).
+[Authentication → Audience stamping and the default](authentication.md#audience-stamping-and-the-default).
 
 ## Health and readiness
 
