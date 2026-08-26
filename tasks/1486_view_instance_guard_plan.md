@@ -218,7 +218,11 @@ every affected call site". Five sites:
 registration at `:121`. Move the `lakehouse_admin` / `AudienceGuard::new` block above the
 `view_instance` registration and pass `audience_guard.clone()` into
 `ViewInstanceTableFunction::new`. `ViewInstanceTableFunction` gains an
-`Arc<AudienceGuard>` field it hands to every `MaterializedView` it builds.
+`Arc<AudienceGuard>` field it hands to every `MaterializedView` it builds. That block carries its
+own doc comment enumerating the guard's consumers (`process_spans`, `perfetto_trace_chunks`,
+`parse_block`, `get_payload`, `list_partitions`'s row filter); update it to add `view_instance` as
+a sixth, since the move puts `view_instance`'s registration below the block while the comment
+still says "registers below".
 
 No new construction of `AudienceGuard` anywhere: the same per-request instance already shared by
 the five other Prong B call sites now covers a sixth.
@@ -300,7 +304,9 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 1. `rust/analytics/src/lakehouse/audience_guard.rs`: extract the private `not_found_err` helper
    from `authorize`; add `pub fn is_public_view_set` and rewrite `global_rows_visible` in terms of
    it; add `pub async fn authorize_view_instance` with the five ordered rules and the doc comment
-   recording §2's `'global'` rationale.
+   recording §2's `'global'` rationale; update `IdKind::ProcessOrStream`'s doc comment, which
+   today names `list_partitions` as its sole consumer, to add `view_instance`'s scan-time check as
+   a second.
 2. Update `audience_guard.rs`'s module doc comment: its entry-point list lives in the opening
    paragraph (lines 1-6, "arg-addressed guards ... that Prong A structurally cannot reach"), not
    in the "One cache, one question" / "No existence oracle" sections — leave those alone, they
@@ -321,11 +327,14 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
    comment that this is the only site that supplies one.
 5. `rust/analytics/src/lakehouse/query.rs`: move the `lakehouse_admin` / `AudienceGuard::new`
    block above the `view_instance` registration; pass the guard to `ViewInstanceTableFunction::new`;
-   pass `None` at `register_table` (:62) and at both `OwnershipRewrite` sources (:344, :352).
+   pass `None` at `register_table` (:62) and at both `OwnershipRewrite` sources (:344, :352); and
+   update the moved block's doc comment enumerating its consumers to add `view_instance` as a
+   sixth.
 6. `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs:400`: pass `None`.
-7. `rust/analytics/src/lakehouse/materialized_view.rs` + `metadata.rs`: update the doc comments
-   that describe the residual as open (`metadata.rs`'s notes on the two `CallerContext::internal()`
-   lookups) to say the entry point is now guarded.
+7. `rust/analytics/src/metadata.rs`: update the residual note in `find_stream_from_view`
+   (`:197`) to say the `view_instance` entry point is now guarded.
+   `find_process_with_latest_timing`'s comment (`:317-320`) defers to it ("see
+   `find_stream_from_view`'s identical comment above") and needs no separate edit.
 8. `rust/analytics/tests/ownership_rewrite_db_test.rs`: this suite `.collect()`s its queries, so the
    guard landing in this phase changes its behaviour — update the three cross-audience
    `view_instance('log_entries'/'async_events'/'thread_spans', ...)` assertions that currently
@@ -349,12 +358,12 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 
 | file | change |
 |---|---|
-| `rust/analytics/src/lakehouse/audience_guard.rs` | `authorize_view_instance`, `is_public_view_set`, `not_found_err`; reframe opening-paragraph module doc |
+| `rust/analytics/src/lakehouse/audience_guard.rs` | `authorize_view_instance`, `is_public_view_set`, `not_found_err`; reframe opening-paragraph module doc; add `view_instance` as `IdKind::ProcessOrStream`'s second consumer in its doc comment |
 | `rust/analytics/src/lakehouse/read_scope.rs` | reframe the Stage 3 paragraph's entry-point list in the module doc |
 | `rust/analytics/src/lakehouse/materialized_view.rs` | `instance_guard` field; guard call in `scan` |
 | `rust/analytics/src/lakehouse/view_instance_table_function.rs` | carry and pass the guard |
-| `rust/analytics/src/lakehouse/query.rs` | reorder guard construction; 4 `MaterializedView::new` / registration sites |
-| `rust/analytics/src/metadata.rs` | doc comments on the two internal lookups |
+| `rust/analytics/src/lakehouse/query.rs` | reorder guard construction; 4 `MaterializedView::new` / registration sites; update the moved block's consumer-list comment to add `view_instance` |
+| `rust/analytics/src/metadata.rs` | residual note on `find_stream_from_view` (`:197`); `find_process_with_latest_timing` defers to it, no separate edit |
 | `rust/analytics/tests/audience_guard_tests.rs` | offline rule tests |
 | `rust/analytics/tests/prong_b_guard_db_test.rs` | DB-backed enforcement + no-materialization tests |
 | `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | `None` at the new parameter |
@@ -430,6 +439,12 @@ Offline (`rust/analytics/tests/audience_guard_tests.rs`, no DB — reuses the ex
 - `ReadScope::Audiences` + `'global'` → `Ok`, no I/O, for both an admin and a non-admin guard and
   a view set *not* on the allowlist (this is the rule that deliberately differs from
   `global_rows_visible`; pin it).
+- `ReadScope::Audiences` + a non-public view set + a real `Uuid` over `unroutable_index()` → `Err`,
+  never `Ok` — mirrors `authorize_under_restricted_scope_denies_on_resolution_error_not_pass`
+  (`audience_guard_tests.rs:189`), pinning that rule (4)'s fall-through to `authorize` really
+  attempts resolution and fails closed rather than short-circuiting to a pass. This is the only
+  offline coverage of the enforcement rule itself, since the DB-backed tests in
+  `prong_b_guard_db_test.rs` are `#[ignore]`d and not run by CI.
 - `ReadScope::Audiences` + a non-uuid, non-`'global'` id → denied with the uniform text.
 - `global_rows_visible` keeps its existing truth table after the `is_public_view_set` extraction.
 
