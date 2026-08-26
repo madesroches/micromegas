@@ -64,9 +64,12 @@ issue's proposed config surface (see Design below).
 ### Table / Transposed Table cell architecture
 
 - Renderers: `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` and
-  `TransposedTableCell.tsx`; both build on shared logic in
-  `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` (1058 lines) — column
-  management, `TableBody`, `formatCell`, `OverrideCell`.
+  `TransposedTableCell.tsx` (notebook cells), plus
+  `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` (the standalone
+  screens table — a third `TableBody`/`OverrideEditor` host, outside the notebook
+  cell-editor pipeline `CellEditorProps`/`CellEditor.tsx` covers); all three build
+  on shared logic in `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
+  (1058 lines) — column management, `TableBody`, `formatCell`, `OverrideCell`.
 - **Per-cell rendering switch** (the place a new render path plugs in):
   `table-utils.tsx:711-739` (`TableBody`, one branch per column) and
   `TransposedTableCell.tsx:122-134` (same idea, transposed). Today it's binary: if
@@ -114,6 +117,17 @@ only**, no `DataType`. It's populated at the single call site
 (`OverrideEditor`, `MapCell`, `HorizontalGroupCell`, …) only needs names, so this has
 never mattered before. `OverrideEditor` needs types now, to know which column's card
 should show the "Render as" toggle (Design §6).
+
+`NotebookRenderer.tsx` doesn't call `meta.EditorComponent` directly, though —
+it renders `<CellEditor>` (`components/CellEditor.tsx`), which declares its own
+local `CellEditorProps` interface (lines 11-25, `availableColumns?: string[]`
+among them) and explicitly forwards a fixed prop list to
+`<meta.EditorComponent … availableColumns={availableColumns} … />` (line 161).
+Anything not named in `CellEditor.tsx`'s own interface and forwarded there never
+reaches `TableCellEditor`/`TransposedTableCellEditor`, so the new
+`availableColumnTypes` prop needs the same two touches here as `availableColumns`
+already has: added to `CellEditor.tsx`'s local `CellEditorProps`, destructured, and
+passed through to `<meta.EditorComponent>`.
 
 ### Color conventions (Chart and Map cells)
 
@@ -209,6 +223,47 @@ to exist when a user wants non-default bar colors — "no override for this colu
 already means default, so there's no `'default'` mode variant to represent.
 `histogramColor` is a single field, not a nested mode object — its one string does
 double duty (Design §6): a recognized colormap name, or a literal CSS color.
+
+**Changing an existing card's column** (`OverrideEditor.handleColumnChange`,
+`OverrideEditor.tsx:62-69`) currently does `newOverrides[index] = {
+...newOverrides[index], column }` — every other field, including `kind`, survives
+untouched. Once histogram columns exist, that's wrong by default: switching a
+markdown card onto a histogram column would leave `kind` unset, which Design §3
+rule 1 still routes to `OverrideCell` with a template now referencing the wrong
+column, instead of the histogram rendering a user picking that column would
+expect. `handleColumnChange` must re-derive `kind` from the newly selected
+column's type (via the new `availableColumnTypes` prop) whenever that derived
+`kind` differs from the card's current one — a same-kind column change (e.g.
+markdown column → another markdown column) is unaffected, that's today's
+behavior and out of scope here:
+- New column `isHistogramStructType` and current `kind !== 'histogram'` → set
+  `kind: 'histogram'`, clear `format` (`undefined`) since the old template
+  referenced the previous column and is stale; leave `histogramColor` as-is
+  (`undefined` stays `undefined` → default flat color; a value from a prior
+  histogram-column selection is harmless to keep, and lets a user bounce
+  between two histogram columns without losing their color choice).
+- New column not histogram-typed and current `kind === 'histogram'` → set
+  `kind: 'markdown'`, clear `histogramColor` (`undefined` — inert once `kind`
+  is `'markdown'` anyway, cleared for cleanliness) and seed `format` with the
+  same `[Link](/path?id=$row.<col>)` template `handleAddOverride` uses for a
+  brand-new override, since there's no existing markdown template to fall back
+  to.
+
+Two existing `string`-typed consumers of `.format` need a matching fallback, since
+`ColumnOverride.format` is now `string | undefined` while they aren't:
+`OverrideCellProps.format` (`table-utils.tsx:236-237`, kept `string`, not widened)
+and `validateFormatMacros(template: string, …)` (`table-utils.tsx:118`). Both stay
+required-`string` — it's the two call sites feeding them that change, to
+`override.format ?? ''`: `OverrideEditor.tsx:33` (`validateFormatMacros(override.format
+?? '', …)`) and the `<OverrideCell format={…}>` sites in `TableBody`
+(`table-utils.tsx:719`, once `overrideMap` holds full entries per Design §3) and
+`TransposedTableCell.tsx` (line ~124). `OverrideEditor`'s `<textarea
+value={override.format}>` (line 147) and `handleFormatChange` get the same
+treatment (`value={override.format ?? ''}`) so the textarea doesn't flip
+uncontrolled when a `kind: 'histogram'` card has no `format`. In practice
+`OverrideCell` and the textarea are only reached for `kind: 'markdown'` (or unset)
+entries once Design §3/§9's UI is in place, but the `?? ''` guard is what makes
+that true at the type level too, not just by convention.
 
 ### 3. Per-cell render selection (in `TableBody` and `TransposedTableCell`)
 
@@ -368,15 +423,17 @@ export function resolveHistogramBarColor(color: string | undefined, t: number): 
 Named colormaps need real colormap data, which the Rust side gets from the
 `colorous` crate specifically to avoid hand-maintaining color tables (rationale in
 `tasks/completed/1069_color_scale_udf_plan.md`, Trade-offs). The same reasoning
-applies here: **add `d3-scale-chromatic`** (MIT, small, `interpolateViridis` /
-`interpolateMagma` / `interpolatePlasma` / `interpolateInferno` /
-`interpolateCividis` / `interpolateTurbo`, each returning a `rgb(...)` string
-directly usable as a CSS color) rather than vendoring stops by hand. This is a new
-frontend dependency — flagged in Open Questions for a quick sign-off rather than
-assumed; note its output won't be byte-identical to `colorous`'s (different source
-implementations of the same published colormap data), which is fine for a
-client-only visual but is called out here in case exact SQL/client color parity
-ever matters.
+applies here: **add `d3-scale-chromatic@^3.1.0`** (ISC license, small — two
+transitive deps, `d3-color` and `d3-interpolate`, both also ISC;
+`interpolateViridis` / `interpolateMagma` / `interpolatePlasma` /
+`interpolateInferno` / `interpolateCividis` / `interpolateTurbo`, each returning a
+`rgb(...)` string directly usable as a CSS color) rather than vendoring stops by
+hand; the package ships no types, so `@types/d3-scale-chromatic@^3.1.0` is needed
+alongside it. This is a new frontend dependency — flagged in Open Questions for a
+quick sign-off rather than assumed; note its output won't be byte-identical to
+`colorous`'s (different source implementations of the same published colormap
+data), which is fine for a client-only visual but is called out here in case exact
+SQL/client color parity ever matters.
 
 **Editor UI** (see `option-b-cell-editor.html` mockup, revised): a swatch picker,
 not a text field a user has to type a name into (or a paragraph explaining what
@@ -417,10 +474,12 @@ availableColumnTypes?: Record<string, DataType>
 ```
 populated at the same call site as `availableColumns`
 (`NotebookRenderer.tsx:833`, `Object.fromEntries(fields.map(f => [f.name, f.type]))`)
-— purely additive, so none of the other seven `availableColumns` consumers need to
-change. `OverrideEditor` needs it (new prop, threaded from `TableCellEditor`/
-`TransposedTableCellEditor`, same as `availableColumns` already is) to know which
-column the "Render as" toggle should appear for.
+and threaded through `CellEditor.tsx`'s own local `CellEditorProps`/destructuring/
+forwarding (same two touches `availableColumns` already gets there — see Current
+State above) — purely additive, so none of the other seven `availableColumns`
+consumers need to change. `OverrideEditor` needs it (new prop, threaded from
+`TableCellEditor`/`TransposedTableCellEditor`, same as `availableColumns` already
+is) to know which column the "Render as" toggle should appear for.
 
 ### 7. What does *not* change
 
@@ -476,11 +535,14 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    color, `t` unused). `HistogramCell` calls this once per bucket with that
    bucket's height ratio.
 4. **Add `d3-scale-chromatic` dependency** (pending sign-off, Open Questions):
-   `analytics-web-app/package.json` + `@types/d3-scale-chromatic` if not bundled.
+   `analytics-web-app/package.json` — `d3-scale-chromatic@^3.1.0` +
+   `@types/d3-scale-chromatic@^3.1.0` (the package ships no types of its own).
 5. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
-   'histogram'` and `histogramColor?: string` (Design §2); update `overrideMap` to
-   store the full entry, not just `format` (Design §3); extend `TableBody`'s
-   per-cell switch (lines 711-739) per Design §3's ordering.
+   'histogram'` and `histogramColor?: string`, making `format` optional (Design
+   §2); update `overrideMap` to store the full entry, not just `format` (Design
+   §3); extend `TableBody`'s per-cell switch (lines 711-739) per Design §3's
+   ordering, passing `format={entry.format ?? ''}` to `<OverrideCell>` (line 719)
+   — `OverrideCellProps.format` stays required `string`, unchanged.
 6. **`macro-substitution.ts`**: add the `isHistogramStructType` branch to
    `formatArrowValue` (Design §5) — the one change that makes debugging "just work"
    through the existing Markdown override path.
@@ -491,9 +553,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    Table and Transposed Table paths.
 8. **`CellEditorProps`** (`cell-registry.ts:90`): add `availableColumnTypes?:
    Record<string, DataType>`; populate it at `NotebookRenderer.tsx:833` alongside
-   the existing `availableColumns` line (Design §6); thread it through
-   `TableCellEditor`/`TransposedTableCellEditor` into `OverrideEditor`'s new prop
-   of the same name.
+   the existing `availableColumns` line (Design §6). **`components/CellEditor.tsx`**:
+   add the same field to its own local `CellEditorProps` interface (lines 11-25),
+   destructure it, and forward it to `<meta.EditorComponent>` (line 161) alongside
+   `availableColumns` — without this, `TableCellEditor`/`TransposedTableCellEditor`
+   never receive it. Then thread it through `TableCellEditor`/
+   `TransposedTableCellEditor` into `OverrideEditor`'s new prop of the same name.
 9. **`components/OverrideEditor.tsx`**: accept the new `availableColumnTypes` prop;
    in each override card, when the selected column `isHistogramStructType`, render
    the "Render as" toggle (Markdown / Histogram) above the Format field; when
@@ -504,17 +569,40 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    (`[Link](...)`) only applies when the newly added column isn't histogram-typed;
    for a histogram column, default the new entry to `kind: 'histogram'` with no
    `histogramColor` set (i.e. still visually "Default," no swatch highlighted,
-   until the user picks one).
-10. **`TableCell.tsx`**: pass `availableColumnTypes` through to `OverrideEditor`.
-11. **`TransposedTableCell.tsx`**: same as above.
-12. **Docs**: `mkdocs/docs/web-app/notebooks/cell-types.md` — add a subsection under
+   until the user picks one). Since `format` is now optional (Design §2), guard
+   its two remaining consumers here: `validateFormatMacros(override.format ?? '',
+   …)` (line 33) and the Format `<textarea value={override.format ?? ''}>` (line
+   147), so a `kind: 'histogram'` card with no `format` doesn't throw off
+   validation or flip the textarea uncontrolled. `handleColumnChange`
+   (lines 62-69) re-derives `kind` (and resets `format`/`histogramColor` as
+   applicable) from the newly selected column's type per Design §2.
+10. **`TableRenderer.tsx`** (`lib/screen-renderers/TableRenderer.tsx`, the screens
+    table — a second `TableBody`/`OverrideEditor` host outside the notebook cell
+    editor pipeline): build an `availableColumnTypes` map next to the existing
+    `availableColumns` line (`Object.fromEntries(table.schema.fields.map(f =>
+    [f.name, f.type]))`, line 203) and pass it to its `<OverrideEditor>` call
+    (~lines 355-359) alongside `availableColumns`. It already passes
+    `tableConfig.overrides` to `TableBody` (line 408), so it picks up step 5's
+    render-selection switch for free — this step only wires up the editor half.
+11. **`TableCell.tsx`**: pass `availableColumnTypes` through to `OverrideEditor`.
+12. **`TransposedTableCell.tsx`**: pass `availableColumnTypes` through to
+    `OverrideEditor`, same as above. It does **not** use `TableBody`, so step 5's
+    change doesn't reach it — separately, change its own `overrideMap`
+    (`useMemo`, line 42) from `Map<string, string>` (column → `format`) to
+    `Map<string, ColumnOverride>` (column → full entry), and apply Design §3's
+    three-way switch at its per-cell render site (lines 122-134), replacing the
+    current binary `overrideMap.has(row.name) ? <OverrideCell .../> :
+    formatCell(...)` — mirroring the `TableBody` change exactly, just against
+    `row.name`/`row.type`/`originalRows[colIdx]` instead of `col.name`/`col.type`/
+    `row`.
+13. **Docs**: `mkdocs/docs/web-app/notebooks/cell-types.md` — add a subsection under
     both Table (`:694-746`) and Transposed Table (`:749-780`) describing the
     automatic histogram rendering (trigger condition: column type, not config), the
     median calculation, the bucket tooltip, the Overrides panel's "Render as:
     Histogram" mode, and the Markdown-override debugging trick. Cross-link to the
     existing `make_histogram()`/`quantile_from_histogram()`/`color_scale()`/
     `lerp_color()` docs in `functions-reference.md`.
-13. **Tests** — see Testing Strategy.
+14. **Tests** — see Testing Strategy.
 
 ## Files to Modify
 
@@ -525,13 +613,15 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 | `analytics-web-app/src/lib/histogram-colors.ts` | new file — `resolveHistogramBarColor` (colormap-name vs. literal-color dispatch), `COLORMAP_PREVIEW_GRADIENTS` (swatch CSS gradients) |
 | `analytics-web-app/src/lib/screen-renderers/macro-substitution.ts` | `formatArrowValue` histogram-struct branch |
 | `analytics-web-app/src/components/HistogramCell.tsx` | new file — bar chart + median + tooltip |
-| `analytics-web-app/src/components/OverrideEditor.tsx` | `availableColumnTypes` prop; per-card "Render as" toggle + Histogram color fields |
-| `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` | `ColumnOverride.kind`/`histogram`; `overrideMap` full-entry lookup; `TableBody` render-mode switch |
+| `analytics-web-app/src/components/OverrideEditor.tsx` | `availableColumnTypes` prop; per-card "Render as" toggle + Histogram color fields; guard `validateFormatMacros`/`<textarea>` against optional `format` |
+| `analytics-web-app/src/components/CellEditor.tsx` | add `availableColumnTypes` to its own local `CellEditorProps`, destructure, forward to `<meta.EditorComponent>` |
+| `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` | `ColumnOverride.kind`/`histogram`, `format` optional; `overrideMap` full-entry lookup; `TableBody` render-mode switch; `<OverrideCell format={entry.format ?? ''}>` (`OverrideCellProps.format` itself unchanged, still required `string`) |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | build `availableColumnTypes` next to existing `availableColumns` (line 203); pass to `OverrideEditor` |
 | `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` | thread `availableColumnTypes` to `OverrideEditor` |
-| `analytics-web-app/src/lib/screen-renderers/cells/TransposedTableCell.tsx` | thread `availableColumnTypes` |
+| `analytics-web-app/src/lib/screen-renderers/cells/TransposedTableCell.tsx` | thread `availableColumnTypes`; `overrideMap` → `Map<string, ColumnOverride>`; apply Design §3's three-way render switch (lines 122-134) |
 | `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` | new `availableColumnTypes` prop on `CellEditorProps` |
 | `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | populate `availableColumnTypes` alongside `availableColumns` |
-| `analytics-web-app/package.json` | new dependency: `d3-scale-chromatic` (+ types) |
+| `analytics-web-app/package.json` | new dependency: `d3-scale-chromatic@^3.1.0` (+ `@types/d3-scale-chromatic@^3.1.0`) |
 | `mkdocs/docs/web-app/notebooks/cell-types.md` | document new default behavior, the Overrides "Render as: Histogram" mode, and the Markdown-debug trick |
 
 No Rust changes — the SQL/Arrow side is complete already.
@@ -592,10 +682,11 @@ No Rust changes — the SQL/Arrow side is complete already.
   rather than hand-maintain color tables (`1069_color_scale_udf_plan.md`
   Trade-offs) — for the same reason: a handful of hardcoded RGB stops per colormap
   is a second place the data can drift from the canonical source, with no owner
-  keeping it in sync. `d3-scale-chromatic` is small, MIT-licensed, and already the
-  standard JS source for these exact colormaps. Flagged as an Open Question rather
-  than silently added, since it's a new runtime dependency someone should sign off
-  on, however small.
+  keeping it in sync. `d3-scale-chromatic` is small (two ISC-licensed transitive
+  deps, `d3-color` and `d3-interpolate`; the package itself is also ISC, not MIT),
+  and already the standard JS source for these exact colormaps. Flagged as an Open
+  Question rather than silently added, since it's a new runtime dependency someone
+  should sign off on, however small.
 - **Single `histogramColor: string` (colormap name or literal color) vs. a
   `mode: 'colormap' | 'custom'` selector with `colormapName`/`customStops`.** An
   earlier draft kept the two cases as explicit, separately-shaped fields — closer
@@ -636,12 +727,14 @@ No Rust changes — the SQL/Arrow side is complete already.
 
 ## Dependencies
 
-- New: `d3-scale-chromatic` (MIT) — client-side named colormaps (`viridis`,
+- New: `d3-scale-chromatic@^3.1.0` (ISC license; two transitive deps, `d3-color`
+  and `d3-interpolate`, both also ISC) — client-side named colormaps (`viridis`,
   `magma`, `plasma`, `inferno`, `cividis`, `turbo`) for when `histogramColor`
-  matches one of those names. Pending sign-off (Open Questions) — the literal-color
-  case has no dependency (`resolveHistogramBarColor` just returns the string as-is),
-  so this could ship without it if the dependency is declined, at the cost of
-  dropping colormap support (flat custom colors only) from v1.
+  matches one of those names. Ships no types, so also add
+  `@types/d3-scale-chromatic@^3.1.0`. Pending sign-off (Open Questions) — the
+  literal-color case has no dependency (`resolveHistogramBarColor` just returns
+  the string as-is), so this could ship without it if the dependency is declined,
+  at the cost of dropping colormap support (flat custom colors only) from v1.
 
 ## Testing Strategy
 
@@ -704,9 +797,10 @@ No Rust changes — the SQL/Arrow side is complete already.
 3. ~~**Debug view mechanism**~~ **Resolved: reuse the Markdown override path**
    (Design §5) — no dedicated toggle, `options` field, or context-menu item.
 4. **`d3-scale-chromatic` dependency** — needed for the colormap-name case of
-   `histogramColor` (Design §6). A new runtime dependency, however small (MIT, no
-   transitive deps of consequence) — flagged for a quick sign-off rather than added
-   unilaterally. If declined, ship with literal-color support only in v1 (no
+   `histogramColor` (Design §6). A new runtime dependency, however small (ISC
+   license; two transitive deps, `d3-color` and `d3-interpolate`, both also ISC)
+   — flagged for a quick sign-off rather than added unilaterally. If declined,
+   ship with literal-color support only in v1 (no
    dependency needed for that case) and revisit later.
 5. **Unit formatting for the median label** — the `Histogram` struct carries no
    unit; v1 formats the median as a plain number (`toLocaleString`-style,
