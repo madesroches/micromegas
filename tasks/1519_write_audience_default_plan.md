@@ -403,26 +403,33 @@ reach:
    `prime_process_audience_cache_for_test`'s direct insert, bypassing
    `remember_process_audience` entirely, so it cannot show the `is_some()` guard's removal; the
    cache-hit path is audience-value-agnostic, making such a case identical in substance to
-   `cache_hit_skips_the_database` under a different label. Arm 3 (the guard's removal, i.e. that a
-   resolved-default caller's conflict-free check now gets memoized on the *write* side) is instead
-   asserted in step 9's DB-backed test, where `remember_process_audience` is actually reachable.
+   `cache_hit_skips_the_database` under a different label. Arm 3 (the guard's removal) is not given
+   a dedicated test anywhere: once `WriteAudience` is single-state, a resolved-default caller is
+   byte-for-byte indistinguishable from any other labelled caller, so there is nothing
+   label-specific left for such a test to prove — see step 9's note on the same point.
 9. `rust/ingestion/tests/audience_stamping_db_test.rs`:
    - Rewrite `existing_null_audience_reregistration_is_ok_and_stays_unstamped` into two tests over
-     a fabricated legacy row (insert via `insert_process`, then
-     `UPDATE processes SET properties = ...` stripping the audience property): re-registering it
-     under a *different* audience is now `AudienceConflict`; re-registering it under the
-     deployment default is `Ok` **and leaves the row unstamped**.
+     a fabricated legacy row: insert via `insert_process` under a throwaway audience distinct from
+     the deployment default (e.g. `team-a`), then `UPDATE processes SET properties = ...` stripping
+     the audience property. The fabricating insert's audience must differ from the one used to
+     re-register — otherwise `insert_process`'s `remember_process_audience` call primes
+     `process_audience_cache` with `process_id -> team-a`, and re-registering under the default
+     would short-circuit on the cache-hit arm (`cached.as_str() == incoming`) without ever reaching
+     the resolved comparison this test exists to exercise. With that separation: re-registering the
+     stripped row under `team-a` (the original, now-stripped label) is now `AudienceConflict`;
+     re-registering it under the deployment default is `Ok` **and leaves the row unstamped**.
    - Add the arm-1 case: an existing row stamped `team-b`, re-registered by a caller carrying no
      bound audience (i.e. the resolved default), is now `AudienceConflict` — previously a silent
      `Ok`.
-   - Add the arm-3 memoization case moved here from step 8: register a fresh process under the
-     resolved default (a normal `insert_process` call, no `bound_audience`), then re-register the
-     same `process_id`/default pair and confirm it still returns `Ok`. This alone doesn't
-     distinguish a cache hit from a second real `SELECT`, so also add a for-test accessor
-     exposing whether `process_audience_cache` holds the entry (mirroring
-     `prime_process_audience_cache_for_test`'s existing `#[doc(hidden)]` pattern) and assert it is
-     present after the first call — proving `remember_process_audience`'s `is_some()` guard
-     removal actually took effect for a resolved-default caller.
+   - No arm-3 (memoization) test is added. Once `WriteAudience` is single-state, a
+     resolved-default caller is indistinguishable from any other labelled caller, so
+     `remember_process_audience`'s `is_some()` guard removal has no label-specific behavior left
+     to assert — the same reasoning step 8 already applies to reject the analogous no-DB test.
+     `same_audience_reregistration_is_ok` (`audience_stamping_db_test.rs:52-73`) already covers
+     insert-then-same-audience-re-registration returning `Ok` over a live DB, which is the only
+     observable-by-construction residual behavior, and it is pre-existing coverage this plan does
+     not need to duplicate. No new `#[doc(hidden)]` cache-inspection accessor is added to
+     `WebIngestionService` for this purpose.
 10. `rust/public/tests/resolve_write_audience_tests.rs`: replace the `none()` expectations with
     default-resolution ones (no `bound_audience`, `ctx: None`, and a malformed `bound_audience`
     all resolve to the supplied default); keep the HTTP-level pass-through cases.
@@ -523,7 +530,8 @@ mechanical — see step 12: their unstamped `process_c` fixture must be fabricat
 a pool parameter)
 
 Docs: `CHANGELOG.md`, `mkdocs/docs/admin/{ingestion,authentication,monolith,flight-sql,maintenance,api-keys,web-app}.md`,
-`mkdocs/docs/otlp/index.md`, `mkdocs/docs/query-guide/schema-reference.md`
+`mkdocs/docs/otlp/index.md`, `mkdocs/docs/query-guide/schema-reference.md`,
+`tasks/data_isolation/audience_based_access_control_plan.md`
 
 ## Trade-offs
 
@@ -675,6 +683,16 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
   written through the verbatim-write admin replication path
   (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`), which this change does not
   touch.
+- `tasks/data_isolation/audience_based_access_control_plan.md` (Stage 5 status update,
+  `:1340-1353`) — this is the epic tracker's shipped-status record for #1373, and it currently
+  states, as fact, exactly the contract this plan inverts: "`resolve_write_audience` is infallible
+  now: a bound audience always stamps, an audience-less credential stays unstamped" and a
+  malformed `bound_audience` "now warns and resolves to `WriteAudience::none()`". Both become false
+  once this plan lands. Follow this doc's own convention for a landed-then-changed claim (the
+  `*(Superseded by #1482: ...)*` parenthetical at `:1271-1272`) and append a matching note to the
+  Stage 5 status update: an audience-less credential (and a malformed `bound_audience`) now
+  resolves to the deployment default at the HTTP edge and is stamped explicitly, rather than
+  staying unstamped / resolving to a `none()` state that no longer exists — see #1519.
 - `CHANGELOG.md` — **Ingestion** entry as described in step 14. Breaking-change surface:
   `WriteAudience::none` removed; `WriteAudience::new` takes `&str` and `as_str` returns `&str`;
   `WebIngestionService::new` gains a required `WriteAudience`;
