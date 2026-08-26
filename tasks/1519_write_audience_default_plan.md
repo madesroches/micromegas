@@ -309,7 +309,7 @@ ingestion path** carries a real audience property in Postgres. Consequences:
   contract must be rewritten to say exactly this, and must not claim the write path always
   stamps.
 - **Each audience gets its own id namespace, and the deployment default's namespace is the
-  un-salted (legacy) one — so nothing re-derives.** The five `IdentityContext` construction sites
+  un-salted (legacy) one.** The five `IdentityContext` construction sites
   (`rust/otel-ingestion/src/handler.rs:161,185,220,318`, `cloudwatch_logs.rs:223`) pass `None` when
   the resolved write audience *is* the deployment default, and `Some(aud)` otherwise. All five have
   the `WebIngestionService` in scope, so the default comes from `service.default_audience()`:
@@ -326,11 +326,18 @@ ingestion path** carries a real audience property in Postgres. Consequences:
     semantics: `Some(a)` salts `NS_OTEL_PROCESS_V1` with the audience and hashes the joined field
     key under that namespace (`identity.rs:262-269`) and prefixes `block_id`'s hash input
     (`block.rs:202-206`); `None` reproduces pre-Stage-5 ids byte for byte.
-  - **Zero `process_id`/`stream_id`/`block_id` re-derivation, in every deployment.** A deployment
-    leaving the knob unset (`public`) and one setting it to e.g. `unassigned` both keep deriving
-    exactly today's ids for traffic that carries no bound audience, because that traffic resolves
-    to the default and therefore keeps the legacy namespace. Only explicitly-bound keys are
-    salted, which is already true today.
+  - **No re-derivation for traffic that carries no bound audience; OTLP ids *do* re-derive once
+    for a key explicitly bound to the deployment default label.** A deployment leaving the knob
+    unset (`public`) and one setting it to e.g. `unassigned` both keep deriving exactly today's ids
+    for traffic that carries no bound audience, because that traffic resolves to the default and
+    therefore keeps the legacy namespace. But today `IdentityContext.audience` is
+    `Some(bound_audience)` for *any* DB-backed key, so a key explicitly bound to a label equal to
+    the deployment default is salted today and moves into the un-salted legacy namespace under
+    this rule — a one-time `process_id`/`stream_id`/`block_id` re-derivation for that key. This is
+    not an edge case: mint falls back to the default when no audience is named
+    (`rust/analytics-web-srv/src/ingestion_keys.rs:248-262`), and migration v6 backfilled every
+    pre-existing key's audience to `'public'` (`rust/ingestion/src/sql_migration.rs:144-149`), so on
+    a deployment with the knob unset, most DB-backed keys are bound to exactly the default label.
   - The audience-collision property the salting exists for is preserved: the mapping
     audience → namespace is still injective (the default maps to the un-salted namespace, every
     other audience to its own salted one), so two audiences sending identical resource attributes
@@ -409,19 +416,28 @@ reach:
    `WebIngestionService::new`; update the `insert_process_request` handler call.
 5. Update the five remaining handler call sites: `otlp.rs:153,170,187`, `firehose.rs:46`,
    `firehose_cloudwatch_logs.rs:39`, `webhook.rs:126`.
-6. `rust/otel-ingestion/src/handler.rs:161,185,220,318` and `cloudwatch_logs.rs:223`: build
-   `IdentityContext.audience` as `(aud != default).then_some(aud)` per Design §6's id-namespace
-   rule, with `default` from `service.default_audience()` (in scope at all five sites). No code
-   change in `identity.rs` or `block.rs`; both get **doc-comment edits only** —
-   `identity.rs:208-218` and `block.rs:195-201` must say `None` now means "the deployment default's
-   namespace", not "the credential carried no audience".
+6. Add `WriteAudience::id_namespace<'a>(&'a self, default: &WriteAudience) -> Option<&'a str>` to
+   `rust/ingestion/src/write_audience.rs`, implementing Design §6's id-namespace rule
+   (`(self.as_str() != default.as_str()).then_some(self.as_str())`) in one named place rather than
+   inlining it. Update `rust/otel-ingestion/src/handler.rs:161,185,220,318` and
+   `cloudwatch_logs.rs:223` to build `IdentityContext.audience` by calling
+   `audience.id_namespace(service.default_audience())` at all five sites (each already has the
+   `WebIngestionService` in scope). No code change in `identity.rs` or `block.rs`; both get
+   **doc-comment edits only** — `identity.rs:208-218` and `block.rs:195-201` must say `None` now
+   means "the deployment default's namespace", not "the credential carried no audience". This
+   produces a one-time `process_id`/`stream_id`/`block_id` re-derivation for a DB-backed key
+   explicitly bound to a label equal to the deployment default (Design §6) — it is not a
+   zero-re-derivation change for every caller.
 
 ### Phase 4 — tests
 
 7. `rust/ingestion/tests/write_audience_tests.rs`: drop the two `none()` constructor tests and the
    two `finalize_process_properties`-with-`none()` tests; add one asserting the resolved default is
    stamped like any other audience, and keep the client-`micromegas.*`-stripping coverage under a
-   real audience.
+   real audience. Also add a unit test for `WriteAudience::id_namespace` covering: a label equal to
+   the default returns `None`; a label different from the default returns `Some` of itself; and
+   both cases hold again when the default itself is a non-`public` label (e.g. `unassigned`), so
+   the rule is verified independent of which label happens to be the default.
 8. `rust/ingestion/tests/process_audience_cache_test.rs`: `make_test_service` passes a default;
    delete `no_incoming_audience_skips_the_database` (no such state left). No test is added for arm 3
    (`remember_process_audience`'s dropped `is_some()` guard): with `WriteAudience` single-state a
@@ -483,8 +499,10 @@ reach:
       breaks) and an **Upgrade note** covering the new **third code reader** of
       `MICROMEGAS_DEFAULT_AUDIENCE` — the counting convention throughout this plan is code call
       sites of a `default_audience_from_env` function (two today, see Overview), not deployment
-      roles — and stating explicitly that **no `process_id`/`stream_id`/`block_id` re-derives**,
-      per Design §6's id-namespace rule.
+      roles — and stating explicitly that traffic carrying no bound audience derives the same
+      `process_id`/`stream_id`/`block_id` as before, but a DB-backed key explicitly bound to a
+      label equal to the deployment default re-derives its ids once, moving from the salted
+      namespace it occupies today into the un-salted legacy one (Design §6's id-namespace rule).
     - Reconcile the existing #1373 **Ingestion** entry (`CHANGELOG.md:35-50`) rather than leaving
       it to contradict the new one. Its "**Amended (#1482, still `## Unreleased`)**" paragraph
       (`:42`) currently claims `WriteAudience::none()` is already removed, that a credential with
@@ -624,8 +642,14 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   "Ingestion writes no audience of its own, and there is no startup backfill" paragraph becomes:
   new processes are stamped with the resolved default; pre-existing unstamped rows are never
   retro-stamped and keep resolving to the default on read. The existing `process_id`-churn
-  paragraph (`:94-101`) needs no change: this upgrade is **not** a churn trigger (Design §6's
-  id-namespace rule keeps the resolved default in the legacy un-salted namespace).
+  paragraph (`:94-101`) needs new content, not "no change": (1) traffic carrying no bound audience
+  keeps deriving today's ids across this upgrade, because it resolves to the default and keeps the
+  legacy un-salted namespace (Design §6); (2) a DB-backed key explicitly bound to a label equal to
+  the deployment default re-derives its `process_id`/`stream_id`/`block_id` once at upgrade time,
+  moving from the salted namespace it occupies today into the un-salted one; and (3) after this
+  change ships, flipping `MICROMEGAS_DEFAULT_AUDIENCE` itself becomes a new churn trigger — it
+  re-derives ids for every key bound to the old default label and every key bound to the new one,
+  since the un-salted namespace moves with the knob.
 - `mkdocs/docs/admin/authentication.md:230-262` (*Audience stamping and the default*) — "A
   credential with none stamps nothing" and "without anything being written back to `processes`"
   both change. Add the third reader to "Set it on **every role that builds a lakehouse**": the
@@ -635,7 +659,12 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   warning: its "regenerate the six views" advice is about read-side resolution of rows that carry no
   stamp, so after this change it applies to legacy rows and rows from the admin replication path.
   Rows that carry a stamp were never relabelled by regeneration — that has always been true of every
-  explicitly-bound credential's rows (Design §6) — so do not present this as a lost capability.
+  explicitly-bound credential's rows (Design §6) — so do not present this as a lost capability. In
+  the same warning block, add a new consequence this change introduces (additive to the scoping
+  correction above, not a replacement for it): flipping the knob now also re-derives OTLP
+  `process_id`/`stream_id`/`block_id` for any DB-backed key explicitly bound to the *old* or the
+  *new* default label, since the un-salted namespace moves with the knob (Design §6) — today
+  changing this knob has zero id consequences.
 - `mkdocs/docs/admin/authentication.md:281-307` (residual-gap warning, squatting paragraph) — can
   drop its implicit "only when the squatted row is already stamped" qualifier; the registration
   guard now also rejects a claim against a legacy unstamped row. The `insert_stream`/`insert_block`
@@ -648,7 +677,9 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   still read as the intended `unassigned` label. Also **rescope** "regenerate the six views if you
   ever change it": it relabels rows that carry no stamp (legacy rows, and rows from the admin
   replication path), which is all it ever did — a stamped row's label has never been regeneration's
-  to change. Scoping correction only; do not frame it as a limitation.
+  to change. Scoping correction only; do not frame it as a limitation. Also add the same id-churn
+  consequence noted for the `:230-262` warning block: changing the knob now re-derives OTLP
+  `process_id`/`stream_id`/`block_id` for any key explicitly bound to the old or new default label.
 - `mkdocs/docs/admin/authentication.md:308-316` ("Known gap — no retro-stamp") — its core claim
   ("a credential with no bound audience can still pre-register a victim's future `process_id` and
   have it stay unstamped") is now false: the squatter's registration is stamped with the resolved
@@ -692,7 +723,12 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   "the credential carried no audience" to "the resolved write audience is the deployment default",
   which is the arm every unaudienced credential takes (Design §6's id-namespace rule). Same
   restatement for the `block_id` audience-prefix description at `:244` and the webhook note at
-  `:443-446`. The `:108-115` churn paragraph needs no new trigger — this change re-derives nothing.
+  `:443-446`. The `:108-115` churn paragraph needs a new trigger added: a DB-backed key explicitly
+  bound to a label equal to the deployment default re-derives its ids once at upgrade time, moving
+  from the salted namespace it occupies today into the un-salted legacy one; traffic carrying no
+  bound audience is unaffected. After this change ships, flipping `MICROMEGAS_DEFAULT_AUDIENCE`
+  becomes a further churn trigger of its own, re-deriving ids for keys bound to the old or new
+  default label.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs:78-80` — "A credential carrying no audience
   stamps nothing; the resulting missing property is resolved to the deployment's
   `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*" is now true only of legacy rows and
@@ -733,7 +769,9 @@ than a leftover of the three-state write path, so no follow-up is proposed and
 ## Testing Strategy
 
 - `cargo test -p micromegas-ingestion -p micromegas -p micromegas-otel-ingestion` for the unit and
-  no-database tests (`write_audience_tests`, `process_audience_cache_test`,
+  no-database tests (`write_audience_tests` — including the new `WriteAudience::id_namespace` unit
+  test, step 7, which is the only automated coverage of the id-namespace rule; the manual
+  end-to-end check below is a supplement, not the primary coverage — `process_audience_cache_test`,
   `resolve_write_audience_tests`, firehose HTTP tests).
 - `cargo clippy --workspace --all-targets` — the `WriteAudience::new` signature change is what
   enumerates the remaining call sites.
@@ -746,11 +784,14 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   and confirm a `micromegas.audience=public` property is present on newly registered processes and
   the `audience` column matches. Repeat with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned` exported for
   *all* roles and confirm both sides read `unassigned`.
-- Id-stability check (Design §6's id-namespace rule, the claim that nothing re-derives): POST the
-  same OTLP payload with an unaudienced credential before and after the change, under both the
-  unset default and `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`, and confirm the derived `process_id`
-  / `stream_id` / `block_id` are identical in all four cases; then confirm a credential bound to a
-  *non-default* audience still derives different ids from those.
+- Id-stability check (Design §6's id-namespace rule): POST the same OTLP payload with an
+  unaudienced credential before and after the change, under both the unset default and
+  `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`, and confirm the derived `process_id` / `stream_id` /
+  `block_id` are identical in all four cases; then confirm a credential bound to a *non-default*
+  audience still derives different ids from those. Then confirm the case that *does* churn: a
+  DB-backed credential explicitly bound to a label equal to the deployment default derives a
+  *different* `process_id`/`stream_id`/`block_id` after the change than before — it moves from the
+  salted namespace it occupied today into the un-salted legacy one.
 - Manual squatting check against the local stack, mirroring the new DB tests: register a process
   under `team-a` via a DB-backed ingestion key, then re-register the same `process_id` with an
   unaudienced credential and confirm a 403 where today it is a silent 200.
