@@ -91,7 +91,7 @@
   }
   .histo-track {
     position: relative;
-    flex: 1 1 auto;
+    flex: 0 0 120px;
     height: 100%;
   }
   .histo-tick {
@@ -103,13 +103,16 @@
     pointer-events: none;
   }
   .histo-median-label {
-    flex: 0 0 auto;
+    flex: 0 0 42px;
+    text-align: right;
     font-size: 9.5px;
     line-height: 1;
     color: var(--brand-gold);
     font-family: ui-monospace, monospace;
     pointer-events: none;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* --- Debug/text override cell --- */

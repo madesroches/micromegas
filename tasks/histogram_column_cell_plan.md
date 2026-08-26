@@ -310,17 +310,27 @@ values now (case 3 above never actually sees one), so there's nothing to special
 Renders inside a `<td>`, replacing the plain-string cell content (same pattern as
 `OverrideCell` — a component, not a formatted string).
 
-- **Cell dimensions**: the histogram cell itself is a fixed-size track —
-  `width: 168px; height: 28px` (matching `option-b-tick-median.html`'s
-  `.histo-cell`), with `gap: 1px` between bars. This has to be fixed, not
-  content-derived: `TableBody` renders every cell as `<td className="...
-  truncate max-w-xs">` (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx`
-  uses `<td className="px-3 py-1.5 ...">` (line 120) — neither `<td>` sets a
-  width, and HTML's default auto table layout sizes an unfixed column to its
-  content's max-content contribution. A flex row of all `flex: 1 1 0` bar
-  `<div>`s with no intrinsic size has a max-content contribution of 0, so
-  without an explicit track width the column — and every bar in it — would
-  collapse to zero width.
+- **Cell dimensions**: the histogram cell itself is `width: 168px; height: 28px`
+  (matching `option-b-tick-median.html`'s `.histo-cell`), but that 168px is the
+  whole cell, not the bar track — it splits into a `120px` bar track
+  (`.histo-track`, fixed, not `flex: 1 1 auto`) + `6px` gap
+  (`.histo-bars-wrap`'s `gap`) + a `42px` fixed-width trailing median label
+  (`.histo-median-label`, `flex: 0 0 42px`, `text-align: right`), so
+  `120 + 6 + 42 = 168`. The mockup's `.histo-track { flex: 1 1 auto }` and
+  `.histo-median-label { flex: 0 0 auto; white-space: nowrap }` are corrected
+  to these fixed bases in the component (and should be updated in the mockup
+  too) — a content-sized label would make the track width, every bar's width,
+  and the median tick's x-position all vary row-to-row with the digit count of
+  the formatted median. Bars use `gap: 1px` between them within the 120px
+  track. All of this has to be fixed-width, not content-derived: `TableBody`
+  renders every cell as `<td className="... truncate max-w-xs">`
+  (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx` uses `<td
+  className="px-3 py-1.5 ...">` (line 120) — neither `<td>` sets a width, and
+  HTML's default auto table layout sizes an unfixed column to its content's
+  max-content contribution. A flex row of all `flex: 1 1 0` bar `<div>`s with
+  no intrinsic size has a max-content contribution of 0, so without an
+  explicit track width the column — and every bar in it — would collapse to
+  zero width.
 - **Bars**: one `<div>` per bucket in a flex row (`align-items: flex-end`), height
   `%` = `bucket_count / max(bucket_count in this row)` — **per-row normalization**.
   The point of the cell is to show *shape*, not to compare magnitude row-to-row (the
@@ -333,24 +343,27 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
   downsampling, and none ever dropped or clipped. Bars are `flex: 1 1 0` with
-  **no `min-width` floor** — each bar's width is `(168px - (bins.length - 1) *
-  1px) / bins.length`, an equal share of the fixed 168px track (Design §4 above),
-  so `bins.length` bars always fit exactly within it regardless of bin count;
-  there is nothing for the track to overflow or clip. `make_histogram`'s bin
-  count is caller-chosen in SQL (typically 15–30 for this use case), where bars
-  stay comfortably visible; at very high bin counts (upward of roughly 80 bins in
-  a 168px track) individual bars become sub-pixel and visually imperceptible, but
-  the underlying data is never truncated — every bucket still occupies its exact
-  proportional share of the track width. There is no `MAX_RENDERED_BARS` constant
-  and no bucket-merging step.
+  **no `min-width` floor** — each bar's width is `(120px - (bins.length - 1) *
+  1px) / bins.length`, an equal share of the fixed 120px bar track (not the
+  168px cell — see "Cell dimensions" above), so `bins.length` bars always fit
+  exactly within the track regardless of bin count; there is nothing for the
+  track to overflow or clip. `make_histogram`'s bin count is caller-chosen in
+  SQL (typically 15–30 for this use case), where bars stay comfortably visible;
+  at very high bin counts (upward of roughly 55 bins in a 120px track)
+  individual bars become sub-pixel and visually imperceptible, but the
+  underlying data is never truncated — every bucket still occupies its exact
+  proportional share of the track width. There is no `MAX_RENDERED_BARS`
+  constant and no bucket-merging step.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
   cell's value — no new SQL column, including that function's `return end` fallback
   when no bucket's cumulative count reaches the target ratio (`quantile.rs:38`).
-  Drawn as a vertical gold (`var(--brand-gold)`) tick over the bar area at the
-  median's x-position, with the numeric value in a fixed-width label trailing the
-  chart (see `option-b-tick-median.html`) — rendered via `toLocaleString()`, no
+  Drawn as a vertical gold (`var(--brand-gold)`) tick, positioned absolutely
+  within the 120px bar track (not the 168px cell — see "Cell dimensions" above)
+  at `((median - start) / (end - start)) * 100%` of that track's width, with the
+  numeric value in a fixed-width (`42px`) label trailing the chart (see
+  `option-b-tick-median.html`) — rendered via `toLocaleString()`, no
   unit, consistent with `formatCell`'s numeric default (`table-utils.tsx:767-774`);
   per-column unit hints are a possible follow-up, out of scope here. Chosen over
   overlaying the number directly on the bars (Option A, kept in
@@ -410,8 +423,8 @@ export function formatArrowValue(value: unknown, dataType?: DataType): string {
     if (date) return date.toISOString()
   }
   if (dataType && isHistogramStructType(dataType)) {
-    const h = value as HistogramValue // { start, end, min, max, sum, sum_sq, count, bins }
-    return `{start:${h.start}, end:${h.end}, count:${h.count}, bins:[${Array.from(h.bins).join(',')}]}`
+    const h = toHistogramValue(value as StructRowProxy) // normalizes bigint count/bins to number
+    return `{start:${h.start}, end:${h.end}, count:${h.count}, bins:[${h.bins.join(',')}]}`
   }
   return String(value)
 }
