@@ -438,32 +438,52 @@ reach:
     both use it for a core fixture (`process_c`, asserted against the read-side default at
     `ownership_rewrite_db_test.rs:560-646` and `prong_b_guard_db_test.rs:373`). With
     `WriteAudience` single-state, `insert_process` can no longer create that row directly, so in
-    each file: change `seed_process`'s `audience` parameter from `Option<&str>` to `&str`, call
-    `insert_process` with a real `WriteAudience` even for `process_c`, and then run a post-insert
-    `UPDATE processes SET properties = ...` step to strip `micromegas.audience` back off
-    `process_c`'s row, so it stays genuinely unstamped. Everything downstream of that (the
-    assertions against the resolved default) is unchanged.
+    each file: **keep** `seed_process`'s `audience: Option<&str>` parameter — do not narrow it to
+    `&str`. Only the `None` arm's meaning changes, from "insert with no stamp" to "insert under
+    the deployment default, then strip `micromegas.audience` back off the row via a shared
+    post-insert `UPDATE processes SET properties = ...` helper", so that `seed_process(ingestion,
+    None)` still produces a genuinely unstamped `process_c` row. `Some(label)` is unchanged. The
+    strip runs *inside* `seed_process` (not left for the caller to invoke separately), which is
+    why `seed_process` needs a `&sqlx::Pool<sqlx::Postgres>` to run the `UPDATE`. Everything
+    downstream of that (the assertions against the resolved default) is unchanged.
 
     This `UPDATE` helper is not shared code between step 9 and this step — `rust/ingestion` and
     `rust/analytics` are different crates and there is no shared test-support crate under `rust/`
     — so it is written once per crate: the `micromegas-ingestion` copy lives in
     `audience_stamping_db_test.rs` itself (step 9), and the `micromegas-analytics` copy goes in
     `rust/analytics/tests/common/` (already shared by `ownership_rewrite_db_test.rs` and
-    `prong_b_guard_db_test.rs`) so both files use one definition rather than two divergent copies.
+    `prong_b_guard_db_test.rs`) so both files' `seed_process` calls into one definition rather than
+    two divergent copies.
 
     `prong_b_guard_db_test.rs`'s `seed_process(ingestion, pool, audience)` (`:75-79`) already takes
-    a `&sqlx::Pool<sqlx::Postgres>`, needed to run the `UPDATE`. `ownership_rewrite_db_test.rs`'s
-    `seed_process(ingestion, audience)` (`:93-96`) does not take a pool at all — add one, threaded
-    from the caller's `lake.db_pool` (already in scope at every call site), matching
-    `prong_b_guard_db_test.rs`'s shape.
+    a `&sqlx::Pool<sqlx::Postgres>`, needed to run the `UPDATE` — no signature change there beyond
+    the `None` arm's new behavior. `ownership_rewrite_db_test.rs`'s `seed_process(ingestion,
+    audience)` (`:93-96`) does not take a pool at all — add one, threaded from the caller's
+    `lake.db_pool` (already in scope at every call site), matching `prong_b_guard_db_test.rs`'s
+    shape.
 
 ### Phase 5 — docs and changelog
 
 13. Docs per the Documentation section.
-14. `CHANGELOG.md` **Ingestion** entry under `## Unreleased`, with a **Minor breaking change**
-    clause (Design §1/§3 API breaks) and an **Upgrade note** covering the id re-derivation, the
-    new third reader of `MICROMEGAS_DEFAULT_AUDIENCE`, and that `MICROMEGAS_DEFAULT_AUDIENCE`
-    becomes retroactively unchangeable for any row stamped after the upgrade (Design §6).
+14. `CHANGELOG.md`, under `## Unreleased`:
+    - Add a new **Ingestion** entry, with a **Minor breaking change** clause (Design §1/§3 API
+      breaks) and an **Upgrade note** covering the id re-derivation, the new third reader of
+      `MICROMEGAS_DEFAULT_AUDIENCE`, and that `MICROMEGAS_DEFAULT_AUDIENCE` becomes retroactively
+      unchangeable for any row stamped after the upgrade (Design §6).
+    - Reconcile the existing #1373 **Ingestion** entry (`CHANGELOG.md:35-50`) rather than leaving
+      it to contradict the new one. Its "**Amended (#1482, still `## Unreleased`)**" paragraph
+      (`:42`) currently claims `WriteAudience::none()` is already removed, that a credential with
+      no bound audience is already stamped with the resolved deployment default, that "an
+      idempotent backfill runs at every ingestion-service startup", and that an existing-`NULL`
+      row is now "rejected as a database error" — none of that is true in the tree today, and the
+      backfill and rejected-as-a-database-error claims never become true (Design §6 explicitly
+      rejects a backfill; the existing-`NULL` arm becomes a resolved comparison, not a rejection).
+      Delete or rewrite that paragraph's backfill and rejected-as-a-database-error sentences so it
+      states only what actually ships, or fold its accurate content into the new entry and drop
+      the stale paragraph outright. The "**Unchanged by #1482**" paragraph (`:46`) — which asserts
+      the write path still stamps nothing, `WriteAudience` is still `Option<Arc<str>>` with
+      `none()`, and there is no startup backfill — is retired at the same time, since after this
+      plan lands none of those claims hold either.
 
 No migration and no `SCHEMA_VERSION` bump: the queryable Arrow schema is unchanged, and the
 `audience` column's materialized values are identical (`COALESCE(NULL, default)` and a stamped
@@ -584,6 +604,15 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
   drop its implicit "only when the squatted row is already stamped" qualifier; the registration
   guard now also rejects a claim against a legacy unstamped row. The `insert_stream`/`insert_block`
   write-injection gap is untouched and stays.
+- `mkdocs/docs/admin/authentication.md:383-398` (the "Worked profiles" privacy-deployment bash
+  block) — "Set it on every role that builds a lakehouse -- FlightSQL, maintenance, monolith --"
+  omits ingestion; add it, since after this plan the ingestion role is a fourth reader of
+  `MICROMEGAS_DEFAULT_AUDIENCE` and an operator who sets the knob only on the three listed roles
+  now gets new processes physically stamped `public` while legacy rows still read as the intended
+  `unassigned` label. Also qualify "regenerate the six views if you ever change it": that only
+  relabels rows that were never stamped (legacy rows, and rows from the admin replication path) —
+  rows the HTTP ingestion path stamped under a previous value of the knob keep that label
+  permanently (Design §6's one-way narrowing).
 - `mkdocs/docs/admin/authentication.md:308-316` ("Known gap — no retro-stamp") — its core claim
   ("a credential with no bound audience can still pre-register a victim's future `process_id` and
   have it stay unstamped") is now false: the squatter's registration is stamped with the resolved
