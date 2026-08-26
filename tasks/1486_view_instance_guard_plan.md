@@ -7,7 +7,9 @@
 names a view instance belonging to another audience can make the server materialize partitions
 for data it will then return zero rows of. This is the availability/cost residual accepted in
 AbAC Stage 3 (#1371 §7) and recorded in `tasks/completed/1371_udtf_udf_guards_plan.md` and
-`tasks/data_isolation/audience_based_access_control_plan.md`.
+`rust/analytics/src/metadata.rs`. The epic plan
+(`tasks/data_isolation/audience_based_access_control_plan.md`) does not mention this residual yet
+— its `### Stage 3 — Enforcement Prong B` section predates it.
 
 This plan closes it by adding a scan-time audience check on the `view_instance(...)` entry point
 only: `AudienceGuard` gains a `authorize_view_instance` rule, `MaterializedView` gains an
@@ -249,6 +251,17 @@ the wrong kind for the view set (e.g. a `process_id` given to `thread_spans`) is
 Postgres row retention has deleted already fails today inside `find_process`; it now fails one
 frame earlier with the uniform message.
 
+**Client-risk survey (settled: low-risk, no client change needed).** Every `view_instance(...)`
+call in `analytics-web-app/` substitutes a `$process_id` the user picked out of a process list
+Prong A has *already* audience-filtered: `useMetricsData.ts:11`, `ProcessLogPage.tsx:23`,
+`ImageCell.tsx:20`, `perf-analysis/queries.ts:11,18`, `notebook-utils.ts:150`, and
+`ProcessMetricsPage.tsx:28,35` (a `view_instance('measures', '$process_id')` pair with the same
+shape). None of these can normally reach an unreadable id, so none needs a code change. The
+reachable case is a hand-typed id in a notebook cell, which today renders as an empty result and
+will render as an error instead — already handled: cells render a query failure as an error state
+carrying the server message (e.g. `HgChildPane.tsx:224-231`), so the uniform not-found text
+surfaces legibly with no additional client work.
+
 ## Implementation Steps
 
 ### Phase 1 — the rule
@@ -257,8 +270,15 @@ frame earlier with the uniform message.
    from `authorize`; add `pub fn is_public_view_set` and rewrite `global_rows_visible` in terms of
    it; add `pub async fn authorize_view_instance` with the five ordered rules and the doc comment
    recording §2's `'global'` rationale.
-2. Update the module doc comment's "One cache, one question" / "No existence oracle" sections to
-   list `view_instance` alongside the other guarded entry points.
+2. Update `audience_guard.rs`'s module doc comment: its entry-point list lives in the opening
+   paragraph (lines 1-6, "arg-addressed guards ... that Prong A structurally cannot reach"), not
+   in the "One cache, one question" / "No existence oracle" sections — leave those alone, they
+   don't enumerate entry points. Reframe the opening paragraph rather than appending to it:
+   `view_instance` joins Prong B to close the cost/availability residual this plan fixes, not
+   because Prong A can't reach it — Prong A already filters `view_instance` scans row-by-row (see
+   the "`MaterializedView` downcast constraint" section above). Apply the same reframing to
+   `read_scope.rs`'s module doc comment, whose Stage 3 paragraph carries the identical "structurally
+   cannot reach" list.
 
 ### Phase 2 — the call site
 
@@ -285,15 +305,16 @@ frame earlier with the uniform message.
 
 10. `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/query-guide/functions-reference.md`,
     `CHANGELOG.md` (per §Documentation).
-11. Mark the residual closed in `tasks/data_isolation/audience_based_access_control_plan.md`
-    (the `#1486` residual note) and in
-    `tasks/completed/1371_udtf_udf_guards_plan.md` §7.
+11. Add a Stage-3 residual-closed note to `tasks/data_isolation/audience_based_access_control_plan.md`'s
+    `### Stage 3 — Enforcement Prong B` section (it does not mention this residual today), and mark
+    it closed in `tasks/completed/1371_udtf_udf_guards_plan.md` §7.
 
 ## Files to Modify
 
 | file | change |
 |---|---|
-| `rust/analytics/src/lakehouse/audience_guard.rs` | `authorize_view_instance`, `is_public_view_set`, `not_found_err`; module doc |
+| `rust/analytics/src/lakehouse/audience_guard.rs` | `authorize_view_instance`, `is_public_view_set`, `not_found_err`; reframe opening-paragraph module doc |
+| `rust/analytics/src/lakehouse/read_scope.rs` | reframe the Stage 3 paragraph's entry-point list in the module doc |
 | `rust/analytics/src/lakehouse/materialized_view.rs` | `instance_guard` field; guard call in `scan` |
 | `rust/analytics/src/lakehouse/view_instance_table_function.rs` | carry and pass the guard |
 | `rust/analytics/src/lakehouse/query.rs` | reorder guard construction; 4 `MaterializedView::new` / registration sites |
@@ -304,7 +325,8 @@ frame earlier with the uniform message.
 | `mkdocs/docs/admin/authentication.md` | Prong B now covers five functions, plus the `'global'` rule |
 | `mkdocs/docs/query-guide/functions-reference.md` | `view_instance` denial behaviour |
 | `CHANGELOG.md` | Unreleased → Analytics entry with the upgrade note |
-| `tasks/data_isolation/audience_based_access_control_plan.md`, `tasks/completed/1371_udtf_udf_guards_plan.md` | mark the residual closed |
+| `tasks/data_isolation/audience_based_access_control_plan.md` | add a Stage-3 residual-closed note (not previously recorded there) |
+| `tasks/completed/1371_udtf_udf_guards_plan.md` | mark the residual closed |
 
 ## Trade-offs
 
@@ -379,9 +401,11 @@ each:
   `view_instance_id` is B's stream id *after* the denied `team-a` query, then run the same query
   as a `team-b` caller and assert a row now exists. Without the fix the first assertion fails.
 - `view_instance_global_stays_readable_for_scoped_callers`: as a `team-a` caller,
-  `view_instance('log_entries', 'global')` succeeds and returns exactly the rows
-  `SELECT * FROM log_entries` returns for that caller (A's, not B's) — the §2 rule, pinned
-  end-to-end against the named-table equivalence it is justified by.
+  `view_instance('log_entries', 'global')` succeeds (no denial, no error) — the §2 rule that
+  `'global'` is passed through uncalled and left to Prong A. The fixture seeds no log entries, so
+  this does not (and does not claim to) pin the row-level equivalence with
+  `SELECT * FROM log_entries`; that equivalence is Prong A's existing row-filter behaviour, already
+  covered by the `ownership_rewrite_*` suites this plan also runs.
 - `view_instance_unaffected_for_read_scope_all`: the existing
   `list_partitions_row_filter_enforces_audience` test already materializes both processes'
   `thread_spans` instances under `ReadScope::All`; it must keep passing unchanged, which is the
@@ -396,9 +420,14 @@ would catch a regression there).
 
 - `mkdocs/docs/admin/authentication.md`, "Audience Filtering Activation": Prong B now covers
   **five** functions — add `view_instance` to the `process_spans`/`perfetto_trace_chunks`/
-  `parse_block`/`get_payload` list, state that a scoped caller naming an instance outside its
-  audiences now gets a not-found-shaped error *instead of an empty result*, and record that
-  `'global'` instances are exempt (no JIT to trigger, Prong A filters their rows) — explicitly
+  `parse_block`/`get_payload` list, but reframe rather than just append: the sentence currently
+  reads "Prong B ... covers the four functions Prong A structurally can't reach", which would be
+  self-contradictory with `view_instance` appended, since Prong A does reach and filter
+  `view_instance` scans (§Design, "The `MaterializedView` downcast constraint"). Reword to "Prong
+  B covers five arg-addressed functions; `view_instance` joins them to close a cost/availability
+  residual, not because Prong A can't reach it." State that a scoped caller naming an instance
+  outside its audiences now gets a not-found-shaped error *instead of an empty result*, and record
+  that `'global'` instances are exempt (no JIT to trigger, Prong A filters their rows) — explicitly
   contrasted with `list_partitions`' different `'global'`-row rule, which is described a few
   paragraphs above and would otherwise read as contradictory.
 - `mkdocs/docs/query-guide/functions-reference.md`, `view_instance(view_name, identifier)`
@@ -410,16 +439,5 @@ would catch a regression there).
   `MaterializedView::new` and `ViewInstanceTableFunction::new` gaining a required parameter
   (both published from `micromegas_analytics::lakehouse`).
 - Mark the residual closed where it was recorded: `tasks/completed/1371_udtf_udf_guards_plan.md`
-  §7 and `tasks/data_isolation/audience_based_access_control_plan.md`.
-
-## Open Questions
-
-1. **Erroring vs. empty result** — §6's behaviour change is client-visible, but the survey of
-   current consumers says it is low-risk: every `view_instance(...)` call in `analytics-web-app/`
-   (`useMetricsData.ts:11`, `ProcessLogPage.tsx:23`, `ImageCell.tsx:20`,
-   `perf-analysis/queries.ts:11,18`, `notebook-utils.ts:150`) substitutes a `$process_id` the user
-   picked out of a process list that Prong A has *already* audience-filtered, so a scoped caller
-   cannot normally reach an unreadable id. The reachable case is a hand-typed id in a notebook
-   cell, which today renders as an empty result and would render as an error. No code change is
-   needed on the client; confirm the error surfaces legibly in a notebook cell during
-   implementation.
+  §7. Add a fresh residual-closed note to `tasks/data_isolation/audience_based_access_control_plan.md`'s
+  `### Stage 3 — Enforcement Prong B` section, which does not mention this residual today.
