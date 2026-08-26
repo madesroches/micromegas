@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Option B — median as tick mark</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --chart-line: #bf360c;
+    --chart-fill: rgba(191, 54, 12, 0.35);
+    --brand-gold: #ffb300;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  h1 { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin: 0 0 4px; }
+  .sub { font-size: 12px; color: var(--text-muted); margin: 0 0 24px; }
+  .cell-frame {
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    max-width: 780px;
+  }
+  .cell-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border-color);
+    font-size: 12px; color: var(--text-muted);
+  }
+  .badge {
+    background: var(--card-bg); border: 1px solid var(--border-color);
+    border-radius: 4px; padding: 1px 6px; font-size: 10px; letter-spacing: 0.04em;
+    color: var(--text-secondary); text-transform: uppercase;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th {
+    text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+  }
+  tbody td {
+    padding: 6px 12px; border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary); vertical-align: middle;
+  }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+  .num { text-align: right; }
+
+  /* --- Histogram cell --- */
+  .histo-cell {
+    position: relative;
+    width: 140px;
+    height: 28px;
+  }
+  .histo-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    width: 100%;
+    height: 100%;
+  }
+  .histo-bar {
+    flex: 1 1 0;
+    background: var(--chart-line);
+    opacity: 0.85;
+    border-radius: 1px 1px 0 0;
+    min-width: 2px;
+    transition: opacity 0.1s;
+  }
+  .histo-bar:hover { opacity: 1; outline: 1px solid var(--brand-gold); }
+  .histo-cell {
+    width: 168px; /* wider than option A: room for the trailing median label */
+  }
+  .histo-bars-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 100%;
+  }
+  .histo-track {
+    position: relative;
+    flex: 1 1 auto;
+    height: 100%;
+  }
+  .histo-tick {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1.5px;
+    background: var(--brand-gold);
+    pointer-events: none;
+  }
+  .histo-median-label {
+    flex: 0 0 auto;
+    font-size: 9.5px;
+    line-height: 1;
+    color: var(--brand-gold);
+    font-family: ui-monospace, monospace;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* --- Debug/text override cell --- */
+  .histo-text {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+    display: block;
+  }
+
+  /* --- Tooltip --- */
+  .tooltip {
+    position: fixed;
+    background: var(--app-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    pointer-events: none;
+    z-index: 50;
+    font-family: ui-monospace, monospace;
+  }
+  .tooltip .row-label { color: var(--text-muted); font-size: 10px; margin-bottom: 3px; }
+  .tooltip .range { color: var(--text-primary); font-weight: 600; }
+  .tooltip .count { color: var(--text-secondary); margin-top: 2px; }
+
+  .note {
+    margin-top: 18px; max-width: 780px; font-size: 12px; color: var(--text-muted);
+    padding: 10px 14px; border: 1px dashed var(--border-color); border-radius: 6px;
+    line-height: 1.5;
+  }
+  .note code { color: var(--brand-gold); }
+</style>
+</head>
+<body>
+
+<h1>Option B — median as a gold tick mark over the bars, value trails the chart</h1>
+<p class="sub">Table cell &middot; SELECT call_site, sample_count, make_histogram(0, 50, 24, duration_ms) AS duration_dist FROM top_call_sites LIMIT 6</p>
+
+<div class="cell-frame">
+  <div class="cell-header">
+    <span class="badge">Table</span>
+    <span>top_call_sites &middot; 6 rows</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>call_site</th>
+        <th class="num">sample_count</th>
+        <th>duration_dist</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<div class="note">
+  Same default-detection and data pipeline as Option A &mdash; only the median encoding differs. A
+  vertical gold tick is drawn over the bar area at the estimated median's x-position, with the
+  numeric value trailing the chart in a fixed-width label (so labels stay aligned column-wide,
+  unlike Option A's overlay which can collide with a tall bar under it). Tick position uses the same
+  client-side linear-interpolation estimate as <code>quantile_from_histogram()</code>. Last row shows
+  the debug view: an ordinary <b>Markdown</b> override on this column with
+  <code>format: "$row.duration_dist"</code> &mdash; no dedicated debug feature needed, since a
+  histogram-typed value now formats as its raw struct fields (instead of stringifying uselessly)
+  wherever a markdown template references it.
+</div>
+
+<div id="tooltip" class="tooltip" style="display:none;"></div>
+
+<script>
+// Deterministic pseudo-random so the mockup is stable across renders.
+function mulberry32(seed) {
+  return function() {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+
+function makeBins(rng, n, shape) {
+  const bins = [];
+  for (let i = 0; i < n; i++) {
+    const x = i / (n - 1);
+    let v;
+    if (shape === 'skewed') v = Math.exp(-6 * x) + rng() * 0.05;
+    else if (shape === 'bimodal') v = Math.exp(-40 * (x - 0.2) ** 2) + 0.6 * Math.exp(-40 * (x - 0.75) ** 2) + rng() * 0.03;
+    else if (shape === 'wide') v = 0.3 + 0.5 * Math.sin(x * Math.PI) + rng() * 0.15;
+    else v = Math.exp(-((x - 0.45) ** 2) / 0.02) + rng() * 0.03; // normal-ish
+    bins.push(Math.max(0, v));
+  }
+  const total = bins.reduce((a, b) => a + b, 0);
+  const countTarget = 200 + Math.floor(rng() * 2000);
+  return bins.map(v => Math.round((v / total) * countTarget));
+}
+
+function estimateMedian(start, end, bins) {
+  const count = bins.reduce((a, b) => a + b, 0);
+  const target = count * 0.5;
+  let running = 0;
+  const bw = (end - start) / bins.length;
+  for (let i = 0; i < bins.length; i++) {
+    const before = running;
+    running += bins[i];
+    if (running >= target && bins[i] > 0) {
+      const ratio = (target - before) / (running - before);
+      const bstart = start + i * bw;
+      return bstart + ratio * bw;
+    }
+  }
+  return end;
+}
+
+const rows = [
+  { name: 'render_shadow_pass', count: 4821, start: 0, end: 50, shape: 'skewed', unit: 'ms' },
+  { name: 'physics_broadphase', count: 9931, start: 0, end: 12, shape: 'normal', unit: 'ms' },
+  { name: 'texture_stream_decode', count: 2140, start: 0, end: 80, shape: 'bimodal', unit: 'ms' },
+  { name: 'ai_pathfind_query', count: 6650, start: 0, end: 20, shape: 'wide', unit: 'ms' },
+  { name: 'gc_minor_collect', count: 15320, start: 0, end: 6, shape: 'skewed', unit: 'ms' },
+  { name: 'ui_layout_pass', count: 3012, start: 0, end: 30, shape: 'normal', unit: 'ms', debug: true },
+];
+
+const tbody = document.getElementById('rows');
+const tooltip = document.getElementById('tooltip');
+
+rows.forEach((r, idx) => {
+  const rng = mulberry32(idx * 97 + 13);
+  const nbins = 24;
+  const bins = makeBins(rng, nbins, r.shape);
+  const max = Math.max(...bins);
+  const median = estimateMedian(r.start, r.end, bins);
+
+  const tr = document.createElement('tr');
+  const bw = (r.end - r.start) / nbins;
+
+  let histoCellHtml;
+  if (r.debug) {
+    const text = `{start:${r.start},end:${r.end},count:${r.count},bins:[${bins.slice(0,6).join(',')},...]}`;
+    histoCellHtml = `<span class="histo-text mono" title="${text}">${text}</span>`;
+  } else {
+    const bars = bins.map((v, i) => {
+      const h = max > 0 ? Math.max(2, (v / max) * 100) : 0;
+      const bstart = (r.start + i * bw).toFixed(1);
+      const bend = (r.start + (i + 1) * bw).toFixed(1);
+      const pct = ((v / r.count) * 100).toFixed(1);
+      return `<div class="histo-bar" style="height:${h}%" data-range="${bstart}–${bend}${r.unit}" data-count="${v}" data-pct="${pct}"></div>`;
+    }).join('');
+    const tickPct = (((median - r.start) / (r.end - r.start)) * 100).toFixed(1);
+    histoCellHtml = `
+      <div class="histo-cell">
+        <div class="histo-bars-wrap">
+          <div class="histo-track">
+            <div class="histo-bars">${bars}</div>
+            <div class="histo-tick" style="left:${tickPct}%"></div>
+          </div>
+          <span class="histo-median-label">${median.toFixed(1)}${r.unit}</span>
+        </div>
+      </div>`;
+  }
+
+  tr.innerHTML = `
+    <td class="mono">${r.name}</td>
+    <td class="num mono">${r.count.toLocaleString()}</td>
+    <td>${histoCellHtml}</td>
+  `;
+  tbody.appendChild(tr);
+});
+
+document.querySelectorAll('.histo-bar').forEach(bar => {
+  bar.addEventListener('mousemove', (e) => {
+    tooltip.style.display = 'block';
+    tooltip.style.left = Math.min(e.clientX + 14, window.innerWidth - 180) + 'px';
+    tooltip.style.top = Math.max(e.clientY - 50, 8) + 'px';
+    tooltip.innerHTML = `
+      <div class="row-label">bucket</div>
+      <div class="range">${bar.dataset.range}</div>
+      <div class="count">count: ${bar.dataset.count} (${bar.dataset.pct}%)</div>
+    `;
+  });
+  bar.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+});
+</script>
+</body>
+</html>
