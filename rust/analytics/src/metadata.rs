@@ -192,9 +192,11 @@ pub async fn find_stream_from_view(
     // the caller's own scan, and it returns stream *metadata* used to build a partition of the
     // very view instance the caller named -- never rows returned to the caller directly. The
     // caller's own read of that partition is filtered by Prong A
-    // (`OwnershipRewrite`'s `async_events`/`thread_spans` `EXISTS` predicates). Residual, accepted:
-    // a caller can still *trigger* materialization of an instance they cannot read (a cost/
-    // availability issue, not a confidentiality one) -- tracked as #1486, not fixed here.
+    // (`OwnershipRewrite`'s `async_events`/`thread_spans` `EXISTS` predicates). The cost/
+    // availability residual this comment used to describe -- a caller triggering materialization
+    // of an instance they cannot read -- is now closed one frame up: `MaterializedView::scan`
+    // runs `AudienceGuard::authorize_view_instance` (#1486) before calling `jit_update` at all, so
+    // a denied caller never reaches this function.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,

@@ -65,6 +65,7 @@ async fn register_table(
         view.clone(),
         part_provider,
         query_range,
+        None,
     );
     view.register_table(ctx, table).await
 }
@@ -117,20 +118,11 @@ pub fn register_lakehouse_functions(
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
 ) {
-    ctx.register_udtf(
-        "view_instance",
-        Arc::new(ViewInstanceTableFunction::new(
-            lakehouse.clone(),
-            view_factory.clone(),
-            part_provider.clone(),
-            query_range,
-        )),
-    );
     // Query Enforcement Prong B (#1371, AbAC Stage 3): one guard, shared (via `Arc`) across every
-    // arg-addressed UDTF/UDF this call registers below -- `process_spans`, `perfetto_trace_chunks`,
-    // `parse_block`, `get_payload`, and `list_partitions`' row filter. `ReadScope::All` makes every
-    // one of its checks a no-op, so this costs nothing for internal/maintenance callers or an
-    // auth-unset deployment.
+    // arg-addressed UDTF/UDF this call registers below -- `view_instance`, `process_spans`,
+    // `perfetto_trace_chunks`, `parse_block`, `get_payload`, and `list_partitions`' row filter.
+    // `ReadScope::All` makes every one of its checks a no-op, so this costs nothing for
+    // internal/maintenance callers or an auth-unset deployment.
     // An admin, or a deployment that can never produce one at all (`CallerContext::
     // admin_principal_possible`'s doc comment).
     let lakehouse_admin = caller.is_admin || !caller.admin_principal_possible;
@@ -140,6 +132,16 @@ pub fn register_lakehouse_functions(
         caller.isolation_config.public_view_sets.clone(),
         lakehouse.audience_index().clone(),
     ));
+    ctx.register_udtf(
+        "view_instance",
+        Arc::new(ViewInstanceTableFunction::new(
+            lakehouse.clone(),
+            view_factory.clone(),
+            part_provider.clone(),
+            query_range,
+            audience_guard.clone(),
+        )),
+    );
     ctx.register_udtf(
         "list_partitions",
         Arc::new(ListPartitionsTableFunction::new(
@@ -347,6 +349,7 @@ pub async fn make_session_context(
                 processes_view,
                 part_provider.clone(),
                 None,
+                None,
             ))));
         let streams_source: Arc<dyn TableSource> =
             Arc::new(DefaultTableSource::new(Arc::new(MaterializedView::new(
@@ -354,6 +357,7 @@ pub async fn make_session_context(
                 reader_factory.clone(),
                 streams_view,
                 part_provider.clone(),
+                None,
                 None,
             ))));
         ctx.add_analyzer_rule(Arc::new(OwnershipRewrite::new(

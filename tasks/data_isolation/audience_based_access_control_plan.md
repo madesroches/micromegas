@@ -1220,6 +1220,17 @@ extension rather than a new header).
    maintenance contexts get `ReadScope::All`; the three user-reachable recursive context sites
    inherit the caller's scope (§5).
 
+**Residual closed (#1486).** Landing this stage (#1371) left one gap, recorded at the time in
+`tasks/completed/1371_udtf_udf_guards_plan.md` §7 and in `rust/analytics/src/metadata.rs`:
+`MaterializedView::scan` ran `View::jit_update` — real JIT materialization work — before any
+audience check, so a caller scoped to one audience naming a `view_instance(...)` instance in
+another audience could trigger materialization for it and only then have Prong A (`OwnershipRewrite`)
+return the query zero rows. Availability/cost, not confidentiality: Prong A already filtered
+`view_instance` scans row-by-row, so nothing was ever returned. #1486 closed it with a fifth Prong B
+guard, `AudienceGuard::authorize_view_instance`, run by `MaterializedView::scan` before
+`jit_update` — `'global'` instances and view sets on `MICROMEGAS_PUBLIC_VIEW_SETS` are exempt, for
+the same reasons the guard's own doc comment and `tasks/1486_view_instance_guard_plan.md` record.
+
 ### Stage 4 — Audience on keys (the open-deployment migration vehicle) — **landed, #1372**
 
 Reduced to the part that genuinely needs the AbAC seam (revised 2026-07-30); the key store itself

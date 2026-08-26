@@ -396,8 +396,14 @@ async fn register_table_never_carries_the_merge_query_sort_node() {
         Arc::new(MetadataCache::new(1024 * 1024)),
     ));
     let part_provider: Arc<dyn QueryPartitionProvider> = Arc::new(NullPartitionProvider {});
-    let materialized =
-        MaterializedView::new(lakehouse, reader_factory, view.clone(), part_provider, None);
+    let materialized = MaterializedView::new(
+        lakehouse,
+        reader_factory,
+        view.clone(),
+        part_provider,
+        None,
+        None,
+    );
 
     let ctx = SessionContext::new();
     view.register_table(&ctx, materialized)

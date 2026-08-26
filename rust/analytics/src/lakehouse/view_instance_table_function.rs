@@ -1,6 +1,7 @@
 use super::{
-    lakehouse_context::LakehouseContext, materialized_view::MaterializedView,
-    partition_cache::QueryPartitionProvider, view_factory::ViewFactory,
+    audience_guard::AudienceGuard, lakehouse_context::LakehouseContext,
+    materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
+    view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
@@ -22,12 +23,16 @@ use std::sync::Arc;
 /// df_spans = client.query(sql, begin_spans, end_spans)
 /// ```
 ///
+/// The only site that supplies an [`AudienceGuard`] to the [`MaterializedView`]s it builds
+/// (#1486): every caller-named instance goes through this table function, so this is where the
+/// scan-time audience check gets wired in.
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
+    guard: Arc<AudienceGuard>,
 }
 
 impl ViewInstanceTableFunction {
@@ -36,12 +41,14 @@ impl ViewInstanceTableFunction {
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
+        guard: Arc<AudienceGuard>,
     ) -> Self {
         Self {
             lakehouse,
             view_factory,
             part_provider,
             query_range,
+            guard,
         }
     }
 }
@@ -79,6 +86,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
             view,
             self.part_provider.clone(),
             self.query_range,
+            Some(self.guard.clone()),
         )))
     }
 }

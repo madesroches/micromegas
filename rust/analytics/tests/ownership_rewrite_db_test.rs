@@ -4,11 +4,19 @@
 //! `MICROMEGAS_DEFAULT_AUDIENCE`) through the real ingestion pipeline, materialize the `blocks`/
 //! `processes`/`streams` batch views `OwnershipRewrite` reads its audience mapping from, then
 //! assert a session's visible rows differ by `CallerContext.read_scope` -- cross-audience denial,
-//! same-audience visibility, `ReadScope::All` sees everything, and (the coverage a naive
-//! "process_id column or bust" implementation would miss) the two schema-less view sets
-//! `async_events`/`thread_spans`. Also asserts the physical `audience` column itself (#1482) is
-//! present, non-`NULL`, and carries the expected value on `processes`/`streams`/`blocks`/
-//! `log_entries`.
+//! same-audience visibility, and `ReadScope::All` sees everything -- for `processes`/`streams`
+//! (named-table queries that reach Prong A's `EXISTS` predicate directly) and for
+//! `log_entries`/`async_events`/`thread_spans` via `view_instance(...)`. For the three
+//! `view_instance(...)` cases, the cross-audience assertion is now satisfied by the #1486 Prong B
+//! guard (`AudienceGuard::authorize_view_instance`, called from `MaterializedView::scan` before
+//! `jit_update`) denying a foreign-audience instance outright, before Prong A's row filter (or
+//! its absence, for the two schema-less view sets `async_events`/`thread_spans`) ever runs --
+//! this file no longer exercises Prong A's own row-filtering behavior for those two view sets.
+//! That coverage (the "process_id column or bust" concern) now lives in the plan-shape tests of
+//! `ownership_rewrite_public_view_set_tests.rs`, which build logical plans but never `.collect()`
+//! them, so they aren't short-circuited by the #1486 guard. Also asserts the physical `audience`
+//! column itself (#1482) is present, non-`NULL`, and carries the expected value on
+//! `processes`/`streams`/`blocks`/`log_entries`.
 //!
 //! Requires a live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (mirrors
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
@@ -385,6 +393,16 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         "ReadScope::All must see process B regardless of audience"
     );
 
+    // The next three sections (`log_entries`, `async_events`, `thread_spans`) all name their
+    // instance through `view_instance(...)`. `MaterializedView::scan` runs the #1486 Prong B
+    // guard (`AudienceGuard::authorize_view_instance`) before `jit_update`, so a scoped caller
+    // naming a foreign-audience instance this way is denied there, before Prong A's row filter
+    // (or, for the two schema-less view sets below, its absence) ever runs. Each `expect_err`
+    // below is therefore coverage of the #1486 guard, not of Prong A's `EXISTS` predicate --
+    // Prong A's own row-filtering behavior for `async_events`/`thread_spans` (the "process_id
+    // column or bust" concern) is exercised separately, by the plan-shape tests in
+    // `ownership_rewrite_public_view_set_tests.rs`.
+
     // --- `log_entries`, a process_id-**column** view, via `view_instance` ----------------
     let log_entries_a_sql = format!(
         "SELECT * FROM view_instance('log_entries', '{}')",
@@ -402,17 +420,23 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         1,
         "a caller scoped to user:a must see process A's log_entries"
     );
-    assert_eq!(
-        row_count(
-            lakehouse.clone(),
-            view_factory.clone(),
-            caller_with_scope(audiences_scope(&["team-b"])),
-            None,
-            &log_entries_a_sql,
-        )
-        .await?,
-        0,
-        "a caller scoped to user:b must not see process A's log_entries"
+    let log_entries_b_err = row_count(
+        lakehouse.clone(),
+        view_factory.clone(),
+        caller_with_scope(audiences_scope(&["team-b"])),
+        None,
+        &log_entries_a_sql,
+    )
+    .await
+    .expect_err(
+        "a caller scoped to user:b naming process A's log_entries instance must be denied by \
+         the #1486 view_instance guard, not silently return zero rows",
+    );
+    assert!(
+        log_entries_b_err
+            .to_string()
+            .contains("not found or not accessible"),
+        "expected the #1486 guard's uniform denial text, got: {log_entries_b_err}"
     );
     assert_eq!(
         row_count(
@@ -444,19 +468,24 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         async_events_a_own > 0,
         "a caller scoped to user:a must see process A's async_events (begin+end of one span)"
     );
-    assert_eq!(
-        row_count(
-            lakehouse.clone(),
-            view_factory.clone(),
-            caller_with_scope(audiences_scope(&["team-b"])),
-            None,
-            &async_events_a_sql,
-        )
-        .await?,
-        0,
-        "a caller scoped to user:b must not see process A's async_events -- the naive \
-         'process_id column or bust' implementation this test guards against would leave this \
-         view set unfiltered entirely"
+    let async_events_b_err = row_count(
+        lakehouse.clone(),
+        view_factory.clone(),
+        caller_with_scope(audiences_scope(&["team-b"])),
+        None,
+        &async_events_a_sql,
+    )
+    .await
+    .expect_err(
+        "a caller scoped to user:b naming process A's async_events instance must be denied by \
+         the #1486 view_instance guard, before Prong A's row filter (or its absence) for this \
+         schema-less view set ever runs",
+    );
+    assert!(
+        async_events_b_err
+            .to_string()
+            .contains("not found or not accessible"),
+        "expected the #1486 guard's uniform denial text, got: {async_events_b_err}"
     );
     assert_eq!(
         row_count(
@@ -492,17 +521,23 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         thread_spans_a_own > 0,
         "a caller scoped to user:a must see process A's thread_spans"
     );
-    assert_eq!(
-        row_count(
-            lakehouse.clone(),
-            view_factory.clone(),
-            caller_with_scope(audiences_scope(&["team-b"])),
-            Some(insert_range),
-            &thread_spans_a_sql,
-        )
-        .await?,
-        0,
-        "a caller scoped to user:b must not see process A's thread_spans"
+    let thread_spans_b_err = row_count(
+        lakehouse.clone(),
+        view_factory.clone(),
+        caller_with_scope(audiences_scope(&["team-b"])),
+        Some(insert_range),
+        &thread_spans_a_sql,
+    )
+    .await
+    .expect_err(
+        "a caller scoped to user:b naming process A's thread_spans instance must be denied by \
+         the #1486 view_instance guard",
+    );
+    assert!(
+        thread_spans_b_err
+            .to_string()
+            .contains("not found or not accessible"),
+        "expected the #1486 guard's uniform denial text, got: {thread_spans_b_err}"
     );
     assert_eq!(
         row_count(

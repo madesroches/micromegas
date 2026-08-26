@@ -27,6 +27,15 @@ view_instance(view_name, identifier)
 
 **Returns:** Schema depends on the view type (see [Schema Reference](schema-reference.md))
 
+!!! note "Audience-filtered deployments"
+    On a deployment with audience filtering active (see
+    [Authentication](../admin/authentication.md#audience-filtering-activation)), naming a
+    process or stream id outside the caller's own audiences fails with a not-found-shaped error
+    instead of returning an empty result — the same check `process_spans`,
+    `perfetto_trace_chunks`, `parse_block`, and `get_payload` already apply to their own id
+    arguments. The `'global'` identifier is exempt from this check and stays readable for any
+    scoped caller.
+
 **Examples:**
 ```sql
 -- Get logs for a specific process

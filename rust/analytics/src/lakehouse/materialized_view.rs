@@ -1,5 +1,6 @@
 use super::{
-    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
+    audience_guard::AudienceGuard, lakehouse_context::LakehouseContext,
+    partition_cache::QueryPartitionProvider,
     partitioned_execution_plan::make_partitioned_execution_plan, reader_factory::ReaderFactory,
     view::View,
 };
@@ -24,6 +25,13 @@ pub struct MaterializedView {
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
+    /// #1486: the `view_instance(...)` scan-time audience check, run before `jit_update`.
+    /// `Some` only when this provider was built by `ViewInstanceTableFunction` -- a
+    /// caller-named instance. `None` for every server-constructed `MaterializedView`: the
+    /// implicitly-registered global tables (`query.rs::register_table`) and `OwnershipRewrite`'s
+    /// own `processes`/`streams` sources, which are Prong A's job to filter row-by-row and must
+    /// never be denied wholesale.
+    instance_guard: Option<Arc<AudienceGuard>>,
 }
 
 impl MaterializedView {
@@ -33,6 +41,7 @@ impl MaterializedView {
         view: Arc<dyn View>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
+        instance_guard: Option<Arc<AudienceGuard>>,
     ) -> Self {
         Self {
             lakehouse,
@@ -40,6 +49,7 @@ impl MaterializedView {
             view,
             part_provider,
             query_range,
+            instance_guard,
         }
     }
 
@@ -66,6 +76,15 @@ impl TableProvider for MaterializedView {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        if let Some(guard) = &self.instance_guard {
+            guard
+                .authorize_view_instance(
+                    &self.view.get_view_set_name(),
+                    &self.view.get_view_instance_id(),
+                )
+                .await?;
+        }
+
         self.view
             .jit_update(self.lakehouse.clone(), self.query_range)
             .await

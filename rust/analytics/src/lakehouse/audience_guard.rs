@@ -1,9 +1,15 @@
-//! Query Enforcement Prong B (#1371, AbAC Stage 3) -- arg-addressed guards for the span/metadata
-//! UDTFs and the `get_payload` UDF that [`super::ownership_rewrite::OwnershipRewrite`] (Prong A)
-//! structurally cannot reach: they bake their target id into a provider at plan time, return
-//! schemas with no `process_id` column to filter on, and some build their own inner session
-//! under `ReadScope::All`. See `tasks/1371_udtf_udf_guards_plan.md` for the full design rationale;
-//! this comment records only what a future reader of this file needs close at hand.
+//! Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486) -- arg-addressed guards for
+//! five entry points: the span/metadata UDTFs and the `get_payload` UDF that
+//! [`super::ownership_rewrite::OwnershipRewrite`] (Prong A) structurally cannot reach (they bake
+//! their target id into a provider at plan time, return schemas with no `process_id` column to
+//! filter on, and some build their own inner session under `ReadScope::All`), plus
+//! `view_instance(...)`, which Prong A *can* and does reach -- it row-filters every
+//! `view_instance` scan the same as the named-table form -- but which still needs a scan-time
+//! guard of its own to stop a caller from triggering JIT materialization (real compute and
+//! object-storage writes) for an instance outside their audiences before Prong A's filter ever
+//! gets to run. See `tasks/1371_udtf_udf_guards_plan.md` and
+//! `tasks/1486_view_instance_guard_plan.md` for the full design rationale; this comment records
+//! only what a future reader of this file needs close at hand.
 //!
 //! ## One cache, one question
 //!
@@ -77,7 +83,10 @@ pub enum IdKind {
     /// `list_partitions`' `view_instance_id`: either a `process_id` or a `stream_id`, resolved in
     /// one round trip. Cached under its own key rather than reusing `Process`/`Block` entries or a
     /// separate `streams` kind, so the `UNION ALL` result -- fail-closed on a collision between the
-    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached.
+    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached. A second consumer since
+    /// #1486: [`AudienceGuard::authorize_view_instance`]'s scan-time check on `view_instance(...)`
+    /// resolves its `view_instance_id` argument through the same kind, sharing cache entries with
+    /// `list_partitions`' row filter over the same id.
     ProcessOrStream,
 }
 
@@ -296,6 +305,13 @@ impl std::fmt::Debug for AudienceIndex {
     }
 }
 
+/// The uniform, existence-oracle-proof denial text every Prong B guard returns:
+/// `{fname}: '{id}' not found or not accessible`. Extracted so [`AudienceGuard::authorize`] and
+/// [`AudienceGuard::authorize_view_instance`]'s fail-closed fallthrough rule can't drift apart.
+fn not_found_err<T>(fname: &str, id: &str) -> datafusion::error::Result<T> {
+    plan_err!("{fname}: '{id}' not found or not accessible")
+}
+
 /// Pure, offline-testable: the whole authorization rule, with no I/O in it. `ReadScope::All` is
 /// the only branch that passes `Unknown` -- every other combination denies it unconditionally.
 pub fn is_readable(scope: &ReadScope, owner: &OwnerAudience) -> bool {
@@ -404,7 +420,7 @@ impl AudienceGuard {
                 "{fname}: denying '{id}' ({kind:?}): owner={owner:?}, scope={:?}",
                 self.read_scope
             );
-            plan_err!("{fname}: '{id}' not found or not accessible")
+            not_found_err(fname, &id.to_string())
         }
     }
 
@@ -434,6 +450,14 @@ impl AudienceGuard {
             .collect())
     }
 
+    /// Whether `view_set_name` is on the `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist -- an operator
+    /// declaring every row of a view set readable by any authenticated caller. Shared by
+    /// [`Self::global_rows_visible`] and [`Self::authorize_view_instance`]'s rule (2) so the two
+    /// read the same allowlist through one accessor.
+    pub fn is_public_view_set(&self, view_set_name: &str) -> bool {
+        self.public_view_sets.iter().any(|s| s == view_set_name)
+    }
+
     /// `list_partitions`' `'global'`-row rule (#1482 §4): a global partition is a multi-audience
     /// file -- it has no single owning audience to check against the caller's scope. Visible
     /// under `ReadScope::All`, when `view_set_name` is on the public allowlist, or when the
@@ -445,8 +469,65 @@ impl AudienceGuard {
         match &self.read_scope {
             ReadScope::All => true,
             ReadScope::Audiences(_) => {
-                self.public_view_sets.iter().any(|s| s == view_set_name) || self.lakehouse_admin
+                self.is_public_view_set(view_set_name) || self.lakehouse_admin
             }
         }
+    }
+
+    /// The `view_instance(view_set_name, view_instance_id)` scan-time check (#1486), run by
+    /// `MaterializedView::scan` before `jit_update` -- so a caller scoped to one audience cannot
+    /// trigger JIT materialization of an instance it cannot read.
+    ///
+    /// Rules, in order:
+    ///
+    /// 1. `ReadScope::All` -> `Ok(())`, no I/O. Internal, maintenance, `--disable-auth`, and
+    ///    every inner session built from an `Authorized::internal_caller()` take this arm.
+    /// 2. `view_set_name` on `public_view_sets` -> `Ok(())`. Matches Prong A: an operator who
+    ///    declared a view set public has said every row of it is readable, so denying
+    ///    materialization of one of its instances would be incoherent. Confidentiality-only:
+    ///    this leaves the cost/availability residual this method exists to close fully open for
+    ///    any view set an operator puts on the allowlist -- any authenticated caller can still
+    ///    force `jit_update` for arbitrary process/stream ids of a public view set. Deliberate.
+    /// 3. `view_instance_id == "global"` -> `Ok(())`. Global instances are row-filtered, not
+    ///    call-guarded: `jit_update` is a no-op for every `'global'` instance today
+    ///    (`LogView`/`MetricsView`, the only two view sets that accept `'global'`), so there is
+    ///    no materialization to protect against, and denying the call would break the legal
+    ///    `view_instance('log_entries', 'global')` spelling of `SELECT * FROM log_entries` for no
+    ///    security gain -- Prong A already filters its rows one at a time. This is a different
+    ///    rule from `list_partitions`' `global_rows_visible`, which gates *visibility of
+    ///    partition metadata* about a `'global'` file with no per-row filter available; reusing
+    ///    it here would deny the `log_entries`/`measures` `'global'` instances to every
+    ///    non-admin scoped caller, a regression. The invariant that makes this rule sound --
+    ///    `'global'` never triggers JIT -- lives in each view set's `jit_update` impl; a future
+    ///    view set whose `'global'` instance does materialize would need to revisit this rule.
+    /// 4. `view_instance_id` parses as a `Uuid` -> [`Self::authorize`] under
+    ///    `IdKind::ProcessOrStream`, discarding the returned `Authorized`. The witness exists to
+    ///    gate construction of an inner unscoped session; this call site builds none --
+    ///    `jit_update`'s `CallerContext::internal()` is unchanged and stays where it is.
+    /// 5. anything else -> the same uniform denial as (4). Fail-closed, matching
+    ///    `list_partitions`'s "anything else is dropped" rule. Unreachable for today's view sets
+    ///    (every `make_view` either accepts `'global'` or `Uuid::parse_str`s, failing at plan
+    ///    time otherwise), so this is a safety net against a future view set with a different id
+    ///    vocabulary.
+    pub async fn authorize_view_instance(
+        &self,
+        view_set_name: &str,
+        view_instance_id: &str,
+    ) -> datafusion::error::Result<()> {
+        if self.read_scope == ReadScope::All {
+            return Ok(());
+        }
+        if self.is_public_view_set(view_set_name) {
+            return Ok(());
+        }
+        if view_instance_id == "global" {
+            return Ok(());
+        }
+        if let Ok(id) = Uuid::parse_str(view_instance_id) {
+            self.authorize(id, IdKind::ProcessOrStream, "view_instance")
+                .await?;
+            return Ok(());
+        }
+        not_found_err("view_instance", view_instance_id)
     }
 }

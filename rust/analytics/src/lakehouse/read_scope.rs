@@ -13,7 +13,9 @@
 //! `MaterializedView`-backed scan. **Stage 3 (#1371) adds Prong B**: the UDTF/UDF guards
 //! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
 //! structurally cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function
-//! registration gate.
+//! registration gate. `view_instance(...)` joined Prong B later (#1486) to close a
+//! cost/availability residual, not because Prong A can't reach it -- Prong A already filters
+//! `view_instance` scans row-by-row, same as the named-table form.
 
 use std::sync::Arc;
 

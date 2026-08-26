@@ -390,6 +390,11 @@ rather than of these two functions — the right place to fix it is a scan-time 
 `view_instance` in a later stage, not a scope parameter here. Recorded in Trade-offs and filed as
 #1486.
 
+**Closed:** #1486 added that scan-time guard — `MaterializedView::scan` now runs
+`AudienceGuard::authorize_view_instance` before calling `View::jit_update`, so a denied caller never
+reaches `find_stream_from_view`/`find_process_with_latest_timing` at all. See
+`tasks/1486_view_instance_guard_plan.md`.
+
 ### 8. `list_partitions` row filtering
 
 Row kinds, keyed on the `view_instance_id` value itself (no `ViewFactory` lookup needed, so retired
@@ -664,7 +669,8 @@ and the aggregate-scan cost this design was chosen to avoid.
   rename lands as an in-place edit of that entry, not a new breaking-change clause.
 - **JIT materialization remains triggerable for unreadable instances (§7).** Accepted as a
   cost/availability residual, not a confidentiality one; a `view_instance` scan-time guard is the
-  fix and is deliberately out of scope here. Filed as #1486.
+  fix and is deliberately out of scope here. Filed as #1486, and closed by it — see §7's update
+  above.
 
 ## Security
 
