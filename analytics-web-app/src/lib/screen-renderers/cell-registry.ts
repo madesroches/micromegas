@@ -1,5 +1,5 @@
 import { ComponentType, ReactNode } from 'react'
-import { Table } from 'apache-arrow'
+import { Table, DataType } from 'apache-arrow'
 import type { CellConfig, CellState, CellType, CellStatus, VariableValue } from './notebook-types'
 
 // Re-export types from notebook-types for backwards compatibility
@@ -88,6 +88,10 @@ export interface CellEditorProps {
   timeRange: { begin: string; end: string }
   /** Available column names from query results (for table/chart cells) */
   availableColumns?: string[]
+  /** Available column name -> DataType map from query results (for the
+   *  Overrides panel's "Render as" toggle, which needs to know which
+   *  column is histogram-typed). */
+  availableColumnTypes?: Record<string, DataType>
   /** Names of datasource-type variables available above this cell */
   datasourceVariables?: string[]
   /** The global default data source name (fallback when cell has none) */

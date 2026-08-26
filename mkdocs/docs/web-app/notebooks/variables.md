@@ -109,6 +109,8 @@ Table and transposed table cells support column format overrides using markdown 
 
 Row macros use `$row.columnName` or `$row["column-name"]` syntax to reference values from the current row. Standard variable macros (`$from`, `$to`, `$variableName`) are also available in format strings.
 
+Markdown is the default and only render mode for most columns, but a column whose value is a `Histogram` struct (from `make_histogram()`) offers a second, non-markdown "Render as: Histogram" mode instead — see [Histogram Columns](cell-types.md#histogram-columns) under the Table cell type.
+
 ## Per-Cell Query Time Range
 
 Every query-backed cell (table, chart, log, property timeline, swimlane, transposed table, flame graph, map, Perfetto export, image, and combobox/expression variable cells) accepts an optional `timeRange: { from, to }` field that overrides the notebook's global (URL-synced) time range for that cell's query.

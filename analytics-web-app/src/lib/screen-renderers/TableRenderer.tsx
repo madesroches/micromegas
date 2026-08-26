@@ -201,6 +201,9 @@ export function TableRenderer({
   // Get available columns from query result
   const table = streamQuery.getTable()
   const availableColumns = table ? table.schema.fields.map((f) => f.name) : []
+  const availableColumnTypes = table
+    ? Object.fromEntries(table.schema.fields.map((f) => [f.name, f.type]))
+    : undefined
 
   // Panel state
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(true)
@@ -355,6 +358,7 @@ export function TableRenderer({
         <OverrideEditor
           overrides={tableConfig.overrides || []}
           availableColumns={availableColumns}
+          availableColumnTypes={availableColumnTypes}
           onChange={handleOverridesChange}
         />
       </div>

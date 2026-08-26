@@ -37,7 +37,7 @@ export function useColumnWarnings(overridesSource: unknown): {
   // Content-hash the override list so a fresh array reference with the
   // same shape (the `?? []` fallback case, or a parent re-rendering) does
   // not trigger a reset. JSON.stringify is fine here — overrides are a
-  // small array of `{ column, format }` objects.
+  // small array of `{ column, kind?, format?, histogramColor? }` objects.
   const overridesHash = JSON.stringify(overridesSource ?? null)
 
   // Reset during render (the "derive state from props" pattern) rather than

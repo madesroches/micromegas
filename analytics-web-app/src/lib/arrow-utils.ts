@@ -2,7 +2,7 @@
  * Utilities for working with Apache Arrow data
  */
 
-import { DataType, TimeUnit, Timestamp, Duration, Table } from 'apache-arrow'
+import { DataType, TimeUnit, Timestamp, Duration, Table, Struct } from 'apache-arrow'
 import { cellColorToCss } from '@/lib/color-utils'
 
 export type XAxisMode = 'time' | 'numeric' | 'categorical'
@@ -164,6 +164,29 @@ export function isBinaryType(dataType: DataType): boolean {
     DataType.isLargeBinary(inner) ||
     DataType.isFixedSizeBinary(inner) ||
     DataType.isBinaryView(inner)
+  )
+}
+
+/**
+ * The `Histogram` struct's field names, in order, as produced by
+ * `make_histogram()` (`rust/datafusion-extensions/src/histogram/accumulator.rs`,
+ * `state_arrow_fields()`).
+ */
+const HISTOGRAM_FIELD_NAMES = ['start', 'end', 'min', 'max', 'sum', 'sum_sq', 'count', 'bins']
+
+/**
+ * Structural check for a `Histogram`-shaped struct column (the type produced
+ * by the `make_histogram()` SQL aggregate). Arrow has no extension-type
+ * metadata on this struct today, so detection is by field name/order rather
+ * than a nominal type tag — see the histogram column cell plan, Design §1.
+ */
+export function isHistogramStructType(dataType: DataType): boolean {
+  if (!DataType.isStruct(dataType)) return false
+  const fields = (dataType as Struct).children
+  if (fields.length !== HISTOGRAM_FIELD_NAMES.length) return false
+  return (
+    fields.every((f, i) => f.name === HISTOGRAM_FIELD_NAMES[i]) &&
+    DataType.isList(fields[fields.length - 1].type)
   )
 }
 

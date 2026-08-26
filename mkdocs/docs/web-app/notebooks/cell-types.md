@@ -710,7 +710,7 @@ SQL query results displayed in a sortable, paginated table.
 | `sortDirection` | `'asc'` \| `'desc'` | Sort direction |
 | `pageSize` | number | Rows per page (default: 100; selectable from 50 / 100 / 250 / 500 / 1000) |
 | `hiddenColumns` | string[] | Columns to hide |
-| `overrides` | array | Column format overrides — each entry `{ column, format }` |
+| `overrides` | array | Column render overrides — each entry `{ column, kind?, format?, histogramColor? }` |
 | `selectionMode` | `'none'` \| `'single'` | Whether clicking a row publishes a selection to downstream cells (default `'none'`) |
 
 **Features:**
@@ -720,6 +720,7 @@ SQL query results displayed in a sortable, paginated table.
 - Client-side pagination with configurable page size
 - Sort column available as `$order_by` macro in SQL for server-side sorting
 - Column format overrides with markdown and row macros (`$row.columnName`)
+- Any column whose value is a `Histogram` struct (the type `make_histogram()` produces) renders as a compact bar chart automatically — no configuration needed
 - With `selectionMode: 'single'`, the selected row is exposed to downstream cells as `$cellname.selected.column`
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
@@ -732,6 +733,14 @@ Override how a column renders by providing a markdown format string with row mac
 ```
 
 This renders the `exe` column as a link to the process page.
+
+### Histogram Columns
+
+A column whose result value is a `Histogram` struct — the type [`make_histogram()`](../../query-guide/functions-reference.md#histogram-functions) produces — renders automatically as a small per-row bar chart instead of the raw struct: one bar per bucket, shaped to that row's own distribution (each row is normalized to its own tallest bucket, so the cell shows shape and spread rather than magnitude compared across rows), plus a vertical gold tick marking the estimated median. The median is computed client-side from the struct's own `start`/`end`/`count`/`bins` fields, using the same interpolation as `quantile_from_histogram(h, 0.5)` — no extra SQL column is required. Hovering a bucket shows a tooltip with its `[start, end)` range and count/percentage of the row's total.
+
+This is the default for any histogram-typed column, with no `overrides` entry needed. Bars are the flat brand color by default; to recolor them, add an override for that column and set **Render as: Histogram** in the Overrides panel. That reveals a swatch picker — six colormap swatches (`viridis`, `magma`, `plasma`, `inferno`, `cividis`, `turbo`, the same names [`color_scale()`](../../query-guide/functions-reference.md#color-functions) supports), each shown as its own gradient, plus one custom-color swatch backed by a native color picker. Picking a colormap drives each bucket's color from its own height ratio — taller buckets sample further along the colormap; picking a custom color paints every bar that flat color. No colormap name is ever typed by hand — clicking a swatch is the only way to set it.
+
+**Debugging a histogram column:** to inspect the raw struct instead of the chart, add (or reuse) an override for that column, leave **Render as** on **Markdown**, and set the format to `$row.columnName` (e.g. `$row.duration_dist`). This isn't a separate feature — a histogram-typed value renders as a compact `{start, end, count, bins}` field dump wherever a markdown template references it, the same as any other column's raw value. Switching the toggle back to Histogram (or removing the override) restores the chart.
 
 **Example SQL:**
 
@@ -759,12 +768,13 @@ Same as Table — `sql`, `dataSource`. The transposed view has no pagination (al
 | Field | Type | Description |
 |-------|------|-------------|
 | `hiddenRows` | string[] | Hidden row names (original column names) |
-| `overrides` | array | Row rendering overrides — each entry `{ column, format }`, where `column` is the original column name (now a row label) |
+| `overrides` | array | Row rendering overrides — each entry `{ column, kind?, format?, histogramColor? }`, where `column` is the original column name (now a row label) |
 
 **Features:**
 
 - Row hiding via right-click context menu, with a restoration bar to unhide
 - Row format overrides with markdown and row macros (same syntax as table column overrides)
+- A `Histogram`-typed row renders the same automatic bar chart described under [Table](#histogram-columns) above, with the same "Render as: Histogram" override and Markdown-debug trick
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
 **Example:**

@@ -21,13 +21,18 @@ vi.mock('apache-arrow', () => {
     Dictionary: 13,
     Utf8View: 14,
     BinaryView: 15,
+    Struct: 16,
+    List: 17,
   }
 
   // Mock DataType class with static type checking methods
   class MockDataType {
     constructor(
       public typeId: number,
-      public dictionary?: MockDataType
+      public dictionary?: MockDataType,
+      // Struct-only: mimics apache-arrow's Struct.children (Field-like
+      // { name, type } entries), read by isHistogramStructType.
+      public children?: { name: string; type: MockDataType }[]
     ) {}
 
     static isTimestamp(dt: MockDataType): boolean {
@@ -72,6 +77,12 @@ vi.mock('apache-arrow', () => {
     static isDictionary(dt: MockDataType): boolean {
       return dt.typeId === TypeId.Dictionary
     }
+    static isStruct(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.Struct
+    }
+    static isList(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.List
+    }
   }
 
   // Factory functions for creating typed DataTypes
@@ -87,6 +98,9 @@ vi.mock('apache-arrow', () => {
   const createBinaryViewType = () => new MockDataType(TypeId.BinaryView)
   const createDictionaryType = (valueType: MockDataType) =>
     new MockDataType(TypeId.Dictionary, valueType)
+  const createListType = () => new MockDataType(TypeId.List)
+  const createStructType = (children: { name: string; type: MockDataType }[]) =>
+    new MockDataType(TypeId.Struct, undefined, children)
 
   return {
     DataType: MockDataType,
@@ -106,6 +120,8 @@ vi.mock('apache-arrow', () => {
       createFixedSizeBinaryType,
       createBinaryViewType,
       createDictionaryType,
+      createListType,
+      createStructType,
     },
   }
 })
@@ -122,6 +138,7 @@ import {
   unwrapDictionary,
   isBinaryType,
   resolveChartColumns,
+  isHistogramStructType,
 } from '../arrow-utils'
 
 // Get test helpers from mock
@@ -139,6 +156,8 @@ const { __test__ } = (await import('apache-arrow')) as unknown as {
     createFixedSizeBinaryType: () => MockArrowType
     createBinaryViewType: () => MockArrowType
     createDictionaryType: (valueType: MockArrowType) => MockArrowType
+    createListType: () => MockArrowType
+    createStructType: (children: { name: string; type: MockArrowType }[]) => MockArrowType
   }
 }
 const {
@@ -153,6 +172,8 @@ const {
   createFixedSizeBinaryType,
   createBinaryViewType,
   createDictionaryType,
+  createListType,
+  createStructType,
 } = __test__
 
 // Helper to create mock table
@@ -1293,5 +1314,64 @@ describe('extractPieData', () => {
     if (result.ok) {
       expect(result.slices).toEqual([])
     }
+  })
+})
+
+describe('isHistogramStructType', () => {
+  const HISTOGRAM_FIELD_NAMES = ['start', 'end', 'min', 'max', 'sum', 'sum_sq', 'count', 'bins']
+
+  function histogramFields(overrides: { name: string; type: unknown }[] = HISTOGRAM_FIELD_NAMES.map((name) => ({
+    name,
+    type: name === 'bins' ? createListType() : createFloatType(),
+  }))) {
+    return overrides
+  }
+
+  it('returns true for the exact Histogram struct shape', () => {
+    const type = createStructType(histogramFields() as never)
+    expect(isHistogramStructType(type as never)).toBe(true)
+  })
+
+  it('returns false when a field is missing', () => {
+    const fields = histogramFields().slice(0, -1) // drop 'bins'
+    const type = createStructType(fields as never)
+    expect(isHistogramStructType(type as never)).toBe(false)
+  })
+
+  it('returns false when fields are out of order', () => {
+    const fields = histogramFields()
+    const reordered = [fields[1], fields[0], ...fields.slice(2)]
+    const type = createStructType(reordered as never)
+    expect(isHistogramStructType(type as never)).toBe(false)
+  })
+
+  it('returns false when there is an extra field', () => {
+    const fields = [...histogramFields(), { name: 'extra', type: createFloatType() }]
+    const type = createStructType(fields as never)
+    expect(isHistogramStructType(type as never)).toBe(false)
+  })
+
+  it('returns false when the last field (bins) is not a List', () => {
+    const fields = histogramFields().map((f) => (f.name === 'bins' ? { ...f, type: createFloatType() } : f))
+    const type = createStructType(fields as never)
+    expect(isHistogramStructType(type as never)).toBe(false)
+  })
+
+  it('returns false for an unrelated struct', () => {
+    const type = createStructType([
+      { name: 'a', type: createFloatType() },
+      { name: 'b', type: createUtf8Type() },
+    ] as never)
+    expect(isHistogramStructType(type as never)).toBe(false)
+  })
+
+  it('returns false for a non-struct type (List)', () => {
+    expect(isHistogramStructType(createListType() as never)).toBe(false)
+  })
+
+  it('returns false for a non-struct type (primitive)', () => {
+    expect(isHistogramStructType(createFloatType() as never)).toBe(false)
+    expect(isHistogramStructType(createUtf8Type() as never)).toBe(false)
+    expect(isHistogramStructType(createIntType() as never)).toBe(false)
   })
 })

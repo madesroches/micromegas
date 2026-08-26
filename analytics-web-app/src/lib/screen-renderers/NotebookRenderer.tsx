@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router'
+import type { DataType } from 'apache-arrow'
 import { Plus, X, Trash2 } from 'lucide-react'
 import {
   DndContext,
@@ -39,6 +40,16 @@ import { useCellSortCheck } from './useCellSortCheck'
 import { useNotebookDragDrop } from './useNotebookDragDrop'
 import { useNotebookKeyboardNav } from './useNotebookKeyboardNav'
 import { useCellManager } from './useCellManager'
+
+/** Column name -> DataType map from a schema field list, for the "Render as"
+ *  toggle in the Overrides panel (Design §6 of the histogram column cell
+ *  plan). `undefined` when the cell has no results yet — preserves the
+ *  existing optional-chain semantics `availableColumns` already relies on. */
+function buildAvailableColumnTypes(
+  fields: { name: string; type: DataType }[] | undefined,
+): Record<string, DataType> | undefined {
+  return fields && Object.fromEntries(fields.map((f) => [f.name, f.type]))
+}
 
 // ============================================================================
 // Modal Components
@@ -831,6 +842,7 @@ export function NotebookRenderer({
                 cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 existingNames={existingNames}
                 availableColumns={cellStates[selectedCell.name]?.data[0]?.schema.fields.map((f) => f.name)}
+                availableColumnTypes={buildAvailableColumnTypes(cellStates[selectedCell.name]?.data[0]?.schema.fields)}
                 defaultDataSource={dataSource}
                 showNotebookOption
                 datasourceVariables={datasourceVariables}
