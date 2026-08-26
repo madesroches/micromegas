@@ -247,9 +247,25 @@ a CHANGELOG upgrade note.
 
 Cases that are *not* affected: an id whose process/stream exists in the caller's audience but is
 the wrong kind for the view set (e.g. a `process_id` given to `thread_spans`) is authorized by
-`IdKind::ProcessOrStream` and then fails inside `jit_update` exactly as it does today. An id whose
-Postgres row retention has deleted already fails today inside `find_process`; it now fails one
-frame earlier with the uniform message.
+`IdKind::ProcessOrStream` and then fails inside `jit_update` exactly as it does today.
+
+An id whose Postgres row retention has deleted is a **mixed case**, split by which helper the view
+set's `jit_update` calls:
+
+- `log_entries` (`log_view.rs:159`), `measures` (`metrics_view.rs:159`), `images`
+  (`images_view.rs:122`), `otel_spans` (`otel/spans_view.rs:125`) call `metadata::find_process`,
+  which reads Postgres directly — these already fail today once retention deletes the row, and now
+  fail one frame earlier with the uniform message. Not a behaviour change for these four.
+- `thread_spans` (`find_stream_from_view` + `find_process_with_latest_timing`,
+  `thread_spans_view.rs:358,367`), `net_spans` (`find_process_with_latest_timing`,
+  `net_spans_view.rs:330`), and `async_events` (same, `async_events_view.rs:130`) resolve through
+  `FROM streams` / `FROM processes` over `LivePartitionProvider` (`metadata.rs:211`, `:335`) —
+  daemon-materialized lakehouse views that can outlive the deleted Postgres row. These three
+  currently **succeed** for such an id (the process/stream data is still queryable from the
+  lakehouse even though the Postgres row is gone); the guard resolves from Postgres only
+  (`owner_query_sql`, `audience_guard.rs:141-190`), so such an id becomes `OwnerAudience::Unknown`
+  and the query is denied — a real behaviour change, and the one this issue is about. This is the
+  same skew `mkdocs/docs/admin/authentication.md:191-197` documents for Prong B generally.
 
 **Client-risk survey (settled: low-risk, no client change needed).** Every `view_instance(...)`
 call in `analytics-web-app/` substitutes a `$process_id` the user picked out of a process list
@@ -261,6 +277,17 @@ reachable case is a hand-typed id in a notebook cell, which today renders as an 
 will render as an error instead — already handled: cells render a query failure as an error state
 carrying the server message (e.g. `HgChildPane.tsx:224-231`), so the uniform not-found text
 surfaces legibly with no additional client work.
+
+Two published client helpers outside the web app take the same "hand-typed id" shape, without a
+Prong-A-filtered picker in front of them: `Client.query_spans(begin, end, limit, stream_id)`
+(`python/micromegas/micromegas/flightsql/client.py:1050`, documented as returning a DataFrame, and
+demonstrated the same way in `python/micromegas/README.md:63`) and
+`fetch_spans_batch(client, stream_id, ...)` (`rust/public/src/client/frame_budget_reporting.rs:114,143,387`),
+both of which pass a caller-supplied `stream_id` straight into
+`view_instance('thread_spans', ...)`. Neither needs a code change either: both already surface a
+server query failure as a returned `Err`/raised exception to their caller, which is exactly what
+the uniform not-found text becomes. Named here because they are the only other reachable callers
+of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Documentation).
 
 ## Implementation Steps
 
@@ -363,8 +390,11 @@ surfaces legibly with no additional client work.
 - **What this closes:** compute and object-storage spend, plus materialization error text, that a
   caller scoped to audience A could previously trigger against an instance in audience B by naming
   it in `view_instance(...)`.
-- **What it does not change:** confidentiality. Prong A already returned zero rows for such a
-  query, and still does. This is an availability/cost hardening.
+- **What it does not change:** confidentiality. Prong A already returned zero rows for a query
+  naming an instance outside the caller's audiences, and still does. This is an availability/cost
+  hardening — though for `thread_spans`/`net_spans`/`async_events` it also newly *denies* an id
+  whose Postgres row retention has deleted but whose lakehouse data still exists (see §6), trading
+  that availability for the uniform fail-closed rule.
 - **Fail-closed:** every non-`All` scope denies on a resolution error (`AudienceGuard::authorize`
   maps a Postgres failure to a query error, never to a pass), on `OwnerAudience::Unknown`, on
   `Ambiguous` unless every arm is readable, and on an id matching neither `'global'` nor `Uuid`.
@@ -435,7 +465,12 @@ would catch a regression there).
   outside the caller's audiences.
 - `CHANGELOG.md`, Unreleased → **Analytics**: the fix, the entry-point-only scope, the `'global'`
   exemption and why it differs from `list_partitions`, the client-visible
-  zero-rows→error change as an upgrade note, and a **Minor breaking change** clause for
+  zero-rows→error change as an upgrade note — explicitly calling out
+  `micromegas.flightsql.Client.query_spans` (Python) and `fetch_spans_batch` (Rust,
+  `rust/public/src/client/frame_budget_reporting.rs`) as the two published client helpers that
+  surface it as an exception — and a note that for `thread_spans`/`net_spans`/`async_events` a
+  `view_instance_id` whose Postgres row retention has already deleted now fails instead of
+  succeeding off the materialized lakehouse view, and a **Minor breaking change** clause for
   `MaterializedView::new` and `ViewInstanceTableFunction::new` gaining a required parameter
   (both published from `micromegas_analytics::lakehouse`).
 - Mark the residual closed where it was recorded: `tasks/completed/1371_udtf_udf_guards_plan.md`
