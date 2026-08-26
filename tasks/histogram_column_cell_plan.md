@@ -363,8 +363,12 @@ change that follows for a saved `format: ''`.
 inside a per-row loop, and `TransposedTableCell` maps `row.values` inside a
 per-row loop, so the type check above must not be called per cell. `TableBody`
 builds a `useMemo`'d `Set<string>` of histogram-typed column names once from
-`columns` (recomputed only when `columns` changes), alongside the existing
-`overrideMap` memo, and the per-cell switch tests membership in that set
+`columns` (rebuilt once per render rather than once per cell — like the
+existing `overrideMap` memo, this doesn't skip work across renders, since
+`columns` itself is rebuilt fresh every render with no memo of its own; it
+only skips work *within* a render, going from row × column calls to one per
+column), alongside the existing `overrideMap` memo, and the per-cell switch
+tests membership in that set
 instead of calling `isHistogramStructType` per cell. `TransposedTableCell`
 calls `isHistogramStructType(row.type)` once per row, hoisted above the
 `row.values.map` (`row.type` is constant across a transposed row's values), and
@@ -417,10 +421,15 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   `table-utils.tsx:384-386`). `HistogramCell` is exported wrapped in
   `React.memo` with a custom comparator, not the default shallow-prop
   comparison (which would also fail, for the same reason): the comparator
-  normalizes each side's value via `toHistogramValue` (cheap — one `Number()`
-  and one `Array.from`) and compares the resulting `{start, end, count,
-  bins}` plus the `color` prop by content, rather than comparing the raw
-  `StructRowProxy`/`Vector` references. When the comparator reports equal,
+  short-circuits before normalizing anything — two props are equal iff both
+  sides' values are `null`/non-object (this matters because "Null and
+  degenerate values" below means `HistogramCell` is explicitly designed to
+  receive a `null` value, and `toHistogramValue` has no null branch) *and*
+  the `color` prop matches; otherwise both sides are normalized via
+  `toHistogramValue` (cheap — one `Number()` and one `Array.from`) and the
+  resulting `{start, end, count, bins}` plus the `color` prop are compared by
+  content, rather than comparing the raw `StructRowProxy`/`Vector`
+  references. When the comparator reports equal,
   React skips re-invoking the component entirely, so `estimateHistogramQuantile`,
   `bucketRange`, and the per-bucket `resolveHistogramBarColor` calls — the
   actual expensive work — never re-run for a row whose histogram content is
@@ -464,9 +473,10 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   = i * (120 / bins.length)`, `width = 120 / bins.length` (so `bins.length` rects
   always tile the 120-unit track exactly, for any bin count — no gap, no
   overflow, no per-threshold gap logic needed the way a flex `gap` would have
-  required), `height = max > 0 ? Math.max(2, (bucket_count / max) * 100 * 28 /
-  100) : 0` — i.e. the same `min-height: 2px` floor as before, just computed in
-  SVG user units instead of CSS `%`/`min-height` — and `y = 28 - height`, where
+  required), `height = max > 0 ? Math.max(2, (bucket_count / max) * 28) : 0` —
+  i.e. the same `min-height: 2px` floor as before, just computed in SVG user
+  units against the `28`-tall `viewBox` instead of CSS `%`/`min-height` — and
+  `y = 28 - height`, where
   `max` is `max(bucket_count in this row)` — **per-row normalization**, matching
   `option-b-tick-median.html`'s own `const h = max > 0 ? Math.max(2, (v / max) *
   100) : 0`. The point of the cell is to show *shape*, not to compare magnitude
@@ -635,9 +645,15 @@ from its value — no mode selector needed:
   near-black for magma/inferno, indistinguishable against `--app-bg: #0a0a0f`,
   so a zero- or low-count bucket's min-height stub would be present in the DOM
   but not actually visible. To keep the guarantee true in colormap mode too,
-  `t` is floored into `[0.15, 1]` before sampling — `t' = 0.15 + t * 0.85` — so
-  every bucket, however low its count, lands past the near-black end of the
-  scale; only the top of the range still reaches each colormap's brightest stop.
+  `t` is floored into `[0.5, 1]` before sampling — `t' = 0.5 + t * 0.5` — a
+  round number chosen to land, for the darkest colormaps (magma, inferno),
+  at roughly 3:1 contrast against `--app-bg` (`#0a0a0f`) and the even-row
+  tinted background; every bucket, however low its count, lands at least
+  that visible, and only the top of the range still reaches each colormap's
+  brightest stop. (A shallower floor like `0.15` looks reasonable on paper
+  but isn't: magma/inferno at `t = 0.15` measure only ≈1.1–1.23:1 contrast on
+  this background — not actually visible or hoverable-looking — so `0.5` is
+  the floor, not `0.15`.)
 - **Anything else** (a `#rrggbb`/`#rrggbbaa` hex string, or any valid CSS color) →
   every bar in the cell gets that one flat color, `t` unused. This replaces flat
   `var(--chart-line)` with a flat color of the user's choosing — a simpler ask than
@@ -659,10 +675,13 @@ const COLORMAP_NAMES = new Set(['viridis', 'magma', 'plasma', 'inferno', 'cividi
 export function resolveHistogramBarColor(color: string | undefined, t: number): string {
   if (!color) return 'var(--chart-line)'
   if (COLORMAP_NAMES.has(color)) {
-    // Floor into [0.15, 1]: a zero/low-count bucket must not sample the
+    // Floor into [0.5, 1]: a zero/low-count bucket must not sample the
     // near-black end of magma/inferno-style colormaps against --app-bg
     // (#0a0a0f), or Design §4's "visible stub" guarantee breaks silently.
-    return colormapInterpolators[color](0.15 + t * 0.85) // d3-scale-chromatic
+    // 0.5 targets roughly 3:1 contrast against --app-bg for the darkest
+    // colormaps (magma, inferno) — a shallower floor like 0.15 measures
+    // only ≈1.1-1.23:1 there and isn't actually visible.
+    return colormapInterpolators[color](0.5 + t * 0.5) // d3-scale-chromatic
   }
   return color // literal CSS color — flat fill, t unused
 }
@@ -771,7 +790,7 @@ into a `linear-gradient(to right, ...)` string. This is not a second, hand-copie
 table of color data: it derives the preview from the same interpolator function
 that colors the real bars, so the swatch can never drift from what clicking it
 actually produces. It samples the raw `t = 0..1` range, not
-`resolveHistogramBarColor`'s floored `[0.15, 1]` (Design §6 above) — the swatch
+`resolveHistogramBarColor`'s floored `[0.5, 1]` (Design §6 above) — the swatch
 is meant to show "this is the viridis colormap" end-to-end so it's recognizable,
 not to reproduce a specific bucket's exact pixel color.
 
@@ -781,7 +800,12 @@ with a new, additive sibling prop:
 availableColumnTypes?: Record<string, DataType>
 ```
 populated at the same call site as `availableColumns`
-(`NotebookRenderer.tsx:833`, `Object.fromEntries(fields.map(f => [f.name, f.type]))`)
+(`NotebookRenderer.tsx:833`) — preserving the existing optional chain rather
+than wrapping it directly in `Object.fromEntries`, which would throw when
+`fields` is `undefined` (before the cell has results): `const fields =
+cellStates[selectedCell.name]?.data[0]?.schema.fields`, then
+`availableColumnTypes={fields && Object.fromEntries(fields.map(f => [f.name,
+f.type]))}`
 and threaded through `CellEditor.tsx`'s own local `CellEditorProps`/destructuring/
 forwarding (same two touches `availableColumns` already gets there — see Current
 State above) — purely additive, so none of the other seven `availableColumns`
@@ -862,18 +886,23 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    color, `t` unused). `HistogramCell` calls this once per bucket with that
    bucket's height ratio.
 5. **`components/HistogramCell.tsx`** (new file): the bar-chart + median + tooltip
-   component per Design §4, accepting an optional `color` prop
-   (`ColumnOverride['histogramColor']`), using `histogram-utils.ts` /
-   `histogram-colors.ts` and the Swimlane tooltip pattern. Exported wrapped in
-   `React.memo` with the custom structural comparator from Design §4 (compares
-   normalized `{start, end, count, bins}` plus `color`, not raw prop identity) —
-   this, not a `useMemo` keyed on the value prop, is what makes the memoization
-   real (Design §3/§4). Used by both Table and Transposed Table paths. The
+   component per Design §4, accepting an optional `color?: string` prop (plain
+   `string`, not `ColumnOverride['histogramColor']` — importing the
+   `table-utils.tsx` type here would reintroduce the exact circular dependency
+   Design §4 avoids for `stableStringify`/`buildEvaluateKey`), using
+   `histogram-utils.ts` / `histogram-colors.ts` and the Swimlane tooltip
+   pattern. Exported wrapped in `React.memo` with the custom structural
+   comparator from Design §4 (null-safe — short-circuits before normalizing
+   when either side's value is `null`; otherwise compares normalized `{start,
+   end, count, bins}` plus `color`, not raw prop identity) — this, not a
+   `useMemo` keyed on the value prop, is what makes the memoization real
+   (Design §3/§4). Used by both Table and Transposed Table paths. The
    median tick's x-position — not
    `estimateHistogramQuantile`'s return value (Step 2) — is where the `start ===
-   end` epsilon guard lives: `Math.abs(end - start) < Number.EPSILON → tick at 0%`,
-   since it's this component's `((median - start) / (end - start)) * 100%` formula
-   that divides by zero on a degenerate point histogram, not the quantile helper
+   end` epsilon guard lives: `Math.abs(end - start) < Number.EPSILON → tick at x
+   = 0`, since it's this component's `((median - start) / (end - start)) * 120`
+   formula (user units against the `120`-wide `viewBox`, not a CSS percent) that
+   divides by zero on a degenerate point histogram, not the quantile helper
    itself (Design §4). Done before `table-utils.tsx` below, which renders it.
 6. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
    'histogram'` and `histogramColor?: string`, making `format` optional (Design
@@ -979,8 +1008,8 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     Histogram" mode (a swatch row — six colormap gradient swatches plus one
     custom-color swatch, not a typed field), and the Markdown-override debugging
     trick. Cross-link to the
-    existing `make_histogram()`/`quantile_from_histogram()`/`color_scale()`/
-    `lerp_color()` docs in `functions-reference.md`. Also update the `overrides`
+    existing `make_histogram()`/`quantile_from_histogram()`/`color_scale()`
+    docs in `functions-reference.md`. Also update the `overrides`
     option-table row in both sections — `:713` (Table) and `:762` (Transposed
     Table) — from `{ column, format }` to `{ column, kind?, format?,
     histogramColor? }` to match Design §2. **`variables.md`**: add a one-line
