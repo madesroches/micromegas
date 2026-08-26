@@ -560,15 +560,22 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   bin_width = 1.0` fallback, `expand.rs:103-107`) and count + percentage of the row's total
   (`bucket_count / count * 100`, only when `count > 0` — see below).
 - **Null and degenerate values**: a `null` histogram value renders `-`, matching
-  `formatCell`'s existing null convention (`table-utils.tsx:755`). The same `-`
-  (empty track, no median tick) also covers three degenerate-but-non-null cases the
-  Rust side can actually produce: `bins` empty (`new_non_configured` + all-null
-  input leaves `start = end = 0`, `bins: Vec::new()` — `accumulator.rs:46-57`),
-  `count === 0` (every group whose sampled values are all null), or every bucket at
-  0 (equivalent to `count === 0`, since `update_batch_scalars` clamps every
-  non-null sample into range, so `sum(bins) === count` — `accumulator.rs:120-130`).
-  Rendering these as `-` avoids computing `bucket_count / max(...) = 0/0 = NaN` bar
-  heights and `bucket_count / count * 100 = 0/0` tooltip percentages.
+  `formatCell`'s existing null convention (`table-utils.tsx:755`). This already
+  covers the `new_non_configured` + all-null-input path: `evaluate` ends with
+  `struct_builder.append(self.start.is_some())` (`accumulator.rs:307`), so an
+  unconfigured accumulator emits a struct with its validity bit false — Arrow JS
+  delivers `null` for that cell, not a non-null struct with empty `bins` (a
+  non-null struct with empty `bins` isn't otherwise producible either:
+  `configure_from_params` enforces `nb_bins >= 1`, and every configured path
+  allocates `bins` up front). The same `-` (empty track, no median tick) also
+  covers two real degenerate-but-non-null cases: `count === 0` (every group whose
+  sampled values are all null), or every bucket at 0 (equivalent to `count === 0`,
+  since `update_batch_scalars` clamps every non-null sample into range, so
+  `sum(bins) === count` — `accumulator.rs:120-130`). Rendering these as `-` avoids
+  computing `bucket_count / max(...) = 0/0 = NaN` bar heights and
+  `bucket_count / count * 100 = 0/0` tooltip percentages. The `bins.length === 0`
+  guard is kept anyway as cheap defense-in-depth, not as handling for a value the
+  Rust side actually produces.
 - **Value shape from Arrow JS**: apache-arrow (`^21.2.0`) surfaces a `Struct` column
   cell as a `StructRowProxy` with named field access. `start`/`end`/`min`/`max`/
   `sum`/`sum_sq` are `Float64` fields, which decode to plain `number`
