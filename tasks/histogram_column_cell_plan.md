@@ -514,8 +514,8 @@ transitive deps, `d3-color` and `d3-interpolate`, both also ISC;
 `interpolateInferno` / `interpolateCividis` / `interpolateTurbo`, each returning a
 `rgb(...)` string directly usable as a CSS color) rather than vendoring stops by
 hand; the package ships no types, so `@types/d3-scale-chromatic@^3.1.0` is needed
-alongside it. This is a new frontend dependency — flagged in Open Questions for a
-quick sign-off rather than assumed; note its output won't be byte-identical to
+alongside it. This is a new frontend dependency — approved, see Open Questions §4;
+note its output won't be byte-identical to
 `colorous`'s (different source implementations of the same published colormap
 data), which is fine for a client-only visual but is called out here in case exact
 SQL/client color parity ever matters.
@@ -644,7 +644,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    `d3-scale-chromatic` `interpolateXxx`; anything else → returned as-is (flat
    color, `t` unused). `HistogramCell` calls this once per bucket with that
    bucket's height ratio.
-4. **Add `d3-scale-chromatic` dependency** (pending sign-off, Open Questions):
+4. **Add `d3-scale-chromatic` dependency** (approved, Open Questions §4):
    `analytics-web-app/package.json` — `d3-scale-chromatic@^3.1.0` +
    `@types/d3-scale-chromatic@^3.1.0` (the package ships no types of its own).
 5. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
@@ -856,10 +856,7 @@ No Rust changes — the SQL/Arrow side is complete already.
   and `d3-interpolate`, both also ISC) — client-side named colormaps (`viridis`,
   `magma`, `plasma`, `inferno`, `cividis`, `turbo`) for when `histogramColor`
   matches one of those names. Ships no types, so also add
-  `@types/d3-scale-chromatic@^3.1.0`. Pending sign-off (Open Questions) — the
-  literal-color case has no dependency (`resolveHistogramBarColor` just returns
-  the string as-is), so this could ship without it if the dependency is declined,
-  at the cost of dropping colormap support (flat custom colors only) from v1.
+  `@types/d3-scale-chromatic@^3.1.0`. Approved (Open Questions §4).
 
 ## Testing Strategy
 
@@ -949,9 +946,7 @@ No Rust changes — the SQL/Arrow side is complete already.
    multi-stop custom-gradient mode was considered and dropped — see Trade-offs.)
 3. ~~**Debug view mechanism**~~ **Resolved: reuse the Markdown override path**
    (Design §5) — no dedicated toggle, `options` field, or context-menu item.
-4. **`d3-scale-chromatic` dependency** — needed for the colormap-name case of
-   `histogramColor` (Design §6). A new runtime dependency, however small (ISC
-   license; two transitive deps, `d3-color` and `d3-interpolate`, both also ISC)
-   — flagged for a quick sign-off rather than added unilaterally. If declined,
-   ship with literal-color support only in v1 (no
-   dependency needed for that case) and revisit later.
+4. ~~**`d3-scale-chromatic` dependency**~~ **Resolved: approved.** Needed for the
+   colormap-name case of `histogramColor` (Design §6); ISC license, two
+   transitive deps (`d3-color`, `d3-interpolate`, both also ISC) — see
+   Dependencies and Implementation Steps §4.
