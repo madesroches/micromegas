@@ -123,9 +123,11 @@ Two small refactors keep this DRY:
   `global_rows_visible` call it, so rule (2) and the `'global'`-row rule read the same allowlist
   through one accessor.
 
-### 2. `'global'` is allowed, deliberately — and it is not `list_partitions`' rule
+### 2. `'global'` is row-filtered, not call-guarded — and that is not `list_partitions`' rule
 
-The issue asks what `'global'` instances should do. **Allow them, with no audience check.** Three
+The issue asks what `'global'` instances should do. **Settled: global instances are row-filtered;
+only process- and stream-specific instances are guarded at call time.** So rule (3) passes
+`'global'` through with no audience check and lets Prong A do the work, one row at a time. Three
 reasons:
 
 - **There is nothing to protect.** `jit_update` is a no-op for every `'global'` instance
@@ -412,12 +414,7 @@ would catch a regression there).
 
 ## Open Questions
 
-1. **`'global'` exemption** — the plan settles this as "allow, unconditionally" (§2). It is the
-   one place where a reviewer might prefer `global_rows_visible` for symmetry with
-   `list_partitions`; the counter-argument is that it would break `view_instance('log_entries',
-   'global')` for every non-admin scoped caller while protecting nothing. Worth an explicit
-   confirmation before implementing, since it is the issue's own stated open point.
-2. **Erroring vs. empty result** — §6's behaviour change is client-visible, but the survey of
+1. **Erroring vs. empty result** — §6's behaviour change is client-visible, but the survey of
    current consumers says it is low-risk: every `view_instance(...)` call in `analytics-web-app/`
    (`useMetricsData.ts:11`, `ProcessLogPage.tsx:23`, `ImageCell.tsx:20`,
    `perf-analysis/queries.ts:11,18`, `notebook-utils.ts:150`) substitutes a `$process_id` the user
