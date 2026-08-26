@@ -132,7 +132,7 @@ Its three callers above already need mechanical updates for the `WriteAudience` 
 (Implementation step 11); they now also pass a `WriteAudience` value (any valid label — these
 tests don't exercise default resolution itself) at the same call sites.
 
-All six write handlers that call `resolve_write_audience` already have
+All seven write handlers that call `resolve_write_audience` already have
 `Extension<Arc<WebIngestionService>>` in scope: `ingestion.rs:70`, `otlp.rs:153,170,187`,
 `firehose.rs:46`, `firehose_cloudwatch_logs.rs:39`, `webhook.rs:126`.
 
@@ -232,7 +232,7 @@ pub fn resolve_write_audience(
 }
 ```
 
-Each of the six handlers becomes
+Each of the seven handlers becomes
 `resolve_write_audience(ctx.as_ref(), service.default_audience())`, evaluated before `service` is
 moved into the downstream call.
 
@@ -437,7 +437,7 @@ reach:
    per Design §4; rewrite the module/function docs.
 4. `rust/public/src/servers/ingestion.rs`: resolve the default in `serve_ingestion` and pass it to
    `WebIngestionService::new`; update the `insert_process_request` handler call.
-5. Update the five remaining handler call sites: `otlp.rs:153,170,187`, `firehose.rs:46`,
+5. Update the six remaining handler call sites: `otlp.rs:153,170,187`, `firehose.rs:46`,
    `firehose_cloudwatch_logs.rs:39`, `webhook.rs:126`.
 6. Add `WriteAudience::id_namespace<'a>(&'a self, default: &WriteAudience) -> Option<&'a str>` to
    `rust/ingestion/src/write_audience.rs`, implementing Design §6's id-namespace rule
@@ -450,7 +450,16 @@ reach:
    means "the deployment default's namespace", not "the credential carried no audience". This
    produces a one-time `process_id`/`stream_id`/`block_id` re-derivation for a DB-backed key
    explicitly bound to a label equal to the deployment default (Design §6) — it is not a
-   zero-re-derivation change for every caller.
+   zero-re-derivation change for every caller. The same "unstamped" framing this bullet corrects in
+   `identity.rs`/`block.rs` survives, untouched, in two test files that assert the no-code-change
+   guarantee those doc comments describe: `rust/otel-ingestion/tests/split_tests.rs:413`
+   (`fn unstamped_audience_reproduces_pre_stage5_ids_byte_for_byte`) and
+   `rust/otel-ingestion/tests/identity_tests.rs:287,323` ("no-churn guarantee for unstamped
+   deployments"; "a stamped audience must derive a different `process_id` than the unstamped
+   default" — no longer true in general once a stamped audience equal to the default maps to
+   `None`). No code or assertion change needed in either file — the behavior they check is
+   unchanged — but both get the same doc-comment sweep: restate "unstamped" as "the deployment
+   default's namespace" wherever these files use it to describe the `None` case.
 
 ### Phase 4 — tests
 
@@ -527,32 +536,56 @@ reach:
       label equal to the deployment default re-derives its ids once, moving from the salted
       namespace it occupies today into the un-salted legacy one (Design §6's id-namespace rule).
     - Reconcile the existing #1373 **Ingestion** entry (`CHANGELOG.md:35-50`) rather than leaving
-      it to contradict the new one. Its "**Amended (#1482, still `## Unreleased`)**" paragraph
-      (`:42`) currently claims `WriteAudience::none()` is already removed, that a credential with
-      no bound audience is already stamped with the resolved deployment default, that "an
-      idempotent backfill runs at every ingestion-service startup", and that an existing-`NULL`
-      row is now "rejected as a database error" — none of that is true in the tree today, and the
-      backfill and rejected-as-a-database-error claims never become true (Design §6 explicitly
-      rejects a backfill; the existing-`NULL` arm becomes a resolved comparison, not a rejection).
-      Delete or rewrite that paragraph's backfill and rejected-as-a-database-error sentences so it
-      states only what actually ships, or fold its accurate content into the new entry and drop
-      the stale paragraph outright.
+      it to contradict the new one — the whole entry, not only its `#1482` amendment paragraphs;
+      the un-amended **bodies** those paragraphs sit on assert things this plan invalidates too.
+      Its "**Amended (#1482, still `## Unreleased`)**" paragraph (`:42`) currently claims
+      `WriteAudience::none()` is already removed, that a credential with no bound audience is
+      already stamped with the resolved deployment default, that "an idempotent backfill runs at
+      every ingestion-service startup", and that an existing-`NULL` row is now "rejected as a
+      database error" — none of that is true in the tree today, and the backfill and
+      rejected-as-a-database-error claims never become true (Design §6 explicitly rejects a
+      backfill; the existing-`NULL` arm becomes a resolved comparison, not a rejection). Delete or
+      rewrite that paragraph's backfill and rejected-as-a-database-error sentences so it states
+      only what actually ships, or fold its accurate content into the new entry and drop the stale
+      paragraph outright. The bullet's own pre-amendment body needs the same pass: "`none()` writes
+      no property at all — absent, not empty"; "resolves a `WriteAudience` from
+      `AuthContext.bound_audience` (`Some` for every DB-backed ingestion key, `None` for
+      env-keyring keys, OIDC, and no-auth-provider deployments)" (there is no `None` state left to
+      resolve to); and "a re-registration ... of a still-`NULL` (never-stamped) row, remains a
+      no-op" (only true when the incoming audience matches the resolved default — a mismatch is
+      now a 403) all go stale the same way and need reconciling alongside the amendment paragraph.
     - Reconcile the sibling "**Amended (#1482)**" paragraph on the OTLP-derived-ids entry
-      (`CHANGELOG.md:43`) the same way. It currently claims that "with `WriteAudience::none()`
-      removed, `IdentityContext.audience` is now a plain `&str`, never absent" and that "every
-      previously-unstamped deployment ... churns its OTLP ids exactly once on upgrade." Neither is
-      true in the tree today (`identity.rs:52-59` still has `audience: Option<&'a str>`;
-      `write_audience.rs:47-52` still has `none()`), and neither becomes true once this plan lands:
-      `IdentityContext.audience` stays `Option<&str>` deliberately (Trade-offs), and traffic
-      carrying no bound audience derives the *same* ids across the upgrade, not new ones (Design
-      §6). Rewrite the paragraph to state the shipping behavior instead: `WriteAudience` drops its
-      `none()` state and always resolves to a real label, but `IdentityContext.audience` stays
-      `Option<&str>`, and only a key explicitly bound to a label equal to the deployment default
-      re-derives its ids, once.
-    - The "**Unchanged by #1482**" paragraph (`:46`) — which asserts
-      the write path still stamps nothing, `WriteAudience` is still `Option<Arc<str>>` with
-      `none()`, and there is no startup backfill — is retired at the same time, since after this
-      plan lands none of those claims hold either.
+      (`CHANGELOG.md:43`) the same way, together with the un-amended body it sits on. The amendment
+      currently claims that "with `WriteAudience::none()` removed, `IdentityContext.audience` is
+      now a plain `&str`, never absent" and that "every previously-unstamped deployment ... churns
+      its OTLP ids exactly once on upgrade." Neither is true in the tree today (`identity.rs:52-59`
+      still has `audience: Option<&'a str>`; `write_audience.rs:47-52` still has `none()`), and
+      neither becomes true once this plan lands: `IdentityContext.audience` stays `Option<&str>`
+      deliberately (Trade-offs), and traffic carrying no bound audience derives the *same* ids
+      across the upgrade, not new ones (Design §6). Rewrite the paragraph to state the shipping
+      behavior instead: `WriteAudience` drops its `none()` state and always resolves to a real
+      label, but `IdentityContext.audience` stays `Option<&str>`, and only a key explicitly bound
+      to a label equal to the deployment default re-derives its ids, once. The bullet's own
+      pre-amendment body needs the identical correction, for the same reason it's made everywhere
+      else in this plan (Design §6, Documentation's `ingestion.md`/`authentication.md`/
+      `otlp/index.md` entries): "Both formulas are no-ops (byte-identical ids) when the audience is
+      absent" and "A deployment that *starts* stamping re-derives its OTLP `process_id`s" is the
+      same blanket claim, corrected the same way — no re-derivation for traffic that carries no
+      bound audience or resolves to the default; a one-time re-derivation only for a key explicitly
+      bound to a label equal to the default.
+    - The **Minor breaking change** clause earlier in the same bullet (`:46`) also goes stale, not
+      only the "**Unchanged by #1482**" paragraph that closes it. It describes
+      `resolve_write_audience` as taking `Option<&Extension<AuthContext>>` and returning
+      `WriteAudience` infallibly, stating "an audience-less one resolves to `WriteAudience::none()`
+      unchanged, no warning" and "a malformed `bound_audience` now warns and resolves to
+      `WriteAudience::none()`" — this plan changes the signature again (Design §4 adds the required
+      `default_audience: &WriteAudience` parameter) and the behavior (an audience-less credential
+      now resolves to the deployment default; there is no `none()` left to resolve to). Update this
+      clause to describe the signature and behavior `resolve_write_audience` actually ships with
+      after this plan. The "**Unchanged by #1482**" paragraph — which asserts the write path still
+      stamps nothing, `WriteAudience` is still `Option<Arc<str>>` with `none()`, and there is no
+      startup backfill — is retired at the same time, since after this plan lands none of those
+      claims hold either.
 
 No migration and no `SCHEMA_VERSION` bump: the queryable Arrow schema is unchanged, and the
 `audience` column's materialized values are identical (`COALESCE(NULL, default)` and a stamped
@@ -576,7 +609,12 @@ Code:
   `None` now means "the deployment default's namespace". **No code change**, per Design §6)
 - `rust/otel-ingestion/src/block.rs` (doc comment only — `block_id_with_context`'s doc,
   `:195-201`; same correction, and no code change)
-- `rust/analytics/src/audience.rs` (module doc only — the write-side contract it states changes)
+- `rust/auth/src/policy.rs` (doc comment only — `default_audience_from_env`'s doc, `:60-72`, states
+  there are exactly two code readers of `MICROMEGAS_DEFAULT_AUDIENCE`; the ingestion edge makes it
+  three)
+- `rust/analytics/src/audience.rs` (module doc, `:8-12` — the write-side contract it states
+  changes — and `default_audience_from_env`'s own doc, `:70-83`, which states the same two-reader
+  count as `policy.rs` above)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (module doc only — `:78-80` asserts "A
   credential carrying no audience stamps nothing", which becomes false for the HTTP write path)
 - `rust/analytics/src/metadata.rs` (doc comment only — `:53-58` asserts "A process whose credential
@@ -593,6 +631,8 @@ Code:
 Tests: `rust/ingestion/tests/{write_audience_tests,audience_stamping_db_test,process_audience_cache_test,insert_block_dedup_db_test,readiness}.rs`,
 `rust/public/tests/{resolve_write_audience_tests,firehose_tests,firehose_cloudwatch_logs_tests}.rs`,
 `rust/analytics/tests/{thread_spans_ordering_db_test,jit_process_batch_db_test}.rs` (mechanical),
+`rust/otel-ingestion/tests/{identity_tests,split_tests}.rs` (doc-comment only — see step 6: restate
+"unstamped" as "the deployment default's namespace", no assertion change),
 `rust/analytics/tests/{ownership_rewrite_db_test,prong_b_guard_db_test,common/db_fixtures}.rs` (not
 mechanical — see step 12: their unstamped `process_c` fixture must be fabricated via a post-insert
 `UPDATE` helper added to `tests/common/`, and `ownership_rewrite_db_test.rs`'s `seed_process` gains
@@ -639,18 +679,27 @@ re-derivation for *all* unaudienced OTLP traffic at upgrade, not only the narrow
 DB-key-bound-to-default case: every env-keyring, OIDC, and `--disable-auth` producer would
 re-derive, which is typically the majority of a deployment's OTLP traffic and is exactly the
 guarantee Design §6's "no re-derivation for traffic that carries no bound audience" bullet
-currently protects. It would also invalidate Design §7's safety argument for turning arm 2 into a
-live 403 at *upgrade* time, since a pre-upgrade unaudienced producer would no longer land on its
-own legacy row post-upgrade — that argument would need to be rebuilt around the alternative's own
-upgrade-time re-derivation instead.
+currently protects. This does *not* weaken Design §7's safety argument for turning arm 2 into a
+live 403 at upgrade time — checked against `rust/otel-ingestion/src/identity.rs:262-269` and
+`rust/ingestion/src/web_ingestion_service.rs:546-550`: under the alternative, a pre-upgrade
+unaudienced producer derives a *different* `process_id` post-upgrade (its own namespace salts with
+the live default), so its post-upgrade registration is a fresh `INSERT` (`rows_affected() != 0`)
+and never reaches `check_process_audience_conflict` at all. §7's conclusion holds trivially under
+the alternative — the conflict arm is unreachable rather than reached-and-safe — so this is not a
+cost the alternative pays; it drops out of the comparison entirely.
 
 Both costs are one-time and both are real: the chosen design pays a smaller, narrower upgrade-time
 cost and leaves a standing knob-flip hazard; the alternative pays a larger, broader upgrade-time
 cost and removes that hazard for good. Which is preferable depends on how likely a deployment is to
 change `MICROMEGAS_DEFAULT_AUDIENCE` after going live versus how much unaudienced OTLP traffic it
 carries at upgrade time — a call about a specific deployment's traffic mix and operational plans,
-not one this plan can make in the abstract. This plan proceeds with the chosen (un-salted-default)
-design; see Open Questions.
+not one this plan can make in the abstract. Bearing on that call: `identity.rs:204-206` and
+`mkdocs/docs/otlp/index.md:110` both already state, as a standing codebase principle independent of
+this plan, that "long-term stability of `process_id` values is not a design goal; re-deriving
+existing ids is always acceptable" — the one-time re-derivation cost either design pays is a
+tolerated cost by that principle, not a novel one this change introduces, which narrows what is
+actually in tension between the two options to the knob-flip hazard alone. This plan proceeds with
+the chosen (un-salted-default) design; see Open Questions.
 
 **Unprefixed only (chosen) vs. `{prefix}_DEFAULT_AUDIENCE`.** The knob is a property of the lake's
 contents, not a per-role setting, and the lakehouse roles read it unprefixed. Giving the ingestion
@@ -780,8 +829,13 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   whose credential carried no audience keeps no property at all ... every site that reads an
   audience out of Postgres resolves that to `MICROMEGAS_DEFAULT_AUDIENCE`" carries the same
   now-false read-side-only framing; correct it alongside the `:230-262` edit above.
-- `mkdocs/docs/admin/monolith.md:52,60-70` — the "one prefix asymmetry" note: ingestion joins the
-  unprefixed readers of `MICROMEGAS_DEFAULT_AUDIENCE`.
+- `mkdocs/docs/admin/monolith.md:52,60-70` — the "one prefix asymmetry" note (`:60-70`): ingestion
+  joins the unprefixed readers of `MICROMEGAS_DEFAULT_AUDIENCE`. `:52` also describes the knob as
+  "the audience a process whose credential carried none is **read** as, applied by every role that
+  builds a lakehouse (here, the same process)" — the same read-side-only wording corrected on
+  `flight-sql.md`/`maintenance.md` below; correct it here too, since the HTTP ingestion path now
+  stamps the resolved default at write time (legacy rows and the admin replication path are still
+  read-side-resolved only), and add ingestion to the "every role that builds a lakehouse" set.
 - `mkdocs/docs/admin/{flight-sql,maintenance}.md` — each `MICROMEGAS_DEFAULT_AUDIENCE` row says
   "set it identically on every role that builds a lakehouse"; add ingestion to that set. Each row
   also describes the knob as "the audience a process whose ingestion credential carried no
@@ -847,6 +901,14 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   written through the verbatim-write admin replication path
   (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`), which this change does not
   touch.
+- `rust/analytics/src/audience.rs:70-83` and `rust/auth/src/policy.rs:60-72` — each
+  `default_audience_from_env` doc comment states there are exactly two code readers of
+  `MICROMEGAS_DEFAULT_AUDIENCE`, naming "the other reader of this same variable" by name. The new
+  `serve_ingestion` call site (Design §2) makes it three. Replace the two-reader framing in both
+  with the three-reader set: `micromegas_auth::policy::default_audience_from_env` (key mint),
+  `micromegas_analytics::audience::default_audience_from_env` (read once by `LakehouseContext::new`
+  and handed to the three Postgres read sites), and the new ingestion-edge call in
+  `serve_ingestion`.
 - `tasks/data_isolation/audience_based_access_control_plan.md` (Stage 5 status update,
   `:1340-1353`) — this is the epic tracker's shipped-status record for #1373, and it currently
   states, as fact, exactly the contract this plan inverts: "`resolve_write_audience` is infallible
