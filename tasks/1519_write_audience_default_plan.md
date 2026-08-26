@@ -378,8 +378,13 @@ ingestion path** carries a real audience property in Postgres. Consequences:
   reconcile the two labels. The 403 persists for every affected producer until the old rows either
   age out past retention via `delete_empty_processes` or an operator deletes them manually. The
   grants/minting levers in the bullet above do not touch this: `MICROMEGAS_DEFAULT_AUDIENCE` itself
-  becomes a lever with a real, disruptive write-path effect for the first time. See Trade-offs for
-  the alternative that removes this hazard, and Open Questions for which design this plan assumes.
+  becomes a lever with a real, disruptive write-path effect for the first time. Of the two effects,
+  only the second is a hazard: `identity.rs:204-206` and `mkdocs/docs/otlp/index.md:110` both state
+  that long-term stability of `process_id` values is not a design goal and re-deriving existing ids
+  is always acceptable, so the first effect is a tolerated cost by standing principle, not a
+  regression. The permanent `AudienceConflict` 403 is the consequence that needs operator warning.
+  Keeping the un-salted legacy namespace is **decided** (Trade-offs); the salted alternative that
+  removes the 403 hazard was considered and declined.
 
 **No backfill, no retro-stamp — decided.** Legacy unstamped rows are never rewritten; they keep
 resolving to the deployment default on read, exactly as `insert_process`'s doc comment has always
@@ -662,7 +667,7 @@ point of this change is to make indistinguishable. Design §6's id-namespace rul
 callers the *same* `process_id`, which strengthens the second ground — and it also removes the
 alternative's only remaining pitch, since under that rule neither design re-derives any id.
 
-**The default occupies the un-salted legacy namespace (chosen, this plan's assumption) vs.
+**The default occupies the un-salted legacy namespace (chosen, decided) vs.
 salting every audience, including the default.** Design §6's rule keeps the deployment default in
 the same un-salted `NS_OTEL_PROCESS_V1` namespace OTLP identity has always used, so the traffic
 that dominates most deployments today — every credential that carries no bound audience
@@ -698,8 +703,19 @@ not one this plan can make in the abstract. Bearing on that call: `identity.rs:2
 this plan, that "long-term stability of `process_id` values is not a design goal; re-deriving
 existing ids is always acceptable" — the one-time re-derivation cost either design pays is a
 tolerated cost by that principle, not a novel one this change introduces, which narrows what is
-actually in tension between the two options to the knob-flip hazard alone. This plan proceeds with
-the chosen (un-salted-default) design; see Open Questions.
+actually in tension between the two options to the knob-flip hazard alone — and, within that
+hazard, to the permanent `AudienceConflict` 403 rather than the id re-derivation that accompanies
+it, since the principle tolerates the re-derivation on both sides of the comparison.
+
+**Decided: keep the un-salted legacy `NS_OTEL_PROCESS_V1` namespace for the deployment default.**
+The id-churn arithmetic that dominates the paragraph above is not what decides it — by the
+`identity.rs:204-206` principle, both designs' one-time re-derivations are tolerated costs, so
+neither the chosen design's narrower churn nor the alternative's broader churn is a real
+differentiator. What the chosen design buys is that the traffic dominating most deployments today
+(every credential carrying no bound audience) keeps deriving byte-identical ids across this
+upgrade, and what it accepts in exchange is the knob-flip 403, handled by operator warning rather
+than by design. Implement §6's rule as written; the salted alternative is recorded here as the road
+not taken, not as pending work.
 
 **Unprefixed only (chosen) vs. `{prefix}_DEFAULT_AUDIENCE`.** The knob is a property of the lake's
 contents, not a per-role setting, and the lakehouse roles read it unprefixed. Giving the ingestion
@@ -958,17 +974,20 @@ than a leftover of the three-state write path, so no follow-up is proposed and
 
 ## Open Questions
 
-**Does the deployment default keep the un-salted legacy namespace (this plan's assumption), or
-does every audience — including the default — get its own salted namespace?** Analyzed in
-Trade-offs. The chosen design pays a smaller one-time upgrade-time re-derivation (only DB-backed
-keys explicitly bound to the default label) but leaves flipping `MICROMEGAS_DEFAULT_AUDIENCE` after
-go-live as a standing hazard with two effects: every DB-backed key bound to either the old or the
-new default label re-derives its id once (moving between the salted and un-salted namespace), and
-unaudienced traffic under the new default permanently 403s against rows stamped under the old one
-until those rows age out past retention or are deleted (Design §6). The
-alternative removes that hazard but re-derives ids for *all* unaudienced OTLP traffic at upgrade,
-not only the default-bound-key case. This plan proceeds with the chosen design; revisit before
-implementation if the target deployment expects to change the default knob post-launch.
+None.
+
+The namespace question is settled: **the deployment default keeps the un-salted legacy
+`NS_OTEL_PROCESS_V1` namespace** (Design §6, analyzed in Trade-offs). Traffic carrying no bound
+audience derives byte-identical ids across this upgrade; only a DB-backed key explicitly bound to a
+label equal to the default re-derives, once — a tolerated cost, since `identity.rs:204-206` and
+`mkdocs/docs/otlp/index.md:110` both state that long-term `process_id` stability is not a design
+goal. The cost genuinely accepted with that choice is the standing knob-flip hazard: flipping
+`MICROMEGAS_DEFAULT_AUDIENCE` after go-live leaves unaudienced traffic under the new default
+permanently 403ing against rows stamped under the old one until those rows age out past retention
+or are deleted (it also re-derives ids for keys bound to the old or new default label, which the
+same principle tolerates). That hazard is handled by documentation, not by design — see the
+Documentation section's requirements for the "changing the default is not a routine operation"
+warning. The salted-every-audience alternative was considered and declined (Trade-offs).
 
 The backfill question is settled (Design §6: no backfill, no retro-stamp), the
 `IdentityContext.audience` typing question is settled (§6's id-namespace rule makes `Option<&str>`
