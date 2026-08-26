@@ -13,8 +13,9 @@
  *   5. `$variable`           (simple variable)
  */
 
-import type { Table, DataType } from 'apache-arrow'
-import { isTimeType, timestampToDate } from '@/lib/arrow-utils'
+import type { Table, DataType, StructRowProxy } from 'apache-arrow'
+import { isTimeType, timestampToDate, isHistogramStructType } from '@/lib/arrow-utils'
+import { toHistogramValue } from '@/lib/histogram-utils'
 import type { VariableValue } from './notebook-types'
 import type { ResolveCtx, ResolvedMacro } from './macro-resolve'
 import { resolveMacro } from './macro-resolve'
@@ -22,11 +23,21 @@ import { resolveMacro } from './macro-resolve'
 /**
  * Format an Arrow value as a string, converting timestamps to RFC3339.
  * Shared with `template-evaluator.ts` for naked macro emission.
+ *
+ * A histogram-typed struct value (Design §5 of the histogram column cell
+ * plan) renders as a compact, fixed-field-order dump instead of falling
+ * through to `String(value)` — this is what makes a Markdown override
+ * pointed at a histogram column ($row.duration_dist) a usable debug view of
+ * the raw struct, with no dedicated debug mechanism needed.
  */
 export function formatArrowValue(value: unknown, dataType?: DataType): string {
   if (dataType && isTimeType(dataType)) {
     const date = timestampToDate(value, dataType)
     if (date) return date.toISOString()
+  }
+  if (dataType && isHistogramStructType(dataType) && value != null) {
+    const h = toHistogramValue(value as StructRowProxy)
+    return `{start:${h.start}, end:${h.end}, count:${h.count}, bins:[${h.bins.join(',')}]}`
   }
   return String(value)
 }

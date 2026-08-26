@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import type { Table } from 'apache-arrow'
+import type { Table, DataType } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, QueryBackedCellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
@@ -14,6 +14,7 @@ interface CellEditorProps {
   timeRange: { begin: string; end: string }
   existingNames: Set<string>
   availableColumns?: string[]
+  availableColumnTypes?: Record<string, DataType>
   defaultDataSource?: string
   datasourceVariables?: string[]
   showNotebookOption?: boolean
@@ -31,6 +32,7 @@ export function CellEditor({
   timeRange,
   existingNames,
   availableColumns,
+  availableColumnTypes,
   defaultDataSource,
   datasourceVariables,
   showNotebookOption,
@@ -159,6 +161,7 @@ export function CellEditor({
           variables={variables}
           timeRange={timeRange}
           availableColumns={availableColumns}
+          availableColumnTypes={availableColumnTypes}
           datasourceVariables={datasourceVariables}
           defaultDataSource={defaultDataSource}
           onRun={onRun}

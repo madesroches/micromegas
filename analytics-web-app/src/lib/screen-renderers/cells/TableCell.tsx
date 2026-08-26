@@ -194,7 +194,7 @@ export function TableCell({ data, status, options, onOptionsChange, variables, t
 // Editor Component
 // =============================================================================
 
-function TableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun, cellResults, cellSelections }: CellEditorProps) {
+function TableCellEditor({ config, onChange, variables, timeRange, availableColumns, availableColumnTypes, onRun, cellResults, cellSelections }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
 
   // Compute the current $order_by value from sort state
@@ -273,6 +273,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
         <OverrideEditor
           overrides={overrides}
           availableColumns={availableColumns || []}
+          availableColumnTypes={availableColumnTypes}
           availableVariables={Object.keys(variables)}
           cellSelectionNames={Object.keys(cellSelections)}
           onChange={handleOverridesChange}

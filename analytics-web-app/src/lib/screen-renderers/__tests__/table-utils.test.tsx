@@ -48,6 +48,12 @@ import {
 import { evaluateTemplate } from '../notebook-utils'
 import type { EvaluateTemplateCtx } from '../notebook-utils'
 import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
+import {
+  makeHistogramVector,
+  SAMPLE_HISTOGRAM_ROW,
+  HISTOGRAM_STRUCT_TYPE,
+  type HistogramRowInput,
+} from './histogram-fixtures'
 
 // =============================================================================
 // Validation helpers (still public)
@@ -1096,5 +1102,73 @@ describe('formatCell', () => {
     const value = new Uint8Array([97, 98, 99])
     const result = formatCell(value, new BinaryView())
     expect(result).toBe('abc (3)')
+  })
+})
+
+// =============================================================================
+// TableBody — histogram column render-mode switch (Design §3)
+// =============================================================================
+
+describe('TableBody — histogram column rendering', () => {
+  const histCol: TableColumn = { name: 'dist', type: HISTOGRAM_STRUCT_TYPE as unknown as DataType }
+  const nameCol: TableColumn = { name: 'name', type: new DataType() }
+  const columns: TableColumn[] = [nameCol, histCol]
+
+  function makeData(rows: { name: string; dist: HistogramRowInput | null }[]) {
+    const vec = makeHistogramVector(rows.map((r) => r.dist))
+    return {
+      numRows: rows.length,
+      get: (i: number) => ({ name: rows[i].name, dist: vec.get(i) }),
+    }
+  }
+
+  it('renders HistogramCell by default for a histogram-typed column (no override)', () => {
+    const data = makeData([{ name: 'a', dist: SAMPLE_HISTOGRAM_ROW }])
+    const { container } = render(
+      <table>
+        <TableBody data={data} columns={columns} allColumns={columns} cellSelections={{}} cellResults={{}} />
+      </table>,
+    )
+    const rects = container.querySelectorAll('svg[data-testid="histogram-track"] rect')
+    expect(rects.length).toBe(SAMPLE_HISTOGRAM_ROW.bins.length)
+  })
+
+  it('renders HistogramCell with the resolved histogramColor when kind is "histogram"', () => {
+    const data = makeData([{ name: 'a', dist: SAMPLE_HISTOGRAM_ROW }])
+    const overrides: ColumnOverride[] = [{ column: 'dist', kind: 'histogram', histogramColor: '#123456' }]
+    const { container } = render(
+      <table>
+        <TableBody data={data} columns={columns} allColumns={columns} overrides={overrides} cellSelections={{}} cellResults={{}} />
+      </table>,
+    )
+    const rects = container.querySelectorAll('svg[data-testid="histogram-track"] rect')
+    expect(rects.length).toBeGreaterThan(0)
+    for (const rect of Array.from(rects)) {
+      expect(rect.getAttribute('fill')).toBe('#123456')
+    }
+  })
+
+  it('renders OverrideCell (markdown) when kind is "markdown" or unset, even on a histogram column', () => {
+    const data = makeData([{ name: 'a', dist: SAMPLE_HISTOGRAM_ROW }])
+    const overrides: ColumnOverride[] = [{ column: 'dist', format: '$row.dist' }]
+    const { container } = render(
+      <table>
+        <TableBody data={data} columns={columns} allColumns={columns} overrides={overrides} cellSelections={{}} cellResults={{}} />
+      </table>,
+    )
+    // No histogram bars — the column rendered as a Markdown override instead.
+    expect(container.querySelector('svg[data-testid="histogram-track"]')).not.toBeInTheDocument()
+    // formatArrowValue's histogram branch: a compact, readable field dump.
+    expect(screen.getByText('{start:0, end:50, count:40, bins:[1,3,6,10,8,6,3,2,1,0]}')).toBeInTheDocument()
+  })
+
+  it('renders "-" for a null histogram value', () => {
+    const data = makeData([{ name: 'a', dist: null }])
+    render(
+      <table>
+        <TableBody data={data} columns={columns} allColumns={columns} cellSelections={{}} cellResults={{}} />
+      </table>,
+    )
+    expect(screen.getByText('-')).toBeInTheDocument()
   })
 })

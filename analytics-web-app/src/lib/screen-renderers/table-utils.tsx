@@ -8,6 +8,7 @@ import { useCallback, useContext, useEffect, useMemo } from 'react'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { ChevronUp, ChevronDown, EyeOff, ArrowUpNarrowWide, ArrowDownNarrowWide, X } from 'lucide-react'
 import { DataType, Table } from 'apache-arrow'
+import type { StructRowProxy } from 'apache-arrow'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
@@ -18,7 +19,9 @@ import {
   isBinaryType,
   isDurationType,
   durationToMs,
+  isHistogramStructType,
 } from '@/lib/arrow-utils'
+import { HistogramCell } from '@/components/HistogramCell'
 import type { VariableValue } from './notebook-types'
 import { evaluateTemplate } from './notebook-utils'
 import type { EvaluateTemplateCtx } from './notebook-utils'
@@ -32,8 +35,18 @@ import { ColumnHeaderWarningIcon, WarningReporterContext } from './warning-repor
 export interface ColumnOverride {
   /** Column name to override */
   column: string
-  /** Markdown format string with $row.x or $row["x"] macros */
-  format: string
+  /** 'markdown' (default — every override before this change already behaves
+   *  this way) or 'histogram'. 'histogram' only takes effect when the column
+   *  is histogram-typed (`isHistogramStructType`); on any other column it's
+   *  inert, same as a markdown override targeting a column that no longer
+   *  exists. */
+  kind?: 'markdown' | 'histogram'
+  /** Markdown format string with $row.x or $row["x"] macros — used when
+   *  `kind` is 'markdown' (or unset). */
+  format?: string
+  /** A recognized colormap name (viridis/magma/plasma/inferno/cividis/turbo)
+   *  or a literal CSS color — used when `kind` is 'histogram'. */
+  histogramColor?: string
 }
 
 // =============================================================================
@@ -673,14 +686,26 @@ export function TableBody({ data, columns, allColumns, compact = false, override
 
   const showRadio = selectionMode === 'single'
 
-  // Build override lookup map
+  // Build override lookup map — the full entry, not just `format`, since
+  // HistogramCell needs `.histogramColor` too.
   const overrideMap = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, ColumnOverride>()
     for (const o of overrides) {
-      map.set(o.column, o.format)
+      map.set(o.column, o)
     }
     return map
   }, [overrides])
+
+  // Histogram-typed column names, computed once per render (not once per
+  // cell) so the per-cell switch below tests Set membership instead of
+  // calling isHistogramStructType row * column times.
+  const histogramColumns = useMemo(() => {
+    const set = new Set<string>()
+    for (const col of columns) {
+      if (isHistogramStructType(col.type)) set.add(col.name)
+    }
+    return set
+  }, [columns])
 
   return (
     <tbody>
@@ -712,11 +737,28 @@ export function TableBody({ data, columns, allColumns, compact = false, override
               const value = row[col.name]
               const override = overrideMap.get(col.name)
 
-              // Use override renderer if configured for this column
-              if (override) {
+              // Case 1: a markdown override (or no `kind` — an existing
+              // override) renders via OverrideCell. This is a presence
+              // check on the map entry, not on `.format` — a saved
+              // override with `format: ''` now renders an empty
+              // OverrideCell rather than falling through to formatCell
+              // (accepted behavior change, brings this in line with
+              // TransposedTableCell's existing presence-based check).
+              if (override && override.kind !== 'histogram') {
                 return (
                   <td key={col.name} className={cellClass}>
-                    <OverrideCell format={override} columnName={col.name} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} cellSelections={cellSelections} cellResults={cellResults} />
+                    <OverrideCell format={override.format ?? ''} columnName={col.name} row={row} columns={columns} allColumns={allColumns} variables={variables} timeRange={timeRange} cellSelections={cellSelections} cellResults={cellResults} />
+                  </td>
+                )
+              }
+
+              // Case 2: a histogram-typed column with no override, or an
+              // explicit `kind: 'histogram'` override, renders as bars +
+              // median + tooltip.
+              if (histogramColumns.has(col.name)) {
+                return (
+                  <td key={col.name} className={cellClass}>
+                    <HistogramCell value={(value as StructRowProxy | null) ?? null} color={override?.histogramColor} />
                   </td>
                 )
               }

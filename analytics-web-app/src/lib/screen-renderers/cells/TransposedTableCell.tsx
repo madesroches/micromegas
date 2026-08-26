@@ -10,7 +10,9 @@ import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { OverrideEditor } from '@/components/OverrideEditor'
+import { HistogramCell } from '@/components/HistogramCell'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
+import { isHistogramStructType } from '@/lib/arrow-utils'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import {
   ColumnOverride,
@@ -22,6 +24,7 @@ import {
   useRowManagement,
 } from '../table-utils'
 import { ColumnHeaderWarningIcon, useColumnWarnings, WarningReporterContext } from '../warning-reporter'
+import type { StructRowProxy } from 'apache-arrow'
 
 // =============================================================================
 // Renderer Component
@@ -41,9 +44,9 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
 
   const overrideMap = useMemo(() => {
     const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
-    const map = new Map<string, string>()
+    const map = new Map<string, ColumnOverride>()
     for (const o of overrides) {
-      map.set(o.column, o.format)
+      map.set(o.column, o)
     }
     return map
   }, [options?.overrides])
@@ -105,6 +108,10 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
             <tbody>
               {visibleRows.map((row) => {
                 const colWarnings = columnWarnings.get(row.name)
+                const override = overrideMap.get(row.name)
+                // Hoisted once per row (row.type is constant across a
+                // transposed row's values) rather than recomputed per value.
+                const isHistogram = isHistogramStructType(row.type)
                 return (
                   <tr key={row.name} className="border-b border-theme-border">
                     <RowContextMenu rowName={row.name} onHide={handleHideRow}>
@@ -119,9 +126,9 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
                     </RowContextMenu>
                     {row.values.map((value, colIdx) => (
                       <td key={colIdx} className="px-3 py-1.5 text-theme-text-primary">
-                        {overrideMap.has(row.name) ? (
+                        {override && override.kind !== 'histogram' ? (
                           <OverrideCell
-                            format={overrideMap.get(row.name)!}
+                            format={override.format ?? ''}
                             columnName={row.name}
                             row={originalRows[colIdx]}
                             columns={columns}
@@ -129,6 +136,11 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
                             timeRange={timeRange}
                             cellSelections={cellSelections}
                             cellResults={cellResults}
+                          />
+                        ) : isHistogram ? (
+                          <HistogramCell
+                            value={(value as StructRowProxy | null) ?? null}
+                            color={override?.histogramColor}
                           />
                         ) : (
                           formatCell(value, row.type)
@@ -150,7 +162,7 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
 // Editor Component
 // =============================================================================
 
-function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns, onRun, cellResults, cellSelections }: CellEditorProps) {
+function TransposedTableCellEditor({ config, onChange, variables, timeRange, availableColumns, availableColumnTypes, onRun, cellResults, cellSelections }: CellEditorProps) {
   const transposedConfig = config as QueryCellConfig
 
   const overrides = useMemo(
@@ -189,6 +201,7 @@ function TransposedTableCellEditor({ config, onChange, variables, timeRange, ava
         <OverrideEditor
           overrides={overrides}
           availableColumns={availableColumns || []}
+          availableColumnTypes={availableColumnTypes}
           availableVariables={Object.keys(variables)}
           cellSelectionNames={Object.keys(cellSelections)}
           onChange={handleOverridesChange}

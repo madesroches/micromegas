@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Table cell editor — Render as Histogram</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --app-panel: #12121a;
+    --app-card: #1a1a2e;
+    --border-color: #2a2a3e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-error: #f87171;
+    --chart-line: #bf360c;
+    --brand-gold: #ffb300;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px;
+    background: var(--app-bg);
+    color: var(--text-primary);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .page-note {
+    max-width: 320px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.6;
+    padding-top: 8px;
+  }
+  .page-note h1 {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0 0 8px;
+  }
+  .page-note code { color: var(--brand-gold); }
+
+  /* ---- Editor panel shell (mirrors CellEditor.tsx) ---- */
+  .panel {
+    width: 400px;
+    height: 780px;
+    background: var(--app-panel);
+    border: 1px solid var(--border-color);
+    border-left-width: 1px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--border-color);
+  }
+  .panel-header .left { display: flex; align-items: center; gap: 8px; }
+  .badge-type {
+    font-size: 11px; padding: 2px 6px; border-radius: 4px;
+    background: var(--app-card); color: var(--text-secondary);
+    text-transform: uppercase; font-weight: 500;
+  }
+  .cell-title { font-weight: 500; color: var(--text-primary); }
+  .close-x { color: var(--text-muted); font-size: 16px; line-height: 1; cursor: default; }
+
+  .panel-content {
+    flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .field-label {
+    display: block; font-size: 11px; font-weight: 500; text-transform: uppercase;
+    color: var(--text-secondary); margin-bottom: 6px; letter-spacing: 0.03em;
+  }
+  .fake-input {
+    width: 100%; padding: 8px 10px; background: var(--app-card);
+    border: 1px solid var(--border-color); border-radius: 6px;
+    color: var(--text-primary); font-size: 13px;
+  }
+  .sql-editor {
+    width: 100%; min-height: 130px; padding: 10px; background: var(--app-card);
+    border: 1px solid var(--border-color); border-radius: 6px;
+    color: var(--text-primary); font-size: 12px; line-height: 1.6;
+  }
+  .sql-editor .kw { color: #1976d2; }
+  .sql-editor .fn { color: #ffb300; }
+  .sql-editor .str { color: #c3e88d; }
+  .sql-editor .num { color: #f78c6c; }
+  .sql-editor .cm { color: #546e7a; }
+
+  .doc-link {
+    font-size: 12px; color: var(--accent-link); display: inline-flex; align-items: center; gap: 4px;
+  }
+
+  /* ---- Accordion sections (OverrideEditor / RowSelectionEditor pattern) ---- */
+  .accordion { border-top: 1px solid var(--border-color); margin: 0 -16px; }
+  .accordion-header {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: var(--app-card); cursor: default;
+  }
+  .accordion-header .left { display: flex; align-items: center; gap: 8px; }
+  .chevron { color: var(--text-muted); font-size: 11px; width: 12px; text-align: center; }
+  .accordion-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .count-badge {
+    font-size: 11px; padding: 1px 6px; border-radius: 4px;
+    background: rgba(21,101,192,0.2); color: var(--accent-link);
+  }
+  .accordion-body { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+  .override-card {
+    padding: 10px; background: var(--app-card); border: 1px solid var(--border-color);
+    border-radius: 6px;
+  }
+  .card-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .card-row label { font-size: 11px; color: var(--text-secondary); font-weight: 500; }
+  .remove-x { color: var(--text-muted); font-size: 13px; cursor: default; }
+  .fake-select {
+    width: 100%; padding: 6px 8px; background: var(--app-bg);
+    border: 1px solid var(--border-color); border-radius: 4px;
+    color: var(--text-primary); font-size: 12.5px; margin-bottom: 8px;
+  }
+  .fake-textarea {
+    width: 100%; padding: 6px 8px; background: var(--app-bg);
+    border: 1px solid var(--border-color); border-radius: 4px;
+    color: var(--text-primary); font-size: 12px; resize: none;
+  }
+  .stop-label {
+    display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  /* mode segmented control */
+  .segmented { display: flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
+  .segmented .seg {
+    flex: 1; text-align: center; padding: 6px 4px; font-size: 11.5px;
+    color: var(--text-secondary); background: var(--app-bg); cursor: default;
+    border-right: 1px solid var(--border-color);
+  }
+  .segmented .seg:last-child { border-right: none; }
+  .segmented .seg.active { background: rgba(21,101,192,0.18); color: var(--accent-link); font-weight: 600; }
+
+  /* ---- Color swatch picker (Render as: Histogram) ---- */
+  .swatch-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .picker-swatch {
+    width: 28px; height: 28px; border-radius: 6px; padding: 0;
+    border: 1.5px solid var(--border-color); cursor: default;
+    position: relative; overflow: hidden;
+  }
+  .picker-swatch.active {
+    border-color: var(--accent-link);
+    box-shadow: 0 0 0 2px rgba(21,101,192,0.35);
+  }
+  .custom-swatch { display: flex; align-items: center; justify-content: center; }
+  .custom-swatch input[type="color"] {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0; border: none; padding: 0; cursor: default;
+  }
+
+  .preview-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }
+  .preview-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+  .preview-bars { display: flex; align-items: flex-end; gap: 1px; height: 24px; width: 100px; }
+  .preview-bars .bar { flex: 1; border-radius: 1px 1px 0 0; }
+
+  .add-btn {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent-link); cursor: default;
+  }
+
+  .help-text {
+    font-size: 11px; color: var(--text-muted); padding-top: 8px; border-top: 1px solid var(--border-color);
+    line-height: 1.6;
+  }
+  .help-text code { background: var(--border-color); padding: 1px 4px; border-radius: 3px; color: var(--text-secondary); }
+
+  .panel-footer { padding: 12px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px; }
+  .btn {
+    width: 100%; text-align: center; padding: 8px; border-radius: 6px; font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn-run { background: var(--accent-link); color: white; }
+  .btn-delete { background: transparent; border: 1px solid var(--accent-error); color: var(--accent-error); }
+</style>
+</head>
+<body>
+
+<div class="panel">
+  <div class="panel-header">
+    <div class="left">
+      <span class="badge-type">Table</span>
+      <span class="cell-title">top_call_sites</span>
+    </div>
+    <span class="close-x">&times;</span>
+  </div>
+
+  <div class="panel-content">
+    <div>
+      <span class="field-label">Cell Name</span>
+      <input class="fake-input mono" value="top_call_sites" readonly>
+    </div>
+
+    <div>
+      <span class="field-label">SQL Query</span>
+      <div class="sql-editor mono"><span class="kw">SELECT</span> call_site, sample_count,
+  <span class="fn">make_histogram</span>(<span class="num">0</span>, <span class="num">50</span>, <span class="num">24</span>, duration_ms) <span class="kw">AS</span> duration_dist
+<span class="kw">FROM</span> top_call_sites
+<span class="kw">ORDER BY</span> sample_count <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">20</span></div>
+    </div>
+
+    <div class="doc-link">&#128279; Query Guide</div>
+
+    <!-- Overrides accordion — expanded. Bar color lives HERE, not in a
+         separate section: one card per column, each with its own "Render as". -->
+    <div class="accordion">
+      <div class="accordion-header">
+        <div class="left">
+          <span class="chevron">&#9662;</span>
+          <span class="accordion-title">Overrides</span>
+        </div>
+        <span class="count-badge">2</span>
+      </div>
+      <div class="accordion-body">
+
+        <!-- Card 1: ordinary markdown override — unchanged from today -->
+        <div class="override-card">
+          <div class="card-row">
+            <label>Column</label>
+            <span class="remove-x">&times;</span>
+          </div>
+          <select class="fake-select mono">
+            <option>call_site</option>
+          </select>
+          <label class="stop-label">Format</label>
+          <textarea class="fake-textarea mono" rows="2">[$row.call_site](/profiler?site=$row.call_site&amp;from=$from&amp;to=$to)</textarea>
+        </div>
+
+        <!-- Card 2: histogram column — "Render as" toggle appears because
+             duration_dist is histogram-typed; Histogram selected (customizing
+             bar color; the column already renders as a histogram by default
+             even with no override card at all). -->
+        <div class="override-card">
+          <div class="card-row">
+            <label>Column</label>
+            <span class="remove-x">&times;</span>
+          </div>
+          <select class="fake-select mono">
+            <option>duration_dist</option>
+          </select>
+
+          <label class="stop-label">Render as</label>
+          <div class="segmented" style="margin-bottom:10px;">
+            <div class="seg">Markdown</div>
+            <div class="seg active">Histogram</div>
+          </div>
+
+          <label class="stop-label">Color</label>
+          <div class="swatch-row">
+            <button class="picker-swatch active" style="background:linear-gradient(90deg,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725);" title="viridis"></button>
+            <button class="picker-swatch" style="background:linear-gradient(90deg,#000004,#51127c,#b73779,#fb8761,#fcfdbf);" title="magma"></button>
+            <button class="picker-swatch" style="background:linear-gradient(90deg,#0d0887,#7e03a8,#cc4778,#f89441,#f0f921);" title="plasma"></button>
+            <button class="picker-swatch" style="background:linear-gradient(90deg,#000004,#57106e,#bc3754,#f98c0a,#fcffa4);" title="inferno"></button>
+            <button class="picker-swatch" style="background:linear-gradient(90deg,#00224e,#35486e,#7e7a77,#c0a34d,#fee838);" title="cividis"></button>
+            <button class="picker-swatch" style="background:linear-gradient(90deg,#30123b,#4675ed,#1ae4b6,#a2fc3c,#f9c536,#7a0403);" title="turbo"></button>
+            <button class="picker-swatch custom-swatch" style="background:#bf360c;" title="Custom color">
+              <input type="color" value="#bf360c" aria-label="Custom color">
+            </button>
+          </div>
+
+          <div class="preview-row">
+            <span class="preview-label">Preview</span>
+            <div class="preview-bars" id="preview-viridis"></div>
+          </div>
+        </div>
+
+        <div class="add-btn">&#43; Add Column</div>
+
+        <div class="help-text">
+          <div>Format: <code>[label](url)</code>, row data via <code>$row.name</code>.</div>
+          <div style="margin-top:4px;">
+            "Render as" only appears for a histogram-typed column &mdash; it's already a
+            histogram by default with no card needed at all. Add a card here only to
+            customize it: <b>Histogram</b> shows the color choices, it doesn't ask you to
+            name or type one.
+          </div>
+          <div style="margin-top:4px;">
+            <b>Debugging</b>: switch "Render as" to <b>Markdown</b> and set Format to
+            <code>$row.duration_dist</code> &mdash; a histogram-typed value formats as its
+            raw struct fields (start/end/count/bins) instead of a chart. No separate debug
+            feature; it's the same Format field every other override uses.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row Selection accordion — collapsed, unrelated to this change -->
+    <div class="accordion">
+      <div class="accordion-header">
+        <div class="left">
+          <span class="chevron">&#9656;</span>
+          <span class="accordion-title">Row Selection</span>
+        </div>
+        <span class="count-badge" style="background:var(--border-color);color:var(--text-muted);">None</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-footer">
+    <div class="btn btn-run">&#9654; Run</div>
+    <div class="btn btn-delete">&#128465; Delete Cell</div>
+  </div>
+</div>
+
+<div class="page-note">
+  <h1>Table cell editor — "Render as": Markdown or Histogram</h1>
+  <p>
+    Every override card now has exactly two render kinds: <b>Markdown</b> (today's only
+    option — the Format field) or <b>Histogram</b> (a color mode for a column that's already
+    a histogram by default). One column, one card, one place to look for "how does this
+    column render."
+  </p>
+  <p>
+    "Render as" only appears when the selected column is histogram-typed (detected via
+    <code>isHistogramStructType</code> against the query result's schema, which the panel
+    doesn't currently see &mdash; <code>availableColumns</code> gains a sibling
+    <code>availableColumnTypes</code> map; see plan Design &sect;6). For every other column
+    the card looks exactly like it does today &mdash; just the Format field, no toggle.
+  </p>
+  <p>
+    Picking Histogram swaps the Format textarea for six colormap swatches &mdash; each an
+    actual gradient, not a name you have to know or type &mdash; plus one custom-color swatch
+    backed by the OS color picker. Click a colormap swatch and each bucket samples that scale
+    by its own height; pick a custom color and every bar gets that one flat color instead. No
+    text field, no help-text paragraph to read: the swatches themselves are what's on offer,
+    and the ring around one shows which is active. The live bars at the bottom of the card
+    update immediately. No card at all still means a plain default-colored histogram &mdash;
+    a card only exists to customize it.
+  </p>
+  <p>
+    There's no separate debug feature. Switching a histogram column's card to <b>Markdown</b>
+    with <code>$row.duration_dist</code> as the Format dumps its raw fields instead of
+    charting it &mdash; the same Format field every other override already uses, just pointed
+    at a column that now formats usefully as text.
+  </p>
+</div>
+
+<script>
+document.getElementById('preview-viridis').innerHTML = [30, 55, 90, 100, 75, 40, 20, 10]
+  .map((h, i, arr) => {
+    const t = h / 100;
+    const stops = ['#440154', '#414487', '#2a788e', '#22a884', '#7ad151', '#fde725'];
+    const idx = Math.min(stops.length - 1, Math.floor(t * (stops.length - 1)));
+    return `<div class="bar" style="height:${h}%;background:${stops[idx]}"></div>`;
+  }).join('');
+</script>
+</body>
+</html>
