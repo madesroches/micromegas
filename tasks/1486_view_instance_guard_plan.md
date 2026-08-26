@@ -104,7 +104,11 @@ Rules, in order:
    inner session built from an `Authorized::internal_caller()` take this arm.)
 2. `view_set_name` on `public_view_sets` → `Ok(())`. Matches Prong A §7: an operator who declared
    a view set public has said every row of it is readable, so denying materialization of one of
-   its instances would be incoherent.
+   its instances would be incoherent. This is a confidentiality argument only: it leaves the
+   cost/availability residual this plan exists to close fully open for any view set an operator
+   puts on that list — any authenticated caller can still force `jit_update` for arbitrary
+   process/stream ids of a public view set. Deliberate and recorded in §Security's "Not closed by
+   this change".
 3. `view_instance_id == "global"` → `Ok(())`. See §2 below.
 4. `view_instance_id` parses as a `Uuid` → `self.authorize(uuid, IdKind::ProcessOrStream,
    "view_instance")`, discarding the returned `Authorized`. The witness exists to gate
@@ -322,17 +326,22 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 7. `rust/analytics/src/lakehouse/materialized_view.rs` + `metadata.rs`: update the doc comments
    that describe the residual as open (`metadata.rs`'s notes on the two `CallerContext::internal()`
    lookups) to say the entry point is now guarded.
+8. `rust/analytics/tests/ownership_rewrite_db_test.rs`: this suite `.collect()`s its queries, so the
+   guard landing in this phase changes its behaviour — update the three cross-audience
+   `view_instance('log_entries'/'async_events'/'thread_spans', ...)` assertions that currently
+   expect `0` rows to instead expect the guard's `not found or not accessible` denial, leaving the
+   same-audience and `ReadScope::All` assertions untouched.
 
 ### Phase 3 — tests
 
-8. Offline unit tests in `rust/analytics/tests/audience_guard_tests.rs` (per §Testing Strategy).
-9. DB-backed tests in `rust/analytics/tests/prong_b_guard_db_test.rs`.
+9. Offline unit tests in `rust/analytics/tests/audience_guard_tests.rs` (per §Testing Strategy).
+10. DB-backed tests in `rust/analytics/tests/prong_b_guard_db_test.rs`.
 
 ### Phase 4 — docs and changelog
 
-10. `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/query-guide/functions-reference.md`,
+11. `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/query-guide/functions-reference.md`,
     `CHANGELOG.md` (per §Documentation).
-11. Add a Stage-3 residual-closed note to `tasks/data_isolation/audience_based_access_control_plan.md`'s
+12. Add a Stage-3 residual-closed note to `tasks/data_isolation/audience_based_access_control_plan.md`'s
     `### Stage 3 — Enforcement Prong B` section (it does not mention this residual today), and mark
     it closed in `tasks/completed/1371_udtf_udf_guards_plan.md` §7.
 
@@ -349,6 +358,7 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 | `rust/analytics/tests/audience_guard_tests.rs` | offline rule tests |
 | `rust/analytics/tests/prong_b_guard_db_test.rs` | DB-backed enforcement + no-materialization tests |
 | `rust/analytics/tests/sql_batch_view_merge_ordering_tests.rs` | `None` at the new parameter |
+| `rust/analytics/tests/ownership_rewrite_db_test.rs` | convert the three cross-audience `view_instance(...)` `0`-row assertions (`log_entries`, `async_events`, `thread_spans`) into denial assertions |
 | `mkdocs/docs/admin/authentication.md` | Prong B now covers five functions, plus the `'global'` rule |
 | `mkdocs/docs/query-guide/functions-reference.md` | `view_instance` denial behaviour |
 | `CHANGELOG.md` | Unreleased → Analytics entry with the upgrade note |
@@ -403,6 +413,12 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 - **Not closed by this change:** the admin-gated `materialize_partitions`/`regenerate_partitions`
   can still materialize any instance in any audience. That is the documented, deployment-wide
   admin gate, out of scope here.
+- **Not closed by this change:** rule (2)'s `public_view_sets` exemption is a confidentiality
+  argument only. A view set an operator has opted into `MICROMEGAS_PUBLIC_VIEW_SETS` is exempt from
+  this guard entirely, so any authenticated caller can still force `jit_update` — real object-store
+  writes — for arbitrary process/stream ids of that view set. Left open deliberately: denying
+  materialization of a view set every row of which is already readable would be incoherent, but
+  the cost/availability residual for that view set is not addressed by this plan.
 
 ## Testing Strategy
 
@@ -442,9 +458,16 @@ each:
   regression check that internal/maintenance callers are untouched.
 
 Plus: `cargo test -p micromegas-analytics`, `cargo clippy --workspace --all-targets`, and the
-existing `ownership_rewrite_*` suites (the Prong A downcast must still find its provider —
-`ownership_rewrite_public_view_set_tests.rs` and `ownership_rewrite_db_test.rs` are the ones that
-would catch a regression there).
+existing `ownership_rewrite_*` suites (the Prong A downcast must still find its provider).
+`ownership_rewrite_public_view_set_tests.rs` passes unchanged — it only builds optimized logical
+plans via `optimized_plan`/`optimized_plan_with_factory` and never `.collect()`s, so
+`TableProvider::scan` (and the guard inside it) is never invoked. `ownership_rewrite_db_test.rs`
+does `.collect()` and today asserts `0` rows for three cross-audience `view_instance(...)` queries
+naming process A's ids under a `team-b` scope (`log_entries` ~ln 388-414, `async_events` ~ln
+428-457, `thread_spans` ~ln 474-516); this plan's guard turns each of those into a denial error
+before `jit_update` runs, so those three assertions must be updated (Phase 2, alongside the guard
+landing) to expect the `not found or not accessible` denial instead of a `0` row count — the
+same-audience and `ReadScope::All` assertions in that file are unaffected and stay as-is.
 
 ## Documentation
 
@@ -459,7 +482,10 @@ would catch a regression there).
   outside its audiences now gets a not-found-shaped error *instead of an empty result*, and record
   that `'global'` instances are exempt (no JIT to trigger, Prong A filters their rows) — explicitly
   contrasted with `list_partitions`' different `'global'`-row rule, which is described a few
-  paragraphs above and would otherwise read as contradictory.
+  paragraphs above and would otherwise read as contradictory. Also record that a view set on
+  `MICROMEGAS_PUBLIC_VIEW_SETS` is exempt from this guard entirely: any authenticated caller can
+  still trigger JIT materialization of any of its instances, since denying materialization of a
+  view set every row of which is already readable would be incoherent.
 - `mkdocs/docs/query-guide/functions-reference.md`, `view_instance(view_name, identifier)`
   (line 13): a note that on an authenticated deployment the function errors for an identifier
   outside the caller's audiences.
