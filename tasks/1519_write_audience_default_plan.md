@@ -326,21 +326,18 @@ ingestion path** carries a real audience property in Postgres. Consequences:
     semantics: `Some(a)` salts `NS_OTEL_PROCESS_V1` with the audience and hashes the joined field
     key under that namespace (`identity.rs:262-269`) and prefixes `block_id`'s hash input
     (`block.rs:202-206`); `None` reproduces pre-Stage-5 ids byte for byte.
-  - **No re-derivation for traffic that carries no bound audience; OTLP ids *do* re-derive once
-    for a key explicitly bound to the deployment default label.** A deployment leaving the knob
-    unset (`public`) and one setting it to e.g. `unassigned` both keep deriving exactly today's ids
-    for traffic that carries no bound audience, because that traffic resolves to the default and
-    therefore keeps the legacy namespace. But today `IdentityContext.audience` is
-    `Some(bound_audience)` for *any* DB-backed key, so a key explicitly bound to a label equal to
-    the deployment default is salted today and moves into the un-salted legacy namespace under
-    this rule — a one-time `process_id`/`stream_id`/`block_id` re-derivation for that key. This is
-    not an edge case: mint falls back to the default when no audience is named
-    (`rust/analytics-web-srv/src/ingestion_keys.rs:248-262`), and migration v6 backfilled every
-    pre-existing key's audience to `'public'` (`rust/ingestion/src/sql_migration.rs:144-149`), so on
-    a deployment with the knob unset, most DB-backed keys are bound to exactly the default label.
-    **This framing covers the one-time transition onto this plan, for a fixed knob value.**
-    It says nothing about what happens if `MICROMEGAS_DEFAULT_AUDIENCE` itself is changed
-    *after* this plan has already shipped — that is a distinct, later event, covered below.
+  - **Some OTLP ids re-derive once at upgrade; this is a non-event.** Traffic carrying no bound
+    audience keeps today's ids (it resolves to the default, so it keeps the legacy namespace). A
+    DB-backed key bound to a label equal to the default is salted today and becomes un-salted under
+    this rule, so its `process_id`/`stream_id`/`block_id` re-derive once. In practice that is
+    *every* DB-backed key: no deployment sets `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`,
+    `rust/analytics/src/audience.rs:51`), migration v6 backfilled every pre-existing key to
+    `'public'` (`sql_migration.rs:144-149`), and mint falls back to the default when no audience is
+    named (`ingestion_keys.rs:248-262`) — so today every audience in existence is `public`. The
+    re-derivation is therefore uniform and needs no migration handling:
+    `identity.rs:204-206` and `mkdocs/docs/otlp/index.md:110` both state that long-term stability
+    of `process_id` values is not a design goal and re-deriving existing ids is always acceptable.
+    All affected rows are stamped `public` on both sides of the upgrade, so nothing conflicts.
   - The audience-collision property the salting exists for is preserved: the mapping
     audience → namespace is still injective (the default maps to the un-salted namespace, every
     other audience to its own salted one), so two audiences sending identical resource attributes
@@ -360,31 +357,18 @@ ingestion path** carries a real audience property in Postgres. Consequences:
   absent data, not a designed flexibility lever. The operator levers are unchanged — **access
   changes go through grants (who is granted which audiences), and new audiences come from minting
   keys bound to them** — and neither has ever involved relabeling already-written data.
-- **Flipping `MICROMEGAS_DEFAULT_AUDIENCE` after this plan ships is a new operational hazard, not
-  a free relabeling.** Before this plan, the knob only changed how *unstamped* rows read on query
-  paths — reversible, since no write-time decision depended on it. After this plan, the un-salted
-  namespace is occupied by whichever label is the *live* default, so a flip moves that occupancy
-  and has two effects. First, a one-time id re-derivation for every DB-backed key bound to either
-  the old or the new default label: a key bound to the *new* default label was salted
-  (`Some(label)`) before the flip and becomes un-salted (`None`) after; a key bound to the *old*
-  default label was un-salted before the flip and becomes salted after — either way its
-  `process_id`/`stream_id`/`block_id` change. Second, traffic that carries no bound audience
-  (unaudienced credentials) keeps deriving the *same* un-salted `process_id` it always did, since
-  that derivation never depended on the label, only on landing in the un-salted namespace — but it
-  now presents that id against rows `check_process_audience_conflict` finds stamped under the
-  *old* default label. Design §5's comparison rejects the mismatch with a permanent
-  `AudienceConflict` 403 (`web_ingestion_service.rs:566-641`), and nothing a later re-registration
-  clears, since there is no retro-stamp and no `UPDATE processes` path (verified by grep) to
-  reconcile the two labels. The 403 persists for every affected producer until the old rows either
-  age out past retention via `delete_empty_processes` or an operator deletes them manually. The
-  grants/minting levers in the bullet above do not touch this: `MICROMEGAS_DEFAULT_AUDIENCE` itself
-  becomes a lever with a real, disruptive write-path effect for the first time. Of the two effects,
-  only the second is a hazard: `identity.rs:204-206` and `mkdocs/docs/otlp/index.md:110` both state
-  that long-term stability of `process_id` values is not a design goal and re-deriving existing ids
-  is always acceptable, so the first effect is a tolerated cost by standing principle, not a
-  regression. The permanent `AudienceConflict` 403 is the consequence that needs operator warning.
-  Keeping the un-salted legacy namespace is **decided** (Trade-offs); the salted alternative that
-  removes the 403 hazard was considered and declined.
+- **Changing `MICROMEGAS_DEFAULT_AUDIENCE` after this plan ships gains a write-path effect.**
+  Before this plan the knob only changed how unstamped rows read on query paths. After it, the
+  un-salted namespace belongs to whichever label is the live default, so a flip re-derives ids for
+  keys bound to the old or new default label (immaterial, per the id-stability principle above) and
+  can leave unaudienced traffic presenting an un-salted `process_id` against rows stamped under the
+  *old* default — which `check_process_audience_conflict` rejects with a 403
+  (`web_ingestion_service.rs:566-641`), with no retro-stamp to reconcile it. This is a
+  documentation matter, not a design one: no deployment has ever set the knob, and the existing
+  "changing the default is not a routine operation" warning in
+  `mkdocs/docs/admin/authentication.md` is the right place for it. Keeping the un-salted legacy
+  namespace is **decided**; the salted-every-audience alternative was considered and declined
+  (Trade-offs).
 
 **No backfill, no retro-stamp — decided.** Legacy unstamped rows are never rewritten; they keep
 resolving to the deployment default on read, exactly as `insert_process`'s doc comment has always
@@ -667,55 +651,29 @@ point of this change is to make indistinguishable. Design §6's id-namespace rul
 callers the *same* `process_id`, which strengthens the second ground — and it also removes the
 alternative's only remaining pitch, since under that rule neither design re-derives any id.
 
-**The default occupies the un-salted legacy namespace (chosen, decided) vs.
-salting every audience, including the default.** Design §6's rule keeps the deployment default in
-the same un-salted `NS_OTEL_PROCESS_V1` namespace OTLP identity has always used, so the traffic
-that dominates most deployments today — every credential that carries no bound audience
-(env-keyring keys, OIDC tokens, `--disable-auth`) — derives byte-identical
-`process_id`/`stream_id`/`block_id`s across this upgrade; only a DB-backed key explicitly bound to
-a label equal to the default re-derives, once. The alternative gives the default its own salted
-namespace like every other audience (`Uuid::new_v5(&NS_OTEL_PROCESS_V1, default.as_bytes())`
-instead of the bare `NS_OTEL_PROCESS_V1`), so which label is *live* as the default never determines
-a namespace by itself. That removes the knob-flip hazard documented in Design §6 entirely — a flip
-just moves traffic to a different, always-fresh namespace, with no id re-derivation for any
-already-bound key and no risk of colliding against rows stamped under the old default — but it
-costs a one-time `process_id`/`stream_id`/`block_id`
-re-derivation for *all* unaudienced OTLP traffic at upgrade, not only the narrower
-DB-key-bound-to-default case: every env-keyring, OIDC, and `--disable-auth` producer would
-re-derive, which is typically the majority of a deployment's OTLP traffic and is exactly the
-guarantee Design §6's "no re-derivation for traffic that carries no bound audience" bullet
-currently protects. This does *not* weaken Design §7's safety argument for turning arm 2 into a
-live 403 at upgrade time — checked against `rust/otel-ingestion/src/identity.rs:262-269` and
-`rust/ingestion/src/web_ingestion_service.rs:546-550`: under the alternative, a pre-upgrade
-unaudienced producer derives a *different* `process_id` post-upgrade (its own namespace salts with
-the live default), so its post-upgrade registration is a fresh `INSERT` (`rows_affected() != 0`)
-and never reaches `check_process_audience_conflict` at all. §7's conclusion holds trivially under
-the alternative — the conflict arm is unreachable rather than reached-and-safe — so this is not a
-cost the alternative pays; it drops out of the comparison entirely.
+**The default occupies the un-salted legacy namespace (chosen, decided) vs. salting every
+audience, including the default.** Design §6's rule keeps the deployment default in the un-salted
+`NS_OTEL_PROCESS_V1` namespace OTLP identity has always used. The alternative gives the default its
+own salted namespace like every other audience (`Uuid::new_v5(&NS_OTEL_PROCESS_V1,
+default.as_bytes())` instead of the bare `NS_OTEL_PROCESS_V1`), so which label is live as the
+default never determines a namespace by itself, which removes the knob-flip effect in Design §6.
 
-Both costs are one-time and both are real: the chosen design pays a smaller, narrower upgrade-time
-cost and leaves a standing knob-flip hazard; the alternative pays a larger, broader upgrade-time
-cost and removes that hazard for good. Which is preferable depends on how likely a deployment is to
-change `MICROMEGAS_DEFAULT_AUDIENCE` after going live versus how much unaudienced OTLP traffic it
-carries at upgrade time — a call about a specific deployment's traffic mix and operational plans,
-not one this plan can make in the abstract. Bearing on that call: `identity.rs:204-206` and
-`mkdocs/docs/otlp/index.md:110` both already state, as a standing codebase principle independent of
-this plan, that "long-term stability of `process_id` values is not a design goal; re-deriving
-existing ids is always acceptable" — the one-time re-derivation cost either design pays is a
-tolerated cost by that principle, not a novel one this change introduces, which narrows what is
-actually in tension between the two options to the knob-flip hazard alone — and, within that
-hazard, to the permanent `AudienceConflict` 403 rather than the id re-derivation that accompanies
-it, since the principle tolerates the re-derivation on both sides of the comparison.
+In today's reality — every audience is `public` and no deployment sets the knob — the two designs
+are a straight swap of which population re-derives once at upgrade: the chosen design keeps
+unaudienced traffic's ids and re-derives DB-backed-key traffic's; the alternative does the reverse.
+Neither is narrower, and by the standing principle that long-term `process_id` stability is not a
+design goal (`identity.rs:204-206`), neither cost is worth weighing. Both designs also converge a
+resolved-to-default producer and a default-bound one onto one `process_id`, so that is not a
+differentiator either.
 
-**Decided: keep the un-salted legacy `NS_OTEL_PROCESS_V1` namespace for the deployment default.**
-The id-churn arithmetic that dominates the paragraph above is not what decides it — by the
-`identity.rs:204-206` principle, both designs' one-time re-derivations are tolerated costs, so
-neither the chosen design's narrower churn nor the alternative's broader churn is a real
-differentiator. What the chosen design buys is that the traffic dominating most deployments today
-(every credential carrying no bound audience) keeps deriving byte-identical ids across this
-upgrade, and what it accepts in exchange is the knob-flip 403, handled by operator warning rather
-than by design. Implement §6's rule as written; the salted alternative is recorded here as the road
-not taken, not as pending work.
+That leaves one real difference — the alternative makes `MICROMEGAS_DEFAULT_AUDIENCE` inert on the
+write path, while the chosen design gives a flip the 403 effect in Design §6. **Decided: keep the
+un-salted legacy namespace.** It is the smaller change (the salted variant would rewrite OTLP
+identity derivation for a knob nothing sets), and the flip effect is handled by the operator
+warning the docs already carry. Note for the record that this does *not* weaken Design §7's
+upgrade-time safety argument either way — under the alternative a pre-upgrade unaudienced producer
+derives a different `process_id`, so its registration is a fresh `INSERT` and never reaches
+`check_process_audience_conflict`.
 
 **Unprefixed only (chosen) vs. `{prefix}_DEFAULT_AUDIENCE`.** The knob is a property of the lake's
 contents, not a per-role setting, and the lakehouse roles read it unprefixed. Giving the ingestion
@@ -778,15 +736,11 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   retro-stamped and keep resolving to the default on read. The existing `process_id`-churn
   paragraph (`:94-101`) needs new content, not "no change": (1) traffic carrying no bound audience
   keeps deriving today's ids across this upgrade, because it resolves to the default and keeps the
-  legacy un-salted namespace (Design §6); (2) a DB-backed key explicitly bound to a label equal to
-  the deployment default re-derives its `process_id`/`stream_id`/`block_id` once at upgrade time,
-  moving from the salted namespace it occupies today into the un-salted one; and (3) after this
-  change ships, flipping `MICROMEGAS_DEFAULT_AUDIENCE` is a new operational hazard with two
-  effects: every DB-backed key bound to either the old or the new default label re-derives its id
-  once, moving between the salted and un-salted namespace; and unaudienced credentials keep
-  deriving their existing un-salted id, but that id now collides with rows stamped under the *old*
-  default label and is rejected with a permanent `AudienceConflict` 403 until those rows age out
-  past retention or are deleted (Design §6, Trade-offs).
+  legacy un-salted namespace (Design §6); and (2) a DB-backed key bound to a label equal to the
+  deployment default re-derives its `process_id`/`stream_id`/`block_id` once at upgrade, moving
+  from the salted namespace into the un-salted one — which today means every DB-backed key, since
+  every audience is `public`. Keep it brief and match the page's existing tone on id churn: this is
+  a tolerated, one-time consequence, not a migration operators must plan around.
 - `mkdocs/docs/admin/authentication.md:230-262` (*Audience stamping and the default*) — "A
   credential with none stamps nothing" and "without anything being written back to `processes`"
   both change. Add the third reader to "Set it on **every role that builds a lakehouse**": the
@@ -797,14 +751,12 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   stamp, so after this change it applies to legacy rows and rows from the admin replication path.
   Rows that carry a stamp were never relabelled by regeneration — that has always been true of every
   explicitly-bound credential's rows (Design §6) — so do not present this as a lost capability. In
-  the same warning block, add a new consequence this change introduces (additive to the scoping
-  correction above, not a replacement for it): flipping the knob is no longer inconsequential, with
-  two effects — every DB-backed key bound to either the old or the new default label re-derives its
-  id once, moving between the salted and un-salted namespace; and unaudienced credentials keep
-  deriving their existing un-salted id, but that id now collides with rows stamped under the *old*
-  default label and is rejected with a permanent `AudienceConflict` 403 until those rows age out
-  past retention or an operator deletes them (Design §6, Trade-offs) — today changing this knob has
-  zero id or access consequences.
+  the same warning block, add one line for the consequence this change introduces (additive to the
+  scoping correction, not a replacement): flipping the knob now also affects the write path —
+  unaudienced traffic can end up presenting an un-salted `process_id` against rows stamped under
+  the old default, which registration rejects with a 403 until those rows age out or are deleted
+  (Design §6). This is the reason the operation is not routine; the accompanying id re-derivation
+  needs no separate warning.
 - `mkdocs/docs/admin/authentication.md:263-272` (the "OTLP `process_id` re-derivation" bullet, same
   "Two consequences worth knowing" list as the `:230-262` edit above) — "a deployment that starts
   stamping (or a deployment that previously bound no audiences and begins binding them to its
@@ -827,11 +779,8 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   still read as the intended `unassigned` label. Also **rescope** "regenerate the six views if you
   ever change it": it relabels rows that carry no stamp (legacy rows, and rows from the admin
   replication path), which is all it ever did — a stamped row's label has never been regeneration's
-  to change. Scoping correction only; do not frame it as a limitation. Also add the same knob-flip
-  hazard noted for the `:230-262` warning block: changing the knob now re-derives the id of every
-  DB-backed key bound to either the old or the new default label, and permanently 403s unaudienced
-  traffic that resolves to the new default against rows still stamped under the old one, until
-  those rows age out past retention or are deleted (Design §6, Trade-offs).
+  to change. Scoping correction only; do not frame it as a limitation. Add the same one-line
+  write-path caveat noted for the `:230-262` warning block.
 - `mkdocs/docs/admin/authentication.md:308-316` ("Known gap — no retro-stamp") — its core claim
   ("a credential with no bound audience can still pre-register a victim's future `process_id` and
   have it stay unstamped") is now false: the squatter's registration is stamped with the resolved
@@ -887,13 +836,9 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   moves *into* the un-salted namespace, so it does not re-derive at binding time. Rewrite it the
   same way: no re-derivation for traffic that carries no bound audience or is bound to a label
   equal to the default; a one-time re-derivation at upgrade for a DB-backed key already bound to
-  the default label. After this change ships, flipping `MICROMEGAS_DEFAULT_AUDIENCE` becomes a new
-  hazard with two effects: every DB-backed key bound to either the old or the new default label
-  re-derives its id once, moving between the salted and un-salted namespace; and unaudienced
-  traffic resolving to the new default keeps its existing un-salted id, but that id now collides
-  with rows stamped under the old default label and is permanently rejected with
-  `AudienceConflict` (403) until those rows age out past retention or are deleted (Design §6,
-  Trade-offs).
+  the default label — which today is every DB-backed key, since every audience is `public`. Leave
+  the knob-flip caveat to `authentication.md`, which this page already links to for it; do not
+  restate it here.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs:78-80` — "A credential carrying no audience
   stamps nothing; the resulting missing property is resolved to the deployment's
   `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*" is now true only of legacy rows and
@@ -960,14 +905,11 @@ than a leftover of the three-state write path, so no follow-up is proposed and
   and confirm a `micromegas.audience=public` property is present on newly registered processes and
   the `audience` column matches. Repeat with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned` exported for
   *all* roles and confirm both sides read `unassigned`.
-- Id-stability check (Design §6's id-namespace rule): POST the same OTLP payload with an
-  unaudienced credential before and after the change, under both the unset default and
-  `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`, and confirm the derived `process_id` / `stream_id` /
-  `block_id` are identical in all four cases; then confirm a credential bound to a *non-default*
-  audience still derives different ids from those. Then confirm the case that *does* churn: a
-  DB-backed credential explicitly bound to a label equal to the deployment default derives a
-  *different* `process_id`/`stream_id`/`block_id` after the change than before — it moves from the
-  salted namespace it occupied today into the un-salted legacy one.
+- Id-stability spot check: POST the same OTLP payload with an unaudienced credential before and
+  after the change and confirm `process_id`/`stream_id`/`block_id` are unchanged. The rule itself
+  is covered by the `WriteAudience::id_namespace` unit test (step 7); no broader matrix is needed,
+  since the one population that does re-derive is expected to and long-term `process_id` stability
+  is not a design goal.
 - Manual squatting check against the local stack, mirroring the new DB tests: register a process
   under `team-a` via a DB-backed ingestion key, then re-register the same `process_id` with an
   unaudienced credential and confirm a 403 where today it is a silent 200.
@@ -977,17 +919,12 @@ than a leftover of the three-state write path, so no follow-up is proposed and
 None.
 
 The namespace question is settled: **the deployment default keeps the un-salted legacy
-`NS_OTEL_PROCESS_V1` namespace** (Design §6, analyzed in Trade-offs). Traffic carrying no bound
-audience derives byte-identical ids across this upgrade; only a DB-backed key explicitly bound to a
-label equal to the default re-derives, once — a tolerated cost, since `identity.rs:204-206` and
-`mkdocs/docs/otlp/index.md:110` both state that long-term `process_id` stability is not a design
-goal. The cost genuinely accepted with that choice is the standing knob-flip hazard: flipping
-`MICROMEGAS_DEFAULT_AUDIENCE` after go-live leaves unaudienced traffic under the new default
-permanently 403ing against rows stamped under the old one until those rows age out past retention
-or are deleted (it also re-derives ids for keys bound to the old or new default label, which the
-same principle tolerates). That hazard is handled by documentation, not by design — see the
-Documentation section's requirements for the "changing the default is not a routine operation"
-warning. The salted-every-audience alternative was considered and declined (Trade-offs).
+`NS_OTEL_PROCESS_V1` namespace** (Design §6, Trade-offs). The upgrade re-derives OTLP ids for
+DB-backed-key traffic and leaves unaudienced traffic's ids alone; since every audience is `public`
+today, all affected rows are stamped `public` on both sides and nothing conflicts. No migration,
+backfill, or `SCHEMA_VERSION` handling is warranted for it — long-term `process_id` stability is
+explicitly not a design goal (`identity.rs:204-206`). The salted-every-audience alternative was
+considered and declined (Trade-offs).
 
 The backfill question is settled (Design §6: no backfill, no retro-stamp), the
 `IdentityContext.audience` typing question is settled (§6's id-namespace rule makes `Option<&str>`
