@@ -25,7 +25,10 @@ than by two independent conventions.
 Severity is fail-open asymmetry / defense-in-depth, not a demonstrated live confidentiality break
 (see the issue's *Severity* section). The reason to do it now is that #1518's proposed write-side
 gate must compare resolved-to-resolved to be correct, and the three-state model will keep
-generating this class of bug until it is gone.
+generating this class of bug until it is gone. Concretely: **this plan must land before #1518's
+write-side gate**, not after — no #1518 gate exists in the tree yet (the only guard today is
+`check_process_audience_conflict`), so there is nothing to sequence against beyond keeping that
+ordering.
 
 ## Current State
 
@@ -261,9 +264,17 @@ This is the issue's §3 decision. With `WriteAudience` single-state, `finalize_p
 appends `micromegas.audience` unconditionally, so every newly registered process carries a real
 audience property in Postgres. Consequences, all accepted:
 
-- **`micromegas.audience` becomes genuinely non-null in Postgres for new rows.** The read-side
-  `COALESCE` in `coalesced_audience_subselect` becomes a legacy-data concern only, not a live
-  convention the write path depends on. `audience.rs:8-12`'s contract must be rewritten to say so.
+- **`micromegas.audience` becomes genuinely non-null in Postgres for new rows written through the
+  HTTP ingestion path.** The read-side `COALESCE` in `coalesced_audience_subselect` becomes a
+  legacy-data concern for that path, not a live convention it depends on. `audience.rs:8-12`'s
+  contract must be rewritten to say so. This does **not** extend to the admin FlightSQL
+  `bulk_ingest`/`do_put_statement_ingest` replication path (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`,
+  `rust/analytics/src/replication.rs:120-145`): it `INSERT`s `processes` rows with the source
+  lake's properties verbatim, none of the stamping or stripping this plan adds included, so a
+  replication run from a lake holding legacy unstamped rows keeps producing NULL-audience rows
+  after this change lands. `COALESCE` stays load-bearing for replicated rows as well as
+  pre-existing legacy ones, and the `audience.rs` rewrite must say so rather than claim the
+  write path always stamps.
 - **OTLP/webhook/Firehose `process_id` (and therefore `stream_id` and `block_id`) re-derive once**
   in any deployment whose ingestion credentials carry no audience today, because
   `IdentityContext.audience` flips from `None` to `Some(default)` and the hash moves into the
@@ -281,6 +292,15 @@ audience property in Postgres. Consequences, all accepted:
   cleanup with its own test churn. Worth a comment noting no HTTP path produces `None` any more.
 - **Local dev (`--disable-auth`) now stamps `public`.** Harmless — it is what every reader already
   resolved those processes to.
+
+**No backfill, no retro-stamp — decided.** Legacy unstamped rows are never rewritten; they keep
+resolving to the deployment default on read, exactly as `insert_process`'s doc comment has always
+promised and as `mkdocs/docs/admin/authentication.md:308-316` (before this plan's rewrite of it)
+documents as a standing accepted gap. There is no `UPDATE processes` statement anywhere in the
+codebase today and this plan does not add one for that purpose — the one it does add (step 9) only
+fabricates a legacy-shaped fixture for test coverage. Nothing about stamping new rows changes that
+reasoning, since `audience` has been a physical, `COALESCE`-resolved column since #1516 regardless
+of when a given row was written.
 
 The alternative (keep an `explicit: bool` beside the label so a resolved-to-default caller stamps
 nothing) is analyzed under Trade-offs.
@@ -356,12 +376,23 @@ reach:
 11. Mechanical `WebIngestionService::new` / `WriteAudience::new` updates in the remaining test
     files: `rust/ingestion/tests/{insert_block_dedup_db_test,readiness}.rs`,
     `rust/public/tests/{firehose_tests,firehose_cloudwatch_logs_tests}.rs`,
-    `rust/analytics/tests/{thread_spans_ordering_db_test,jit_process_batch_db_test,ownership_rewrite_db_test,prong_b_guard_db_test}.rs`.
+    `rust/analytics/tests/{thread_spans_ordering_db_test,jit_process_batch_db_test}.rs`.
+12. `rust/analytics/tests/{ownership_rewrite_db_test,prong_b_guard_db_test}.rs` are **not**
+    mechanical: both call a local `seed_process(ingestion, audience: Option<&str>)` whose `None`
+    arm exists to produce a `processes` row with no `micromegas.audience` property at all, and
+    both use it for a core fixture (`process_c`, asserted against the read-side default at
+    `ownership_rewrite_db_test.rs:560-646` and `prong_b_guard_db_test.rs:373`). With
+    `WriteAudience` single-state, `insert_process` can no longer create that row directly, so in
+    each file: change `seed_process`'s `audience` parameter from `Option<&str>` to `&str`, call
+    `insert_process` with a real `WriteAudience` even for `process_c`, and then run the same
+    post-insert `UPDATE processes SET properties = ...` helper step 9 introduces to strip
+    `micromegas.audience` back off `process_c`'s row, so it stays genuinely unstamped. Everything
+    downstream of that (the assertions against the resolved default) is unchanged.
 
 ### Phase 5 — docs and changelog
 
-12. Docs per the Documentation section.
-13. `CHANGELOG.md` **Ingestion** entry under `## Unreleased`, with a **Minor breaking change**
+13. Docs per the Documentation section.
+14. `CHANGELOG.md` **Ingestion** entry under `## Unreleased`, with a **Minor breaking change**
     clause (Design §1/§3 API breaks) and an **Upgrade note** covering the id re-derivation and the
     new third reader of `MICROMEGAS_DEFAULT_AUDIENCE`.
 
@@ -384,13 +415,20 @@ Code:
 - `rust/otel-ingestion/src/handler.rs`
 - `rust/otel-ingestion/src/cloudwatch_logs.rs`
 - `rust/analytics/src/audience.rs` (module doc only — the write-side contract it states changes)
+- `rust/analytics/src/lakehouse/ownership_rewrite.rs` (module doc only — `:78-80` asserts "A
+  credential carrying no audience stamps nothing", which becomes false for the HTTP write path)
+- `rust/monolith/src/main.rs` (comment only — `:249-255` carries the same "stamps nothing" framing
+  around `analytics_read_policy`'s construction)
 
 Tests: `rust/ingestion/tests/{write_audience_tests,audience_stamping_db_test,process_audience_cache_test,insert_block_dedup_db_test,readiness}.rs`,
 `rust/public/tests/{resolve_write_audience_tests,firehose_tests,firehose_cloudwatch_logs_tests}.rs`,
-`rust/analytics/tests/{thread_spans_ordering_db_test,jit_process_batch_db_test,ownership_rewrite_db_test,prong_b_guard_db_test}.rs`
+`rust/analytics/tests/{thread_spans_ordering_db_test,jit_process_batch_db_test}.rs` (mechanical),
+`rust/analytics/tests/{ownership_rewrite_db_test,prong_b_guard_db_test}.rs` (not mechanical — see
+step 12: their unstamped `process_c` fixture must be fabricated via the same post-insert `UPDATE`
+helper step 9 introduces)
 
-Docs: `CHANGELOG.md`, `mkdocs/docs/admin/{ingestion,authentication,monolith,flight-sql,maintenance}.md`,
-`mkdocs/docs/otlp/index.md`
+Docs: `CHANGELOG.md`, `mkdocs/docs/admin/{ingestion,authentication,monolith,flight-sql,maintenance,api-keys,web-app}.md`,
+`mkdocs/docs/otlp/index.md`, `mkdocs/docs/query-guide/schema-reference.md`
 
 ## Trade-offs
 
@@ -428,6 +466,12 @@ distinct error-response shapes, and it is a *widening* of behavior relative to t
 appearance: `none()` already resolved to the default on every read. Left as-is, with the `warn!`
 kept and its message updated. Unreachable for a DB-backed key.
 
+**Possible follow-up: narrow `IdentityContext.audience` from `Option<&str>`.** After this change no
+HTTP path produces `None` for it (Design §6). Narrowing the type would remove that last write-side
+`Option`, but `IdentityContext::default()` and the `None` arm are still used at ~30 call sites
+across `rust/otel-ingestion/tests/{block_tests,cloudwatch_logs_tests,cloudwatch_metrics_tests,identity_tests}.rs`,
+so it is left as `Option<&str>` here and deferred to its own cleanup with its own test churn.
+
 ## Documentation
 
 - `mkdocs/docs/admin/ingestion.md:32` — the `MICROMEGAS_DEFAULT_AUDIENCE` row currently reads "The
@@ -445,10 +489,21 @@ kept and its message updated. Unreachable for a DB-backed key.
   both change. Add the third reader to "Set it on **every role that builds a lakehouse**": the
   ingestion role now needs it too, and a deployment that sets it on only some roles gets new
   processes stamped with one label while legacy rows read as another.
-- `mkdocs/docs/admin/authentication.md:279-300` (residual-gap warning) — the process-squatting
-  paragraph can drop its implicit "only when the squatted row is already stamped" qualifier; the
-  registration guard now also rejects a claim against a legacy unstamped row. The
-  `insert_stream`/`insert_block` write-injection gap is untouched and stays.
+- `mkdocs/docs/admin/authentication.md:263-272` (the "OTLP `process_id` re-derivation" consequence
+  bullet) — gains this change as another id-churn trigger, alongside "starts stamping" / "starts
+  binding audiences to its ingestion keys": a deployment whose ingestion credentials carry no
+  audience today re-derives every OTLP producer's `process_id` once this ships, even with no other
+  configuration change.
+- `mkdocs/docs/admin/authentication.md:281-307` (residual-gap warning, squatting paragraph) — can
+  drop its implicit "only when the squatted row is already stamped" qualifier; the registration
+  guard now also rejects a claim against a legacy unstamped row. The `insert_stream`/`insert_block`
+  write-injection gap is untouched and stays.
+- `mkdocs/docs/admin/authentication.md:308-316` ("Known gap — no retro-stamp") — its core claim
+  ("a credential with no bound audience can still pre-register a victim's future `process_id` and
+  have it stay unstamped") is now false: the squatter's registration is stamped with the resolved
+  default at write time, and the victim's later registration under its own audience is rejected
+  with a 403 — a different residual shape (registration denial, already covered by the paragraph
+  above) rather than an unlabelled row. Rewrite or delete this paragraph.
 - `mkdocs/docs/admin/authentication.md:242-247` — the "three places the audience is read out of
   Postgres" list is unchanged, but the sentence framing the default as read-side-only needs the
   write-side resolution added.
@@ -456,15 +511,42 @@ kept and its message updated. Unreachable for a DB-backed key.
   unprefixed readers of `MICROMEGAS_DEFAULT_AUDIENCE`.
 - `mkdocs/docs/admin/{flight-sql,maintenance}.md` — each `MICROMEGAS_DEFAULT_AUDIENCE` row says
   "set it identically on every role that builds a lakehouse"; add ingestion to that set.
+- `mkdocs/docs/admin/api-keys.md:265-268` — "the same value data written by a credential with no
+  bound audience is *read* as, applied where the audience is resolved rather than stamped onto the
+  data itself" becomes false for the HTTP ingestion path; rewrite to say the value is now stamped
+  onto the data at write time (still read-side-resolved only for legacy rows and the admin
+  replication path).
+- `mkdocs/docs/admin/api-keys.md:306-311` — "Data ingested through the env keyring
+  (`MICROMEGAS_API_KEYS`) ... its processes are stamped with nothing and are *read* as the
+  deployment's `MICROMEGAS_DEFAULT_AUDIENCE`" is now wrong: env-keyring ingestion resolves to no
+  bound audience, which the HTTP edge now stamps as the default explicitly. Rewrite to say these
+  processes are now stamped with the resolved default rather than left unstamped.
+- `mkdocs/docs/admin/web-app.md:71-77` — the `MICROMEGAS_DEFAULT_AUDIENCE` comment's "nothing on
+  the write side stamps this default" is now false; rewrite to say the ingestion HTTP edge stamps
+  it explicitly on any credential with no bound audience.
+- `mkdocs/docs/query-guide/schema-reference.md:620-628` — "the default is applied where the
+  audience is read out of the metadata database, so a process that was never stamped still
+  materializes under a real label" is now true only of legacy rows and the admin replication path;
+  rewrite to say new rows are stamped with the resolved default at write time.
 - `mkdocs/docs/otlp/index.md:85-115` — the two-arm `process_id` formula: the "no write audience"
   arm is no longer reachable over HTTP, since the credential's audience or the deployment default
   always applies. Same for the `block_id` audience-prefix description at `:244` and the webhook
   note at `:443-446`.
+- `rust/analytics/src/lakehouse/ownership_rewrite.rs:78-80` — "A credential carrying no audience
+  stamps nothing; the resulting missing property is resolved to the deployment's
+  `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*" is now true only of legacy rows and
+  the admin replication path (Design §6); rewrite to say the HTTP write path resolves and stamps
+  the default itself.
+- `rust/monolith/src/main.rs:249-255` — the same "stamps nothing" framing around
+  `analytics_read_policy`'s construction needs the identical correction.
 - `rust/analytics/src/audience.rs:8-12` — the module doc's "the default is applied where the
-  audience is read, not where the process is written" is now true of *legacy rows only*; rewrite
-  it to say the write path resolves the default too, and that `COALESCE` exists for rows written
-  before it did.
-- `CHANGELOG.md` — **Ingestion** entry as described in step 13. Breaking-change surface:
+  audience is read, not where the process is written" is now true of *legacy rows and admin
+  `bulk_ingest`/replication rows only*; rewrite it to say the HTTP write path resolves the default
+  too, and that `COALESCE` remains load-bearing both for rows written before it did and for rows
+  written through the verbatim-write admin replication path
+  (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`), which this change does not
+  touch.
+- `CHANGELOG.md` — **Ingestion** entry as described in step 14. Breaking-change surface:
   `WriteAudience::none` removed; `WriteAudience::new` takes `&str` and `as_str` returns `&str`;
   `WebIngestionService::new` gains a required `WriteAudience`;
   `micromegas::servers::write_audience::resolve_write_audience` gains a required
@@ -479,7 +561,7 @@ kept and its message updated. Unreachable for a DB-backed key.
   enumerates the remaining call sites.
 - DB-backed tests (`#[ignore]`, need `MICROMEGAS_SQL_CONNECTION_STRING` /
   `MICROMEGAS_OBJECT_STORE_URI`): `cargo test -p micromegas-ingestion --test audience_stamping_db_test -- --ignored`,
-  plus the `micromegas-analytics` DB tests touched in step 11.
+  plus the `micromegas-analytics` DB tests touched in steps 11-12.
 - End-to-end against a local stack (`python3 local_test_env/ai_scripts/start_services.py`,
   `--disable-auth`): ingest with the Python client, then
   `micromegas-query "SELECT process_id, audience, properties FROM processes ORDER BY insert_time DESC LIMIT 5"`
@@ -492,13 +574,6 @@ kept and its message updated. Unreachable for a DB-backed key.
 
 ## Open Questions
 
-- **Do we want a one-off backfill for legacy unstamped rows?** This plan says no: the read side
-  already resolves them correctly, and a retro-stamp would rewrite rows whose original audience
-  was genuinely unknown. Left explicitly out of scope, as `insert_process`'s doc comment has
-  always promised. Worth confirming that stays the intent now that new rows are always stamped.
-- **Should `IdentityContext.audience` become non-optional in a follow-up?** After this change no
-  HTTP path produces `None`; the remaining `None` users are `otel-ingestion`'s own tests and
-  `IdentityContext::default()`. Narrowing it would remove the last write-side three-state
-  remnant, at the cost of churn in that crate's test suite.
-- **#1518 sequencing.** That issue's write-side gate depends on this comparison being
-  resolved-to-resolved. Nothing here blocks on it, but the gate should not land first.
+None. The backfill question is settled (Design §6: no backfill, no retro-stamp), the
+`IdentityContext.audience` typing question is settled (§6: stays `Option<&str>`, follow-up noted
+under Trade-offs), and the #1518 ordering is settled (Overview: this plan lands first).
