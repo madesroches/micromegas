@@ -361,7 +361,7 @@ of this shape; the CHANGELOG upgrade note calls them out explicitly (see §Docum
 | `rust/analytics/tests/ownership_rewrite_db_test.rs` | convert the three cross-audience `view_instance(...)` `0`-row assertions (`log_entries`, `async_events`, `thread_spans`) into denial assertions |
 | `mkdocs/docs/admin/authentication.md` | Prong B now covers five functions, plus the `'global'` rule |
 | `mkdocs/docs/query-guide/functions-reference.md` | `view_instance` denial behaviour |
-| `CHANGELOG.md` | Unreleased → Analytics entry with the upgrade note |
+| `CHANGELOG.md` | Amend the `#1371` Stage 3 entry ("four surfaces" reframe) + new Unreleased → Analytics entry with the upgrade note |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | add a Stage-3 residual-closed note (not previously recorded there) |
 | `tasks/completed/1371_udtf_udf_guards_plan.md` | mark the residual closed |
 
@@ -489,7 +489,14 @@ same-audience and `ReadScope::All` assertions in that file are unaffected and st
 - `mkdocs/docs/query-guide/functions-reference.md`, `view_instance(view_name, identifier)`
   (line 13): a note that on an authenticated deployment the function errors for an identifier
   outside the caller's audiences.
-- `CHANGELOG.md`, Unreleased → **Analytics**: the fix, the entry-point-only scope, the `'global'`
+- `CHANGELOG.md`: the `#1371` Stage 3 entry (still `## Unreleased`) opens with "arg-addressed
+  audience guards for the four span/metadata surfaces `OwnershipRewrite` (Prong A, above)
+  structurally cannot reach" — the same self-contradiction as the mkdocs/module-doc sentences
+  above once `view_instance` joins the list. Add an **Amended (#1486, still `## Unreleased`)**
+  clause to that existing entry, following the `#1482` clauses already there, reframing it to
+  "five arg-addressed functions, `view_instance` joining to close a cost/availability residual"
+  rather than appending `view_instance` to the "four ... cannot reach" list.
+- `CHANGELOG.md`, Unreleased → **Analytics**: a new entry with the fix, the entry-point-only scope, the `'global'`
   exemption and why it differs from `list_partitions`, the client-visible
   zero-rows→error change as an upgrade note — explicitly calling out
   `micromegas.flightsql.Client.query_spans` (Python) and `fetch_spans_batch` (Rust,
