@@ -46,13 +46,14 @@ const SEPARATOR_STR: &str = "\x1F";
 /// Identity inputs beyond the OTLP payload itself (AbAC Stage 5, #1373, §4).
 ///
 /// `Default` reproduces pre-Stage-5 ids byte for byte -- both fields are no-ops when absent, so
-/// an unstamped deployment (or any call site that hasn't been threaded with a real audience yet)
-/// sees zero id churn.
+/// the deployment default's un-salted namespace (or any call site that hasn't been threaded with
+/// a real audience yet) sees zero id churn.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityContext<'a> {
     /// Authenticated write audience. Folded into `process_id` and `block_id` so two audiences
     /// posting identical resources/payloads never collapse onto one process or dedup against
-    /// each other. `None` reproduces pre-Stage-5 ids byte for byte.
+    /// each other. `None` means the resolved write audience is the deployment default, which
+    /// keeps the un-salted namespace and reproduces pre-Stage-5 ids byte for byte.
     pub audience: Option<&'a str>,
     /// Webhook-only: canonicalized incoming header bytes (formerly `extra_hash_input`).
     pub extra_hash_input: &'a [u8],

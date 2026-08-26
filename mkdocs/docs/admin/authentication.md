@@ -385,10 +385,14 @@ mint authority. Selectors:
 
 - **`public` is always readable**, by every authenticated principal, whether
   or not it appears in the map at all — writing `{"public": ["*"]}` changes
-  nothing. Note this covers never-stamped data only while
-  `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such data is read as
-  whatever that knob names, so pointing it at another label puts it under that
-  label's grants instead.
+  nothing. Note this covers data that arrives without a bound audience only
+  while `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is now
+  stamped with the knob's value at write time (see
+  [Audience stamping and the default](#audience-stamping-and-the-default)),
+  with only a pre-existing unstamped row — one written before that write-side
+  resolution shipped, or by the admin replication path — still resolved to it
+  at query time. Pointing the knob at another label puts all of that under
+  that label's grants instead.
 - **There is no self-audience rule.** A caller is never granted an audience
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary
