@@ -67,9 +67,16 @@ issue's proposed config surface (see Design below).
   `TransposedTableCell.tsx` (notebook cells), plus
   `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` (the standalone
   screens table — a third `TableBody`/`OverrideEditor` host, outside the notebook
-  cell-editor pipeline `CellEditorProps`/`CellEditor.tsx` covers); all three build
+  cell-editor pipeline `CellEditorProps`/`CellEditor.tsx` covers); all four build
   on shared logic in `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
-  (1058 lines) — column management, `TableBody`, `formatCell`, `OverrideCell`.
+  (1058 lines) — column management, `TableBody`, `formatCell`, `OverrideCell`. A
+  fourth host, `cells/ReferenceTableCell.tsx` (renders arbitrary CSV/query results
+  as a lookup table), calls `<TableBody data={slicedData} columns={visibleColumns}
+  compact … />` (`ReferenceTableCell.tsx:132`) with no `overrides` prop and hosts
+  no `OverrideEditor` — it has no config surface for column rendering at all, so a
+  histogram-typed column there gets Design §3's default histogram rendering
+  automatically and unconfigurably (no color override, no Markdown-debug escape
+  hatch).
 - **Per-cell rendering switch** (the place a new render path plugs in):
   `table-utils.tsx:711-739` (`TableBody`, one branch per column) and
   `TransposedTableCell.tsx:122-134` (same idea, transposed). Today it's binary: if
@@ -316,12 +323,12 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   (`.histo-track`, fixed, not `flex: 1 1 auto`) + `6px` gap
   (`.histo-bars-wrap`'s `gap`) + a `42px` fixed-width trailing median label
   (`.histo-median-label`, `flex: 0 0 42px`, `text-align: right`), so
-  `120 + 6 + 42 = 168`. The mockup's `.histo-track { flex: 1 1 auto }` and
-  `.histo-median-label { flex: 0 0 auto; white-space: nowrap }` are corrected
-  to these fixed bases in the component (and should be updated in the mockup
-  too) — a content-sized label would make the track width, every bar's width,
-  and the median tick's x-position all vary row-to-row with the digit count of
-  the formatted median. Bars use `gap: 1px` between them within the 120px
+  `120 + 6 + 42 = 168`. The mockup already uses these fixed bases —
+  `.histo-track { flex: 0 0 120px }` and `.histo-median-label { flex: 0 0 42px;
+  text-align: right }` — and the component matches it exactly; a content-sized
+  label would instead make the track width, every bar's width, and the median
+  tick's x-position all vary row-to-row with the digit count of the formatted
+  median. Bars use `gap: 1px` between them within the 120px
   track. All of this has to be fixed-width, not content-derived: `TableBody`
   renders every cell as `<td className="... truncate max-w-xs">`
   (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx` uses `<td
@@ -342,27 +349,41 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   default as Chart/Swimlane single-series color) unless the override supplies a
   `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
-  downsampling, and none ever dropped or clipped. Bars are `flex: 1 1 0` with
-  **no `min-width` floor** — each bar's width is `(120px - (bins.length - 1) *
-  1px) / bins.length`, an equal share of the fixed 120px bar track (not the
-  168px cell — see "Cell dimensions" above), so `bins.length` bars always fit
-  exactly within the track regardless of bin count; there is nothing for the
-  track to overflow or clip. `make_histogram`'s bin count is caller-chosen in
-  SQL (typically 15–30 for this use case), where bars stay comfortably visible;
-  at very high bin counts (upward of roughly 55 bins in a 120px track)
-  individual bars become sub-pixel and visually imperceptible, but the
-  underlying data is never truncated — every bucket still occupies its exact
-  proportional share of the track width. There is no `MAX_RENDERED_BARS`
+  downsampling, and no bucket is ever dropped or merged. Bars are `flex: 1 1 0`
+  with **no `min-width` floor** and the inter-bar `gap` is not a fixed `1px`
+  constant but conditional on `bins.length`: `1px` up to some threshold (e.g.
+  `bins.length <= 60`), `0px` above it. This matters because flex `gap` doesn't
+  shrink and `flex: 1 1 0` gives each bar a zero flex *basis*, so free space can
+  go negative but the gap can't absorb it — with a fixed `1px` gap, bar width
+  `(120px - (bins.length - 1) * 1px) / bins.length` turns non-positive once
+  `bins.length >= 121`, which would overflow the fixed 120px track (and then
+  clip, since `TableBody`'s `<td>` carries `truncate` /
+  `overflow: hidden` — `table-utils.tsx:672-674`). With the gap dropped to `0px`
+  above the threshold, bar width is `120px / bins.length`, positive for any
+  `bins.length`, so `bins.length` bars always fit exactly within the 120px
+  track regardless of bin count. `make_histogram`'s bin count is caller-chosen
+  in SQL (typically 15–30 for this use case) with no server-side cap
+  (`configure_from_params` only enforces `nb_bins >= 1`); at very high bin
+  counts individual bars become sub-pixel and visually imperceptible, but no
+  bucket is ever dropped, merged, or clipped — every bucket still occupies its
+  exact proportional share of the track width. There is no `MAX_RENDERED_BARS`
   constant and no bucket-merging step.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
   cell's value — no new SQL column, including that function's `return end` fallback
-  when no bucket's cumulative count reaches the target ratio (`quantile.rs:38`).
+  when no bucket's cumulative count reaches the target ratio (`quantile.rs:40`).
   Drawn as a vertical gold (`var(--brand-gold)`) tick, positioned absolutely
   within the 120px bar track (not the 168px cell — see "Cell dimensions" above)
-  at `((median - start) / (end - start)) * 100%` of that track's width, with the
-  numeric value in a fixed-width (`42px`) label trailing the chart (see
+  at `((median - start) / (end - start)) * 100%` of that track's width — except
+  when `end === start` (the degenerate point-histogram case, `start == end` is
+  legal input and has its own Rust test, `histogram_runtime_bounds_tests.rs:423-438`
+  "Test 5: Degenerate point histogram"), where that division is `0/0 = NaN`; pin
+  the tick to `0%` instead, mirroring the `start === end → bin_width = 1.0`
+  unit-width fallback already ported for `bucketRange` (`expand.rs:103-107`) — with
+  a single point mass, the median is that point, at the start of the (unit-width)
+  bucket. The numeric value renders in a fixed-width (`42px`) label trailing the
+  chart (see
   `option-b-tick-median.html`) — rendered via `toLocaleString()`, no
   unit, consistent with `formatCell`'s numeric default (`table-utils.tsx:767-774`);
   per-column unit hints are a possible follow-up, out of scope here. Chosen over
@@ -566,6 +587,11 @@ is) to know which column the "Render as" toggle should appear for.
   value once the render-selection switch is in place.
 - Every non-histogram column's Overrides card: unchanged appearance and behavior —
   the "Render as" toggle is conditional on the column being histogram-typed.
+- `ReferenceTableCell.tsx`: not touched by this plan. It shares `TableBody`
+  (Current State above), so a histogram-typed column there picks up the default
+  flat-color histogram rendering automatically — but since it never passes
+  `overrides` and has no `OverrideEditor`, that rendering is unconfigurable there
+  (no color override, no Markdown-debug fallback to the raw struct).
 
 ## Mockups
 
@@ -605,8 +631,9 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
      `bins` (`Vector<bigint>`) via `Array.from(raw.bins, Number)` (Design §4).
    - `estimateHistogramQuantile(h: HistogramValue, ratio: number): number` — port of
      `quantile.rs::estimate_quantile`, including its `return end` fallback
-     (`quantile.rs:38`) when no bucket's cumulative count reaches `count * ratio`
-     (e.g. `count === 0`).
+     (`quantile.rs:40`) when no bucket's cumulative count reaches `count * ratio`
+     (e.g. `count === 0`), and the `end === start → tick at 0%` degenerate case
+     (Design §4).
    - `bucketRange(h: HistogramValue, bucketIndex: number): [number, number]` — port
      of `expand.rs`'s bin-center math (return the boundaries, not the center, since
      the tooltip wants a range), including its `start === end → bin_width = 1.0`
@@ -687,7 +714,13 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     median calculation, the bucket tooltip, the Overrides panel's "Render as:
     Histogram" mode, and the Markdown-override debugging trick. Cross-link to the
     existing `make_histogram()`/`quantile_from_histogram()`/`color_scale()`/
-    `lerp_color()` docs in `functions-reference.md`.
+    `lerp_color()` docs in `functions-reference.md`. Also update the `overrides`
+    option-table row in both sections — `:713` (Table) and `:762` (Transposed
+    Table) — from `{ column, format }` to `{ column, kind?, format?,
+    histogramColor? }` to match Design §2. Note under Reference Table (the section
+    documenting `ReferenceTableCellConfig`) that a histogram-typed column there
+    renders with the same default flat-color bars, with no override available to
+    change its color or fall back to a raw-struct debug view.
 14. **Tests** — see Testing Strategy.
 
 ## Files to Modify
@@ -809,7 +842,11 @@ No Rust changes — the SQL/Arrow side is complete already.
   tooltip content, the Overrides panel's "Render as: Histogram" option (the Color
   field accepts either a named colormap — same six names as `color_scale()` — or
   any CSS color for a flat fill), and the debugging trick (Markdown override,
-  `$row.col` on a histogram column dumps its raw fields).
+  `$row.col` on a histogram column dumps its raw fields). Update the `overrides`
+  option-table row in both sections (`:713`, `:762`) from `{ column, format }` to
+  `{ column, kind?, format?, histogramColor? }`. Note under Reference Table that a
+  histogram-typed column inherits the same default rendering with no override
+  available.
 - No changes needed to `functions-reference.md` — the SQL functions this feature
   consumes are already documented there.
 
@@ -832,8 +869,9 @@ No Rust changes — the SQL/Arrow side is complete already.
   and `macro-substitution.test.ts`) has to construct `count` and `bins` with
   explicit field types — `new Uint64()` / a `List` of `Uint64` — the same way
   existing fixtures already do for other typed columns (`vectorFromArray(...,
-  new Utf8View())` in `arrow-ipc-fixtures.ts:213`, `new BinaryView()`/`Float64` in
-  `table-utils.test.tsx:29,219`). A naive `vectorFromArray([{count: 5, bins: [1,
+  new Utf8View())` in `arrow-ipc-fixtures.ts:213`, `new BinaryView()` in
+  `arrow-ipc-fixtures.ts:219` and `table-utils.test.tsx:1097`, `new Float64()` in
+  `table-utils.test.tsx:738,758,781`). A naive `vectorFromArray([{count: 5, bins: [1,
   2, 3]}])` infers `Float64`/`List<Float64>` from the plain JS numbers, which
   still satisfies `isHistogramStructType` (Design §1 only checks field
   names/order and that the last field is a `List`) but never produces a single
@@ -858,8 +896,12 @@ No Rust changes — the SQL/Arrow side is complete already.
   colormap names dispatches to its `d3-scale-chromatic` interpolator and varies
   with `t`; an unrecognized string (hex color, CSS name) is returned unchanged
   regardless of `t`; `undefined` → `var(--chart-line)`.
-- `macro-substitution.test.ts`: `formatArrowValue` renders a histogram-struct value
-  as its compact field dump (`{start:..., end:..., count:..., bins:[...]}`),
+- New `macro-substitution.test.ts` (no test file for this module exists today —
+  `formatArrowValue` is currently covered indirectly via
+  `__tests__/notebook-utils.test.ts`; add the histogram case there instead if
+  splitting out a dedicated file isn't warranted): `formatArrowValue` renders a
+  histogram-struct value as its compact field dump
+  (`{start:..., end:..., count:..., bins:[...]}`),
   asserted against Arrow's current `StructRow.toString()` output as the baseline
   (what `String(value)` already produces without this change) rather than
   `[object Object]`, confirming the new branch is a formatting improvement, not a
@@ -875,7 +917,8 @@ No Rust changes — the SQL/Arrow side is complete already.
   bar surfaces the correct range/count/percentage; median label matches
   `estimateHistogramQuantile`; bar fill color matches `resolveHistogramBarColor`
   for a colormap name, a literal color, and no `color` prop at all.
-- `OverrideEditor.test.tsx`: "Render as" toggle appears only when the selected
+- New `OverrideEditor.test.tsx` (no test file exists for this component today):
+  "Render as" toggle appears only when the selected
   column is histogram-typed (via a mock `availableColumnTypes`); switching to
   Histogram hides the Format field and shows the swatch row; column dropdown for
   a new override still lists all columns (the toggle is per-card, not a dropdown
