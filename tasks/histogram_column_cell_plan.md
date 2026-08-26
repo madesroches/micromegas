@@ -293,7 +293,18 @@ that true at the type level too, not just by convention.
 Extend the existing binary switch, evaluated in this order per column:
 
 1. Column has a `ColumnOverride` with `kind: 'markdown'` (or no `kind` — an
-   existing override) → `OverrideCell`, unchanged rendering path. If the format
+   existing override) → `OverrideCell`. This is a presence check on the map
+   entry, not on `.format`: a saved override with `format: ''` now renders an
+   empty `OverrideCell` here rather than falling through to case 3. That's a
+   deliberate behavior change from today's `TableBody`, which reads `override
+   = overrideMap.get(col.name)` as the format string itself and tests `if
+   (override)` — a blank format is falsy there today, so it falls through to
+   `formatCell`. Switching the map to full entries makes the lookup always
+   truthy once an entry exists, and this plan accepts that rather than adding
+   a `.format`-truthiness special case, since it unifies `TableBody` with
+   `TransposedTableCell`'s existing `overrideMap.has(row.name)` check (already
+   presence-based today, unaffected by this plan) and a blank saved format is
+   a degenerate edge case, not a meaningful configuration. If the format
    references a histogram-typed column via `$row.col`, it already resolves to a
    readable struct dump rather than an unhelpful stringification (see below) — this
    is the whole debugging story, no separate mechanism.
@@ -318,6 +329,10 @@ string>` (column → `format`) to `Map<string, ColumnOverride>` (column → full
 entry), since `HistogramCell` needs `.histogramColor`, not just `.format`.
 `OverrideCell`'s call site adjusts to read `.format` off the looked-up entry instead
 of using the map's value directly — a one-line change at each of its two call sites.
+The truthiness check that gated case 1 (`if (override)`) stays a presence check on
+the map entry, unchanged in form — see the note on case 1 above for why that's now
+a presence check on the entry rather than on the format string, and the accepted
+behavior change that follows for a saved `format: ''`.
 
 **Memoization (keeps §1's per-column cost real):** `TableBody` maps `columns`
 inside a per-row loop, and `TransposedTableCell` maps `row.values` inside a
@@ -708,7 +723,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    membership instead of calling `isHistogramStructType` per cell; extend
    `TableBody`'s per-cell switch (lines 711-739) per Design §3's ordering, passing
    `format={entry.format ?? ''}` to `<OverrideCell>` (line 719) —
-   `OverrideCellProps.format` stays required `string`, unchanged.
+   `OverrideCellProps.format` stays required `string`, unchanged. The case-1
+   guard stays `if (override)` (now testing presence of the looked-up entry, not
+   the format string) — per Design §3, a saved override with `format: ''`
+   renders an empty `OverrideCell` instead of today's fall-through to
+   `formatCell`, an accepted behavior change that brings `TableBody` in line
+   with `TransposedTableCell`'s existing `.has()` check.
 6. **`macro-substitution.ts`**: add the `isHistogramStructType` branch to
    `formatArrowValue` (Design §5) — the one change that makes debugging "just work"
    through the existing Markdown override path.
