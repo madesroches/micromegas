@@ -3,7 +3,7 @@ import type { DataType } from 'apache-arrow'
 import { ChevronDown, ChevronRight, Plus, X, AlertTriangle } from 'lucide-react'
 import { type ColumnOverride, validateFormatMacros } from '@/lib/screen-renderers/table-utils'
 import { isHistogramStructType } from '@/lib/arrow-utils'
-import { COLORMAP_NAMES, resolveHistogramBarColor, buildColormapPreviewGradient } from '@/lib/histogram-colors'
+import { COLORMAP_NAMES, isColormapName, resolveHistogramBarColor, buildColormapPreviewGradient } from '@/lib/histogram-colors'
 
 interface OverrideEditorProps {
   overrides: ColumnOverride[]
@@ -35,10 +35,6 @@ const DEFAULT_FORMAT_TEMPLATE = (column: string) => `[Link](/path?id=$row.${colu
 const PREVIEW_BINS = [3, 7, 14, 22, 30, 26, 18, 10, 5, 2]
 const PREVIEW_TRACK_WIDTH = 120
 const PREVIEW_TRACK_HEIGHT = 28
-
-function isColormapName(value: string): boolean {
-  return (COLORMAP_NAMES as readonly string[]).includes(value)
-}
 
 function HistogramColorPreview({ color }: { color?: string }) {
   const max = Math.max(...PREVIEW_BINS)

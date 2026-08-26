@@ -40,7 +40,7 @@ const colormapInterpolators: Record<ColormapName, (t: number) => string> = {
   turbo: interpolateTurbo,
 }
 
-function isColormapName(color: string): color is ColormapName {
+export function isColormapName(color: string): color is ColormapName {
   return COLORMAP_NAME_SET.has(color)
 }
 

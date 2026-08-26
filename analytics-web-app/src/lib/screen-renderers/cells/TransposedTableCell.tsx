@@ -137,7 +137,7 @@ export function TransposedTableCell({ data, status, options, onOptionsChange, va
                             cellSelections={cellSelections}
                             cellResults={cellResults}
                           />
-                        ) : isHistogram && (!override || override.kind === 'histogram') ? (
+                        ) : isHistogram ? (
                           <HistogramCell
                             value={(value as StructRowProxy | null) ?? null}
                             color={override?.histogramColor}

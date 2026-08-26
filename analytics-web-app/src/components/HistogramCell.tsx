@@ -149,6 +149,7 @@ function HistogramCellImpl({ value, color }: HistogramCellProps) {
         data-testid="histogram-median"
         className="text-brand-gold font-mono whitespace-nowrap overflow-hidden text-ellipsis"
         style={{ flex: `0 0 ${LABEL_WIDTH}px`, textAlign: 'right', fontSize: '9.5px', lineHeight: 1 }}
+        title={median.toFixed(1)}
       >
         {median.toFixed(1)}
       </span>

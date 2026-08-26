@@ -1,3 +1,4 @@
+import { interpolateMagma } from 'd3-scale-chromatic'
 import {
   COLORMAP_NAMES,
   resolveHistogramBarColor,
@@ -29,15 +30,8 @@ describe('resolveHistogramBarColor', () => {
     // At t=0 the raw interpolator would be near-black for magma/inferno;
     // resolveHistogramBarColor floors into [0.5, 1] instead, so t=0 and the
     // interpolator's own t=0.5 sample should match exactly.
-    const atFloor = resolveHistogramBarColor('magma', 0)
-    // Import isn't available here without pulling in d3 directly again, so
-    // just assert the floor lands at the same value on both ends of a tiny
-    // range: t=0 and a value just above 0 map close together (both near the
-    // floor), while t=1 differs.
-    const justAboveZero = resolveHistogramBarColor('magma', 0.01)
-    const atTop = resolveHistogramBarColor('magma', 1)
-    expect(atFloor).not.toBe(atTop)
-    expect(atFloor).not.toBe(justAboveZero)
+    expect(resolveHistogramBarColor('magma', 0)).toBe(interpolateMagma(0.5))
+    expect(resolveHistogramBarColor('magma', 1)).toBe(interpolateMagma(1))
   })
 })
 

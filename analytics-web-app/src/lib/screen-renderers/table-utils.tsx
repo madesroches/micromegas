@@ -755,7 +755,7 @@ export function TableBody({ data, columns, allColumns, compact = false, override
               // Case 2: a histogram-typed column with no override, or an
               // explicit `kind: 'histogram'` override, renders as bars +
               // median + tooltip.
-              if (histogramColumns.has(col.name) && (!override || override.kind === 'histogram')) {
+              if (histogramColumns.has(col.name)) {
                 return (
                   <td key={col.name} className={cellClass}>
                     <HistogramCell value={(value as StructRowProxy | null) ?? null} color={override?.histogramColor} />
