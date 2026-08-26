@@ -70,13 +70,13 @@ issue's proposed config surface (see Design below).
   cell-editor pipeline `CellEditorProps`/`CellEditor.tsx` covers); all four build
   on shared logic in `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
   (1058 lines) — column management, `TableBody`, `formatCell`, `OverrideCell`. A
-  fourth host, `cells/ReferenceTableCell.tsx` (renders arbitrary CSV/query results
-  as a lookup table), calls `<TableBody data={slicedData} columns={visibleColumns}
-  compact … />` (`ReferenceTableCell.tsx:132`) with no `overrides` prop and hosts
-  no `OverrideEditor` — it has no config surface for column rendering at all, so a
-  histogram-typed column there gets Design §3's default histogram rendering
-  automatically and unconfigurably (no color override, no Markdown-debug escape
-  hatch).
+  fourth host, `cells/ReferenceTableCell.tsx`, also calls `<TableBody
+  data={slicedData} columns={visibleColumns} compact … />`
+  (`ReferenceTableCell.tsx:132`), but it's CSV-only: `execute` is
+  `csvToArrowIPC(refConfig.csv)`, and `csv-to-arrow.ts` infers only `Float64` or
+  `Utf8` per column — never the `Histogram` struct shape — so a histogram-typed
+  column can never occur there and this plan's default histogram rendering is
+  unreachable on that host.
 - **Per-cell rendering switch** (the place a new render path plugs in):
   `table-utils.tsx:711-739` (`TableBody`, one branch per column) and
   `TransposedTableCell.tsx:122-134` (same idea, transposed). Today it's binary: if
@@ -329,10 +329,12 @@ string>` (column → `format`) to `Map<string, ColumnOverride>` (column → full
 entry), since `HistogramCell` needs `.histogramColor`, not just `.format`.
 `OverrideCell`'s call site adjusts to read `.format` off the looked-up entry instead
 of using the map's value directly — a one-line change at each of its two call sites.
-The truthiness check that gated case 1 (`if (override)`) stays a presence check on
-the map entry, unchanged in form — see the note on case 1 above for why that's now
-a presence check on the entry rather than on the format string, and the accepted
-behavior change that follows for a saved `format: ''`.
+The truthiness check that gated case 1 (`if (override)`) becomes `if (override &&
+override.kind !== 'histogram')` — the `kind` exclusion is what routes a
+`kind: 'histogram'` entry to case 2 instead, and the remaining `override` part is
+now a presence check on the map entry rather than on the format string — see the
+note on case 1 above for why that's now presence-based, and the accepted behavior
+change that follows for a saved `format: ''`.
 
 **Memoization (keeps §1's per-column cost real):** `TableBody` maps `columns`
 inside a per-row loop, and `TransposedTableCell` maps `row.values` inside a
@@ -655,11 +657,10 @@ is) to know which column the "Render as" toggle should appear for.
   value once the render-selection switch is in place.
 - Every non-histogram column's Overrides card: unchanged appearance and behavior —
   the "Render as" toggle is conditional on the column being histogram-typed.
-- `ReferenceTableCell.tsx`: not touched by this plan. It shares `TableBody`
-  (Current State above), so a histogram-typed column there picks up the default
-  flat-color histogram rendering automatically — but since it never passes
-  `overrides` and has no `OverrideEditor`, that rendering is unconfigurable there
-  (no color override, no Markdown-debug fallback to the raw struct).
+- `ReferenceTableCell.tsx`: not touched by this plan. It's CSV-only
+  (`Float64`/`Utf8` columns only, Current State above), so a histogram-typed
+  column can never occur there and this plan's rendering is unreachable on that
+  host.
 
 ## Mockups
 
@@ -724,8 +725,10 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    `TableBody`'s per-cell switch (lines 711-739) per Design §3's ordering, passing
    `format={entry.format ?? ''}` to `<OverrideCell>` (line 719) —
    `OverrideCellProps.format` stays required `string`, unchanged. The case-1
-   guard stays `if (override)` (now testing presence of the looked-up entry, not
-   the format string) — per Design §3, a saved override with `format: ''`
+   guard becomes `if (override && override.kind !== 'histogram')` (the `override`
+   part now tests presence of the looked-up entry, not the format string; the
+   `kind` exclusion is what lets case 2 fire for a `kind: 'histogram'` entry) —
+   per Design §3, a saved override with `format: ''`
    renders an empty `OverrideCell` instead of today's fall-through to
    `formatCell`, an accepted behavior change that brings `TableBody` in line
    with `TransposedTableCell`'s existing `.has()` check.
@@ -799,10 +802,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     `lerp_color()` docs in `functions-reference.md`. Also update the `overrides`
     option-table row in both sections — `:713` (Table) and `:762` (Transposed
     Table) — from `{ column, format }` to `{ column, kind?, format?,
-    histogramColor? }` to match Design §2. Note under Reference Table (the section
-    documenting `ReferenceTableCellConfig`) that a histogram-typed column there
-    renders with the same default flat-color bars, with no override available to
-    change its color or fall back to a raw-struct debug view.
+    histogramColor? }` to match Design §2.
 14. **`CHANGELOG.md`**: add one bullet under `## Unreleased` → `**Web App:**`
     describing the automatic histogram-column rendering for Table/Transposed
     Table cells, the Overrides panel's "Render as: Histogram" mode, and the
@@ -932,9 +932,7 @@ No Rust changes — the SQL/Arrow side is complete already.
   any CSS color for a flat fill), and the debugging trick (Markdown override,
   `$row.col` on a histogram column dumps its raw fields). Update the `overrides`
   option-table row in both sections (`:713`, `:762`) from `{ column, format }` to
-  `{ column, kind?, format?, histogramColor? }`. Note under Reference Table that a
-  histogram-typed column inherits the same default rendering with no override
-  available.
+  `{ column, kind?, format?, histogramColor? }`.
 - No changes needed to `functions-reference.md` — the SQL functions this feature
   consumes are already documented there.
 
