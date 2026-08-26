@@ -1,5 +1,7 @@
 # Markdown Cell Run Control Plan
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1522
+
 ## Overview
 
 Markdown cells have no run/play control and no way to move out of an
