@@ -206,7 +206,12 @@ that an arbitrary user struct is very unlikely to collide, while staying robust 
 incidental width differences (the check doesn't hard-code `Float64` vs `Float32` for
 every subfield). This is a deliberate trade-off — see Trade-offs.
 
-This runs once per column (over `table.schema.fields`), not per row — cheap.
+Calling this function is cheap, but the render loop must not call it once per
+cell: `TableBody` maps `columns` inside a per-row `Array.from`, and
+`TransposedTableCell` maps `row.values` inside a per-row loop too, so a naive
+per-cell call would run it row × column times instead of once per column.
+Design §3 specifies the memoization that keeps the actual per-render cost at
+once per column.
 
 ### 2. `ColumnOverride` gains a second render kind: `'markdown'` or `'histogram'`
 
@@ -258,8 +263,14 @@ behavior and out of scope here:
   `kind: 'markdown'`, clear `histogramColor` (`undefined` — inert once `kind`
   is `'markdown'` anyway, cleared for cleanliness) and seed `format` with the
   same `[Link](/path?id=$row.<col>)` template `handleAddOverride` uses for a
-  brand-new override, since there's no existing markdown template to fall back
-  to.
+  brand-new override, unconditionally overwriting whatever `format` the card
+  currently holds. This is a column *change*, not a toggle: any existing
+  template referenced the previous column and is stale for the new one (even if
+  it happens to still be non-empty, e.g. carried over from an earlier Markdown
+  stint before a Histogram toggle — Design §6 — followed by this column swap),
+  so `handleColumnChange` always reseeds rather than preserving it. This is
+  deliberately the opposite of the toggle's rule in Design §6, which preserves
+  an existing template because the column hasn't changed underneath it.
 
 Two existing `string`-typed consumers of `.format` need a matching fallback, since
 `ColumnOverride.format` is now `string | undefined` while they aren't:
@@ -307,6 +318,18 @@ string>` (column → `format`) to `Map<string, ColumnOverride>` (column → full
 entry), since `HistogramCell` needs `.histogramColor`, not just `.format`.
 `OverrideCell`'s call site adjusts to read `.format` off the looked-up entry instead
 of using the map's value directly — a one-line change at each of its two call sites.
+
+**Memoization (keeps §1's per-column cost real):** `TableBody` maps `columns`
+inside a per-row loop, and `TransposedTableCell` maps `row.values` inside a
+per-row loop, so the type check above must not be called per cell. `TableBody`
+builds a `useMemo`'d `Set<string>` of histogram-typed column names once from
+`columns` (recomputed only when `columns` changes), alongside the existing
+`overrideMap` memo, and the per-cell switch tests membership in that set
+instead of calling `isHistogramStructType` per cell. `TransposedTableCell`
+calls `isHistogramStructType(row.type)` once per row, hoisted above the
+`row.values.map` (`row.type` is constant across a transposed row's values), and
+reuses that single boolean for every value in the row instead of recomputing it
+per value.
 
 `formatCell` itself needs **no changes** — unlike an earlier draft of this plan,
 which added a dedicated debug-string branch there. It's unreachable for histogram
@@ -546,10 +569,14 @@ the result set at all. Without the `kind` fallback, a card already saved with
 in any of those states, and editing it there would write a stray `format` onto a
 histogram card.
 
-Clicking the toggle itself writes `kind` plus the same `format`/`histogramColor`
-side effects Design §2 already specifies for `handleColumnChange`, so the two
-transitions that can change a card's rendered kind — column swap and toggle click —
-follow one consistent rule:
+Clicking the toggle writes `kind`, but its `format`/`histogramColor` side effects
+are deliberately different from `handleColumnChange`'s (Design §2), not the same
+rule: a column change invalidates any existing template, because it referenced
+the *old* column and is stale regardless of whether it's still displayed, so
+`handleColumnChange` always overwrites `format` when the new column's histogram-
+ness flips the effective kind. A toggle click doesn't change which column is
+selected, so the same template (if any) still refers to the right column and
+there's no staleness to force — it's preserved rather than overwritten:
 
 - **To Markdown**: set `kind: 'markdown'`; clear `histogramColor` (`undefined` —
   inert once `kind` is `'markdown'` anyway); seed `format` with
@@ -676,9 +703,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 5. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
    'histogram'` and `histogramColor?: string`, making `format` optional (Design
    §2); update `overrideMap` to store the full entry, not just `format` (Design
-   §3); extend `TableBody`'s per-cell switch (lines 711-739) per Design §3's
-   ordering, passing `format={entry.format ?? ''}` to `<OverrideCell>` (line 719)
-   — `OverrideCellProps.format` stays required `string`, unchanged.
+   §3); add a `useMemo`'d `Set<string>` of histogram-typed column names built
+   once from `columns` (Design §3's memoization) so the per-cell switch tests set
+   membership instead of calling `isHistogramStructType` per cell; extend
+   `TableBody`'s per-cell switch (lines 711-739) per Design §3's ordering, passing
+   `format={entry.format ?? ''}` to `<OverrideCell>` (line 719) —
+   `OverrideCellProps.format` stays required `string`, unchanged.
 6. **`macro-substitution.ts`**: add the `isHistogramStructType` branch to
    `formatArrowValue` (Design §5) — the one change that makes debugging "just work"
    through the existing Markdown override path.
@@ -738,7 +768,8 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     current binary `overrideMap.has(row.name) ? <OverrideCell .../> :
     formatCell(...)` — mirroring the `TableBody` change exactly, just against
     `row.name`/`row.type`/`originalRows[colIdx]` instead of `col.name`/`col.type`/
-    `row`.
+    `row`. Per Design §3's memoization, call `isHistogramStructType(row.type)`
+    once per row, hoisted above the `row.values.map`, rather than once per value.
 13. **Docs**: `mkdocs/docs/web-app/notebooks/cell-types.md` — add a subsection under
     both Table (`:694-746`) and Transposed Table (`:749-780`) describing the
     automatic histogram rendering (trigger condition: column type, not config), the
@@ -752,7 +783,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     documenting `ReferenceTableCellConfig`) that a histogram-typed column there
     renders with the same default flat-color bars, with no override available to
     change its color or fall back to a raw-struct debug view.
-14. **Tests** — see Testing Strategy.
+14. **`CHANGELOG.md`**: add one bullet under `## Unreleased` → `**Web App:**`
+    describing the automatic histogram-column rendering for Table/Transposed
+    Table cells, the Overrides panel's "Render as: Histogram" mode, and the
+    `overrides` entry shape change (`{ column, format }` → `{ column, kind?,
+    format?, histogramColor? }`).
+15. **Tests** — see Testing Strategy.
 
 ## Files to Modify
 
@@ -773,6 +809,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 | `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | populate `availableColumnTypes` alongside `availableColumns` |
 | `analytics-web-app/package.json` | new dependency: `d3-scale-chromatic@^3.1.0` (+ `@types/d3-scale-chromatic@^3.1.0`) |
 | `mkdocs/docs/web-app/notebooks/cell-types.md` | document new default behavior, the Overrides "Render as: Histogram" mode, and the Markdown-debug trick |
+| `CHANGELOG.md` | `## Unreleased` → `**Web App:**` bullet for the new default histogram rendering, the "Render as: Histogram" override mode, and the `overrides` entry shape change |
 
 No Rust changes — the SQL/Arrow side is complete already.
 
