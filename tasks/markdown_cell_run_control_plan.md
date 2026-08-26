@@ -43,11 +43,14 @@ execution pipeline, and markdown has no way to trigger that pipeline for
 itself alone:
 
 - `canRun = canRunProp ?? !!meta.execute` (`CellContainer.tsx:97`), `canRun = !!meta.execute`
-  (`CellEditor.tsx:95`), and `canRun = !!meta.execute` (`HgChildPane.tsx:84`) each hide the
-  Run button, "Run from here", and "Auto-run from here" whenever a cell type has no
-  `execute` method. `markdownMetadata` deliberately has none
-  (`MarkdownCell.tsx:95`, `cell-registry.ts:150-158`) — three independent call
-  sites currently duplicate the same `!!meta.execute` fallback with no override hook for `CellEditor`/`HgChildPane`.
+  (`CellEditor.tsx:95`), `canRun = !!meta.execute` (`HgChildPane.tsx:84`), and the inline
+  `!!meta.execute` check gating the Run button in `ChildEditorView`
+  (`HorizontalGroupCell.tsx:400`, used by `HgEditorPanel` when a hg child is open in the
+  per-child editor panel) each hide the Run button, "Run from here", and "Auto-run from
+  here" whenever a cell type has no `execute` method. `markdownMetadata` deliberately has
+  none (`MarkdownCell.tsx:95`, `cell-registry.ts:150-158`) — four independent call sites
+  currently duplicate the same `!!meta.execute` fallback with no override hook for
+  `CellEditor`/`HgChildPane`/`ChildEditorView`.
 - `status` is set to `'success'` for markdown via a single unconditional
   shortcut in `useCellExecution.executeCell` (`useCellExecution.ts:134-138`):
   ```ts
@@ -104,11 +107,15 @@ readonly canRun?: boolean
 
 Set `canRun: true` in `markdownMetadata` (`MarkdownCell.tsx:78-100`).
 
-Replace the three duplicated `!!meta.execute` fallbacks with `meta.canRun ?? !!meta.execute`:
+Replace the four duplicated `!!meta.execute` fallbacks with `meta.canRun ?? !!meta.execute`:
 
 - `CellContainer.tsx:97` — but `CellContainer` doesn't have `meta` in scope for callers that pass `canRunProp` directly; it already computes `meta = getCellTypeMetadata(type)` at line 96, so this is a one-line change: `const canRun = canRunProp ?? meta.canRun ?? !!meta.execute`.
 - `CellEditor.tsx:95` — `const canRun = meta.canRun ?? !!meta.execute`.
-- `HgChildPane.tsx:84` — `const canRun = meta.canRun ?? !!meta.execute` (covers markdown cells nested inside horizontal groups).
+- `HgChildPane.tsx:84` — `const canRun = meta.canRun ?? !!meta.execute` (covers markdown cells nested inside horizontal groups, in the compact hg child pane).
+- `HorizontalGroupCell.tsx:400` — change `{onRun && !!meta.execute && (...)}` to
+  `{onRun && (meta.canRun ?? !!meta.execute) && (...)}` in `ChildEditorView` (covers a
+  markdown cell nested inside a horizontal group when opened for editing in the per-child
+  editor panel — `meta` is already in scope there via `getCellTypeMetadata(child.type)`).
 
 This is the single source of truth the issue's own "Notes" section points at
 ("`canRun` could be decoupled from `!!meta.execute`") — no other cell type's
@@ -149,8 +156,8 @@ autoRunFromHere={cell.type === 'markdown' ? undefined : cell.autoRunFromHere}
 
 `CellEditor`'s footer only ever renders a single "Run" button (no
 "from here" variant there), so no equivalent change is needed there.
-`HgChildPane` likewise only has a single Run button per child — no change
-needed beyond the `canRun` fallback above.
+`HgChildPane` and `ChildEditorView` likewise only render a single Run
+button per child — no change needed beyond the `canRun` fallback above.
 
 ### Wiring `onRun`
 
@@ -188,31 +195,39 @@ auto-success on creation) considered and deferred.
    - Change `canRun = !!meta.execute` to `canRun = meta.canRun ?? !!meta.execute`.
 5. `analytics-web-app/src/lib/screen-renderers/cells/HgChildPane.tsx`
    - Change `canRun = !!meta.execute` to `canRun = meta.canRun ?? !!meta.execute`.
-6. `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
+6. `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
+   - In `ChildEditorView` (~line 400), change `{onRun && !!meta.execute && (...)}` to
+     `{onRun && (meta.canRun ?? !!meta.execute) && (...)}`.
+7. `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
    - In `renderCell`, make `onRunFromHere`, `onToggleAutoRunFromHere`, and
      `autoRunFromHere` passed to `CellContainer` (around lines 707-712)
      `undefined` for `cell.type === 'markdown'`.
-7. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
+8. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
    - Add a test asserting `markdownMetadata.canRun === true`.
-8. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
+9. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
    - Add a case: a cell type with `execute` absent but `canRun: true`
      (or a mock) shows the Run button; confirm "Run from here"/"Auto-run"
      visibility is driven by the presence of the corresponding callbacks,
      not by `canRun` alone.
-9. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
-   - Update/replace the existing `'should not show run button for markdown
-     cells'` test (line 506) — markdown now *does* show a Run button, but
-     not "Run from here" or "Auto-run from here".
-   - Add a test: with a markdown cell already at `status: 'success'`, edit
-     its content directly (no Run click) and assert the rendered output
-     updates (covers the already-working live-reactivity path, which had no
-     regression test before).
-   - Add a test: a markdown cell at `status: 'idle'` (e.g. freshly added)
-     renders blank, clicking Run flips it to rendered content, and no
-     upstream query cell's `executeCell` is invoked as a result (assert via
-     a spy/mock data source that no additional query fires).
-10. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
-11. Manual check with `yarn dev` (or the monolith): open a notebook with a
+10. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
+    - Add a case: a markdown child selected in the per-child editor panel
+      (`ChildEditorView`) shows the Run button when `onRun` is provided —
+      covers the same `canRun` fallback as `HgChildPane` but for the
+      full-panel editor, which the existing suite doesn't exercise.
+11. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
+    - Update/replace the existing `'should not show run button for markdown
+      cells'` test (line 506) — markdown now *does* show a Run button, but
+      not "Run from here" or "Auto-run from here".
+    - Add a test: with a markdown cell already at `status: 'success'`, edit
+      its content directly (no Run click) and assert the rendered output
+      updates (covers the already-working live-reactivity path, which had no
+      regression test before).
+    - Add a test: a markdown cell at `status: 'idle'` (e.g. freshly added)
+      renders blank, clicking Run flips it to rendered content, and no
+      upstream query cell's `executeCell` is invoked as a result (assert via
+      a spy/mock data source that no additional query fires).
+12. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
+13. Manual check with `yarn dev` (or the monolith): open a notebook with a
     slow upstream query cell and a markdown cell below it referencing
     `$variable`/`$cell.col`. Edit the markdown content after the initial
     load — confirm it updates live. Then trigger "Run from here" on the
@@ -227,9 +242,11 @@ auto-success on creation) considered and deferred.
 - `analytics-web-app/src/components/CellContainer.tsx`
 - `analytics-web-app/src/components/CellEditor.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/HgChildPane.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
 - `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`
 
@@ -279,13 +296,14 @@ auto-success on creation) considered and deferred.
 
 ## Testing Strategy
 
-- **Automated**: see Implementation Steps 7-9 — `canRun` metadata assertion,
+- **Automated**: see Implementation Steps 8-11 — `canRun` metadata assertion,
   `CellContainer` Run-button visibility for a no-`execute` type with
-  `canRun: true`, `NotebookRenderer` markdown Run button now visible while
-  "Run from here"/"Auto-run from here" stay hidden, live content-edit
-  reactivity while `status: 'success'`, and Run-click recovery from `idle`
-  without touching upstream cells.
-- **Manual**: see Implementation Step 11 — the scenario the issue describes
+  `canRun: true`, the same Run-button visibility for a markdown child in the
+  hg per-child editor panel (`ChildEditorView`), `NotebookRenderer` markdown
+  Run button now visible while "Run from here"/"Auto-run from here" stay
+  hidden, live content-edit reactivity while `status: 'success'`, and
+  Run-click recovery from `idle` without touching upstream cells.
+- **Manual**: see Implementation Step 13 — the scenario the issue describes
   (slow upstream query, markdown edit, no reload needed; Run works
   independently of an in-flight upstream re-run).
 - **Regression**: existing `NotebookRenderer.test.tsx` assertions for
