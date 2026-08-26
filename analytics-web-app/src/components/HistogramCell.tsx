@@ -80,7 +80,10 @@ function HistogramCellImpl({ value, color }: HistogramCellProps) {
     return <span className="text-theme-text-primary">-</span>
   }
 
-  const max = Math.max(...h.bins)
+  // Avoid Math.max(...h.bins): spreading into Math.max hits V8's ~131k
+  // argument-count limit and throws for very large nb_bins, which would
+  // unmount the whole table body instead of just this cell.
+  const max = h.bins.reduce((m, v) => (v > m ? v : m), 0)
   const median = estimateHistogramQuantile(h, 0.5)
   const degeneratePoint = Math.abs(h.end - h.start) < Number.EPSILON
   const tickX = degeneratePoint ? 0 : ((median - h.start) / (h.end - h.start)) * TRACK_WIDTH
