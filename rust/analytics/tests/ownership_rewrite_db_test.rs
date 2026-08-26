@@ -33,13 +33,17 @@
 //! `processes` `SqlBatchView`'s transform query reads `first_value("processes.properties") ...
 //! FROM blocks` -- i.e. from the already-materialized `blocks` partitions, never from Postgres
 //! directly (`processes_view.rs`). Stamping the process at creation time (before any block
-//! exists) trivially satisfies this ordering.
+//! exists) trivially satisfies this ordering. `insert_process` now stamps unconditionally
+//! (#1519), so `seed_process`'s never-stamped fixture (`process_c`) is fabricated by inserting
+//! through that same real path and then stripping the property back off with a post-insert
+//! `UPDATE` (`common::db_fixtures::strip_process_audience`) -- the real ingestion path itself no
+//! longer has a code branch that produces an unstamped row.
 
 mod common;
 
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
-use common::db_fixtures::{ensure_telemetry_guard, reset_global_view};
+use common::db_fixtures::{ensure_telemetry_guard, reset_global_view, strip_process_audience};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
@@ -85,23 +89,35 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left never stamped if `None` --
-/// plus its cpu/log streams and one block each, through the real ingestion pipeline
-/// (`WebIngestionService`, the same entry point a real client hits). A `None` process carries no
-/// `micromegas.audience` property in Postgres at all; #1482's read-side `COALESCE` resolves it to
-/// `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) when the audience is read out.
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, fabricated as a legacy-shaped,
+/// never-stamped row if `None` -- plus its cpu/log streams and one block each, through the real
+/// ingestion pipeline (`WebIngestionService`, the same entry point a real client hits).
+/// `insert_process` stamps unconditionally now (#1519), so there is no code path left that
+/// produces an unstamped row on its own: the `None` arm inserts under the deployment default
+/// (`public`, matching this file's `MICROMEGAS_DEFAULT_AUDIENCE`) and then strips the
+/// `micromegas.audience` property back off with a post-insert `UPDATE`
+/// (`strip_process_audience`), reproducing the shape of a row written before the write path
+/// resolved the default, or one written by the admin replication path. Either way, #1482's
+/// read-side `COALESCE` resolves a missing property to `MICROMEGAS_DEFAULT_AUDIENCE` (default
+/// `public`) when the audience is read out.
 async fn seed_process(
     ingestion: &WebIngestionService,
+    pool: &sqlx::Pool<sqlx::Postgres>,
     audience: Option<&str>,
 ) -> Result<ProcessFixture> {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
-    let write_audience = WriteAudience::new(audience)?;
+    let write_audience = WriteAudience::new(audience.unwrap_or("public"))?;
     ingestion
         .insert_process(process_body, &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+    if audience.is_none() {
+        strip_process_audience(pool, process_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("strip_process_audience: {e}"))?;
+    }
 
     // "cpu" stream: one thread span pair (thread_spans) and one async span pair (async_events),
     // in the same block -- async span events ride the thread event queue (see
@@ -254,16 +270,17 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     // Seed three processes *before* any block/view materialization: A and B are stamped with
-    // different audiences, C is never stamped at all -- exercising #1482's read-side default,
-    // which resolves C's missing property to `MICROMEGAS_DEFAULT_AUDIENCE` (`public` here) at
-    // every site the audience is read out of Postgres.
-    let process_a = seed_process(&ingestion, Some("team-a")).await?;
-    let process_b = seed_process(&ingestion, Some("team-b")).await?;
-    let process_c = seed_process(&ingestion, None).await?;
+    // different audiences, C is fabricated as a legacy-shaped, never-stamped row -- exercising
+    // #1482's read-side default, which resolves C's missing property to
+    // `MICROMEGAS_DEFAULT_AUDIENCE` (`public` here) at every site the audience is read out of
+    // Postgres.
+    let process_a = seed_process(&ingestion, &lake.db_pool, Some("team-a")).await?;
+    let process_b = seed_process(&ingestion, &lake.db_pool, Some("team-b")).await?;
+    let process_c = seed_process(&ingestion, &lake.db_pool, None).await?;
 
     let lake = Arc::new(lake);
     let runtime = Arc::new(micromegas_analytics::lakehouse::runtime::make_runtime_env()?);

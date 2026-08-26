@@ -50,11 +50,14 @@ pub struct ProcessMetadata {
     pub start_ticks: i64,
     pub parent_process_id: Option<uuid::Uuid>,
     pub properties: SharedJsonbSerialized,
-    /// The owning process's audience (#1482) -- always present, never empty. A process whose
-    /// credential carried no audience keeps no property in Postgres; every producer of this
-    /// struct resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so the
-    /// `Option` stops at the database boundary. Appended last: a required field with no default,
-    /// so the compiler enumerates every construction site.
+    /// The owning process's audience (#1482) -- always present, never empty. A process
+    /// registered through the HTTP ingestion path always carries a `micromegas.audience`
+    /// property now (#1519): a credential with no bound audience is stamped with the resolved
+    /// deployment default explicitly. Only a legacy row, or one written by the admin
+    /// `bulk_ingest`/replication path, keeps no property at all; every producer of this struct
+    /// resolves that case to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so the `Option`
+    /// stops at the database boundary either way. Appended last: a required field with no
+    /// default, so the compiler enumerates every construction site.
     pub audience: Arc<str>,
 }
 

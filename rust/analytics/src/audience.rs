@@ -3,13 +3,18 @@
 //! `lakehouse::ownership_rewrite`) -- and by `metadata.rs`, the JIT / per-process path (#1482
 //! §1).
 //!
-//! A process registered under a credential that carried no audience keeps **no**
-//! `micromegas.audience` property in Postgres, permanently. The default is applied where the
-//! audience is *read*, not where the process is written: every read site wraps the extraction in
+//! A process registered through the HTTP ingestion path always carries a `micromegas.audience`
+//! property now: a credential with no bound audience resolves to the deployment default at the
+//! HTTP edge and is stamped with it explicitly, the same as any other audience (#1519). What
+//! still keeps **no** property is a legacy row written before that write-side resolution shipped,
+//! and a row written by the admin `bulk_ingest`/replication path
+//! (`rust/public/src/servers/flight_sql_service_impl.rs`), which writes a source lake's
+//! properties verbatim and stamps nothing of its own. For both of those, the default is applied
+//! where the audience is *read*: every read site wraps the extraction in
 //! [`coalesced_audience_subselect`], so a missing property resolves to the deployment's
 //! `MICROMEGAS_DEFAULT_AUDIENCE` and a `NULL` audience is unrepresentable downstream of Postgres.
 //! That is what lets the materialized `audience` column be non-nullable and what lets Prong B
-//! resolve every existing id to a real audience.
+//! resolve every existing id to a real audience, whether it was ever stamped or not.
 
 /// The reserved process property key an ingestion credential's audience is stamped under.
 /// Re-exported here (rather than each consumer importing `micromegas_telemetry` directly) so the
@@ -76,10 +81,12 @@ fn is_valid_audience(aud: &str) -> bool {
 /// under until they are regenerated.
 ///
 /// Unprefixed, unlike `IsolationConfig`'s knobs: this is not a per-caller query-side setting but
-/// a property of the lake's contents, and `micromegas_auth::policy::default_audience_from_env`
-/// -- the other reader of this same variable, on the key-minting side -- falls back to exactly
-/// this unprefixed name. Trimming and its warning match that reader, so one env value can never
-/// be accepted by one role and rejected by another.
+/// a property of the lake's contents. Two other code readers of the same variable fall back to
+/// this same unprefixed name: `micromegas_auth::policy::default_audience_from_env`, on the
+/// key-minting side, and the ingestion HTTP edge's own call in `serve_ingestion` (#1519), which
+/// resolves the default a credential with no bound audience is stamped with at write time.
+/// Trimming and its warning match both, so one env value can never be accepted by one role and
+/// rejected by another.
 pub fn default_audience_from_env() -> anyhow::Result<String> {
     const VAR: &str = "MICROMEGAS_DEFAULT_AUDIENCE";
     let resolved = match std::env::var(VAR) {

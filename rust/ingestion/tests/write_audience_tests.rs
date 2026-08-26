@@ -1,5 +1,6 @@
 //! Unit tests (no DB) for `WriteAudience` and the two `pub` property-stamping helpers
-//! (AbAC Stage 5, #1373). Every case here is a pure function of its arguments.
+//! (AbAC Stage 5, #1373; collapsed to a single state by #1519). Every case here is a pure
+//! function of its arguments.
 
 use micromegas_ingestion::web_ingestion_service::{
     finalize_process_properties, strip_reserved_properties,
@@ -21,29 +22,17 @@ fn find<'a>(properties: &'a [Property], key: &str) -> Option<&'a Property> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn write_audience_none_carries_no_audience() {
-    let audience = WriteAudience::none();
-    assert_eq!(audience.as_str(), None);
-}
-
-#[test]
-fn write_audience_new_none_is_equivalent_to_none() {
-    let audience = WriteAudience::new(None).expect("None is always valid");
-    assert_eq!(audience, WriteAudience::none());
-}
-
-#[test]
 fn write_audience_accepts_the_full_charset() {
     for valid in ["team-alpha", "team_alpha", "TeamAlpha123", "a", "-", "_"] {
-        let audience = WriteAudience::new(Some(valid))
+        let audience = WriteAudience::new(valid)
             .unwrap_or_else(|e| panic!("{valid:?} should be a valid audience: {e:#}"));
-        assert_eq!(audience.as_str(), Some(valid));
+        assert_eq!(audience.as_str(), valid);
     }
 }
 
 #[test]
 fn write_audience_rejects_empty_string() {
-    assert!(WriteAudience::new(Some("")).is_err());
+    assert!(WriteAudience::new("").is_err());
 }
 
 #[test]
@@ -56,7 +45,7 @@ fn write_audience_rejects_disallowed_characters() {
         "team@alpha",
     ] {
         assert!(
-            WriteAudience::new(Some(invalid)).is_err(),
+            WriteAudience::new(invalid).is_err(),
             "{invalid:?} must be rejected"
         );
     }
@@ -65,14 +54,44 @@ fn write_audience_rejects_disallowed_characters() {
 #[test]
 fn write_audience_rejects_256_bytes() {
     let too_long = "a".repeat(256);
-    assert!(WriteAudience::new(Some(&too_long)).is_err());
+    assert!(WriteAudience::new(&too_long).is_err());
     let exactly_255 = "a".repeat(255);
-    assert!(WriteAudience::new(Some(&exactly_255)).is_ok());
+    assert!(WriteAudience::new(&exactly_255).is_ok());
 }
 
 #[test]
 fn write_audience_rejects_non_ascii() {
-    assert!(WriteAudience::new(Some("team-\u{e9}")).is_err()); // "team-é"
+    assert!(WriteAudience::new("team-\u{e9}").is_err()); // "team-é"
+}
+
+// ---------------------------------------------------------------------------
+// WriteAudience::id_namespace
+// ---------------------------------------------------------------------------
+
+#[test]
+fn id_namespace_is_none_when_equal_to_the_default() {
+    let default = WriteAudience::new("public").expect("valid audience");
+    let same = WriteAudience::new("public").expect("valid audience");
+    assert_eq!(same.id_namespace(&default), None);
+}
+
+#[test]
+fn id_namespace_is_some_of_itself_when_different_from_the_default() {
+    let default = WriteAudience::new("public").expect("valid audience");
+    let other = WriteAudience::new("team-a").expect("valid audience");
+    assert_eq!(other.id_namespace(&default), Some("team-a"));
+}
+
+#[test]
+fn id_namespace_rule_holds_independent_of_which_label_is_the_default() {
+    // The rule is "equal to the default", not "equal to `public`" -- verify both cases again
+    // with a non-`public` label as the deployment default.
+    let default = WriteAudience::new("unassigned").expect("valid audience");
+    let same = WriteAudience::new("unassigned").expect("valid audience");
+    assert_eq!(same.id_namespace(&default), None);
+
+    let other = WriteAudience::new("public").expect("valid audience");
+    assert_eq!(other.id_namespace(&default), Some("public"));
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +141,7 @@ fn strip_reserved_properties_keeps_a_key_that_merely_contains_the_prefix_mid_str
 #[test]
 fn finalize_process_properties_drops_client_stamp_and_writes_the_authenticated_one() {
     let client = vec![prop("micromegas.audience", "attacker-asserted")];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     assert_eq!(out.len(), 1);
     assert_eq!(
@@ -140,7 +159,7 @@ fn finalize_process_properties_drops_other_reserved_keys_and_keeps_the_rest() {
         prop("otel.resource.service.name", "kept"),
         prop("arbitrary-client-key", "kept"),
     ];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     // otel.resource.service.name + arbitrary-client-key + the one stamped micromegas.audience
     assert_eq!(out.len(), 3);
@@ -160,28 +179,26 @@ fn finalize_process_properties_drops_other_reserved_keys_and_keeps_the_rest() {
 }
 
 #[test]
-fn finalize_process_properties_with_none_audience_writes_no_property_at_all() {
-    let client = vec![prop("arbitrary-client-key", "kept")];
-    let out = finalize_process_properties(client, &WriteAudience::none());
-    assert_eq!(out.len(), 1, "only the untouched client key remains");
-    assert!(
-        find(&out, PROPERTY_AUDIENCE).is_none(),
-        "an unstamped write must leave the audience property absent, not present-and-empty"
-    );
-}
-
-#[test]
-fn finalize_process_properties_with_none_audience_still_strips_client_micromegas_star() {
+fn finalize_process_properties_stamps_the_resolved_default_like_any_other_audience() {
+    // A caller resolved to the deployment default (an audience-less credential, resolved by
+    // `resolve_write_audience` before this function ever sees it) stamps `micromegas.audience`
+    // exactly like an explicitly-bound one -- there is no separate unstamped path any more
+    // (#1519).
     let client = vec![
         prop("micromegas.audience", "self-stamped-pre-stage-5"),
         prop("arbitrary-client-key", "kept"),
     ];
-    let out = finalize_process_properties(client, &WriteAudience::none());
-    assert_eq!(out.len(), 1);
-    assert!(
-        find(&out, PROPERTY_AUDIENCE).is_none(),
-        "a pre-Stage-5 self-stamp must not survive once ingesting under an audience-less \
-         credential -- it becomes unstamped, not a retained self-assertion"
+    let default = WriteAudience::new("public").unwrap();
+    let out = finalize_process_properties(client, &default);
+    assert_eq!(out.len(), 2);
+    assert_eq!(
+        find(&out, PROPERTY_AUDIENCE).map(|p| p.value_str()),
+        Some("public"),
+        "a resolved-to-default caller must be stamped, not left unstamped"
+    );
+    assert_eq!(
+        find(&out, "arbitrary-client-key").map(|p| p.value_str()),
+        Some("kept")
     );
 }
 
@@ -192,7 +209,7 @@ fn finalize_process_properties_leaves_otel_resource_and_arbitrary_keys_untouched
         prop("otel.resource.process.pid", "1234"),
         prop("some-native-client-key", "value"),
     ];
-    let audience = WriteAudience::new(Some("team-a")).unwrap();
+    let audience = WriteAudience::new("team-a").unwrap();
     let out = finalize_process_properties(client, &audience);
     assert_eq!(out.len(), 4); // 3 untouched + the stamp
     assert_eq!(

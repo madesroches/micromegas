@@ -250,9 +250,10 @@ async fn main() -> Result<()> {
     // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
     // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
     // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
-    // (#1482) -- a process whose credential carried no audience resolves to
-    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) where the audience is read out of
-    // Postgres, so there is no separate query-time unstamped fallback to configure here.
+    // (#1482) -- a credential with no bound audience is stamped with the resolved
+    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time now (#1519);
+    // only a legacy row or one from the admin replication path still resolves that on read, so
+    // there is no separate query-time unstamped fallback to configure here either way.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
         // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`

@@ -49,7 +49,7 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` | No | JSON object keyed by audience name, granting read/mint access to selectors (`*`/`user:<email>`/`group:<g>`) for FlightSQL callers (falls back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`) — see [Audiences and Grants](authentication.md#audiences-and-grants) |
 | `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering; falls back to unprefixed `MICROMEGAS_PUBLIC_VIEW_SETS`) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
-| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint/import routes fall back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience a process whose credential carried none is **read** as, applied by every role that builds a lakehouse (here, the same process). One knob for both, read unprefixed, joining the list in the note below. Changing it does not relabel already-written partitions — see [Audience stamping and the default](authentication.md#audience-stamping-and-the-default) |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint/import routes fall back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience a credential with no bound audience is stamped with explicitly at write time by the ingestion role, and that a legacy or admin-replicated row with no stamp is **read** as by every role that builds a lakehouse (here, the same process). One knob for all of it, read unprefixed, joining the list in the note below. Changing it does not relabel already-written partitions — see [Audience stamping and the default](authentication.md#audience-stamping-and-the-default) |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374) |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Caps how many live keys one non-admin caller may hold at once (default `100`) |
@@ -73,7 +73,10 @@ cargo run --bin micromegas-monolith -- \
     (`micromegas_auth::policy::default_audience_from_env`, prefix `""` under monolith); every
     role that builds a lakehouse (FlightSQL, maintenance) reads the unprefixed name directly and
     has no prefixed variant at all, so a prefixed spelling would split those roles onto a
-    different default than the web role — set the unprefixed name.
+    different default than the web role — set the unprefixed name. The ingestion role now joins
+    this same unprefixed group too (#1519): it resolves `MICROMEGAS_DEFAULT_AUDIENCE` with the
+    empty prefix, deliberately, so the value it stamps new processes with can never disagree with
+    what the lakehouse roles resolve a legacy row's missing stamp to.
 
 ## CLI flags
 

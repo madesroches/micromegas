@@ -2,6 +2,7 @@
 // Tests that require a live DB/blob store are marked #[ignore].
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -13,10 +14,10 @@ fn make_test_service() -> Arc<WebIngestionService> {
     let blob_storage = Arc::new(BlobStorage::new(blob_store, Path::default()));
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
-    Arc::new(WebIngestionService::new(DataLakeConnection::new(
-        pool,
-        blob_storage,
-    )))
+    Arc::new(WebIngestionService::new(
+        DataLakeConnection::new(pool, blob_storage),
+        WriteAudience::new("public").expect("valid audience"),
+    ))
 }
 
 #[tokio::test]
@@ -33,9 +34,10 @@ async fn cache_hit_returns_true_without_probing() {
 #[ignore]
 #[tokio::test]
 async fn check_ready_returns_true_when_dependencies_healthy() {
-    let service = WebIngestionService::from_env()
-        .await
-        .expect("creating service from env");
+    let service =
+        WebIngestionService::from_env(WriteAudience::new("public").expect("valid audience"))
+            .await
+            .expect("creating service from env");
     assert!(
         service.check_ready().await,
         "should return true when DB and blob storage are reachable"

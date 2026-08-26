@@ -8,6 +8,7 @@ use axum::routing::post;
 use micromegas_auth::types::{AuthContext, AuthProvider};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -67,7 +68,7 @@ pub async fn insert_process_request(
     ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
     service
         .insert_process(body, &audience)
         .await
@@ -144,7 +145,17 @@ pub async fn serve_ingestion(
     use super::axum_utils::observability_middleware;
     use super::shutdown::serve_axum_with_graceful_shutdown;
 
-    let service = Arc::new(WebIngestionService::new(lake));
+    // The deployment's default audience (#1519), resolved once at startup so a typo fails
+    // startup rather than surfacing per-request -- matching `LakehouseContext::new`'s handling
+    // of the same variable. Unprefixed (`""`): the ingestion edge must read exactly the
+    // unprefixed `MICROMEGAS_DEFAULT_AUDIENCE` name the lakehouse roles read, never a
+    // `{prefix}_DEFAULT_AUDIENCE` override, or the write side and the read side could be
+    // configured to disagree -- the exact failure this resolution exists to remove. The `?`
+    // here is redundant-by-design, not a reachable error path: `default_audience_from_env`
+    // already validates against the same charset predicate `WriteAudience::new` applies.
+    let default_audience =
+        WriteAudience::new(&micromegas_auth::policy::default_audience_from_env("")?)?;
+    let service = Arc::new(WebIngestionService::new(lake, default_audience));
 
     let health_router = Router::new()
         .route("/health", get(|| async { axum::http::StatusCode::OK }))

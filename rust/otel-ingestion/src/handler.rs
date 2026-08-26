@@ -158,7 +158,7 @@ pub async fn ingest_logs(
         return Ok(ExportLogsServiceResponse::default());
     }
     let ctx = IdentityContext {
-        audience: audience.as_str(),
+        audience: audience.id_namespace(service.default_audience()),
         extra_hash_input: &[],
     };
     let blocks = split_logs(req, ctx).map_err(|e| OtelError::Parse {
@@ -182,7 +182,7 @@ async fn ingest_parsed_metrics(
         return Ok(());
     }
     let ctx = IdentityContext {
-        audience: audience.as_str(),
+        audience: audience.id_namespace(service.default_audience()),
         extra_hash_input: &[],
     };
     let blocks = split_metrics(req, ctx).map_err(|e| OtelError::Parse {
@@ -217,7 +217,7 @@ pub async fn ingest_traces(
         return Ok(ExportTraceServiceResponse::default());
     }
     let ctx = IdentityContext {
-        audience: audience.as_str(),
+        audience: audience.id_namespace(service.default_audience()),
         extra_hash_input: &[],
     };
     let blocks = split_traces(req, ctx).map_err(|e| OtelError::Parse {
@@ -315,7 +315,7 @@ pub async fn ingest_webhook(
 ) -> Result<(), OtelError> {
     let req = build_webhook_request(resource_attrs, target, &body);
     let ctx = IdentityContext {
-        audience: audience.as_str(),
+        audience: audience.id_namespace(service.default_audience()),
         extra_hash_input: header_hash_input,
     };
     let blocks = split_logs(req, ctx).map_err(|e| OtelError::Parse {

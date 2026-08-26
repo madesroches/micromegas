@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
+use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::block_wire_format::{Block, BlockPayload};
 use uuid::Uuid;
 
@@ -63,7 +64,7 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -120,7 +121,7 @@ async fn orphaned_object_is_healed_by_insert_block_typed() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -179,7 +180,7 @@ async fn row_without_object_gets_object_written_but_row_left_untouched() -> Resu
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -246,7 +247,7 @@ async fn distinct_blocks_yield_distinct_objects_and_rows() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let stream_id = Uuid::new_v4();
     let process_id = Uuid::new_v4();
