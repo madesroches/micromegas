@@ -18,6 +18,12 @@ const TRACK_WIDTH = 120
 const TRACK_GAP = 6
 const LABEL_WIDTH = 42
 
+// Estimated rendered size of HistogramTooltip (px-2.5 py-2, three text-[10px]
+// / text-xs lines), used to clamp it to the viewport the same way
+// SwimlaneCell.tsx clamps its own fixed-position tooltip.
+const TOOLTIP_WIDTH = 170
+const TOOLTIP_HEIGHT = 72
+
 interface HistogramCellProps {
   /** The raw `Histogram` struct cell, or `null` for a null value / no data. */
   value: StructRowProxy | null
@@ -168,7 +174,10 @@ function HistogramTooltip({ x, y, h, bucket }: HistogramTooltipProps) {
     <div
       data-testid="histogram-tooltip"
       className="fixed bg-app-bg border border-theme-border rounded-md px-2.5 py-2 text-xs font-mono pointer-events-none z-50 shadow-lg"
-      style={{ left: x + 14, top: y - 10 }}
+      style={{
+        left: Math.min(x + 14, window.innerWidth - TOOLTIP_WIDTH),
+        top: Math.min(y - 10, window.innerHeight - TOOLTIP_HEIGHT),
+      }}
     >
       <div className="text-theme-text-muted text-[10px] mb-1">bucket</div>
       <div className="text-theme-text-primary font-semibold">
