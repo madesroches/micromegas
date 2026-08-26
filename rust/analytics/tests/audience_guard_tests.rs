@@ -217,3 +217,95 @@ async fn global_rows_hidden_by_default_under_restricted_scope() {
     );
     assert!(!guard.global_rows_visible("log_entries"));
 }
+
+// --- `authorize_view_instance` (the `view_instance(...)` scan-time guard, #1486) ---------
+
+#[tokio::test]
+async fn authorize_view_instance_under_read_scope_all_performs_no_io() {
+    let guard = AudienceGuard::new(ReadScope::All, false, vec![], unroutable_index());
+    guard
+        .authorize_view_instance("thread_spans", &Uuid::new_v4().to_string())
+        .await
+        .expect("ReadScope::All must authorize with no I/O, even over an unroutable pool");
+}
+
+#[tokio::test]
+async fn authorize_view_instance_allows_public_view_set_with_no_io() {
+    let guard = AudienceGuard::new(
+        audiences(&["team-alpha"]),
+        false,
+        vec!["log_entries".to_string()],
+        unroutable_index(),
+    );
+    guard
+        .authorize_view_instance("log_entries", &Uuid::new_v4().to_string())
+        .await
+        .expect(
+            "a view set on public_view_sets must be authorized with no I/O, regardless of the \
+             instance id",
+        );
+}
+
+#[tokio::test]
+async fn authorize_view_instance_allows_global_with_no_io_admin_or_not_public_or_not() {
+    // Rule (3) deliberately differs from `global_rows_visible`: `'global'` is passed through
+    // uncalled and left to Prong A's row filter, for both an admin and a non-admin guard, and
+    // for a view set that is *not* on the public allowlist -- pin it, since it's the one rule
+    // in this method that isn't just `global_rows_visible` reused.
+    let non_admin_non_public = AudienceGuard::new(
+        audiences(&["team-alpha"]),
+        false,
+        vec![],
+        unroutable_index(),
+    );
+    non_admin_non_public
+        .authorize_view_instance("log_entries", "global")
+        .await
+        .expect(
+            "'global' must be authorized with no I/O for a non-admin caller over a non-public \
+             view set -- there is nothing to protect, jit_update no-ops for 'global'",
+        );
+
+    let admin = AudienceGuard::new(audiences(&["team-alpha"]), true, vec![], unroutable_index());
+    admin
+        .authorize_view_instance("log_entries", "global")
+        .await
+        .expect("'global' must also be authorized with no I/O for an admin caller");
+}
+
+#[tokio::test]
+async fn authorize_view_instance_denies_on_resolution_error_not_pass() {
+    // No `ReadScope::All`/public-view-set/`'global'` short-circuit here, so this does try to
+    // reach the unroutable pool -- mirrors
+    // `authorize_under_restricted_scope_denies_on_resolution_error_not_pass`, pinning that rule
+    // (4)'s fall-through to `authorize` really attempts resolution and fails closed rather than
+    // short-circuiting to a pass.
+    let guard = AudienceGuard::new(
+        audiences(&["team-alpha"]),
+        false,
+        vec![],
+        unroutable_index(),
+    );
+    guard
+        .authorize_view_instance("thread_spans", &Uuid::new_v4().to_string())
+        .await
+        .expect_err("a resolution error must be a denial, never a readable verdict");
+}
+
+#[tokio::test]
+async fn authorize_view_instance_denies_non_uuid_non_global_id() {
+    let guard = AudienceGuard::new(
+        audiences(&["team-alpha"]),
+        false,
+        vec![],
+        unroutable_index(),
+    );
+    let err = guard
+        .authorize_view_instance("thread_spans", "not-a-uuid-or-global")
+        .await
+        .expect_err("an id that is neither 'global' nor a valid Uuid must be denied");
+    assert!(
+        err.to_string().contains("not found or not accessible"),
+        "expected the uniform not-found-shaped denial text, got: {err}"
+    );
+}

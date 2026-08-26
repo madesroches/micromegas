@@ -1,6 +1,7 @@
-//! DB-backed tests for Query Enforcement Prong B (#1371, AbAC Stage 3): `AudienceGuard`'s
-//! arg-addressed guards on `process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload`,
-//! and the row filter on `list_partitions`. Mirrors `ownership_rewrite_db_test.rs`'s convention
+//! DB-backed tests for Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486):
+//! `AudienceGuard`'s arg-addressed guards on `process_spans`, `perfetto_trace_chunks`,
+//! `parse_block`, `get_payload`, and `view_instance`, plus the row filter on `list_partitions`.
+//! Mirrors `ownership_rewrite_db_test.rs`'s convention
 //! (seed through the real ingestion pipeline, `#[ignore]`, requires a live
 //! `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`) and reuses its
 //! `ProcessInfo.properties` stamping approach -- see that file's module doc comment for why
@@ -669,6 +670,198 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
         1.min(team_a_instance_ids.len()),
         "LIMIT 1 over team-a's filtered set must return exactly min(1, matching) rows"
     );
+
+    Ok(())
+}
+
+/// #1486: `view_instance(...)`'s own scan-time guard, run by `MaterializedView::scan` before
+/// `jit_update`. Covers both resolution arms of `IdKind::ProcessOrStream` -- a stream-scoped view
+/// set (`thread_spans`) and a process-scoped one with no `process_id` column (`async_events`).
+#[ignore]
+#[tokio::test]
+async fn view_instance_guard_enforces_audience() -> Result<()> {
+    let f = setup().await?;
+
+    // --- stream-scoped: `thread_spans` -----------------------------------------------------
+    let own_thread_spans_sql = format!(
+        "SELECT * FROM view_instance('thread_spans', '{}')",
+        f.process_a.cpu_stream_id
+    );
+    let own_thread_spans_rows = row_count(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        Some(f.insert_range),
+        &own_thread_spans_sql,
+    )
+    .await?;
+    assert!(
+        own_thread_spans_rows > 0,
+        "the owning audience must see its own thread_spans instance"
+    );
+
+    let foreign_thread_spans_sql = format!(
+        "SELECT * FROM view_instance('thread_spans', '{}')",
+        f.process_b.cpu_stream_id
+    );
+    let err = query(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        Some(f.insert_range),
+        &foreign_thread_spans_sql,
+    )
+    .await
+    .expect_err("a foreign audience's stream instance must be denied before jit_update runs");
+    assert!(
+        err.to_string().contains("not found or not accessible"),
+        "expected the uniform not-found-shaped denial, got: {err}"
+    );
+
+    // --- process-scoped, no process_id column: `async_events` ------------------------------
+    let own_async_events_sql = format!(
+        "SELECT * FROM view_instance('async_events', '{}')",
+        f.process_a.process_id
+    );
+    let own_async_events_rows = row_count(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        None,
+        &own_async_events_sql,
+    )
+    .await?;
+    assert!(
+        own_async_events_rows > 0,
+        "the owning audience must see its own async_events instance"
+    );
+
+    let foreign_async_events_sql = format!(
+        "SELECT * FROM view_instance('async_events', '{}')",
+        f.process_b.process_id
+    );
+    let err = query(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        None,
+        &foreign_async_events_sql,
+    )
+    .await
+    .expect_err("a foreign audience's process instance must be denied before jit_update runs");
+    assert!(
+        err.to_string().contains("not found or not accessible"),
+        "expected the uniform not-found-shaped denial, got: {err}"
+    );
+
+    Ok(())
+}
+
+/// The test that actually proves the issue (#1486) is fixed: a denied `view_instance` call must
+/// never reach `jit_update`, so it must never materialize a partition for the instance it named.
+#[ignore]
+#[tokio::test]
+async fn view_instance_guard_prevents_jit_materialization() -> Result<()> {
+    let f = setup().await?;
+    let sql = format!(
+        "SELECT * FROM view_instance('thread_spans', '{}')",
+        f.process_b.cpu_stream_id
+    );
+
+    // A denied team-a caller must not trigger materialization of B's thread_spans instance.
+    query(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        Some(f.insert_range),
+        &sql,
+    )
+    .await
+    .expect_err("cross-audience view_instance call must be denied");
+
+    let partitions_after_denial = query(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(ReadScope::All),
+        None,
+        "SELECT view_instance_id FROM list_partitions()",
+    )
+    .await?;
+    let ids_after_denial: Vec<String> = partitions_after_denial
+        .iter()
+        .flat_map(|b| {
+            let ids = string_column_by_name(b, "view_instance_id").expect("view_instance_id");
+            (0..b.num_rows())
+                .map(move |i| ids.value(i).expect("valid utf8").to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        !ids_after_denial.contains(&f.process_b.cpu_stream_id.to_string()),
+        "the denied query must not have materialized a partition for B's thread_spans instance \
+         -- without the #1486 fix this assertion fails, since jit_update ran anyway"
+    );
+
+    // Now run the same query as team-b, the owning audience: it must succeed and the partition
+    // must now exist.
+    let own_rows = row_count(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-b"])),
+        Some(f.insert_range),
+        &sql,
+    )
+    .await?;
+    assert!(
+        own_rows > 0,
+        "team-b, the owning audience, must see its own thread_spans instance"
+    );
+
+    let partitions_after_own_query = query(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(ReadScope::All),
+        None,
+        "SELECT view_instance_id FROM list_partitions()",
+    )
+    .await?;
+    let ids_after_own_query: Vec<String> = partitions_after_own_query
+        .iter()
+        .flat_map(|b| {
+            let ids = string_column_by_name(b, "view_instance_id").expect("view_instance_id");
+            (0..b.num_rows())
+                .map(move |i| ids.value(i).expect("valid utf8").to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        ids_after_own_query.contains(&f.process_b.cpu_stream_id.to_string()),
+        "the owning audience's own query must have materialized the instance"
+    );
+
+    Ok(())
+}
+
+/// §2 of the #1486 plan: `'global'` is row-filtered, not call-guarded -- a scoped caller must
+/// keep being able to run `view_instance(<view set>, 'global')` with no denial, exactly as it can
+/// run the equivalent `SELECT * FROM <view set>` today.
+#[ignore]
+#[tokio::test]
+async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> {
+    let f = setup().await?;
+    // The fixture seeds no log entries directly (only cpu-stream span/async events), so this
+    // does not assert row-level equivalence with `SELECT * FROM log_entries` -- only that the
+    // call itself is not denied. That row-level equivalence is Prong A's existing behaviour,
+    // covered by `ownership_rewrite_db_test.rs`.
+    row_count(
+        f.lakehouse.clone(),
+        f.view_factory.clone(),
+        caller(scope(&["team-a"])),
+        None,
+        "SELECT * FROM view_instance('log_entries', 'global')",
+    )
+    .await
+    .expect("'global' must stay readable for a scoped caller -- no JIT to trigger, Prong A filters its rows");
 
     Ok(())
 }

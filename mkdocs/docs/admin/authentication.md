@@ -158,11 +158,25 @@ telemetry-ingestion-srv --disable-auth
     prongs. **Prong A** (`OwnershipRewrite`, AbAC Stage 2) injects an audience predicate into
     every `MaterializedView`-backed query plan, so a caller only sees processes whose
     (client-asserted) `micromegas.audience` property resolves to one of their own audiences.
-    **Prong B** (`AudienceGuard`, AbAC Stage 3) covers the four functions Prong A structurally
-    can't reach — a restricted caller's call to `process_spans`, `perfetto_trace_chunks`,
-    `parse_block`, or `get_payload` fails with a not-found-shaped error unless the id argument
-    names a process in one of their own audiences, and `list_partitions()` silently omits every
-    row (including `'global'` rows) that isn't theirs to see.
+    **Prong B** (`AudienceGuard`, AbAC Stage 3) covers five arg-addressed functions —
+    `view_instance` joins `process_spans`, `perfetto_trace_chunks`, `parse_block`, and
+    `get_payload` to close a cost/availability residual (#1486), not because Prong A can't reach
+    it: Prong A already row-filters every `view_instance` scan the same as the named-table form.
+    A restricted caller's call to any of the five fails with a not-found-shaped error unless the
+    id argument names a process or stream in one of their own audiences — for `view_instance`
+    this replaces what used to be a silent, empty result with an error — and `list_partitions()`
+    silently omits every row (including `'global'` rows) that isn't theirs to see. `'global'`
+    instances are the one exception `view_instance`'s guard makes: `view_instance(<view set>,
+    'global')` is exempt from the check entirely and stays readable for any scoped caller, since
+    no `'global'` instance has anything for `jit_update` to materialize and Prong A already
+    filters its rows one at a time — a different rule from `list_partitions()`'s `'global'`-row
+    visibility described below, which gates *partition metadata about* a `'global'` file rather
+    than the rows of the file itself. A view set on `MICROMEGAS_PUBLIC_VIEW_SETS` is also exempt
+    from `view_instance`'s guard entirely: any authenticated caller can still trigger JIT
+    materialization of any of its instances, since denying materialization of a view set every
+    row of which is already readable would be incoherent — the cost/availability hardening this
+    guard otherwise provides simply doesn't apply to a view set an operator has opted into that
+    allowlist.
 
     **`audience` is now a physical, non-nullable column on `blocks`, `processes`, `streams`,
     `log_entries`, `measures`, and `log_stats` (#1482)** — extracted once from Postgres at write
