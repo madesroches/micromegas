@@ -252,9 +252,6 @@ The analytics web app provides a modern web interface for exploring telemetry da
 - **Trace Generation**: Generate and download Perfetto traces from process data
 - **Process Statistics**: Detailed process metrics and monitoring
 
-!!! warning "Development Stage"
-    The Analytics Web Application is in early development and only suitable for local testing. Not recommended for production use.
-
 ## Design Principles
 
 - **High-frequency collection**: Support for 100k+ events/second per process
