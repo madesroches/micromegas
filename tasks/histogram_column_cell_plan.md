@@ -387,18 +387,28 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   no intrinsic size has a max-content contribution of 0, so without an
   explicit track width the column — and every bar in it — would collapse to
   zero width.
-- **Bars**: one `<div>` per bucket in a flex row (`align-items: flex-end`), height
-  `%` = `max > 0 ? Math.max(2, (bucket_count / max) * 100) : 0`, where `max` is
-  `max(bucket_count in this row)` — **per-row normalization**, matching
-  `option-b-tick-median.html`'s own `const h = max > 0 ? Math.max(2, (v / max) *
-  100) : 0`. The point of the cell is to show *shape*, not to compare magnitude
-  row-to-row (the issue frames this as "spot rows with unusual spread, multiple
-  modes, or outliers" — a shape question), so each row's own tallest bucket
-  reaches 100% height. The `2%` floor keeps a 0-count bucket rendered as a visible
-  stub rather than a zero-height, unhoverable div, so the per-bucket tooltip (see
-  "Tooltip" below) works on empty buckets too — exactly the buckets a user would
-  probe when reading spread. When the row's max bucket is 0 (see "Null and
-  degenerate values" below), skip the ratio entirely — it would otherwise be
+- **Bars**: one full-height (`height: 100%`), transparent wrapper `<div>` per
+  bucket in a flex row (`align-items: stretch`) — the wrapper, not the bar inside
+  it, is what carries the hover handlers (see "Tooltip" below), so the hoverable
+  target spans the full 28px track height even when the bar itself renders as a
+  thin stub. Each wrapper contains one bar `<div>` (`align-self: flex-end`),
+  height `%` = `max > 0 ? (bucket_count / max) * 100 : 0` with a `min-height: 2px`
+  floor, where `max` is `max(bucket_count in this row)` — **per-row
+  normalization**, matching `option-b-tick-median.html`'s own `const h = max > 0 ?
+  Math.max(2, (v / max) * 100) : 0`, adapted here from a `2%` floor to a
+  `min-height: 2px` one: `2%` of the cell's fixed 28px track is a 0.56px
+  hairline — sub-pixel, so it fails to render as the "visible and hoverable" stub
+  the floor exists to guarantee — whereas `min-height: 2px` renders an actual
+  visible pixel row regardless of track height. The point of the cell is to show
+  *shape*, not to compare magnitude row-to-row (the issue frames this as "spot
+  rows with unusual spread, multiple modes, or outliers" — a shape question), so
+  each row's own tallest bucket reaches 100% height. The `min-height` floor keeps
+  a 0-count bucket rendered as a visible stub rather than a zero-height div, and
+  because the full-height wrapper (not the bar) is the hover target, that stub's
+  hover area is the whole 28px track, not just its own 2px — so the per-bucket
+  tooltip (see "Tooltip" below) works on empty buckets too — exactly the buckets a
+  user would probe when reading spread. When the row's max bucket is 0 (see "Null
+  and degenerate values" below), skip the ratio entirely — it would otherwise be
   `0/0 = NaN` — and render the degenerate case instead. Fill color defaults to
   `var(--chart-line)` (same default as Chart/Swimlane single-series color) unless
   the override supplies a `histogramColor` — see Design §6.
@@ -454,7 +464,8 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   the median sits relative to the spread, not just its value, and a trailing
   fixed-width label can't collide with a tall bucket underneath it.
 - **Tooltip**: reuse the Swimlane cell's pattern — local `useState<{x, y, bucket} |
-  null>`, `onMouseEnter`/`onMouseMove`/`onMouseLeave` per bar,
+  null>`, `onMouseEnter`/`onMouseMove`/`onMouseLeave` per bucket wrapper (the
+  full-height hover target from "Bars" above, not the bar `<div>` itself),
   `position: fixed` div styled `bg-app-bg border border-theme-border rounded-md
   shadow-lg`. Content: bucket range (`[start, end)` computed the same way as
   `expand_histogram`, including its `Math.abs(end - start) < Number.EPSILON →
@@ -715,11 +726,14 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    - `toHistogramValue(raw: StructRowProxy): HistogramValue` — reads the raw Arrow
      struct cell once, converting `count` (`bigint`) via `Number(raw.count)` and
      `bins` (`Vector<bigint>`) via `Array.from(raw.bins, Number)` (Design §4).
-   - `estimateHistogramQuantile(h: HistogramValue, ratio: number): number` — port of
-     `quantile.rs::estimate_quantile`, including its `return end` fallback
-     (`quantile.rs:40`) when no bucket's cumulative count reaches `count * ratio`
-     (e.g. `count === 0`), and the `Math.abs(end - start) < Number.EPSILON → tick
-     at 0%` degenerate case (Design §4).
+   - `estimateHistogramQuantile(h: HistogramValue, ratio: number): number` — a
+     straight port of `quantile.rs::estimate_quantile`, including its `return end`
+     fallback (`quantile.rs:40`) when no bucket's cumulative count reaches `count *
+     ratio` (e.g. `count === 0`). No `start === end` epsilon guard here: with zero
+     width the ported logic already returns `start` unchanged, which is the
+     correct median for a point histogram — the `0/0 → NaN` hazard only shows up
+     in the tick's *position* formula, not in this value, and is guarded there
+     instead (Step 5, Design §4).
    - `bucketRange(h: HistogramValue, bucketIndex: number): [number, number]` — port
      of `expand.rs`'s bin-center math (return the boundaries, not the center, since
      the tooltip wants a range), including its `Math.abs(end - start) <
@@ -739,8 +753,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    component per Design §4, accepting an optional `color` prop
    (`ColumnOverride['histogramColor']`), using `histogram-utils.ts` /
    `histogram-colors.ts` and the Swimlane tooltip pattern. Exported for use by both
-   Table and Transposed Table paths. Done before `table-utils.tsx` below, which
-   renders it.
+   Table and Transposed Table paths. The median tick's x-position — not
+   `estimateHistogramQuantile`'s return value (Step 2) — is where the `start ===
+   end` epsilon guard lives: `Math.abs(end - start) < Number.EPSILON → tick at 0%`,
+   since it's this component's `((median - start) / (end - start)) * 100%` formula
+   that divides by zero on a degenerate point histogram, not the quantile helper
+   itself (Design §4). Done before `table-utils.tsx` below, which renders it.
 6. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
    'histogram'` and `histogramColor?: string`, making `format` optional (Design
    §2); update `overrideMap` to store the full entry, not just `format` (Design
@@ -823,7 +841,9 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     both Table (`:694-746`) and Transposed Table (`:749-780`) describing the
     automatic histogram rendering (trigger condition: column type, not config), the
     median calculation, the bucket tooltip, the Overrides panel's "Render as:
-    Histogram" mode, and the Markdown-override debugging trick. Cross-link to the
+    Histogram" mode (a swatch row — six colormap gradient swatches plus one
+    custom-color swatch, not a typed field), and the Markdown-override debugging
+    trick. Cross-link to the
     existing `make_histogram()`/`quantile_from_histogram()`/`color_scale()`/
     `lerp_color()` docs in `functions-reference.md`. Also update the `overrides`
     option-table row in both sections — `:713` (Table) and `:762` (Transposed
@@ -965,9 +985,11 @@ No Rust changes — the SQL/Arrow side is complete already.
 - `mkdocs/docs/web-app/notebooks/cell-types.md` — Table and Transposed Table
   sections: document automatic histogram-column rendering, median calculation
   ("estimated client-side, matches `quantile_from_histogram(h, 0.5)`"), bucket
-  tooltip content, the Overrides panel's "Render as: Histogram" option (the Color
-  field accepts either a named colormap — same six names as `color_scale()` — or
-  any CSS color for a flat fill), and the debugging trick (Markdown override,
+  tooltip content, the Overrides panel's "Render as: Histogram" option (a swatch
+  row, not a typed field — six colormap gradient swatches, one per name
+  `color_scale()` also supports, plus one custom-color swatch backed by a native
+  color picker; clicking a swatch is the only way to set the color, no value is
+  ever typed by hand), and the debugging trick (Markdown override,
   `$row.col` on a histogram column dumps its raw fields). Update the `overrides`
   option-table row in both sections (`:713`, `:762`) from `{ column, format }` to
   `{ column, kind?, format?, histogramColor? }`.
@@ -1042,11 +1064,15 @@ No Rust changes — the SQL/Arrow side is complete already.
   from a `kind: 'histogram'` override; null histogram value renders `-`.
 - New `HistogramCell.test.tsx` (or colocated in `__tests__/`): bar count always
   matches `bins.length` (no downsampling, including a large bin count); hover on a
-  bar surfaces the correct range/count/percentage; median label matches
-  `estimateHistogramQuantile`; bar fill color matches `resolveHistogramBarColor`
-  for a colormap name, a literal color, and no `color` prop at all; a 0-count
-  bucket still renders at the `2%` height floor (not 0px) and its hover tooltip
-  fires and shows the correct range/count.
+  bucket's wrapper surfaces the correct range/count/percentage; median label
+  matches `estimateHistogramQuantile`; bar fill color matches
+  `resolveHistogramBarColor` for a colormap name, a literal color, and no `color`
+  prop at all; a 0-count bucket's bar has an inline/computed `min-height` of `2px`
+  (not `0px` and not a `%`-only height, since jsdom performs no layout and can't
+  assert a rendered pixel size otherwise); that bucket's full-height hover wrapper
+  still fires `onMouseEnter`/`onMouseLeave` and shows the correct range/count in
+  the tooltip, confirming the hover target is the wrapper and not the (visually
+  thin) bar itself.
 - New `OverrideEditor.test.tsx` (no test file exists for this component today):
   "Render as" toggle appears only when the selected
   column is histogram-typed (via a mock `availableColumnTypes`); switching to
