@@ -5,10 +5,13 @@ Issue: [#1519](https://github.com/madesroches/micromegas/issues/1519)
 ## Overview
 
 An ingestion credential that carries no bound audience should behave exactly as if it were bound
-to the deployment's default audience (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset). Three
-of the four surfaces that touch an audience already resolve it that way — key mint/import, the
-three Postgres read sites, and the query-side read scope. The ingest-time write path does not: it
-keeps "unaudienced" as a distinct third state, and as a direct consequence
+to the deployment's default audience (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset). Exactly
+two code sites resolve it that way today: `micromegas_auth::policy::default_audience_from_env` for
+key mint/import, and `micromegas_analytics::audience::default_audience_from_env`, read once by
+`LakehouseContext::new` and handed to the three Postgres read sites. (The query-side read scope
+resolves no default at all — `rust/analytics/src/lakehouse/read_scope.rs:199-210` only rejects the
+removed `MICROMEGAS_UNSTAMPED_AUDIENCE`.) The ingest-time write path resolves nothing: it keeps
+"unaudienced" as a distinct third state, and as a direct consequence
 `check_process_audience_conflict` has two fail-open arms that skip the registration conflict guard
 (#1373 §6) instead of comparing.
 
@@ -119,7 +122,7 @@ integration tests. `serve_ingestion`'s two callers (`rust/monolith/src/main.rs:3
 neither `micromegas-auth` nor `micromegas-analytics`, so `from_env` cannot call
 `default_audience_from_env` itself — that is exactly why default resolution lives in
 `rust/public` instead. `from_env` therefore gains a required `WriteAudience` parameter rather than
-a fourth, crate-local copy of default resolution:
+a third, crate-local copy of default resolution:
 
 ```rust
 pub async fn from_env(default_audience: WriteAudience) -> anyhow::Result<Arc<Self>>
@@ -166,10 +169,16 @@ step" comment stay as they are.
 
 ```rust
 // rust/public/src/servers/ingestion.rs, in serve_ingestion
-let default_audience = WriteAudience::new(&default_audience_from_env("")?)
-    .with_context(|| "MICROMEGAS_DEFAULT_AUDIENCE")?;
+let default_audience = WriteAudience::new(&default_audience_from_env("")?)?;
 let service = Arc::new(WebIngestionService::new(lake, default_audience));
 ```
+
+The `WriteAudience::new` call here cannot actually fail: `default_audience_from_env`
+(`rust/auth/src/policy.rs:73-97`) already trims and validates against the same
+`[A-Za-z0-9_-]{1,255}` predicate `WriteAudience::new` applies. The `?` is redundant-by-design —
+defence in depth against the two predicates drifting apart — not a reachable error path, so it
+carries no `.with_context(...)` message (which would be unreachable, and
+`rust/public/src/servers/ingestion.rs:1-16` imports no `anyhow::Context`).
 
 Using `micromegas_auth::policy::default_audience_from_env("")`: `rust/public` is the crate that
 sees both `micromegas-auth` and `micromegas-ingestion` (`micromegas_auth::types` is already
@@ -285,60 +294,71 @@ resolved value as `existing`, which is what enforcement acts on.
 ### 6. A resolved-to-default caller stamps explicitly
 
 This is the issue's §3 decision. With `WriteAudience` single-state, `finalize_process_properties`
-appends `micromegas.audience` unconditionally, so every newly registered process carries a real
-audience property in Postgres. Consequences, all accepted:
+appends `micromegas.audience` unconditionally, so every process registered **through the HTTP
+ingestion path** carries a real audience property in Postgres. Consequences:
 
-- **`micromegas.audience` becomes genuinely non-null in Postgres for new rows written through the
-  HTTP ingestion path.** The read-side `COALESCE` in `coalesced_audience_subselect` becomes a
-  legacy-data concern for that path, not a live convention it depends on. `audience.rs:8-12`'s
-  contract must be rewritten to say so. This does **not** extend to the admin FlightSQL
-  `bulk_ingest`/`do_put_statement_ingest` replication path (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`,
-  `rust/analytics/src/replication.rs:120-145`): it `INSERT`s `processes` rows with the source
-  lake's properties verbatim, none of the stamping or stripping this plan adds included, so a
+- **HTTP-written rows are always stamped; `bulk_ingest`/replication still writes properties
+  verbatim, so `COALESCE` stays load-bearing.** That is the exact scope of the invariant, and no
+  sentence anywhere in this plan or in the docs may state it more broadly. The admin FlightSQL `bulk_ingest`/`do_put_statement_ingest` replication path
+  (`rust/public/src/servers/flight_sql_service_impl.rs:1281-1290`,
+  `rust/analytics/src/replication.rs:120-145`) is untouched: it `INSERT`s `processes` rows with the
+  source lake's properties **verbatim** — none of the stamping or stripping this plan adds — so a
   replication run from a lake holding legacy unstamped rows keeps producing NULL-audience rows
-  after this change lands. `COALESCE` stays load-bearing for replicated rows as well as
-  pre-existing legacy ones, and the `audience.rs` rewrite must say so rather than claim the
-  write path always stamps.
-- **OTLP/webhook/Firehose `process_id` (and therefore `stream_id` and `block_id`) re-derive once**
-  in any deployment whose ingestion credentials carry no audience today, because
-  `IdentityContext.audience` flips from `None` to `Some(default)` and the hash moves into the
-  per-audience namespace. `identity.rs:203-206` states outright that "long-term stability of
-  `process_id` values is not a design goal; re-deriving existing ids is always acceptable", and
-  this is the same churn shape `mkdocs/docs/admin/ingestion.md:96-101` and
-  `mkdocs/docs/otlp/index.md:108-115` already document for a deployment that starts binding
-  audiences. Pre-upgrade data keeps its old ids, resolved to the same default on read; the same
-  logical process appears as a new row going forward. A retried Firehose/OTLP POST that straddles
-  the deploy can also store one duplicate block (old `block_id` and new both present) — a
-  one-time window, already counted as `block_object_duplicate`.
-- **The five `IdentityContext` sites pass `Some(audience.as_str())`.** `IdentityContext.audience`
-  stays `Option<&str>`: `IdentityContext::default()` and the `None` arm remain reachable from
-  `otel-ingestion`'s own unit tests and any non-HTTP caller, and narrowing that type is a separate
-  cleanup with its own test churn. Worth a comment noting no HTTP path produces `None` any more.
+  after this change lands. The read-side `COALESCE` in `coalesced_audience_subselect` therefore
+  remains load-bearing for replicated rows and for pre-existing legacy ones. `audience.rs:8-12`'s
+  contract must be rewritten to say exactly this, and must not claim the write path always
+  stamps.
+- **Each audience gets its own id namespace, and the deployment default's namespace is the
+  un-salted (legacy) one — so nothing re-derives.** The five `IdentityContext` construction sites
+  (`rust/otel-ingestion/src/handler.rs:161,185,220,318`, `cloudwatch_logs.rs:223`) pass `None` when
+  the resolved write audience *is* the deployment default, and `Some(aud)` otherwise. All five have
+  the `WebIngestionService` in scope, so the default comes from `service.default_audience()`:
+
+  ```rust
+  let aud = audience.as_str();                       // always a real label now
+  let id_audience = (aud != default).then_some(aud);  // the default occupies the legacy namespace
+  ```
+
+  Consequences:
+
+  - `rust/otel-ingestion/src/identity.rs` and `rust/otel-ingestion/src/block.rs` need **no code
+    change**, and `IdentityContext.audience` stays `Option<&str>` with exactly its current
+    semantics: `Some(a)` salts `NS_OTEL_PROCESS_V1` with the audience and hashes the joined field
+    key under that namespace (`identity.rs:262-269`) and prefixes `block_id`'s hash input
+    (`block.rs:202-206`); `None` reproduces pre-Stage-5 ids byte for byte.
+  - **Zero `process_id`/`stream_id`/`block_id` re-derivation, in every deployment.** A deployment
+    leaving the knob unset (`public`) and one setting it to e.g. `unassigned` both keep deriving
+    exactly today's ids for traffic that carries no bound audience, because that traffic resolves
+    to the default and therefore keeps the legacy namespace. Only explicitly-bound keys are
+    salted, which is already true today.
+  - The audience-collision property the salting exists for is preserved: the mapping
+    audience → namespace is still injective (the default maps to the un-salted namespace, every
+    other audience to its own salted one), so two audiences sending identical resource attributes
+    still never collide on one `process_id`.
+  - Two doc comments change meaning and are **doc-only** edits: `process_id_from_resource`'s
+    `ctx.audience` paragraph (`identity.rs:208-218`) and `block_id_with_context`'s doc
+    (`block.rs:195-201`) both describe `None` as "the credential carried no audience"; `None` now
+    means "the deployment default's namespace".
 - **Local dev (`--disable-auth`) now stamps `public`.** Harmless — it is what every reader already
   resolved those processes to.
-- **`MICROMEGAS_DEFAULT_AUDIENCE` becomes retroactively unchangeable for rows stamped after this
-  ships.** Today the knob is read-side only (`coalesced_audience_subselect`,
-  `rust/analytics/src/audience.rs:34-47`): it applies the *current* value at materialization, so
-  regenerating the six views after a knob change relabels every never-stamped row to the new
-  default — which is why `mkdocs/docs/admin/authentication.md:250-260` calls changing it a
-  non-routine operation but still describes it as achievable via regeneration. Once a row carries
-  `micromegas.audience` physically in `processes.properties`, regeneration no longer touches its
-  label — there is no `UPDATE processes` anywhere in the codebase to retro-relabel it. So after
-  this plan lands, a later change to the knob permanently splits data across two labels: rows
-  written before the change keep resolving (and relabeling on regeneration) to whatever the knob
-  says now, while rows written after it keep whatever label was resolved at their write time,
-  forever. This is a one-way narrowing of an existing admin capability and is accepted, not merely
-  incidental — see the Trade-offs comparison with `explicit: bool`, which does not have this
-  property.
+- **A recorded audience is permanent, exactly as it already is for every explicitly-bound
+  credential.** There is no retro-stamp and no `UPDATE processes` anywhere in the tree, so a row
+  that carries `micromegas.audience` keeps that label for good — that has been true since #1373 for
+  every credential with a bound audience, and this change simply extends the same uniformity to
+  unaudienced writes. The rows whose effective label was ever mutable were the never-stamped ones,
+  and only because no label was recorded: read-time resolution from a config knob is an artifact of
+  absent data, not a designed flexibility lever. The operator levers are unchanged — **access
+  changes go through grants (who is granted which audiences), and new audiences come from minting
+  keys bound to them** — and neither has ever involved relabeling already-written data.
 
 **No backfill, no retro-stamp — decided.** Legacy unstamped rows are never rewritten; they keep
 resolving to the deployment default on read, exactly as `insert_process`'s doc comment has always
 promised and as `mkdocs/docs/admin/authentication.md:308-316` (before this plan's rewrite of it)
 documents as a standing accepted gap. There is no `UPDATE processes` statement anywhere in the
-codebase today and this plan does not add one for that purpose — the one it does add (step 9) only
-fabricates a legacy-shaped fixture for test coverage. Nothing about stamping new rows changes that
-reasoning, since `audience` has been a physical, `COALESCE`-resolved column since #1516 regardless
-of when a given row was written.
+codebase today and this plan does not add one for that purpose — the ones it does add (steps 9 and
+12) only fabricate a legacy-shaped fixture for test coverage. Nothing about stamping new rows
+changes that reasoning, since `audience` has been a physical, `COALESCE`-resolved column since
+#1516 regardless of when a given row was written.
 
 The alternative (keep an `explicit: bool` beside the label so a resolved-to-default caller stamps
 nothing) is analyzed under Trade-offs.
@@ -350,9 +370,10 @@ reach:
 
 - Native `process_id`s are client-generated random UUIDs, fresh per process run, so a native
   producer never re-registers a *previous* run's row.
-- An OTLP producer that ran unaudienced before the upgrade derives a *different* (default-salted)
-  `process_id` after it, so it lands on a fresh row rather than colliding with its own legacy
-  unstamped one.
+- An OTLP producer that ran unaudienced before the upgrade derives the *same* `process_id` after
+  it — Design §6's id-namespace rule keeps the deployment default in the legacy un-salted namespace
+  — so it lands on exactly its own legacy row. That row's stored audience resolves to the same
+  default the producer now resolves to, the comparison matches, and the re-registration is `Ok`.
 - What does now get rejected is a credential claiming audience `B` re-registering a legacy
   unstamped row — i.e. exactly the squatting shape the guard exists to reject.
 
@@ -388,8 +409,12 @@ reach:
    `WebIngestionService::new`; update the `insert_process_request` handler call.
 5. Update the five remaining handler call sites: `otlp.rs:153,170,187`, `firehose.rs:46`,
    `firehose_cloudwatch_logs.rs:39`, `webhook.rs:126`.
-6. `rust/otel-ingestion/src/handler.rs:161,185,220,318` and `cloudwatch_logs.rs:223`: pass
-   `Some(audience.as_str())`.
+6. `rust/otel-ingestion/src/handler.rs:161,185,220,318` and `cloudwatch_logs.rs:223`: build
+   `IdentityContext.audience` as `(aud != default).then_some(aud)` per Design §6's id-namespace
+   rule, with `default` from `service.default_audience()` (in scope at all five sites). No code
+   change in `identity.rs` or `block.rs`; both get **doc-comment edits only** —
+   `identity.rs:208-218` and `block.rs:195-201` must say `None` now means "the deployment default's
+   namespace", not "the credential carried no audience".
 
 ### Phase 4 — tests
 
@@ -398,39 +423,28 @@ reach:
    stamped like any other audience, and keep the client-`micromegas.*`-stripping coverage under a
    real audience.
 8. `rust/ingestion/tests/process_audience_cache_test.rs`: `make_test_service` passes a default;
-   delete `no_incoming_audience_skips_the_database` (no such state left). Do **not** add a
-   primed-default-entry cache-hit case in this file to cover arm 3 — priming goes straight through
-   `prime_process_audience_cache_for_test`'s direct insert, bypassing
-   `remember_process_audience` entirely, so it cannot show the `is_some()` guard's removal; the
-   cache-hit path is audience-value-agnostic, making such a case identical in substance to
-   `cache_hit_skips_the_database` under a different label. Arm 3 (the guard's removal) is not given
-   a dedicated test anywhere: once `WriteAudience` is single-state, a resolved-default caller is
-   byte-for-byte indistinguishable from any other labelled caller, so there is nothing
-   label-specific left for such a test to prove — see step 9's note on the same point.
-9. `rust/ingestion/tests/audience_stamping_db_test.rs`:
-   - Rewrite `existing_null_audience_reregistration_is_ok_and_stays_unstamped` into two tests over
-     a fabricated legacy row: insert via `insert_process` under a throwaway audience distinct from
-     the deployment default (e.g. `team-a`), then `UPDATE processes SET properties = ...` stripping
-     the audience property. The fabricating insert's audience must differ from the one used to
-     re-register — otherwise `insert_process`'s `remember_process_audience` call primes
-     `process_audience_cache` with `process_id -> team-a`, and re-registering under the default
-     would short-circuit on the cache-hit arm (`cached.as_str() == incoming`) without ever reaching
-     the resolved comparison this test exists to exercise. With that separation: re-registering the
-     stripped row under `team-a` (the original, now-stripped label) is now `AudienceConflict`;
-     re-registering it under the deployment default is `Ok` **and leaves the row unstamped**.
-   - Add the arm-1 case: an existing row stamped `team-b`, re-registered by a caller carrying no
-     bound audience (i.e. the resolved default), is now `AudienceConflict` — previously a silent
-     `Ok`.
-   - No arm-3 (memoization) test is added. Once `WriteAudience` is single-state, a
-     resolved-default caller is indistinguishable from any other labelled caller, so
-     `remember_process_audience`'s `is_some()` guard removal has no label-specific behavior left
-     to assert — the same reasoning step 8 already applies to reject the analogous no-DB test.
-     `same_audience_reregistration_is_ok` (`audience_stamping_db_test.rs:52-73`) already covers
-     insert-then-same-audience-re-registration returning `Ok` over a live DB, which is the only
-     observable-by-construction residual behavior, and it is pre-existing coverage this plan does
-     not need to duplicate. No new `#[doc(hidden)]` cache-inspection accessor is added to
-     `WebIngestionService` for this purpose.
-10. `rust/public/tests/resolve_write_audience_tests.rs`: replace the `none()` expectations with
+   delete `no_incoming_audience_skips_the_database` (no such state left). No test is added for arm 3
+   (`remember_process_audience`'s dropped `is_some()` guard): with `WriteAudience` single-state a
+   resolved-default caller is byte-for-byte indistinguishable from any other labelled caller, so
+   there is nothing label-specific left to assert.
+9. `rust/ingestion/tests/audience_stamping_db_test.rs`: rewrite
+   `existing_null_audience_reregistration_is_ok_and_stays_unstamped` into two tests over a
+   fabricated legacy row. Fabricate by inserting via `insert_process`, then stripping the audience
+   property with an `UPDATE processes SET properties = ...` helper local to this file (step 12 has
+   the `micromegas-analytics` copy). Construct the test service with `public` as its default. The
+   fabricating label must differ from **both** the default and the label the tests re-register
+   under — e.g. fabricate under `seed-only`, re-register under `team-a` — because `insert_process`
+   calls `remember_process_audience` on a fresh insert
+   (`web_ingestion_service.rs:546-550`) and the 60s TTL cannot expire within a test, so a shared
+   label would short-circuit on the cache-hit arm and never reach the resolved comparison. The two
+   cases: re-registering the stripped row under `team-a` is now `AudienceConflict`; re-registering
+   it under the deployment default is `Ok` **and leaves the row unstamped**. No separate arm-1 test
+   — `different_audience_reregistration_is_a_conflict` (`:76-107`) already asserts
+   stamped-`team-a` → re-register-`team-b` → `AudienceConflict` over a live DB, and once
+   `WriteAudience` is single-state a "carries no bound audience" caller is that same code path
+   under a different string literal. No arm-3 test either, per step 8.
+10. `rust/public/tests/resolve_write_audience_tests.rs`: `make_test_service` (`:29-38`) passes a
+    default; replace the `none()` expectations with
     default-resolution ones (no `bound_audience`, `ctx: None`, and a malformed `bound_audience`
     all resolve to the supplied default); keep the HTTP-level pass-through cases.
 11. Mechanical `WebIngestionService::new` / `WriteAudience::new` updates in the remaining test
@@ -440,43 +454,37 @@ reach:
     these files (`readiness.rs:36`, `firehose_tests.rs:243`, `firehose_cloudwatch_logs_tests.rs:205`)
     also call `WebIngestionService::from_env()` — pass a `WriteAudience` default there too (Design §3).
 12. `rust/analytics/tests/{ownership_rewrite_db_test,prong_b_guard_db_test}.rs` are **not**
-    mechanical: both call a local `seed_process(ingestion, audience: Option<&str>)` whose `None`
-    arm exists to produce a `processes` row with no `micromegas.audience` property at all, and
-    both use it for a core fixture (`process_c`, asserted against the read-side default at
-    `ownership_rewrite_db_test.rs:560-646` and `prong_b_guard_db_test.rs:373`). With
-    `WriteAudience` single-state, `insert_process` can no longer create that row directly, so in
-    each file: **keep** `seed_process`'s `audience: Option<&str>` parameter — do not narrow it to
-    `&str`. Only the `None` arm's meaning changes, from "insert with no stamp" to "insert under
-    the deployment default, then strip `micromegas.audience` back off the row via a shared
-    post-insert `UPDATE processes SET properties = ...` helper", so that `seed_process(ingestion,
-    None)` still produces a genuinely unstamped `process_c` row. `Some(label)` is unchanged. The
-    strip runs *inside* `seed_process` (not left for the caller to invoke separately), which is
-    why `seed_process` needs a `&sqlx::Pool<sqlx::Postgres>` to run the `UPDATE`. Everything
-    downstream of that (the assertions against the resolved default) is unchanged.
-
-    This `UPDATE` helper is not shared code between step 9 and this step — `rust/ingestion` and
-    `rust/analytics` are different crates and there is no shared test-support crate under `rust/`
-    — so it is written once per crate: the `micromegas-ingestion` copy lives in
-    `audience_stamping_db_test.rs` itself (step 9), and the `micromegas-analytics` copy goes in
-    `rust/analytics/tests/common/` (already shared by `ownership_rewrite_db_test.rs` and
-    `prong_b_guard_db_test.rs`) so both files' `seed_process` calls into one definition rather than
-    two divergent copies.
-
-    `prong_b_guard_db_test.rs`'s `seed_process(ingestion, pool, audience)` (`:75-79`) already takes
-    a `&sqlx::Pool<sqlx::Postgres>`, needed to run the `UPDATE` — no signature change there beyond
-    the `None` arm's new behavior. `ownership_rewrite_db_test.rs`'s `seed_process(ingestion,
-    audience)` (`:93-96`) does not take a pool at all — add one, threaded from the caller's
-    `lake.db_pool` (already in scope at every call site), matching `prong_b_guard_db_test.rs`'s
-    shape.
+    mechanical: both call a local `seed_process(.., audience: Option<&str>)` whose `None` arm
+    produces a `processes` row with no `micromegas.audience` property, and both use it for a core
+    fixture (`process_c`, asserted against the read-side default at
+    `ownership_rewrite_db_test.rs:560-646` and `prong_b_guard_db_test.rs:373`).
+    - **Keep** `seed_process`'s `audience: Option<&str>` parameter — do not narrow it to `&str`.
+      Only the `None` arm's meaning changes: insert under the deployment default, then strip
+      `micromegas.audience` back off with an `UPDATE processes SET properties = ...`, run *inside*
+      `seed_process` so no call site changes. `Some(label)` and all downstream assertions are
+      unchanged.
+    - `prong_b_guard_db_test.rs`'s `seed_process(ingestion, pool, audience)` (`:75-79`) already
+      takes a `&sqlx::Pool<sqlx::Postgres>`; `ownership_rewrite_db_test.rs`'s (`:93-96`) does not —
+      add one, threaded from the caller's `lake.db_pool` (in scope at every call site).
+    - The `UPDATE` helper goes in `rust/analytics/tests/common/` (already shared by both files).
+      It cannot be shared with step 9's copy — different crate, no shared test-support crate under
+      `rust/` — so there is one copy per crate.
+    - Update the doc comments the insert-then-strip rewrite invalidates: both `seed_process` docs
+      (`ownership_rewrite_db_test.rs:87-92`, `prong_b_guard_db_test.rs:67-75`) and
+      `ownership_rewrite_db_test.rs`'s module doc (`:26`) describe the `None` arm as a never-stamped
+      row produced "through the real `insert_process(body, &WriteAudience)` parameter, exactly the
+      path a real client hits" — that mechanism no longer exists.
 
 ### Phase 5 — docs and changelog
 
 13. Docs per the Documentation section.
 14. `CHANGELOG.md`, under `## Unreleased`:
     - Add a new **Ingestion** entry, with a **Minor breaking change** clause (Design §1/§3 API
-      breaks) and an **Upgrade note** covering the id re-derivation, the new third reader of
-      `MICROMEGAS_DEFAULT_AUDIENCE`, and that `MICROMEGAS_DEFAULT_AUDIENCE` becomes retroactively
-      unchangeable for any row stamped after the upgrade (Design §6).
+      breaks) and an **Upgrade note** covering the new **third code reader** of
+      `MICROMEGAS_DEFAULT_AUDIENCE` — the counting convention throughout this plan is code call
+      sites of a `default_audience_from_env` function (two today, see Overview), not deployment
+      roles — and stating explicitly that **no `process_id`/`stream_id`/`block_id` re-derives**,
+      per Design §6's id-namespace rule.
     - Reconcile the existing #1373 **Ingestion** entry (`CHANGELOG.md:35-50`) rather than leaving
       it to contradict the new one. Its "**Amended (#1482, still `## Unreleased`)**" paragraph
       (`:42`) currently claims `WriteAudience::none()` is already removed, that a credential with
@@ -510,6 +518,10 @@ Code:
 - `rust/public/src/servers/webhook.rs`
 - `rust/otel-ingestion/src/handler.rs`
 - `rust/otel-ingestion/src/cloudwatch_logs.rs`
+- `rust/otel-ingestion/src/identity.rs` (doc comment only — `:208-218`'s `ctx.audience` paragraph;
+  `None` now means "the deployment default's namespace". **No code change**, per Design §6)
+- `rust/otel-ingestion/src/block.rs` (doc comment only — `block_id_with_context`'s doc,
+  `:195-201`; same correction, and no code change)
 - `rust/analytics/src/audience.rs` (module doc only — the write-side contract it states changes)
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` (module doc only — `:78-80` asserts "A
   credential carrying no audience stamps nothing", which becomes false for the HTTP write path)
@@ -536,27 +548,22 @@ Docs: `CHANGELOG.md`, `mkdocs/docs/admin/{ingestion,authentication,monolith,flig
 ## Trade-offs
 
 **Resolve at the edge (chosen) vs. resolve inside the guard.** Resolving only inside
-`check_process_audience_conflict` would fix the comparison with a much smaller diff and zero id
-churn, but leaves `WriteAudience` three-state — so the next surface added on the write path
-(#1518's gate) starts from the same broken premise. The issue is explicit that the model, not just
+`check_process_audience_conflict` would fix the comparison with a much smaller diff, but leaves
+`WriteAudience` three-state — so the next surface added on the write path (#1518's gate) starts
+from the same broken premise. The issue is explicit that the model, not just
 the two arms, is the defect.
 
 **Stamp the resolved default (chosen) vs. `WriteAudience { label, explicit: bool }`.** The
-alternative keeps the stamp and the id derivation on the *explicit* audience only, so nothing
-churns: no new property on existing-shape processes, no `process_id` re-derivation, and
-`audience.rs:8-12`'s contract survives verbatim. It was rejected on two grounds. First, it keeps a
-two-headed type whose users must pick the right accessor — `label` for comparisons, `explicit` for
-stamping — which is the same class of mistake as today's `Option`, just relocated. Second, it makes
-a resolved-to-default OTLP producer and an explicitly-default-bound one derive *different*
-`process_id`s for the same resource attributes while both resolve to the same audience: two rows
-for one logical process, and a permanent asymmetry between two callers the whole point of this
-change is to make indistinguishable. The one-time id churn is bounded, documented, and explicitly
-sanctioned by `identity.rs`'s stability note. The alternative also preserves relabellability that
-the chosen design gives up: because it never writes `micromegas.audience` for a resolved-to-default
-caller, such a row stays subject to `coalesced_audience_subselect` and keeps tracking
-`MICROMEGAS_DEFAULT_AUDIENCE` on every regeneration, indefinitely — whereas stamping the resolved
-default physically freezes that row's label as of its write time, so a later knob change can never
-retro-relabel it (Design §6, new bullet). Rejected anyway on the two grounds above.
+alternative keeps the stamp on the *explicit* audience only, so no new property appears on
+existing-shape processes and `audience.rs:8-12`'s contract survives verbatim. Rejected on two
+grounds. First, it keeps a two-headed type whose users must pick the right accessor — `label` for
+comparisons, `explicit` for stamping — which is the same class of mistake as today's `Option`, just
+relocated. Second, it makes a resolved-to-default OTLP producer and an explicitly-default-bound one
+derive *different* `process_id`s for the same resource attributes while both resolve to the same
+audience: two rows for one logical process, and a permanent asymmetry between two callers the whole
+point of this change is to make indistinguishable. Design §6's id-namespace rule gives both of those
+callers the *same* `process_id`, which strengthens the second ground — and it also removes the
+alternative's only remaining pitch, since under that rule neither design re-derives any id.
 
 **Unprefixed only (chosen) vs. `{prefix}_DEFAULT_AUDIENCE`.** The knob is a property of the lake's
 contents, not a per-role setting, and the lakehouse roles read it unprefixed. Giving the ingestion
@@ -575,11 +582,37 @@ distinct error-response shapes, and it is a *widening* of behavior relative to t
 appearance: `none()` already resolved to the default on every read. Left as-is, with the `warn!`
 kept and its message updated. Unreachable for a DB-backed key.
 
-**Possible follow-up: narrow `IdentityContext.audience` from `Option<&str>`.** After this change no
-HTTP path produces `None` for it (Design §6). Narrowing the type would remove that last write-side
-`Option`, but `IdentityContext::default()` and the `None` arm are still used at ~30 call sites
-across `rust/otel-ingestion/tests/{block_tests,cloudwatch_logs_tests,cloudwatch_metrics_tests,identity_tests}.rs`,
-so it is left as `Option<&str>` here and deferred to its own cleanup with its own test churn.
+**The #1482 addendum reverted this exact write-side design; re-adding it is deliberate.** This
+design already landed on this same unmerged `audience` branch and was then reverted —
+`tasks/completed/1482_audience_column_plan.md:1508-1620` ("Addendum: one default audience, resolved
+where the audience is read", *Status: implemented*), reverted in `c84b7daae` / `8b674f942` /
+`993c07b23`. What this plan **re-adds** from that revert: `WriteAudience` single-state with `none()`
+gone and `default_from_env()`'s job moved to the caller, `WebIngestionService`'s `default_audience`
+field and `new(lake, default_audience)`, the conflict guard's existing-`NULL` arm becoming a real
+comparison, `resolve_write_audience` taking the default, and its five HTTP-edge callers passing it.
+What **stays reverted** and this plan does not bring back: `rust/ingestion/src/audience_backfill.rs`
+with its Postgres mutation on every ingestion-role startup, and `replication.rs`'s
+reject-unstamped-source-process check. Also staying reverted: `IdentityContext.audience` keeps its
+`Option<&str>` shape and `block.rs` keeps its "domain-separate only when `Some`" short-circuit —
+Design §6's id-namespace rule depends on both, which is also why the addendum's "the ~94-site test
+churn does not happen" concern remains moot here.
+
+Why the addendum's reasoning does not settle this plan: it was arguing about what the *physical
+`audience` column* needs — "the column only needs the value it materializes to be non-null, not the
+row it was extracted from" — which is correct and unchanged here (Design §6 keeps `COALESCE`
+load-bearing for legacy and replicated rows, and adds no backfill). This plan's motivation is a
+mechanism the addendum never weighed: the fail-open authorization *comparison* in
+`check_process_audience_conflict`, which is not a materialization concern and is not fixed by
+resolving at read time. And the addendum's "more moving parts — and a real Postgres mutation on
+every ingestion-role startup — than the column actually requires" objection lands squarely on the
+backfill, which is exactly the piece left reverted.
+
+**`IdentityContext.audience` stays `Option<&str>` — deliberately, not as a deferred cleanup.**
+Narrowing it would be positively undesirable under Design §6's id-namespace rule: `None` carries
+real meaning there — the deployment default's legacy un-salted namespace — and every caller,
+including the five HTTP-edge sites, must be able to express it. The `Option` is load-bearing rather
+than a leftover of the three-state write path, so no follow-up is proposed and
+`IdentityContext::default()` stays as it is.
 
 ## Documentation
 
@@ -591,36 +624,31 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
   "Ingestion writes no audience of its own, and there is no startup backfill" paragraph becomes:
   new processes are stamped with the resolved default; pre-existing unstamped rows are never
   retro-stamped and keep resolving to the default on read. The existing `process_id`-churn
-  paragraph (`:94-101`) gains this upgrade as another trigger — note that its claim about "simply
-  adopting a non-`public` default" causing churn only becomes true with this change.
+  paragraph (`:94-101`) needs no change: this upgrade is **not** a churn trigger (Design §6's
+  id-namespace rule keeps the resolved default in the legacy un-salted namespace).
 - `mkdocs/docs/admin/authentication.md:230-262` (*Audience stamping and the default*) — "A
   credential with none stamps nothing" and "without anything being written back to `processes`"
   both change. Add the third reader to "Set it on **every role that builds a lakehouse**": the
   ingestion role now needs it too, and a deployment that sets it on only some roles gets new
   processes stamped with one label while legacy rows read as another. The "Changing the default is
-  not a routine operation" warning block in this range must also note the new irreversibility
-  (Design §6): regenerating the six views after a knob change relabels only rows that were never
-  stamped (legacy rows, and rows from the admin replication path); rows the HTTP ingestion path
-  stamped with the previous default keep that label permanently, since there is no `UPDATE
-  processes` to retro-relabel them.
-- `mkdocs/docs/admin/authentication.md:263-272` (the "OTLP `process_id` re-derivation" consequence
-  bullet) — gains this change as another id-churn trigger, alongside "starts stamping" / "starts
-  binding audiences to its ingestion keys": a deployment whose ingestion credentials carry no
-  audience today re-derives every OTLP producer's `process_id` once this ships, even with no other
-  configuration change.
+  not a routine operation" warning block in this range needs a **scoping** correction, not a new
+  warning: its "regenerate the six views" advice is about read-side resolution of rows that carry no
+  stamp, so after this change it applies to legacy rows and rows from the admin replication path.
+  Rows that carry a stamp were never relabelled by regeneration — that has always been true of every
+  explicitly-bound credential's rows (Design §6) — so do not present this as a lost capability.
 - `mkdocs/docs/admin/authentication.md:281-307` (residual-gap warning, squatting paragraph) — can
   drop its implicit "only when the squatted row is already stamped" qualifier; the registration
   guard now also rejects a claim against a legacy unstamped row. The `insert_stream`/`insert_block`
   write-injection gap is untouched and stays.
 - `mkdocs/docs/admin/authentication.md:383-398` (the "Worked profiles" privacy-deployment bash
   block) — "Set it on every role that builds a lakehouse -- FlightSQL, maintenance, monolith --"
-  omits ingestion; add it, since after this plan the ingestion role is a fourth reader of
-  `MICROMEGAS_DEFAULT_AUDIENCE` and an operator who sets the knob only on the three listed roles
-  now gets new processes physically stamped `public` while legacy rows still read as the intended
-  `unassigned` label. Also qualify "regenerate the six views if you ever change it": that only
-  relabels rows that were never stamped (legacy rows, and rows from the admin replication path) —
-  rows the HTTP ingestion path stamped under a previous value of the knob keep that label
-  permanently (Design §6's one-way narrowing).
+  omits ingestion; add it, since the ingestion role now reads `MICROMEGAS_DEFAULT_AUDIENCE` too
+  (the third code reader — step 14 fixes the counting convention), and an operator who sets the knob
+  only on the three listed roles gets new processes physically stamped `public` while legacy rows
+  still read as the intended `unassigned` label. Also **rescope** "regenerate the six views if you
+  ever change it": it relabels rows that carry no stamp (legacy rows, and rows from the admin
+  replication path), which is all it ever did — a stamped row's label has never been regeneration's
+  to change. Scoping correction only; do not frame it as a limitation.
 - `mkdocs/docs/admin/authentication.md:308-316` ("Known gap — no retro-stamp") — its core claim
   ("a credential with no bound audience can still pre-register a victim's future `process_id` and
   have it stay unstamped") is now false: the squatter's registration is stamped with the resolved
@@ -659,10 +687,12 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
   audience is read out of the metadata database, so a process that was never stamped still
   materializes under a real label" is now true only of legacy rows and the admin replication path;
   rewrite to say new rows are stamped with the resolved default at write time.
-- `mkdocs/docs/otlp/index.md:85-115` — the two-arm `process_id` formula: the "no write audience"
-  arm is no longer reachable over HTTP, since the credential's audience or the deployment default
-  always applies. Same for the `block_id` audience-prefix description at `:244` and the webhook
-  note at `:443-446`.
+- `mkdocs/docs/otlp/index.md:85-115` — the two-arm `process_id` formula stays correct and both arms
+  stay reachable over HTTP; only the meaning of the "no write audience" arm needs restating, from
+  "the credential carried no audience" to "the resolved write audience is the deployment default",
+  which is the arm every unaudienced credential takes (Design §6's id-namespace rule). Same
+  restatement for the `block_id` audience-prefix description at `:244` and the webhook note at
+  `:443-446`. The `:108-115` churn paragraph needs no new trigger — this change re-derives nothing.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs:78-80` — "A credential carrying no audience
   stamps nothing; the resulting missing property is resolved to the deployment's
   `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*" is now true only of legacy rows and
@@ -716,6 +746,11 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
   and confirm a `micromegas.audience=public` property is present on newly registered processes and
   the `audience` column matches. Repeat with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned` exported for
   *all* roles and confirm both sides read `unassigned`.
+- Id-stability check (Design §6's id-namespace rule, the claim that nothing re-derives): POST the
+  same OTLP payload with an unaudienced credential before and after the change, under both the
+  unset default and `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`, and confirm the derived `process_id`
+  / `stream_id` / `block_id` are identical in all four cases; then confirm a credential bound to a
+  *non-default* audience still derives different ids from those.
 - Manual squatting check against the local stack, mirroring the new DB tests: register a process
   under `team-a` via a DB-backed ingestion key, then re-register the same `process_id` with an
   unaudienced credential and confirm a 403 where today it is a silent 200.
@@ -723,5 +758,6 @@ so it is left as `Option<&str>` here and deferred to its own cleanup with its ow
 ## Open Questions
 
 None. The backfill question is settled (Design §6: no backfill, no retro-stamp), the
-`IdentityContext.audience` typing question is settled (§6: stays `Option<&str>`, follow-up noted
-under Trade-offs), and the #1518 ordering is settled (Overview: this plan lands first).
+`IdentityContext.audience` typing question is settled (§6's id-namespace rule makes `Option<&str>`
+the correct long-term type rather than a deferred cleanup — see Trade-offs), and the #1518 ordering
+is settled (Overview: this plan lands first).
