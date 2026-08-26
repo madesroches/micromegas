@@ -1206,17 +1206,20 @@ No Rust changes — the SQL/Arrow side is complete already.
   markdown text reflects the new `formatArrowValue` behavior when the template
   references the column; `HistogramCell` receives the resolved `histogramColor`
   from a `kind: 'histogram'` override; null histogram value renders `-`.
-- New `HistogramCell.test.tsx` (or colocated in `__tests__/`): bar count always
-  matches `bins.length` (no downsampling, including a large bin count); hover on a
-  bucket's wrapper surfaces the correct range/count/percentage; median label
-  matches `estimateHistogramQuantile`; bar fill color matches
-  `resolveHistogramBarColor` for a colormap name, a literal color, and no `color`
-  prop at all; a 0-count bucket's bar has an inline/computed `min-height` of `2px`
-  (not `0px` and not a `%`-only height, since jsdom performs no layout and can't
-  assert a rendered pixel size otherwise); that bucket's full-height hover wrapper
-  still fires `onMouseEnter`/`onMouseLeave` and shows the correct range/count in
-  the tooltip, confirming the hover target is the wrapper and not the (visually
-  thin) bar itself.
+- New `HistogramCell.test.tsx` (or colocated in `__tests__/`): the bar-track
+  `<svg>` always renders exactly `bins.length` `<rect>` children (no
+  downsampling, including a large bin count); median label matches
+  `estimateHistogramQuantile`; bar fill color matches `resolveHistogramBarColor`
+  for a colormap name, a literal color, and no `color` prop at all; a 0-count
+  bucket's `<rect>` has a `height` attribute of at least `2` (an SVG user-unit
+  attribute, not a CSS height, since jsdom performs no layout and can't assert a
+  rendered pixel size otherwise). Tooltip behavior is driven by firing
+  `pointermove` on the `<svg>` itself with a stubbed `getBoundingClientRect`
+  (jsdom returns all-zero rects by default) and a `clientX` positioned over a
+  given bucket, then asserting the tooltip shows that bucket's correct
+  range/count/percentage; firing `pointerleave` clears the tooltip. This
+  confirms the hover target is the single `<svg>`'s pointer position, hit-tested
+  against bucket index, not a per-bucket element.
 - New `OverrideEditor.test.tsx` (no test file exists for this component today):
   "Render as" toggle appears only when the selected
   column is histogram-typed (via a mock `availableColumnTypes`); switching to
