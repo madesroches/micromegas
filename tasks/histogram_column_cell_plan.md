@@ -310,6 +310,17 @@ values now (case 3 above never actually sees one), so there's nothing to special
 Renders inside a `<td>`, replacing the plain-string cell content (same pattern as
 `OverrideCell` — a component, not a formatted string).
 
+- **Cell dimensions**: the histogram cell itself is a fixed-size track —
+  `width: 168px; height: 28px` (matching `option-b-tick-median.html`'s
+  `.histo-cell`), with `gap: 1px` between bars. This has to be fixed, not
+  content-derived: `TableBody` renders every cell as `<td className="...
+  truncate max-w-xs">` (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx`
+  uses `<td className="px-3 py-1.5 ...">` (line 120) — neither `<td>` sets a
+  width, and HTML's default auto table layout sizes an unfixed column to its
+  content's max-content contribution. A flex row of all `flex: 1 1 0` bar
+  `<div>`s with no intrinsic size has a max-content contribution of 0, so
+  without an explicit track width the column — and every bar in it — would
+  collapse to zero width.
 - **Bars**: one `<div>` per bucket in a flex row (`align-items: flex-end`), height
   `%` = `bucket_count / max(bucket_count in this row)` — **per-row normalization**.
   The point of the cell is to show *shape*, not to compare magnitude row-to-row (the
@@ -321,12 +332,17 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   default as Chart/Swimlane single-series color) unless the override supplies a
   `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
-  downsampling. `make_histogram`'s bin count is caller-chosen in SQL (typically
-  15–30 for this use case), and each bar's width is derived from the cell, not
-  fixed: the flex row's bars are `flex: 1 1 0` (equal shares of the track), so a
-  row with `bins.length` buckets gets bars roughly `trackWidth / bins.length` wide.
-  A column with more bins renders thinner bars rather than dropping data; there is
-  no `MAX_RENDERED_BARS` constant and no bucket-merging step.
+  downsampling, and none ever dropped or clipped. Bars are `flex: 1 1 0` with
+  **no `min-width` floor** — each bar's width is `(168px - (bins.length - 1) *
+  1px) / bins.length`, an equal share of the fixed 168px track (Design §4 above),
+  so `bins.length` bars always fit exactly within it regardless of bin count;
+  there is nothing for the track to overflow or clip. `make_histogram`'s bin
+  count is caller-chosen in SQL (typically 15–30 for this use case), where bars
+  stay comfortably visible; at very high bin counts (upward of roughly 80 bins in
+  a 168px track) individual bars become sub-pixel and visually imperceptible, but
+  the underlying data is never truncated — every bucket still occupies its exact
+  proportional share of the track width. There is no `MAX_RENDERED_BARS` constant
+  and no bucket-merging step.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
@@ -797,14 +813,34 @@ No Rust changes — the SQL/Arrow side is complete already.
 
 ## Testing Strategy
 
+- **Histogram fixtures must use explicit `UInt64`/`List<UInt64>` types.** Every
+  test below that builds a `Histogram`-typed Arrow value (this file's
+  `histogram-utils.test.ts`, plus `table-utils.test.tsx`, `HistogramCell.test.tsx`,
+  and `macro-substitution.test.ts`) has to construct `count` and `bins` with
+  explicit field types — `new Uint64()` / a `List` of `Uint64` — the same way
+  existing fixtures already do for other typed columns (`vectorFromArray(...,
+  new Utf8View())` in `arrow-ipc-fixtures.ts:213`, `new BinaryView()`/`Float64` in
+  `table-utils.test.tsx:29,219`). A naive `vectorFromArray([{count: 5, bins: [1,
+  2, 3]}])` infers `Float64`/`List<Float64>` from the plain JS numbers, which
+  still satisfies `isHistogramStructType` (Design §1 only checks field
+  names/order and that the last field is a `List`) but never produces a single
+  `bigint` — silently skipping the one runtime hazard Design §4 calls out (the
+  `bigint`/`Vector` read boundary `toHistogramValue` exists to normalize). Factor
+  this into one shared fixture helper (e.g. `makeHistogramVector` in
+  `arrow-ipc-fixtures.ts`) reused by all four test files rather than duplicated
+  per file.
 - `arrow-utils.test.ts`: `isHistogramStructType` — true for a struct built with
   the exact field/type shape; false for a struct missing a field, with fields out
   of order, with an extra field, or with a non-`List` `bins` field; false for
   unrelated Struct/List/primitive columns.
-- New `histogram-utils.test.ts`: `estimateHistogramQuantile` against hand-computed
-  expectations (mirror a couple of cases from `expand_histogram_tests.rs` /
-  `histogram_runtime_bounds_tests.rs` for cross-checking against the Rust UDF's
-  behavior).
+- New `histogram-utils.test.ts`: `toHistogramValue` against the shared
+  `UInt64`/`List<UInt64>` fixture — asserts `count` (a `bigint` on the raw
+  struct) decodes to a plain `number`, and `bins` (a `Vector<bigint>` with no
+  numeric index signature) decodes to a plain `number[]` via `Array.from`, not
+  `[object BigInt]` or a `Vector` instance. `estimateHistogramQuantile` against
+  hand-computed expectations (mirror a couple of cases from
+  `expand_histogram_tests.rs` / `histogram_runtime_bounds_tests.rs` for
+  cross-checking against the Rust UDF's behavior).
 - New `histogram-colors.test.ts`: `resolveHistogramBarColor` — each of the six
   colormap names dispatches to its `d3-scale-chromatic` interpolator and varies
   with `t`; an unrecognized string (hex color, CSS name) is returned unchanged
