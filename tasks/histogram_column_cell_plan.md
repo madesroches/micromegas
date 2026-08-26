@@ -320,14 +320,13 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   degenerate case instead. Fill color defaults to `var(--chart-line)` (same
   default as Chart/Swimlane single-series color) unless the override supplies a
   `histogramColor` — see Design §6.
-- **Bucket count vs. cell width**: `make_histogram`'s bin count is caller-chosen in
-  SQL (typically 15–30 for this use case) and a compact cell is roughly 120–170px
-  wide, so most queries need no downsampling. As a safety net, if
-  `bins.length` exceeds a `MAX_RENDERED_BARS` constant (e.g. 60), merge adjacent
-  buckets pairwise (summing counts) until under the cap, purely for display — the
-  underlying struct/tooltip data is unaffected. The exact value (60) isn't
-  load-bearing: it only needs to comfortably exceed the typical 15–30 bin count
-  `make_histogram` callers choose, not match any SQL-side constant.
+- **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
+  downsampling. `make_histogram`'s bin count is caller-chosen in SQL (typically
+  15–30 for this use case), and each bar's width is derived from the cell, not
+  fixed: the flex row's bars are `flex: 1 1 0` (equal shares of the track), so a
+  row with `bins.length` buckets gets bars roughly `trackWidth / bins.length` wide.
+  A column with more bins renders thinner bars rather than dropping data; there is
+  no `MAX_RENDERED_BARS` constant and no bucket-merging step.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
@@ -583,8 +582,6 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
      of `expand.rs`'s bin-center math (return the boundaries, not the center, since
      the tooltip wants a range), including its `start === end → bin_width = 1.0`
      unit-width fallback (`expand.rs:103-107`).
-   - `downsampleBins(bins: number[], maxBars: number): number[]` — pairwise merge
-     when `bins.length > maxBars`.
 3. **`lib/histogram-colors.ts`** (new file): a `COLORMAP_NAMES` set and
    `resolveHistogramBarColor(color: string | undefined, t: number): string` —
    `undefined` → `var(--chart-line)`; a recognized name → the matching
@@ -669,7 +666,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 | File | Change |
 |---|---|
 | `analytics-web-app/src/lib/arrow-utils.ts` | new `isHistogramStructType` |
-| `analytics-web-app/src/lib/histogram-utils.ts` | new file — quantile/bucket-range/downsample math |
+| `analytics-web-app/src/lib/histogram-utils.ts` | new file — quantile/bucket-range math |
 | `analytics-web-app/src/lib/histogram-colors.ts` | new file — `resolveHistogramBarColor` (colormap-name vs. literal-color dispatch), `COLORMAP_PREVIEW_GRADIENTS` (swatch CSS gradients) |
 | `analytics-web-app/src/lib/screen-renderers/macro-substitution.ts` | `formatArrowValue` histogram-struct branch |
 | `analytics-web-app/src/components/HistogramCell.tsx` | new file — bar chart + median + tooltip |
@@ -807,8 +804,7 @@ No Rust changes — the SQL/Arrow side is complete already.
 - New `histogram-utils.test.ts`: `estimateHistogramQuantile` against hand-computed
   expectations (mirror a couple of cases from `expand_histogram_tests.rs` /
   `histogram_runtime_bounds_tests.rs` for cross-checking against the Rust UDF's
-  behavior); `downsampleBins` bucket-count and count-conservation (sum before ==
-  sum after merge).
+  behavior).
 - New `histogram-colors.test.ts`: `resolveHistogramBarColor` — each of the six
   colormap names dispatches to its `d3-scale-chromatic` interpolator and varies
   with `t`; an unrecognized string (hex color, CSS name) is returned unchanged
@@ -825,11 +821,11 @@ No Rust changes — the SQL/Arrow side is complete already.
   markdown text reflects the new `formatArrowValue` behavior when the template
   references the column; `HistogramCell` receives the resolved `histogramColor`
   from a `kind: 'histogram'` override; null histogram value renders `-`.
-- New `HistogramCell.test.tsx` (or colocated in `__tests__/`): bar count matches
-  (post-downsample) bucket count; hover on a bar surfaces the correct
-  range/count/percentage; median label matches `estimateHistogramQuantile`; bar
-  fill color matches `resolveHistogramBarColor` for a colormap name, a literal
-  color, and no `color` prop at all.
+- New `HistogramCell.test.tsx` (or colocated in `__tests__/`): bar count always
+  matches `bins.length` (no downsampling, including a large bin count); hover on a
+  bar surfaces the correct range/count/percentage; median label matches
+  `estimateHistogramQuantile`; bar fill color matches `resolveHistogramBarColor`
+  for a colormap name, a literal color, and no `color` prop at all.
 - `OverrideEditor.test.tsx`: "Render as" toggle appears only when the selected
   column is histogram-typed (via a mock `availableColumnTypes`); switching to
   Histogram hides the Format field and shows the swatch row; column dropdown for
