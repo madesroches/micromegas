@@ -87,10 +87,15 @@ issue's proposed config surface (see Design below).
   to `ctx.row[col]` (`macro-resolve.ts:94-99`, case `'rowCol'`) — the **raw** cell
   value, whatever type it is — then `formatArrowValue(value, dataType)`
   (`macro-substitution.ts:26-32`) stringifies it for output: special-cased for
-  timestamps, otherwise a bare `String(value)`. For a `Struct`/`List` value (like a
-  histogram) that's not useful today (confirmed: no `isListType`/`isStructType`
-  handling anywhere in `arrow-utils.ts`) — this plan's only change to the override
-  pipeline itself is teaching `formatArrowValue` one more case (Design §5).
+  timestamps, otherwise a bare `String(value)`. For a `Struct` value (like a
+  histogram), `String(value)` already produces a readable field dump today: the
+  cell value is a `StructRowProxy` whose `get()` trap resolves prototype methods
+  first (`Reflect.has(row, key)`, `node_modules/apache-arrow/row/struct.js:98-101`),
+  so `String(value)` calls `StructRow.toString()` (same file, lines 42-44) and
+  yields `{"start": 0, "end": 50, "min": …, "bins": ["3","7",…]}` — not
+  `[object Object]`. `$row.col` on a histogram column therefore already dumps the
+  struct today; this plan's only change to the override pipeline itself (Design
+  §5) makes that dump more compact/consistent, not functional.
 - Both cell types configure `overrides`/`hiddenColumns`(`hiddenRows` for Transposed)
   as string-array/array fields in `options` (`QueryCellConfig.options?:
   Record<string, unknown>`, `notebook-types.ts:120`).
@@ -271,8 +276,8 @@ Extend the existing binary switch, evaluated in this order per column:
 
 1. Column has a `ColumnOverride` with `kind: 'markdown'` (or no `kind` — an
    existing override) → `OverrideCell`, unchanged rendering path. If the format
-   references a histogram-typed column via `$row.col`, it now resolves to a
-   readable struct dump instead of an unhelpful stringification (see below) — this
+   references a histogram-typed column via `$row.col`, it already resolves to a
+   readable struct dump rather than an unhelpful stringification (see below) — this
    is the whole debugging story, no separate mechanism.
 2. Column `isHistogramStructType(col.type)` **and** (no override **or**
    `kind: 'histogram'`) → new `HistogramCell` component (bars + median +
@@ -283,7 +288,7 @@ Extend the existing binary switch, evaluated in this order per column:
    column that isn't explicitly overridden to markdown.
 
 ```
-override?.kind is markdown (or unset)  → OverrideCell        (existing; $row.col now
+override?.kind is markdown (or unset)  → OverrideCell        (existing; $row.col already
                                                                 dumps histogram structs
                                                                 usefully — Design §5)
 histogram && (no override | histogram) → <HistogramCell color={override?.histogramColor}>
@@ -310,22 +315,30 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   The point of the cell is to show *shape*, not to compare magnitude row-to-row (the
   issue frames this as "spot rows with unusual spread, multiple modes, or
   outliers" — a shape question), so each row's own tallest bucket reaches 100%
-  height. Fill color defaults to `var(--chart-line)` (same default as Chart/Swimlane
-  single-series color) unless the override supplies a `histogramColor` — see
-  Design §6.
+  height. When the row's max bucket is 0 (see "Null and degenerate values" below),
+  skip that division — it would otherwise be `0/0 = NaN` — and render the
+  degenerate case instead. Fill color defaults to `var(--chart-line)` (same
+  default as Chart/Swimlane single-series color) unless the override supplies a
+  `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: `make_histogram`'s bin count is caller-chosen in
   SQL (typically 15–30 for this use case) and a compact cell is roughly 120–170px
   wide, so most queries need no downsampling. As a safety net, if
   `bins.length` exceeds a `MAX_RENDERED_BARS` constant (e.g. 60), merge adjacent
   buckets pairwise (summing counts) until under the cap, purely for display — the
-  underlying struct/tooltip data is unaffected.
+  underlying struct/tooltip data is unaffected. The exact value (60) isn't
+  load-bearing: it only needs to comfortably exceed the typical 15–30 bin count
+  `make_histogram` callers choose, not match any SQL-side constant.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
-  cell's value — no new SQL column. Drawn as a vertical gold (`var(--brand-gold)`)
-  tick over the bar area at the median's x-position, with the numeric value in a
-  fixed-width label trailing the chart (see `option-b-tick-median.html`). Chosen
-  over overlaying the number directly on the bars (Option A, kept in
+  cell's value — no new SQL column, including that function's `return end` fallback
+  when no bucket's cumulative count reaches the target ratio (`quantile.rs:38`).
+  Drawn as a vertical gold (`var(--brand-gold)`) tick over the bar area at the
+  median's x-position, with the numeric value in a fixed-width label trailing the
+  chart (see `option-b-tick-median.html`) — rendered via `toLocaleString()`, no
+  unit, consistent with `formatCell`'s numeric default (`table-utils.tsx:767-774`);
+  per-column unit hints are a possible follow-up, out of scope here. Chosen over
+  overlaying the number directly on the bars (Option A, kept in
   `option-a-text-median.html` for reference) because the tick communicates *where*
   the median sits relative to the spread, not just its value, and a trailing
   fixed-width label can't collide with a tall bucket underneath it.
@@ -333,25 +346,47 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   null>`, `onMouseEnter`/`onMouseMove`/`onMouseLeave` per bar,
   `position: fixed` div styled `bg-app-bg border border-theme-border rounded-md
   shadow-lg`. Content: bucket range (`[start, end)` computed the same way as
-  `expand_histogram`) and count + percentage of the row's total (`bucket_count /
-  count * 100`).
-- **Null handling**: a `null` histogram value renders `-`, matching `formatCell`'s
-  existing null convention (`table-utils.tsx:755`).
+  `expand_histogram`, including its `start === end → bin_width = 1.0` unit-width
+  fallback, `expand.rs:103-107`) and count + percentage of the row's total
+  (`bucket_count / count * 100`, only when `count > 0` — see below).
+- **Null and degenerate values**: a `null` histogram value renders `-`, matching
+  `formatCell`'s existing null convention (`table-utils.tsx:755`). The same `-`
+  (empty track, no median tick) also covers three degenerate-but-non-null cases the
+  Rust side can actually produce: `bins` empty (`new_non_configured` + all-null
+  input leaves `start = end = 0`, `bins: Vec::new()` — `accumulator.rs:46-57`),
+  `count === 0` (every group whose sampled values are all null), or every bucket at
+  0 (equivalent to `count === 0`, since `update_batch_scalars` clamps every
+  non-null sample into range, so `sum(bins) === count` — `accumulator.rs:120-130`).
+  Rendering these as `-` avoids computing `bucket_count / max(...) = 0/0 = NaN` bar
+  heights and `bucket_count / count * 100 = 0/0` tooltip percentages.
 - **Value shape from Arrow JS**: apache-arrow (`^21.2.0`) surfaces a `Struct` column
-  cell as a `StructRowProxy` with named field access (`row.start`, `row.bins`, …)
-  and the `bins` `List<UInt64>` field as a `Vector`/typed array (`.toArray()` or
-  iteration) — verify exact accessor shape against the installed version during
-  implementation; not yet exercised elsewhere in this codebase (no existing
-  List/Struct column consumer to copy from).
+  cell as a `StructRowProxy` with named field access. `start`/`end`/`min`/`max`/
+  `sum`/`sum_sq` are `Float64` fields, which decode to plain `number`
+  (`type.d.ts:222-223`, `TArray: Float64Array; TValue: number`). `count` and every
+  element of `bins` are `UInt64`, which decode to `bigint` in this arrow version
+  (`type.d.ts:142-143`, `TArray: BigUint64Array; TValue: bigint`) — `row.count` is a
+  `bigint`, and `row.bins` (`List<UInt64>`) is a `Vector` (`getList`,
+  `visitor/get.js:169-176`), not an indexable array — it has no numeric index
+  signature, so it must be read via `Array.from(row.bins, Number)` or iteration, not
+  `bins[i]`. This plan normalizes once at the read boundary: a
+  `toHistogramValue(raw: StructRowProxy): HistogramValue` helper (Implementation
+  Steps §2) does `Number(raw.count)` and `Array.from(raw.bins, Number)`, so every
+  downstream helper and component works with plain `number`s only — no `bigint`
+  arithmetic anywhere else in the histogram code.
 
-### 5. Debugging: reuse Markdown, no dedicated feature
+### 5. Debugging: reuse Markdown, no dedicated feature (already works today)
 
-The task asked for a way to fall back to the raw struct for debugging. Rather than
-a bespoke mechanism, this plan makes the *existing* Markdown override path handle it
-for free: `formatArrowValue` (`macro-substitution.ts:26-32`), the function that
-renders a resolved `$row.col`/`$variable.col`/etc. macro to text — shared by both
-the SQL-side `substituteMacros` and the display-side `evaluateTemplate` — gains one
-more case:
+The task asked for a way to fall back to the raw struct for debugging. The
+*existing* Markdown override path already covers this for free, with zero code
+changes required: because a histogram-typed cell value is a `StructRowProxy`,
+`formatArrowValue`'s existing fallback `String(value)` already resolves to
+`StructRow.toString()` (Current State above) and renders a readable field dump
+(`{"start": 0, "end": 50, "min": …, "bins": […]}`). What follows is an optional
+polish, not a fix: `formatArrowValue` (`macro-substitution.ts:26-32`), the function
+that renders a resolved `$row.col`/`$variable.col`/etc. macro to text — shared by
+both the SQL-side `substituteMacros` and the display-side `evaluateTemplate` — can
+gain one more case to make that dump more compact/consistent (fixed field order, no
+per-value quoting) than Arrow's own pretty-printer produces:
 
 ```ts
 export function formatArrowValue(value: unknown, dataType?: DataType): string {
@@ -377,7 +412,8 @@ feature with its own UI, state, or context-menu item. Switching back to Histogra
 
 This is strictly less surface than a dedicated `textColumns` toggle would have been:
 no new `options` field, no context-menu changes to `SortHeader`/`RowContextMenu`, no
-`formatCell` branch — one function gains one `if`.
+`formatCell` branch — and even the one `formatArrowValue` case above is optional,
+since the debug path already works without it.
 
 ### 6. Custom bar color
 
@@ -438,10 +474,22 @@ SQL/client color parity ever matters.
 **Editor UI** (see `option-b-cell-editor.html` mockup, revised): a swatch picker,
 not a text field a user has to type a name into (or a paragraph explaining what
 names exist). Each override card gets one addition — when the selected column
-`isHistogramStructType` (needs `availableColumnTypes`, see below), a two-way
-"Render as" toggle appears above the existing Format field: **Markdown** (today's
-only option; format textarea shown, unchanged) or **Histogram** (format textarea
-hidden; a color-swatch row shown instead):
+`isHistogramStructType`, **or** the card's own `override.kind === 'histogram'`
+already, a two-way "Render as" toggle appears above the existing Format field:
+**Markdown** (today's only option; format textarea shown, unchanged) or
+**Histogram** (format textarea hidden; a color-swatch row shown instead). The
+`kind === 'histogram'` fallback matters because the new `availableColumnTypes`
+prop (see below) can be empty or missing the column even for a histogram-typed
+one: `OverrideEditor` already treats an empty column list as a
+real "no results yet" state (`hasResults = availableColumns.length > 0`,
+`OverrideEditor.tsx:25`), both `TableRenderer.tsx` (`availableColumns` is `[]`
+before a query has run, line 203) and `NotebookRenderer.tsx` (`availableColumns`
+is `undefined` before the cell has results, line 833) supply that empty state
+before a successful run, and an orphaned override targets a column no longer in
+the result set at all. Without the `kind` fallback, a card already saved with
+`kind: 'histogram'` would show the Format textarea instead of the toggle/swatches
+in any of those states, and editing it there would write a stray `format` onto a
+histogram card.
 
 - Six preset swatches, one per colormap, each rendered as its own actual
   mini-gradient (a small `linear-gradient(...)` sampled at 5-6 stops per colormap —
@@ -456,8 +504,9 @@ hidden; a color-swatch row shown instead):
 - A live bar preview below the row, using the exact same normalized-height math as
   the real cell, updates immediately on selection.
 
-For a non-histogram column, the toggle doesn't render at all — the card looks
-exactly as it does today.
+For a column that's neither histogram-typed (by `availableColumnTypes`) nor already
+`kind: 'histogram'`, the toggle doesn't render at all — the card looks exactly as it
+does today.
 
 `COLORMAP_PREVIEW_GRADIENTS: Record<ColormapName, string>` (new, in
 `histogram-colors.ts`) holds one hardcoded CSS gradient string per colormap purely
@@ -520,12 +569,20 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    check per Design §1). No existing helper to extend — this is new.
 2. **`lib/histogram-utils.ts`** (new file): pure functions shared across the render
    and debug-format paths —
-   - `type HistogramValue = { start: number; end: number; min: number; max: number; sum: number; sum_sq: number; count: number | bigint; bins: ArrayLike<number | bigint> }`
+   - `type HistogramValue = { start: number; end: number; min: number; max: number; sum: number; sum_sq: number; count: number; bins: number[] }`
+     — plain numbers only (Design §4); nothing downstream of `toHistogramValue`
+     touches a `bigint`.
+   - `toHistogramValue(raw: StructRowProxy): HistogramValue` — reads the raw Arrow
+     struct cell once, converting `count` (`bigint`) via `Number(raw.count)` and
+     `bins` (`Vector<bigint>`) via `Array.from(raw.bins, Number)` (Design §4).
    - `estimateHistogramQuantile(h: HistogramValue, ratio: number): number` — port of
-     `quantile.rs::estimate_quantile`.
+     `quantile.rs::estimate_quantile`, including its `return end` fallback
+     (`quantile.rs:38`) when no bucket's cumulative count reaches `count * ratio`
+     (e.g. `count === 0`).
    - `bucketRange(h: HistogramValue, bucketIndex: number): [number, number]` — port
      of `expand.rs`'s bin-center math (return the boundaries, not the center, since
-     the tooltip wants a range).
+     the tooltip wants a range), including its `start === end → bin_width = 1.0`
+     unit-width fallback (`expand.rs:103-107`).
    - `downsampleBins(bins: number[], maxBars: number): number[]` — pairwise merge
      when `bins.length > maxBars`.
 3. **`lib/histogram-colors.ts`** (new file): a `COLORMAP_NAMES` set and
@@ -560,7 +617,10 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    never receive it. Then thread it through `TableCellEditor`/
    `TransposedTableCellEditor` into `OverrideEditor`'s new prop of the same name.
 9. **`components/OverrideEditor.tsx`**: accept the new `availableColumnTypes` prop;
-   in each override card, when the selected column `isHistogramStructType`, render
+   in each override card, when the selected column `isHistogramStructType` **or**
+   the card's own `kind === 'histogram'` already (Design §6 — falls back to the
+   stored `kind` whenever `availableColumnTypes` is empty or missing the column, so
+   a saved histogram card never silently reverts to a plain Format textarea), render
    the "Render as" toggle (Markdown / Histogram) above the Format field; when
    Histogram is selected, swap the Format textarea for a swatch-picker row (six
    colormap swatches from `COLORMAP_PREVIEW_GRADIENTS` + one custom-color swatch
@@ -638,13 +698,15 @@ No Rust changes — the SQL/Arrow side is complete already.
   toggle.** An earlier draft of this plan proposed a separate `options.textColumns`
   list and a "Show as Text" context-menu item (mirroring "Hide Column"), reasoning
   that a debug flip is a quick reflex better suited to a context menu than a
-  multi-field editor. Revised per direction: teaching `formatArrowValue` to render
-  a histogram struct usefully means the *existing* Markdown override already does
-  the job — `$row.col` on a histogram column now dumps its fields instead of
-  stringifying uselessly. This is strictly less code (one function gains one `if`,
-  vs. a new `options` field, two hooks, and two context-menu items) and one fewer
-  concept for a user to learn — "Overrides" already is the place to change how a
-  column renders, debug view included.
+  multi-field editor. Revised per direction: the *existing* Markdown override path
+  already does the job with zero code changes — `$row.col` on a histogram column
+  already dumps its fields via Arrow's own `StructRow.toString()` (Current State
+  above), not "stringifying uselessly" as an earlier draft of this plan assumed.
+  The optional `formatArrowValue` branch (Design §5) only tidies that dump's
+  formatting. Either way this is strictly less code than a dedicated toggle (at
+  most one function gains one `if`, vs. a new `options` field, two hooks, and two
+  context-menu items) and one fewer concept for a user to learn — "Overrides"
+  already is the place to change how a column renders, debug view included.
 - **`ColumnOverride.kind: 'markdown' | 'histogram'` vs. a separate
   `histogramColors` option/component.** An earlier draft proposed a standalone
   option and a sibling `HistogramColorEditor` component, reasoning that
@@ -752,8 +814,11 @@ No Rust changes — the SQL/Arrow side is complete already.
   with `t`; an unrecognized string (hex color, CSS name) is returned unchanged
   regardless of `t`; `undefined` → `var(--chart-line)`.
 - `macro-substitution.test.ts`: `formatArrowValue` renders a histogram-struct value
-  as its field dump (`{start:..., end:..., count:..., bins:[...]}`) instead of
-  `[object Object]`; non-histogram struct/list/primitive values unaffected.
+  as its compact field dump (`{start:..., end:..., count:..., bins:[...]}`),
+  asserted against Arrow's current `StructRow.toString()` output as the baseline
+  (what `String(value)` already produces without this change) rather than
+  `[object Object]`, confirming the new branch is a formatting improvement, not a
+  functional fix; non-histogram struct/list/primitive values unaffected.
 - `table-utils.test.tsx`: `TableBody` renders `HistogramCell` for a histogram-typed
   column by default and when `kind: 'histogram'`; renders `OverrideCell` when
   `kind: 'markdown'` (or unset) even on a histogram column, and that its resolved
@@ -802,12 +867,3 @@ No Rust changes — the SQL/Arrow side is complete already.
    — flagged for a quick sign-off rather than added unilaterally. If declined,
    ship with literal-color support only in v1 (no
    dependency needed for that case) and revisit later.
-5. **Unit formatting for the median label** — the `Histogram` struct carries no
-   unit; v1 formats the median as a plain number (`toLocaleString`-style,
-   consistent with `formatCell`'s numeric default). Reusing the `format_value(x,
-   unit)` template function (used by markdown overrides today) for histogram
-   columns specifically would need a small config surface (e.g. a per-column unit
-   hint) — out of scope for this plan; flagged as a natural follow-up if requested.
-6. **`MAX_RENDERED_BARS` downsample threshold** — proposed 60 as a safety net; not
-   expected to trigger for typical `make_histogram` bin counts (15–30) at normal
-   cell widths, so the exact number isn't load-bearing.
