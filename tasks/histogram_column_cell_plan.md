@@ -357,6 +357,20 @@ calls `isHistogramStructType(row.type)` once per row, hoisted above the
 reuses that single boolean for every value in the row instead of recomputing it
 per value.
 
+This only keeps the *routing* check (`isHistogramStructType`) cheap — it says
+nothing about `HistogramCell`'s own per-render cost once a cell is routed there.
+`TableBody` builds `const row = data.get(rowIdx)` fresh inside its per-row
+`Array.from`, and `TransposedTableCell` does the equivalent per row too, so the
+histogram struct value `HistogramCell` receives has a fresh identity on every
+parent render: Arrow's getters allocate a new `StructRowProxy` from `getStruct`
+and a new `Vector` from `getList` on every access, the exact trap `OverrideCell`
+had before #1092 (`tasks/completed/1092_override_cell_memo_fix_plan.md`; see the
+"Do NOT replace `[cacheKey]` with the obvious prop list" comment at
+`table-utils.tsx:384-386`). A `useMemo(..., [value])` inside `HistogramCell`
+around `toHistogramValue`/`estimateHistogramQuantile`/per-bucket
+`resolveHistogramBarColor` would therefore never hit. See Design §4 for
+`HistogramCell`'s own memoization plan.
+
 `formatCell` itself needs **no changes** — unlike an earlier draft of this plan,
 which added a dedicated debug-string branch there. It's unreachable for histogram
 values now (case 3 above never actually sees one), so there's nothing to special-case.
@@ -366,6 +380,29 @@ values now (case 3 above never actually sees one), so there's nothing to special
 Renders inside a `<td>`, replacing the plain-string cell content (same pattern as
 `OverrideCell` — a component, not a formatted string).
 
+- **Memoization**: the struct value `HistogramCell` receives is a fresh
+  `StructRowProxy` on every parent render — `TableBody` builds `const row =
+  data.get(rowIdx)` fresh inside its per-row `Array.from`, and Arrow's
+  `getStruct`/`getList` getters allocate a new proxy/`Vector` on every access —
+  so keying a `useMemo` on the value's identity (`[value]`) never hits, exactly
+  the trap #1092 fixed for `OverrideCell`
+  (`tasks/completed/1092_override_cell_memo_fix_plan.md`; see the "Do NOT
+  replace `[cacheKey]` with the obvious prop list" comment at
+  `table-utils.tsx:384-386`). `HistogramCell` is exported wrapped in
+  `React.memo` with a custom comparator, not the default shallow-prop
+  comparison (which would also fail, for the same reason): the comparator
+  normalizes each side's value via `toHistogramValue` (cheap — one `Number()`
+  and one `Array.from`) and compares the resulting `{start, end, count,
+  bins}` plus the `color` prop by content, rather than comparing the raw
+  `StructRowProxy`/`Vector` references. When the comparator reports equal,
+  React skips re-invoking the component entirely, so `estimateHistogramQuantile`,
+  `bucketRange`, and the per-bucket `resolveHistogramBarColor` calls — the
+  actual expensive work — never re-run for a row whose histogram content is
+  unchanged. This lives in `HistogramCell`/`histogram-utils.ts`, not in
+  `table-utils.tsx`'s `stableStringify`/`buildEvaluateKey` (importing those
+  would create a circular dependency, since `table-utils.tsx` is what renders
+  `HistogramCell`) — a small structural equality check plays the same role
+  here that the stringified cache key plays for `OverrideCell`.
 - **Cell dimensions**: the histogram cell itself is `width: 168px; height: 28px`
   (matching `option-b-tick-median.html`'s `.histo-cell`), but that 168px is the
   whole cell, not the bar track — it splits into a `120px` bar track
@@ -407,7 +444,12 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   because the full-height wrapper (not the bar) is the hover target, that stub's
   hover area is the whole 28px track, not just its own 2px — so the per-bucket
   tooltip (see "Tooltip" below) works on empty buckets too — exactly the buckets a
-  user would probe when reading spread. When the row's max bucket is 0 (see "Null
+  user would probe when reading spread. This "visible stub" guarantee is about
+  the bar's *height*, not its *color* — a 2px-tall stub filled in a near-black
+  colormap color against the app's near-black background would technically
+  render but not actually be visible; Design §6 floors the colormap sampling
+  ratio so that doesn't happen, keeping the guarantee true in every color mode.
+  When the row's max bucket is 0 (see "Null
   and degenerate values" below), skip the ratio entirely — it would otherwise be
   `0/0 = NaN` — and render the degenerate case instead. Fill color defaults to
   `var(--chart-line)` (same default as Chart/Swimlane single-series color) unless
@@ -552,7 +594,14 @@ from its value — no mode selector needed:
   (Design §4). There's no per-bucket "value" column to plug in here (unlike
   Chart/Map's row-level `color` column, a single `Histogram` struct has no
   secondary per-bucket signal beyond the counts it already carries), so color and
-  height deliberately reinforce the same signal.
+  height deliberately reinforce the same signal. Sampled at raw `t`, this would
+  break Design §4's "visible stub" guarantee: `t = 0` (or close to it) is
+  near-black for magma/inferno, indistinguishable against `--app-bg: #0a0a0f`,
+  so a zero- or low-count bucket's min-height stub would be present in the DOM
+  but not actually visible. To keep the guarantee true in colormap mode too,
+  `t` is floored into `[0.15, 1]` before sampling — `t' = 0.15 + t * 0.85` — so
+  every bucket, however low its count, lands past the near-black end of the
+  scale; only the top of the range still reaches each colormap's brightest stop.
 - **Anything else** (a `#rrggbb`/`#rrggbbaa` hex string, or any valid CSS color) →
   every bar in the cell gets that one flat color, `t` unused. This replaces flat
   `var(--chart-line)` with a flat color of the user's choosing — a simpler ask than
@@ -573,7 +622,12 @@ const COLORMAP_NAMES = new Set(['viridis', 'magma', 'plasma', 'inferno', 'cividi
 
 export function resolveHistogramBarColor(color: string | undefined, t: number): string {
   if (!color) return 'var(--chart-line)'
-  if (COLORMAP_NAMES.has(color)) return colormapInterpolators[color](t) // d3-scale-chromatic
+  if (COLORMAP_NAMES.has(color)) {
+    // Floor into [0.15, 1]: a zero/low-count bucket must not sample the
+    // near-black end of magma/inferno-style colormaps against --app-bg
+    // (#0a0a0f), or Design §4's "visible stub" guarantee breaks silently.
+    return colormapInterpolators[color](0.15 + t * 0.85) // d3-scale-chromatic
+  }
   return color // literal CSS color — flat fill, t unused
 }
 ```
@@ -637,6 +691,15 @@ there's no staleness to force — it's preserved rather than overwritten:
   `histogramColor` untouched (a value from a prior Histogram stint on this same
   card is preserved, same as the column-change case in Design §2).
 
+- A leading **Default** swatch, rendered as a flat `var(--chart-line)` square (the
+  same fallback `resolveHistogramBarColor` returns for `undefined`), comes first
+  in the row. Clicking it sets `histogramColor: undefined` — this is the only
+  control in the row that *clears* the field rather than setting it, and it's
+  what makes the unset state reachable again once any other swatch has been
+  clicked: without it, the only way back to the default bar color is deleting
+  the whole override card, which for a card toggled over from Markdown (Design
+  §6's toggle rules above) would also discard the preserved `format`. Clicking
+  Default only clears `histogramColor`; it doesn't touch `format`.
 - Six preset swatches, one per colormap, each rendered as its own actual
   mini-gradient (a small `linear-gradient(...)` sampled at 5-6 stops per colormap —
   see `buildColormapPreviewGradient` below) — the swatch *is* the documentation, no
@@ -646,7 +709,10 @@ there's no staleness to force — it's preserved rather than overwritten:
   required either, though the resulting hex is still what's stored). Clicking it
   opens the picker; the swatch shows whatever was last chosen.
 - Whichever swatch matches the card's current `histogramColor` gets a highlighted
-  ring border, so the active choice is visible at a glance, not inferred from text.
+  ring border, so the active choice is visible at a glance, not inferred from
+  text — including Default, which carries the ring exactly when `histogramColor`
+  is `undefined` (a brand-new histogram card's starting state, per Implementation
+  Steps §9).
 - A live bar preview below the row, using the exact same normalized-height math as
   the real cell, updates immediately on selection.
 
@@ -661,7 +727,10 @@ at `t = 0, 0.2, ..., 1` fed through `colormapInterpolators[name](t)` and joined
 into a `linear-gradient(to right, ...)` string. This is not a second, hand-copied
 table of color data: it derives the preview from the same interpolator function
 that colors the real bars, so the swatch can never drift from what clicking it
-actually produces.
+actually produces. It samples the raw `t = 0..1` range, not
+`resolveHistogramBarColor`'s floored `[0.15, 1]` (Design §6 above) — the swatch
+is meant to show "this is the viridis colormap" end-to-end so it's recognizable,
+not to reproduce a specific bucket's exact pixel color.
 
 **`availableColumnTypes` addition**: extend `CellEditorProps` (`cell-registry.ts:90`)
 with a new, additive sibling prop:
@@ -752,8 +821,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 5. **`components/HistogramCell.tsx`** (new file): the bar-chart + median + tooltip
    component per Design §4, accepting an optional `color` prop
    (`ColumnOverride['histogramColor']`), using `histogram-utils.ts` /
-   `histogram-colors.ts` and the Swimlane tooltip pattern. Exported for use by both
-   Table and Transposed Table paths. The median tick's x-position — not
+   `histogram-colors.ts` and the Swimlane tooltip pattern. Exported wrapped in
+   `React.memo` with the custom structural comparator from Design §4 (compares
+   normalized `{start, end, count, bins}` plus `color`, not raw prop identity) —
+   this, not a `useMemo` keyed on the value prop, is what makes the memoization
+   real (Design §3/§4). Used by both Table and Transposed Table paths. The
+   median tick's x-position — not
    `estimateHistogramQuantile`'s return value (Step 2) — is where the `start ===
    end` epsilon guard lives: `Math.abs(end - start) < Number.EPSILON → tick at 0%`,
    since it's this component's `((median - start) / (end - start)) * 100%` formula
@@ -798,12 +871,14 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    the "Render as" toggle (Markdown / Histogram) above the Format field; when
    Histogram is selected, swap the Format textarea for a swatch-picker row (six
    colormap swatches from `buildColormapPreviewGradient` + one custom-color swatch
-   backed by `<input type="color">`, active swatch ring-highlighted) + live bar
-   preview, per `option-b-cell-editor.html`. `handleAddOverride`'s seeded template
-   (`[Link](...)`) only applies when the newly added column isn't histogram-typed;
-   for a histogram column, default the new entry to `kind: 'histogram'` with no
-   `histogramColor` set (i.e. still visually "Default," no swatch highlighted,
-   until the user picks one). Since `format` is now optional (Design §2), guard
+   backed by `<input type="color">`, plus the leading Default swatch, active
+   swatch ring-highlighted) + live bar preview, per `option-b-cell-editor.html`.
+   `handleAddOverride`'s seeded template (`[Link](...)`) only applies when the
+   newly added column isn't histogram-typed; for a histogram column, default the
+   new entry to `kind: 'histogram'` with no `histogramColor` set (i.e. the
+   Default swatch starts ring-highlighted, until the user picks another one — and
+   clicking Default again at any point returns to this same unset state). Since
+   `format` is now optional (Design §2), guard
    its two remaining consumers here: `validateFormatMacros(override.format ?? '',
    …)` (line 33) and the Format `<textarea value={override.format ?? ''}>` (line
    147), so a `kind: 'histogram'` card with no `format` doesn't throw off
@@ -1081,8 +1156,11 @@ No Rust changes — the SQL/Arrow side is complete already.
   filter — this component still serves every column, histogram or not); clicking a
   colormap swatch sets `histogramColor` to that name and ring-highlights it;
   changing the custom-color swatch's `<input type="color">` sets `histogramColor`
-  to the picked hex and moves the highlight to the custom swatch; no swatch is
-  highlighted when `histogramColor` is unset.
+  to the picked hex and moves the highlight to the custom swatch; the Default
+  swatch is ring-highlighted when `histogramColor` is unset (a brand-new
+  histogram card); clicking the Default swatch after a colormap or custom color
+  has been picked sets `histogramColor` back to `undefined`, moves the highlight
+  back to Default, and leaves `format` untouched.
 - Manual: `yarn dev`, build a notebook Table cell against
   `SELECT call_site, make_histogram(0, 50, 24, duration_ms) AS dist FROM ...
   GROUP BY call_site`, verify bars/median/tooltip render by default with no
