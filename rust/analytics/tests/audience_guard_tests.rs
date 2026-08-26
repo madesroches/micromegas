@@ -14,12 +14,38 @@
 //! (`fetch_owner_rows`/`merge_owner_rows`); see `prong_b_guard_db_test.rs` for end-to-end coverage
 //! against a real row with no audience property. What's covered here is the pure half:
 //! `is_readable` already denies `Unknown` unconditionally under `ReadScope::Audiences`.
+//!
+//! Also covers, offline, that the #1486 `view_instance(...)` guard is actually wired into
+//! `MaterializedView::scan` (not just correct in isolation, which the rest of this file already
+//! covers): every test that proves the hook fires end-to-end
+//! (`prong_b_guard_db_test.rs`/`ownership_rewrite_db_test.rs`) is `#[ignore]`d and DB-backed, so
+//! CI's plain `cargo test` would not catch a regression that dropped the guard call out of
+//! `scan` or stopped passing it into `MaterializedView::new`.
+//! `materialized_view_scan_denies_before_jit_update_for_foreign_audience_instance` below builds
+//! a real `MaterializedView` over a stub `View` whose `jit_update` must never run, and asserts
+//! `scan` denies before reaching it.
 
+use anyhow::Result;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::logical_expr::Expr;
+use datafusion::prelude::{DataFrame, SessionContext};
 use micromegas_analytics::lakehouse::audience_guard::{
     AudienceGuard, AudienceIndex, IdKind, OwnerAudience, is_readable,
 };
+use micromegas_analytics::lakehouse::dataframe_time_bounds::DataFrameTimeBounds;
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas_analytics::lakehouse::materialized_view::MaterializedView;
+use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
 use micromegas_analytics::lakehouse::read_scope::ReadScope;
+use micromegas_analytics::lakehouse::runtime::make_runtime_env;
+use micromegas_analytics::lakehouse::view::{PartitionSpec, View};
+use micromegas_analytics::time::TimeRange;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -307,5 +333,165 @@ async fn authorize_view_instance_denies_non_uuid_non_global_id() {
     assert!(
         err.to_string().contains("not found or not accessible"),
         "expected the uniform not-found-shaped denial text, got: {err}"
+    );
+}
+
+// --- `MaterializedView::scan` enforcement wiring (offline) --------------------------------
+
+/// Offline `LakehouseContext` -- matches `lakehouse_admin_gate_test.rs`'s /
+/// `ownership_rewrite_public_view_set_tests.rs`'s harness: a `connect_lazy` Postgres pool (never
+/// touches the network at construction time) plus an in-memory object store, so `jit_update`
+/// would be the only thing in this test able to reach real I/O -- and it must never run.
+async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
+    let db_pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("connect_lazy should not touch the network");
+    let object_store: Arc<dyn object_store::ObjectStore> =
+        Arc::new(object_store::memory::InMemory::new());
+    let blob_storage = Arc::new(BlobStorage::new(
+        object_store,
+        object_store::path::Path::from("lakehouse"),
+    ));
+    let lake = Arc::new(DataLakeConnection::new(db_pool, blob_storage));
+    let runtime = Arc::new(make_runtime_env().expect("make_runtime_env"));
+    Arc::new(LakehouseContext::new(lake, runtime).expect("LakehouseContext::new"))
+}
+
+/// Never actually invoked -- `get_time_bounds()` is only called on a `.collect()`-then-limit
+/// path this test never reaches (the guard denies before `jit_update`, and the scan never runs
+/// to completion).
+#[derive(Debug)]
+struct UnusedTimeBounds;
+
+#[async_trait]
+impl DataFrameTimeBounds for UnusedTimeBounds {
+    async fn get_time_bounds(&self, _df: DataFrame) -> Result<TimeRange> {
+        unreachable!("not exercised: the #1486 guard must deny before this view is ever scanned")
+    }
+}
+
+/// A minimal `View` standing in for a real caller-named `view_instance(...)` target. Its
+/// `view_instance_id` is a `Uuid` (not `"global"`), so `AudienceGuard::authorize_view_instance`
+/// takes the resolution branch rather than one of its no-I/O short-circuits. `jit_update` flips
+/// `jit_update_called` and then fails -- proof, if `MaterializedView::scan` ever reaches it, that
+/// the #1486 guard check was skipped or misordered.
+#[derive(Debug)]
+struct JitUpdateMustNotRunView {
+    view_set_name: Arc<String>,
+    view_instance_id: Arc<String>,
+    schema: Arc<Schema>,
+    jit_update_called: Arc<AtomicBool>,
+}
+
+impl JitUpdateMustNotRunView {
+    fn new(jit_update_called: Arc<AtomicBool>) -> Self {
+        Self {
+            view_set_name: Arc::new("test_guarded_view_set".to_string()),
+            view_instance_id: Arc::new(Uuid::new_v4().to_string()),
+            schema: Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)])),
+            jit_update_called,
+        }
+    }
+}
+
+#[async_trait]
+impl View for JitUpdateMustNotRunView {
+    fn get_view_set_name(&self) -> Arc<String> {
+        self.view_set_name.clone()
+    }
+
+    fn get_view_instance_id(&self) -> Arc<String> {
+        self.view_instance_id.clone()
+    }
+
+    async fn make_batch_partition_spec(
+        &self,
+        _lakehouse: Arc<LakehouseContext>,
+        _existing_partitions: Arc<micromegas_analytics::lakehouse::partition_cache::PartitionCache>,
+        _insert_range: TimeRange,
+    ) -> Result<Arc<dyn PartitionSpec>> {
+        unreachable!("not exercised: the #1486 guard must deny before this view is ever scanned")
+    }
+
+    fn get_file_schema_hash(&self) -> Vec<u8> {
+        vec![1]
+    }
+
+    fn get_file_schema(&self) -> Arc<Schema> {
+        self.schema.clone()
+    }
+
+    async fn jit_update(
+        &self,
+        _lakehouse: Arc<LakehouseContext>,
+        _query_range: Option<TimeRange>,
+    ) -> Result<()> {
+        self.jit_update_called.store(true, Ordering::SeqCst);
+        anyhow::bail!(
+            "jit_update must never run for a foreign-audience view_instance() call -- the \
+             #1486 guard in MaterializedView::scan should have denied the scan first"
+        )
+    }
+
+    fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>> {
+        Ok(vec![])
+    }
+
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(UnusedTimeBounds)
+    }
+
+    fn get_update_group(&self) -> Option<i32> {
+        None
+    }
+}
+
+/// Pins the actual enforcement wiring `materialized_view.rs:79-87` relies on: that
+/// `MaterializedView::scan` calls the `instance_guard`'s `authorize_view_instance` and denies
+/// before ever calling `View::jit_update`. Every test that already covers this end-to-end
+/// (`prong_b_guard_db_test.rs`, `ownership_rewrite_db_test.rs`) is `#[ignore]`d and DB-backed, so
+/// CI's plain `cargo test` needs this offline seam to catch a regression -- e.g. dropping
+/// `Some(...)` back to `None` at `view_instance_table_function.rs`'s `MaterializedView::new`
+/// call, or deleting the `if let Some(guard) = ...` block in `scan`.
+#[tokio::test]
+async fn materialized_view_scan_denies_before_jit_update_for_foreign_audience_instance() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let jit_update_called = Arc::new(AtomicBool::new(false));
+    let view: Arc<dyn View> = Arc::new(JitUpdateMustNotRunView::new(jit_update_called.clone()));
+    // Scoped away from the instance's (unresolvable, since the index's pool is unroutable)
+    // owning audience -- not `ReadScope::All`, and the view set is not on `public_view_sets`, so
+    // `authorize_view_instance` takes its resolution branch and fails closed on the connection
+    // error, exactly like `authorize_view_instance_denies_on_resolution_error_not_pass` above.
+    let guard = Arc::new(AudienceGuard::new(
+        audiences(&["team-alpha"]),
+        false,
+        vec![],
+        unroutable_index(),
+    ));
+    let materialized_view = MaterializedView::new(
+        lakehouse.clone(),
+        lakehouse.reader_factory().clone(),
+        view,
+        Arc::new(NullPartitionProvider {}),
+        None,
+        Some(guard),
+    );
+
+    let ctx = SessionContext::new();
+    ctx.register_table("guarded_instance", Arc::new(materialized_view))
+        .expect("register_table");
+    ctx.sql("SELECT * FROM guarded_instance")
+        .await
+        .expect("planning must succeed -- the guard only runs at scan time, not at plan time")
+        .collect()
+        .await
+        .expect_err(
+            "a caller scoped away from the instance's owning audience must be denied at scan \
+             time, before jit_update ever runs",
+        );
+
+    assert!(
+        !jit_update_called.load(Ordering::SeqCst),
+        "jit_update must never have run: MaterializedView::scan's #1486 guard check should have \
+         denied the scan before reaching it"
     );
 }
