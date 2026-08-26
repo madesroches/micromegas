@@ -220,7 +220,7 @@ pub async fn ingest_cloudwatch_logs_firehose(
 ) -> Result<(), OtelError> {
     let mut total_decompressed_bytes: u64 = 0;
     let ctx = IdentityContext {
-        audience: audience.as_str(),
+        audience: audience.id_namespace(service.default_audience()),
         extra_hash_input: &[],
     };
     for (i, rec) in records.iter().enumerate() {

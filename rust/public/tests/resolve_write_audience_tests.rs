@@ -1,6 +1,6 @@
 //! Unit tests for `resolve_write_audience`, plus HTTP-level pass-through cases for the native and
 //! OTLP ingestion routes, and a pre-resolve rejection case for the webhook route (AbAC Stage 5,
-//! #1373, §5).
+//! #1373, §5; #1519).
 //!
 //! HTTP cases use `tower::ServiceExt::oneshot` against a lazily-connected Postgres pool +
 //! in-memory object store (never actually touched), matching
@@ -26,15 +26,19 @@ use object_store::path::Path;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+fn default_audience() -> WriteAudience {
+    WriteAudience::new("public").expect("valid audience")
+}
+
 fn make_test_service() -> Arc<WebIngestionService> {
     let blob_store = Arc::new(InMemory::new());
     let blob_storage = Arc::new(BlobStorage::new(blob_store, Path::default()));
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused")
         .expect("lazy pool creation is infallible");
-    Arc::new(WebIngestionService::new(DataLakeConnection::new(
-        pool,
-        blob_storage,
-    )))
+    Arc::new(WebIngestionService::new(
+        DataLakeConnection::new(pool, blob_storage),
+        default_audience(),
+    ))
 }
 
 fn ctx_with_bound_audience(audience: &str) -> AuthContext {
@@ -71,37 +75,40 @@ fn ctx_without_bound_audience() -> AuthContext {
 
 // ---------------------------------------------------------------------------
 // resolve_write_audience: its remaining branches (the `Ok` bound-audience-stamps path and the
-// `Err`-degrades-to-none warn path).
+// `Err`-degrades-to-the-default warn path).
 // ---------------------------------------------------------------------------
 
 #[test]
 fn bound_audience_stamps() {
     let ctx = Extension(ctx_with_bound_audience("team-a"));
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::new(Some("team-a")).unwrap());
+    let audience = resolve_write_audience(Some(&ctx), &default_audience());
+    assert_eq!(audience, WriteAudience::new("team-a").unwrap());
 }
 
 #[test]
-fn audience_less_credential_is_unstamped() {
+fn audience_less_credential_resolves_to_the_default() {
     let ctx = Extension(ctx_without_bound_audience());
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::none());
+    let default = WriteAudience::new("unassigned").unwrap();
+    let audience = resolve_write_audience(Some(&ctx), &default);
+    assert_eq!(audience, default);
 }
 
 #[test]
-fn no_extension_is_unstamped() {
-    let audience = resolve_write_audience(None);
-    assert_eq!(audience, WriteAudience::none());
+fn no_extension_resolves_to_the_default() {
+    let default = WriteAudience::new("unassigned").unwrap();
+    let audience = resolve_write_audience(None, &default);
+    assert_eq!(audience, default);
 }
 
 #[test]
-fn malformed_bound_audience_warns_and_degrades_to_none() {
+fn malformed_bound_audience_warns_and_degrades_to_the_default() {
     // "bad label with spaces" fails `WriteAudience::new`'s `[A-Za-z0-9_-]{1,255}` charset check
-    // (the space bytes), so this exercises the `Err` arm: it warns and resolves to
-    // `WriteAudience::none()` instead of being rejected.
+    // (the space bytes), so this exercises the `Err` arm: it warns and resolves to the supplied
+    // deployment default instead of being rejected.
     let ctx = Extension(ctx_with_bound_audience("bad label with spaces"));
-    let audience = resolve_write_audience(Some(&ctx));
-    assert_eq!(audience, WriteAudience::none());
+    let default = WriteAudience::new("unassigned").unwrap();
+    let audience = resolve_write_audience(Some(&ctx), &default);
+    assert_eq!(audience, default);
 }
 
 // ---------------------------------------------------------------------------

@@ -194,11 +194,16 @@ fn nanos_to_datetime(nanos: i64) -> DateTime<Utc> {
 }
 
 /// Prepends `"aud{SEPARATOR}{audience}{SEPARATOR}"` to `payload_bytes` before hashing when
-/// `ctx.audience` is `Some` (AbAC Stage 5, #1373, §4) -- ahead of `ctx.extra_hash_input`, which
-/// the webhook path already folds in -- so two audiences posting byte-identical payloads never
-/// dedup against each other. `block_id_from_payload`'s signature stays a plain `&[u8]`; the
-/// prepend is caller-side concatenation here, exactly like the webhook path's own
-/// `extra_hash_input` before it.
+/// `ctx.audience` is `Some` (AbAC Stage 5, #1373, §4; id-namespace rule, #1519, §6) -- ahead of
+/// `ctx.extra_hash_input`, which the webhook path already folds in -- so two audiences posting
+/// byte-identical payloads never dedup against each other. `block_id_from_payload`'s signature
+/// stays a plain `&[u8]`; the prepend is caller-side concatenation here, exactly like the
+/// webhook path's own `extra_hash_input` before it.
+///
+/// `ctx.audience: None` means "the resolved write audience is the deployment default"
+/// (`WriteAudience::id_namespace`), not "the credential carried no audience" -- the write path
+/// always resolves a real audience now, and the deployment default is the one that keeps this
+/// unprefixed shape.
 fn block_id_with_context(ctx: IdentityContext, payload_bytes: &[u8]) -> Uuid {
     if ctx.audience.is_none() && ctx.extra_hash_input.is_empty() {
         // Byte-identical to pre-Stage-5 behavior when there is nothing to fold in.

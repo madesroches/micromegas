@@ -132,13 +132,13 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -444,13 +444,13 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -689,13 +689,13 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -905,13 +905,13 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1121,13 +1121,13 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1376,13 +1376,13 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1664,13 +1664,13 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1916,13 +1916,13 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -2124,13 +2124,13 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new(Some("public"))?)
+        .insert_process(process_body, &WriteAudience::new("public")?)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 

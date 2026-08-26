@@ -263,10 +263,10 @@ selector to the audience's entry in `{prefix}_AUDIENCE_GRANTS`), never a
 restamping of the key or its already-ingested history.
 
 **A request that names no audience gets the deployment default**
-(`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value data
-written by a credential with no bound audience is *read* as, applied where the
-audience is resolved rather than stamped onto the data itself (see
-[Audience stamping and the default](authentication.md#audience-stamping-and-the-default)).
+(`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value a credential with no bound
+audience is now *stamped* with explicitly at ingestion write time (still applied only where the
+audience is *read*, not stamped, for a legacy row or one written by the admin replication path;
+see [Audience stamping and the default](authentication.md#audience-stamping-and-the-default)).
 One knob answers one question, on every route: what does something that arrives
 without an audience get. A new credential's *entire future* ingestion history
 follows that choice, so **name the audience explicitly when minting a key for
@@ -305,11 +305,11 @@ get the same behavior. An admin with no email is unaffected — no `user:` row c
 them either way, same pre-existing gap as before.
 
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
-audience of its own.** That keyring has no audience column, by design (per
-the umbrella data-isolation plan) — its processes are stamped with nothing and
-are *read* as the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (default
-`public`), the same treatment any process ingested before #1482 existed gets.
-See [Authentication → Audience stamping and the
+bound audience of its own.** That keyring has no audience column, by design
+(per the umbrella data-isolation plan) — its credential resolves to no bound
+audience, so its processes are now *stamped* with the deployment's
+`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly, rather than left
+unstamped. See [Authentication → Audience stamping and the
 default](authentication.md#audience-stamping-and-the-default).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly** —

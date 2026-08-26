@@ -107,10 +107,11 @@ pub fn strip_reserved_properties(properties: Vec<Property>) -> Vec<Property> {
 }
 
 /// Drops every client-supplied reserved-namespace property (see [`strip_reserved_properties`]),
-/// then appends the server-written [`PROPERTY_AUDIENCE`] property when `audience` carries one.
-/// Client input can therefore neither assert nor suppress the stamp. `audience: &WriteAudience`
-/// of `None` writes no property at all -- absent, not empty, matching what
-/// `OwnershipRewriteConfig.unstamped_audience` coalesces.
+/// then appends the server-written [`PROPERTY_AUDIENCE`] property unconditionally. Client input
+/// can therefore neither assert nor suppress the stamp. `audience: &WriteAudience` is always a
+/// real label (#1519) -- a credential carrying no bound audience already resolved to the
+/// deployment default before reaching here (`resolve_write_audience`), so every process
+/// registered through this path carries a `micromegas.audience` property.
 ///
 /// `pub`, not private -- see [`strip_reserved_properties`]'s doc comment for why.
 pub fn finalize_process_properties(
@@ -118,12 +119,10 @@ pub fn finalize_process_properties(
     audience: &WriteAudience,
 ) -> Vec<Property> {
     let mut properties = strip_reserved_properties(client);
-    if let Some(aud) = audience.as_str() {
-        properties.push(Property::new(
-            Arc::new(PROPERTY_AUDIENCE.to_string()),
-            Arc::new(aud.to_string()),
-        ));
-    }
+    properties.push(Property::new(
+        Arc::new(PROPERTY_AUDIENCE.to_string()),
+        Arc::new(audience.as_str().to_string()),
+    ));
     properties
 }
 
@@ -159,10 +158,19 @@ pub struct WebIngestionService {
     /// fixed size instead of leaving it open for the server's entire uptime; capacity remains a
     /// separate, memory-only bound.
     process_audience_cache: Cache<Uuid, WriteAudience>,
+    /// The deployment's resolved default audience (AbAC Stage 5, #1373; #1519), resolved once at
+    /// startup by the caller (`serve_ingestion`, via `micromegas_auth::policy::default_audience_from_env`
+    /// -- `micromegas-ingestion` depends on neither `micromegas-auth` nor `micromegas-analytics`,
+    /// so it cannot resolve this itself) and passed to [`Self::new`]. [`Self::check_process_audience_conflict`]
+    /// uses it to resolve a legacy row with no `micromegas.audience` property the same way every
+    /// reader already does, so the comparison is sound; the five OTLP `IdentityContext` call
+    /// sites use it via [`WriteAudience::id_namespace`] to decide which id namespace a given
+    /// write audience occupies.
+    default_audience: WriteAudience,
 }
 
 impl WebIngestionService {
-    pub fn new(lake: DataLakeConnection) -> Self {
+    pub fn new(lake: DataLakeConnection, default_audience: WriteAudience) -> Self {
         Self {
             lake,
             ready_ok_until: Arc::new(Mutex::new(None)),
@@ -170,7 +178,15 @@ impl WebIngestionService {
                 .max_capacity(PROCESS_AUDIENCE_CACHE_CAPACITY)
                 .time_to_live(PROCESS_AUDIENCE_CACHE_TTL)
                 .build(),
+            default_audience,
         }
+    }
+
+    /// The deployment's resolved default audience -- see the `default_audience` field's doc
+    /// comment. Exposed so the HTTP edge (`resolve_write_audience`) and the five OTLP
+    /// `IdentityContext` construction sites can reach it without re-resolving the environment.
+    pub fn default_audience(&self) -> &WriteAudience {
+        &self.default_audience
     }
 
     pub async fn check_ready(&self) -> bool {
@@ -240,13 +256,18 @@ impl WebIngestionService {
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
     /// connects to the data lake, runs ingestion migrations, and returns
     /// a ready-to-use service.
-    pub async fn from_env() -> anyhow::Result<Arc<Self>> {
+    ///
+    /// `default_audience` -- the deployment's resolved default audience (#1519) -- is threaded
+    /// straight into [`Self::new`]. `micromegas-ingestion` depends on neither `micromegas-auth`
+    /// nor `micromegas-analytics`, so it cannot resolve this itself; the caller resolves it
+    /// (typically via `micromegas_auth::policy::default_audience_from_env`) and passes it in.
+    pub async fn from_env(default_audience: WriteAudience) -> anyhow::Result<Arc<Self>> {
         let cfg = DataLakeConfig::from_env()?;
         let lake = connect_to_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?;
         migrate_db(lake.db_pool.clone())
             .await
             .with_context(|| "migrate_db")?;
-        Ok(Arc::new(Self::new(lake)))
+        Ok(Arc::new(Self::new(lake, default_audience)))
     }
 
     #[span_fn]
@@ -502,9 +523,11 @@ impl WebIngestionService {
     /// than `audience`) is rejected with [`IngestionServiceError::AudienceConflict`] (§6) rather
     /// than silently no-op'd: `process_id` is client-chosen on this path, so a reused id under a
     /// different credential is a real, reachable case, and it is what keeps Stage 2's
-    /// `MAX(audience)` per-process resolution (`ownership_rewrite.rs`) sound. An existing `NULL`
-    /// audience is left alone (no retro-stamp, ever -- see the module-level design doc) since a
-    /// mid-migration re-registration must not lose the process.
+    /// `MAX(audience)` per-process resolution (`ownership_rewrite.rs`) sound. An existing row
+    /// with no `micromegas.audience` property (legacy data written before the write path
+    /// resolved the default, or a row from the admin replication path, #1519 §6) is resolved to
+    /// the deployment default the same way every reader does, then compared like any other row;
+    /// it is never retro-stamped, ever -- see the module-level design doc.
     #[span_fn]
     pub async fn insert_process(
         &self,
@@ -553,10 +576,12 @@ impl WebIngestionService {
     }
 
     /// On a conflicting `insert_process` re-registration, enforces one audience per process
-    /// (§6, AbAC Stage 5, #1373). No-op (aside from a `debug!`) when `audience` carries no
-    /// audience at all, or when the existing row's audience is `NULL` or matches `audience`
-    /// exactly; `Err(IngestionServiceError::AudienceConflict)` when the existing row was stamped
-    /// with a *different* audience than this request carries.
+    /// (§6, AbAC Stage 5, #1373; #1519). No-op (aside from a `debug!`) when the existing row's
+    /// audience -- resolved the same way every reader resolves it (a stamped property, or the
+    /// deployment default for a legacy/replicated row with none) -- matches `audience` exactly;
+    /// `Err(IngestionServiceError::AudienceConflict)` when it resolves to a *different* audience
+    /// than this request carries. `WriteAudience` is single-state (#1519): there is no longer an
+    /// unaudienced caller to special-case, so every call reaches this same comparison.
     ///
     /// Consults [`Self::process_audience_cache`] before touching the database: a hit for this
     /// `process_id` whose cached audience matches `audience` means a prior call already proved
@@ -568,12 +593,9 @@ impl WebIngestionService {
         process_id: Uuid,
         audience: &WriteAudience,
     ) -> Result<(), IngestionServiceError> {
-        let Some(incoming) = audience.as_str() else {
-            debug!("duplicate process_id={process_id} skipped (already exists)");
-            return Ok(());
-        };
+        let incoming = audience.as_str();
         if let Some(cached) = self.process_audience_cache.get(&process_id)
-            && cached.as_str() == Some(incoming)
+            && cached.as_str() == incoming
         {
             debug!(
                 "duplicate process_id={process_id} skipped (already exists, same audience, cached)"
@@ -601,50 +623,45 @@ impl WebIngestionService {
             );
             return Ok(());
         };
+        // An existing row with no `micromegas.audience` property is legacy data written before
+        // the write path resolved the default, or a row from the admin replication path (#1519
+        // §6, which writes `processes` rows' properties verbatim). Resolve it the same way every
+        // reader does, rather than treating "unstamped" as a state that matches anything.
         let existing = properties
             .iter()
             .find(|p| p.key_str() == PROPERTY_AUDIENCE)
-            .map(|p| p.value_str().to_string());
-        match existing {
-            Some(existing) if existing != incoming => {
-                warn!(
-                    "process_id={process_id} audience conflict: existing={existing:?} \
-                     incoming={incoming:?} -- rejecting re-registration"
-                );
-                Err(IngestionServiceError::AudienceConflict {
-                    process_id,
-                    existing,
-                    incoming: incoming.to_string(),
-                })
-            }
-            Some(_) => {
-                debug!("duplicate process_id={process_id} skipped (already exists, same audience)");
-                self.remember_process_audience(process_id, audience);
-                Ok(())
-            }
-            None => {
-                debug!(
-                    "duplicate process_id={process_id} skipped (already exists, unstamped -- no retro-stamp)"
-                );
-                // Not cached: the row's audience is still NULL (never stamped), so caching
-                // `audience` here would record a value the database row never actually held.
-                Ok(())
-            }
+            .map(|p| p.value_str().to_string())
+            .unwrap_or_else(|| self.default_audience.as_str().to_string());
+        if existing != incoming {
+            warn!(
+                "process_id={process_id} audience conflict: existing={existing:?} \
+                 incoming={incoming:?} -- rejecting re-registration"
+            );
+            return Err(IngestionServiceError::AudienceConflict {
+                process_id,
+                existing,
+                incoming: incoming.to_string(),
+            });
         }
+        debug!("duplicate process_id={process_id} skipped (already exists, same audience)");
+        // Caching the resolved value for a legacy/replicated unstamped row is correct and
+        // deliberate: that *is* the audience the row resolves to, the deployment default cannot
+        // change within a process lifetime, and there is no `UPDATE processes` path anywhere in
+        // the codebase that could retro-stamp the row out from under this entry.
+        self.remember_process_audience(process_id, audience);
+        Ok(())
     }
 
     /// Records `audience` as the confirmed-conflict-free audience for `process_id` in
     /// [`Self::process_audience_cache`], so a later call with the same `process_id`/`audience`
-    /// pair can skip [`Self::check_process_audience_conflict`]'s `SELECT`. A no-op when
-    /// `audience` carries no audience at all -- that path never queries the database in the
-    /// first place, so there's nothing worth memoizing. Only ever called with an audience already
-    /// known to be conflict-free (a fresh `INSERT`, or a guard check that just passed) -- never
-    /// on a rejection.
+    /// pair can skip [`Self::check_process_audience_conflict`]'s `SELECT`. Unconditional (#1519):
+    /// `WriteAudience` is single-state, so a resolved-to-default caller is byte-for-byte
+    /// indistinguishable from any other labelled caller, and there is nothing left to guard on.
+    /// Only ever called with an audience already known to be conflict-free (a fresh `INSERT`, or
+    /// a guard check that just passed) -- never on a rejection.
     fn remember_process_audience(&self, process_id: Uuid, audience: &WriteAudience) {
-        if audience.as_str().is_some() {
-            self.process_audience_cache
-                .insert(process_id, audience.clone());
-        }
+        self.process_audience_cache
+            .insert(process_id, audience.clone());
     }
 
     /// Registers a process originating from OTLP. Idempotent via `ON CONFLICT DO NOTHING`.

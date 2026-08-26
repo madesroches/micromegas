@@ -75,9 +75,13 @@
 //!
 //! A process is stamped with `micromegas.audience` at registration from the authenticated
 //! credential's `AuthContext.bound_audience`, and a client can neither assert nor forge that
-//! stamp. A credential carrying no audience stamps nothing; the resulting missing property is
-//! resolved to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*
-//! (#1482), so the column this rewrite filters on is non-null either way. Registration
+//! stamp. A credential carrying no bound audience resolves to the deployment default at the HTTP
+//! write edge and is stamped with it explicitly, the same as any other audience (#1519) -- only
+//! a legacy row written before that resolution shipped, or one written by the admin
+//! `bulk_ingest`/replication path (which writes a source lake's properties verbatim), keeps no
+//! property at all, and is resolved to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` where the
+//! audience is *read* (#1482) instead. Either way the column this rewrite filters on is
+//! non-null. Registration
 //! (`insert_process`/`register_otel_process`) rejects a same-`process_id`, different-audience
 //! re-registration outright -- needed because the OTLP `process_id` derivation formula is public,
 //! so without this guard a credential could pre-register (via the native path) the exact

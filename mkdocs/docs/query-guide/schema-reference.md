@@ -623,9 +623,11 @@ ORDER BY image_count DESC;
 `audience` is a documented, stable column on `processes`, `streams`, `blocks`, `log_entries`,
 `log_stats`, and `measures` -- the audience of the owning process, written server-side from the
 authenticated ingestion credential, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` when the
-credential carried none. Never client-settable, and never `NULL`: the default is applied where
-the audience is read out of the metadata database, so a process that was never stamped still
-materializes under a real label.
+credential carried none. Never client-settable, and never `NULL`: a new process is stamped with
+its resolved audience explicitly at write time now, so `NULL` only ever arises for a row written
+before that write-side resolution shipped, or one written by the admin replication path -- and
+for those, the default is still applied where the audience is read out of the metadata database,
+so even such a row materializes under a real label.
 
 `Dictionary(Int32, Utf8)` on all six views -- it compares against string literals normally.
 

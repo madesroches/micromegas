@@ -25,9 +25,12 @@
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
 //! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
 //! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more
-//! (#1482): a process whose credential carried no audience keeps no property in Postgres, and
-//! `owner_query_sql`'s `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every
-//! *existing* id has a real owning audience. `Unknown` therefore means "no such row" -- deny, on
+//! (#1482): a process registered through the HTTP ingestion path always carries a
+//! `micromegas.audience` property (#1519 -- a credential with no bound audience is stamped with
+//! the resolved deployment default explicitly); only a legacy row, or one written by the admin
+//! `bulk_ingest`/replication path, keeps no property in Postgres, and `owner_query_sql`'s
+//! `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every *existing* id has a
+//! real owning audience either way. `Unknown` therefore means "no such row" -- deny, on
 //! the same fail-closed reasoning as before. An id ambiguous between a `process_id` and a `stream_id`
 //! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
 //! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
@@ -148,9 +151,10 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 
 /// The SQL shape for each [`IdKind`]. `LEFT JOIN LATERAL` (not an inner `unnest` in the `FROM`
 /// list) keeps a row in the result even when its `properties` carry no `AUDIENCE_PROPERTY` --
-/// the ordinary case for a process registered under a credential that carried none. `COALESCE`
-/// then resolves that to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), so such a
-/// process has a real owning audience here rather than a distinct "unstamped" state. The
+/// no longer the ordinary case since #1519 stamps a credential with no bound audience explicitly
+/// at write time; a missing property is now legacy-row or admin-replication-path only.
+/// `COALESCE` then resolves that to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), so
+/// such a process has a real owning audience here rather than a distinct "unstamped" state. The
 /// `LEFT JOIN` still matters: an inner unnest would drop the row entirely, and
 /// [`merge_owner_rows`] would then report "no such id" for an id that does exist -- the same
 /// verdict (deny) reached by the wrong reasoning.

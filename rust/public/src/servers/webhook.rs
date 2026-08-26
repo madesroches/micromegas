@@ -123,7 +123,7 @@ async fn webhook_handler(
         return build_error_response(StatusCode::BAD_REQUEST, "empty body", false);
     }
 
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
 
     let mut resource_attrs = Vec::new();
     push_attr_from_header(

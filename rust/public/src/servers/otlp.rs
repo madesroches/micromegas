@@ -150,7 +150,7 @@ async fn logs_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
     match handler::ingest_logs(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
@@ -167,7 +167,7 @@ async fn metrics_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
     match handler::ingest_metrics(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),
@@ -184,7 +184,7 @@ async fn traces_handler(
         Ok(enc) => enc,
         Err(e) => return e.into_otlp_response(Encoding::Protobuf),
     };
-    let audience = resolve_write_audience(ctx.as_ref());
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
     match handler::ingest_traces(service, body, encoding, &audience).await {
         Ok(resp) => success_response(resp, encoding),
         Err(e) => OtlpHttpError::Otel(e).into_otlp_response(encoding),

@@ -57,19 +57,21 @@ pub fn is_valid_audience(aud: &str) -> bool {
 /// per-request 400. Empty or otherwise invalid ⇒ `Err`: with one knob there is no "unset" state
 /// left for an empty string to mean, so a blank value is a misconfiguration, not an opt-out.
 ///
-/// Leading/trailing whitespace is trimmed and `warn!`-logged, the same way
-/// `micromegas_analytics::audience::default_audience_from_env` -- the other reader of this same
-/// variable -- handles it, so one env value can never be accepted by one role and rejected by
-/// the other. Trimming keeps a value a deployment template rendered with stray
+/// Leading/trailing whitespace is trimmed and `warn!`-logged, the same way the other two readers
+/// of this same variable handle it, so one env value can never be accepted by one role and
+/// rejected by another. Trimming keeps a value a deployment template rendered with stray
 /// padding working; the warning stays because padding is far more likely a templating slip than
 /// an intention.
 ///
-/// One knob, one meaning: the audience anything that arrives without one gets. It is what
-/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes, and
-/// the same value `micromegas_analytics::audience::default_audience_from_env` resolves a
-/// never-stamped process to on the read side (#1482) -- the key-minting half used to be a
-/// separate `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, a distinction that only ever made an operator
-/// configure the same value twice.
+/// One knob, one meaning: the audience anything that arrives without one gets. There are three
+/// code readers today (not deployment roles -- a role can build more than one of these):
+/// this function (key mint/import), `micromegas_analytics::audience::default_audience_from_env`
+/// (read once by `LakehouseContext::new` and handed to the three Postgres read sites), and the
+/// ingestion HTTP edge's own call in `serve_ingestion` (#1519), which resolves the default a
+/// credential with no bound audience is stamped with at write time. This is what
+/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes --
+/// the key-minting half used to be a separate `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, a distinction
+/// that only ever made an operator configure the same value twice.
 pub fn default_audience_from_env(prefix: &str) -> Result<String> {
     let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {

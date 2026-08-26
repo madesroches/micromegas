@@ -1351,6 +1351,16 @@ corrected to what actually shipped rather than left as the pre-implementation pl
     case; it now warns and resolves to `WriteAudience::none()` instead of being rejected — a
     deliberate fail-open narrowing, not a behavior-preserving refactor (see `CHANGELOG.md`).
     See `tasks/remove_stamping_config_plan.md`.
+
+    *(Superseded by #1519: `resolve_write_audience` is no longer infallible-into-a-third-state —
+    `WriteAudience::none()` is removed outright, and an audience-less credential (and a malformed
+    `bound_audience`) now resolves to the deployment default at the HTTP edge and is stamped with
+    it explicitly, the same as any other audience, rather than staying unstamped / resolving to a
+    `none()` state that no longer exists. This closes the fail-open gap in
+    `check_process_audience_conflict` this status update's own knob-removal reasoning left open:
+    a credential claiming a different audience against an existing unstamped row is now rejected
+    with a 403, the same as against a stamped one. See `tasks/1519_write_audience_default_plan.md`.)*
+
 11a. **Landed alongside stamping, not deferred**: OTLP-derived `process_id`/`block_id` are now
     audience-scoped (`IdentityContext { audience, extra_hash_input }` folded into both formulas).
     Stamping without this would let two audiences sending identical resource attributes collapse

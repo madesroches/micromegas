@@ -69,9 +69,10 @@ export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 
 # The deployment's default audience: what a mint/import request that supplies
-# no `audience` gets, and the audience data written by a credential with no
-# bound audience is *read* as (nothing on the write side stamps this default;
-# see mkdocs/docs/admin/authentication.md#audience-stamping-and-the-default).
+# no `audience` gets, and what the ingestion HTTP edge now stamps explicitly
+# onto any credential with no bound audience (still applied read-side only for
+# a legacy row or one written by the admin replication path; see
+# mkdocs/docs/admin/authentication.md#audience-stamping-and-the-default).
 # Defaults to `public` when unset -- see
 # mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
 export MICROMEGAS_DEFAULT_AUDIENCE="public"

@@ -17,7 +17,7 @@ mod common;
 
 use anyhow::{Context, Result};
 use chrono::{DurationRound, TimeDelta, Utc};
-use common::db_fixtures::{ensure_telemetry_guard, reset_global_view};
+use common::db_fixtures::{ensure_telemetry_guard, reset_global_view, strip_process_audience};
 use micromegas_analytics::dfext::string_column_accessor::string_column_by_name;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -65,13 +65,15 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, left never stamped if `None`
-/// (#1482's read-side `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its
-/// cpu stream and one block,
-/// through the real ingestion pipeline. See `ownership_rewrite_db_test.rs`'s identical-in-spirit
-/// helper for why stamping happens before any block is materialized (irrelevant to Prong B,
-/// which reads Postgres directly, but kept for consistency and because this file shares its
-/// seeding style).
+/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, fabricated as a legacy-shaped,
+/// never-stamped row if `None` (#1482's read-side `COALESCE` resolves that to
+/// `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its cpu stream and one block, through the real
+/// ingestion pipeline. `insert_process` stamps unconditionally now (#1519), so the `None` arm
+/// inserts under the deployment default (`public`) and then strips the `micromegas.audience`
+/// property back off with a post-insert `UPDATE` (`strip_process_audience`) -- see
+/// `ownership_rewrite_db_test.rs`'s identical-in-spirit helper for why stamping happens before
+/// any block is materialized (irrelevant to Prong B, which reads Postgres directly, but kept for
+/// consistency and because this file shares its seeding style).
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -80,11 +82,16 @@ async fn seed_process(
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
-    let write_audience = WriteAudience::new(audience)?;
+    let write_audience = WriteAudience::new(audience.unwrap_or("public"))?;
     ingestion
         .insert_process(process_body, &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
+    if audience.is_none() {
+        strip_process_audience(pool, process_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("strip_process_audience: {e}"))?;
+    }
 
     let mut cpu_stream = ThreadStream::new(1024, process_id, &["cpu".to_owned()], HashMap::new());
     let cpu_stream_id = cpu_stream.stream_id();
@@ -240,7 +247,7 @@ async fn setup() -> Result<Fixtures> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    let ingestion = WebIngestionService::new(lake.clone());
+    let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let process_a = seed_process(&ingestion, &lake.db_pool, Some("team-a")).await?;

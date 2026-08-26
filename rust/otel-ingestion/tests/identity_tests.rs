@@ -284,7 +284,10 @@ fn interned_key_is_ignored_in_identity() {
 #[test]
 fn process_id_none_audience_matches_default_context() {
     // `IdentityContext { audience: None, .. }` must be byte-identical to `::default()` -- the
-    // no-churn guarantee for unstamped deployments.
+    // no-churn guarantee for traffic resolved to the deployment default's namespace (formerly
+    // described as "unstamped deployments"; #1519 makes `None` mean "the deployment default's
+    // namespace" rather than "the credential carried no audience" -- see `identity.rs`'s doc
+    // comment on `process_id_from_resource`).
     let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
     let none_ctx = IdentityContext {
         audience: None,
@@ -310,17 +313,22 @@ fn two_audiences_over_the_same_resource_derive_distinct_process_ids() {
         audience: Some("team-b"),
         extra_hash_input: &[],
     };
-    let unstamped = IdentityContext::default();
+    // Not "the unstamped default" (#1519): `None` now means the resolved write audience *is*
+    // the deployment default, not that the credential carried no audience. `ctx_a`/`ctx_b` here
+    // are both non-default labels, so this still isolates the "distinct audience -> distinct
+    // namespace" property regardless of that reframing.
+    let default_ctx = IdentityContext::default();
     let id_a = process_id_from_resource(Some(&r), ctx_a);
     let id_b = process_id_from_resource(Some(&r), ctx_b);
-    let id_unstamped = process_id_from_resource(Some(&r), unstamped);
+    let id_default = process_id_from_resource(Some(&r), default_ctx);
     assert_ne!(
         id_a, id_b,
         "distinct audiences must derive distinct process_id"
     );
     assert_ne!(
-        id_a, id_unstamped,
-        "a stamped audience must derive a different process_id than the unstamped default"
+        id_a, id_default,
+        "a non-default audience must derive a different process_id than the deployment default's \
+         namespace"
     );
 }
 
@@ -342,16 +350,17 @@ fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
     // Before the audience was domain-separated via a per-audience namespace UUID, the audience
     // was appended to the joined field key with the same unescaped `\x1F` `SEPARATOR` that joins
     // the 31 resource-attribute fields. OTLP attribute values are arbitrary UTF-8 and `norm` only
-    // trims + lower-cases -- it does not reject or escape `\x1F` -- so an unstamped (or
-    // differently-audienced) caller could craft a resource attribute whose value ends in
-    // `\x1F<victim-audience>` and reproduce byte-for-byte the joined key + audience suffix a
-    // genuinely stamped request for that audience would hash, forging the victim's process_id.
+    // trims + lower-cases -- it does not reject or escape `\x1F` -- so a caller resolved to the
+    // deployment default (or differently-audienced) could craft a resource attribute whose value
+    // ends in `\x1F<victim-audience>` and reproduce byte-for-byte the joined key + audience
+    // suffix a genuinely stamped request for that audience would hash, forging the victim's
+    // process_id.
     //
     // Craft that exact scenario: the victim is a real `victim-team`-stamped producer whose last
-    // identifying field (`process.runtime.description`) is `"real-runtime"`; the attacker is an
-    // unstamped caller whose corresponding field is `"real-runtime\x1Fvictim-team"` -- under the
-    // old concatenation scheme this made the attacker's un-stamped joined key byte-identical to
-    // the victim's stamped one.
+    // identifying field (`process.runtime.description`) is `"real-runtime"`; the attacker is a
+    // caller resolved to the deployment default whose corresponding field is
+    // `"real-runtime\x1Fvictim-team"` -- under the old concatenation scheme this made the
+    // attacker's default-namespace joined key byte-identical to the victim's stamped one.
     let shared_fields: &[(&str, &str)] =
         &[("host.name", "shared-host"), ("service.name", "shared-svc")];
 
@@ -372,8 +381,8 @@ fn crafted_separator_byte_cannot_forge_a_stamped_process_id() {
 
     assert_ne!(
         victim_id, attacker_id,
-        "a crafted resource attribute containing a raw separator byte must not let an \
-         unstamped request forge a stamped audience's process_id"
+        "a crafted resource attribute containing a raw separator byte must not let a request \
+         resolved to the deployment default forge a stamped audience's process_id"
     );
 
     // Same crafted attribute, but the attacker also claims a *different* audience than the

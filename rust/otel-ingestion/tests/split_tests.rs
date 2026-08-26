@@ -412,7 +412,11 @@ fn two_audiences_posting_identical_traces_derive_distinct_process_and_block_ids(
 #[test]
 fn unstamped_audience_reproduces_pre_stage5_ids_byte_for_byte() {
     // `IdentityContext::default()` (audience: None) must be byte-identical to the pre-Stage-5
-    // hash -- no churn for deployments that never stamp.
+    // hash -- no churn for traffic resolved to the deployment default's namespace (#1519 makes
+    // `None` mean "the deployment default's namespace" rather than "the credential carried no
+    // audience"; the function name and this comment keep the pre-#1519 "unstamped" phrasing
+    // since that's still the reachable case that never churns -- see `identity.rs`'s doc comment
+    // on `process_id_from_resource`).
     let req_default = make_logs_request(
         "svc",
         "h1",
