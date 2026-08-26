@@ -6,9 +6,12 @@ pub mod async_events_block_processor;
 pub mod async_events_view;
 /// Write parquet in object store
 pub mod async_parquet_writer;
-/// Query Enforcement Prong B (#1371, AbAC Stage 3): per-id audience resolution
-/// (`AudienceIndex`) and the fail-closed guard (`AudienceGuard`) for the UDTF/UDF surfaces
-/// `OwnershipRewrite` (Prong A) structurally cannot reach.
+/// Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486): per-id audience
+/// resolution (`AudienceIndex`) and the fail-closed guard (`AudienceGuard`) for the
+/// span/metadata UDTFs and `get_payload` UDF `OwnershipRewrite` (Prong A) structurally cannot
+/// reach, plus a scan-time guard on `view_instance(...)`, which Prong A *can* and does reach --
+/// there `view_instance` joined Prong B to close a cost/availability residual (stopping JIT
+/// materialization for a foreign-audience instance), not because Prong A can't filter it.
 pub mod audience_guard;
 /// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
 /// The batches are based on event times.

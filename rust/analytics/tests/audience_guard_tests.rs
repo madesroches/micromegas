@@ -52,9 +52,14 @@ use uuid::Uuid;
 /// An `AudienceIndex` over a `connect_lazy` pool to an unroutable address -- `connect_lazy` never
 /// touches the network at construction time (same trick `lakehouse_admin_gate_test.rs` uses for
 /// `LakehouseContext`), so a test built from this index can assert "no I/O happened" simply by
-/// not hanging/erroring on a query that would otherwise need a real connection.
+/// not hanging/erroring on a query that would otherwise need a real connection. An explicit short
+/// `acquire_timeout` keeps the resolution-error tests fast -- sqlx's default is 30s (see
+/// `rust/auth/tests/db_api_key_tests.rs` and `rust/ingestion/tests/process_audience_cache_test.rs`
+/// for the same pattern).
 fn unroutable_index() -> Arc<AudienceIndex> {
-    let pool = sqlx::PgPool::connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(50))
+        .connect_lazy("postgres://user:pass@127.0.0.1:1/db")
         .expect("connect_lazy should not touch the network");
     Arc::new(AudienceIndex::new(
         pool,
