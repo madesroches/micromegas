@@ -272,6 +272,15 @@ behavior and out of scope here:
   deliberately the opposite of the toggle's rule in Design §6, which preserves
   an existing template because the column hasn't changed underneath it.
 
+Both branches above only apply when the newly selected column's type is present
+in `availableColumnTypes` — which, per Design §6, can be empty or missing an
+entry even for a histogram-typed column (e.g. before a query has run, or the
+prop simply hasn't loaded yet). When the new column's type is unknown,
+`handleColumnChange` cannot tell whether it's histogram-typed, so it leaves
+`kind`, `format`, and `histogramColor` untouched — only `column` changes, same
+as today's behavior — rather than guessing and risking an incorrect flip to
+`'markdown'` on what is actually a histogram column.
+
 Two existing `string`-typed consumers of `.format` need a matching fallback, since
 `ColumnOverride.format` is now `string | undefined` while they aren't:
 `OverrideCellProps.format` (`table-utils.tsx:236-237`, kept `string`, not widened)
@@ -379,15 +388,20 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   explicit track width the column — and every bar in it — would collapse to
   zero width.
 - **Bars**: one `<div>` per bucket in a flex row (`align-items: flex-end`), height
-  `%` = `bucket_count / max(bucket_count in this row)` — **per-row normalization**.
-  The point of the cell is to show *shape*, not to compare magnitude row-to-row (the
-  issue frames this as "spot rows with unusual spread, multiple modes, or
-  outliers" — a shape question), so each row's own tallest bucket reaches 100%
-  height. When the row's max bucket is 0 (see "Null and degenerate values" below),
-  skip that division — it would otherwise be `0/0 = NaN` — and render the
-  degenerate case instead. Fill color defaults to `var(--chart-line)` (same
-  default as Chart/Swimlane single-series color) unless the override supplies a
-  `histogramColor` — see Design §6.
+  `%` = `max > 0 ? Math.max(2, (bucket_count / max) * 100) : 0`, where `max` is
+  `max(bucket_count in this row)` — **per-row normalization**, matching
+  `option-b-tick-median.html`'s own `const h = max > 0 ? Math.max(2, (v / max) *
+  100) : 0`. The point of the cell is to show *shape*, not to compare magnitude
+  row-to-row (the issue frames this as "spot rows with unusual spread, multiple
+  modes, or outliers" — a shape question), so each row's own tallest bucket
+  reaches 100% height. The `2%` floor keeps a 0-count bucket rendered as a visible
+  stub rather than a zero-height, unhoverable div, so the per-bucket tooltip (see
+  "Tooltip" below) works on empty buckets too — exactly the buckets a user would
+  probe when reading spread. When the row's max bucket is 0 (see "Null and
+  degenerate values" below), skip the ratio entirely — it would otherwise be
+  `0/0 = NaN` — and render the degenerate case instead. Fill color defaults to
+  `var(--chart-line)` (same default as Chart/Swimlane single-series color) unless
+  the override supplies a `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
   downsampling, and no bucket is ever dropped or merged. Bars are `flex: 1 1 0`
   with **no `min-width` floor** and the inter-bar `gap` is not a fixed `1px`
@@ -416,11 +430,13 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   Drawn as a vertical gold (`var(--brand-gold)`) tick, positioned absolutely
   within the 120px bar track (not the 168px cell — see "Cell dimensions" above)
   at `((median - start) / (end - start)) * 100%` of that track's width — except
-  when `end === start` (the degenerate point-histogram case, `start == end` is
-  legal input and has its own Rust test, `histogram_runtime_bounds_tests.rs:423-438`
-  "Test 5: Degenerate point histogram"), where that division is `0/0 = NaN`; pin
-  the tick to `0%` instead, mirroring the `start === end → bin_width = 1.0`
-  unit-width fallback already ported for `bucketRange` (`expand.rs:103-107`) — with
+  when `Math.abs(end - start) < Number.EPSILON` (the degenerate point-histogram
+  case, `start == end` is legal input and has its own Rust test,
+  `histogram_runtime_bounds_tests.rs:423-438` "Test 5: Degenerate point
+  histogram"), where that division is `0/0 = NaN`; pin the tick to `0%` instead,
+  mirroring the same `Math.abs(end - start) < Number.EPSILON → bin_width = 1.0`
+  epsilon-guarded fallback already ported for `bucketRange`
+  (`expand.rs:103-107` — `(end - start).abs() < f64::EPSILON`) — with
   a single point mass, the median is that point, at the start of the (unit-width)
   bucket. The numeric value renders in a fixed-width (`42px`) label trailing the
   chart, formatted with the mockup's own bounded-precision rule — `median.toFixed(1)`
@@ -441,8 +457,8 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   null>`, `onMouseEnter`/`onMouseMove`/`onMouseLeave` per bar,
   `position: fixed` div styled `bg-app-bg border border-theme-border rounded-md
   shadow-lg`. Content: bucket range (`[start, end)` computed the same way as
-  `expand_histogram`, including its `start === end → bin_width = 1.0` unit-width
-  fallback, `expand.rs:103-107`) and count + percentage of the row's total
+  `expand_histogram`, including its `Math.abs(end - start) < Number.EPSILON →
+  bin_width = 1.0` fallback, `expand.rs:103-107`) and count + percentage of the row's total
   (`bucket_count / count * 100`, only when `count > 0` — see below).
 - **Null and degenerate values**: a `null` histogram value renders `-`, matching
   `formatCell`'s existing null convention (`table-utils.tsx:755`). The same `-`
@@ -612,7 +628,7 @@ there's no staleness to force — it's preserved rather than overwritten:
 
 - Six preset swatches, one per colormap, each rendered as its own actual
   mini-gradient (a small `linear-gradient(...)` sampled at 5-6 stops per colormap —
-  see `COLORMAP_PREVIEW_GRADIENTS` below) — the swatch *is* the documentation, no
+  see `buildColormapPreviewGradient` below) — the swatch *is* the documentation, no
   name has to be read or typed. Clicking one sets `histogramColor` to that name.
 - One more swatch for a custom flat color, backed by a native `<input
   type="color">` (so the OS color picker does the picking — no hex-typing
@@ -627,13 +643,14 @@ For a column that's neither histogram-typed (by `availableColumnTypes`) nor alre
 `kind: 'histogram'`, the toggle doesn't render at all — the card looks exactly as it
 does today.
 
-`COLORMAP_PREVIEW_GRADIENTS: Record<ColormapName, string>` (new, in
-`histogram-colors.ts`) holds one hardcoded CSS gradient string per colormap purely
-for swatch rendering — a handful of sampled stops, not the full interpolation
-table `d3-scale-chromatic` provides for actual bucket coloring. This is a visual
-approximation for a small picker icon, not a second source of truth for the real
-per-bucket color math (`resolveHistogramBarColor` above is the only place that
-matters for correctness).
+`buildColormapPreviewGradient(name: ColormapName): string` (new, in
+`histogram-colors.ts`) builds the swatch's CSS gradient by sampling the same
+`d3-scale-chromatic` interpolator `resolveHistogramBarColor` uses — e.g. 6 stops
+at `t = 0, 0.2, ..., 1` fed through `colormapInterpolators[name](t)` and joined
+into a `linear-gradient(to right, ...)` string. This is not a second, hand-copied
+table of color data: it derives the preview from the same interpolator function
+that colors the real bars, so the swatch can never drift from what clicking it
+actually produces.
 
 **`availableColumnTypes` addition**: extend `CellEditorProps` (`cell-registry.ts:90`)
 with a new, additive sibling prop:
@@ -701,22 +718,30 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    - `estimateHistogramQuantile(h: HistogramValue, ratio: number): number` — port of
      `quantile.rs::estimate_quantile`, including its `return end` fallback
      (`quantile.rs:40`) when no bucket's cumulative count reaches `count * ratio`
-     (e.g. `count === 0`), and the `end === start → tick at 0%` degenerate case
-     (Design §4).
+     (e.g. `count === 0`), and the `Math.abs(end - start) < Number.EPSILON → tick
+     at 0%` degenerate case (Design §4).
    - `bucketRange(h: HistogramValue, bucketIndex: number): [number, number]` — port
      of `expand.rs`'s bin-center math (return the boundaries, not the center, since
-     the tooltip wants a range), including its `start === end → bin_width = 1.0`
-     unit-width fallback (`expand.rs:103-107`).
-3. **`lib/histogram-colors.ts`** (new file): a `COLORMAP_NAMES` set and
+     the tooltip wants a range), including its `Math.abs(end - start) <
+     Number.EPSILON → bin_width = 1.0` fallback (`expand.rs:103-107` —
+     `(end - start).abs() < f64::EPSILON`).
+3. **Add `d3-scale-chromatic` dependency** (approved, Open Questions §4):
+   `analytics-web-app/package.json` — `d3-scale-chromatic@^3.1.0` +
+   `@types/d3-scale-chromatic@^3.1.0` (the package ships no types of its own).
+   Done before `histogram-colors.ts` below, which imports it.
+4. **`lib/histogram-colors.ts`** (new file): a `COLORMAP_NAMES` set and
    `resolveHistogramBarColor(color: string | undefined, t: number): string` —
    `undefined` → `var(--chart-line)`; a recognized name → the matching
    `d3-scale-chromatic` `interpolateXxx`; anything else → returned as-is (flat
    color, `t` unused). `HistogramCell` calls this once per bucket with that
    bucket's height ratio.
-4. **Add `d3-scale-chromatic` dependency** (approved, Open Questions §4):
-   `analytics-web-app/package.json` — `d3-scale-chromatic@^3.1.0` +
-   `@types/d3-scale-chromatic@^3.1.0` (the package ships no types of its own).
-5. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
+5. **`components/HistogramCell.tsx`** (new file): the bar-chart + median + tooltip
+   component per Design §4, accepting an optional `color` prop
+   (`ColumnOverride['histogramColor']`), using `histogram-utils.ts` /
+   `histogram-colors.ts` and the Swimlane tooltip pattern. Exported for use by both
+   Table and Transposed Table paths. Done before `table-utils.tsx` below, which
+   renders it.
+6. **`table-utils.tsx`**: extend `ColumnOverride` with `kind?: 'markdown' |
    'histogram'` and `histogramColor?: string`, making `format` optional (Design
    §2); update `overrideMap` to store the full entry, not just `format` (Design
    §3); add a `useMemo`'d `Set<string>` of histogram-typed column names built
@@ -731,15 +756,14 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    per Design §3, a saved override with `format: ''`
    renders an empty `OverrideCell` instead of today's fall-through to
    `formatCell`, an accepted behavior change that brings `TableBody` in line
-   with `TransposedTableCell`'s existing `.has()` check.
-6. **`macro-substitution.ts`**: add the `isHistogramStructType` branch to
+   with `TransposedTableCell`'s existing `.has()` check. **`warning-reporter.tsx`**:
+   update the one-line comment at `warning-reporter.tsx:40` (`// small array of
+   { column, format } objects`), which documents the shape being content-hashed,
+   to reflect the new `{ column, kind?, format?, histogramColor? }` shape — it's
+   still a small array safe to `JSON.stringify`, just no longer only two fields.
+7. **`macro-substitution.ts`**: add the `isHistogramStructType` branch to
    `formatArrowValue` (Design §5) — the one change that makes debugging "just work"
    through the existing Markdown override path.
-7. **`components/HistogramCell.tsx`** (new file): the bar-chart + median + tooltip
-   component per Design §4, accepting an optional `color` prop
-   (`ColumnOverride['histogramColor']`), using `histogram-utils.ts` /
-   `histogram-colors.ts` and the Swimlane tooltip pattern. Exported for use by both
-   Table and Transposed Table paths.
 8. **`CellEditorProps`** (`cell-registry.ts:90`): add `availableColumnTypes?:
    Record<string, DataType>`; populate it at `NotebookRenderer.tsx:833` alongside
    the existing `availableColumns` line (Design §6). **`components/CellEditor.tsx`**:
@@ -755,7 +779,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    a saved histogram card never silently reverts to a plain Format textarea), render
    the "Render as" toggle (Markdown / Histogram) above the Format field; when
    Histogram is selected, swap the Format textarea for a swatch-picker row (six
-   colormap swatches from `COLORMAP_PREVIEW_GRADIENTS` + one custom-color swatch
+   colormap swatches from `buildColormapPreviewGradient` + one custom-color swatch
    backed by `<input type="color">`, active swatch ring-highlighted) + live bar
    preview, per `option-b-cell-editor.html`. `handleAddOverride`'s seeded template
    (`[Link](...)`) only applies when the newly added column isn't histogram-typed;
@@ -767,7 +791,9 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    147), so a `kind: 'histogram'` card with no `format` doesn't throw off
    validation or flip the textarea uncontrolled. `handleColumnChange`
    (lines 62-69) re-derives `kind` (and resets `format`/`histogramColor` as
-   applicable) from the newly selected column's type per Design §2. The toggle's
+   applicable) from the newly selected column's type per Design §2, only when
+   that type is present in `availableColumnTypes` — otherwise it leaves
+   `kind`/`format`/`histogramColor` untouched and only updates `column`. The toggle's
    own `onClick` handler writes `kind` plus the matching `format`/`histogramColor`
    side effects per Design §6's Editor UI rules: to Markdown, seed `format` with
    `handleAddOverride`'s template only if `format` is currently unset, and clear
@@ -779,11 +805,11 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     `availableColumns` line (`Object.fromEntries(table.schema.fields.map(f =>
     [f.name, f.type]))`, line 203) and pass it to its `<OverrideEditor>` call
     (~lines 355-359) alongside `availableColumns`. It already passes
-    `tableConfig.overrides` to `TableBody` (line 408), so it picks up step 5's
+    `tableConfig.overrides` to `TableBody` (line 408), so it picks up step 6's
     render-selection switch for free — this step only wires up the editor half.
 11. **`TableCell.tsx`**: pass `availableColumnTypes` through to `OverrideEditor`.
 12. **`TransposedTableCell.tsx`**: pass `availableColumnTypes` through to
-    `OverrideEditor`, same as above. It does **not** use `TableBody`, so step 5's
+    `OverrideEditor`, same as above. It does **not** use `TableBody`, so step 6's
     change doesn't reach it — separately, change its own `overrideMap`
     (`useMemo`, line 42) from `Map<string, string>` (column → `format`) to
     `Map<string, ColumnOverride>` (column → full entry), and apply Design §3's
@@ -802,12 +828,19 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
     `lerp_color()` docs in `functions-reference.md`. Also update the `overrides`
     option-table row in both sections — `:713` (Table) and `:762` (Transposed
     Table) — from `{ column, format }` to `{ column, kind?, format?,
-    histogramColor? }` to match Design §2.
+    histogramColor? }` to match Design §2. **`variables.md`**: add a one-line
+    cross-reference from the existing "Column Format Overrides" section
+    (`mkdocs/docs/web-app/notebooks/variables.md:102`) — which currently presents
+    overrides as markdown-only — to the new "Render as: Histogram" documentation
+    in `cell-types.md`, noting that a histogram-typed column's override card
+    offers a second, non-markdown render mode.
 14. **`CHANGELOG.md`**: add one bullet under `## Unreleased` → `**Web App:**`
     describing the automatic histogram-column rendering for Table/Transposed
-    Table cells, the Overrides panel's "Render as: Histogram" mode, and the
+    Table cells, the Overrides panel's "Render as: Histogram" mode, the
     `overrides` entry shape change (`{ column, format }` → `{ column, kind?,
-    format?, histogramColor? }`).
+    format?, histogramColor? }`), and the accepted behavior change that a saved
+    override with a blank `format` now renders an empty override cell instead of
+    falling through to the default formatter (Design §3 case 1).
 15. **Tests** — see Testing Strategy.
 
 ## Files to Modify
@@ -816,12 +849,13 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 |---|---|
 | `analytics-web-app/src/lib/arrow-utils.ts` | new `isHistogramStructType` |
 | `analytics-web-app/src/lib/histogram-utils.ts` | new file — quantile/bucket-range math |
-| `analytics-web-app/src/lib/histogram-colors.ts` | new file — `resolveHistogramBarColor` (colormap-name vs. literal-color dispatch), `COLORMAP_PREVIEW_GRADIENTS` (swatch CSS gradients) |
+| `analytics-web-app/src/lib/histogram-colors.ts` | new file — `resolveHistogramBarColor` (colormap-name vs. literal-color dispatch), `buildColormapPreviewGradient` (swatch CSS gradient, sampled from the same `d3-scale-chromatic` interpolators) |
 | `analytics-web-app/src/lib/screen-renderers/macro-substitution.ts` | `formatArrowValue` histogram-struct branch |
 | `analytics-web-app/src/components/HistogramCell.tsx` | new file — bar chart + median + tooltip |
 | `analytics-web-app/src/components/OverrideEditor.tsx` | `availableColumnTypes` prop; per-card "Render as" toggle + Histogram color fields; guard `validateFormatMacros`/`<textarea>` against optional `format` |
 | `analytics-web-app/src/components/CellEditor.tsx` | add `availableColumnTypes` to its own local `CellEditorProps`, destructure, forward to `<meta.EditorComponent>` |
 | `analytics-web-app/src/lib/screen-renderers/table-utils.tsx` | `ColumnOverride.kind`/`histogram`, `format` optional; `overrideMap` full-entry lookup; `TableBody` render-mode switch; `<OverrideCell format={entry.format ?? ''}>` (`OverrideCellProps.format` itself unchanged, still required `string`) |
+| `analytics-web-app/src/lib/screen-renderers/warning-reporter.tsx` | update the stale `{ column, format }` shape comment to match the new `ColumnOverride` shape |
 | `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | build `availableColumnTypes` next to existing `availableColumns` (line 203); pass to `OverrideEditor` |
 | `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx` | thread `availableColumnTypes` to `OverrideEditor` |
 | `analytics-web-app/src/lib/screen-renderers/cells/TransposedTableCell.tsx` | thread `availableColumnTypes`; `overrideMap` → `Map<string, ColumnOverride>`; apply Design §3's three-way render switch (lines 122-134) |
@@ -829,6 +863,7 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 | `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` | populate `availableColumnTypes` alongside `availableColumns` |
 | `analytics-web-app/package.json` | new dependency: `d3-scale-chromatic@^3.1.0` (+ `@types/d3-scale-chromatic@^3.1.0`) |
 | `mkdocs/docs/web-app/notebooks/cell-types.md` | document new default behavior, the Overrides "Render as: Histogram" mode, and the Markdown-debug trick |
+| `mkdocs/docs/web-app/notebooks/variables.md` | cross-reference "Column Format Overrides" section to the new "Render as: Histogram" docs |
 | `CHANGELOG.md` | `## Unreleased` → `**Web App:**` bullet for the new default histogram rendering, the "Render as: Histogram" override mode, and the `overrides` entry shape change |
 
 No Rust changes — the SQL/Arrow side is complete already.
@@ -895,7 +930,10 @@ No Rust changes — the SQL/Arrow side is complete already.
   deps, `d3-color` and `d3-interpolate`; the package itself is also ISC, not MIT),
   and already the standard JS source for these exact colormaps. Flagged as an Open
   Question rather than silently added, since it's a new runtime dependency someone
-  should sign off on, however small.
+  should sign off on, however small. This reasoning applies equally to the swatch
+  previews in Design §6: `buildColormapPreviewGradient` samples the same
+  interpolators rather than hand-maintaining a second, separately-sourced gradient
+  table that could drift from the colors the bars actually render.
 - **Single `histogramColor: string` (colormap name or literal color) vs. a
   `mode: 'colormap' | 'custom'` selector with `colormapName`/`customStops`.** An
   earlier draft kept the two cases as explicit, separately-shaped fields — closer
@@ -933,6 +971,10 @@ No Rust changes — the SQL/Arrow side is complete already.
   `$row.col` on a histogram column dumps its raw fields). Update the `overrides`
   option-table row in both sections (`:713`, `:762`) from `{ column, format }` to
   `{ column, kind?, format?, histogramColor? }`.
+- `mkdocs/docs/web-app/notebooks/variables.md` — add a one-line cross-reference
+  from the existing "Column Format Overrides" section (`:102`, which currently
+  presents overrides as markdown-only) to the new "Render as: Histogram"
+  documentation in `cell-types.md`.
 - No changes needed to `functions-reference.md` — the SQL functions this feature
   consumes are already documented there.
 
@@ -960,9 +1002,12 @@ No Rust changes — the SQL/Arrow side is complete already.
   names/order and that the last field is a `List`) but never produces a single
   `bigint` — silently skipping the one runtime hazard Design §4 calls out (the
   `bigint`/`Vector` read boundary `toHistogramValue` exists to normalize). Factor
-  this into one shared fixture helper (e.g. `makeHistogramVector` in
-  `arrow-ipc-fixtures.ts`) reused by all four test files rather than duplicated
-  per file.
+  this into one shared fixture helper, `makeHistogramVector`, in a new
+  `src/lib/screen-renderers/__tests__/histogram-fixtures.ts` — next to its
+  consumers, rather than in `arrow-ipc-fixtures.ts` (`src/lib/__tests__/`, a
+  different directory whose existing exports are IPC byte-stream builders used
+  only within that same folder) — reused by all four test files rather than
+  duplicated per file.
 - `arrow-utils.test.ts`: `isHistogramStructType` — true for a struct built with
   the exact field/type shape; false for a struct missing a field, with fields out
   of order, with an extra field, or with a non-`List` `bins` field; false for
@@ -999,7 +1044,9 @@ No Rust changes — the SQL/Arrow side is complete already.
   matches `bins.length` (no downsampling, including a large bin count); hover on a
   bar surfaces the correct range/count/percentage; median label matches
   `estimateHistogramQuantile`; bar fill color matches `resolveHistogramBarColor`
-  for a colormap name, a literal color, and no `color` prop at all.
+  for a colormap name, a literal color, and no `color` prop at all; a 0-count
+  bucket still renders at the `2%` height floor (not 0px) and its hover tooltip
+  fires and shows the correct range/count.
 - New `OverrideEditor.test.tsx` (no test file exists for this component today):
   "Render as" toggle appears only when the selected
   column is histogram-typed (via a mock `availableColumnTypes`); switching to
@@ -1035,4 +1082,4 @@ No Rust changes — the SQL/Arrow side is complete already.
 4. ~~**`d3-scale-chromatic` dependency**~~ **Resolved: approved.** Needed for the
    colormap-name case of `histogramColor` (Design §6); ISC license, two
    transitive deps (`d3-color`, `d3-interpolate`, both also ISC) — see
-   Dependencies and Implementation Steps §4.
+   Dependencies and Implementation Steps §3.
