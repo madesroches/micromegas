@@ -130,16 +130,30 @@ only**, no `DataType`. It's populated at the single call site
 never mattered before. `OverrideEditor` needs types now, to know which column's card
 should show the "Render as" toggle (Design §6).
 
-`NotebookRenderer.tsx` doesn't call `meta.EditorComponent` directly, though —
-it renders `<CellEditor>` (`components/CellEditor.tsx`), which declares its own
-local `CellEditorProps` interface (lines 11-25, `availableColumns?: string[]`
-among them) and explicitly forwards a fixed prop list to
+`NotebookRenderer.tsx` doesn't call `meta.EditorComponent` directly for a top-level
+cell, though — it renders `<CellEditor>` (`components/CellEditor.tsx`), which
+declares its own local `CellEditorProps` interface (lines 11-25, `availableColumns?:
+string[]` among them) and explicitly forwards a fixed prop list to
 `<meta.EditorComponent … availableColumns={availableColumns} … />` (line 161).
 Anything not named in `CellEditor.tsx`'s own interface and forwarded there never
-reaches `TableCellEditor`/`TransposedTableCellEditor`, so the new
+reaches `TableCellEditor`/`TransposedTableCellEditor` via this path, so the new
 `availableColumnTypes` prop needs the same two touches here as `availableColumns`
 already has: added to `CellEditor.tsx`'s local `CellEditorProps`, destructured, and
 passed through to `<meta.EditorComponent>`.
+
+`CellEditor.tsx` is not the only forwarding point into `meta.EditorComponent`,
+though: `HorizontalGroupCell.tsx`'s `ChildEditorView` (lines ~276-397) also renders
+`<meta.EditorComponent … availableColumns={availableColumns} … />` for a
+horizontal-group child, which includes Table and Transposed Table cells nested
+inside a group. That path is reached through a *separate* top-level branch in
+`NotebookRenderer.tsx` — `HgEditorPanel` (declared and called around lines 133-190
+and 804-820), not `CellEditor` — and `HgEditorPanelProps`/its call site never
+declare or pass `availableColumns` at all, so `ChildEditorView`'s own
+`availableColumns` prop is always `undefined` for every child editor today,
+regardless of this plan. This is a pre-existing gap, not something this plan
+introduces or regresses, but it means an HG-nested Table/Transposed Table cell's
+"Render as" toggle (Design §6) is unreachable no matter what threading this plan
+adds — see Design §6 / Files to Modify for how this plan scopes around it.
 
 ### Color conventions (Chart and Map cells)
 
@@ -375,6 +389,18 @@ around `toHistogramValue`/`estimateHistogramQuantile`/per-bucket
 which added a dedicated debug-string branch there. It's unreachable for histogram
 values now (case 3 above never actually sees one), so there's nothing to special-case.
 
+**Interaction with `TableRenderer`'s lack of pagination:** case 2 above routes every
+row of a histogram-typed column to `HistogramCell`, and `TableRenderer.tsx` passes
+the *full* result table to `TableBody` (`data={table}`) with no page slicing —
+unlike `cells/TableCell.tsx`, which caps rendering at `DEFAULT_PAGE_SIZE = 100`
+rows. A screens table grouping by a high-cardinality key can therefore route
+thousands of rows through case 2 at once. Design §4 bounds each routed cell's own
+DOM/listener footprint to a small, row-count-independent constant (one `<svg>`
+element and one pointer listener, regardless of bucket count) specifically so this
+routing decision doesn't multiply an unbounded row count by a per-bucket element
+count; it does not add pagination to `TableRenderer`, which stays out of scope for
+this plan.
+
 ### 4. `HistogramCell` component (new file, e.g. `components/HistogramCell.tsx`)
 
 Renders inside a `<td>`, replacing the plain-string cell content (same pattern as
@@ -411,77 +437,80 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   (`.histo-median-label`, `flex: 0 0 42px`, `text-align: right`), so
   `120 + 6 + 42 = 168`. The mockup already uses these fixed bases —
   `.histo-track { flex: 0 0 120px }` and `.histo-median-label { flex: 0 0 42px;
-  text-align: right }` — and the component matches it exactly; a content-sized
-  label would instead make the track width, every bar's width, and the median
-  tick's x-position all vary row-to-row with the digit count of the formatted
-  median. Bars use `gap: 1px` between them within the 120px
-  track. All of this has to be fixed-width, not content-derived: `TableBody`
-  renders every cell as `<td className="... truncate max-w-xs">`
-  (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx` uses `<td
-  className="px-3 py-1.5 ...">` (line 120) — neither `<td>` sets a width, and
-  HTML's default auto table layout sizes an unfixed column to its content's
-  max-content contribution. A flex row of all `flex: 1 1 0` bar `<div>`s with
-  no intrinsic size has a max-content contribution of 0, so without an
-  explicit track width the column — and every bar in it — would collapse to
-  zero width.
-- **Bars**: one full-height (`height: 100%`), transparent wrapper `<div>` per
-  bucket in a flex row (`align-items: stretch`) — the wrapper, not the bar inside
-  it, is what carries the hover handlers (see "Tooltip" below), so the hoverable
-  target spans the full 28px track height even when the bar itself renders as a
-  thin stub. Each wrapper contains one bar `<div>` (`align-self: flex-end`),
-  height `%` = `max > 0 ? (bucket_count / max) * 100 : 0` with a `min-height: 2px`
-  floor, where `max` is `max(bucket_count in this row)` — **per-row
-  normalization**, matching `option-b-tick-median.html`'s own `const h = max > 0 ?
-  Math.max(2, (v / max) * 100) : 0`, adapted here from a `2%` floor to a
-  `min-height: 2px` one: `2%` of the cell's fixed 28px track is a 0.56px
-  hairline — sub-pixel, so it fails to render as the "visible and hoverable" stub
-  the floor exists to guarantee — whereas `min-height: 2px` renders an actual
-  visible pixel row regardless of track height. The point of the cell is to show
-  *shape*, not to compare magnitude row-to-row (the issue frames this as "spot
-  rows with unusual spread, multiple modes, or outliers" — a shape question), so
-  each row's own tallest bucket reaches 100% height. The `min-height` floor keeps
-  a 0-count bucket rendered as a visible stub rather than a zero-height div, and
-  because the full-height wrapper (not the bar) is the hover target, that stub's
-  hover area is the whole 28px track, not just its own 2px — so the per-bucket
-  tooltip (see "Tooltip" below) works on empty buckets too — exactly the buckets a
-  user would probe when reading spread. This "visible stub" guarantee is about
-  the bar's *height*, not its *color* — a 2px-tall stub filled in a near-black
-  colormap color against the app's near-black background would technically
-  render but not actually be visible; Design §6 floors the colormap sampling
-  ratio so that doesn't happen, keeping the guarantee true in every color mode.
-  When the row's max bucket is 0 (see "Null
+  text-align: right }` — and the component matches those outer proportions
+  exactly; a content-sized label would instead make the track width, every bar's
+  width, and the median tick's x-position all vary row-to-row with the digit
+  count of the formatted median. All of this has to be fixed-size, not
+  content-derived: `TableBody` renders every cell as `<td className="...
+  truncate max-w-xs">` (`table-utils.tsx:672-674`) and `TransposedTableCell.tsx`
+  uses `<td className="px-3 py-1.5 ...">` (line 120) — neither `<td>` sets a
+  width, and HTML's default auto table layout sizes an unfixed column to its
+  content's max-content contribution. The bar track itself is a single inline
+  `<svg width={120} height={28} viewBox="0 0 120 28" preserveAspectRatio="none">`
+  (see "Bars" below) — an `<svg>` with explicit `width`/`height` attributes has a
+  fixed intrinsic size regardless of its children, so the zero-max-content-
+  contribution hazard a flex row of unsized bar `<div>`s would have had doesn't
+  apply here.
+- **Bars — one `<svg>` per cell, not two `<div>`s per bucket**: every bucket is
+  rendered, but as a single `<rect>` inside one shared `<svg width={120}
+  height={28} viewBox="0 0 120 28" preserveAspectRatio="none">` bar track, not as
+  a pair of full-height hover-wrapper + bar `<div>`s. This bounds the DOM/listener
+  cost of a histogram cell to a small constant independent of bucket count — one
+  `<svg>` element, `bins.length` `<rect>` children, and a single `onPointerMove`/
+  `onPointerLeave` pair of listeners on the `<svg>` itself — rather than two
+  elements and three mouse handlers (`onMouseEnter`/`onMouseMove`/`onMouseLeave`)
+  per bucket; see the note on `TableRenderer`'s lack of pagination at the end of
+  Design §3 for why that bound matters. Bucket `i`'s `<rect>` is positioned at `x
+  = i * (120 / bins.length)`, `width = 120 / bins.length` (so `bins.length` rects
+  always tile the 120-unit track exactly, for any bin count — no gap, no
+  overflow, no per-threshold gap logic needed the way a flex `gap` would have
+  required), `height = max > 0 ? Math.max(2, (bucket_count / max) * 100 * 28 /
+  100) : 0` — i.e. the same `min-height: 2px` floor as before, just computed in
+  SVG user units instead of CSS `%`/`min-height` — and `y = 28 - height`, where
+  `max` is `max(bucket_count in this row)` — **per-row normalization**, matching
+  `option-b-tick-median.html`'s own `const h = max > 0 ? Math.max(2, (v / max) *
+  100) : 0`. The point of the cell is to show *shape*, not to compare magnitude
+  row-to-row (the issue frames this as "spot rows with unusual spread, multiple
+  modes, or outliers" — a shape question), so each row's own tallest bucket
+  reaches the full 28-unit height. The `2`-unit floor keeps a 0-count bucket
+  rendered as a visible stub rather than a zero-height rect; because hit-testing
+  happens via the pointer's x-position across the whole `<svg>` (see "Tooltip"
+  below), not via each `<rect>`'s own geometry, a 2-unit-tall stub is just as
+  hoverable as a full-height bar — the per-bucket tooltip works on empty buckets
+  too, exactly the buckets a user would probe when reading spread. This "visible
+  stub" guarantee is about the bar's *height*, not its *color* — a 2-unit-tall
+  stub filled in a near-black colormap color against the app's near-black
+  background would technically render but not actually be visible; Design §6
+  floors the colormap sampling ratio so that doesn't happen, keeping the
+  guarantee true in every color mode. When the row's max bucket is 0 (see "Null
   and degenerate values" below), skip the ratio entirely — it would otherwise be
   `0/0 = NaN` — and render the degenerate case instead. Fill color defaults to
   `var(--chart-line)` (same default as Chart/Swimlane single-series color) unless
   the override supplies a `histogramColor` — see Design §6.
 - **Bucket count vs. cell width**: every bucket is always rendered — no cap, no
-  downsampling, and no bucket is ever dropped or merged. Bars are `flex: 1 1 0`
-  with **no `min-width` floor** and the inter-bar `gap` is not a fixed `1px`
-  constant but conditional on `bins.length`: `1px` up to some threshold (e.g.
-  `bins.length <= 60`), `0px` above it. This matters because flex `gap` doesn't
-  shrink and `flex: 1 1 0` gives each bar a zero flex *basis*, so free space can
-  go negative but the gap can't absorb it — with a fixed `1px` gap, bar width
-  `(120px - (bins.length - 1) * 1px) / bins.length` turns non-positive once
-  `bins.length >= 121`, which would overflow the fixed 120px track (and then
-  clip, since `TableBody`'s `<td>` carries `truncate` /
-  `overflow: hidden` — `table-utils.tsx:672-674`). With the gap dropped to `0px`
-  above the threshold, bar width is `120px / bins.length`, positive for any
-  `bins.length`, so `bins.length` bars always fit exactly within the 120px
-  track regardless of bin count. `make_histogram`'s bin count is caller-chosen
-  in SQL (typically 15–30 for this use case) with no server-side cap
-  (`configure_from_params` only enforces `nb_bins >= 1`); at very high bin
-  counts individual bars become sub-pixel and visually imperceptible, but no
-  bucket is ever dropped, merged, or clipped — every bucket still occupies its
-  exact proportional share of the track width. There is no `MAX_RENDERED_BARS`
-  constant and no bucket-merging step.
+  downsampling, and no bucket is ever dropped or merged. Because each `<rect>`'s
+  `x`/`width` are computed as an exact fraction of the fixed 120-unit `viewBox`
+  (see "Bars" above) rather than laid out via flexbox, `bins.length` bars always
+  fit exactly within the track for any bin count — there's no flex-`gap`-vs-
+  negative-free-space failure mode to guard against, so no conditional gap
+  threshold is needed either. `make_histogram`'s bin count is caller-chosen in
+  SQL (typically 15–30 for this use case) with no server-side cap
+  (`configure_from_params` only enforces `nb_bins >= 1`); at very high bin counts
+  individual rects become sub-pixel and visually imperceptible, but no bucket is
+  ever dropped, merged, or clipped — every bucket still occupies its exact
+  proportional share of the track width, and the `<svg>`/`<rect>` count for the
+  cell stays exactly `1 + bins.length` regardless. There is no `MAX_RENDERED_BARS`
+  constant and no bucket-merging step — the bound here is on DOM node count
+  overhead (one `<svg>` and its listeners, not two elements and three handlers
+  per bucket), not on how many buckets get drawn.
 - **Median overlay (locked in: Option B, tick-mark)**: compute via the same
   linear-interpolation as `estimate_quantile` in `quantile.rs:15-41`, ported to TS
   (ratio fixed at `0.5`), operating on `start`/`end`/`count`/`bins` already on the
   cell's value — no new SQL column, including that function's `return end` fallback
   when no bucket's cumulative count reaches the target ratio (`quantile.rs:40`).
-  Drawn as a vertical gold (`var(--brand-gold)`) tick, positioned absolutely
-  within the 120px bar track (not the 168px cell — see "Cell dimensions" above)
-  at `((median - start) / (end - start)) * 100%` of that track's width — except
+  Drawn as a vertical gold (`var(--brand-gold)`) `<line>` inside the same
+  `120×28` bar-track `<svg>` (not a separate element — see "Bars" above), at `x1
+  = x2 = ((median - start) / (end - start)) * 120`, `y1 = 0`, `y2 = 28` — except
   when `Math.abs(end - start) < Number.EPSILON` (the degenerate point-histogram
   case, `start == end` is legal input and has its own Rust test,
   `histogram_runtime_bounds_tests.rs:423-438` "Test 5: Degenerate point
@@ -505,11 +534,18 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   `option-a-text-median.html` for reference) because the tick communicates *where*
   the median sits relative to the spread, not just its value, and a trailing
   fixed-width label can't collide with a tall bucket underneath it.
-- **Tooltip**: reuse the Swimlane cell's pattern — local `useState<{x, y, bucket} |
-  null>`, `onMouseEnter`/`onMouseMove`/`onMouseLeave` per bucket wrapper (the
-  full-height hover target from "Bars" above, not the bar `<div>` itself),
-  `position: fixed` div styled `bg-app-bg border border-theme-border rounded-md
-  shadow-lg`. Content: bucket range (`[start, end)` computed the same way as
+- **Tooltip**: reuse the Swimlane cell's `position: fixed` tooltip-div pattern for
+  content/styling, but not its per-segment handler wiring — local `useState<{x, y,
+  bucket} | null>`, and a single `onPointerMove`/`onPointerLeave` pair on the
+  `<svg>` itself (Design §4 "Bars" above), not `onMouseEnter`/`onMouseMove`/
+  `onMouseLeave` per bucket. `onPointerMove` reads the pointer's x-position via
+  `event.clientX - svgRect.left` (from a `getBoundingClientRect()` cached in a
+  ref, or `nativeEvent.offsetX`), maps it into a bucket index with `Math.floor(x /
+  (trackWidthPx / bins.length))`, clamped to `[0, bins.length - 1]`, and updates
+  state only when that index changes; `onPointerLeave` clears it. The tooltip
+  content itself is unchanged — `position: fixed` div styled `bg-app-bg
+  border border-theme-border rounded-md shadow-lg`. Content: bucket range
+  (`[start, end)` computed the same way as
   `expand_histogram`, including its `Math.abs(end - start) < Number.EPSILON →
   bin_width = 1.0` fallback, `expand.rs:103-107`) and count + percentage of the row's total
   (`bucket_count / count * 100`, only when `count > 0` — see below).
@@ -653,8 +689,15 @@ names exist). Each override card gets one addition — when the selected column
 `isHistogramStructType`, **or** the card's own `override.kind === 'histogram'`
 already, a two-way "Render as" toggle appears above the existing Format field:
 **Markdown** (today's only option; format textarea shown, unchanged) or
-**Histogram** (format textarea hidden; a color-swatch row shown instead). The
-`kind === 'histogram'` fallback matters because the new `availableColumnTypes`
+**Histogram** (format textarea hidden; a color-swatch row shown instead). The two
+amber validation-warning blocks ("Unknown macro" / "Unknown column") that
+`OverrideEditor` renders as siblings of the Format textarea move with it: they, and
+the `validateFormatMacros` call that feeds them, are gated on the same effective-kind
+check the toggle itself uses (stored `kind`, defaulting to `'markdown'` when unset).
+A `kind: 'histogram'` card therefore validates and shows nothing about its preserved
+`format` — otherwise a card carrying a stale template from an earlier Markdown stint
+(Design §2/§6) would keep surfacing warnings about a field the user can no longer see
+or edit. The `kind === 'histogram'` fallback matters because the new `availableColumnTypes`
 prop (see below) can be empty or missing the column even for a histogram-typed
 one: `OverrideEditor` already treats an empty column list as a
 real "no results yet" state (`hasResults = availableColumns.length > 0`,
@@ -863,6 +906,14 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    `availableColumns` — without this, `TableCellEditor`/`TransposedTableCellEditor`
    never receive it. Then thread it through `TableCellEditor`/
    `TransposedTableCellEditor` into `OverrideEditor`'s new prop of the same name.
+   **Out of scope**: `HorizontalGroupCell.tsx`'s `ChildEditorView` (Current State
+   above) is a second forwarding point into `meta.EditorComponent`, reached via
+   `HgEditorPanel` rather than `CellEditor`, but `HgEditorPanelProps` doesn't carry
+   `availableColumns` today, so an HG-nested Table/Transposed Table cell's editor
+   never receives column names at all — a pre-existing gap this plan doesn't fix.
+   Threading `availableColumnTypes` through that already-broken path is not part of
+   this plan; the "Render as" toggle stays unreachable for HG-nested table cells,
+   same as it is for `availableColumns`-dependent behavior there today.
 9. **`components/OverrideEditor.tsx`**: accept the new `availableColumnTypes` prop;
    in each override card, when the selected column `isHistogramStructType` **or**
    the card's own `kind === 'histogram'` already (Design §6 — falls back to the
@@ -882,7 +933,16 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    its two remaining consumers here: `validateFormatMacros(override.format ?? '',
    …)` (line 33) and the Format `<textarea value={override.format ?? ''}>` (line
    147), so a `kind: 'histogram'` card with no `format` doesn't throw off
-   validation or flip the textarea uncontrolled. `handleColumnChange`
+   validation or flip the textarea uncontrolled. Additionally, gate the
+   `validationWarnings` computation (the `validateFormatMacros` call itself) and
+   both amber warning-block renders ("Unknown macro" / "Unknown column",
+   currently siblings of the Format textarea) on the card's effective kind being
+   `'markdown'` — the same stored-`kind`-defaulting-to-`'markdown'` check the
+   toggle uses. Without this, a `kind: 'histogram'` card that still carries a
+   stale template from an earlier Markdown stint (Design §2/§6 both preserve
+   rather than clear `format` in different cases) would keep computing and
+   showing warnings about a field the user can no longer see or edit.
+   `handleColumnChange`
    (lines 62-69) re-derives `kind` (and resets `format`/`histogramColor` as
    applicable) from the newly selected column's type per Design §2, only when
    that type is present in `availableColumnTypes` — otherwise it leaves
@@ -960,6 +1020,15 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
 | `mkdocs/docs/web-app/notebooks/cell-types.md` | document new default behavior, the Overrides "Render as: Histogram" mode, and the Markdown-debug trick |
 | `mkdocs/docs/web-app/notebooks/variables.md` | cross-reference "Column Format Overrides" section to the new "Render as: Histogram" docs |
 | `CHANGELOG.md` | `## Unreleased` → `**Web App:**` bullet for the new default histogram rendering, the "Render as: Histogram" override mode, and the `overrides` entry shape change |
+
+`analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` and
+`NotebookRenderer.tsx`'s `HgEditorPanel` are **not modified** by this plan: threading
+`availableColumnTypes` there would only reach `ChildEditorView`'s
+`meta.EditorComponent` forwarding, which is already unreachable today because
+`HgEditorPanelProps` never carries `availableColumns` either (Current State /
+Implementation Steps §8) — an HG-nested Table/Transposed Table cell's "Render as"
+toggle stays out of scope for this plan rather than layering new plumbing onto that
+pre-existing gap.
 
 No Rust changes — the SQL/Arrow side is complete already.
 
