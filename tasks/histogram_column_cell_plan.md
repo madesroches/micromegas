@@ -383,10 +383,16 @@ Renders inside a `<td>`, replacing the plain-string cell content (same pattern a
   unit-width fallback already ported for `bucketRange` (`expand.rs:103-107`) — with
   a single point mass, the median is that point, at the start of the (unit-width)
   bucket. The numeric value renders in a fixed-width (`42px`) label trailing the
-  chart (see
-  `option-b-tick-median.html`) — rendered via `toLocaleString()`, no
-  unit, consistent with `formatCell`'s numeric default (`table-utils.tsx:767-774`);
-  per-column unit hints are a possible follow-up, out of scope here. Chosen over
+  chart, formatted with the mockup's own bounded-precision rule — `median.toFixed(1)`
+  (`option-b-tick-median.html`), not `toLocaleString()` (unbounded fraction digits
+  plus grouping separators, e.g. `1,234.568`, routinely wider than 42px at the
+  label's `9.5px` font). `toFixed(1)` caps output at one fraction digit, which fits
+  42px for the value ranges this feature targets; on the rare value that still
+  overflows (e.g. a very large magnitude), the label's existing `overflow: hidden;
+  text-overflow: ellipsis` (`.histo-median-label`) truncates it — no separate
+  handling needed. No unit is appended, consistent with `formatCell`'s numeric
+  default (`table-utils.tsx:767-774`); per-column unit hints are a possible
+  follow-up, out of scope here. Chosen over
   overlaying the number directly on the bars (Option A, kept in
   `option-a-text-median.html` for reference) because the tick communicates *where*
   the median sits relative to the spread, not just its value, and a trailing
@@ -540,6 +546,26 @@ the result set at all. Without the `kind` fallback, a card already saved with
 in any of those states, and editing it there would write a stray `format` onto a
 histogram card.
 
+Clicking the toggle itself writes `kind` plus the same `format`/`histogramColor`
+side effects Design §2 already specifies for `handleColumnChange`, so the two
+transitions that can change a card's rendered kind — column swap and toggle click —
+follow one consistent rule:
+
+- **To Markdown**: set `kind: 'markdown'`; clear `histogramColor` (`undefined` —
+  inert once `kind` is `'markdown'` anyway); seed `format` with
+  `handleAddOverride`'s `[Link](/path?id=$row.<col>)`-style default template
+  **only when `format` is currently unset** — a card added on a histogram column
+  has no `format` yet, so this is exactly the case that matters, including the
+  debugging flow Design §5 documents (flip to Markdown, then type
+  `$row.dist`). A card that already carries a `format` from an earlier Markdown
+  stint (e.g. toggled back and forth) keeps it untouched, so a deliberate edit is
+  never silently overwritten.
+- **To Histogram**: set `kind: 'histogram'`; leave `format` untouched (it's simply
+  not read while `kind === 'histogram'` — Design §3 case 2 — so a stale template
+  is harmless and reappears if the user later toggles back to Markdown) and leave
+  `histogramColor` untouched (a value from a prior Histogram stint on this same
+  card is preserved, same as the column-change case in Design §2).
+
 - Six preset swatches, one per colormap, each rendered as its own actual
   mini-gradient (a small `linear-gradient(...)` sampled at 5-6 stops per colormap —
   see `COLORMAP_PREVIEW_GRADIENTS` below) — the swatch *is* the documentation, no
@@ -688,7 +714,12 @@ given the issue's emphasis on spotting "unusual spread" at a glance.
    147), so a `kind: 'histogram'` card with no `format` doesn't throw off
    validation or flip the textarea uncontrolled. `handleColumnChange`
    (lines 62-69) re-derives `kind` (and resets `format`/`histogramColor` as
-   applicable) from the newly selected column's type per Design §2.
+   applicable) from the newly selected column's type per Design §2. The toggle's
+   own `onClick` handler writes `kind` plus the matching `format`/`histogramColor`
+   side effects per Design §6's Editor UI rules: to Markdown, seed `format` with
+   `handleAddOverride`'s template only if `format` is currently unset, and clear
+   `histogramColor`; to Histogram, leave both `format` and `histogramColor`
+   untouched.
 10. **`TableRenderer.tsx`** (`lib/screen-renderers/TableRenderer.tsx`, the screens
     table — a second `TableBody`/`OverrideEditor` host outside the notebook cell
     editor pipeline): build an `availableColumnTypes` map next to the existing
