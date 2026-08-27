@@ -103,6 +103,7 @@ vi.mock('../cell-registry', async () => {
 import { NotebookRenderer } from '../NotebookRenderer'
 import { ScreenRendererProps } from '../index'
 import { CellConfig } from '../notebook-utils'
+import { CELL_TYPE_METADATA } from '../cell-registry'
 
 // Helper to create default props
 function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): ScreenRendererProps {
@@ -503,12 +504,82 @@ describe('NotebookRenderer', () => {
       expect(screen.getByTitle('Run cell')).toBeInTheDocument()
     })
 
-    it('should not show run button for markdown cells', async () => {
+    it('should show a run button for markdown cells (canRun via metadata, not execute)', async () => {
       const cells = [createMarkdownCell('Notes')]
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
-      expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
+      expect(screen.getByTitle('Run cell')).toBeInTheDocument()
+    })
+
+    it('should not show "Run from here" or "Auto-run from here" for markdown cells', async () => {
+      const cells = [createMarkdownCell('Notes')]
+
+      await renderNotebook(createDefaultProps({ config: { cells } }))
+
+      expect(screen.queryByText('Run from here')).not.toBeInTheDocument()
+      expect(screen.queryByText('Auto-run from here')).not.toBeInTheDocument()
+    })
+
+    it('updates markdown output live when content changes while status is success, with no Run click', async () => {
+      const cells = [createMarkdownCell('Notes', 'v1')]
+      const props = createDefaultProps({ config: { cells } })
+      const { rerender } = await renderNotebook(props)
+
+      // Get the cell to 'success' via its own Run button (auto-execution on
+      // mount depends on the WASM engine loading, which isn't available here).
+      const notesRow = screen.getByText('Notes').closest('div')
+      await act(async () => {
+        fireEvent.click(within(notesRow!).getByTitle('Run cell'))
+      })
+      expect(screen.getByTestId('cell-renderer-markdown')).toHaveTextContent('v1')
+
+      const updatedCells = [createMarkdownCell('Notes', 'v2')]
+      await act(async () => {
+        rerender(<NotebookRenderer {...props} config={{ cells: updatedCells }} />)
+      })
+
+      expect(screen.getByTestId('cell-renderer-markdown')).toHaveTextContent('v2')
+    })
+
+    it('renders a newly-added idle markdown cell only after its own Run is clicked, without executing any other cell', async () => {
+      // Spy on the table cell type's execute so we can prove clicking markdown's
+      // Run never triggers it (a query re-run would be the real cost this plan avoids).
+      const tableMeta = CELL_TYPE_METADATA.table as unknown as {
+        execute: (...args: unknown[]) => Promise<unknown>
+      }
+      const tableExecuteSpy = vi.spyOn(tableMeta, 'execute')
+
+      const tableCell = createTableCell('Query')
+      const props = createDefaultProps({ config: { cells: [tableCell] } })
+      const { rerender } = await renderNotebook(props)
+
+      // Run the table cell once via its own Run button to establish a baseline
+      // call count (auto-execution on mount isn't exercised in this environment).
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('Run cell'))
+      })
+      expect(tableExecuteSpy).toHaveBeenCalledTimes(1)
+
+      // Simulate a markdown cell added after mount: it has no cellStates entry
+      // yet, so it starts 'idle' and renders blank — same as a fresh add/duplicate.
+      const markdownCell = createMarkdownCell('Notes', 'hello')
+      await act(async () => {
+        rerender(<NotebookRenderer {...props} config={{ cells: [tableCell, markdownCell] }} />)
+      })
+
+      const markdownRenderer = screen.getByTestId('cell-renderer-markdown')
+      expect(markdownRenderer).toHaveTextContent('')
+
+      const notesRow = screen.getByText('Notes').closest('div')
+      const runButton = within(notesRow!).getByTitle('Run cell')
+      await act(async () => {
+        fireEvent.click(runButton)
+      })
+
+      expect(screen.getByTestId('cell-renderer-markdown')).toHaveTextContent('hello')
+      // The markdown Run is a synchronous local no-op — it must not re-run the table query.
+      expect(tableExecuteSpy).toHaveBeenCalledTimes(1)
     })
   })
 

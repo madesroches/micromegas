@@ -24,7 +24,7 @@ import {
   Group,
 } from 'lucide-react'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
-import { getCellTypeMetadata, createDefaultCell } from '../cell-registry'
+import { getCellTypeMetadata, createDefaultCell, cellCanRun } from '../cell-registry'
 import { AddCellModal } from '../shared'
 import type {
   CellConfig,
@@ -397,7 +397,7 @@ function ChildEditorView({
         cellResults={cellResults}
         cellSelections={cellSelections}
       />
-      {onRun && !!meta.execute && (
+      {onRun && cellCanRun(meta) && (
         <Button onClick={onRun} className="w-full gap-2">
           <Play className="w-4 h-4" />
           Run

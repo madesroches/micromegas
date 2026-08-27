@@ -34,13 +34,13 @@ Auto-run automatically re-executes cells when their inputs change, keeping resul
 
 ### Enabling Auto-Run
 
-Each cell has an `autoRunFromHere` toggle. When enabled, changes to that cell or its inputs trigger automatic execution from that cell downward.
+Each runnable query cell has an `autoRunFromHere` toggle (markdown cells do not). When enabled, changes to that cell or its inputs trigger automatic execution from that cell downward.
 
 ### Trigger Behavior
 
 | Change Type | What Executes | Timing |
 |-------------|---------------|--------|
-| SQL or content edit | The edited cell and all cells below it | **Debounced** (300ms) — waits for the user to stop typing |
+| SQL edit | The edited cell and all cells below it | **Debounced** (300ms) — waits for the user to stop typing |
 | Variable value selection | Only cells *after* the variable cell | **Immediate** — the variable's own query is not re-run since the user already chose a value |
 | Time range change | All cells from the first cell | **Immediate** |
 | Refresh button | All cells from the first cell | **Immediate** |

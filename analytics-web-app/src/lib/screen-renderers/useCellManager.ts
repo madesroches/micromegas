@@ -225,8 +225,11 @@ export function useCellManager({
       if (cell.autoRunFromHere) {
         const prev = cell as unknown as Record<string, unknown>
         const next = updates as unknown as Record<string, unknown>
-        // Keys that affect presentation only, not query results
-        const nonExecKeys = new Set(['layout', 'name', 'autoRunFromHere', 'options'])
+        // Keys that affect presentation only, not query results. `content` is
+        // markdown-only (no query-backed cell type has it) — editing it should
+        // never schedule a downstream re-run, even if `autoRunFromHere` ended
+        // up set on a markdown cell some other way than its (hidden) toggle.
+        const nonExecKeys = new Set(['layout', 'name', 'autoRunFromHere', 'options', 'content'])
         const hasChange = Object.keys(next).some(k => !nonExecKeys.has(k) && next[k] !== prev[k])
         if (hasChange) {
           scheduleAutoRun(cell.name)

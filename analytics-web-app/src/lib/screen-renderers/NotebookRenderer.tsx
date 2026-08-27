@@ -705,10 +705,12 @@ export function NotebookRenderer({
               setSelectedChildName(null)
             }}
             onRun={() => executeCellByName(cell.name)}
-            onRunFromHere={() => executeFromCellByName(cell.name)}
-            autoRunFromHere={cell.autoRunFromHere}
-            onToggleAutoRunFromHere={() =>
-              updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })
+            onRunFromHere={meta.execute ? () => executeFromCellByName(cell.name) : undefined}
+            autoRunFromHere={meta.execute ? cell.autoRunFromHere : undefined}
+            onToggleAutoRunFromHere={
+              meta.execute
+                ? () => updateCell(index, { autoRunFromHere: !cell.autoRunFromHere })
+                : undefined
             }
             onDownloadCsv={
               state.data.length > 0 && state.data[0].numRows > 0

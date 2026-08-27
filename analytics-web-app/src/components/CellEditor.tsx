@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { Table, DataType } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
-import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
+import { getCellTypeMetadata, cellCanRun } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, QueryBackedCellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
 import { validateCellName, sanitizeCellName, shouldShowDataSource, shouldShowTimeRange } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
@@ -92,7 +92,7 @@ export function CellEditor({
   const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 
   // Determine if this cell can run
-  const canRun = !!meta.execute
+  const canRun = cellCanRun(meta)
 
   return (
     <div className="flex flex-col flex-1 min-h-0">

@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { CellRendererProps } from '../cell-registry'
-import { getCellTypeMetadata } from '../cell-registry'
+import { getCellTypeMetadata, cellCanRun } from '../cell-registry'
 import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
 import type { CellConfig, CellState } from '../notebook-types'
 import { buildStatusText } from '../notebook-cell-view'
@@ -81,7 +81,7 @@ export function HgChildPane({
   const meta = getCellTypeMetadata(child.type)
   const CellRenderer = meta.renderer
   const TitleBarRenderer = meta.titleBarRenderer
-  const canRun = !!meta.execute
+  const canRun = cellCanRun(meta)
 
   const statusText = buildStatusText(child, state)
 

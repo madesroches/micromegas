@@ -34,7 +34,7 @@ export function MarkdownCell({ content, status, variables, timeRange, cellResult
 // Editor Component
 // =============================================================================
 
-function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResults, cellSelections }: CellEditorProps) {
+function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResults, cellSelections, onRun }: CellEditorProps) {
   const mdConfig = config as MarkdownCellConfig
 
   // Validate macro references in content
@@ -56,6 +56,7 @@ function MarkdownCellEditor({ config, onChange, variables, timeRange, cellResult
           language="markdown"
           placeholder="# Heading&#10;&#10;Your markdown here..."
           minHeight="200px"
+          onRunShortcut={onRun}
         />
       </div>
       {validationErrors.length > 0 && (
@@ -86,6 +87,7 @@ export const markdownMetadata: CellTypeMetadata = {
   defaultHeight: 150,
 
   canBlockDownstream: false,
+  canRun: true,
 
   createDefaultConfig: () => ({
     type: 'markdown' as const,
