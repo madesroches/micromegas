@@ -140,11 +140,9 @@ here:
   enabled, every keystroke while editing would schedule a re-run of every
   cell below it.
 
-Rather than adding `content` to `nonExecKeys` (which would also be correct
-but leaves the "Run from here" menu item showing with no real use for
-markdown), suppress both affordances at the only two call sites that build
-markdown's `CellContainer` props (`NotebookRenderer.tsx:707-712`, the hg
-group header at `:577-578` doesn't apply — markdown isn't a group). Pass
+Suppress both affordances at the only two call sites that build markdown's
+`CellContainer` props (`NotebookRenderer.tsx:707-712`, the hg group header
+at `:577-578` doesn't apply — markdown isn't a group). Pass
 `onRunFromHere`/`onToggleAutoRunFromHere`/`autoRunFromHere` as `undefined`
 when `cell.type === 'markdown'`:
 
@@ -158,6 +156,18 @@ autoRunFromHere={cell.type === 'markdown' ? undefined : cell.autoRunFromHere}
 "from here" variant there), so no equivalent change is needed there.
 `HgChildPane` and `ChildEditorView` likewise only render a single Run
 button per child — no change needed beyond the `canRun` fallback above.
+
+Hiding the toggle only closes the normal UI path, though. `autoRunFromHere`
+is declared on the generic `CellConfigBase` (`notebook-types.ts:107`), not
+gated by cell type, and `NotebookSourceView`'s raw-JSON "Apply" editor
+(`onConfigChange(JSON.parse(sourceText))`) only checks that `cells` is an
+array — nothing stops a user from pasting/editing JSON that sets a markdown
+cell's `autoRunFromHere: true` directly, bypassing the toggle entirely. So
+this plan also adds `'content'` to the `nonExecKeys` set in
+`useCellManager.updateCell` (`:229`), closing the gap regardless of how
+`autoRunFromHere` got set. `content` is unique to `MarkdownCellConfig`
+(`notebook-types.ts:125`) — no query-backed cell type has a `content` field
+(they use `sql`) — so this is a no-op for every other cell type.
 
 ### Wiring `onRun`
 
@@ -215,26 +225,50 @@ auto-success on creation) considered and deferred.
    - In `renderCell`, make `onRunFromHere`, `onToggleAutoRunFromHere`, and
      `autoRunFromHere` passed to `CellContainer` (around lines 707-712)
      `undefined` for `cell.type === 'markdown'`.
-8. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
+8. `analytics-web-app/src/lib/screen-renderers/useCellManager.ts`
+   - Add `'content'` to the `nonExecKeys` set in `updateCell` (`:229`), so
+     editing a markdown cell's content never schedules a downstream auto-run
+     even if `autoRunFromHere` reached it some other way than the (now
+     hidden) toggle — e.g. `NotebookSourceView`'s raw-JSON editor. See
+     Design's "Suppress ... for markdown" section.
+9. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
    - Add a test asserting `markdownMetadata.canRun === true`.
-9. `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
-   - Add `canRun: true` to `BASE_METADATA.markdown`, mirroring how
-     `canBlockDownstream: false` already mirrors production `markdownMetadata`
-     there. Without this, `getCellTypeMetadata('markdown').canRun` stays
-     `undefined` under the shared mock used by `CellContainer.test.tsx`,
-     `HorizontalGroupCell.test.tsx`, and `NotebookRenderer.test.tsx`, and the
-     new tests in steps 10-12 can't exercise the Run button for markdown.
-10. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
+10. `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
+    - Add `canRun: true` to `BASE_METADATA.markdown`, mirroring how
+      `canBlockDownstream: false` already mirrors production `markdownMetadata`
+      there. Without this, `getCellTypeMetadata('markdown').canRun` stays
+      `undefined` under the shared mock used by `CellContainer.test.tsx`,
+      `HorizontalGroupCell.test.tsx`, and `NotebookRenderer.test.tsx`, and the
+      new tests in steps 11-13 can't exercise the Run button for markdown.
+11. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
     - Add a case: a cell type with `execute` absent but `canRun: true`
       (or a mock) shows the Run button; confirm "Run from here"/"Auto-run"
       visibility is driven by the presence of the corresponding callbacks,
       not by `canRun` alone.
-11. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
+    - Update the existing `'should not show run button for markdown cells'`
+      test (~line 167): with the mock registry's `markdown.canRun` now
+      `true` (step 10) and no `canRunProp` override, the Run button *does*
+      render for `type="markdown"` — this assertion no longer holds. Replace
+      it with the positive case above (or repurpose this test into it), and
+      keep a separate case confirming an explicit `canRunProp={false}` still
+      hides the button regardless of type.
+    - Update the existing `'should not show "Run from here" for markdown
+      cells'` test (~line 218): `CellContainer` has no cell-type-specific
+      logic of its own — the plan's suppression is applied only by the
+      caller (`NotebookRenderer`, step 7), which now omits `onRunFromHere`
+      entirely for markdown. This test passes `onRunFromHere` directly, so
+      once `canRun` is metadata-driven and `true` for markdown, "Run from
+      here" renders here too, regardless of `type`. Remove this test (its
+      intent is now covered by the callback-presence case added above) and
+      rely on the `NotebookRenderer.test.tsx` update in step 13 — where
+      `onRunFromHere` is genuinely never passed for markdown — to verify the
+      end-to-end suppression.
+12. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
     - Add a case: a markdown child selected in the per-child editor panel
       (`ChildEditorView`) shows the Run button when `onRun` is provided —
       covers the same `canRun` fallback as `HgChildPane` but for the
       full-panel editor, which the existing suite doesn't exercise.
-12. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
+13. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
     - Update/replace the existing `'should not show run button for markdown
       cells'` test (line 506) — markdown now *does* show a Run button, but
       not "Run from here" or "Auto-run from here".
@@ -246,8 +280,8 @@ auto-success on creation) considered and deferred.
       renders blank, clicking Run flips it to rendered content, and no
       upstream query cell's `executeCell` is invoked as a result (assert via
       a spy/mock data source that no additional query fires).
-13. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
-14. Manual check with `yarn dev` (or the monolith): open a notebook with a
+14. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
+15. Manual check with `yarn dev` (or the monolith): open a notebook with a
     slow upstream query cell and a markdown cell below it referencing
     `$variable`/`$cell.col`. Edit the markdown content after the initial
     load — confirm it updates live. Then trigger "Run from here" on the
@@ -264,6 +298,7 @@ auto-success on creation) considered and deferred.
 - `analytics-web-app/src/lib/screen-renderers/cells/HgChildPane.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
+- `analytics-web-app/src/lib/screen-renderers/useCellManager.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
 - `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
@@ -289,12 +324,17 @@ auto-success on creation) considered and deferred.
   Introducing a second boolean for a single caller is unwarranted
   abstraction; a one-line type check at the existing call site is simpler
   and just as clear. Revisit if a second cell type needs the same split.
-- **Not touching `useCellManager`'s `nonExecKeys` auto-run exclusion.**
-  Adding `content` there would prevent the auto-run footgun too, but only
-  matters if `autoRunFromHere` can ever be set on a markdown cell — which
-  this plan prevents by hiding the toggle. Changing `nonExecKeys` without
-  also hiding the toggle would leave a confusing UI (a toggle with no
-  observable effect); hiding the toggle is the more honest fix.
+- **Hiding the toggle alone is not sufficient — also add `content` to
+  `useCellManager`'s `nonExecKeys`.** Hiding "Auto-run from here" closes the
+  normal UI path, but `autoRunFromHere` lives on the generic `CellConfigBase`
+  and isn't schema-gated by cell type: `NotebookSourceView`'s raw-JSON
+  editor can set `autoRunFromHere: true` on a markdown cell directly,
+  bypassing the toggle entirely. So this plan does both — hides the toggle
+  (the honest UI fix, since a visible toggle with no effect would be
+  confusing) *and* adds `'content'` to `nonExecKeys` (the actual footgun
+  fix, since it's the only thing that makes editing content schedule a
+  downstream auto-run in the first place). `content` is unique to
+  `MarkdownCellConfig`, so this is a no-op for every other cell type.
 - **Eagerly marking new markdown cells `success` on creation** (see Open
   Questions) was considered as a way to skip even the one Run click for
   brand-new cells, but adds a new callback into `useCellManager` for a minor
@@ -317,15 +357,17 @@ auto-success on creation) considered and deferred.
 
 ## Testing Strategy
 
-- **Automated**: see Implementation Steps 8-12 — `canRun` metadata assertion,
+- **Automated**: see Implementation Steps 9-13 — `canRun` metadata assertion,
   the shared `cell-registry-mock.ts` update so `canRun: true` is visible to
   tests, `CellContainer` Run-button visibility for a no-`execute` type with
-  `canRun: true`, the same Run-button visibility for a markdown child in the
-  hg per-child editor panel (`ChildEditorView`), `NotebookRenderer` markdown
-  Run button now visible while "Run from here"/"Auto-run from here" stay
-  hidden, live content-edit reactivity while `status: 'success'`, and
-  Run-click recovery from `idle` without touching upstream cells.
-- **Manual**: see Implementation Step 14 — the scenario the issue describes
+  `canRun: true` (with the two now-stale markdown-suppression tests in
+  `CellContainer.test.tsx` updated/removed per step 11), the same Run-button
+  visibility for a markdown child in the hg per-child editor panel
+  (`ChildEditorView`), `NotebookRenderer` markdown Run button now visible
+  while "Run from here"/"Auto-run from here" stay hidden, live content-edit
+  reactivity while `status: 'success'`, and Run-click recovery from `idle`
+  without touching upstream cells.
+- **Manual**: see Implementation Step 15 — the scenario the issue describes
   (slow upstream query, markdown edit, no reload needed; Run works
   independently of an in-flight upstream re-run).
 - **Regression**: existing `NotebookRenderer.test.tsx` assertions for
