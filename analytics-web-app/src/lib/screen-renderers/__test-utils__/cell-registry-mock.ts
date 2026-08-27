@@ -319,6 +319,8 @@ export function createCellRegistryMock(options: MockOptions = {}) {
   const mock: Record<string, unknown> = {
     getCellTypeMetadata: (type: string) => metadata[type] || metadata['table'],
 
+    cellCanRun: (meta: { canRun?: boolean; execute?: unknown }) => meta.canRun ?? !!meta.execute,
+
     CELL_TYPE_OPTIONS: Object.entries(BASE_METADATA).map(([type, meta]) => ({
       type,
       name: meta.label,

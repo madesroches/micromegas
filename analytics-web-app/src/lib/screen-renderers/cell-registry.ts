@@ -140,7 +140,7 @@ export interface CellTypeMetadata {
    * Whether this cell type shows a Run control, independent of whether it has
    * an `execute` method. Defaults to `!!execute`. Markdown sets this to `true`
    * so users get an explicit "re-render" control even though execution is a
-   * free, local, synchronous no-op (see `execute`'s absence above).
+   * free, local, synchronous no-op (markdown declares no `execute`).
    */
   readonly canRun?: boolean
 
@@ -241,6 +241,14 @@ export function getCellRenderer(type: CellType): ComponentType<CellRendererProps
  */
 export function getCellEditor(type: CellType): ComponentType<CellEditorProps> {
   return CELL_TYPE_METADATA[type].EditorComponent
+}
+
+/**
+ * Whether a cell type shows a Run control: explicit `canRun` if set,
+ * otherwise whether it has an `execute` method.
+ */
+export function cellCanRun(meta: CellTypeMetadata): boolean {
+  return meta.canRun ?? !!meta.execute
 }
 
 /**

@@ -1,7 +1,7 @@
 import { ReactNode, Ref, useRef, useEffect, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, Plus, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
-import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
+import { CellType, CellStatus, getCellTypeMetadata, cellCanRun } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { useFadeOnIdle } from '@/hooks/useFadeOnIdle'
@@ -50,7 +50,7 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   dragHandleProps?: Record<string, unknown>
   /** Whether the cell is currently being dragged */
   isDragging?: boolean
-  /** Override whether the run button is shown (defaults to cell type's execute capability) */
+  /** Override whether the run button is shown (defaults to the cell type's `canRun`, falling back to whether it has an `execute` method) */
   canRun?: boolean
   /** Download cell data as CSV */
   onDownloadCsv?: () => void
@@ -94,7 +94,7 @@ export function CellContainer({
   ...divProps
 }: CellContainerProps) {
   const meta = getCellTypeMetadata(type)
-  const canRun = canRunProp ?? meta.canRun ?? !!meta.execute
+  const canRun = canRunProp ?? cellCanRun(meta)
   const isGroup = type === 'hg'
 
   const fadeClass = useFadeOnIdle(status)
