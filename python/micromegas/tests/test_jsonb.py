@@ -73,3 +73,39 @@ def test_jsonb_cast_i64():
     res = client.query(sql)
     value = res.iloc[0]["value"]
     assert value == 321321321321
+
+
+def test_jsonb_entries_per_row_expansion_over_properties():
+    # unnest(jsonb_entries(properties)) over a real, dictionary-encoded `properties` column —
+    # confirms per-row expansion through the dictionary fast path against genuine ingested data,
+    # not a hand-built column (the shape/NULL/error edge cases are covered by the Rust suite).
+    # `processes.properties` is used rather than `log_entries.properties` because per-log-entry
+    # properties are typically empty; process-level properties (exe, username, ...) are not.
+    sql = """
+      SELECT process_id, kv['key'] as key, count(*) as n
+      FROM (SELECT process_id, unnest(jsonb_entries(properties)) as kv FROM processes)
+      GROUP BY process_id, key
+      LIMIT 20
+    """
+    res = client.query(sql, begin, end)
+    assert not res.empty
+    assert (res["n"] > 0).all()
+    assert res["key"].notna().all()
+
+
+def test_jsonb_path_elements_nested_array():
+    # unnest(jsonb_path_elements(...)) over a JSON body shaped like a real OTLP/webhook payload
+    # with a nested array (see the `commits` array assertion in test_otlp_e2e.py), confirming the
+    # path-elements UDF end to end over FlightSQL.
+    sql = """
+      SELECT jsonb_as_string(jsonb_get(commit, 'id')) as commit_id
+      FROM (
+        SELECT unnest(jsonb_path_elements(
+          jsonb_parse('{"object_kind": "push", "commits": [{"id": "abc123"}, {"id": "def456"}]}'),
+          '$.commits[*]'
+        )) as commit
+      )
+      ORDER BY commit_id
+    """
+    res = client.query(sql)
+    assert list(res["commit_id"]) == ["abc123", "def456"]

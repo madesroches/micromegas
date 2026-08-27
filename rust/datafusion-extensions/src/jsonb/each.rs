@@ -1,3 +1,4 @@
+use crate::jsonb::extract::object_or_array_entries;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray, DictionaryArray, GenericBinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
@@ -13,7 +14,6 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
-use jsonb::RawJsonb;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a JSONB object or array into rows of (key, value).
@@ -85,33 +85,14 @@ fn output_schema() -> SchemaRef {
 
 /// Extract key-value entries from JSONB bytes.
 ///
-/// For objects, uses `object_each()` with field names as keys.
-/// For arrays, uses `array_values()` with element indices as keys.
+/// For objects, keys are field names. For arrays, keys are element indices (as strings).
+/// Errors with the UDTF's usual message if the input is neither an object nor an array.
 fn extract_entries_from_jsonb(
     jsonb_bytes: &[u8],
 ) -> Result<Vec<(String, Vec<u8>)>, DataFusionError> {
-    let jsonb = RawJsonb::new(jsonb_bytes);
-    match jsonb.object_each() {
-        Ok(Some(entries)) => {
-            return Ok(entries
-                .into_iter()
-                .map(|(k, v)| (k, v.as_ref().to_vec()))
-                .collect());
-        }
-        Ok(None) => {}
-        Err(e) => return Err(DataFusionError::External(e.into())),
-    }
-    match jsonb.array_values() {
-        Ok(Some(values)) => Ok(values
-            .into_iter()
-            .enumerate()
-            .map(|(i, v)| (i.to_string(), v.as_ref().to_vec()))
-            .collect()),
-        Ok(None) => Err(DataFusionError::Execution(
-            "jsonb_each: input is not a JSONB object or array".into(),
-        )),
-        Err(e) => Err(DataFusionError::External(e.into())),
-    }
+    object_or_array_entries(jsonb_bytes)?.ok_or_else(|| {
+        DataFusionError::Execution("jsonb_each: input is not a JSONB object or array".into())
+    })
 }
 
 fn entries_to_batch(entries: &[(String, Vec<u8>)]) -> Result<RecordBatch, DataFusionError> {

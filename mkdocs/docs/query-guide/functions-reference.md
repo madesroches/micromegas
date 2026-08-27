@@ -427,15 +427,112 @@ SELECT jsonb_path_query_first(
 ) as first_admin;
 -- Returns: {"name": "Alice", "role": "admin"}
 
--- Combined with jsonb_array_elements for row expansion
-SELECT jsonb_as_string(jsonb_get(value, 'name')) as player_name
-FROM jsonb_array_elements(
-  jsonb_path_query(msg_jsonb, '$.teams[*].players[*] ? (@.type == "human")')
+-- Combined with jsonb_path_elements for per-row expansion (see jsonb_path_elements below —
+-- jsonb_array_elements can't take a column reference like msg_jsonb as its argument)
+SELECT jsonb_as_string(jsonb_get(e, 'name')) as player_name
+FROM (
+  SELECT unnest(jsonb_path_elements(msg_jsonb, '$.teams[*].players[*] ? (@.type == "human")')) as e
+  FROM events
 )
 ```
 
 !!! warning "Common mistake"
     Using JavaScript-style filter syntax like `$.items[?(@.type=="active")]` will result in a parse error. Always use the SQL/JSON style: `$.items[*] ? (@.type == "active")`.
+
+##### `jsonb_entries(jsonb)`
+
+Expands a JSONB object or array into a list of `{key, value}` entries. Unlike `jsonb_each`, this is a plain scalar function, so it can take a column reference and be expanded **per source row** with `unnest()` — the per-row equivalent of `FROM t, jsonb_each(t.col)`, which DataFusion cannot evaluate as a correlated join.
+
+For objects, `key` is the field name. For arrays, `key` is the element index as a string (`"0"`, `"1"`, ...). Returns NULL for a JSON scalar (number, string, boolean) or a NULL input.
+
+**Syntax:**
+```sql
+jsonb_entries(jsonb)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+**Returns:** `List<Struct<key: Utf8, value: Binary>>` - one entry per object field or array element, or NULL if the input is a JSON scalar or NULL; errors if the JSONB bytes cannot be decoded
+
+**Examples:**
+```sql
+-- One row per property, per source row
+SELECT time, kv['key'] as key, jsonb_as_string(kv['value']) as value
+FROM (SELECT time, unnest(jsonb_entries(properties)) as kv FROM log_entries)
+
+-- Count occurrences of each property key
+SELECT kv['key'] as key, count(*) as n
+FROM (SELECT unnest(jsonb_entries(properties)) as kv FROM log_entries)
+GROUP BY key
+ORDER BY n DESC;
+```
+
+!!! note "Accessing struct fields after unnest()"
+    Use `kv['key']` / `kv['value']` (as above), or `kv.key` / `kv.value` in a subquery that aliases the unnested column. `(unnest(jsonb_entries(...))).key` — dot access directly on the `unnest()` call — is not supported by DataFusion.
+
+##### `jsonb_elements(jsonb)`
+
+Expands a JSONB array into a list of its elements, for **per-row** expansion with `unnest()` — the per-row equivalent of `FROM t, jsonb_array_elements(t.col)`. Unlike `jsonb_entries`, the result has no `key`, just the element values. Returns NULL for a JSON object or scalar, or a NULL input.
+
+**Syntax:**
+```sql
+jsonb_elements(jsonb)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+**Returns:** `List<Binary (JSONB)>` - one entry per array element, or NULL if the input is not a JSONB array; errors if the JSONB bytes cannot be decoded
+
+**Examples:**
+```sql
+-- One row per array element, per source row
+SELECT jsonb_as_string(jsonb_get(e, 'name')) as player_name
+FROM (SELECT unnest(jsonb_elements(jsonb_get(jsonb_parse(msg), 'players'))) as e FROM events)
+```
+
+##### `jsonb_path_elements(jsonb, path)`
+
+Expands all matches of a JSONPath expression on a JSONB value into a list, for **per-row** expansion with `unnest()`. This is the per-row equivalent of `unnest(jsonb_path_query(jsonb, path))`, which doesn't work directly — `jsonb_path_query` returns a JSONB scalar (a JSONB array), not an Arrow list, so DataFusion's `unnest()` can't expand it.
+
+**Syntax:**
+```sql
+jsonb_path_elements(jsonb, path)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+- `path` (`Utf8`): A JSONPath expression string, including filter predicates (see [Filter Predicates in JSONPath](#filter-predicates-in-jsonpath) above). A NULL `path` produces a NULL list for that row.
+
+**Returns:** `List<Binary (JSONB)>` - one entry per path match, an empty list if the path has no matches, or NULL if the JSONB input or the path is NULL; errors if the JSONB bytes cannot be decoded
+
+**Examples:**
+```sql
+-- One row per matched commit, per source row
+SELECT jsonb_as_string(jsonb_get(c, 'id')) as commit_id
+FROM (SELECT unnest(jsonb_path_elements(jsonb_parse(msg), '$.commits[*]')) as c FROM log_entries)
+
+-- Combined with a filter predicate
+SELECT jsonb_as_string(jsonb_get(e, 'name')) as player_name
+FROM (
+  SELECT unnest(jsonb_path_elements(msg_jsonb, '$.teams[*].players[*] ? (@.type == "human")')) as e
+  FROM events
+)
+```
 
 ##### `jsonb_get(jsonb, key)`
 
@@ -589,7 +686,7 @@ jsonb_object_keys(jsonb)
    * `Binary` - Plain JSONB binary
    * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
-**Returns:** `Dictionary<Int32, List<Utf8>>` - Dictionary-encoded array of key names for memory efficiency (repeated key lists share the same dictionary entry), or NULL if input is not an object
+**Returns:** `List<Utf8>` - Array of key names, or NULL if input is not an object
 
 **Examples:**
 ```sql
@@ -601,6 +698,10 @@ SELECT jsonb_object_keys(jsonb_parse('{"name": "server", "port": 8080}')) as key
 SELECT jsonb_object_keys(properties) as prop_keys
 FROM processes
 LIMIT 5;
+
+-- One row per key, across all processes
+SELECT DISTINCT unnest(jsonb_object_keys(properties)) as prop_key
+FROM processes;
 ```
 
 ##### `jsonb_array_length(jsonb)`
@@ -655,7 +756,7 @@ FROM jsonb_each(jsonb_subquery)
 
 **Parameters:**
 
-- `jsonb_value` (Binary/JSONB): A JSONB object or array value, provided as a literal or a subquery returning a single JSONB column. If the subquery returns multiple rows, the entries from all rows are concatenated. Null values are skipped. Returns an error if the input is a scalar (e.g., number or string).
+- `jsonb_value` (Binary/JSONB): A JSONB object or array value, provided as a literal or an **uncorrelated** subquery returning a single JSONB column — `jsonb_each(t.col)` with a bare column reference to a table in the outer `FROM` (e.g. `FROM t, jsonb_each(t.col)`) is not supported (DataFusion has no correlated table-function evaluation) and fails to plan with a "no field named" schema error. Use `jsonb_entries` above for per-row expansion instead. If the subquery returns multiple rows, the entries from all rows are concatenated. Null values are skipped. Returns an error if the input is a scalar (e.g., number or string).
 
 **Returns:**
 
@@ -700,7 +801,7 @@ FROM jsonb_array_elements(jsonb_array)
 
 **Parameters:**
 
-- `jsonb_value` (Binary/JSONB): A JSONB array value, provided as a literal, subquery, or expression (e.g., `jsonb_path_query(...)`). If a subquery returns multiple rows, the elements from all arrays are concatenated. Returns an error if the input is not a JSONB array.
+- `jsonb_value` (Binary/JSONB): A JSONB array value, provided as a literal, subquery, or expression (e.g., `jsonb_path_query(...)`) — but the expression must contain **no column reference** to a table in the outer `FROM` (`jsonb_array_elements(jsonb_path_query(jsonb_parse('...'), path))` is fine; `jsonb_array_elements(jsonb_path_query(msg_jsonb, path))` is not, since `msg_jsonb` is a bare column reference, and fails to plan with a "no field named" schema error). Use `jsonb_path_elements`/`jsonb_elements` above for per-row expansion of a column instead. If a subquery returns multiple rows, the elements from all arrays are concatenated. Returns an error if the input is not a JSONB array.
 
 **Returns:**
 
@@ -1494,6 +1595,22 @@ WHERE msg LIKE '%response_time%'
   AND jsonb_parse(msg) IS NOT NULL
 GROUP BY service
 ORDER BY avg_response_ms DESC;
+```
+
+```sql
+-- Per-row expansion: one row per property, per log entry (uses the dictionary fast path
+-- automatically, since `properties` is dictionary-encoded)
+SELECT time, kv['key'] as key, jsonb_as_string(kv['value']) as value
+FROM (SELECT time, unnest(jsonb_entries(properties)) as kv FROM log_entries)
+WHERE time >= NOW() - INTERVAL '1 hour';
+
+-- Per-row expansion of a nested array selected by a JSONPath, keeping the source row's columns
+SELECT time, jsonb_as_string(jsonb_get(commit, 'id')) as commit_id
+FROM (
+    SELECT time, unnest(jsonb_path_elements(jsonb_parse(msg), '$.commits[*]')) as commit
+    FROM log_entries
+    WHERE msg LIKE '%commits%'
+);
 ```
 
 ### Time-based Aggregation

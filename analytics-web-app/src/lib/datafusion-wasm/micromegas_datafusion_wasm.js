@@ -184,7 +184,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { dtor_idx: 109, function: Function { arguments: [Externref], shim_idx: 32433, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { dtor_idx: 109, function: Function { arguments: [Externref], shim_idx: 32479, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm.wasm_bindgen_9464af5f1cc93373___closure__destroy___dyn_core_9b3796e30d99ddb7___ops__function__FnMut__wasm_bindgen_9464af5f1cc93373___JsValue____Output___core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_9464af5f1cc93373___JsError___, wasm_bindgen_9464af5f1cc93373___convert__closures_____invoke___wasm_bindgen_9464af5f1cc93373___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_9464af5f1cc93373___JsError___true_);
             return ret;
         },

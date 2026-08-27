@@ -1,6 +1,5 @@
 use datafusion::arrow::array::{
-    Array, ArrayRef, BinaryDictionaryBuilder, DictionaryArray, GenericBinaryBuilder, ListArray,
-    StringArray,
+    Array, ArrayRef, BinaryDictionaryBuilder, GenericBinaryBuilder, ListArray, StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -53,19 +52,9 @@ fn create_record_batch(jsonb_array: ArrayRef) -> RecordBatch {
     RecordBatch::try_new(schema, vec![jsonb_array]).expect("Failed to create RecordBatch")
 }
 
-/// Helper to extract keys from a Dictionary<Int32, List<Utf8>> result
-fn extract_keys_from_dict_list(
-    dict_array: &DictionaryArray<Int32Type>,
-    index: usize,
-) -> Vec<String> {
-    let list_values = dict_array
-        .values()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .expect("Expected ListArray values");
-
-    let key_index = dict_array.keys().value(index) as usize;
-    let values = list_values.value(key_index);
+/// Helper to extract keys from a plain `List<Utf8>` result at a given row
+fn extract_keys_from_list(list_array: &ListArray, index: usize) -> Vec<String> {
+    let values = list_array.value(index);
     let string_array = values
         .as_any()
         .downcast_ref::<StringArray>()
@@ -98,31 +87,29 @@ async fn test_jsonb_object_keys_simple_object() {
     let result_batch = &results[0];
     let result_array = result_batch.column(0);
 
-    // Verify return type is Dictionary<Int32, List<Utf8>>
+    // Verify return type is plain List<Utf8> (not dictionary-encoded)
     assert!(
         matches!(
             result_array.data_type(),
-            DataType::Dictionary(key_type, value_type)
-            if matches!(key_type.as_ref(), DataType::Int32)
-            && matches!(value_type.as_ref(), DataType::List(field) if matches!(field.data_type(), DataType::Utf8))
+            DataType::List(field) if matches!(field.data_type(), DataType::Utf8)
         ),
-        "Expected Dictionary<Int32, List<Utf8>> return type, got {:?}",
+        "Expected List<Utf8> return type, got {:?}",
         result_array.data_type()
     );
 
-    let dict_array = result_array
+    let list_array = result_array
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    assert_eq!(dict_array.len(), 2);
+    assert_eq!(list_array.len(), 2);
 
-    let keys1 = extract_keys_from_dict_list(dict_array, 0);
+    let keys1 = extract_keys_from_list(list_array, 0);
     assert_eq!(keys1.len(), 2);
     assert!(keys1.contains(&"a".to_string()));
     assert!(keys1.contains(&"b".to_string()));
 
-    let keys2 = extract_keys_from_dict_list(dict_array, 1);
+    let keys2 = extract_keys_from_list(list_array, 1);
     assert_eq!(keys2.len(), 2);
     assert!(keys2.contains(&"name".to_string()));
     assert!(keys2.contains(&"port".to_string()));
@@ -153,33 +140,35 @@ async fn test_jsonb_object_keys_with_dictionary_input() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    assert_eq!(dict_array.len(), 4);
+    assert_eq!(list_array.len(), 4);
 
-    let keys0 = extract_keys_from_dict_list(dict_array, 0);
+    let keys0 = extract_keys_from_list(list_array, 0);
     assert_eq!(keys0, vec!["x"]);
 
-    let keys1 = extract_keys_from_dict_list(dict_array, 1);
+    let keys1 = extract_keys_from_list(list_array, 1);
     assert_eq!(keys1.len(), 2);
     assert!(keys1.contains(&"y".to_string()));
     assert!(keys1.contains(&"z".to_string()));
 
-    let keys2 = extract_keys_from_dict_list(dict_array, 2);
+    let keys2 = extract_keys_from_list(list_array, 2);
     assert_eq!(keys2, vec!["x"]);
 
-    let keys3 = extract_keys_from_dict_list(dict_array, 3);
+    let keys3 = extract_keys_from_list(list_array, 3);
     assert_eq!(keys3.len(), 2);
 
-    // Verify dictionary deduplication: repeated inputs should share dictionary values
-    // Keys at indices 0 and 2 should point to the same dictionary entry
-    assert_eq!(dict_array.keys().value(0), dict_array.keys().value(2));
-    // Keys at indices 1 and 3 should point to the same dictionary entry
-    assert_eq!(dict_array.keys().value(1), dict_array.keys().value(3));
+    // Repeated inputs (through the dictionary fast path) produce identical key lists, even
+    // though the result is no longer dictionary-encoded and shares no storage between rows.
+    assert_eq!(keys0, keys2);
+    assert_eq!(
+        keys1.iter().collect::<std::collections::HashSet<_>>(),
+        keys3.iter().collect::<std::collections::HashSet<_>>()
+    );
 }
 
 #[tokio::test]
@@ -202,15 +191,15 @@ async fn test_jsonb_object_keys_with_null_input() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    assert!(!dict_array.is_null(0)); // First entry (valid input) is not null
-    assert!(dict_array.is_null(1)); // Null input produces null dictionary entry
-    assert!(!dict_array.is_null(2)); // Third entry (valid input) is not null
+    assert!(!list_array.is_null(0)); // First entry (valid input) is not null
+    assert!(list_array.is_null(1)); // Null input produces a null list entry
+    assert!(!list_array.is_null(2)); // Third entry (valid input) is not null
 }
 
 #[tokio::test]
@@ -237,16 +226,16 @@ async fn test_jsonb_object_keys_non_object_returns_null() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    // All non-objects should return null dictionary entries
-    assert!(dict_array.is_null(0)); // Array
-    assert!(dict_array.is_null(1)); // String
-    assert!(dict_array.is_null(2)); // Number
+    // All non-objects should return null list entries
+    assert!(list_array.is_null(0)); // Array
+    assert!(list_array.is_null(1)); // String
+    assert!(list_array.is_null(2)); // Number
 }
 
 #[tokio::test]
@@ -268,14 +257,14 @@ async fn test_jsonb_object_keys_empty_object() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    assert!(!dict_array.is_null(0));
-    let keys = extract_keys_from_dict_list(dict_array, 0);
+    assert!(!list_array.is_null(0));
+    let keys = extract_keys_from_list(list_array, 0);
     assert!(keys.is_empty()); // Empty object returns empty array
 }
 
@@ -299,13 +288,13 @@ async fn test_jsonb_object_keys_nested_object() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    let keys = extract_keys_from_dict_list(dict_array, 0);
+    let keys = extract_keys_from_list(list_array, 0);
     assert_eq!(keys.len(), 2);
     assert!(keys.contains(&"outer".to_string()));
     assert!(keys.contains(&"sibling".to_string()));
@@ -333,16 +322,58 @@ async fn test_jsonb_object_keys_preserves_key_order() {
 
     let results = df.collect().await.expect("Failed to collect results");
     let result_batch = &results[0];
-    let dict_array = result_batch
+    let list_array = result_batch
         .column(0)
         .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .expect("Expected DictionaryArray");
+        .downcast_ref::<ListArray>()
+        .expect("Expected ListArray");
 
-    let keys = extract_keys_from_dict_list(dict_array, 0);
+    let keys = extract_keys_from_list(list_array, 0);
     assert_eq!(keys.len(), 3);
     // The order should be preserved
     assert_eq!(keys[0], "first");
     assert_eq!(keys[1], "second");
     assert_eq!(keys[2], "third");
+}
+
+#[tokio::test]
+async fn test_jsonb_object_keys_unnest() {
+    // unnest() should work directly on the plain List<Utf8> result, without an arrow_cast
+    // workaround, and per-row expansion should be independently orderable / countable.
+    let jsonb1 = create_jsonb_object(r#"{"a": 1, "b": 2}"#);
+    let jsonb2 = create_jsonb_object(r#"{"c": 3}"#);
+
+    let input = create_jsonb_binary_array(vec![jsonb1, jsonb2]);
+    let batch = create_record_batch(input);
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(make_jsonb_object_keys_udf());
+    ctx.register_batch("test_table", batch)
+        .expect("Failed to register batch");
+
+    let df = ctx
+        .sql(
+            "SELECT unnest(jsonb_object_keys(jsonb_data)) AS key FROM test_table \
+             ORDER BY key",
+        )
+        .await
+        .expect("Failed to execute query");
+
+    let results = df.collect().await.expect("Failed to collect results");
+    let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 3);
+
+    let mut keys: Vec<String> = Vec::new();
+    for batch in &results {
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Expected StringArray");
+        for i in 0..col.len() {
+            keys.push(col.value(i).to_string());
+        }
+    }
+    keys.sort();
+    assert_eq!(keys, vec!["a", "b", "c"]);
 }

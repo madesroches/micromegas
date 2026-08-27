@@ -1,21 +1,22 @@
-use datafusion::arrow::array::{
-    Array, ArrayRef, DictionaryArray, GenericBinaryArray, Int32Array, ListBuilder, StringBuilder,
-};
-use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
-use datafusion::common::{Result, exec_err, internal_err};
+use crate::jsonb::list_udfs::{binary_accessor_or_err, binary_dict, dict_fast_path};
+use datafusion::arrow::array::{ArrayRef, ListBuilder, StringBuilder};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::common::{Result, exec_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use jsonb::RawJsonb;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A scalar UDF that extracts the keys from a JSONB object.
 ///
 /// Accepts both `Binary` and `Dictionary<Int32, Binary>` inputs.
-/// Returns `Dictionary<Int32, List<Utf8>>` containing the object keys, or null if input is not an object.
-/// Dictionary encoding is used because JSONB values (especially properties) are often repeated.
+/// Returns `List<Utf8>` containing the object keys, or null if input is not an object.
+/// A `Dictionary<Int32, Binary>` input takes a fast path that extracts each unique blob once
+/// (`take`-expanded to row count), since JSONB values (especially `properties`) are often
+/// repeated; the returned list is never dictionary-encoded — `unnest()` and `SELECT DISTINCT`
+/// need a plain list to work directly, without an `arrow_cast` workaround.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonbObjectKeys {
     signature: Signature,
@@ -76,13 +77,10 @@ impl ScalarUDFImpl for JsonbObjectKeys {
     }
 
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Dictionary(
-            Box::new(DataType::Int32),
-            Box::new(DataType::List(Arc::new(Field::new_list_field(
-                DataType::Utf8,
-                true,
-            )))),
-        ))
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::Utf8,
+            true,
+        ))))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -91,116 +89,46 @@ impl ScalarUDFImpl for JsonbObjectKeys {
             return exec_err!("wrong number of arguments to jsonb_object_keys()");
         }
 
-        match args[0].data_type() {
-            DataType::Binary => {
-                let binary_array = args[0]
-                    .as_any()
-                    .downcast_ref::<GenericBinaryArray<i32>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("error casting to binary array".into())
-                    })?;
-
-                let result = build_dict_list_array(binary_array.len(), |i| {
-                    if binary_array.is_null(i) {
-                        Ok(None)
-                    } else {
-                        extract_keys_from_jsonb(binary_array.value(i))
-                    }
-                })?;
-                Ok(ColumnarValue::Array(result))
-            }
-            DataType::Dictionary(_, value_type)
-                if matches!(value_type.as_ref(), DataType::Binary) =>
-            {
-                let dict_array = args[0]
-                    .as_any()
-                    .downcast_ref::<DictionaryArray<Int32Type>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("error casting dictionary array".into())
-                    })?;
-
-                let binary_values = dict_array
-                    .values()
-                    .as_any()
-                    .downcast_ref::<GenericBinaryArray<i32>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("dictionary values are not a binary array".into())
-                    })?;
-
-                let result = build_dict_list_array(dict_array.len(), |i| {
-                    if dict_array.is_null(i) {
-                        Ok(None)
-                    } else {
-                        let key_index = dict_array.keys().value(i) as usize;
-                        if key_index < binary_values.len() {
-                            extract_keys_from_jsonb(binary_values.value(key_index))
-                        } else {
-                            internal_err!("Dictionary key index out of bounds in jsonb_object_keys")
-                        }
-                    }
-                })?;
-                Ok(ColumnarValue::Array(result))
-            }
-            _ => exec_err!(
-                "jsonb_object_keys: unsupported input type, expected Binary or Dictionary<Int32, Binary>"
-            ),
-        }
+        Ok(ColumnarValue::Array(build_keys_list(&args[0])?))
     }
 }
 
-/// Build a Dictionary<Int32, List<Utf8>> array from a function that returns keys for each index.
-/// Uses a HashMap to deduplicate identical key lists for memory efficiency.
-/// Returns None from get_keys to indicate a null output (distinct from Some(empty vec) for empty objects).
-fn build_dict_list_array<F>(len: usize, mut get_keys: F) -> Result<ArrayRef>
-where
-    F: FnMut(usize) -> Result<Option<Vec<String>>>,
-{
-    // Map from key list to dictionary index (only for non-null results)
-    let mut unique_lists: HashMap<Vec<String>, i32> = HashMap::new();
-    let mut key_indices: Vec<Option<i32>> = Vec::with_capacity(len);
-    let mut ordered_lists: Vec<Vec<String>> = Vec::new();
-
-    // First pass: collect all values and deduplicate
-    for i in 0..len {
-        let keys = get_keys(i)?;
-        match keys {
-            Some(key_list) => {
-                if let Some(idx) = unique_lists.get(&key_list) {
-                    key_indices.push(Some(*idx));
-                } else {
-                    let idx = ordered_lists.len() as i32;
-                    unique_lists.insert(key_list.clone(), idx);
-                    key_indices.push(Some(idx));
-                    ordered_lists.push(key_list);
-                }
+fn append_keys_slot(list_builder: &mut ListBuilder<StringBuilder>, keys: Option<Vec<String>>) {
+    match keys {
+        Some(keys) => {
+            for key in keys {
+                list_builder.values().append_value(key);
             }
-            None => {
-                // Null input produces null dictionary entry (null key)
-                key_indices.push(None);
-            }
+            list_builder.append(true);
         }
+        None => list_builder.append(false),
+    }
+}
+
+/// Build `jsonb_object_keys`'s list array: dictionary fast path when the input is
+/// `Dictionary<Int32, Binary>`, row-by-row via `create_binary_accessor` otherwise.
+fn build_keys_list(array: &ArrayRef) -> Result<ArrayRef> {
+    if let Some(dict_array) = binary_dict(array) {
+        let list_builder = ListBuilder::new(StringBuilder::new());
+        return dict_fast_path(dict_array, list_builder, |builder, bytes| {
+            append_keys_slot(builder, extract_keys_from_jsonb(bytes)?);
+            Ok(())
+        });
     }
 
-    // Build the values array (List<Utf8>) from unique lists
+    let accessor = binary_accessor_or_err(array, "jsonb_object_keys")?;
     let mut list_builder = ListBuilder::new(StringBuilder::new());
-    for keys in &ordered_lists {
-        for key in keys {
-            list_builder.values().append_value(key);
+    for i in 0..accessor.len() {
+        if accessor.is_null(i) {
+            list_builder.append(false);
+        } else {
+            append_keys_slot(
+                &mut list_builder,
+                extract_keys_from_jsonb(accessor.value(i))?,
+            );
         }
-        list_builder.append(true);
     }
-    let values_array = Arc::new(list_builder.finish());
-
-    // Build the keys array (None values become null keys)
-    let keys_array = Int32Array::from(key_indices);
-
-    // Construct the dictionary array
-    let dict_array =
-        DictionaryArray::<Int32Type>::try_new(keys_array, values_array).map_err(|e| {
-            DataFusionError::Internal(format!("Failed to create dictionary array: {e}"))
-        })?;
-
-    Ok(Arc::new(dict_array))
+    Ok(Arc::new(list_builder.finish()))
 }
 
 /// Creates a user-defined function to extract the keys from a JSONB object.
