@@ -31,9 +31,9 @@ Three decisions taken with the issue author:
 - **No property migration.** The whole audience-stamping stack (#1373, #1482, #1519) is still
   `## Unreleased`, and no deployed environment holds property-stamped rows. So the property is not
   backfilled into the column, is not read as a fallback, and stops being written. The only rows
-  that carry a NULL column are genuinely pre-AbAC rows and admin `bulk_ingest` rows from a source
-  that predates the column, and those resolve to `MICROMEGAS_DEFAULT_AUDIENCE` at read time
-  exactly as they do today.
+  that carry a NULL column are genuinely pre-AbAC rows — admin `bulk_ingest` from a source that
+  predates the column is rejected outright rather than written with NULL (§3) — and those resolve
+  to `MICROMEGAS_DEFAULT_AUDIENCE` at read time exactly as they do today.
 - **`blocks` and `streams` carry their own audience, not the process's.** This is settled, not a
   trade-off to be revisited: a block's label is the credential that wrote *that block*, and a
   stream's is the credential that wrote *that stream*. The point of the change is precisely that
@@ -41,15 +41,18 @@ Three decisions taken with the issue author:
   a downstream view aggregates or joins across rows, the fix is to re-anchor the view on the
   row's own stamp (§4) — never to relabel the row from the process it points at.
 
-Scope is integrity, not confidentiality: no read escalation is created or removed here — reading B
-still requires a read grant on B. That claim depends on a mismatched row never materializing into
-any view in the first place: a block whose `audience` disagrees with the `streams.audience` or
-`processes.audience` it joins to is excluded from materialization by a single predicate on
-`blocks_view`'s `data_sql` (mirrored in its `source_count_query`) — it never becomes a row of
-`blocks` at all, so it is equally absent from `log_entries`, `measures`, and every other view that
-reads blocks through the `blocks` view's own materialized partitions — see
-["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for the one residual case the
-predicate does not close (a NULL-anchored `processes`/`streams` row), and, for
+Scope is integrity, not confidentiality: for any row whose own anchor already carries a real,
+non-NULL audience, no read escalation is created or removed here — reading B still requires a read
+grant on B. That claim depends on a mismatched row never materializing into any view in the first
+place: a block whose `audience` disagrees with the `streams.audience` or `processes.audience` it
+joins to is excluded from materialization by a single predicate on `blocks_view`'s `data_sql`
+(mirrored in its `source_count_query`) — it never becomes a row of `blocks` at all, so it is equally
+absent from `log_entries`, `measures`, and every other view that reads blocks through the `blocks`
+view's own materialized partitions — see
+["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for the residual cases the
+predicate does not close: a NULL-anchored `processes`/`streams` row relabeled by an attacker's block,
+and its mirror image, a NULL-audience block resolving through a real `processes`/`streams` anchor —
+which *is* a bounded read escalation, not covered by "already public" — and, for
 `log_entries`/`measures` specifically, why letting a mismatched row materialize would leak the
 victim process's own `exe`/`username`/`computer`/`process_properties`.
 Process squatting (`check_process_audience_conflict`) and cross-audience OTLP process collision
@@ -142,8 +145,8 @@ database read at all**.
 
 > **A row's own `audience` column is the authoritative label for that row.** It is the
 > authenticated fact recorded at the moment the row was written. A NULL column means the row
-> predates this stage (or came from an admin `bulk_ingest` source that predates it) and resolves
-> to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's audience is ever derived from
+> predates this stage and resolves to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's
+> audience is ever derived from
 > another row's — not through `process_id`, not through `stream_id` — for any row that carries the
 > column. A reader with no `audience` column to read still resolves through the owning
 > process/stream row; see ["What remains process-anchored"](#what-remains-process-anchored) for
@@ -219,8 +222,9 @@ established. No third "unstamped" state appears on the write side.
 **Ingestion service** (`rust/ingestion/src/web_ingestion_service.rs`) — four methods gain an
 `audience: &WriteAudience` parameter and one bind each:
 
-- `insert_stream` — add `audience` to the existing explicit column list.
-- `register_otel_stream` — same.
+- `insert_stream` — add `audience` to the existing explicit column list, and on
+  `rows_affected() == 0` call the new `check_stream_audience_conflict` (§5) before returning.
+- `register_otel_stream` — same, plus the same conflict check.
 - `insert_block` — thread through to `insert_block_typed`.
 - `insert_block_typed` — **give the `INSERT` an explicit column list** while adding the bind, in
   place of today's positional `VALUES($1..$11)`:
@@ -285,11 +289,16 @@ same reason: it hand-builds a `processes` table with no `audience` column, which
 above now rejects (see [Documentation](#documentation)).
 
 `local_test_env/ai_scripts/import_net_blocks_from_prod.py` projects explicit column lists into
-`bulk_ingest` and must add the audience to each, sourced from that table's own view now that
-`audience` lives there directly: `processes_view.audience → audience` for the processes table,
-`streams_view.audience → audience` for streams, and `blocks_view.audience → audience` for blocks.
-Note `_build_streams_table` is already missing `format`, which `ingest_streams` requires — fix that
-in the same pass rather than leaving a second latent break.
+`bulk_ingest`, but all three (`_build_processes_table`, `_build_streams_table`,
+`_build_blocks_table`) derive from a single `SELECT * FROM blocks` result (`_select_net_blocks`),
+and `blocks_view` exposes exactly one `audience` column — the block's own stamp — with no
+`processes.audience`/`streams.audience` alongside it (§4: those anchor columns were dropped, not
+projected into the Arrow output). So each of the three `_project(...)` calls must add
+`("audience", "audience")`, sourcing all three tables' `audience` from that one block-level column;
+§4's mismatch predicate guarantees it agrees with `processes.audience`/`streams.audience` for any
+block that isn't NULL-anchored legacy data, which is the only case this script's source query can
+produce. Note `_build_streams_table` is already missing `format`, which `ingest_streams` requires —
+fix that in the same pass rather than leaving a second latent break.
 
 ### 4. Read path
 
@@ -420,6 +429,28 @@ public within the deployment before this label was ever attached to it. It is no
 design — see the NULL-tolerant-window discussion in Migration & Upgrade Notes for the window's
 lifetime and the rationale in full.
 
+**The reverse direction — a real anchor with a NULL block.** The predicate's NULL-tolerance is
+symmetric: it also passes a block whose own `audience` is NULL against a `processes`/`streams`
+anchor that already carries a real, non-NULL stamp. This is reachable mid-rolling-upgrade of the
+ingestion tier, not just before it starts: a v8 replica registers process `P` with
+`processes.audience = 'beta'`, while a pre-v8 replica — still issuing the old positional
+`VALUES($1..$11)` `INSERT INTO blocks` — writes one of `P`'s blocks with a short `VALUES` list,
+leaving `blocks.audience` NULL. That block survives the predicate on its own NULL side, and resolves
+to `COALESCE(NULL, default) = MICROMEGAS_DEFAULT_AUDIENCE` everywhere it is read: `blocks_view`'s own
+`data_sql`, `log_entries`/`measures`, and Prong B's `IdKind::Block` arm (`owner_query_sql`, which
+resolves this block alone, off `blocks.audience`, never through `P`). Unlike the NULL-anchor case
+above, the anchor here is real, so the "already public" argument does not apply: before this plan,
+the same block resolves through `P`'s process row to `beta` and is gated accordingly; after this
+plan, until the block's own `audience` is populated, it reads as the deployment default instead —
+a genuine read escalation to any default-audience reader — and `blocks` rows are immutable (§2), so
+the mislabel is permanent until the row ages out under retention. The actual bound is on the
+deployment, not the row: it requires a deployment already running production traffic under a
+non-default audience while its ingestion tier is only partway upgraded to v8, and #1373/#1482/#1519
+— the rest of the audience-stamping stack this plan builds on — are all still `## Unreleased`, so no
+deployment holds a non-default audience today. Migration & Upgrade Notes carries the operational
+guidance this bound depends on: every ingestion replica, not just one, has to reach v8 before
+audience separation can be relied on.
+
 - `processes_view.rs` / `streams_view.rs`: no change. Both the transform and merge queries keep
   plain `max(audience)` — see "The normal case" above.
 - `log_entries` and `measures` have a different regression, not a relabeling one: `audience` itself
@@ -508,24 +539,48 @@ rows than its unfiltered source count; the partition still materializes normally
 that one row.
 
 A SQL predicate cannot emit a per-row `error!` the way a Rust check could. The signal moves to
-partition granularity instead: today `BlocksView::make_batch_partition_spec` only calls
-`fetch_metadata_partition_spec`, which owns `source_count_query` and returns just its (now
-filtered) count — there is no second query anywhere in this path. `make_batch_partition_spec`
-gains one: it runs its own unfiltered count directly against `pool`, alongside the call to
-`fetch_metadata_partition_spec` — the same three-table join as `source_count_query` above
-(`SELECT COUNT(*) FROM blocks, streams, processes WHERE blocks.stream_id = streams.stream_id AND
-blocks.process_id = processes.process_id AND blocks.insert_time >= $1 AND blocks.insert_time <
-$2`), differing from it only in omitting the audience-mismatch predicate, so the two queries agree
-on everything except that predicate and the delta they produce isolates exactly the rows it
-excluded rather than also picking up blocks whose `streams`/`processes` row is absent for
-unrelated reasons (early arrival, or a post-sweep orphan — see
-["Why not a write-side gate"](#why-not-a-write-side-gate) — both routine and both out of scope
-here per ["Out of scope"](#out-of-scope--follow-ups))
-and compares that count to the `record_count` the filtered `source_count_query` produced; when they
-differ, it logs one `error!` naming the view instance and insert-time range and the number of blocks excluded,
-and increments the `block_audience_mismatch_excluded` metric (§5) by that count. This is coarser
-than a per-block log — it does not name the specific block, process, or the three audiences
-involved — but that per-row detail is exactly what §5's hourly `block_audience_mismatch_rows` query
+partition granularity instead — but it has to be attached to the point where a partition is actually
+*written*, not to every pass that merely checks whether one needs to be: `materialize_partition`
+(`rust/analytics/src/lakehouse/batch_update.rs`) calls `view.make_batch_partition_spec(...)` before
+`verify_overlapping_partitions` and its `PartitionCreationStrategy::Abort` early return, and the
+second/minute/hour/day tasks all call `materialize_all_views` over overlapping insert ranges — so a
+comparison computed inside `make_batch_partition_spec` itself would re-run and re-log/re-increment
+on *every* scheduled pass over an affected range, including passes that abort and write nothing,
+not just a retry or a re-merge. The comparison instead lives in `MetadataPartitionSpec::write` (the
+`PartitionSpec` trait method `materialize_partition` calls only after `verify_overlapping_partitions`
+has decided *not* to abort), so it runs once per partition actually written, never on a pass that
+turns out to be a no-op.
+
+Today `BlocksView::make_batch_partition_spec` only calls `fetch_metadata_partition_spec`, which owns
+`source_count_query` and returns just its (now filtered) count for partition sizing — there is no
+second query anywhere in this path. `BlocksView` additionally attaches the unfiltered-vs-filtered
+diagnostic query text to the returned `MetadataPartitionSpec` (a new optional field, e.g.
+`audience_mismatch_query: Option<Arc<String>>`, `None` for every other view built on this module) —
+without running it yet. `MetadataPartitionSpec::write`, when that field is `Some`, runs it once
+against the pool it is already writing through:
+
+```sql
+SELECT COUNT(*) AS unfiltered,
+       COUNT(*) FILTER (WHERE <audience-mismatch predicate holds>) AS filtered
+FROM blocks, streams, processes
+WHERE blocks.stream_id = streams.stream_id AND blocks.process_id = processes.process_id
+AND blocks.insert_time >= $1 AND blocks.insert_time < $2
+```
+
+— the same three-table join and predicate as `source_count_query` (§4 above), both counts read from
+a single atomic pass via `FILTER` rather than two independent queries (which would race against
+concurrent inserts or a `delete_expired_blocks` sweep and could come out negative), so
+`unfiltered - filtered` isolates exactly the rows the predicate excluded rather than also picking up
+blocks whose `streams`/`processes` row is absent for unrelated reasons (early arrival, or a
+post-sweep orphan — see ["Why not a write-side gate"](#why-not-a-write-side-gate) — both routine and
+both out of scope here per ["Out of scope"](#out-of-scope--follow-ups)), and can never itself go
+negative. The pure helper behind that subtraction (Testing Strategy) clamps at zero regardless, as a
+defensive floor — not because this query can produce a negative delta, but so the type stays a plain
+count if the query is ever changed later. When the delta is nonzero, `write` logs one `error!` naming
+the view instance and insert-time range and the number of blocks excluded, and increments the
+`block_audience_mismatch_excluded` metric (§5) by that count. This is coarser than a per-block log —
+it does not name the specific block, process, or the three audiences involved — but that per-row
+detail is exactly what §5's hourly `block_audience_mismatch_rows` query
 gets by reading Postgres directly, which sees precisely the rows this predicate excludes; the
 partition-level `error!`/metric is the signal that a given partition's materialization was affected
 at all, and the hourly query is where the detail lives. The two metrics are deliberately named
@@ -535,10 +590,12 @@ so an identically-named counter from both sites would land in the same process's
 with no tag to tell them apart, and any query over it would silently sum two incompatible
 quantities — materialized-partition exclusions vs. live Postgres rows in the last hour.
 `block_audience_mismatch_excluded` also double-counts across a materialization retry or a re-merge
-over an overlapping insert range, since each attempt re-runs the comparison and re-increments; it
-is a signal that *some* materialization saw a mismatch, not a running total of distinct excluded
-blocks. `block_audience_mismatch_rows` (§5) has no such caveat — each hourly tick counts current
-Postgres state directly.
+over an overlapping insert range, since each partition actually *written* for that range re-runs the
+comparison and re-increments (the comparison lives in `MetadataPartitionSpec::write`, precisely so a
+pass that aborts without writing — the common case on a range that is already current — does not
+also re-count it, per the design above). It is a signal that *some* write saw a mismatch, not a
+running total of distinct excluded blocks. `block_audience_mismatch_rows` (§5) has no such
+caveat — each hourly tick counts current Postgres state directly.
 
 `OwnershipRewrite` needs no change: every audience-carrying view keeps its existing bare
 single-`audience`-column filter, on `blocks`, `log_entries`, and `measures` exactly as on
@@ -661,15 +718,30 @@ and a `warn!` when non-zero. The healthy baseline is a flat zero; every non-zero
 or an attack.
 
 A second counter is needed alongside it, for a divergence that is not always a bug: `blocks.audience`
-disagreeing with its stream's or process's own `audience`. `insert_stream`/`register_otel_stream`
-have no audience-conflict guard equivalent to `check_process_audience_conflict` and use
-`ON CONFLICT (stream_id) DO NOTHING` (`web_ingestion_service.rs:437-440,490-493`), so an existing
-stream keeps whatever audience it was first stamped with even if the ingestion credential's bound
-audience is later re-pointed — not hypothetical, since streams are opened lazily over a process's
-lifetime. Once the materialization-time exclusion (§4) is in place, every subsequent block on that
-stream is silently dropped from `blocks` — and so from `log_entries`, `measures`, and every other
-view built from it — for every audience, with only the per-partition `error!`/`imetric!` in
-`blocks_view.rs` and this hourly counter as signal that it happened.
+disagreeing with its stream's or process's own `audience`. Before this plan, `insert_stream`/
+`register_otel_stream` have no audience-conflict guard equivalent to `check_process_audience_conflict`
+and use `ON CONFLICT (stream_id) DO NOTHING` (`web_ingestion_service.rs:437-440,490-493`), so an
+existing stream keeps whatever audience it was first stamped with even if the ingestion credential's
+bound audience is later re-pointed — not hypothetical, since streams are opened lazily over a
+process's lifetime. Once the materialization-time exclusion (§4) is in place, every subsequent block
+on that stream would otherwise be silently dropped from `blocks` — and so from `log_entries`,
+`measures`, and every other view built from it — for every audience, with only the per-partition
+`error!`/`imetric!` in `blocks_view.rs` and this hourly counter as signal that it happened.
+
+This plan closes that write-time gap rather than only measuring its effect: `insert_stream` and
+`register_otel_stream` gain a `check_stream_audience_conflict`, mirroring
+`check_process_audience_conflict` exactly (same cache-then-`SELECT audience FROM streams WHERE
+stream_id = $1` shape, same "row disappeared concurrently" arm, same
+`IngestionServiceError::AudienceConflict`-shaped 403), gated the same way on `rows_affected() == 0`.
+The write-side-lookup cost the design rejects elsewhere (§4, "Why not a write-side gate") is a
+per-block cost; this guard only ever runs on the rare re-registration path, exactly like the process
+guard it mirrors, so it costs nothing on the hot per-block insert. It turns a re-pointed credential
+into an immediate 403 at the next `insert_stream`/`register_otel_stream` call for that stream,
+instead of a permanent silent drop discovered only after the fact. It does not close the gap
+retroactively for a stream re-registration that already happened before this plan shipped, and it
+does not help a stream that is never re-registered after its credential is re-pointed (blocks keep
+arriving on an already-open stream with no further `insert_stream` call to catch them) — the hourly
+counter below stays as the signal for that residual case and for sizing it.
 
 This counter has to count exactly what the §4 predicate excludes, or it cannot honestly claim to
 size "how much otherwise-legitimate telemetry the materialization-time skip silently drops" (below).
@@ -770,7 +842,9 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 
 2. `rust/ingestion/src/web_ingestion_service.rs`: add `audience: &WriteAudience` to
    `insert_stream`, `register_otel_stream`, `insert_block`, `insert_block_typed`; bind the column
-   in each; give `insert_block_typed`'s `INSERT` an explicit column list. Drop the two known-gap
+   in each; give `insert_block_typed`'s `INSERT` an explicit column list. Add
+   `check_stream_audience_conflict` (§5), mirroring `check_process_audience_conflict`, and call it
+   from `insert_stream`/`register_otel_stream` on `rows_affected() == 0`. Drop the two known-gap
    doc comments (`:287-296`, `:417-421`) and replace them with a one-line note on what the stamp
    means.
 3. Same file: bind `processes.audience` in `insert_process`/`register_otel_process`, give
@@ -802,13 +876,22 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    `fetch_metadata_partition_spec` needs no new bind and `MetadataPartitionSpec::default_audience`'s
    existing doc comment (which already says `source_count_query` gets no `$3` bind) stays accurate
    as written.
-   `make_batch_partition_spec` also runs its own unfiltered count directly against the pool — the
-   same `blocks, streams, processes` join as `source_count_query`, minus the audience-mismatch
-   predicate, so the delta isolates exactly the excluded rows rather than also counting blocks
-   whose `streams`/`processes` row is routinely absent (early arrival, post-sweep orphan) — and
-   compares it against `fetch_metadata_partition_spec`'s filtered `record_count`, logging one
-   `error!` and incrementing
-   `imetric!("block_audience_mismatch_excluded", "count", n)` (§5) when they differ;
+   `BlocksView::make_batch_partition_spec` additionally attaches the unfiltered-vs-filtered
+   diagnostic query text to the returned `MetadataPartitionSpec` (new field on
+   `metadata_partition_spec.rs`'s `MetadataPartitionSpec`, e.g.
+   `audience_mismatch_query: Option<Arc<String>>`, `None` for every other view built on this module)
+   without running it. `MetadataPartitionSpec::write` — called only after `verify_overlapping_partitions`
+   has decided not to `Abort`, i.e. only when a partition is actually about to be written — runs it
+   once directly against the pool: the same `blocks, streams, processes` join as `source_count_query`,
+   computing both the unfiltered count and the audience-mismatch-filtered count atomically in a
+   single `SELECT ... COUNT(*) FILTER (WHERE ...)` (not two separate `COUNT(*)` queries compared
+   across connections, which would be non-atomic and could go negative) — so the delta isolates
+   exactly the excluded rows rather than also counting blocks whose `streams`/`processes` row is
+   routinely absent (early arrival, post-sweep orphan), logging one `error!` and incrementing
+   `imetric!("block_audience_mismatch_excluded", "count", n)` (§5) when the delta is nonzero. Moving
+   this into `write` (rather than into `make_batch_partition_spec`, which every pass over an insert
+   range calls regardless of whether anything ends up being written) keeps the metric scoped to
+   partitions that are actually materialized, not to every scheduled pass over an affected range.
    `blocks_file_schema_hash()` stays `vec![5]` — no bump, no forced rebuild (§4, Migration & Upgrade
    Notes).
    This one predicate is the sole
@@ -845,8 +928,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 ### Phase 5 — tests, docs, tooling
 
 14. Tests (see [Testing Strategy](#testing-strategy)).
-15. `local_test_env/ai_scripts/import_net_blocks_from_prod.py`: project the audience into all three
-    tables, and add the missing `format` projection.
+15. `local_test_env/ai_scripts/import_net_blocks_from_prod.py`: project the single `blocks.audience`
+    column (§3) into all three `_project(...)` calls, and add the missing `format` projection.
 16. Docs and `CHANGELOG.md` (see [Documentation](#documentation)).
 17. `tasks/data_isolation/audience_based_access_control_plan.md` §11b: replace the "residual,
     deferred to Stage 5b" text with what actually shipped.
@@ -856,14 +939,20 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 - `rust/ingestion/src/sql_migration.rs`
 - `rust/ingestion/src/web_ingestion_service.rs`
 - `rust/telemetry/src/property_names.rs`, `rust/telemetry/src/property.rs`
-- `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/maintenance.rs`
+- `rust/public/src/servers/ingestion.rs`, `rust/public/src/servers/maintenance.rs`,
+  `rust/public/src/servers/flight_sql_service_impl.rs` (doc comment only — `do_put_statement_ingest`'s
+  `is_admin` rationale, see [Documentation](#documentation))
 - `rust/otel-ingestion/src/handler.rs`
-- `rust/analytics/src/replication.rs`, `rust/analytics/src/audience.rs`,
+- `rust/analytics/src/lib.rs` (doc comment only — the `audience` module summary),
+  `rust/analytics/src/replication.rs`, `rust/analytics/src/audience.rs`,
   `rust/analytics/src/metadata.rs`
 - `rust/analytics/src/lakehouse/blocks_view.rs` (the audience-mismatch predicate on
-  `data_sql`/`source_count_query`, plus the per-partition mismatch `error!`/`imetric!`
-  in `make_batch_partition_spec`, §4 — the single exclusion point every consumer of `blocks`
-  inherits; `partition_source_data.rs` needs no change of its own), `log_stats_view.rs`,
+  `data_sql`/`source_count_query`, plus attaching the per-partition mismatch diagnostic query to
+  `MetadataPartitionSpec` in `make_batch_partition_spec`, §4 — the single exclusion point every
+  consumer of `blocks` inherits; `partition_source_data.rs` needs no change of its own),
+  `metadata_partition_spec.rs` (the new `audience_mismatch_query` field and the `error!`/`imetric!`
+  emission moved into `MetadataPartitionSpec::write`, so it fires only when a partition is actually
+  written, §4), `log_stats_view.rs`,
   `audience_guard.rs`, `ownership_rewrite.rs` (module doc
   only — the stale "what remains open" paragraph, narrowed per §4; `audience_column_predicate`
   itself is unchanged) — `processes_view.rs`/`streams_view.rs` need no change (§4, "The
@@ -928,10 +1017,12 @@ consumer inherits; there is no second skip-and-log elsewhere to keep in sync wit
 that mismatched telemetry — including a legitimate stream's, if its `audience` has gone stale
 against a re-pointed credential (§5) — is now silently dropped from every view rather than causing
 a visible build failure, and the drop can only be logged at partition granularity: a SQL predicate
-has no per-row `error!` the way a Rust check would, so `make_batch_partition_spec` logs one `error!`
-and one `imetric!("block_audience_mismatch_excluded", "count", n)` per affected partition (§4),
-naming the count excluded but not the individual blocks (and note this count can double-count
-across a materialization retry or a re-merge over an overlapping insert range, §4). That
+has no per-row `error!` the way a Rust check would, so `MetadataPartitionSpec::write` — run only for
+a partition that is actually written, not on every pass that merely checks whether one is needed
+(§4) — logs one `error!` and one `imetric!("block_audience_mismatch_excluded", "count", n)` per
+affected partition, naming the count excluded but not the individual blocks (and note this count can
+still double-count across a materialization retry or a re-merge over an overlapping insert range,
+since each such write re-runs the comparison, §4). That
 partition-level signal and §5's hourly `block_audience_mismatch_rows` counter —
 which queries Postgres directly and so does carry the per-block, per-process, per-audience detail —
 are therefore not optional instrumentation but the only record that data was discarded at all; the
@@ -1016,6 +1107,22 @@ the new semantics, until the old ones age out of the retention window — or an 
   specifically designed to avoid (§2, "No backfill" above) — and would still not fully close the
   window against a mixed-version rolling fleet, since a pre-v8 binary can keep writing NULL-audience
   rows after any backfill pass runs. The NULL-tolerant pass-through as written stays.
+- **The reverse direction: a NULL block against a real anchor.** The same NULL-tolerant predicate
+  also passes a block whose *own* `audience` is NULL through against a `processes`/`streams` anchor
+  that already carries a real, non-NULL stamp — reachable when a pre-v8 ingestion replica (still
+  issuing the old positional `INSERT INTO blocks VALUES($1..$11)`) writes a block for a process a
+  v8 replica already registered with a real audience. Unlike every other case in this section, the
+  anchor here is not NULL, so "the row was already public" does not apply: before this plan the
+  block resolves through its process to that real audience and is gated accordingly; after this
+  plan it resolves to `MICROMEGAS_DEFAULT_AUDIENCE` until its own column is populated, which — since
+  `blocks` rows are immutable — is never. That is a genuine, if narrow, read escalation, not an
+  accepted no-op (see [The `max(audience)` regression](#the-maxaudience-regression) for the full
+  mechanism). Its bound is on the deployment, not the row: it requires production traffic already
+  running under a non-default audience while the ingestion tier is only partway upgraded to v8, and
+  #1373/#1482/#1519 — the rest of the audience-stamping stack this plan builds on — are all still
+  `## Unreleased`, so no deployment holds a non-default audience as of this plan. The operational
+  mitigation is the deploy-order guidance above, generalized: bring every ingestion replica to v8,
+  not just one, before relying on audience separation during a rolling upgrade.
 - `blocks_file_schema_hash()` stays `vec![5]` — no bump, and deliberately so rather than as a
   side effect. The Arrow schema doesn't change, so nothing would auto-invalidate `blocks` partitions
   on its own either way; on top of that, the author chose not to force a rebuild, to avoid
@@ -1160,11 +1267,13 @@ the new semantics, until the old ones age out of the retention window — or an 
     a bug (it may reflect a re-pointed credential, §5) but always means telemetry was silently
     dropped from `blocks` (and so from `log_entries`/`measures`/`log_stats` and every other view
     built from it), so it belongs in the same alerting shape.
-  - `block_audience_mismatch_excluded` (`count`) — emitted per affected `blocks` partition from
-    `blocks_view.rs`'s `make_batch_partition_spec` (§4), not on the hourly cadence. Document that it
-    double-counts across a materialization retry or a re-merge over an overlapping insert range, so
-    it is a "some partition saw a mismatch" signal rather than a running total of distinct excluded
-    blocks — `block_audience_mismatch_rows` is the metric to trust for sizing the drop.
+  - `block_audience_mismatch_excluded` (`count`) — emitted from `MetadataPartitionSpec::write` (§4)
+    only for a `blocks` partition that is actually written, not on every scheduled pass over an
+    affected insert-time range and not on the hourly cadence. Document that it still double-counts
+    across a materialization retry or a re-merge over an overlapping insert range — each such write
+    re-runs the comparison — so it is a "some write saw a mismatch" signal rather than a running
+    total of distinct excluded blocks — `block_audience_mismatch_rows` is the metric to trust for
+    sizing the drop.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc:
   - the "What remains open, tracked separately" paragraph is only partly obsolete — narrow it to
     the five `per_process_audience()`-resolved views, the JIT `view_instance` path (§4, "What
@@ -1181,6 +1290,28 @@ the new semantics, until the old ones age out of the retention window — or an 
     the moment it was written. Update the section to state that directly, and note the NULL-anchor
     exception (a pre-v8 row's column is absent, not "always present", until it resolves through
     `COALESCE` at read time).
+  - the `## micromegas.audience is server-written and authenticated` section (`:74-90`) describes a
+    property stamped on `processes` at registration and read through `COALESCE` at query time — the
+    whole section now describes a column instead: rewrite "A process is stamped with
+    `micromegas.audience` at registration ... resolved to the deployment's
+    `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read*" to describe the `audience` column
+    (§1's precedence rule) rather than a property, and drop the "or one written by the admin
+    `bulk_ingest`/replication path ... keeps no property at all" clause — replication now hard-fails
+    on a missing `audience` column rather than writing one with none (§3, §6 above). The
+    registration-conflict and "what remains open" paragraphs that follow are covered by the two
+    bullets above.
+- `rust/public/src/servers/flight_sql_service_impl.rs:1282-1290` — `do_put_statement_ingest`'s doc
+  comment justifies gating the RPC on `is_admin` entirely in terms of writing `micromegas.audience`
+  **properties** verbatim on `processes` rows. After this plan that gate protects a verbatim write
+  of the authoritative `audience` **column** on all three tables — a strictly stronger capability
+  than a property write (§3, "Admin replication") — so the comment's security rationale needs
+  rewriting to name the column, not the property, as what an ordinary authenticated client must not
+  be able to set directly.
+- `rust/analytics/src/lib.rs:14` — the `audience` module doc comment reads "The single
+  `micromegas.audience` property constant and SQL fragment shared by the writer and both
+  enforcement prongs"; `PROPERTY_AUDIENCE` and the property-based SQL fragments are removed by this
+  plan (§3, §4), so this needs to describe `coalesced_audience_column`/`audience_column_mismatch`
+  and the precedence rule (§1) instead.
 
 ## Testing Strategy
 
@@ -1194,9 +1325,12 @@ the new semantics, until the old ones age out of the retention window — or an 
 - `audience_guard_tests.rs`: `is_readable`/`merge_owner_rows` are unchanged, but assert
   `owner_query_sql` no longer mentions `unnest` or `properties` for any `IdKind`.
 - `blocks_view.rs` (or a small colocated module) unit test: `mismatch_excluded_count` (§4, Testing
-  Strategy) returns `0` when the unfiltered and filtered counts agree and the difference when they
-  don't — the pure arithmetic behind the per-partition `error!`/`imetric!`, tested directly instead
-  of through those side effects.
+  Strategy) returns `0` when the unfiltered and filtered counts agree, the difference when they
+  don't, and `0` (not a negative number) if ever called with `filtered > unfiltered` — the pure
+  arithmetic behind the per-partition `error!`/`imetric!`, tested directly instead of through those
+  side effects. In practice the two counts come from one atomic `COUNT(*) FILTER (WHERE ...)` query
+  (§4), so `filtered > unfiltered` should not occur; the clamp is a defensive floor on the helper's
+  contract, not a case this plan expects to hit.
 
 **DB-backed** (`#[ignore]`, live Postgres + object store — the existing harness pattern)
 
@@ -1204,6 +1338,10 @@ the new semantics, until the old ones age out of the retention window — or an 
   `strip_audience_property` → `UPDATE ... SET audience = NULL` for fabricating a legacy row. The
   conflict-guard cases (same audience, different audience → 403, legacy NULL row vs. default) all
   carry over unchanged in intent.
+- **New**: the same three conflict-guard cases (same audience → no-op, different audience → 403,
+  legacy NULL-audience row vs. default) for `check_stream_audience_conflict` (§5) via
+  `insert_stream`/`register_otel_stream` re-registering an existing `stream_id` under a different
+  audience — mirroring the `insert_process`/`register_otel_process` coverage above.
 - **New**: stamp round-trip for streams and blocks — `insert_stream`/`insert_block_typed` under
   audience `alpha` land rows whose `audience` column reads back `alpha`.
 - **New, `audience_mismatch_skip_db_test.rs`, the actual regression this closes**: a block written
@@ -1230,10 +1368,12 @@ the new semantics, until the old ones age out of the retention window — or an 
   log/metric capture harness to assert against. Assert instead: the materialized partition's row
   count equals the unfiltered source count minus one (the excluded block), and that
   `make_batch_partition_spec`'s excluded-count computation — the `unfiltered_count -
-  filtered_count` comparison that decides whether to log/increment the metric at all (§4) — is
-  exercised through a small pure helper (e.g. `fn mismatch_excluded_count(unfiltered: i64, filtered:
-  i64) -> i64`) that is unit-tested directly for its arithmetic (zero when they agree, the
-  difference when they don't) rather than through the `error!`/`imetric!` side effects it drives.
+  filtered_count` comparison, both counts read from the single atomic `COUNT(*) FILTER (WHERE ...)`
+  query (§4), that decides whether to log/increment the metric at all — is exercised through a small
+  pure helper (e.g. `fn mismatch_excluded_count(unfiltered: i64, filtered: i64) -> i64`, clamped at
+  zero) that is unit-tested directly for its arithmetic (zero when they agree, the difference when
+  they don't, zero rather than negative if ever called with `filtered > unfiltered`) rather than
+  through the `error!`/`imetric!` side effects it drives.
 - **New**: Prong B resolves `IdKind::Block` for a block whose `processes` row has been deleted
   (orphan), returning the block's own stamp rather than `Unknown`.
 - `prong_b_guard_db_test.rs` / `ownership_rewrite_db_test.rs` / `jit_process_batch_db_test.rs` /
