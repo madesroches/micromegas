@@ -191,8 +191,16 @@ many rows. Expanding per row would re-parse the same bytes repeatedly, so when t
 `DictionaryArray<Int32, Binary>` (matched directly on `args[0].data_type()`, the `keys.rs` shape —
 see "What exists" above):
 
-1. Build the list array once over the dictionary's **unique values** (length = number of distinct
-   blobs, not number of rows).
+1. Build the list array once over only the dictionary slots actually referenced by a non-null key
+   in `dict.keys()` for this batch — **not** all of `dict.values()`. A `filter`/`slice` upstream
+   (e.g. a `WHERE` on `log_entries.properties`) leaves the full values array intact even though
+   most of it is unreferenced, so extracting over `dict.values()` wholesale can parse far more
+   blobs than there are rows, and can trip `DataFusionError::External` on an undecodable blob in a
+   slot no surviving row uses. Values array nulls also need their own check: every existing
+   dictionary reader in this codebase (`binary_column_accessor.rs:64-67`, `keys.rs:134-139`,
+   `each.rs:176-182`) calls `values.value(idx)` only after confirming the slot is non-null, and the
+   fast path must do the same — a null dictionary value produces a NULL list entry, not
+   `RawJsonb::new(&[])` on empty bytes.
 2. `arrow::compute::take(list_array, dict.keys())` to expand to the row count.
 
 `take` supports `ListArray`, and null dictionary keys propagate as null list entries. This is the
@@ -201,14 +209,17 @@ same shape as `properties_to_array`'s `take`-based reconstruction (`properties_u
 `ListBuilder`, using `create_binary_accessor`.
 
 `jsonb_path_elements` takes a second `path` argument, so the per-unique-blob shortcut is only
-sound when the result depends on the blob alone — i.e. when `path` is constant across the batch
-(a single distinct non-null value, e.g. a folded literal). In that case the fast path parses the
-path once and applies it per unique blob, same as above. When `path` varies by row (a column
+sound when the result depends on the blob alone — i.e. when `path` is **non-null in every row of
+the batch and constant across those rows** (a single distinct non-null value, e.g. a folded
+literal; any row with a NULL `path` disqualifies the batch, since the Semantics table requires a
+NULL `path` to produce a NULL list, and a per-unique-blob `take` result carries no per-row path
+nullity to apply that mask against). In that case the fast path parses the path once and applies
+it per unique blob, same as above. When `path` varies by row or contains any NULL (a column
 reference — `Signature::any(2, ..)` allows this, same as `JsonbPathQuery`), the dictionary
 shortcut does not apply and `jsonb_path_elements` falls back to the row-by-row builder, reading
-`path` per row exactly as `eval_jsonb_path_query` does (`path_query.rs:36-59`). `jsonb_entries`
-and `jsonb_elements` take only the `jsonb` argument, so their fast path always applies to
-dictionary input.
+`path` per row exactly as `eval_jsonb_path_query` does (`path_query.rs:36-59`), which naturally
+handles per-row NULL `path` via `path_query.rs:47-48`. `jsonb_entries` and `jsonb_elements` take
+only the `jsonb` argument, so their fast path always applies to dictionary input.
 
 Parsed JSONPath objects are cached in a `HashMap<&str, JsonPath>` keyed on the path string, reusing
 the pattern at `path_query.rs:44,53-61`.
@@ -293,6 +304,10 @@ Also, in the same pass:
   `jsonb_path_query(...)`)". That holds only when the expression contains no column reference.
   State the restriction and point at the new UDFs. Same for the `jsonb_each` parameter note at
   line 658.
+- Rewrite the `jsonb_array_elements(jsonb_path_query(msg_jsonb, ...))` example at
+  `functions-reference.md:430-434` — it's a bare column reference (`msg_jsonb`) inside the UDTF
+  argument, exactly the broken form the two notes above now warn against — to the new
+  `jsonb_path_elements` + `unnest` form.
 - Add a per-row expansion example to the "JSON Data Processing" patterns section (line 1470).
 
 ### 6. Python integration tests — `python/micromegas/tests/test_jsonb.py`
@@ -384,8 +399,11 @@ Tracked separately under #1475:
    different array, asserting each expanded row keeps its own source column. This must fail if
    anyone reintroduces uncorrelated evaluation.
 6. **Dictionary input** — same assertions against a `Dictionary<Int32, Binary>` column with
-   repeated blobs, including a null dictionary key, so the fast path and the plain path are proven
-   to agree row for row.
+   repeated blobs, including a null dictionary key and a null value in the dictionary's values
+   array, so the fast path and the plain path are proven to agree row for row. Also a sliced/
+   filtered dictionary case — a values array containing blobs no surviving row's key references,
+   including an undecodable one in an unreferenced slot — asserting the fast path does not error
+   on it and does not degrade into parsing every value.
 7. **Composition** — `jsonb_as_string` / `jsonb_get` / `jsonb_as_i64` applied to unnested values;
    `GROUP BY` and `SELECT DISTINCT` over an unnested key column.
 8. **UDTF regression** — existing `jsonb_each_tests.rs` and `jsonb_array_elements_tests.rs` must
