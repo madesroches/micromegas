@@ -12,12 +12,16 @@ can append events to B's process, and those events are labelled B.
 
 This plan replaces the inherited, property-carried audience with a **per-row `audience` column on
 `processes`, `streams`, and `blocks`**, written from the authenticated credential at every insert.
-Each row then carries the audience it was actually written under, and no row's label is ever
-derived from another row. An attacker's block carries A no matter which `process_id` it claims, so
-it surfaces only to A's readers; the victim never sees it, and the victim's process never has to
-be resolvable at write time — which is the reason the originally-proposed write-side gate could not
-work (streams and blocks routinely arrive before their process row exists; see
-[Why not a write-side gate](#why-not-a-write-side-gate)).
+Each row then carries the audience it was actually written under, and for every reader that
+resolves audience off one of those three physical columns, no row's label is ever derived from
+another row: an attacker's block carries A no matter which `process_id` it claims, so it surfaces
+only to A's readers, and the victim never sees it there. The victim's process never has to be
+resolvable at write time either way — which is the reason the originally-proposed write-side gate
+could not work (streams and blocks routinely arrive before their process row exists; see
+[Why not a write-side gate](#why-not-a-write-side-gate)). Five views that have no `audience`
+column of their own, and the per-process JIT `view_instance` path, still resolve audience through
+the owning process/stream row and are not closed by this change — see
+["What remains process-anchored"](#what-remains-process-anchored) in §4.
 
 Two decisions taken with the issue author, both narrowing the change:
 
@@ -124,7 +128,10 @@ database read at all**.
 > authenticated fact recorded at the moment the row was written. A NULL column means the row
 > predates this stage (or came from an admin `bulk_ingest` source that predates it) and resolves
 > to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's audience is ever derived from
-> another row's — not through `process_id`, not through `stream_id`.
+> another row's — not through `process_id`, not through `stream_id` — for any row that carries the
+> column. A reader with no `audience` column to read still resolves through the owning
+> process/stream row; see ["What remains process-anchored"](#what-remains-process-anchored) for
+> which readers that is.
 
 `check_process_audience_conflict`'s one-audience-per-process rule is unaffected: it still governs
 the `processes` row and only the `processes` row.
@@ -203,6 +210,12 @@ established. No third "unstamped" state appears on the write side.
 
 `insert_process` and `register_otel_process` bind the column instead of appending the property:
 
+- `insert_process`'s `INSERT INTO processes` is today a positional `VALUES($1..$13)` with no
+  column list (`web_ingestion_service.rs:546`; `register_otel_process` already has an explicit
+  list). A short `VALUES` list against a table whose column count just grew is silently accepted
+  by Postgres, defaulting the missed bind to NULL — the row then just reads as the deployment
+  default instead of the insert failing loudly. Give it an explicit column list ending in
+  `audience`, the same fix as `insert_block_typed` below, for the same reason.
 - `finalize_process_properties` is **removed**. `strip_reserved_properties` stays and keeps doing
   its job — a client-supplied `micromegas.*` property is still dropped, so a client can neither
   assert nor suppress a stamp; there is simply no property to append any more.
@@ -227,8 +240,14 @@ All three ingest functions read an `audience` column from the incoming record ba
 The `processes`, `streams`, and `blocks` views each already expose an `audience` column, so any
 source built from `main` supplies it. A **missing column is a hard error**, matching the precedent
 `ingest_streams` set for `format` in v4 ("Hard failure rather than a silent default so a v3 source
-replicating into a v4 target surfaces the schema mismatch loudly"). `ingest_blocks`' positional
-`VALUES($1..$11)` gets an explicit column list for the same reason as above.
+replicating into a v4 target surfaces the schema mismatch loudly"). `ingest_processes`'s and
+`ingest_blocks`' positional `VALUES($1..$13)` / `VALUES($1..$11)` inserts (`replication.rs:122`)
+both get an explicit column list for the same reason as above: a missed bind against a
+just-widened table silently defaults to NULL instead of failing.
+
+The `bulk_ingest` example in `mkdocs/docs/query-guide/python-api.md` needs the same fix for the
+same reason: it hand-builds a `processes` table with no `audience` column, which the hard-error
+above now rejects (see [Documentation](#documentation)).
 
 `local_test_env/ai_scripts/import_net_blocks_from_prod.py` projects explicit column lists into
 `bulk_ingest` and must add the audience to each: `process_audience → audience` for the processes
@@ -301,12 +320,52 @@ stamp:
 - Both **merge** queries are unchanged: they read a column already named `audience` from
   `{source}`, and `max()` over rows that now agree by construction is a no-op that costs nothing to
   leave in place.
-- `log_entries`, `measures`, and `log_stats` keep using `audience` — their rows come from a block's
-  payload, so the block's own stamp is the correct anchor. No change.
+- `log_entries` and `measures` keep using `audience` unchanged — their rows come from a block's
+  payload, so the block's own stamp is the correct anchor, and there is no cross-block aggregation
+  to relabel a row.
+- `log_stats_view.rs` has the same regression as `processes_view`/`streams_view`: its transform
+  and merge queries both aggregate `log_entries` rows with `arrow_cast(max(audience), ...)`
+  `GROUP BY process_id, level, target, time_bin` — a group that, after per-block stamping, can
+  contain blocks from different audiences. An attacker's block landing in a victim's group
+  relabels the victim's `log_stats` row, which is one of the six views Prong A filters on its own
+  `audience` column. Fix: add `audience` to the `GROUP BY` in **both** the transform and merge
+  queries (the selected column and schema are unchanged, so the file-schema hash does not need to
+  bump).
 
 `OwnershipRewrite` needs no change at all: it dispatches on whether a view's file schema has an
 `audience` field, all six column-carrying views still have one, and the two new columns on
 `blocks_view` are ordinary data columns it ignores.
+
+#### What remains process-anchored
+
+This plan closes the row-derivation gap only where a row carries its own `audience` column.
+Two classes of reader still resolve audience through the *owning* process/stream row, and this
+plan leaves both as they are today:
+
+- **The five views `OwnershipRewrite` resolves via `per_process_audience()`.** `net_spans`,
+  `otel_spans`, and `images` are filtered through the `IN`-subquery built from
+  `MAX(audience) GROUP BY process_id` over `__processes__partitions`; `async_events` and
+  `thread_spans` are filtered through the equivalent `EXISTS` arms, the latter via `streams`. None
+  of these five carries its own `audience` column, so a block an attacker writes onto a victim's
+  `process_id`/`stream_id` still surfaces through them to the victim's readers, exactly as before
+  this change. Giving them their own columns is a materialization change (they are not
+  block-derived `SqlBatchView`s the way `log_entries`/`measures`/`log_stats` are) and is out of
+  scope here.
+- **The per-process JIT `view_instance` path.** `view_instance('log_entries'|'measures', pid)`
+  (`log_view.rs`, `metrics_view.rs`, and similarly `images_view.rs`,
+  `otel/spans_view.rs`) resolves one `ProcessMetadata` via `find_process` and stamps every block
+  it fetches with that single `process.audience`
+  (`jit_partitions.rs::fetch_process_blocks` sets `process: process.clone()` on each
+  `PartitionSourceBlock`; `log_entries_table.rs`/`metrics_table.rs` emit `row.process.audience`).
+  Only the global, blocks-view-backed instance is per-block. So a block an attacker writes onto a
+  victim's `process_id` is labelled with the *victim's* audience — and is visible to the victim —
+  through `view_instance`, while the same block correctly carries the attacker's own audience in
+  the global view. Carrying the block's own stamp into the JIT path (splitting a per-block
+  audience out of `ProcessMetadata`) is a real fix but a separate change; it is not attempted
+  here.
+
+Both are pre-existing gaps, not new ones — this plan does not widen either — and both are recorded
+in [Out of scope](#out-of-scope--follow-ups).
 
 **`metadata.rs::find_process`** — `coalesced_audience_subselect("properties", 2)` becomes
 `coalesced_audience_column("processes", 2)`. Nothing else in `ProcessMetadata` changes.
@@ -408,9 +467,10 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    in each; give `insert_block_typed`'s `INSERT` an explicit column list. Drop the two known-gap
    doc comments (`:287-296`, `:417-421`) and replace them with a one-line note on what the stamp
    means.
-3. Same file: bind `processes.audience` in `insert_process`/`register_otel_process`, delete
-   `finalize_process_properties`, and rewrite `check_process_audience_conflict` to
-   `SELECT audience`.
+3. Same file: bind `processes.audience` in `insert_process`/`register_otel_process`, give
+   `insert_process`'s `INSERT INTO processes` an explicit column list (`register_otel_process`
+   already has one), delete `finalize_process_properties`, and rewrite
+   `check_process_audience_conflict` to `SELECT audience`.
 4. `rust/telemetry/src/property_names.rs` + `property.rs`: remove `PROPERTY_AUDIENCE` and its
    re-export.
 5. `rust/public/src/servers/ingestion.rs`: thread `ctx: Option<Extension<AuthContext>>` into
@@ -418,7 +478,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 6. `rust/otel-ingestion/src/handler.rs`: pass `audience` to `register_otel_stream` and
    `insert_block_typed` in `write_blocks`.
 7. `rust/analytics/src/replication.rs`: read and bind `audience` in `ingest_processes`,
-   `ingest_streams`, `ingest_blocks`; explicit column list on the blocks insert.
+   `ingest_streams`, `ingest_blocks`; explicit column list on both the processes insert and the
+   blocks insert.
 
 ### Phase 3 — read path
 
@@ -428,7 +489,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 9. `rust/analytics/src/lakehouse/blocks_view.rs`: new `data_sql`, two appended schema fields,
    `blocks_file_schema_hash()` → `vec![6]`.
 10. `rust/analytics/src/lakehouse/processes_view.rs` / `streams_view.rs`: transform queries switch
-    to `max(process_audience)` / `max(stream_audience)`.
+    to `max(process_audience)` / `max(stream_audience)`. `log_stats_view.rs`: add `audience` to the
+    `GROUP BY` in both the transform and merge queries (§4, "The `max(audience)` regression").
 11. `rust/analytics/src/metadata.rs`: `find_process` uses `coalesced_audience_column`.
 12. `rust/analytics/src/lakehouse/audience_guard.rs`: rewrite `owner_query_sql`'s three arms, drop
     the `AUDIENCE_PROPERTY` bind, renumber the default to `$2`, and update the module doc's
@@ -457,8 +519,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 - `rust/analytics/src/replication.rs`, `rust/analytics/src/audience.rs`,
   `rust/analytics/src/metadata.rs`
 - `rust/analytics/src/lakehouse/blocks_view.rs`, `processes_view.rs`, `streams_view.rs`,
-  `audience_guard.rs`, `ownership_rewrite.rs` (module doc only — the stale "what remains open"
-  paragraph)
+  `log_stats_view.rs`, `audience_guard.rs`, `ownership_rewrite.rs` (module doc only — the stale
+  "what remains open" paragraph, narrowed per §4)
 - Tests: `rust/ingestion/tests/audience_stamping_db_test.rs`,
   `rust/ingestion/tests/write_audience_tests.rs`, `rust/analytics/tests/common/db_fixtures.rs`,
   `rust/analytics/tests/audience_guard_tests.rs`, `rust/analytics/tests/prong_b_guard_db_test.rs`,
@@ -467,7 +529,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
   plus every `insert_stream`/`insert_block` call site in `rust/analytics/tests/`
 - `local_test_env/ai_scripts/import_net_blocks_from_prod.py`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
-  `mkdocs/docs/admin/api-keys.md`
+  `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/query-guide/schema-reference.md`,
+  `mkdocs/docs/query-guide/python-api.md`
 - `CHANGELOG.md`, `tasks/data_isolation/audience_based_access_control_plan.md`
 
 ## Trade-offs
@@ -509,10 +572,16 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 
 - The v8 migration is catalog-only and runs in one transaction; there is no table rewrite and no
   lock held over data.
-- **Deploy order matters within a rolling upgrade.** A pre-v8 ingestion binary writing against a
-  v8 database is fine (it just leaves the column NULL, which reads as the default). A v8 binary
-  against a pre-v8 database fails its inserts — so migrate first, which `migrate_db` on startup
-  already does.
+- **Deploy order matters within a rolling upgrade, and it is not just about writes.**
+  `migrate_db` only runs from `WebIngestionService::from_env`, `connect_to_remote_data_lake`
+  (admin replication), and the monolith — `LakehouseContext::from_env` (flight-sql, maintenance)
+  calls `connect_to_data_lake`, which never migrates. So the ingestion role (or the monolith) has
+  to be upgraded and restarted first to apply v8; a v8 analytics or maintenance binary reading
+  against a pre-v8 database doesn't just risk a bad insert, it fails every read that now
+  references the new columns (`blocks_view`'s `data_sql`, `find_process`, `owner_query_sql`) with
+  an "undefined column" error, before any writer has migrated it. A pre-v8 ingestion binary
+  writing against an already-migrated v8 database is fine (it just leaves the column NULL, which
+  reads as the default).
 - `blocks_file_schema_hash()` bumping forces `blocks` partitions to rebuild. Per `CLAUDE.md` this
   is not a SQL break: the queryable Arrow schema gains two appended columns and every existing
   column keeps its name, type, and position.
@@ -525,13 +594,32 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 
 ## Documentation
 
+- `mkdocs/docs/query-guide/schema-reference.md` — the user-facing SQL-surface reference for the
+  `audience` column. Retitle the per-view description (`:47,78,138,174,217,290`) from "The
+  audience of the owning process" to reflect the per-row stamp (each view's own `audience` for
+  `processes`/`streams`/`blocks`, the block's stamp for `log_entries`/`measures`/`log_stats`, and
+  the process/stream stamp specifically for the process/stream-anchored views still listed under
+  "What remains process-anchored"), and document the two new `blocks`-only columns
+  (`stream_audience`, `process_audience`). Update the `:623-635` paragraph on where the default is
+  applied to describe the column, not the property.
+- `mkdocs/docs/query-guide/python-api.md` — the `bulk_ingest` example (`:488-507`) is a
+  copy-pasteable `processes` `pyarrow.Table` with all thirteen current columns and no `audience`;
+  after §3 makes a missing `audience` column a hard error, running that example against a v8
+  target fails. Add `audience` to the example, and add the equivalent guidance for `streams` and
+  `blocks` bulk-ingest tables nearby.
 - `mkdocs/docs/admin/authentication.md`
   - "Audience stamping and the default" (`:230-260`): the stamp is a column on `processes`,
     `streams`, and `blocks`, written at every insert, not a `micromegas.audience` property on the
     process.
-  - **Delete the "Residual gap: cross-audience write injection" warning admonition**
-    (`:303-341`) — this plan is what closes it. Keep the process-squatting paragraphs inside it
-    (they describe a different, already-closed gap) by lifting them into the surrounding prose.
+  - **Narrow the "Residual gap: cross-audience write injection" warning admonition**
+    (`:303-341`) — this plan closes the gap only for `blocks`/`streams`/`processes` themselves and
+    the views derived straight from them (`log_entries`, `measures`, `log_stats`,
+    `processes_view`, `streams_view`); it does not close it for `net_spans`, `otel_spans`,
+    `images`, `async_events`, `thread_spans`, or the per-process `view_instance` path (§4, "What
+    remains process-anchored"), which still resolve audience through the owning process/stream
+    row. Rewrite the admonition to describe that narrower, remaining surface rather than deleting
+    it. Keep the process-squatting paragraphs inside it (they describe a different, already-closed
+    gap) by lifting them into the surrounding prose.
   - `:205` "the two prongs read different copies of `micromegas.audience`": still true (Prong A
     reads a materialized snapshot, Prong B reads Postgres live), but retitle to the column.
 - `mkdocs/docs/admin/ingestion.md` "What gets stamped" (`:70-105`): the stamp now lands on all
@@ -546,7 +634,10 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   `&WriteAudience`; `finalize_process_properties` and `PROPERTY_AUDIENCE` are removed;
   `audience_subselect`/`coalesced_audience_subselect` are replaced by `coalesced_audience_column`.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc: the "What remains open,
-  tracked separately" paragraph and its operational-mitigation advice are obsolete.
+  tracked separately" paragraph is only partly obsolete — narrow it to the five
+  `per_process_audience()`-resolved views and the JIT `view_instance` path (§4, "What remains
+  process-anchored"); its operational-mitigation advice (audience-bound DB-backed credentials
+  only) still applies to that narrower surface and should stay.
 
 ## Testing Strategy
 
@@ -591,6 +682,12 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 
 ## Out of Scope / Follow-ups
 
+- **The five process/stream-anchored views** (`net_spans`, `otel_spans`, `images`,
+  `async_events`, `thread_spans`) and **the per-process JIT `view_instance` path**
+  (`log_view.rs`/`metrics_view.rs`/`images_view.rs`/`otel/spans_view.rs`) still resolve audience
+  through the owning process/stream row rather than a per-row column — see
+  ["What remains process-anchored"](#what-remains-process-anchored). Pre-existing gaps, not
+  widened by this plan; giving each its own per-row stamp is a follow-up.
 - **Relaxing `blocks_view`'s inner join to `processes`.** Now that blocks are self-describing, that
   join is the only thing still hiding early-arriving and post-sweep blocks from every view.
   Relaxing it becomes possible; it is a separate change with its own materialization consequences.
