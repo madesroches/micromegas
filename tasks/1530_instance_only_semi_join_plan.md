@@ -346,7 +346,9 @@ Narrowing to three is removing the `skip` line from the two `EXISTS` arms (`asyn
    dropped predicate, the view sets affected, and that it is a planning cleanup: no caller gains
    access to another audience's rows, though a legitimate owner may now see rows that the
    daemon-materialized `processes` snapshot's lag previously hid from the dropped predicate, and
-   the one narrow, retention-bounded backstop given up (#1530). Also amend, in place, the two prior
+   the one narrow, retention-bounded backstop given up. Note also that a caller with an
+   empty `ReadScope::Audiences` now gets the guard's not-found error where the folded-away
+   `lit(false)` predicate previously produced an empty result (#1530). Also amend, in place, the two prior
    still-`## Unreleased` entries this change falsifies — matching the file's own precedent of
    editing an unreleased entry rather than only appending (e.g. the existing `**Amended (#1482,
    still `## Unreleased`)**` and `**Amended (#1486, still `## Unreleased`)**` notes): the #1482
@@ -409,7 +411,8 @@ predicate).
 
 ## Security
 
-No authorization decision changes. For every reachable query:
+No caller gains access to another audience's rows, with the one narrow exception recorded
+below. For every reachable query:
 
 - In the ordinary case, no caller gains access to another audience's rows. A caller authorized for
   instance *X* saw *X*'s rows before, further narrowed by any Prong A/Prong B materialization-lag
