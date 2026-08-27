@@ -45,7 +45,11 @@ Scalar JSONB UDFs live in `rust/datafusion-extensions/src/jsonb/` and are regist
 
 Input dispatch over `Binary` / `Dictionary<Int32, Binary>` is already abstracted by
 `create_binary_accessor` in `rust/datafusion-extensions/src/binary_column_accessor.rs`;
-`path_query.rs:31` uses it, and it is the intended reuse point for the new UDFs.
+`path_query.rs:31` uses it, and it is the reuse point for the new UDFs' plain-`Binary` path.
+`BinaryColumnAccessor` only exposes `value(i)` / `len()` / `is_null(i)`, with no way to learn
+whether the input was dictionary-encoded or to reach the dictionary's keys/values — so the
+dictionary fast path (below) cannot be built on it and instead follows `jsonb_object_keys`'s
+`DataType::Dictionary<Int32, Binary>` downcast (`keys.rs:94-143`).
 
 ### The gap (verified empirically, DataFusion 54.1)
 
@@ -162,6 +166,8 @@ Both argument positions accept `Binary` and `Dictionary<Int32, Binary>` via
 | array | one entry per element, `key` = index as string | one element per item | matches of the path |
 | JSON scalar (number, string, bool) | NULL | NULL | 0 matches → empty list |
 | empty object / array | empty list → 0 rows | empty list → 0 rows | empty list → 0 rows |
+| invalid/undecodable JSONB bytes | `DataFusionError::External`, same as `jsonb_each`'s decode failure (`each.rs:102`) | same, as `jsonb_array_elements` (`array_elements.rs:91`) | same |
+| NULL `path` | n/a | n/a | NULL list → 0 rows (matches `jsonb_path_query`, `path_query.rs:47-48`) |
 | invalid JSONPath | — | — | `DataFusionError::Execution`, same text as `jsonb_path_query` |
 
 **NULL rather than an error for a shape mismatch** is the deliberate divergence from the UDTFs,
@@ -171,11 +177,19 @@ existing precedent: `jsonb_parse` on malformed JSON returns NULL, asserted in
 `python/micromegas/tests/test_jsonb.py:14-21`. NULL and empty-list both produce zero rows under
 `unnest`, so the distinction is only visible to a caller inspecting the list directly.
 
+**Invalid/undecodable JSONB bytes still error**, unlike the shape-mismatch case above — this is
+inherited from `extract.rs`'s `object_or_array_entries` / `array_elements`, which wrap a
+jsonb-crate decode failure as `DataFusionError::External` (`each.rs:102`, `array_elements.rs:91`)
+before the caller ever gets to decide NULL vs. error on shape. A `Binary` column is expected to
+hold valid JSONB (produced by `jsonb_parse`, not arbitrary user bytes), so this is treated as a
+genuine data-corruption error rather than a shape mismatch worth swallowing.
+
 ### Dictionary fast path
 
 `properties` columns are dictionary-encoded precisely because the same JSONB blob repeats across
 many rows. Expanding per row would re-parse the same bytes repeatedly, so when the input is a
-`DictionaryArray<Int32, Binary>`:
+`DictionaryArray<Int32, Binary>` (matched directly on `args[0].data_type()`, the `keys.rs` shape —
+see "What exists" above):
 
 1. Build the list array once over the dictionary's **unique values** (length = number of distinct
    blobs, not number of rows).
@@ -184,7 +198,17 @@ many rows. Expanding per row would re-parse the same bytes repeatedly, so when t
 `take` supports `ListArray`, and null dictionary keys propagate as null list entries. This is the
 same shape as `properties_to_array`'s `take`-based reconstruction (`properties_udf.rs:108-113`) and
 `keys.rs`'s dedup via `build_dict_list_array`. The plain-`Binary` path builds row by row with a
-`ListBuilder`.
+`ListBuilder`, using `create_binary_accessor`.
+
+`jsonb_path_elements` takes a second `path` argument, so the per-unique-blob shortcut is only
+sound when the result depends on the blob alone — i.e. when `path` is constant across the batch
+(a single distinct non-null value, e.g. a folded literal). In that case the fast path parses the
+path once and applies it per unique blob, same as above. When `path` varies by row (a column
+reference — `Signature::any(2, ..)` allows this, same as `JsonbPathQuery`), the dictionary
+shortcut does not apply and `jsonb_path_elements` falls back to the row-by-row builder, reading
+`path` per row exactly as `eval_jsonb_path_query` does (`path_query.rs:36-59`). `jsonb_entries`
+and `jsonb_elements` take only the `jsonb` argument, so their fast path always applies to
+dictionary input.
 
 Parsed JSONPath objects are cached in a `HashMap<&str, JsonPath>` keyed on the path string, reusing
 the pattern at `path_query.rs:44,53-61`.
@@ -196,17 +220,19 @@ SELECT unnest(jsonb_entries(properties)) FROM log_entries
                     |
         JsonbEntries::invoke_with_args
                     |
-        create_binary_accessor(&args[0])   -- Binary | Dictionary<Int32, Binary>
+        match args[0].data_type()   -- Binary | Dictionary<Int32, Binary>
                     |
-        Dictionary?  --yes-->  extract per unique dictionary value
+        Dictionary?  --yes-->  downcast to DictionaryArray<Int32Type> (keys.rs shape)
                     |               |
-                    |          ListBuilder<StructBuilder> over unique values
+                    |          extract per unique dictionary value:
+                    |          ListBuilder<StructBuilder> over dict.values()
                     |               |
                     |          take(list, dict.keys())  -->  ListArray, len = num_rows
                     |
-                    no --> ListBuilder<StructBuilder> row by row
+                    no --> create_binary_accessor(&args[0])
+                    |      ListBuilder<StructBuilder> row by row
                     |
-        extract::object_or_array_entries per row
+        extract::object_or_array_entries per row / unique value
                     |
         ColumnarValue::Array(ListArray)
                     |
@@ -237,8 +263,11 @@ constructors, following the file conventions in `path_query.rs` and `keys.rs`:
 
 Factor the two `List<Binary>` producers over one shared builder routine parameterized by the
 per-row extraction closure; `jsonb_entries` needs its own `ListBuilder<StructBuilder>` variant.
-Both variants share the dictionary fast path, so it should be written once and take the
-"build list array from these unique blobs" closure.
+The dictionary fast path (`DictionaryArray<Int32Type>` downcast + `take`, see "Dictionary fast
+path") is shared across all three and written once, taking a "build list array from these unique
+blobs" closure. `jsonb_path_elements` only invokes it when `path` is constant across the batch;
+otherwise it falls back to the row-by-row builder, reading `path` per row like
+`eval_jsonb_path_query` does.
 
 ### 3. Register — `rust/datafusion-extensions/src/jsonb/mod.rs`, `src/lib.rs`
 
@@ -317,8 +346,8 @@ share one extraction and one builder, so the incremental cost is a signature and
 **`value` as `Binary` vs. `Utf8`.** `Utf8` would make `unnest(jsonb_entries(properties))` directly
 readable without a `jsonb_as_string` wrapper, since property values are almost always strings —
 but it would silently mangle nested objects and arrays. `Binary` keeps composition with the
-existing accessor UDFs. A `properties`-specific `Utf8` convenience wrapper is a possible follow-up,
-noted below.
+existing accessor UDFs. A `properties`-specific `Utf8` convenience wrapper is a possible
+follow-up, listed under Out of Scope.
 
 ## Out of Scope
 
@@ -331,6 +360,10 @@ Tracked separately under #1475:
 - Making the UDTFs *reject* a column-referencing expression with a clear error at plan time. This
   plan only corrects the documentation; the code-level signpost is a separate small change.
 - Correlated table functions / `LATERAL`.
+- A `properties`-shaped convenience wrapper (`properties_to_pairs(properties)` →
+  `List<Struct<key: Utf8, value: Utf8>>`) restoring the exact pre-JSONB `unnest(properties)`
+  shape. Deliberately left out of this plan — worth adding only if the `jsonb_as_string` wrapper
+  proves annoying in practice.
 
 ## Testing Strategy
 
@@ -386,8 +419,3 @@ Then:
    (`jsonb_path_query_list`), which pairs each list UDF with its scalar counterpart instead. Either
    is defensible; the names are a permanent SQL-surface commitment, so worth confirming before
    implementation.
-2. **A `properties`-shaped convenience wrapper.** Since properties values are nearly always
-   strings, a `properties_to_pairs(properties)` → `List<Struct<key: Utf8, value: Utf8>>` would make
-   the dominant case a one-liner and restore the exact pre-JSONB `unnest(properties)` shape.
-   Deliberately left out of this plan — worth adding only if the `jsonb_as_string` wrapper proves
-   annoying in practice.
