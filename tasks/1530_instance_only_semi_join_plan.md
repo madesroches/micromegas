@@ -249,7 +249,7 @@ After:
 TableScan: net_spans
 ```
 
-## Scope: three view sets or five?
+## Scope: all five instance-only view sets
 
 The issue names `net_spans`/`otel_spans`/`images` (the §4 semi-join). The identical argument holds
 for `async_events`/`thread_spans`: same instance-only registration, same `"global"` rejection, same
@@ -258,10 +258,9 @@ than the semi-join but still plans a scan of `__processes__partitions` (plus
 `__streams__partitions` for `thread_spans`) and, after `DecorrelatePredicateSubquery`, a
 `LeftSemi Join`.
 
-**This plan covers all five.** One structural rule over five view sets is simpler than a rule that
-special-cases three of them, and it leaves no "why is `async_events` different?" question behind.
-Narrowing to three is removing the `skip` line from the two `EXISTS` arms (`async_events`,
-`thread_spans`) if that is preferred.
+**This plan covers all five — confirmed, not merely proposed.** One structural rule over five view
+sets is simpler than a rule that special-cases three of them, and it leaves no "why is
+`async_events` different?" question behind.
 
 ## Implementation Steps
 
@@ -471,6 +470,5 @@ plan-shape test above already asserts exactly this shape change against a real (
 
 ## Open Questions
 
-None blocking. One decision recorded rather than asked: the scope covers all five instance-only
-view sets rather than the three named in the issue (see **Scope** above); narrowing is removing the
-`skip` line from the two `EXISTS` arms if that is not wanted.
+None. The one scope question — three view sets or five — is settled: all five instance-only view
+sets get the skip, including `async_events` and `thread_spans` (see **Scope** above).
