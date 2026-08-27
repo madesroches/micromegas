@@ -465,7 +465,7 @@ Static text and documentation using GitHub Flavored Markdown.
 - Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$from`, `$to`
 - Validates macro references during editing — warns about undefined variables
 - Does not execute queries or block downstream cells — its Run button just re-renders the cell in place against whatever upstream results already exist, without running any query or affecting other cells
-- On initial load (or after "Run from here"/a refresh resets it), rendered output appears only after the cell's turn in sequential execution — the body stays blank until upstream variables and cell results are resolved, so macros never display stale or broken values on first paint. Once that first render has happened, editing the content updates it live; if it's ever reset to blank while a slow cell above is still running, click **Run** to re-render immediately against the previous results instead of waiting
+- On initial load (or after "Run from here"/a refresh resets it), rendered output appears only after the cell's turn in sequential execution — the body stays blank until upstream variables and cell results are resolved, so macros never display stale or broken values on first paint. Once that first render has happened, editing the content updates it live; if it's ever reset to blank while a slow cell above is still running, click **Run** to re-render immediately against whatever upstream results are currently resolved — macros for cells that are still re-running render unresolved (with a warning banner) until those cells finish
 
 **Example content:**
 
