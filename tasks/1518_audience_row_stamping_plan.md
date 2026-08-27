@@ -271,10 +271,13 @@ All three ingest functions read an `audience` column from the incoming record ba
 The `processes`, `streams`, and `blocks` views each already expose an `audience` column, so any
 source built from `main` supplies it. A **missing column is a hard error**, matching the precedent
 `ingest_streams` set for `format` in v4 ("Hard failure rather than a silent default so a v3 source
-replicating into a v4 target surfaces the schema mismatch loudly"). `ingest_processes`'s and
-`ingest_blocks`' positional `VALUES($1..$13)` / `VALUES($1..$11)` inserts (`replication.rs:122`)
-both get an explicit column list for the same reason as above: a missed bind against a
-just-widened table silently defaults to NULL instead of failing.
+replicating into a v4 target surfaces the schema mismatch loudly"). This is safe to do outright:
+the issue author has confirmed that no replication tooling outside this repository pins a source
+lake older than the column, and the only in-repo producers — `import_net_blocks_from_prod.py` and
+the two `bulk_ingest` examples — are updated by this plan. `ingest_processes`'s and `ingest_blocks`'
+positional `VALUES($1..$13)` / `VALUES($1..$11)` inserts (`replication.rs:122` and `:213`) both get
+an explicit column list for the same reason as above: a missed bind against a just-widened table
+silently defaults to NULL instead of failing.
 
 The `bulk_ingest` example in `mkdocs/docs/query-guide/python-api.md` needs the same fix for the
 same reason: it hand-builds a `processes` table with no `audience` column, which the hard-error
@@ -340,7 +343,10 @@ writes NULL-audience blocks onto a stream a v8 binary already stamped). The NULL
 avoids this: an attacker-injected block always carries a real, non-NULL stamp (§3 — every insert
 binds a resolved `WriteAudience`, defaulted but never NULL), so nothing an attacker controls is
 ever `IS NULL`, and the only way to reach the "either side NULL" pass-through is a genuinely
-pre-v8 row — see Migration & Upgrade Notes for the resulting window.
+pre-v8 row. That residual pass-through is accepted, not an open question: a NULL anchor means the
+row predates per-row stamping and resolves to `MICROMEGAS_DEFAULT_AUDIENCE` — the deployment's
+public/legacy audience — so the metadata an attacker reaches through it was already public. See
+Migration & Upgrade Notes for the resulting window and the rationale in full.
 `make_batch_partition_spec`'s `source_count_query` (below) carries the identical WHERE-clause
 predicate, so the row count it uses to size partition work agrees with what `data_sql` actually
 returns. Because the predicate is the NULL-tolerant form above rather than a `COALESCE` comparison,
@@ -382,12 +388,15 @@ NULL — every row registered before its ingestion binary reached v8, since thos
 and there is no backfill (§2) — survives with its own real stamp while `process_audience`/
 `stream_audience` resolve to the deployment default via `COALESCE`. In that window plain
 `max(audience)` would take the attacker's stamp and relabel the process/stream row exactly as
-described below, so `max(process_audience)`/`max(stream_audience)` is **not** a no-op and is not
-mere defense-in-depth: it is what keeps `processes_view`/`streams_view` correctly labelled for
-every process/stream whose `processes`/`streams` row predates v8, for as long as such rows exist
-(see the new Open Questions item on NULL-anchor handling). It remains defense-in-depth only for the
-disjoint case — a process/stream whose own row already carries a real stamp — where the predicate
-alone already guarantees agreement. The two `blocks_view` columns are what let this anchoring exist
+described below, so `max(process_audience)`/`max(stream_audience)` is **not** a no-op: it does act,
+keeping a NULL-anchored `processes`/`streams` row from being relabeled for as long as such rows
+exist. But a NULL-anchored row's data is already public — it resolves to
+`MICROMEGAS_DEFAULT_AUDIENCE` (Migration & Upgrade Notes) — so what the switch protects during that
+window is not confidential, and its real value there is defense-in-depth against the mismatch
+predicate being weakened later, not protection of anything an attacker couldn't already reach. That
+is the same value it has in the disjoint case — a process/stream whose own row already carries a
+real stamp — where the predicate alone already guarantees agreement. The two `blocks_view` columns
+are what let this anchoring exist
 without re-deriving `streams.audience`/`processes.audience` at every downstream call site. That is a
 real cost, not a free hedge: a public SQL-surface addition on
 `blocks_view` (`stream_audience`, `process_audience`), the `blocks_file_schema_hash()` bump this
@@ -434,9 +443,12 @@ stamp:
   victim `beta`'s `processes` row is a legacy, pre-v8 row whose `audience` is still NULL: the
   NULL-tolerant predicate passes the block through (§4 above), so it does materialize into
   `log_entries`/`measures` with `audience = 'alpha'` and `beta`'s real
-  `exe`/`username`/`computer`/`process_properties` — the exact leak this fix otherwise closes. That
-  residual window is tracked as an open question (see [Open Questions](#open-questions)), not
-  closed by this design. `log_table_schema()`, the measures schema, and `log_view.rs`'s and
+  `exe`/`username`/`computer`/`process_properties`. That residual exposure is accepted, not
+  closed by this design: `beta`'s process row here is NULL-anchored, i.e. pre-AbAC, so its
+  `exe`/`username`/`computer`/`process_properties` already resolve to `MICROMEGAS_DEFAULT_AUDIENCE`
+  and are already public within the deployment — `alpha`'s readers gain nothing that wasn't
+  already exposed under the default audience. See Migration & Upgrade Notes for the window's
+  lifetime. `log_table_schema()`, the measures schema, and `log_view.rs`'s and
   `metrics_view.rs`'s `SCHEMA_VERSION` are untouched — the two extra columns exist on `blocks_view`
   only; no downstream view needs to carry them or repeat the check.
 - `log_stats_view.rs` aggregates `log_entries` rows with `arrow_cast(max(audience), ...)`
@@ -446,11 +458,15 @@ stamp:
   block stamped with a real, non-default audience (e.g. an attacker's) through alongside the
   process's own legacy blocks (default audience), so `max(audience)` over that group would relabel
   the victim's aggregated stats row with the attacker's stamp — the same relabeling
-  `processes_view`/`streams_view` are fixed against above, for the same reason. This is **not**
-  merely defense-in-depth: adding `audience` to the `GROUP BY` in **both** the transform and merge
-  queries is what keeps that legacy-row window from merging two audiences' rows into one labelled
-  row; it only becomes a true no-op once the NULL-anchor window is closed (see
-  [Open Questions](#open-questions)). The selected column and schema are unchanged, so the
+  `processes_view`/`streams_view` are fixed against above, for the same reason. Adding `audience`
+  to the `GROUP BY` in **both** the transform and merge queries does act during that window: it
+  keeps that legacy-row group from merging two audiences' rows into one labelled row. But the
+  victim's own row there is a NULL-anchored, pre-v8 row, whose data is already public (it resolves
+  to `MICROMEGAS_DEFAULT_AUDIENCE` — Migration & Upgrade Notes), so what the `GROUP BY` change
+  protects during that window is not confidential; its real value is defense-in-depth against the
+  mismatch predicate being weakened later, the same as everywhere else this pattern shows up. It
+  only becomes a true no-op once the NULL-anchor window closes (see Migration & Upgrade Notes). The
+  selected column and schema are unchanged, so the
   file-schema hash does not need to bump — but the grouping itself changes, which has its own
   regeneration cost; see Migration & Upgrade Notes, where it is mandatory, not optional.
 
@@ -543,7 +559,8 @@ against those same partitions, exactly as `log_entries`/`measures` do), so a blo
 excludes was never written into a `blocks` partition for either of them to find either. It is
 **not** closed against a victim whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience
 row — the predicate's NULL-tolerant pass-through lets an attacker's block through unchecked in that
-case (see Migration & Upgrade Notes and [Open Questions](#open-questions)). What is left open is
+case. That is accepted, not left as an open question: a NULL-anchored victim row's data is already
+public (see Migration & Upgrade Notes). What is left open is
 narrower than the original gap:
 
 - **The five views `OwnershipRewrite` resolves via `per_process_audience()`.** `net_spans`,
@@ -569,8 +586,9 @@ narrower than the original gap:
   `process.audience` to the deployment default regardless of what its post-upgrade blocks are
   actually stamped with, so every block this path fetches for such a process is relabelled to the
   default — a *value* difference, not just a mechanism one — on top of `view_instance` being denied
-  outright to a reader scoped to the block's real audience (see Migration & Upgrade Notes and
-  [Open Questions](#open-questions)). Carrying the block's own stamp into the JIT path (splitting a
+  outright to a reader scoped to the block's real audience; this is accepted for the same
+  public-legacy-data reason as elsewhere (see Migration & Upgrade Notes). Carrying the block's own
+  stamp into the JIT path (splitting a
   per-block audience out of `ProcessMetadata`) is still worth doing for its own sake — it removes
   the aggregate dependency rather than relying on it staying safe — but it is not attempted here.
 
@@ -790,8 +808,9 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    it (and every JIT-partitioned view) reads blocks from `blocks_view`'s own materialized
    partitions and so never sees a row this predicate excluded (§4).
 10. `rust/analytics/src/lakehouse/processes_view.rs` / `streams_view.rs`: transform queries switch
-    to `max(process_audience)` / `max(stream_audience)` — load-bearing, not merely
-    defense-in-depth, during the NULL-anchor window (§4, "The `max(audience)` regression").
+    to `max(process_audience)` / `max(stream_audience)` — defense-in-depth: it keeps a NULL-anchored
+    process/stream row from being relabeled during the NULL-anchor window (§4, "The `max(audience)`
+    regression"), though what it protects there is already-public legacy data, not confidential.
     `log_stats_view.rs`: add `audience` to the `GROUP BY` in both the transform and merge queries,
     same rationale — mandatory regeneration of `log_stats` partitions over the retention window is
     part of this step, not a follow-up (see Migration & Upgrade Notes).
@@ -873,7 +892,9 @@ group has `audience == process_audience == stream_audience` **for a process/stre
 already carries a real stamp** — for that case, bare `max(audience)` is already correct and the two
 columns plus the `max(process_audience)`/`max(stream_audience)` switch are pure defense-in-depth,
 not a prerequisite for the fix. That is not the whole picture: for a process/stream whose row is
-still a legacy, pre-v8 NULL-audience row, the switch is load-bearing rather than a hedge — see
+still a legacy, pre-v8 NULL-audience row, the switch does act — it keeps that row from being
+relabeled — but what it protects there is already-public legacy data (Migration & Upgrade Notes),
+so it remains defense-in-depth rather than a prerequisite there too; see
 [The `max(audience)` regression](#the-maxaudience-regression) for why. That cost is not free either
 way: it is a public SQL-surface addition on `blocks_view`
 (`stream_audience`, `process_audience`), it forces the `blocks_file_schema_hash()` bump, it needs
@@ -919,7 +940,8 @@ acceptable for a signal that no longer gates security.
 row's *own* read, so a legacy row or admin `bulk_ingest` row still resolves to the same audience it
 does today when read in isolation. It is not behaviourally inert for the §4 mismatch predicate,
 though: a backfilled column would remove the NULL escape hatch that predicate's NULL-tolerant form
-relies on, changing what it excludes (see the NULL-anchor Open Questions item). Absent that
+relies on, changing what it excludes (see the NULL-tolerant-window discussion in Migration &
+Upgrade Notes). Absent that
 predicate interaction, backfilling would mean a full table rewrite of `blocks` for a legacy row's
 own resolved value.
 
@@ -954,14 +976,26 @@ own resolved value.
   checked against that row's audience at all, so an attacker in audience `zeta` who names such a
   `process_id`/`stream_id` still materializes a row labelled `audience = 'zeta'` and, for
   `log_entries`/`measures`, carrying the victim's real `exe`/`username`/`computer`/
-  `process_properties` (§4). A NULL row is not "a leftover from the (single, then-implicit)
-  deployment default" in a sense that makes it safe to target: it resolves to
+  `process_properties` (§4). A NULL row does not resolve to "the attacker's own audience" in a way
+  that makes it safe to target on that account: it resolves to
   `MICROMEGAS_DEFAULT_AUDIENCE` at read time, which is a distinct audience from the attacker's
   whenever the deployment default differs from the attacker's own — so targeting a NULL-anchored
   row is exactly a cross-audience exploit, not a no-op. This window persists for as long as any
   pre-v8 `processes`/`streams` row exists, since those rows are immutable and this plan does no
-  backfill (§2); see [Open Questions](#open-questions) for the candidate resolutions and their
-  costs.
+  backfill (§2).
+
+  **This is a known, accepted residual exposure, not an open question.** A NULL `audience` on a
+  `processes`/`streams` row means the row predates per-row stamping — it is pre-AbAC data that
+  resolves to `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment's public/legacy audience. The metadata
+  an attacker reaches by naming such a `process_id` — `exe`/`username`/`computer`/
+  `process_properties` — is therefore already public: the pass-through leaks nothing that was
+  confidential to begin with. That is why the alternatives are not worth their cost: a strict
+  `COALESCE`-then-compare predicate would permanently drop legitimate post-upgrade telemetry from
+  every such process/stream, not just during the rollout, and a one-time backfill of the column
+  would cost the full-table rewrite of `blocks` (and `processes`/`streams`) the v8 migration is
+  specifically designed to avoid (§2, "No backfill" above) — and would still not fully close the
+  window against a mixed-version rolling fleet, since a pre-v8 binary can keep writing NULL-audience
+  rows after any backfill pass runs. The NULL-tolerant pass-through as written stays.
 - `blocks_file_schema_hash()` bumping forces `blocks` partitions to rebuild. Per `CLAUDE.md` this
   is not a SQL break: the queryable Arrow schema gains two appended columns and every existing
   column keeps its name, type, and position.
@@ -989,9 +1023,13 @@ own resolved value.
   real audience), while a reader scoped to the deployment default sees the process row but none of
   its post-upgrade telemetry. This split persists for as long as the legacy row exists and is not
   fixed by regeneration — regenerating `processes`/`streams`/`log_entries`/`measures` partitions
-  changes nothing about what `audience` a NULL `processes`/`streams` row resolves to. See
-  [Open Questions](#open-questions) for the candidate resolutions (NULL-tolerant pass-through as
-  written, a strict comparison, or a backfill) and their costs — this plan does not pick one. An
+  changes nothing about what `audience` a NULL `processes`/`streams` row resolves to. This split is
+  accepted for the same reason as the mismatch-predicate window above: the legacy `processes`/
+  `streams` row it stems from is pre-AbAC, public/legacy data, so a reader denied `view_instance`
+  for it, or a default-audience reader who can't see its post-upgrade telemetry, is not being denied
+  anything confidential — it is an operational rough edge of the NULL-anchor window, not a
+  confidentiality gap, and the NULL-tolerant pass-through (as written) is kept rather than traded for
+  a strict comparison or a backfill. An
   operator who wants strict consistency for the disjoint, already-real-stamp case above can still
   `regenerate_partitions` over `blocks`, `processes`, `streams`, `log_entries`, `measures` for the
   retention window.
@@ -1040,9 +1078,12 @@ own resolved value.
     row. It also does not close it against any `processes`/`streams` row whose `audience` is
     still NULL — a row registered before its ingestion binary reached v8 — since the §4 mismatch
     predicate's NULL-tolerant pass-through lets an attacker's block through unchecked against such
-    a row for as long as it exists (Migration & Upgrade Notes; [Open
-    Questions](#open-questions) tracks the candidate fixes). Rewrite the admonition to describe
-    that narrower, remaining surface — including the NULL-anchor window — rather than deleting it.
+    a row for as long as it exists (Migration & Upgrade Notes). This is an accepted, bounded
+    limitation, not an open gap: a NULL-anchored row is pre-AbAC data that already resolves to the
+    deployment's public/legacy default audience, so what an attacker reaches through it was already
+    public. Rewrite the admonition to describe
+    that narrower, remaining surface — including the NULL-anchor window and why it is accepted —
+    rather than deleting it.
     Keep the process-squatting paragraphs inside it (they describe a different, already-closed
     gap) by lifting them into the surrounding prose.
   - `:205` "the two prongs read different copies of `micromegas.audience`": still true (Prong A
@@ -1097,7 +1138,8 @@ own resolved value.
   - the "What remains open, tracked separately" paragraph is only partly obsolete — narrow it to
     the five `per_process_audience()`-resolved views, the JIT `view_instance` path (§4, "What
     remains process-anchored"), and the NULL-anchor window against a pre-v8 `processes`/`streams`
-    row (§4 Migration & Upgrade Notes; [Open Questions](#open-questions)); its
+    row (§4, Migration & Upgrade Notes) — the latter documented as an accepted, bounded limitation
+    over already-public legacy data, not an open item; its
     operational-mitigation advice (audience-bound DB-backed credentials only) still applies to
     that narrower surface and should stay.
   - the "One audience per process, not per row" section (`:36-47`) justifies filtering the six
@@ -1203,43 +1245,3 @@ own resolved value.
   dropping the `COALESCE` from the three read sites that use it (`blocks_view`, `find_process`,
   `owner_query_sql`). A retention-window question, not a design one; worth its own follow-up issue
   once this ships.
-
-## Open Questions
-
-1. **Replication and a pre-column source.** The plan hard-fails `bulk_ingest` when the incoming
-   batch has no `audience` column, matching the `format` precedent from schema v4. The alternative
-   is to accept the column as optional and bind NULL (which reads as the target's default). Hard
-   failure is louder and the feature is unreleased, so nothing in the wild breaks — but confirm
-   that no internal replication tooling pins an older source lake.
-2. **How to handle a NULL `processes`/`streams` anchor in the §4 mismatch predicate.**
-   `processes`/`streams` rows are immutable (`ON CONFLICT ... DO NOTHING`) and this plan does no
-   backfill (§2), so a row registered before its ingestion binary reached v8 keeps `audience = NULL`
-   for the rest of its life while its post-upgrade blocks carry a real, resolved stamp. The
-   predicate has to decide what a block compared against such a row means, and every option tried
-   so far has a real cost:
-   - **NULL-tolerant pass-through (as currently written).** `x.audience IS NULL OR y.audience IS
-     NULL OR x.audience = y.audience` lets any block through when either side is NULL. Cost: it
-     leaves the cross-audience injection attack this plan exists to close fully open against any
-     NULL-anchored `processes`/`streams` row — an attacker naming such a `process_id`/`stream_id`
-     still materializes a row under its own audience carrying the victim's real
-     `exe`/`username`/`computer`/`process_properties` (§4, Migration & Upgrade Notes). The window
-     lasts as long as any pre-v8 row exists.
-   - **Strict comparison (`COALESCE`-then-compare).** `COALESCE(x.audience, default) =
-     COALESCE(y.audience, default)` closes that hole, but at the cost of silently and permanently
-     dropping legitimate telemetry: every block a v8 binary writes under a real, non-default
-     audience for a process/stream whose row is still NULL-anchored disagrees with that row's
-     `COALESCE`d default and is excluded forever, not just during the rollout (§4). The same
-     exposure applies mid-rolling-upgrade when a pre-v8 binary writes a NULL-audience block onto an
-     already-v8-stamped stream.
-   - **One-time backfill of the column from the deployment default, in the v8 migration.** Setting
-     `audience = <default>` for every existing NULL row at migration time would let the predicate
-     use the strict form safely, since no row would carry NULL going forward except one currently
-     mid-write. Cost: it is the full-table rewrite of `blocks` (and `processes`/`streams`) this
-     plan's "No backfill" trade-off (above) rejects specifically to keep the v8 migration
-     catalog-only and lock-free; it also does not fully solve the problem on its own — during a
-     rolling upgrade a pre-v8 binary can still write a NULL-audience row *after* the backfill ran
-     against a database already on v8, so the predicate (or a repeated backfill pass) still has to
-     decide what a NULL anchor means for whatever survives that mixed-version window, unless
-     ingestion is fully drained to v8 before the backfill runs.
-   Choosing among these — or accepting the residual window some other way — is a decision for this
-   plan's author, not made here.
