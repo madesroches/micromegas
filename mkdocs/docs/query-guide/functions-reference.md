@@ -457,7 +457,7 @@ jsonb_entries(jsonb)
    * `Binary` - Plain JSONB binary
    * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
-**Returns:** `List<Struct<key: Utf8, value: Binary>>` - one entry per object field or array element, or NULL if the input is a JSON scalar or NULL
+**Returns:** `List<Struct<key: Utf8, value: Binary>>` - one entry per object field or array element, or NULL if the input is a JSON scalar or NULL; errors if the JSONB bytes cannot be decoded
 
 **Examples:**
 ```sql
@@ -491,7 +491,7 @@ jsonb_elements(jsonb)
    * `Binary` - Plain JSONB binary
    * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
-**Returns:** `List<Binary (JSONB)>` - one entry per array element, or NULL if the input is not a JSONB array
+**Returns:** `List<Binary (JSONB)>` - one entry per array element, or NULL if the input is not a JSONB array; errors if the JSONB bytes cannot be decoded
 
 **Examples:**
 ```sql
@@ -518,7 +518,7 @@ jsonb_path_elements(jsonb, path)
 
 - `path` (`Utf8`): A JSONPath expression string, including filter predicates (see [Filter Predicates in JSONPath](#filter-predicates-in-jsonpath) above). A NULL `path` produces a NULL list for that row.
 
-**Returns:** `List<Binary (JSONB)>` - one entry per path match, or an empty list if the path has no matches
+**Returns:** `List<Binary (JSONB)>` - one entry per path match, an empty list if the path has no matches, or NULL if the JSONB input or the path is NULL; errors if the JSONB bytes cannot be decoded
 
 **Examples:**
 ```sql

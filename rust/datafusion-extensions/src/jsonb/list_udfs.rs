@@ -6,7 +6,7 @@
 //! dictionary fast path builds the list once per unique blob and expands it to row count via
 //! `take`, instead of re-parsing the same bytes on every row.
 
-use crate::binary_column_accessor::create_binary_accessor;
+use crate::binary_column_accessor::{BinaryColumnAccessor, create_binary_accessor};
 use crate::jsonb::extract::{EntryList, array_elements, object_or_array_entries, path_select_all};
 use datafusion::arrow::array::{
     Array, ArrayBuilder, ArrayRef, BinaryBuilder, DictionaryArray, GenericBinaryArray, ListBuilder,
@@ -70,6 +70,35 @@ fn dict_values_binary_array(
         .as_any()
         .downcast_ref::<GenericBinaryArray<i32>>()
         .ok_or_else(|| DataFusionError::Internal("dictionary values are not a binary array".into()))
+}
+
+/// Returns `array` downcast to `DictionaryArray<Int32Type>` if it is exactly
+/// `Dictionary<Int32, Binary>`, the only dictionary shape the fast path handles; any other
+/// dictionary key/value type (e.g. `Dictionary<Int8, Binary>`) falls through to `None` so the
+/// caller takes the `create_binary_accessor` row-by-row path and gets its actionable
+/// `Unsupported dictionary key type: …` `Execution` error instead of an opaque downcast failure.
+fn binary_dict(array: &ArrayRef) -> Option<&DictionaryArray<Int32Type>> {
+    if let DataType::Dictionary(key, value) = array.data_type()
+        && key.as_ref() == &DataType::Int32
+        && value.as_ref() == &DataType::Binary
+    {
+        array.as_any().downcast_ref::<DictionaryArray<Int32Type>>()
+    } else {
+        None
+    }
+}
+
+/// `create_binary_accessor` with the standard `Invalid input type for {func_name}: …` error
+/// wrapping shared by the three list-returning JSONB UDFs' non-dictionary fallback path.
+fn binary_accessor_or_err(
+    array: &ArrayRef,
+    func_name: &str,
+) -> Result<Box<dyn BinaryColumnAccessor + Send>> {
+    create_binary_accessor(array).map_err(|e| {
+        DataFusionError::Execution(format!(
+            "Invalid input type for {func_name}: {e}. Expected Binary or Dictionary<Int32, Binary>"
+        ))
+    })
 }
 
 /// Build a plain `List` array positionally aligned with `dict_array.values()` — one entry per
@@ -158,13 +187,7 @@ fn build_binary_list<F>(array: &ArrayRef, func_name: &str, mut extract: F) -> Re
 where
     F: FnMut(&[u8]) -> Result<Option<Vec<Vec<u8>>>>,
 {
-    if let DataType::Dictionary(_, value_type) = array.data_type()
-        && matches!(value_type.as_ref(), DataType::Binary)
-    {
-        let dict_array = array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int32Type>>()
-            .ok_or_else(|| DataFusionError::Internal("error casting dictionary array".into()))?;
+    if let Some(dict_array) = binary_dict(array) {
         let list_builder = ListBuilder::new(BinaryBuilder::new()).with_field(binary_list_field());
         return dict_fast_path(dict_array, list_builder, |builder, bytes| {
             append_binary_slot(builder, extract(bytes)?);
@@ -172,11 +195,7 @@ where
         });
     }
 
-    let accessor = create_binary_accessor(array).map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Invalid input type for {func_name}: {e}. Expected Binary or Dictionary<Int32, Binary>"
-        ))
-    })?;
+    let accessor = binary_accessor_or_err(array, func_name)?;
     let mut list_builder = ListBuilder::new(BinaryBuilder::new()).with_field(binary_list_field());
     for i in 0..accessor.len() {
         if accessor.is_null(i) {
@@ -189,13 +208,7 @@ where
 }
 
 fn build_entries_list(array: &ArrayRef) -> Result<ArrayRef> {
-    if let DataType::Dictionary(_, value_type) = array.data_type()
-        && matches!(value_type.as_ref(), DataType::Binary)
-    {
-        let dict_array = array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int32Type>>()
-            .ok_or_else(|| DataFusionError::Internal("error casting dictionary array".into()))?;
+    if let Some(dict_array) = binary_dict(array) {
         let capacity = dict_array.values().len();
         let list_builder =
             ListBuilder::new(StructBuilder::from_fields(entry_struct_fields(), capacity))
@@ -205,11 +218,7 @@ fn build_entries_list(array: &ArrayRef) -> Result<ArrayRef> {
         });
     }
 
-    let accessor = create_binary_accessor(array).map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Invalid input type for jsonb_entries: {e}. Expected Binary or Dictionary<Int32, Binary>"
-        ))
-    })?;
+    let accessor = binary_accessor_or_err(array, "jsonb_entries")?;
     let mut list_builder = ListBuilder::new(StructBuilder::from_fields(
         entry_struct_fields(),
         accessor.len(),
@@ -443,27 +452,16 @@ impl ScalarUDFImpl for JsonbPathElements {
                 )
             })?;
 
-        if let DataType::Dictionary(_, value_type) = args[0].data_type()
-            && matches!(value_type.as_ref(), DataType::Binary)
+        if let Some(dict_array) = binary_dict(&args[0])
             && let Some(constant_path) = constant_non_null_path(paths)
         {
-            let dict_array = args[0]
-                .as_any()
-                .downcast_ref::<DictionaryArray<Int32Type>>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("error casting dictionary array".into())
-                })?;
             return Ok(ColumnarValue::Array(dict_fast_path_path_elements(
                 dict_array,
                 constant_path,
             )?));
         }
 
-        let accessor = create_binary_accessor(&args[0]).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Invalid input type for jsonb_path_elements: {e}. Expected Binary or Dictionary<Int32, Binary>"
-            ))
-        })?;
+        let accessor = binary_accessor_or_err(&args[0], "jsonb_path_elements")?;
         let mut list_builder =
             ListBuilder::new(BinaryBuilder::new()).with_field(binary_list_field());
         let mut path_cache: HashMap<&str, JsonPath> = HashMap::new();
