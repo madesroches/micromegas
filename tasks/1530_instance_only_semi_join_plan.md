@@ -52,8 +52,9 @@ None of `net_spans`, `otel_spans`, `images`, `async_events`, `thread_spans` has 
 - Each constructor rejects `"global"` outright: `images_view.rs:76`, `net_spans_view.rs:82`,
   `otel/spans_view.rs:79`, `async_events_view.rs:81`, `thread_spans_view.rs:84`.
 - The only construction path left is `ViewInstanceTableFunction::call_with_args`
-  (`view_instance_table_function.rs:83`), which is the **only** site that passes
-  `Some(guard)` into `MaterializedView::new`.
+  (`view_instance_table_function.rs:83`), which is the **only** production site that passes
+  `Some(guard)` into `MaterializedView::new` (the one other is the stub fixture in
+  `audience_guard_tests.rs`).
 
 ### Prong B runs before any row is read
 
@@ -113,9 +114,10 @@ whichever row happens to match the caller.
 
 Net of the collision case, what remains is Prong A / Prong B disagreement, and the two read very
 different things: Prong B resolves a live point query against `processes`/`streams`; Prong A's
-`per_process_audience` is built from `__processes__partitions`, a time-partitioned, append-only JIT
-materialization off `blocks` (`processes_view.rs`) that is never retroactively edited once a time
-range is materialized. `delete_old_data` (`rust/analytics/src/delete.rs:152-169`) deletes a
+`per_process_audience` is built from `__processes__partitions`, a time-partitioned, append-only
+`SqlBatchView` materialization off the `blocks` view (`processes_view.rs`), populated only by the
+maintenance daemon's batch pass (`SqlBatchView::jit_update` is a no-op) and never retroactively
+edited once a time range is materialized. `delete_old_data` (`rust/analytics/src/delete.rs:152-169`) deletes a
 process's row from live `processes` once it is old and stream-empty, and in the same pass calls
 `retire_expired_partitions` over the same `expiration` cutoff, which deletes every
 `lakehouse_partitions` row with `end_insert_time < expiration` (`write_partition.rs:94-101`) --
@@ -146,9 +148,13 @@ process_id/stream_id collision, both, fail-closed as above). These can also diff
 that is not a collision: `insert_stream` accepts any `process_id` unconditionally and stamps the
 stream with the caller's own audience, not the process's. That shift is covered by `blocks_view`'s
 mismatch predicate: `ThreadSpansView::jit_update` generates partitions through `BlocksView`, whose
-mismatch predicate excludes a block whose stream disagrees with the owning process's row, so a
-stream/process audience mismatch never reaches this scan regardless of which stamp Prong A or Prong
-B reads. This is not treated as a realistic exposure and is not a reason to keep the predicate.
+mismatch predicate drops any block whose own stamp differs from either its `streams` row or its
+`processes` row (`audience_column_mismatch`, `blocks_view.rs` -- it never compares the two rows to
+each other). A block under a stream/process disagreement cannot match both, so it never reaches
+this scan regardless of which stamp Prong A or Prong B reads. The one exception is a legacy
+NULL-stamped block, which the predicate's NULL-tolerant pass-through lets in -- that is the
+already-documented NULL-anchor window, not a new gap. This is not treated as a realistic exposure
+and is not a reason to keep the predicate.
 
 It notably does **not** defend against cross-audience block injection: an attacker's block naming a
 victim's `process_id` lands in the victim's instance, so `process_id IN (victim's audience)` passes.
@@ -278,7 +284,12 @@ sets is simpler than a rule that special-cases three of them, and it leaves no "
 3. Same file: update the module doc's branch table — add the skip rule as a row, note that the
    §4/§async_events/§thread_spans predicates now apply only to a scan that is *not* a guarded
    instance, and drop the "What remains open" bullet's implication that these five are filtered
-   per-scan by Prong A. Keep the description behavioural: no issue numbers, no stage labels.
+   per-scan by Prong A. Two earlier paragraphs make the same claim and need the same treatment:
+   the "physical `audience` column" section's closing sentence (the five "keep the
+   `process_id`/`EXISTS` machinery below, which still resolves through `__processes__partitions`")
+   and the "One audience per row" section's closing sentence (the §4 semi-join and the
+   §async_events/§thread_spans `EXISTS` shapes "still resolve through `per_process_audience`").
+   Keep the description behavioural: no issue numbers, no stage labels.
 
 ### Phase 3 — tests
 
@@ -296,7 +307,8 @@ sets is simpler than a rule that special-cases three of them, and it leaves no "
      `thread_spans_view_instance_plans_with_an_injected_two_hop_exists` (the guarded
      `view_instance(...)` forms) to assert the absence of an injected predicate, renaming them
      accordingly.
-   - Update the `default_view_factory` inventory test (`~line 520`) to a two-way split keyed on the
+   - Update the `default_view_factory` inventory test
+     (`real_view_factory_covers_every_registered_view_set`) to a two-way split keyed on the
      `audience` column plus whether the scan is a guarded instance: a view carrying the physical
      `audience` column → bare `Filter` on `audience` (whether reached globally or through
      `view_instance(...)`; `log_entries`/`measures` are registered both ways and must still assert
@@ -317,7 +329,9 @@ sets is simpler than a rule that special-cases three of them, and it leaves no "
 6. `rust/analytics/tests/audience_guard_tests.rs`: add a unit test pinning
    `instance_is_audience_guarded()` against `authorize_view_instance`'s arms — guard present +
    `'global'` → false; guard present + UUID → true; guard absent → false. This is the coupling
-   Design §1 calls out.
+   Design §1 calls out. The file's existing `JitUpdateMustNotRunView` stub hardcodes a fresh
+   `Uuid` instance id; give its `new` an instance-id parameter so the same stub serves the
+   `'global'` case.
 
 ### Phase 4 — docs and changelog
 
@@ -357,7 +371,13 @@ sets is simpler than a rule that special-cases three of them, and it leaves no "
    plan with no injected predicate for a guarded `view_instance(...)` scan; the #1486 entry's
    sentence "Prong A already row-filters every `view_instance` scan the same as the named-table
    form" needs the same treatment, since that is now true only for the view sets carrying the
-   physical `audience` column.
+   physical `audience` column. Two more still-`## Unreleased` entries carry the same falsified
+   claims and get the same in-place amendment: the standalone #1486 **Analytics** entry's "only to
+   have `OwnershipRewrite` (Prong A) return it zero rows afterward" (there is no Prong A fallback
+   for the five any more — Prong B's denial is the only enforcement), and the #1482 **Analytics**
+   entry's closing sentence that the five "keep today's semi-join/`EXISTS` enforcement shapes,
+   resolving through `__processes__partitions` as before". The #1486 entry's `'global'` and
+   public-view-set exemption sentences stay accurate and are left alone.
 
 ## Files to Modify
 
@@ -429,9 +449,10 @@ below. For every reachable query:
   `Ambiguous` merge in `merge_owner_rows` is what makes that anchor safe whenever both rows exist
   (see Current State and the bullet above for the one case where only one does). `thread_spans` is
   additionally covered on its own legitimate-divergence path: `insert_stream` may stamp a stream
-  with the caller's own audience regardless of its process's, but a stream stamped differently from
-  its owning process is already excluded by `blocks_view`'s mismatch predicate before this scan
-  runs, so that particular anchor shift changes no caller's visible rows.
+  with the caller's own audience regardless of its process's, but a block under a stream stamped
+  differently from its owning process is already excluded by `blocks_view`'s mismatch predicate (a
+  block's own stamp cannot match both rows) before this scan runs, so that particular anchor shift
+  changes no caller's visible rows.
 - A caller not authorized for *X* was denied by Prong B at `scan` before and is denied at `scan`
   after — including the empty-`ReadScope::Audiences` case, where `is_readable` returns false rather
   than the predicate's `lit(false)` producing an empty result.
@@ -440,7 +461,8 @@ below. For every reachable query:
 
 The residual gaps recorded in `ownership_rewrite.rs`'s module doc — legacy NULL-anchor rows, the
 per-instance audience label being resolved through the owning process rather than a per-row column
-— are unchanged by this work.
+— are unchanged in substance by this work; only their wording moves from "resolved by Prong A's
+predicate" to "resolved by Prong B's instance check" (Phase 2 step 3, Phase 4 step 7).
 
 ## Performance
 
@@ -461,12 +483,12 @@ result size, so it is largest exactly where it hurts most — a small `view_inst
 - `cargo test -p micromegas-analytics --test audience_guard_tests` — accessor/guard-arm coupling.
 - `cargo test -p micromegas-analytics` and `cargo clippy --workspace -- -D warnings` for the rest.
 
-No manual sanity check against the local test env: `local_test_env/ai_scripts/start_services.py`
-launches `flight-sql-srv` with `--disable-auth` unconditionally, which resolves to
-`ReadScope::All` and skips `OwnershipRewrite` entirely, so no session obtainable from the
-documented local test env can show the `EXPLAIN` shape this change affects. The offline
-plan-shape test above already asserts exactly this shape change against a real (non-`All`)
-`ReadScope`.
+No manual sanity check against the local test env: the documented split-mode
+`local_test_env/ai_scripts/start_services.py` launches `flight-sql-srv` with `--disable-auth`,
+which resolves to `ReadScope::All` and skips `OwnershipRewrite` entirely, so it cannot show the
+`EXPLAIN` shape this change affects. (An OIDC-configured monolith or
+`start_services_with_oidc.py` session could, but it is not required.) The offline plan-shape test
+above already asserts exactly this shape change against a real (non-`All`) `ReadScope`.
 
 ## Open Questions
 
