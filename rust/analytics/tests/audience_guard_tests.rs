@@ -6,14 +6,18 @@
 //! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`. Both
 //! predate this file and already exercise the pieces this stage added to them.
 //!
-//! `OwnerAudience::Unstamped` is gone (#1482 §4): a process with no audience property resolves to
+//! `OwnerAudience::Unstamped` is gone (#1482 §4): a row with a NULL `audience` column resolves to
 //! `MICROMEGAS_DEFAULT_AUDIENCE` in `owner_query_sql`'s `COALESCE`, so it is an ordinary
 //! `Audience(..)` rather than a state to special-case, and a resolved `None` -- now reachable only
 //! for an id with no row at all -- maps to `OwnerAudience::Unknown` in `merge_owner_rows`, always
 //! denied under `ReadScope::Audiences`. That mapping itself is private and DB-backed
 //! (`fetch_owner_rows`/`merge_owner_rows`); see `prong_b_guard_db_test.rs` for end-to-end coverage
-//! against a real row with no audience property. What's covered here is the pure half:
+//! against a real row with a NULL `audience` column. What's covered here is the pure half:
 //! `is_readable` already denies `Unknown` unconditionally under `ReadScope::Audiences`.
+//!
+//! `owner_query_sql` moved from property/`unnest`-based SQL to per-row `audience`-column point
+//! queries (AbAC Stage 5b, #1518, §4) -- pinned below via the `#[doc(hidden)]`
+//! `owner_query_sql_for_test` accessor.
 //!
 //! Also covers, offline, that the #1486 `view_instance(...)` guard is actually wired into
 //! `MaterializedView::scan` (not just correct in isolation, which the rest of this file already
@@ -32,7 +36,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_expr::Expr;
 use datafusion::prelude::{DataFrame, SessionContext};
 use micromegas_analytics::lakehouse::audience_guard::{
-    AudienceGuard, AudienceIndex, IdKind, OwnerAudience, is_readable,
+    AudienceGuard, AudienceIndex, IdKind, OwnerAudience, is_readable, owner_query_sql_for_test,
 };
 use micromegas_analytics::lakehouse::dataframe_time_bounds::DataFrameTimeBounds;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -339,6 +343,42 @@ async fn authorize_view_instance_denies_non_uuid_non_global_id() {
         err.to_string().contains("not found or not accessible"),
         "expected the uniform not-found-shaped denial text, got: {err}"
     );
+}
+
+// --- `owner_query_sql` (AbAC Stage 5b, #1518, §4): column-based, no join/unnest -----------
+
+#[test]
+fn owner_query_sql_never_mentions_unnest_or_properties() {
+    for kind in [IdKind::Process, IdKind::Block, IdKind::ProcessOrStream] {
+        let sql = owner_query_sql_for_test(kind);
+        assert!(
+            !sql.contains("unnest"),
+            "{kind:?}: owner_query_sql must read the audience column directly, not unnest a \
+             properties array -- got: {sql}"
+        );
+        assert!(
+            !sql.contains("properties"),
+            "{kind:?}: owner_query_sql must not reference properties at all -- got: {sql}"
+        );
+        assert!(
+            sql.contains("audience"),
+            "{kind:?}: owner_query_sql must reference the audience column -- got: {sql}"
+        );
+    }
+}
+
+#[test]
+fn owner_query_sql_block_has_no_join_to_processes() {
+    // The one behaviour change worth pinning: IdKind::Block used to join through `processes` to
+    // resolve a block's audience; it now reads `blocks.audience` alone, a single-table point
+    // query, so a block whose `processes` row is gone (retention swept it, or it hasn't arrived
+    // yet) resolves to its own stamp instead of falling through to `Unknown`.
+    let sql = owner_query_sql_for_test(IdKind::Block);
+    assert!(
+        !sql.to_lowercase().contains("join"),
+        "IdKind::Block must be a single-table query with no join -- got: {sql}"
+    );
+    assert!(sql.contains("FROM blocks"));
 }
 
 // --- `MaterializedView::scan` enforcement wiring (offline) --------------------------------

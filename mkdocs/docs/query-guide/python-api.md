@@ -501,12 +501,52 @@ processes = pa.table({
     'insert_time': [datetime.datetime.now(datetime.timezone.utc)],
     'parent_process_id': [''],
     'properties': [[]],
+    'audience': ['public'],
 })
 
 # Ingest process metadata
 result = client.bulk_ingest('processes', processes)
 if result:
     print(f"Ingested {result.record_count} process records")
+```
+
+!!! note "`audience` is required"
+    Every table in the schema-v8-and-later `bulk_ingest` shape carries an `audience` column
+    (the row's own write audience — see [Authentication](../admin/authentication.md)). A
+    source table missing it is rejected outright rather than silently defaulted, matching the
+    same hard-failure precedent the `streams` table's `format` column already set. The example
+    above supplies `'public'`; a real replication source should carry each row's actual
+    audience.
+
+`streams` and `blocks` need the same column, alongside their other required fields:
+
+```python
+streams = pa.table({
+    'stream_id': ['...'],
+    'process_id': ['550e8400-e29b-41d4-a716-446655440000'],
+    'dependencies_metadata': [b''],
+    'objects_metadata': [b''],
+    'tags': [[]],
+    'properties': [[]],
+    'insert_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'format': ['micromegas-transit'],
+    'audience': ['public'],
+})
+
+blocks = pa.table({
+    'block_id': ['...'],
+    'stream_id': ['...'],
+    'process_id': ['550e8400-e29b-41d4-a716-446655440000'],
+    'begin_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'begin_ticks': [0],
+    'end_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'end_ticks': [0],
+    'nb_objects': [0],
+    'object_offset': [0],
+    'payload_size': [0],
+    'insert_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'audience': ['public'],
+})
 ```
 
 **Supported tables:** `processes`, `streams`, `blocks`, `payloads`

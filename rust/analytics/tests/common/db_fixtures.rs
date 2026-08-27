@@ -14,7 +14,6 @@ use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::response_writer::Logger;
 use micromegas_analytics::time::TimeRange;
-use micromegas_telemetry::property::{PROPERTY_AUDIENCE, Property};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::levels::LevelFilter;
 use std::sync::Arc;
@@ -102,31 +101,20 @@ pub async fn reset_global_view(
     regenerate_global_view(lakehouse, view, insert_range, logger).await
 }
 
-/// Fabricates a legacy-shaped `processes` row: strips the `micromegas.audience` property back
-/// off a process that `insert_process` already stamped, via a direct
-/// `UPDATE processes SET properties = ...`. There is no `UPDATE processes` path anywhere in the
-/// production codebase -- `insert_process` always stamps now (#1519) -- so this is test-only
-/// scaffolding, shared by `ownership_rewrite_db_test.rs` and `prong_b_guard_db_test.rs`, to
-/// reproduce the shape a row written before that write-side resolution shipped, or one written
-/// by the admin `bulk_ingest`/replication path, still has. Cannot be shared with
+/// Fabricates a legacy-shaped `processes` row: nulls the `audience` column back out on a process
+/// that `insert_process` already stamped, via a direct `UPDATE processes SET audience = NULL`.
+/// There is no `UPDATE processes` path anywhere in the production codebase -- `insert_process`
+/// always stamps now (#1519) -- so this is test-only scaffolding, shared by
+/// `ownership_rewrite_db_test.rs` and `prong_b_guard_db_test.rs`, to reproduce the shape a row
+/// written before the v8 `audience` column existed (AbAC Stage 5b, #1518), or one written by the
+/// admin `bulk_ingest`/replication path, still has. Cannot be shared with
 /// `rust/ingestion/tests/audience_stamping_db_test.rs`'s identical-in-spirit copy -- different
 /// crate, no shared test-support crate under `rust/`.
 pub async fn strip_process_audience(pool: &sqlx::PgPool, process_id: uuid::Uuid) -> Result<()> {
-    let properties: Vec<Property> =
-        sqlx::query_scalar("SELECT properties FROM processes WHERE process_id = $1")
-            .bind(process_id)
-            .fetch_one(pool)
-            .await
-            .with_context(|| "reading process properties to strip")?;
-    let stripped: Vec<Property> = properties
-        .into_iter()
-        .filter(|p| p.key_str() != PROPERTY_AUDIENCE)
-        .collect();
-    sqlx::query("UPDATE processes SET properties = $1 WHERE process_id = $2")
-        .bind(stripped)
+    sqlx::query("UPDATE processes SET audience = NULL WHERE process_id = $1")
         .bind(process_id)
         .execute(pool)
         .await
-        .with_context(|| "stripping micromegas.audience property")?;
+        .with_context(|| "nulling processes.audience")?;
     Ok(())
 }

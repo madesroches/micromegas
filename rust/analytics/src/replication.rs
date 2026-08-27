@@ -39,6 +39,10 @@ async fn ingest_streams(
         // Hard failure (rather than a silent default) on missing `format` so a
         // v3 source replicating into a v4 target surfaces the schema mismatch loudly.
         let format_column = string_column_by_name(&b, "format")?;
+        // Same rationale, for `audience` (#1518, AbAC Stage 5b): every source built from `main`
+        // exposes `streams.audience`, so a missing column means the source predates the v8
+        // column and must fail loudly rather than silently write NULL into every replicated row.
+        let audience_column = string_column_by_name(&b, "audience")?;
 
         for row in 0..b.num_rows() {
             let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
@@ -57,8 +61,8 @@ async fn ingest_streams(
 
             instrument_named!(
                 sqlx::query(
-                    "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format, audience)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
                  ON CONFLICT (stream_id) DO NOTHING;",
                 )
                 .bind(stream_id)
@@ -71,6 +75,7 @@ async fn ingest_streams(
                     insert_time_column.value(row),
                 ))
                 .bind(format_column.value(row)?)
+                .bind(audience_column.value(row)?)
                 .execute(&mut *tr),
                 "sql_insert_stream"
             )
@@ -106,6 +111,11 @@ async fn ingest_processes(
             typed_column_by_name(&b, "insert_time")?;
         let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
         let properties_accessor = properties_column_by_name(&b, "properties")?;
+        // Hard failure (rather than a silent default) on missing `audience` (#1518, AbAC Stage
+        // 5b), matching the precedent `ingest_streams` set for `format` in v4: every source
+        // built from `main` exposes `processes.audience`, so a missing column means the source
+        // predates the v8 column.
+        let audience_column = string_column_by_name(&b, "audience")?;
         for row in 0..b.num_rows() {
             let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
             let parent_process_str = parent_process_id_column.value(row)?;
@@ -119,7 +129,12 @@ async fn ingest_processes(
             let properties = micromegas_telemetry::property::make_properties(&properties_map);
             instrument_named!(
                 sqlx::query(
-                    "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+                    "INSERT INTO processes
+                     (process_id, exe, username, realname, computer, distro, cpu_brand,
+                      tsc_frequency, start_time, start_ticks, insert_time, parent_process_id,
+                      properties, audience)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                     ON CONFLICT (process_id) DO NOTHING;",
                 )
                 .bind(process_id)
                 .bind(exe_column.value(row)?)
@@ -136,6 +151,7 @@ async fn ingest_processes(
                 ))
                 .bind(parent_process_id)
                 .bind(properties)
+                .bind(audience_column.value(row)?)
                 .execute(&mut *tr),
                 "sql_insert_process"
             )
@@ -205,26 +221,38 @@ async fn ingest_blocks(
         let payload_size_column: &Int64Array = typed_column_by_name(&b, "payload_size")?;
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
+        // Hard failure (rather than a silent default) on missing `audience` (#1518, AbAC Stage
+        // 5b), matching the precedent `ingest_streams` set for `format` in v4: every source
+        // built from `main` exposes `blocks.audience`, so a missing column means the source
+        // predates the v8 column.
+        let audience_column = string_column_by_name(&b, "audience")?;
         for row in 0..b.num_rows() {
             let block_id = Uuid::parse_str(block_id_column.value(row)?)?;
             let stream_id = Uuid::parse_str(stream_id_column.value(row)?)?;
             let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
             instrument_named!(
-                sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;")
-                    .bind(block_id)
-                    .bind(stream_id)
-                    .bind(process_id)
-                    .bind(DateTime::from_timestamp_nanos(begin_time_column.value(row)))
-                    .bind(begin_ticks_column.value(row))
-                    .bind(DateTime::from_timestamp_nanos(end_time_column.value(row)))
-                    .bind(end_ticks_column.value(row))
-                    .bind(nb_objects_column.value(row))
-                    .bind(object_offset_column.value(row))
-                    .bind(payload_size_column.value(row))
-                    .bind(DateTime::from_timestamp_nanos(
-                        insert_time_column.value(row),
-                    ))
-                    .execute(&mut *tr),
+                sqlx::query(
+                    "INSERT INTO blocks (block_id, stream_id, process_id, begin_time, begin_ticks,
+                      end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time,
+                      audience)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                     ON CONFLICT (block_id) DO NOTHING;",
+                )
+                .bind(block_id)
+                .bind(stream_id)
+                .bind(process_id)
+                .bind(DateTime::from_timestamp_nanos(begin_time_column.value(row)))
+                .bind(begin_ticks_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(end_time_column.value(row)))
+                .bind(end_ticks_column.value(row))
+                .bind(nb_objects_column.value(row))
+                .bind(object_offset_column.value(row))
+                .bind(payload_size_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(
+                    insert_time_column.value(row),
+                ))
+                .bind(audience_column.value(row)?)
+                .execute(&mut *tr),
                 "sql_insert_block"
             )
             .await

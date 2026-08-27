@@ -1,9 +1,9 @@
 use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
 use std::{collections::HashMap, sync::Arc};
 
-/// Re-exported so server code keeps reaching these names through `property`; they are defined in
-/// [`crate::property_names`] so client crates can reach them without the `server` feature.
-pub use crate::property_names::{PROPERTY_AUDIENCE, RESERVED_PROPERTY_PREFIX};
+/// Re-exported so server code keeps reaching this name through `property`; it is defined in
+/// [`crate::property_names`] so client crates can reach it without the `server` feature.
+pub use crate::property_names::RESERVED_PROPERTY_PREFIX;
 
 /// Represents a key-value property.
 ///

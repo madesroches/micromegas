@@ -71,35 +71,47 @@ instead — see [API Keys](api-keys.md).
 
 ## What gets stamped
 
-A process registered under a credential that carries a write audience is stamped with a
-`micromegas.audience` property, server-written from that credential — never trusted from the
-client payload. This is what makes the analytics-side audience filter
-([Authentication](authentication.md)) a real security boundary instead of a client-asserted
-label.
+A process, stream, and block registered under a credential that carries a write audience are
+each stamped with their own `audience` **column** (schema v8, #1518) — server-written from that
+credential, never trusted from the client payload. A block's or a stream's own stamp is the
+credential that wrote *that* row, never derived from the `process_id`/`stream_id` it points at.
+This is what makes the analytics-side audience filter ([Authentication](authentication.md)) a
+real security boundary instead of a client-asserted label.
 
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
-  audience. Every process a key registers is stamped with that audience.
+  audience. Every process, stream, and block a key writes is stamped with that audience.
 - **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no bound audience
-  of their own. A process registered under one is stamped with the resolved deployment default.
+  of their own. A row registered under one is stamped with the resolved deployment default.
 - **No auth provider configured** (`--disable-auth`): stamped with the deployment default too,
   for the same reason.
 
-Every process registered through this HTTP ingestion path is stamped: a credential with no bound
+Every row registered through this HTTP ingestion path is stamped: a credential with no bound
 audience resolves to `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) at the write edge and is
 stamped with it explicitly, exactly like any other audience — see
 [Authentication → The default audience](authentication.md#audience-stamping-and-the-default).
-There is still no startup backfill and no retro-stamping: a **pre-existing** row with no
-`micromegas.audience` property (written before this resolution shipped, or written by the admin
-`bulk_ingest`/replication path, which writes a source lake's properties verbatim) keeps that
-absence permanently, and is resolved to the same deployment default on the **read** side instead
-— so it is materialized and enforced under that label without anything being written back to
-`processes`. Nothing about a rolling upgrade needs sequencing on this account.
+There is still no startup backfill and no retro-stamping: a **pre-existing** row with a NULL
+`audience` column (registered before its ingestion binary reached schema v8) keeps that absence
+permanently, and is resolved to the same deployment default on the **read** side instead — so it
+is materialized and enforced under that label without anything being written back to it. Admin
+`bulk_ingest`/replication now hard-fails on a missing `audience` column rather than ever writing
+one with none, so an unstamped row can only be a genuinely pre-v8 one.
+
+!!! warning "Deploy order matters in a split deployment"
+    Schema v8 migrations only run from ingestion's (or the monolith's) startup path — FlightSQL
+    and maintenance never migrate the database. Upgrade and restart ingestion (or the monolith)
+    *before* flight-sql/maintenance: a v8 analytics or maintenance binary reading against a
+    pre-v8 database fails every query that touches the new `audience` columns with an "undefined
+    column" error, until ingestion has migrated it. A pre-v8 ingestion binary against an
+    already-migrated v8 database is fine — writes just leave the column NULL, which reads as the
+    deployment default. See the CHANGELOG's Stage 5b upgrade note for the full sequencing, including
+    the mandatory `regenerate_partitions` pass over `log_stats`.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
 property a client sends is dropped at ingestion and logged (`warn!`), naming the key. In
 particular, a native client that used to self-stamp `micromegas.audience` directly no longer has
-any effect — its data gets the deployment default instead, unless its credential is switched to a
-DB ingestion key bound to the audience it wants to keep.
+any effect — there is no property to re-assert any more, and its data gets the deployment default
+instead, unless its credential is switched to a DB ingestion key bound to the audience it wants
+to keep.
 
 **OTLP `process_id` churn on this upgrade is narrower than "starts stamping."** Because every
 audience gets its own OTLP id namespace and the deployment default keeps the pre-existing,

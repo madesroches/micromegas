@@ -15,7 +15,7 @@ It reads the lake from the environment:
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store holding the partitions |
-| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The audience a credential with no bound ingestion audience is **stamped** with explicitly at write time, and that a legacy or admin-replicated row with no stamp is **read** as (default `public`). Set it identically on every role that builds a lakehouse — [FlightSQL](flight-sql.md), this one, the [monolith](monolith.md), and [ingestion](ingestion.md) — since **this** role is what bakes the value into partitions and the ingestion role is what stamps new rows with it — a deployment that sets the knob only on some of these roles materializes and stamps under mismatched defaults. Changing it does not relabel already-written partitions; regenerate the six views over any range that should reflect the new value. See [Audience stamping and the default](authentication.md#audience-stamping-and-the-default) |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The audience a credential with no bound ingestion audience is **stamped** with explicitly at write time, and that a legacy row with no stamp is **read** as (default `public`). Set it identically on every role that builds a lakehouse — [FlightSQL](flight-sql.md), this one, the [monolith](monolith.md), and [ingestion](ingestion.md) — since **this** role is what bakes the value into partitions and the ingestion role is what stamps new rows with it — a deployment that sets the knob only on some of these roles materializes and stamps under mismatched defaults. Changing it does not relabel already-written partitions; regenerate the six views over any range that should reflect the new value. See [Audience stamping and the default](authentication.md#audience-stamping-and-the-default) |
 | `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` | No | Query engine memory budget in MB; unset means an unbounded pool (the local-development default). This **is** set in real deployments. Unlike `flight-sql-srv`, the daemon's merges and materialization run on the shared, unscoped pool — there is no per-query audit record here, so this budget is a process-wide ceiling rather than something attributable to one query. Merge scans open one reader per source file group by design (#1491) -- one reader total for the concatenating path, or one per input partition for the ordered sort-merge path -- so merge memory does not scale with host core count |
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent work, in MB; default 100 GB (DataFusion's own default), far larger than a typical Fargate container's local disk. Applies the same way as on `flight-sql-srv`: exceeding the cap fails whichever task's spill write pushes past it, process-wide and shared across all concurrent work, not necessarily the task that consumed most of the budget |
 
@@ -84,7 +84,7 @@ consolidated into coarser ones:
 | Every second | 1 s | Materialize the newest 1-second partitions. Skipped when the daemon is more than 10 s behind — the minute task backfills the gap. |
 | Every minute | 1 min | Materialize 1-minute partitions. |
 | pg_stats | 1 min | Sample the metadata Postgres's `pg_stat_*` views (see [below](#metadata-postgres-self-observability)). |
-| Every hour | 1 h | Retention cleanup (see below), then materialize 1-hour partitions. |
+| Every hour | 1 h | Retention cleanup (see below), the `blocks`/`streams`/`audience` integrity counts (see [below](#block_stream_process_id_mismatch)), then materialize 1-hour partitions. |
 | Every day | 1 day | Materialize 1-day partitions. |
 
 ### Retention
@@ -94,6 +94,52 @@ The hourly task performs cleanup automatically:
 - **Deletes lake data older than the retention horizon** — blocks, streams, and
   processes past the horizon are removed.
 - **Deletes expired temporary files** left behind by query execution.
+
+### Integrity counts (AbAC Stage 5b, #1518)
+
+Alongside retention cleanup, the hourly task also counts two `blocks`-row anomalies over the
+last hour, directly against Postgres. Both cost nothing on the ingestion hot path — that is
+precisely why they run here instead of at write time.
+
+#### `block_stream_process_id_mismatch`
+
+`count`, no tags: the number of `blocks` rows in the last hour whose `process_id` disagrees with
+their stream's own `process_id`. No longer security-critical under per-row audience stamping — a
+block's own `audience` column governs its label regardless of what `process_id` it claims — so
+this is a plain data-integrity signal. **Healthy baseline: a flat zero.** Every non-zero reading
+is a bug or an attack; a hard-reject at write time is a deferred follow-up pending data from this
+counter.
+
+#### `block_audience_mismatch_rows`
+
+`count`, no tags: the number of `blocks` rows in the last hour whose own `audience` disagrees
+with their stream's or process's `audience` — built from the same NULL-tolerant comparison the
+`blocks_view.rs` materialization-time exclusion predicate uses, so the two can never drift apart.
+A non-zero reading is **not necessarily a bug** — it may reflect a re-pointed ingestion
+credential — but it always means telemetry was silently dropped from `blocks` (and so from
+`log_entries`/`measures`/`log_stats` and every other view built from it) by that exclusion. A
+deployment should watch this metric read a flat zero for a representative period before trusting
+that the exclusion is only ever discarding attacker-injected blocks and not legitimate telemetry;
+a nonzero, non-attack reading is a sign to fix the underlying cause (e.g. stop re-pointing a
+credential's audience mid-stream) rather than to treat the drop as expected.
+
+Kept separate from, and never summed with, `block_audience_mismatch_excluded` below — both run in
+this same maintenance-role process, so an identically-named counter from both sites would land in
+the same process's `measures` stream with no tag to tell them apart, and any query summing them
+would be summing two incompatible quantities: this one is a live Postgres row count over the last
+hour, the other is a per-partition exclusion count at materialization time.
+
+#### `block_audience_mismatch_excluded`
+
+`count`, no tags: emitted from `MetadataPartitionSpec::write`, not from the hourly task — only
+when a `blocks` partition is actually written (never on a scheduled pass that decides nothing
+needs writing), naming the count of rows the audience-mismatch predicate excluded from that
+partition. It still **double-counts** across a materialization retry, or a fresh
+`CreateFromSource` re-write of a range whose source rows changed, since each such write re-runs
+the comparison — but not across a re-merge, which writes through the view's `PartitionMerger` and
+never calls `MetadataPartitionSpec::write`. So it is a "some write saw a mismatch" signal rather
+than a running total of distinct excluded blocks — trust `block_audience_mismatch_rows` above for
+sizing the drop.
 
 The retention horizon defaults to 90 days and is configurable via
 `--retention-days` or the `MICROMEGAS_RETENTION_DAYS` environment variable:

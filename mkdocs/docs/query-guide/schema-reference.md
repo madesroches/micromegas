@@ -44,7 +44,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | This process's own write audience -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -75,7 +75,7 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | This stream's own write audience (its own stamp, never derived from its `process_id`) -- see `processes.audience`; never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -135,7 +135,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.insert_time` | `Timestamp(Nanosecond)` | When process was inserted |
 | `processes.parent_process_id` | `Utf8` | Parent process identifier |
 | `processes.properties` | `Dictionary(Int32, Binary)` | Process properties (JSONB format) |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | This block's own write audience (its own stamp, never derived from its `process_id`/`stream_id`) -- see `processes.audience`; never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -171,7 +171,7 @@ Text-based log entries with levels and structured data.
 | `msg` | `Utf8` | Log message |
 | `properties` | `Dictionary(Int32, Binary)` | Log-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the block this log entry came from (the block's own stamp) -- see `processes.audience`; never `NULL` |
 
 #### Log Levels
 
@@ -214,7 +214,7 @@ Materialized view providing aggregated log statistics by process, minute, level,
 | `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
 | `target` | `Dictionary(Int32, Utf8)` | Module/target that generated the logs |
 | `count` | `Int64` | Number of log entries in this aggregation |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the blocks aggregated into this row (the blocks' own stamp -- rows are grouped separately per audience) -- see `processes.audience`; never `NULL` |
 
 **Key Features:**
 - Pre-aggregated by 1-minute intervals for efficient time-series queries
@@ -287,7 +287,7 @@ Numerical measurements and counters.
 | `value` | `Float64` | Metric value |
 | `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
 | `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
-| `audience` | `Dictionary(Int32, Utf8)` | The audience of the owning process (see `processes.audience`); never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | The audience of the block this measure came from (the block's own stamp) -- see `processes.audience`; never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -621,13 +621,16 @@ ORDER BY image_count DESC;
 ### Audience
 
 `audience` is a documented, stable column on `processes`, `streams`, `blocks`, `log_entries`,
-`log_stats`, and `measures` -- the audience of the owning process, written server-side from the
-authenticated ingestion credential, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` when the
-credential carried none. Never client-settable, and never `NULL`: a new process is stamped with
-its resolved audience explicitly at write time now, so `NULL` only ever arises for a row written
-before that write-side resolution shipped, or one written by the admin replication path -- and
-for those, the default is still applied where the audience is read out of the metadata database,
-so even such a row materializes under a real label.
+`log_stats`, and `measures`. On `processes`, `streams`, and `blocks` it is that row's own write
+audience -- written server-side from the authenticated ingestion credential, or the deployment's
+`MICROMEGAS_DEFAULT_AUDIENCE` when the credential carried none, and never derived from any other
+row (a block's own stamp is never borrowed from the `process_id`/`stream_id` it points at). On
+`log_entries`, `measures`, and `log_stats` it is the audience of the block the row came from,
+carried straight through. Never client-settable, and never `NULL` as read out through any of
+these views: a new row is stamped with its resolved audience explicitly at write time, so `NULL`
+only ever arises in the underlying Postgres column for a row registered before its ingestion
+binary reached schema v8 -- and for that row, the deployment default is applied where the
+audience is read out of the metadata database, so it still materializes under a real label.
 
 `Dictionary(Int32, Utf8)` on all six views -- it compares against string literals normally.
 

@@ -4,8 +4,8 @@
 //!  - `Parse`        → 400 (malformed protobuf, malformed gzip)
 //!  - `Database`     → 503 (transient — client should retry per OTLP/HTTP spec)
 //!  - `Storage`      → 503 (transient)
-//!  - `Denied`       → 403 (AbAC Stage 5, #1373: a conflicting re-registration under a
-//!    different audience)
+//!  - `Denied`       → 403 (AbAC Stage 5, #1373 and Stage 5b, #1518: a conflicting
+//!    process or stream re-registration under a different audience)
 //!
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
 //! in the axum layer stack before the request reaches the OtelError surface.
@@ -112,9 +112,11 @@ impl OtelError {
             Self::Parse { signal, message } => format!("parse error ({signal}): {message}"),
             Self::Database { signal, .. } => format!("database error ({signal})"),
             Self::Storage { signal, .. } => format!("storage error ({signal})"),
-            // Sanitized: no internal detail (audience labels, process ids) leaks to the client.
+            // Sanitized: no internal detail (audience labels, process/stream ids) leaks to the
+            // client. Covers both the process- and stream-side conflict guards (AbAC Stage 5
+            // §6, Stage 5b §5) -- either can produce this variant.
             Self::Denied { .. } => {
-                "write denied: process already registered under a different audience".to_string()
+                "write denied: already registered under a different audience".to_string()
             }
         }
     }
@@ -142,6 +144,20 @@ impl OtelError {
                 signal,
                 message: format!(
                     "process_id {process_id} was registered under audience {existing:?}, this \
+                     request carries {incoming:?}"
+                ),
+            },
+            // Reachable the same way: `register_otel_stream` runs the stream-side conflict
+            // guard (AbAC Stage 5b, #1518 §5), rejecting a same-`stream_id`, different-audience
+            // re-registration -- the stream-side mirror of the `AudienceConflict` arm above.
+            IngestionServiceError::StreamAudienceConflict {
+                stream_id,
+                existing,
+                incoming,
+            } => OtelError::Denied {
+                signal,
+                message: format!(
+                    "stream_id {stream_id} was registered under audience {existing:?}, this \
                      request carries {incoming:?}"
                 ),
             },

@@ -76,8 +76,9 @@ async fn push_and_insert_block(
     stream: &mut ThreadStream,
     process_info: &ProcessInfo,
     name: &'static str,
+    audience: &WriteAudience,
 ) -> Result<()> {
-    push_pairs_and_insert_block(ingestion, stream, process_info, name, 1).await
+    push_pairs_and_insert_block(ingestion, stream, process_info, name, 1, audience).await
 }
 
 /// Pushes `n_pairs` begin/end span pairs (so `2 * n_pairs` objects) into the current block, closes
@@ -91,6 +92,7 @@ async fn push_pairs_and_insert_block(
     process_info: &ProcessInfo,
     name: &'static str,
     n_pairs: usize,
+    audience: &WriteAudience,
 ) -> Result<()> {
     for _ in 0..n_pairs {
         let t0 = now();
@@ -117,7 +119,7 @@ async fn push_pairs_and_insert_block(
         .close();
     let encoded = block.encode_bin(process_info)?;
     ingestion
-        .insert_block(bytes::Bytes::from(encoded))
+        .insert_block(bytes::Bytes::from(encoded), audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block: {e}"))?;
     Ok(())
@@ -133,12 +135,13 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -147,12 +150,12 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Block 1: earlier in real (event) time.
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a", &audience).await?;
 
     // Block 2: later in real (event) time. No manufactured gap here -- `replace_block` (called
     // inside `push_and_insert_block`) captures the *new* (next) block's begin timestamp before
@@ -164,7 +167,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // 1's end and block 2's begin; deleting that workaround is this test's regression signal for
     // Part B's `max_sort_key_time`, which is what makes a real block-boundary overlap safe for the
     // `Concatenated` scan check without needing the gap at all.
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b", &audience).await?;
 
     // Force the two blocks into different 1-hour JIT insert-time segments -- rather than waiting
     // a real hour -- by pushing block 1's insert_time back. This is the cheap alternative the
@@ -445,12 +448,13 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -459,13 +463,13 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Block 1 (object_offset 0): registered first. Block 2 (object_offset 2): registered second.
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a").await?;
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_a", &audience).await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_b", &audience).await?;
 
     // Swap insert_time (only -- ticks and payloads are untouched) so block 2 (registered second)
     // is insert-time *earlier* than block 1 (registered first): an inversion straddling this
@@ -690,12 +694,13 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -704,13 +709,13 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Push 3 blocks (2 objects each).
     for name in ["span_0", "span_1", "span_2"] {
-        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name, &audience).await?;
     }
 
     // Deterministic event order (matching object_offset order: 0, 2, 4) and insert-time order
@@ -906,12 +911,13 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -920,13 +926,13 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Push 3 blocks (2 objects each).
     for name in ["span_0", "span_1", "span_2"] {
-        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name, &audience).await?;
     }
 
     // Blocks 0 and 1 share the exact same insert_time `t`; block 2 is later. Event order matches
@@ -1122,12 +1128,13 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1136,13 +1143,13 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Push 4 blocks (2 objects each).
     for name in ["span_0", "span_1", "span_2", "span_3"] {
-        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name, &audience).await?;
     }
 
     // Deterministic event order and insert order (0s, 1s, 2s, 3s) -- no inversions. Truncated to
@@ -1377,12 +1384,13 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1391,13 +1399,13 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Push 4 blocks (2 objects each) for run 1.
     for name in ["span_0", "span_1", "span_2", "span_3"] {
-        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name, &audience).await?;
     }
 
     // Force a deterministic event order (matching object_offset order: 0, 2, 4, 6) and
@@ -1551,7 +1559,7 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     // Push block 4 and give it an insert_time that sorts into the *middle* of the event-time
     // order (between blocks 1 and 2), straddling run 1's cut point at index 2 -- the scenario
     // Design §6 describes as legally shifting an earlier cut point.
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_4").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_4", &audience).await?;
     sqlx::query(
         "UPDATE blocks SET begin_ticks = 1500, end_ticks = 1600, insert_time = $1 \
          WHERE stream_id = $2 AND object_offset = 8",
@@ -1665,12 +1673,13 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1679,12 +1688,12 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
     // Only block 0 exists for run 1.
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_0").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_0", &audience).await?;
 
     // Truncated to microsecond precision (Postgres's timestamptz columns only store
     // microseconds), since the final assertion compares a stored, read-back boundary against
@@ -1806,8 +1815,8 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
     .with_context(|| "writing run 1 degenerate partition")?;
 
     // Push blocks 1 and 2 (deterministic event and insert order: t0+1s, t0+2s).
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_1").await?;
-    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_2").await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_1", &audience).await?;
+    push_and_insert_block(&ingestion, &mut stream, &process_info, "span_2", &audience).await?;
     for (object_offset, begin_ticks, end_ticks, insert_secs) in
         [(2i64, 1000i64, 2000i64, 1i64), (4, 2000, 3000, 2)]
     {
@@ -1917,12 +1926,13 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -1931,7 +1941,7 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
@@ -1943,7 +1953,15 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
     // identically-ranged row (same range, same count); that would wrongly skip the write this
     // test needs to reach `retire_partitions`.
     for (name, n_pairs) in [("span_0", 1usize), ("span_1", 2), ("span_2", 3)] {
-        push_pairs_and_insert_block(&ingestion, &mut stream, &process_info, name, n_pairs).await?;
+        push_pairs_and_insert_block(
+            &ingestion,
+            &mut stream,
+            &process_info,
+            name,
+            n_pairs,
+            &audience,
+        )
+        .await?;
     }
 
     // Deterministic event order (matching object_offset order), but all 3 blocks share the exact
@@ -2125,12 +2143,13 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -2139,7 +2158,7 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
     let stream_info = make_stream_info(&stream);
     let stream_body = bytes::Bytes::from(encode_cbor(&stream_info)?);
     ingestion
-        .insert_stream(stream_body)
+        .insert_stream(stream_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
@@ -2148,7 +2167,7 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
     // regardless, but a round hour boundary keeps the math simple).
     let base_hour = (Utc::now() - TimeDelta::hours(10)).duration_trunc(TimeDelta::hours(1))?;
     for name in ["span_0", "span_1", "span_2", "span_3"] {
-        push_and_insert_block(&ingestion, &mut stream, &process_info, name).await?;
+        push_and_insert_block(&ingestion, &mut stream, &process_info, name, &audience).await?;
     }
     for (i, (object_offset, begin_ticks, end_ticks)) in [
         (0i64, 0i64, 1000i64),

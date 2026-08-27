@@ -156,8 +156,9 @@ telemetry-ingestion-srv --disable-auth
     access to the server: it flips every session from the internal `ReadScope::All` marker to
     `ReadScope::Audiences`, which activates query-time audience filtering across both enforcement
     prongs. **Prong A** (`OwnershipRewrite`, AbAC Stage 2) injects an audience predicate into
-    every `MaterializedView`-backed query plan, so a caller only sees processes whose
-    (client-asserted) `micromegas.audience` property resolves to one of their own audiences.
+    every `MaterializedView`-backed query plan, so a caller only sees rows whose own per-row
+    `audience` column (`processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats` —
+    see the per-row stamping paragraph below) resolves to one of their own audiences.
     **Prong B** (`AudienceGuard`, AbAC Stage 3) covers five arg-addressed functions —
     `view_instance` joins `process_spans`, `perfetto_trace_chunks`, `parse_block`, and
     `get_payload` to close a cost/availability residual (#1486), not because Prong A can't reach
@@ -178,21 +179,24 @@ telemetry-ingestion-srv --disable-auth
     guard otherwise provides simply doesn't apply to a view set an operator has opted into that
     allowlist.
 
-    **`audience` is now a physical, non-nullable column on `blocks`, `processes`, `streams`,
-    `log_entries`, `measures`, and `log_stats` (#1482)** — extracted once from Postgres at write
-    time and propagated structurally into every downstream view, the same way `properties`
-    already does. There is no more `MICROMEGAS_UNSTAMPED_AUDIENCE` knob to configure: a credential
-    with no bound audience is stamped with the resolved deployment default explicitly at write
-    time now (see [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)); only a legacy
-    row, or one written by the admin replication path, keeps no property at all, and every site
-    that reads an audience out of Postgres resolves *that* to `MICROMEGAS_DEFAULT_AUDIENCE`,
-    which is what makes the column non-nullable either way. **Prong A** filters those six
-    views directly on the column; the `net_spans`/`otel_spans`/`images` view sets (which don't
-    carry the column yet) keep the semi-join through `processes`, and `async_events`/
-    `thread_spans` keep their literal `EXISTS` shapes. **Prong B**'s `list_partitions()`
-    `'global'`-row rule shows a row when its view set is on `MICROMEGAS_PUBLIC_VIEW_SETS` or the
-    caller passes the lakehouse admin gate (the same boolean that already governs the eight
-    admin-gated functions below) — not a query-time audience-in-scope check.
+    **`audience` is a physical column on `processes`, `streams`, and `blocks` (schema v8, #1518),
+    each carrying its own row's own stamp** — the credential that wrote *that* row, never derived
+    from the `process_id`/`stream_id` it points at. `log_entries`, `measures`, and `log_stats`
+    carry the owning block's stamp straight through, and are non-nullable at that point:
+    `blocks_view`'s materialization resolves a legacy, pre-v8 NULL column to
+    `MICROMEGAS_DEFAULT_AUDIENCE` via `COALESCE` before it ever reaches those views. There is no
+    `MICROMEGAS_UNSTAMPED_AUDIENCE` knob to configure: a credential with no bound audience is
+    stamped with the resolved deployment default explicitly at write time (see
+    [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)); only a row registered before
+    its ingestion binary reached schema v8 keeps a NULL column, and every site that reads an
+    audience out of Postgres resolves *that* to `MICROMEGAS_DEFAULT_AUDIENCE`. **Prong A** filters
+    those six views directly on the column; the `net_spans`/`otel_spans`/`images` view sets
+    (which don't carry the column) keep the semi-join through `processes`, and
+    `async_events`/`thread_spans` keep their literal `EXISTS` shapes. **Prong B**'s
+    `list_partitions()` `'global'`-row rule shows a row when its view set is on
+    `MICROMEGAS_PUBLIC_VIEW_SETS` or the caller passes the lakehouse admin gate (the same boolean
+    that already governs the eight admin-gated functions below) — not a query-time
+    audience-in-scope check.
 
     **API keys and no-`email`-claim OIDC tokens are covered by `public` alone, with no second
     knob.** Under the grant-map model (see [Audiences and Grants](#audiences-and-grants) below),
@@ -202,16 +206,16 @@ telemetry-ingestion-srv --disable-auth
     `public` (see [Ingestion](ingestion.md#environment-variables)) restores
     visibility for every caller kind that never binds an audience of its own.
 
-    **The two prongs read different copies of `micromegas.audience`, with different freshness.**
+    **The two prongs read different copies of the `audience` column, with different freshness.**
     Prong A reads a daemon-materialized parquet snapshot (unchanged from Stage 2 — a process the
     maintenance role hasn't caught up on is invisible to everyone, including its owner); Prong B
     reads Postgres directly, so it is fresher for a just-ingested process, but denies (rather than
     falls back to the stale snapshot) once retention has deleted a process's Postgres row even if
-    a merged/compacted lakehouse partition of its data still exists. Both copies are now
-    non-null and write-once, so the prongs can never disagree about the *value* — the remaining
-    skew is purely this materialization-lag/retention-lag timing, not a second interpretation of
-    missing data. See the CHANGELOG's AbAC Stage 3 entry for the full mechanism and its accepted
-    trade-offs.
+    a merged/compacted lakehouse partition of its data still exists. Both copies resolve a
+    real row's own stamp the same way, so the prongs can never disagree about the *value* for a
+    row either has stamped — the remaining skew is purely this materialization-lag/retention-lag
+    timing, not a second interpretation of missing data. See the CHANGELOG's AbAC Stage 3 entry
+    for the full mechanism and its accepted trade-offs.
 
     **Eight admin-gated lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
     `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, and the
@@ -231,29 +235,31 @@ telemetry-ingestion-srv --disable-auth
 ### Audience stamping and the default {#audience-stamping-and-the-default}
 
 The read-side filter above is only trustworthy because of what happens on the write side
-(ingestion, #1373/#1482/#1519): `micromegas.audience` is **server-written from the authenticated
-ingestion credential**, never trusted from the client payload. Ingestion strips any
-client-supplied `micromegas.*` property and stamps `micromegas.audience` before the process's
-first block is ever materialized. A credential with a bound audience (a DB-backed
-`ingestion_api_keys` row) is stamped with that; one with none — an env-keyring key, an OIDC
-token, or no auth provider at all — resolves to the deployment default and is stamped with it
-explicitly, the same as any other audience. See
+(ingestion, #1373/#1482/#1519/#1518): each of `processes`, `streams`, and `blocks` carries its
+own `audience` **column**, server-written from the authenticated ingestion credential, never
+trusted from the client payload. Ingestion strips any client-supplied `micromegas.*` property
+(there is no property to re-assert as a stamp any more — the audience is a physical column) and
+stamps every row it writes at insert time — a block's or a stream's own stamp is the credential
+that wrote *that* row, never derived from the `process_id`/`stream_id` it points at. A credential
+with a bound audience (a DB-backed `ingestion_api_keys` row) is stamped with that; one with none —
+an env-keyring key, an OIDC token, or no auth provider at all — resolves to the deployment default
+and is stamped with it explicitly, the same as any other audience. See
 [Ingestion → What gets stamped](ingestion.md#what-gets-stamped) for the full mechanism,
 credential-by-credential.
 
-**A pre-existing row with no stamp is read as the deployment default.** Every process registered
-through the HTTP ingestion path now carries a real `micromegas.audience` property, so this
-applies only to a row written before that write-side resolution shipped, or one written by the
-admin `bulk_ingest`/replication path (which writes a source lake's properties verbatim, stamping
-nothing of its own). `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) is applied at each of the
-three places the audience is read out of Postgres — the `blocks` view's materialization, the
-per-process JIT path, and Prong B's id lookups — so such a row still has a real, non-null
-audience everywhere it is enforced, without anything being written back to `processes`. Set it on
-**every role that builds a lakehouse — including ingestion now**: FlightSQL, maintenance, the
-monolith, and ingestion. The maintenance role is the one that bakes the value into partitions, and
-ingestion is the one that stamps new rows with it, so a deployment that sets the knob on only
-some of these roles gets new processes physically stamped under one label while legacy rows keep
-reading under another.
+**A pre-existing row with no stamp is read as the deployment default.** Every process, stream, and
+block registered through the HTTP ingestion path now carries a real, non-NULL `audience` column,
+so this applies only to a row registered before its ingestion binary reached schema v8 (nullable,
+no backfill by design — see the CHANGELOG's Stage 5b entry) — admin `bulk_ingest`/replication now
+hard-fails on a missing `audience` column rather than ever writing one with none.
+`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) is applied at each of the three places the
+audience is read out of Postgres — the `blocks` view's materialization, the per-process JIT path,
+and Prong B's id lookups — so such a row still has a real, non-null audience everywhere it is
+enforced, without anything being written back to it. Set it on **every role that builds a
+lakehouse — including ingestion now**: FlightSQL, maintenance, the monolith, and ingestion. The
+maintenance role is the one that bakes the value into partitions, and ingestion is the one that
+stamps new rows with it, so a deployment that sets the knob on only some of these roles gets new
+rows physically stamped under one label while legacy rows keep reading under another.
 
 !!! warning "Changing the default is not a routine operation"
     A partition keeps the default that was configured when it was materialized. Changing
@@ -261,8 +267,9 @@ reading under another.
     — regenerate the six views (see the
     [Maintenance](maintenance.md) role's `regenerate_partitions`) over any range that should
     reflect the new value. This regeneration only ever relabels rows that carry **no** stamp
-    (legacy rows, and rows from the admin replication path) — it has never relabelled a row that
-    was actually stamped, and still doesn't. Two consequences follow from the same rule:
+    (a legacy row registered before its ingestion binary reached schema v8) — it has never
+    relabelled a row that was actually stamped, and still doesn't. Two consequences follow from
+    the same rule:
     partitions materialized on either side of a change disagree about such a row, and
     `FROM log_entries` can disagree with `view_instance('log_entries', <pid>)` for it, since the
     two are materialized at different times. Prong B is not affected — it reads Postgres live, so
@@ -294,50 +301,74 @@ Two consequences worth knowing before you flip this stage on:
   two audiences, and unrelated to the upgrade-time re-derivation above.
 - **Client self-stamping stops taking effect.** Before Stage 5, a native client setting its own
   `micromegas.audience` property was the *only* thing that stamped a process at all. That
-  self-stamp is now stripped and replaced by the credential's authenticated audience, or the
-  deployment default when the credential carries none (an env-keyring key or an OIDC token). A
-  producer that relied on self-stamping while authenticating with one of those now gets the
-  deployment default instead of its own asserted label. To keep its own label, move it onto a DB
-  ingestion key bound to that audience.
+  self-stamp is now stripped (there is no property to re-assert any more — the stamp is a
+  physical column) and replaced by the credential's authenticated audience, or the deployment
+  default when the credential carries none (an env-keyring key or an OIDC token). A producer that
+  relied on self-stamping while authenticating with one of those now gets the deployment default
+  instead of its own asserted label. To keep its own label, move it onto a DB ingestion key bound
+  to that audience.
 
-!!! warning "Residual gap: cross-audience write injection (tracked, not yet closed)"
-    Process *registration* (`insert_process`/`register_otel_process`) now rejects a
-    same-`process_id`, different-audience re-registration outright (§6), closing the OTLP
-    process-squatting confidentiality gap described below. What's still open is appending to an
-    *existing* process a credential didn't create: `insert_stream`/`insert_block` accept any
-    `process_id`/`stream_id` unconditionally, so a credential bound to audience A that discovers a
-    `process_id`/`stream_id` belonging to audience B can still append events to B's process —
-    events that then inherit B's stamped audience. This grants no *read* power (reading B still
-    requires a read grant on B), so it is an integrity-only gap, tracked as a follow-up issue
-    rather than closed by #1373 (it depends on the same cache layer AbAC Stage 3's Prong B needs).
+**Process registration is confidentiality-sensitive, and this is closed.** `processes` is a
+single table shared by the native and OTLP paths, and the OTLP `process_id` derivation formula is
+public (see [OTLP Ingestion](../otlp/index.md)). Any ingestion credential could otherwise
+pre-register (via the native `insert_process` path) the exact `process_id` a victim audience's
+OTLP producer would later derive; the genuine producer's stream/blocks would then silently land
+on a row stamped with the squatter's audience, leaking that audience's data to the squatter.
+`insert_process` and `register_otel_process` both reject a same-`process_id`, different-audience
+re-registration with a 403 (§6) -- since a stamped process's audience is immutable (there is no
+`UPDATE processes` path anywhere in the codebase), the victim's producer can never successfully
+register that `process_id` again until an operator manually deletes the squatted row (e.g.
+`DELETE FROM processes WHERE process_id = ...`). The maintenance daemon's automatic
+`delete_empty_processes` sweep (`rust/analytics/src/delete.rs`) only reclaims it on its own once
+the squatted row has no streams and the retention window has elapsed -- a squatter that also
+writes a stream keeps the row alive indefinitely. This closes the gap for a squatted row's
+write-side audience too, not only an already-stamped one: the guard resolves an existing row with
+a NULL `audience` column to the deployment default the same way every reader does, then compares
+-- so a squatter claiming a different audience against a legacy or freshly pre-registered
+unstamped row is rejected exactly the same way as against a stamped one. `check_stream_audience_conflict`
+(schema v8, #1518, §5) closes the equivalent gap for `streams`: a stream re-pointed to a
+different credential's audience is now rejected at the next `insert_stream`/`register_otel_stream`
+call for that `stream_id`, rather than silently keeping its original stamp while later blocks on
+it get dropped by the materialization-time exclusion below.
 
-    Process registration itself is confidentiality-sensitive, not merely an integrity concern:
-    `processes` is a single table shared by the native and OTLP paths, and the OTLP `process_id`
-    derivation formula is public (see [OTLP Ingestion](../otlp/index.md)). Before this guard, any
-    ingestion credential could pre-register (via the native `insert_process` path) the exact
-    `process_id` a victim audience's OTLP producer would later derive; the genuine producer's
-    stream/blocks would then silently land on a row stamped with the squatter's audience, leaking
-    that audience's data to the squatter. `insert_process` and `register_otel_process` both now
-    reject such a conflicting re-registration with a 403 -- since a stamped process's audience is
-    immutable (there is no `UPDATE processes` path anywhere in the codebase), the victim's
-    producer can never successfully register that `process_id` again until an operator manually
-    deletes the squatted row (e.g. `DELETE FROM processes WHERE process_id = ...`). The
-    maintenance daemon's automatic `delete_empty_processes` sweep
-    (`rust/analytics/src/delete.rs`) only reclaims it on its own once the squatted row has no
-    streams and the retention window has elapsed -- a squatter that also writes a stream keeps
-    the row alive indefinitely. **This closes the gap for a squatted row's write-side audience
-    too, not only an already-stamped one (#1519)**: the guard now resolves an existing row with
-    no `micromegas.audience` property to the deployment default the same way every reader does,
-    then compares -- so a squatter claiming a different audience against a legacy or freshly
-    pre-registered unstamped row is rejected exactly the same way as against a stamped one.
+**No retro-stamp, still.** Either guard compares against the existing row's *resolved* audience
+but never writes anything back: a matching re-registration of a row with a NULL `audience` column
+remains `Ok` and leaves it unstamped. This is no longer a gap a squatter can exploit, though --
+since every process/stream registered through this HTTP path is now stamped explicitly (see
+[Ingestion → What gets stamped](ingestion.md#what-gets-stamped)), an unstamped row only ever
+arises from data written before its ingestion binary reached schema v8, never from a squatter
+racing a victim's registration.
 
-    **No retro-stamp, still.** The guard compares against the existing row's *resolved* audience
-    but never writes anything back: a matching re-registration of a row with no
-    `micromegas.audience` property remains `Ok` and leaves it unstamped. This is no longer a gap
-    a squatter can exploit, though -- since every process registered through this HTTP path is
-    now stamped explicitly (see [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)),
-    an unstamped row only ever arises from data written before that resolution shipped, or from
-    the admin replication path, never from a squatter racing a victim's registration.
+!!! warning "Residual gap: cross-audience write injection, narrower than before (tracked, not yet closed)"
+    Every `blocks`/`streams`/`processes` row, and every view derived straight from them
+    (`log_entries`, `measures`, `log_stats`, `processes_view`, `streams_view`), now carries its
+    own `audience` stamp — a block whose own stamp disagrees with the `streams`/`processes` row
+    it points at is excluded from materialization entirely (schema v8, #1518, §4), so an
+    attacker's block never surfaces under the victim's label, or under its own label pointing at
+    the victim's `process_id`, in any of those views. What's still open is narrower than the
+    original gap:
+
+    - **Five process/stream-anchored view sets** — `net_spans`, `otel_spans`, `images`,
+      `async_events`, `thread_spans` — and **the per-process JIT `view_instance` path** still
+      resolve their audience *label* through the owning process's/stream's row rather than a
+      genuine per-row column of their own. The cross-audience *injection* scenario (an attacker's
+      block naming a victim's `process_id`/`stream_id`) is closed for both, as a side effect of
+      where the materialization-time exclusion above lives — except against a victim whose
+      `processes`/`streams` row is itself a legacy, pre-v8 NULL-audience row (next bullet).
+    - **The NULL-anchor window.** A `processes`/`streams` row registered before its ingestion
+      binary reached schema v8 keeps a NULL `audience` column for its entire remaining life (rows
+      are immutable, and there is no backfill). The materialization-time exclusion's NULL-tolerant
+      form lets a mismatched block through unchecked against such a row, for as long as it exists
+      — deliberately, since a strict comparison would instead permanently drop that row's
+      legitimate post-upgrade telemetry. This is an accepted, bounded limitation over
+      already-public legacy data (everything in the lake before this stage is public — see the
+      CHANGELOG's Stage 5b entry), not an open item to close on its own; it is bounded by bringing
+      **every** ingestion replica to schema v8 (not just one) before relying on audience
+      separation during a rolling upgrade, and shrinks as legacy rows age out under retention.
+
+    There is no in-product enforcement knob left for either surface; the mitigation is
+    operational -- provision only audience-bound DB-backed ingestion credentials, and don't run
+    ingestion with an env-keyring key, OIDC, or `--disable-auth` alongside them.
 
 ## Audiences and Grants
 
@@ -389,10 +420,9 @@ mint authority. Selectors:
   while `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is now
   stamped with the knob's value at write time (see
   [Audience stamping and the default](#audience-stamping-and-the-default)),
-  with only a pre-existing unstamped row — one written before that write-side
-  resolution shipped, or by the admin replication path — still resolved to it
-  at query time. Pointing the knob at another label puts all of that under
-  that label's grants instead.
+  with only a pre-existing unstamped row — one registered before its ingestion
+  binary reached schema v8 — still resolved to it at query time. Pointing the
+  knob at another label puts all of that under that label's grants instead.
 - **There is no self-audience rule.** A caller is never granted an audience
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary

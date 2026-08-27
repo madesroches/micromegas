@@ -145,10 +145,17 @@ async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
         .expect("create_physical_plan");
     let plan_str = displayable(plan.as_ref()).indent(true).to_string();
 
+    // `GROUP BY` gained a fifth key, `audience` (AbAC Stage 5b, #1518, §4), which isn't part of
+    // the declared `(time_bin, process_id, level, target)` scan ordering -- DataFusion's
+    // aggregate-ordering selection (`indices.len() != groupby_exprs.len()` in
+    // `datafusion-physical-plan`) now plans this as `PartiallySorted` rather than fully `Sorted`.
+    // Both are still a streaming aggregation with no blocking sort; the assertion that actually
+    // matters is the absence of `SortExec` below.
     assert!(
-        plan_str.contains("ordering_mode=Sorted"),
+        plan_str.contains("ordering_mode=Sorted")
+            || plan_str.contains("ordering_mode=PartiallySorted"),
         "expected order-aware aggregation over the declared (time_bin, process_id, level, target) \
-         ordering, got:\n{plan_str}"
+         ordering (Sorted or PartiallySorted, given the added `audience` GROUP BY key), got:\n{plan_str}"
     );
     assert!(
         !plan_str.contains("SortExec"),

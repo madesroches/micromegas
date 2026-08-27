@@ -1280,14 +1280,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
     }
 
     /// `bulk_ingest` (routed here from `CommandStatementIngest`) is a replication/administrative
-    /// API, not an ordinary analytics write path: it writes row properties -- including
-    /// `micromegas.audience` on `processes` rows -- verbatim, with none of the server-side
-    /// stamping or reserved-namespace stripping the HTTP ingestion paths apply. Gating this RPC
-    /// on `is_admin` is what keeps that verbatim write safe: an admin-run replication tool
-    /// re-ingesting rows already stamped at their origin lake is exactly the case the docs
-    /// describe (`mkdocs/docs/query-guide/python-api.md`), while an ordinary authenticated
-    /// analytics client must not be able to set `micromegas.audience` directly (#1373, AbAC
-    /// Stage 5).
+    /// API, not an ordinary analytics write path: it writes the authoritative `audience` column
+    /// on `processes`/`streams`/`blocks` rows -- and every other column, including properties --
+    /// verbatim, with none of the server-side stamping or reserved-namespace stripping the HTTP
+    /// ingestion paths apply (AbAC Stage 5b, #1518, §3: a missing `audience` column is now a
+    /// hard error, so this path either writes a source lake's real per-row stamps or fails
+    /// outright, never a silent default). Gating this RPC on `is_admin` is what keeps that
+    /// verbatim write safe -- a strictly stronger capability than writing a mere property ever
+    /// was: an admin-run replication tool re-ingesting rows already stamped at their origin lake
+    /// is exactly the case the docs describe (`mkdocs/docs/query-guide/python-api.md`), while an
+    /// ordinary authenticated analytics client must not be able to set the `audience` column
+    /// directly (#1373, AbAC Stage 5).
     #[span_fn]
     async fn do_put_statement_ingest(
         &self,

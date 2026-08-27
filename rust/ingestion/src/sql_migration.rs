@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 7;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 8;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -209,6 +209,69 @@ pub async fn upgrade_data_lake_schema_v7(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 8.
+/// Adds the per-row `audience` column to `processes`, `streams`, and `blocks` (#1518, AbAC Stage
+/// 5b): the write audience the row was actually stamped with at insert time, replacing the old
+/// `micromegas.audience` property carried on `processes` alone. Nullable, no `DEFAULT`, no
+/// backfill -- a NULL column means the row predates this stage and resolves to the deployment's
+/// `MICROMEGAS_DEFAULT_AUDIENCE` at read time, exactly as an unstamped row does today. A `DEFAULT`
+/// would let a not-yet-upgraded writer keep inserting rows that silently take a label, the same
+/// reason v6 refused one.
+///
+/// The three `CHECK` constraints are added `NOT VALID`, deliberately unlike v6's validated
+/// `CHECK` on `ingestion_api_keys`: a validated `CHECK` folded into (or following) `ADD COLUMN`
+/// puts the table on Postgres's `ATRewriteTables` validation path, which scans every existing row
+/// under `ACCESS EXCLUSIVE` before the `ALTER TABLE` commits -- exactly the full-table
+/// lock-and-scan the v3 migration goes out of its way to avoid for `blocks`
+/// (`CREATE UNIQUE INDEX CONCURRENTLY`, run outside any transaction). `NOT VALID` skips that scan:
+/// the constraint applies to every row written from this point on (`WriteAudience::new` already
+/// validates the charset in Rust before any row reaches SQL) while existing rows are simply not
+/// checked. `ingestion_api_keys_audience_name`'s validated `CHECK` is a precedent for a small,
+/// operator-populated table where the scan cost doesn't matter; it does not apply unmodified to
+/// `blocks`, the largest table in the lake.
+///
+/// No index: nothing queries Postgres *by* audience -- Prong B looks rows up by primary key and
+/// projects the column, so an index on the hot `blocks` table would be pure write cost.
+///
+/// `sql_telemetry_db.rs`'s `create_tables` (the v1 shape) is not touched: a fresh database is
+/// created at v1 and then walks every upgrade in turn, so adding the column there too would
+/// double-apply it.
+pub async fn upgrade_data_lake_schema_v8(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute("ALTER TABLE processes ADD COLUMN audience VARCHAR(255);")
+        .await
+        .with_context(|| "adding column audience to processes table")?;
+    tr.execute("ALTER TABLE streams ADD COLUMN audience VARCHAR(255);")
+        .await
+        .with_context(|| "adding column audience to streams table")?;
+    tr.execute("ALTER TABLE blocks ADD COLUMN audience VARCHAR(255);")
+        .await
+        .with_context(|| "adding column audience to blocks table")?;
+    tr.execute(
+        "ALTER TABLE processes ADD CONSTRAINT processes_audience_name \
+         CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;",
+    )
+    .await
+    .with_context(|| "adding audience-name CHECK constraint on processes")?;
+    tr.execute(
+        "ALTER TABLE streams ADD CONSTRAINT streams_audience_name \
+         CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;",
+    )
+    .await
+    .with_context(|| "adding audience-name CHECK constraint on streams")?;
+    tr.execute(
+        "ALTER TABLE blocks ADD CONSTRAINT blocks_audience_name \
+         CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;",
+    )
+    .await
+    .with_context(|| "adding audience-name CHECK constraint on blocks")?;
+    tr.execute("UPDATE migration SET version=8;")
+        .await
+        .with_context(|| "updating data lake schema version to 8")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -333,6 +396,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v7");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v7(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 7 == current_version {
+        info!("upgrading data_lake_schema to v8");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v8(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

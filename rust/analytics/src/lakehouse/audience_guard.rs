@@ -13,25 +13,29 @@
 //!
 //! ## One cache, one question
 //!
-//! [`AudienceIndex`] answers exactly one question, for three id kinds ([`IdKind`]): which
-//! audience is stamped on the process that owns this id? It resolves from **Postgres** (the
-//! origin of `micromegas.audience`), by primary-key point query -- fresher and independent of
-//! materialization, unlike [`super::ownership_rewrite::OwnershipRewrite`], which reads a
-//! daemon-materialized snapshot (see the plan's §11 for the consequences of the two prongs
-//! reading different copies).
+//! [`AudienceIndex`] answers exactly one question, for three id kinds ([`IdKind`]): what
+//! audience is *this id's own row* stamped with (AbAC Stage 5b, #1518, §1 -- a process's for
+//! [`IdKind::Process`], a block's own for [`IdKind::Block`], a process's or a stream's own for
+//! [`IdKind::ProcessOrStream`])? It resolves from **Postgres**, by a single-table,
+//! primary-key point query per row kind -- fresher and independent of materialization, unlike
+//! [`super::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot
+//! (see the plan's §11 for the consequences of the two prongs reading different copies).
 //!
 //! ## Fail-closed
 //!
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
 //! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
-//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more
-//! (#1482): a process registered through the HTTP ingestion path always carries a
-//! `micromegas.audience` property (#1519 -- a credential with no bound audience is stamped with
-//! the resolved deployment default explicitly); only a legacy row, or one written by the admin
-//! `bulk_ingest`/replication path, keeps no property in Postgres, and `owner_query_sql`'s
-//! `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every *existing* id has a
-//! real owning audience either way. `Unknown` therefore means "no such row" -- deny, on
-//! the same fail-closed reasoning as before. An id ambiguous between a `process_id` and a `stream_id`
+//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more:
+//! a process/stream/block registered through the HTTP ingestion path always carries a real,
+//! non-NULL `audience` column (#1519 -- a credential with no bound audience is stamped with the
+//! resolved deployment default explicitly); only a legacy, pre-v8 row keeps a NULL column, and
+//! `owner_query_sql`'s `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every
+//! *existing* id has a real owning audience either way. `Unknown` therefore means "no such row"
+//! -- deny, on the same fail-closed reasoning as before. One behaviour change from before #1518:
+//! since each arm now reads its own table directly rather than joining through `processes`, a
+//! block or stream whose `process_id` no longer resolves (retention swept it, or it hasn't
+//! arrived yet) resolves to *its own* stamp instead of falling through to `Unknown` -- see
+//! `owner_query_sql`'s doc comment. An id ambiguous between a `process_id` and a `stream_id`
 //! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
 //! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
 //! denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`] map it to a query
@@ -45,7 +49,6 @@
 //! reason so an operator can tell the two apart; the client cannot.
 
 use super::read_scope::{CallerContext, ReadScope};
-use crate::audience::AUDIENCE_PROPERTY;
 use anyhow::Context;
 use datafusion::common::plan_err;
 use datafusion::error::DataFusionError;
@@ -149,18 +152,21 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
         .collect()
 }
 
-/// The SQL shape for each [`IdKind`]. `LEFT JOIN LATERAL` (not an inner `unnest` in the `FROM`
-/// list) keeps a row in the result even when its `properties` carry no `AUDIENCE_PROPERTY` --
-/// no longer the ordinary case since #1519 stamps a credential with no bound audience explicitly
-/// at write time; a missing property is now legacy-row or admin-replication-path only.
-/// `COALESCE` then resolves that to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` (#1482), so
-/// such a process has a real owning audience here rather than a distinct "unstamped" state. The
-/// `LEFT JOIN` still matters: an inner unnest would drop the row entirely, and
-/// [`merge_owner_rows`] would then report "no such id" for an id that does exist -- the same
-/// verdict (deny) reached by the wrong reasoning.
+/// The SQL shape for each [`IdKind`] (AbAC Stage 5b, #1518, §4): every arm reads the row's own
+/// `audience` column directly -- a single-table point query on a primary-key-indexed column, no
+/// join and no `unnest` any more. `IdKind::Block` resolves off `blocks.audience` alone (the
+/// block's own stamp, never derived from the `process_id` it claims); the `ProcessOrStream` arm
+/// resolves `processes.audience`/`streams.audience` directly, each on its own table.
+///
+/// One behaviour change worth noting: a block or stream whose `process_id` no longer has a
+/// `processes` row (retention swept it, or it hasn't arrived yet) previously resolved to
+/// [`OwnerAudience::Unknown`] via the (now-removed) join to `processes`; it now resolves to its
+/// own stamp. That is the correct answer under the precedence rule in `crate::audience`'s module
+/// doc, and it makes `get_payload`/`parse_block` work on orphaned-but-present blocks.
 ///
 /// `$1` is the batch of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one
-/// query; `$2` is [`AUDIENCE_PROPERTY`]; `$3` is the default audience.
+/// query; `$2` is the default audience (the property-name bind this used to need is gone, so the
+/// default moves from `$3` to `$2`).
 ///
 /// This site reads Postgres live, so it always resolves the *current* default -- unlike Prong A,
 /// which reads whatever default was configured when the partition was materialized. The two
@@ -168,39 +174,29 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 fn owner_query_sql(kind: IdKind) -> &'static str {
     match kind {
         IdKind::Process => {
-            "SELECT p.process_id AS id, COALESCE(a.value, $3) AS audience
-             FROM processes p
-             LEFT JOIN LATERAL (
-                 SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
-             ) a ON TRUE
-             WHERE p.process_id = ANY($1::uuid[])"
+            "SELECT process_id AS id, COALESCE(audience, $2) AS audience
+             FROM processes WHERE process_id = ANY($1::uuid[])"
         }
         IdKind::Block => {
-            "SELECT b.block_id AS id, COALESCE(a.value, $3) AS audience
-             FROM blocks b
-             JOIN processes p ON p.process_id = b.process_id
-             LEFT JOIN LATERAL (
-                 SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
-             ) a ON TRUE
-             WHERE b.block_id = ANY($1::uuid[])"
+            "SELECT block_id AS id, COALESCE(audience, $2) AS audience
+             FROM blocks WHERE block_id = ANY($1::uuid[])"
         }
         IdKind::ProcessOrStream => {
-            "SELECT p.process_id AS id, COALESCE(a.value, $3) AS audience
-             FROM processes p
-             LEFT JOIN LATERAL (
-                 SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
-             ) a ON TRUE
-             WHERE p.process_id = ANY($1::uuid[])
+            "SELECT process_id AS id, COALESCE(audience, $2) AS audience
+             FROM processes WHERE process_id = ANY($1::uuid[])
              UNION ALL
-             SELECT s.stream_id AS id, COALESCE(a.value, $3) AS audience
-             FROM streams s
-             JOIN processes p ON p.process_id = s.process_id
-             LEFT JOIN LATERAL (
-                 SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1
-             ) a ON TRUE
-             WHERE s.stream_id = ANY($1::uuid[])"
+             SELECT stream_id AS id, COALESCE(audience, $2) AS audience
+             FROM streams WHERE stream_id = ANY($1::uuid[])"
         }
     }
+}
+
+/// Exposes [`owner_query_sql`] to integration tests, which otherwise can't reach a private
+/// function -- mirrors `web_ingestion_service.rs`'s `check_process_audience_conflict_for_test`
+/// naming convention. Intended for testing only.
+#[doc(hidden)]
+pub fn owner_query_sql_for_test(kind: IdKind) -> &'static str {
+    owner_query_sql(kind)
 }
 
 async fn fetch_owner_rows(
@@ -211,7 +207,6 @@ async fn fetch_owner_rows(
 ) -> anyhow::Result<Vec<(Uuid, Option<String>)>> {
     let rows = sqlx::query(owner_query_sql(kind))
         .bind(ids)
-        .bind(AUDIENCE_PROPERTY)
         .bind(default_audience)
         .fetch_all(pool)
         .await

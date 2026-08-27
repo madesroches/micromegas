@@ -129,13 +129,14 @@ pub(crate) async fn write_blocks(
                 prepared.process_id,
                 vec![tag.clone()],
                 format,
+                audience,
             )
             .await
             .map_err(|e| OtelError::from_ingestion(e, signal))?;
 
         // Write the block.
         service
-            .insert_block_typed(prepared.block)
+            .insert_block_typed(prepared.block, audience)
             .await
             .map_err(|e| OtelError::from_ingestion(e, signal))?;
 

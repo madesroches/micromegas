@@ -44,6 +44,29 @@ pub struct MetadataPartitionSpec {
     /// The sort guarantee this partition's rows will carry, per the caller's `data_sql`'s
     /// `ORDER BY` (e.g. `Some(["insert_time"])` for `BlocksView`). Recorded on `Partition` as-is.
     pub sort_order: Option<Vec<String>>,
+    /// The unfiltered-vs-filtered audience-mismatch diagnostic query text (AbAC Stage 5b, #1518,
+    /// §4), attached by `BlocksView::make_batch_partition_spec` and `None` for every other view
+    /// built on this module (in practice, the only other view). Binds `$1`/`$2` (the insert
+    /// range) exactly like `data_sql` and `source_count_query`, but never `$3` -- it counts rows,
+    /// not the resolved audience label. Run inside [`Self::write`], not
+    /// `make_batch_partition_spec`: `materialize_partition` calls
+    /// `view.make_batch_partition_spec(...)` before `verify_overlapping_partitions`'s
+    /// `PartitionCreationStrategy::Abort` early return, and every scheduled maintenance pass
+    /// over an insert range calls that regardless of whether anything ends up written -- running
+    /// the comparison there would re-log/re-increment on every such pass, including ones that
+    /// abort. Running it in `write` instead scopes the signal to partitions actually written.
+    pub audience_mismatch_query: Option<Arc<String>>,
+}
+
+/// `unfiltered - filtered`, clamped at zero -- the count of rows the audience-mismatch predicate
+/// excluded from this partition's materialization (AbAC Stage 5b, #1518, §4). Pulled out as a
+/// pure function so the arithmetic behind [`MetadataPartitionSpec::write`]'s `error!`/`imetric!`
+/// pair can be unit-tested directly rather than only through those side effects. In practice
+/// `unfiltered` and `filtered` come from one atomic `COUNT(*) FILTER (WHERE ...)` query, so
+/// `filtered > unfiltered` should never occur; the clamp is a defensive floor on this helper's
+/// contract, not a case this plan expects to hit.
+pub fn mismatch_excluded_count(unfiltered: i64, filtered: i64) -> i64 {
+    (unfiltered - filtered).max(0)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -77,6 +100,7 @@ pub async fn fetch_metadata_partition_spec(
         default_audience,
         compute_time_bounds,
         sort_order,
+        audience_mismatch_query: None,
     })
 }
 
@@ -195,6 +219,34 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
+
+        // Runs only here -- once a partition is actually about to be written, never on a
+        // scheduled pass that decides nothing needs writing (see the field's doc comment, §4).
+        if let Some(audience_mismatch_query) = &self.audience_mismatch_query {
+            let row = instrument_named!(
+                sqlx::query(audience_mismatch_query)
+                    .bind(self.insert_range.begin)
+                    .bind(self.insert_range.end)
+                    .fetch_one(&lake.db_pool),
+                "sql_select_audience_mismatch_counts"
+            )
+            .await
+            .with_context(|| "counting audience-mismatch exclusions")?;
+            let unfiltered: i64 = row
+                .try_get("unfiltered")
+                .with_context(|| "reading unfiltered count")?;
+            let filtered: i64 = row
+                .try_get("filtered")
+                .with_context(|| "reading filtered count")?;
+            let excluded = mismatch_excluded_count(unfiltered, filtered);
+            if excluded > 0 {
+                error!(
+                    "{excluded} blocks excluded from {desc} by the audience-mismatch predicate \
+                     -- see block_audience_mismatch_rows for per-block detail"
+                );
+                imetric!("block_audience_mismatch_excluded", "count", excluded as u64);
+            }
+        }
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = spawn_with_context(write_partition_from_rows(

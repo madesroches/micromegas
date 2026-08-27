@@ -1367,16 +1367,30 @@ corrected to what actually shipped rather than left as the pre-implementation pl
     onto one `process_id` — silently mislabeling the second audience's data and, since `blocks`
     also dedups on `block_id` alone, silently dropping its writes — which the design plan judged
     "not only an attack — it is the ordinary multi-tenant case," not a follow-up-worthy edge case.
-11b. **Residual, deliberately deferred to a follow-up issue (Stage 5b), not this stage**:
-    `insert_stream`/`insert_block` still accept any `process_id`/`stream_id` unconditionally, with
-    no check that the authenticated caller is authorized to write to that specific process. A
-    credential bound to audience A that discovers a `process_id`/`stream_id` belonging to
-    audience B can still append events to B's process, which then inherit B's stamped audience —
-    an integrity gap (no read escalation: reading B still requires a read grant on B). Deferred
-    because the fix is a write-side authorization gate that shares Stage 3's (#1371) still-
-    unimplemented `moka` cache layer (`process_id → audience`, `stream_id → process_id`) rather
-    than duplicating that design inside #1373 — see `web_ingestion_service.rs`'s
-    `insert_stream`/`insert_block_typed` doc comments for the in-tree tracking.
+11b. **Closed by Stage 5b (#1518), not by a write-side authorization gate.** The residual this step
+    originally described — `insert_stream`/`insert_block` accepting any `process_id`/`stream_id`
+    unconditionally, so a credential bound to audience A that discovered a `process_id`/`stream_id`
+    belonging to audience B could append events that inherited B's stamped audience — turned out not
+    to need the write-side gate this step anticipated (a target's owning audience is frequently
+    unresolvable at write time: a stream or block routinely arrives before its process row exists,
+    and retention can delete a long-lived process's row out from under its still-live blocks — see
+    `tasks/1518_audience_row_stamping_plan.md`'s "Why not a write-side gate"). Instead, `streams` and
+    `blocks` each gained their **own** `audience` column (schema v8), stamped from the same resolved
+    `WriteAudience` every insert already carries rather than inherited through `process_id`/
+    `stream_id`. A row's label is now fixed at write time from the credential that wrote *it*, never
+    derived from another row — so an attacker's block naming a victim's `process_id` is labelled with
+    the attacker's own audience, not the victim's, and is additionally excluded from materialization
+    entirely by a NULL-tolerant mismatch predicate on `blocks_view`'s `data_sql` once its own stamp
+    disagrees with the `streams`/`processes` row it points at. `check_stream_audience_conflict`
+    (mirroring `check_process_audience_conflict`) closes the equivalent re-pointed-credential gap for
+    `streams`. This closes the gap for `blocks`/`streams`/`processes` and the views derived straight
+    from them (`log_entries`, `measures`, `log_stats`, `processes_view`, `streams_view`); the five
+    process/stream-anchored view sets (`net_spans`, `otel_spans`, `images`, `async_events`,
+    `thread_spans`) and the per-process JIT `view_instance` path still resolve their audience label
+    through the owning process's/stream's row and are unaffected, as is the NULL-anchor window
+    against a legacy, pre-v8 row with no stamp of its own — see that plan's §4 for the full account
+    of both. No cache layer was needed after all: the mechanism closes the gap on the *read* side
+    (exclusion at materialization) rather than by authorizing the write.
 
 ### Stage 6 — Audience resolution on mint + setup script (enables real per-user keys)
 12. Extend the mint route with `MintPolicy::resolve_audience` (`AudienceMintPolicy`, §1): the

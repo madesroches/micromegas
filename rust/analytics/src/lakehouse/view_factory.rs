@@ -20,7 +20,7 @@
 //! |target        |Utf8                         | category or module name of the log entry                  |
 //! |level         |int32                        | verbosity level (Fatal=1, Error=2, Warning=3, Info=4, Debug=5, Trace=6)|                                           |
 //! |msg           |Utf8                         | message                                                   |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | the audience of the block this log entry came from (the block's own stamp), never `NULL` |
 //!
 //! ### log_entries view instances
 //!
@@ -41,7 +41,7 @@
 //! |name          |Utf8                         | name of the measure                                       |
 //! |unit          |Utf8                         | unit of measure                                           |
 //! |value         |Float64                      | value measured                                            |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | the audience of the block this measure came from (the block's own stamp), never `NULL` |
 //!
 //!
 //! ### measures view instances
@@ -62,7 +62,7 @@
 //! |level         |Int32                        | log level (see `log_entries` above)                        |
 //! |target        |Dictionary(Int32, Utf8)      | category or module name of the aggregated logs             |
 //! |count         |Int64                        | number of log entries in this aggregation                  |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | the audience of the blocks aggregated into this row (the blocks' own stamp), never `NULL` |
 //!
 //! ## thread_spans
 //!
@@ -159,7 +159,7 @@
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this process's data was last updated                |
 //! |last_block_end_ticks |Int64                   | tick count when the last block ended                       |
 //! |last_block_end_time |UTC Timestamp (nanoseconds) | timestamp when the last block ended                     |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the process -- server-written, never `NULL`    |
+//! |audience      |Dictionary(Int32, Utf8)      | this process's own write audience -- server-written, never `NULL`    |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -176,7 +176,7 @@
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the stream metedata was received |
 //! |format        |Utf8                         | stream payload format (e.g. for OTLP support)              |
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this stream's data was last updated                 |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | this stream's own write audience (its own stamp, never derived from its process) -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -213,7 +213,7 @@
 //! |processes.insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the process metedata was received |
 //! |processes.parent_process_id |Utf8                     | unique id of the parent process (nullable in practice)      |
 //! |processes.properties | Array of {key: utf8, value: utf8} | self-reported metadata by the process                  |
-//! |audience      |Dictionary(Int32, Utf8)      | audience of the owning process -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | this block's own write audience (its own stamp, never derived from its process_id/stream_id) -- server-written, never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!

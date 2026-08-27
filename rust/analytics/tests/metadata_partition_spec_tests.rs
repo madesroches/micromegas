@@ -7,7 +7,9 @@
 use datafusion::arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use micromegas_analytics::lakehouse::metadata_partition_spec::cast_to_file_schema;
+use micromegas_analytics::lakehouse::metadata_partition_spec::{
+    cast_to_file_schema, mismatch_excluded_count,
+};
 use std::sync::Arc;
 
 fn audience_dictionary_type() -> DataType {
@@ -102,4 +104,30 @@ fn columns_beyond_the_declared_schema_pass_through() {
     let file_schema = Schema::new(vec![Field::new("payload_size", DataType::Int64, false)]);
     let casted = cast_to_file_schema(inferred_batch(), &file_schema).unwrap();
     assert_eq!(casted.column(1).data_type(), &DataType::Utf8);
+}
+
+// --- `mismatch_excluded_count` (AbAC Stage 5b, #1518, §4): the pure arithmetic behind the
+// per-partition `error!`/`imetric!("block_audience_mismatch_excluded", ...)` pair in
+// `MetadataPartitionSpec::write`, tested directly rather than only through those side effects. In
+// practice `unfiltered`/`filtered` come from one atomic `COUNT(*) FILTER (WHERE ...)` query, so
+// `filtered > unfiltered` should never occur -- the clamp is a defensive floor on the contract,
+// not a case this plan expects to hit.
+
+#[test]
+fn mismatch_excluded_count_is_zero_when_counts_agree() {
+    assert_eq!(mismatch_excluded_count(42, 42), 0);
+    assert_eq!(mismatch_excluded_count(0, 0), 0);
+}
+
+#[test]
+fn mismatch_excluded_count_is_the_difference_when_they_disagree() {
+    assert_eq!(mismatch_excluded_count(10, 7), 3);
+    assert_eq!(mismatch_excluded_count(1, 0), 1);
+}
+
+#[test]
+fn mismatch_excluded_count_clamps_at_zero_rather_than_going_negative() {
+    // Should not occur given the single atomic query the two counts come from, but the helper's
+    // contract clamps regardless -- a defensive floor, not a case this plan expects to exercise.
+    assert_eq!(mismatch_excluded_count(5, 10), 0);
 }

@@ -29,6 +29,19 @@ pub async fn make_log_stats_view(
     // ORDER BY is the view-author contract's item 3 (tasks/completed/1392_kway_merge_sorted_partitions_plan.md
     // Design §5/§7): it lets the fresh-write path record the (time_bin, process_id, level, target)
     // sort_order guarantee with_merge_sort_order below declares.
+    //
+    // `audience` joins the GROUP BY (AbAC Stage 5b, #1518, §4): `log_entries.audience` is the
+    // block's own per-row stamp, not derived from `process_id` -- once `blocks_view`'s
+    // audience-mismatch predicate is in place, a `process_id`'s group can still span two
+    // audiences whenever that process's own row is a legacy, pre-v8 NULL-audience one (the
+    // predicate's NULL-tolerant pass-through lets a real-stamped block through alongside that
+    // process's own default-audience blocks). Grouping on `audience` too keeps those rows
+    // separate rather than letting `max(audience)` collapse them into one labelled row; it is a
+    // no-op once no NULL-anchored `processes` row is left, and stands as defense-in-depth against
+    // the mismatch predicate being weakened later. `audience` does **not** join the declared
+    // `ORDER BY`/`with_merge_sort_order` columns below -- see that builder's doc comment for why
+    // an extra, unordered `GROUP BY` key degrades the merge query's `InputOrderMode` to
+    // `PartiallySorted` rather than blocking the streaming aggregation outright.
     let transform_query = Arc::new(String::from(
         r#"
         SELECT date_bin('1 minute', time) as time_bin,
@@ -40,14 +53,15 @@ pub async fn make_log_stats_view(
         FROM log_entries
         WHERE insert_time >= '{begin}'
         AND insert_time < '{end}'
-        GROUP BY process_id, level, target, time_bin
+        GROUP BY process_id, level, target, time_bin, audience
         ORDER BY time_bin, process_id, level, target
         ;"#,
     ));
 
     // Merge query to combine partitions. No ORDER BY is written here -- QueryMerger applies the
     // sort as a DataFusion logical-plan node from the with_merge_sort_order columns below (Design
-    // §2/§3), never reaching this SQL text.
+    // §2/§3), never reaching this SQL text. `audience` joins this GROUP BY too, for the same
+    // reason as the transform query above.
     let merge_query = Arc::new(String::from(
         r#"
         SELECT time_bin,
@@ -57,7 +71,7 @@ pub async fn make_log_stats_view(
                sum(count) as count,
                arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
         FROM {source}
-        GROUP BY process_id, level, target, time_bin
+        GROUP BY process_id, level, target, time_bin, audience
         ;"#,
     ));
 
