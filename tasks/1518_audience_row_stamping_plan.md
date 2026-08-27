@@ -36,9 +36,12 @@ Two decisions taken with the issue author, both narrowing the change:
   exactly as they do today.
 
 Scope is integrity, not confidentiality: no read escalation is created or removed here — reading B
-still requires a read grant on B. Process squatting (`check_process_audience_conflict`) and
-cross-audience OTLP process collision (audience-salted id derivation) are already closed and are
-untouched.
+still requires a read grant on B. That claim depends on `OwnershipRewrite` checking all three of
+`blocks_view`'s audience columns, not just `audience`, on the `blocks` view itself — see
+["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for why the two appended
+anchor columns would otherwise turn `blocks` into a cross-audience existence-and-label oracle.
+Process squatting (`check_process_audience_conflict`) and cross-audience OTLP process collision
+(audience-salted id derivation) are already closed and are untouched.
 
 ## Current State
 
@@ -142,26 +145,37 @@ the `processes` row and only the `processes` row.
 `rust/ingestion/src/sql_migration.rs` following the v6 pattern:
 
 ```sql
-ALTER TABLE processes ADD COLUMN audience VARCHAR(255)
-  CONSTRAINT processes_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$');
-ALTER TABLE streams   ADD COLUMN audience VARCHAR(255)
-  CONSTRAINT streams_audience_name   CHECK (audience ~ '^[A-Za-z0-9_-]+$');
-ALTER TABLE blocks    ADD COLUMN audience VARCHAR(255)
-  CONSTRAINT blocks_audience_name    CHECK (audience ~ '^[A-Za-z0-9_-]+$');
+ALTER TABLE processes ADD COLUMN audience VARCHAR(255);
+ALTER TABLE streams   ADD COLUMN audience VARCHAR(255);
+ALTER TABLE blocks    ADD COLUMN audience VARCHAR(255);
+ALTER TABLE processes ADD CONSTRAINT processes_audience_name
+  CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;
+ALTER TABLE streams   ADD CONSTRAINT streams_audience_name
+  CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;
+ALTER TABLE blocks    ADD CONSTRAINT blocks_audience_name
+  CHECK (audience ~ '^[A-Za-z0-9_-]+$') NOT VALID;
 UPDATE migration SET version=8;
 ```
 
 Deliberate properties:
 
 - **Nullable, no `DEFAULT`, no backfill.** `ADD COLUMN` with no default is a catalog-only
-  operation in Postgres 11+, so this is instant even on a large `blocks` table and the whole
-  migration stays inside one transaction like every prior version. A `DEFAULT` would also let a
-  not-yet-upgraded writer keep inserting rows that silently take a label, the same reason v6
-  refused one.
-- **`CHECK` permits NULL** (a `NULL ~ '...'` predicate evaluates to NULL, which passes), so it
-  constrains stamped rows without demanding a backfill. It mirrors
-  `ingestion_api_keys_audience_name` and re-states in SQL what `WriteAudience::new` already
-  validates in Rust.
+  operation in Postgres 11+, so the column adds are instant even on a large `blocks` table. A
+  `DEFAULT` would also let a not-yet-upgraded writer keep inserting rows that silently take a
+  label, the same reason v6 refused one.
+- **`CHECK ... NOT VALID`, not a plain `ADD COLUMN ... CHECK`.** A column-level `CHECK` folded into
+  `ADD COLUMN` is not catalog-only: Postgres splits it into a separate `ADD CONSTRAINT`
+  subcommand, and a *validated* check constraint puts the table on `ATRewriteTables`' validation
+  path, which scans every existing row under `ACCESS EXCLUSIVE` before the `ALTER TABLE` commits —
+  exactly the full-table lock-and-scan the v3 migration goes out of its way to avoid for `blocks`
+  (`CREATE UNIQUE INDEX CONCURRENTLY`, run outside any transaction, `sql_migration.rs:288-302`).
+  `NOT VALID` skips that scan: the constraint applies to rows written from this point on (which is
+  all that matters here — `WriteAudience::new` already validates the charset in Rust before any
+  row reaches SQL) while existing rows are simply not checked. `VALIDATE CONSTRAINT`, if ever
+  wanted, is a separate statement that takes only a `SHARE UPDATE EXCLUSIVE` lock and can run
+  later outside this migration. The `ingestion_api_keys_audience_name` precedent this mirrors is a
+  validated check on a small, operator-populated table, where the scan cost doesn't matter; it
+  does not apply unmodified to `blocks`.
 - **No index.** Nothing queries Postgres *by* audience — Prong B looks rows up by primary key and
   projects the column. An index on the hot `blocks` table would be pure write cost.
 - `rust/ingestion/src/sql_telemetry_db.rs`'s `create_tables` (the v1 shape) is **not** touched: a
@@ -216,9 +230,14 @@ established. No third "unstamped" state appears on the write side.
   by Postgres, defaulting the missed bind to NULL — the row then just reads as the deployment
   default instead of the insert failing loudly. Give it an explicit column list ending in
   `audience`, the same fix as `insert_block_typed` below, for the same reason.
-- `finalize_process_properties` is **removed**. `strip_reserved_properties` stays and keeps doing
-  its job — a client-supplied `micromegas.*` property is still dropped, so a client can neither
-  assert nor suppress a stamp; there is simply no property to append any more.
+- `finalize_process_properties` is **removed** — it was *strip then append*, and it is the only
+  call to `strip_reserved_properties` on the process write path today (`insert_stream` calls
+  `strip_reserved_properties` directly; the process sites only reach it through this helper).
+  Removing the helper without replacing that call would let a client re-assert arbitrary
+  `micromegas.*` properties on `processes`. So `insert_process` and `register_otel_process` must
+  each gain their own direct `strip_reserved_properties(...)` call at their `properties` bind site
+  in place of the removed helper — a client-supplied `micromegas.*` property is still dropped, so a
+  client can neither assert nor suppress a stamp; there is simply no property to append any more.
 - `micromegas_telemetry::property_names::PROPERTY_AUDIENCE` becomes unused in production code and
   is removed along with its `property.rs` re-export. `RESERVED_PROPERTY_PREFIX` stays.
 - `check_process_audience_conflict` reads `SELECT audience FROM processes WHERE process_id = $1`
@@ -332,9 +351,20 @@ stamp:
   queries (the selected column and schema are unchanged, so the file-schema hash does not need to
   bump).
 
-`OwnershipRewrite` needs no change at all: it dispatches on whether a view's file schema has an
-`audience` field, all six column-carrying views still have one, and the two new columns on
-`blocks_view` are ordinary data columns it ignores.
+`OwnershipRewrite` needs one change, confined to `blocks`. `blocks_view`'s join has no
+`streams.process_id = processes.process_id` predicate, so an attacker in audience `alpha` can
+insert a block naming its own `stream_id` (audience `alpha`, so `stream_audience='alpha'`) but a
+victim's `process_id` (audience `beta`, so `process_audience='beta'`). The row materializes with
+`audience='alpha'` — visible to the attacker — while carrying `process_audience='beta'`. If
+`audience_column_predicate` keeps filtering `blocks` on `audience` alone, as it does for the other
+five column-carrying views, `SELECT process_id, process_audience FROM blocks` becomes a
+cross-audience existence-and-label oracle: the attacker learns that `beta` owns a given
+`process_id` by probing it into blocks it can read. Fix: for the `blocks` table specifically,
+`audience_column_predicate` requires `audience`, `stream_audience`, **and** `process_audience` all
+be in the caller's read scope, not just `audience` — a legitimate block's three columns already
+agree, so this is a no-op for every row that isn't itself an attempted cross-audience probe.
+`processes`, `streams`, `log_entries`, `measures`, and `log_stats` carry only the single `audience`
+column and keep the existing bare-column filter unchanged.
 
 #### What remains process-anchored
 
@@ -469,8 +499,10 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    means.
 3. Same file: bind `processes.audience` in `insert_process`/`register_otel_process`, give
    `insert_process`'s `INSERT INTO processes` an explicit column list (`register_otel_process`
-   already has one), delete `finalize_process_properties`, and rewrite
-   `check_process_audience_conflict` to `SELECT audience`.
+   already has one), delete `finalize_process_properties`, add a direct
+   `strip_reserved_properties(...)` call at each of `insert_process`'s and
+   `register_otel_process`'s `properties` bind sites (the only call the removed helper made), and
+   rewrite `check_process_audience_conflict` to `SELECT audience`.
 4. `rust/telemetry/src/property_names.rs` + `property.rs`: remove `PROPERTY_AUDIENCE` and its
    re-export.
 5. `rust/public/src/servers/ingestion.rs`: thread `ctx: Option<Extension<AuthContext>>` into
@@ -491,6 +523,10 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 10. `rust/analytics/src/lakehouse/processes_view.rs` / `streams_view.rs`: transform queries switch
     to `max(process_audience)` / `max(stream_audience)`. `log_stats_view.rs`: add `audience` to the
     `GROUP BY` in both the transform and merge queries (§4, "The `max(audience)` regression").
+    `ownership_rewrite.rs`: `audience_column_predicate` requires `audience`, `stream_audience`,
+    and `process_audience` all be in the caller's read scope when filtering `blocks` specifically
+    (same section) — otherwise the two appended columns turn `blocks` into a cross-audience
+    existence-and-label oracle.
 11. `rust/analytics/src/metadata.rs`: `find_process` uses `coalesced_audience_column`.
 12. `rust/analytics/src/lakehouse/audience_guard.rs`: rewrite `owner_query_sql`'s three arms, drop
     the `AUDIENCE_PROPERTY` bind, renumber the default to `$2`, and update the module doc's
@@ -519,8 +555,9 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 - `rust/analytics/src/replication.rs`, `rust/analytics/src/audience.rs`,
   `rust/analytics/src/metadata.rs`
 - `rust/analytics/src/lakehouse/blocks_view.rs`, `processes_view.rs`, `streams_view.rs`,
-  `log_stats_view.rs`, `audience_guard.rs`, `ownership_rewrite.rs` (module doc only — the stale
-  "what remains open" paragraph, narrowed per §4)
+  `log_stats_view.rs`, `audience_guard.rs`, `ownership_rewrite.rs` (`audience_column_predicate`
+  gains a `blocks`-specific three-column check, §4's "`max(audience)` regression"; module doc also
+  updated — the stale "what remains open" paragraph, narrowed per §4)
 - Tests: `rust/ingestion/tests/audience_stamping_db_test.rs`,
   `rust/ingestion/tests/write_audience_tests.rs`, `rust/analytics/tests/common/db_fixtures.rs`,
   `rust/analytics/tests/audience_guard_tests.rs`, `rust/analytics/tests/prong_b_guard_db_test.rs`,
@@ -529,8 +566,9 @@ audience_guard (Prong B)  block_id  -> blocks.audience
   plus every `insert_stream`/`insert_block` call site in `rust/analytics/tests/`
 - `local_test_env/ai_scripts/import_net_blocks_from_prod.py`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
-  `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/query-guide/schema-reference.md`,
-  `mkdocs/docs/query-guide/python-api.md`
+  `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/maintenance.md`,
+  `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/docs/query-guide/python-api.md`,
+  `python/micromegas/micromegas/flightsql/client.py`
 - `CHANGELOG.md`, `tasks/data_isolation/audience_based_access_control_plan.md`
 
 ## Trade-offs
@@ -570,8 +608,10 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 
 ## Migration & Upgrade Notes
 
-- The v8 migration is catalog-only and runs in one transaction; there is no table rewrite and no
-  lock held over data.
+- The v8 migration runs in one transaction. `ADD COLUMN` is catalog-only, and the `CHECK`
+  constraints are added `NOT VALID` (§2) specifically so the migration never scans existing rows —
+  a validated `CHECK` on `ADD COLUMN` would otherwise force a full-table scan of `blocks` under
+  `ACCESS EXCLUSIVE`. There is no table rewrite and no lock held over data.
 - **Deploy order matters within a rolling upgrade, and it is not just about writes.**
   `migrate_db` only runs from `WebIngestionService::from_env`, `connect_to_remote_data_lake`
   (admin replication), and the monolith — `LakehouseContext::from_env` (flight-sql, maintenance)
@@ -585,11 +625,19 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 - `blocks_file_schema_hash()` bumping forces `blocks` partitions to rebuild. Per `CLAUDE.md` this
   is not a SQL break: the queryable Arrow schema gains two appended columns and every existing
   column keeps its name, type, and position.
-- `processes`/`streams` are `SqlBatchView`s that hash their inferred Arrow schema, which does not
-  change, so they are **not** auto-invalidated. Their values only differ from the old ones for a
-  row that was actually attacked, so no regeneration is required; an operator who wants strict
-  consistency can `regenerate_partitions` over `blocks`, `processes`, and `streams` for the
-  retention window.
+- `processes`/`streams`/`log_entries`/`measures`/`log_stats` are all `SqlBatchView`s that hash
+  their inferred Arrow schema (`SqlBatchView::get_file_schema_hash`), which does not change for any
+  of them — `log_view.rs`/`metrics_view.rs` return a constant `vec![SCHEMA_VERSION]`, and
+  `processes_view.rs`/`streams_view.rs`/`log_stats_view.rs` are equally schema-stable — so **none**
+  of the five is auto-invalidated, the same as `processes`/`streams`. Their values only differ from
+  the old ones for a row that was actually attacked, so no regeneration is required; an operator
+  who wants strict consistency can `regenerate_partitions` over all six audience-carrying views
+  (`blocks`, `processes`, `streams`, `log_entries`, `measures`, `log_stats`) for the retention
+  window. `log_stats` is the one case where regeneration is more than a value fix: adding
+  `audience` to its `GROUP BY` (§4) changes the grouping itself, so partitions materialized before
+  this change keep rows grouped *without* audience — mixing what should now be separate
+  per-audience rows — until they are regenerated; it's a shape disagreement with fresh partitions,
+  not just a value one.
 - No client change. No wire-format change. Native and OTLP producers are unaffected.
 
 ## Documentation
@@ -607,6 +655,11 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   after §3 makes a missing `audience` column a hard error, running that example against a v8
   target fails. Add `audience` to the example, and add the equivalent guidance for `streams` and
   `blocks` bulk-ingest tables nearby.
+- `python/micromegas/micromegas/flightsql/client.py:630-654` — `bulk_ingest`'s docstring carries a
+  second, independent copy of the same 13-column `processes` `pa.table({...})` example with no
+  `audience` column. It fails against a v8 target for the same reason as the mkdocs example above
+  and needs the same fix, applied separately since it's a different file with its own copy of the
+  example.
 - `mkdocs/docs/admin/authentication.md`
   - "Audience stamping and the default" (`:230-260`): the stamp is a column on `processes`,
     `streams`, and `blocks`, written at every insert, not a `micromegas.audience` property on the
@@ -624,7 +677,16 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
     reads a materialized snapshot, Prong B reads Postgres live), but retitle to the column.
 - `mkdocs/docs/admin/ingestion.md` "What gets stamped" (`:70-105`): the stamp now lands on all
   three metadata rows; the "a client that used to self-stamp" note stays accurate, since
-  `strip_reserved_properties` still runs.
+  `strip_reserved_properties` still runs. Add a **deploy-order note** next to it, matching the
+  style of `api-keys.md`'s "Migrating from the env keyring" ordering guidance and `monolith.md`'s
+  schema-version table entry: in a split deployment, upgrade and restart ingestion (or the
+  monolith) *before* flight-sql/maintenance — `migrate_db` only runs from
+  `WebIngestionService::from_env`, `connect_to_remote_data_lake`, and the monolith, never from
+  `LakehouseContext::from_env` (flight-sql, maintenance), so a v8 analytics or maintenance binary
+  reading against a pre-v8 database fails every read that touches the new columns
+  (`blocks_view`'s `data_sql`, `find_process`, `owner_query_sql`) with an "undefined column" error
+  until ingestion has migrated it. A pre-v8 ingestion binary against an already-migrated v8
+  database is fine (writes just leave the column NULL, which reads as the default).
 - `mkdocs/docs/admin/api-keys.md:238`: the parenthetical naming the property.
 - `CHANGELOG.md`, under `## Unreleased` → **Ingestion**: one entry describing the column, the
   closed gap, and the schema v8 bump. Because #1373/#1482/#1519 are all still `## Unreleased`,
@@ -633,6 +695,17 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   `insert_block`, `insert_block_typed`, and `register_otel_stream` each gain a required
   `&WriteAudience`; `finalize_process_properties` and `PROPERTY_AUDIENCE` are removed;
   `audience_subselect`/`coalesced_audience_subselect` are replaced by `coalesced_audience_column`.
+  **Upgrade note**: deploy and restart ingestion (or the monolith) before flight-sql/maintenance —
+  only `migrate_db`'s callers (`WebIngestionService::from_env`, `connect_to_remote_data_lake`, the
+  monolith) apply schema v8; `LakehouseContext::from_env` (flight-sql, maintenance) never migrates,
+  so a v8 binary reading a pre-v8 database fails every query that touches the new columns
+  (`blocks_view`, `find_process`, `owner_query_sql`) with an "undefined column" error. A pre-v8
+  ingestion binary against an already-migrated database is fine.
+- `mkdocs/docs/admin/maintenance.md` — the hourly task's table row (`:87`) gains the new
+  `process_id`/`stream_id` mismatch count alongside retention cleanup, and the metric gets its own
+  reference section matching `materialize_view_failure`'s (`:62-68`): name
+  `block_stream_process_id_mismatch` (`count`), no tags, healthy baseline a flat zero — every
+  non-zero reading is a bug or an attack (§5).
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc: the "What remains open,
   tracked separately" paragraph is only partly obsolete — narrow it to the five
   `per_process_audience()`-resolved views and the JIT `view_instance` path (§4, "What remains
@@ -662,6 +735,10 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   `process_id` owned by `beta` materializes into `blocks_view` with `audience = 'alpha'`, and
   `beta`'s `processes_view`/`streams_view` rows keep `audience = 'beta'` — the `max(audience)`
   regression guard.
+- **New, `ownership_rewrite_db_test.rs`**: an `alpha`-scoped query over `blocks` does not return
+  the row above — confirms `audience_column_predicate`'s three-column check on `blocks` keeps
+  `process_audience='beta'` from surfacing to `alpha`, i.e. `blocks` is not an existence-and-label
+  oracle for `beta`.
 - **New**: Prong B resolves `IdKind::Block` for a block whose `processes` row has been deleted
   (orphan), returning the block's own stamp rather than `Unknown`.
 - `prong_b_guard_db_test.rs` / `ownership_rewrite_db_test.rs` / `jit_process_batch_db_test.rs` /
@@ -696,6 +773,14 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
 - **Dropping the process-squatting conflict guard's cache.** `check_process_audience_conflict` now
   reads one indexed column instead of an array; whether its `moka` cache still earns its keep is
   worth re-measuring, but not here.
+- **Tightening `audience` to `NOT NULL` on `processes`/`streams`/`blocks`.** Nullability today
+  exists only for genuinely pre-AbAC legacy rows — §3 has replication read and bind `audience` from
+  the incoming batch and hard-fail when it's missing, so the admin replication path already always
+  stamps a real label and is not itself a reason to stay nullable. Once every deployment has cycled
+  past its retention window and no legacy-NULL row remains, the column could become `NOT NULL`,
+  dropping the `COALESCE` from the three read sites that use it (`blocks_view`, `find_process`,
+  `owner_query_sql`). A retention-window question, not a design one; worth its own follow-up issue
+  once this ships.
 
 ## Open Questions
 
@@ -704,7 +789,3 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
    is to accept the column as optional and bind NULL (which reads as the target's default). Hard
    failure is louder and the feature is unreleased, so nothing in the wild breaks — but confirm
    that no internal replication tooling pins an older source lake.
-2. **Whether `processes.audience` should become `NOT NULL` in a later migration.** It cannot now
-   (legacy rows), but once every deployment has cycled past its retention window the column could
-   be tightened, which would let the `COALESCE` disappear from three read sites. Worth an issue, or
-   worth leaving permanently nullable to keep the admin replication path free to stamp nothing?
