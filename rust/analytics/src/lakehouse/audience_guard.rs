@@ -162,7 +162,10 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 /// `processes` row (retention swept it, or it hasn't arrived yet) previously resolved to
 /// [`OwnerAudience::Unknown`] via the (now-removed) join to `processes`; it now resolves to its
 /// own stamp. That is the correct answer under the precedence rule in `crate::audience`'s module
-/// doc, and it makes `get_payload`/`parse_block` work on orphaned-but-present blocks.
+/// doc, and it makes `parse_block` (the sole `IdKind::Block` caller) work on orphaned-but-present
+/// blocks. `get_payload` is unaffected by this change: it authorizes via
+/// `readable_ids(&distinct_process_ids, IdKind::Process)`, never resolving a block id through
+/// `IdKind::Block`.
 ///
 /// `$1` is the batch of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one
 /// query; `$2` is the default audience (the property-name bind this used to need is gone, so the

@@ -44,7 +44,7 @@ Contains metadata about processes that have sent telemetry data.
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
-| `audience` | `Dictionary(Int32, Utf8)` | This process's own write audience -- written server-side from the authenticated ingestion credential or the deployment's default ingestion audience, never client-settable, never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | This process's own write audience -- resolved from its blocks' stamps (`max(audience)`), which agree with the underlying `processes` row's own column except during the rollout window for a pre-v8, NULL-audience row; written server-side, never client-settable, never `NULL` |
 
 **Example Queries:**
 ```sql
@@ -75,7 +75,7 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `format` | `Utf8` | Stream payload format (e.g. for OTLP support) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
-| `audience` | `Dictionary(Int32, Utf8)` | This stream's own write audience (its own stamp, never derived from its `process_id`) -- see `processes.audience`; never `NULL` |
+| `audience` | `Dictionary(Int32, Utf8)` | This stream's own write audience -- resolved from its blocks' stamps (`max(audience)`), which agree with the underlying `streams` row's own column except during the rollout window for a pre-v8, NULL-audience row; see `processes.audience`; never `NULL` |
 
 **Example Queries:**
 ```sql

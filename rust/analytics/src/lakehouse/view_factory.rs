@@ -159,7 +159,7 @@
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this process's data was last updated                |
 //! |last_block_end_ticks |Int64                   | tick count when the last block ended                       |
 //! |last_block_end_time |UTC Timestamp (nanoseconds) | timestamp when the last block ended                     |
-//! |audience      |Dictionary(Int32, Utf8)      | this process's own write audience -- server-written, never `NULL`    |
+//! |audience      |Dictionary(Int32, Utf8)      | this process's own write audience -- resolved from its blocks' stamps (`max(audience)`), which agree with the process's own column except during the rollout window for a pre-v8, NULL-audience process row; never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!
@@ -176,7 +176,7 @@
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the stream metedata was received |
 //! |format        |Utf8                         | stream payload format (e.g. for OTLP support)              |
 //! |last_update_time |UTC Timestamp (nanoseconds) | when this stream's data was last updated                 |
-//! |audience      |Dictionary(Int32, Utf8)      | this stream's own write audience (its own stamp, never derived from its process) -- server-written, never `NULL` |
+//! |audience      |Dictionary(Int32, Utf8)      | this stream's own write audience -- resolved from its blocks' stamps (`max(audience)`), which agree with the stream's own column except during the rollout window for a pre-v8, NULL-audience stream row; never `NULL` |
 //!
 //! There is only one instance in this view set and it is implicitly available.
 //!

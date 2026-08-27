@@ -71,10 +71,6 @@ pub struct BlocksView {
     /// (AbAC Stage 5b, #1518, §4: a NULL `blocks.audience`, i.e. a legacy pre-v8 row). Carried
     /// from `LakehouseContext::default_audience` by every constructor call.
     default_audience: Arc<str>,
-    /// The unfiltered-vs-filtered diagnostic query text (§4) attached to every
-    /// `MetadataPartitionSpec` this view produces -- see that struct's `audience_mismatch_query`
-    /// field doc comment.
-    audience_mismatch_query: Arc<String>,
     ordered_merger: Arc<dyn PartitionMerger>,
     plain_merger: Arc<dyn PartitionMerger>,
 }
@@ -102,16 +98,6 @@ impl BlocksView {
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
             audience_column = coalesced_audience_column("blocks", 3),
-        ));
-        let audience_mismatch_query = Arc::new(format!(
-            r#"SELECT COUNT(*) AS unfiltered,
-                      COUNT(*) FILTER (WHERE {keep_predicate}) AS filtered
-               FROM blocks, streams, processes
-               WHERE blocks.stream_id = streams.stream_id
-               AND blocks.process_id = processes.process_id
-               AND blocks.insert_time >= $1
-               AND blocks.insert_time < $2
-               ;"#
         ));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let schema = Arc::new(blocks_view_schema());
@@ -141,7 +127,6 @@ impl BlocksView {
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
             default_audience,
-            audience_mismatch_query,
             ordered_merger,
             plain_merger,
         })
@@ -169,18 +154,24 @@ impl View for BlocksView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        // `count` is the kept side of the audience-mismatch comparison (rows surviving
+        // `keep_predicate`, i.e. this partition's `record_count`); `unfiltered` is the same join
+        // and insert-time range with no predicate applied at all. One query gives
+        // `fetch_metadata_partition_spec` both, so `MetadataPartitionSpec::write` never needs a
+        // second round trip to recover the unfiltered count (§4) -- see `unfiltered_count`'s doc
+        // comment on that struct.
         let source_count_query = format!(
-            "SELECT COUNT(*) as count
+            "SELECT COUNT(*) FILTER (WHERE {keep_predicate}) AS count,
+                    COUNT(*) AS unfiltered
              FROM blocks, streams, processes
              WHERE blocks.stream_id = streams.stream_id
              AND blocks.process_id = processes.process_id
              AND blocks.insert_time >= $1
              AND blocks.insert_time < $2
-             AND {keep_predicate}
              ;",
             keep_predicate = audience_mismatch_keep_predicate(),
         );
-        let mut spec = fetch_metadata_partition_spec(
+        let spec = fetch_metadata_partition_spec(
             &lakehouse.lake().db_pool,
             &source_count_query,
             self.data_sql.clone(),
@@ -193,10 +184,6 @@ impl View for BlocksView {
         )
         .await
         .with_context(|| "fetch_metadata_partition_spec")?;
-        // Attached, not run: `MetadataPartitionSpec::write` runs this only once a partition is
-        // actually about to be written (§4) -- not on every scheduled pass over an insert range
-        // that decides nothing needs writing.
-        spec.audience_mismatch_query = Some(self.audience_mismatch_query.clone());
         Ok(Arc::new(spec))
     }
 

@@ -881,8 +881,10 @@ async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> 
 /// or it hasn't arrived yet) resolves `IdKind::Block` to the block's own stamp rather than
 /// falling through to `OwnerAudience::Unknown`. Before this stage, `owner_query_sql`'s
 /// `IdKind::Block` arm joined through `processes` to resolve the audience, so deleting the
-/// `processes` row denied `get_payload`/`parse_block` on an otherwise-present, otherwise-readable
-/// block; the per-row `blocks.audience` column removes that join entirely.
+/// `processes` row denied `parse_block` (the sole `IdKind::Block` caller) on an
+/// otherwise-present, otherwise-readable block; the per-row `blocks.audience` column removes
+/// that join entirely. `get_payload` is unaffected either way -- it authorizes via
+/// `IdKind::Process`, never `IdKind::Block`.
 #[ignore]
 #[tokio::test]
 async fn block_resolves_to_its_own_stamp_when_its_process_row_is_gone() -> Result<()> {

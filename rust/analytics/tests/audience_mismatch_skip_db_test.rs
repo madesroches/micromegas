@@ -9,10 +9,10 @@
 //! `#[ignore]`, requires a live `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`).
 //!
 //! Assertions are on observable state (materialized row counts, column values), never on the
-//! `error!`/`imetric!` side effects `MetadataPartitionSpec::write` emits -- see
+//! `warn!`/`imetric!` side effects `MetadataPartitionSpec::write` emits -- see
 //! `insert_block_dedup_db_test.rs`'s module doc for the repo's convention on this point. The
-//! `unfiltered_count - filtered_count` arithmetic those side effects are built on
-//! (`mismatch_excluded_count`) is unit-tested directly in `metadata_partition_spec_tests.rs`.
+//! `unfiltered - kept` arithmetic those side effects are built on (`mismatch_excluded_count`) is
+//! unit-tested directly in `metadata_partition_spec_tests.rs`.
 
 mod common;
 
