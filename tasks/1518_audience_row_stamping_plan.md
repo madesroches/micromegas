@@ -41,22 +41,34 @@ Three decisions taken with the issue author:
   a downstream view aggregates or joins across rows, the fix is to re-anchor the view on the
   row's own stamp (§4) — never to relabel the row from the process it points at.
 
-Scope is integrity, not confidentiality: for any row whose own anchor already carries a real,
-non-NULL audience, no read escalation is created or removed here — reading B still requires a read
-grant on B. That claim depends on a mismatched row never materializing into any view in the first
-place: a block whose `audience` disagrees with the `streams.audience` or `processes.audience` it
-joins to is excluded from materialization by a single predicate on `blocks_view`'s `data_sql`
-(mirrored in its `source_count_query`) — it never becomes a row of `blocks` at all, so it is equally
-absent from `log_entries`, `measures`, and every other view that reads blocks through the `blocks`
-view's own materialized partitions — see
-["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for the residual cases the
-predicate does not close: a NULL-anchored `processes`/`streams` row relabeled by an attacker's block,
-and its mirror image, a NULL-audience block resolving through a real `processes`/`streams` anchor —
-which *is* a bounded read escalation, not covered by "already public" — and, for
-`log_entries`/`measures` specifically, why letting a mismatched row materialize would leak the
-victim process's own `exe`/`username`/`computer`/`process_properties`.
+Scope is integrity, not confidentiality: a row's label is fixed at write time from the credential
+that wrote it, and reading audience B still requires a read grant on B. The mechanism that makes
+that hold is exclusion at materialization — a block whose `audience` disagrees with the
+`streams.audience` or `processes.audience` it joins to is excluded by a single predicate on
+`blocks_view`'s `data_sql` (mirrored in its `source_count_query`), so it never becomes a row of
+`blocks` at all and is equally absent from `log_entries`, `measures`, and every other view that
+reads blocks through the `blocks` view's own materialized partitions. That predicate is
+NULL-tolerant, so mixed-version rows — a NULL `audience` on one side — pass through it; what they
+then resolve to is described once, in
+["The `max(audience)` regression"](#the-maxaudience-regression) in §4.
 Process squatting (`check_process_audience_conflict`) and cross-audience OTLP process collision
 (audience-salted id derivation) are already closed and are untouched.
+
+### Governing premise — the data already in the lake is public
+
+Everything currently stored in this lake is public. Audience stamping protects data ingested from
+here on; it is not protecting anything already written. The audience-stamping stack this plan builds
+on (#1373, #1482, #1519) is all still `## Unreleased`, so no deployed environment holds rows under a
+non-default audience, and none is running production traffic under one.
+
+This is the governing assumption for every legacy-`NULL`, mixed-version, and un-regenerated-partition
+case below. Each of those is a **consistency** concern — a row or an aggregate resolving to a label
+other than the one a fully-stamped lake would give it — not a confidentiality one, and each is
+described mechanically rather than accounted for as exposure. The mechanisms that make the design
+hold once real audiences exist are unaffected by the premise and all stand as specified: the
+NULL-tolerant mismatch predicate, the mismatch metric and per-partition signal, the deploy-order
+requirement, `check_stream_audience_conflict`, the v8 migration and its test, and the mandatory
+`log_stats` regeneration.
 
 ## Current State
 
@@ -118,8 +130,7 @@ six views on their own physical `audience` column and resolves the other five th
 That `max(audience)` is safe today only because every block of a process derives the same value
 from the same process row. **Per-row stamping breaks that assumption** — see
 [The `max(audience)` regression](#the-maxaudience-regression) below, which is the one non-obvious
-consequence of this change and the reason a NULL-anchored `processes`/`streams` row is a residual,
-accepted exposure rather than a closed one.
+consequence of this change.
 
 ### Why not a write-side gate
 
@@ -343,23 +354,21 @@ The mismatch predicate is NULL-tolerant rather than a `COALESCE`-then-compare: i
 only when **both** sides carry a real, non-NULL stamp and those stamps disagree. A `COALESCE`d
 comparison would get this wrong in the other direction — `COALESCE(NULL, 'public') = 'public'`
 against `COALESCE('alpha', 'public') = 'alpha'` disagree, so a legacy row with a `NULL` audience on
-one side and any non-default real stamp on the other would be excluded even though nothing was
-ever attacked. That failure mode is not theoretical: `processes`/`streams` rows are immutable
+one side and any non-default real stamp on the other would be excluded even though nothing is wrong
+with it. That failure mode is not theoretical: `processes`/`streams` rows are immutable
 (`ON CONFLICT (process_id|stream_id) DO NOTHING`, `web_ingestion_service.rs:437-440,490-493,546`)
 and there is no backfill (§2), so every process/stream registered before the v8 ingestion binary
 rolls out keeps `audience = NULL` for its entire remaining life while its post-upgrade blocks carry
 the credential's real (non-default) audience — a `COALESCE` comparison would silently drop all of
 that process's/stream's post-upgrade telemetry from `blocks`, `log_entries`, `measures`, and
-`log_stats` forever, not just during the rollout window. The same mixed-version exposure applies
-mid-rolling-upgrade with a pre-v8 and v8 ingestion binary running side by side (a pre-v8 process
+`log_stats` forever, not just during the rollout window. The same mixed-version case arises
+mid-rolling-upgrade with a pre-v8 and a v8 ingestion binary running side by side (a pre-v8 process
 writes NULL-audience blocks onto a stream a v8 binary already stamped). The NULL-tolerant form
-avoids this: an attacker-injected block always carries a real, non-NULL stamp (§3 — every insert
-binds a resolved `WriteAudience`, defaulted but never NULL), so nothing an attacker controls is
-ever `IS NULL`, and the only way to reach the "either side NULL" pass-through is a genuinely
-pre-v8 row. That residual pass-through is accepted, not an open question: a NULL anchor means the
-row predates per-row stamping and resolves to `MICROMEGAS_DEFAULT_AUDIENCE` — the deployment's
-public/legacy audience — so the metadata an attacker reaches through it was already public. See
-Migration & Upgrade Notes for the resulting window and the rationale in full.
+avoids this: an injected block always carries a real, non-NULL stamp (§3 — every insert binds a
+resolved `WriteAudience`, defaulted but never NULL), so nothing a client controls is ever `IS NULL`,
+and the only way to reach the "either side NULL" pass-through is a genuinely pre-v8 row. What such a
+row resolves to is stated once, in
+["The `max(audience)` regression"](#the-maxaudience-regression) below.
 `make_batch_partition_spec`'s `source_count_query` (below) carries the identical WHERE-clause
 predicate, so the row count it uses to size partition work agrees with what `data_sql` actually
 returns. Because the predicate is the NULL-tolerant form above rather than a `COALESCE` comparison,
@@ -391,14 +400,11 @@ Consequence: existing `blocks` partitions keep whatever `audience` values they w
 with under the old query — sourced from the owning process's `micromegas.audience` property rather
 than the block's own stamp — and predate the mismatch predicate (§4), so a partition may contain a
 row the predicate would now exclude. Old- and new-semantics partitions are queried together going
-forward, with nothing in the row data itself distinguishing which query produced it. In practice this
-is a consistency note rather than an open confidentiality question: every partition in the lake today
-holds public data, so a pre-change `audience` label describes public data either way, and the per-row
-guarantee this plan establishes simply takes effect for everything ingested from here on — old
-partitions carry no confidential exposure to age out of, they just age out of the retention window on
-the usual schedule. An operator who wants uniform, per-row semantics on the existing partitions sooner
-than that can run `regenerate_partitions` over `blocks`. See Migration & Upgrade Notes for the full
-accounting.
+forward, with nothing in the row data itself distinguishing which query produced it. Per the
+governing premise, that is a consistency gap and nothing more: the per-row guarantee takes effect for
+everything ingested from here on, and the existing partitions age out of the retention window on the
+usual schedule. An operator who wants uniform, per-row semantics on them sooner can run
+`regenerate_partitions` over `blocks`.
 
 #### The `max(audience)` regression
 
@@ -414,60 +420,39 @@ therefore already correct and needs no change: every non-NULL-stamped block cont
 `max()` agrees with every other, so the aggregate can only ever equal that one shared value. This is
 the normal case: a process/stream whose own row already carries a real, non-NULL stamp, with every
 one of its blocks also carrying a real, non-NULL stamp. A block that reaches a real anchor with a
-NULL stamp of its own is a different case, covered in "The reverse direction" below, and it does
-**not** hold to this agreement.
+NULL stamp of its own does not hold to this agreement; it is one of the two mixed-version shapes
+covered next.
 
-**The NULL-anchor case — kept honest, not closed.** The predicate is NULL-tolerant (§4 above): a
-block matched against a legacy `processes`/`streams` row whose `audience` is still NULL — every row
-registered before its ingestion binary reached v8, since those rows are immutable and there is no
-backfill (§2) — survives with its own real stamp regardless of what that stamp is. With
-`processes_view`/`streams_view` computing plain `max(audience)` over a process's/stream's blocks,
-such a block **can** relabel that legacy row: an attacker in audience `zeta` writes one block
-claiming victim `beta`'s NULL-audience `process_id`, and the aggregate resolves to `zeta` (or, if
-`beta` also has legitimate post-upgrade blocks on the same process, `max('beta', 'zeta') = 'zeta'`)
-— relabeling the victim's process row, hiding it from `beta`'s readers and exposing its metadata to
-`zeta`'s. This is exactly the relabeling a per-row-anchored `max()` would have prevented.
+**The two mixed-version shapes — stated once, here.** The predicate is NULL-tolerant (§4 above), so
+a row pair with a NULL `audience` on either side passes through it, in both directions:
 
-This is now an accepted consequence, on the same grounds as every other NULL-anchor exposure in
-this plan: a NULL-anchored `processes`/`streams` row is pre-AbAC data that resolves to
-`MICROMEGAS_DEFAULT_AUDIENCE` at read time, so the row `max(audience)` can relabel here was already
-public within the deployment before this label was ever attached to it. It is not closed by this
-design — see the NULL-tolerant-window discussion in Migration & Upgrade Notes for the window's
-lifetime and the rationale in full.
+- **NULL anchor, real block.** A block with a real stamp joins a legacy `processes`/`streams` row
+  whose `audience` is still NULL — every row registered before its ingestion binary reached v8,
+  since those rows are immutable and there is no backfill (§2). The block survives with its own
+  stamp, so `max(audience)` over that process's/stream's blocks can resolve to a value the legacy
+  row itself never carried.
+- **Real anchor, NULL block.** A pre-v8 ingestion replica, still issuing the old positional
+  `INSERT INTO blocks VALUES($1..$11)`, writes a block for a process a v8 replica already stamped.
+  That block survives on its own NULL side and resolves to
+  `COALESCE(NULL, default) = MICROMEGAS_DEFAULT_AUDIENCE`.
 
-**The reverse direction — a real anchor with a NULL block.** The predicate's NULL-tolerance is
-symmetric: it also passes a block whose own `audience` is NULL against a `processes`/`streams`
-anchor that already carries a real, non-NULL stamp. This is reachable mid-rolling-upgrade of the
-ingestion tier, not just before it starts: a v8 replica registers process `P` with
-`processes.audience = 'beta'`, while a pre-v8 replica — still issuing the old positional
-`VALUES($1..$11)` `INSERT INTO blocks` — writes one of `P`'s blocks with a short `VALUES` list,
-leaving `blocks.audience` NULL. That block survives the predicate on its own NULL side, and resolves
-to `COALESCE(NULL, default) = MICROMEGAS_DEFAULT_AUDIENCE` everywhere it is read: `blocks_view`'s own
+In both shapes the resolved value reaches every reader of the block's own column: `blocks_view`'s
 `data_sql`, `log_entries`/`measures`, Prong B's `IdKind::Block` arm (`owner_query_sql`, which
-resolves this block alone, off `blocks.audience`, never through `P`), and
-`processes_view`/`streams_view`'s own `max(audience)` — which aggregates over this same
-materialized `blocks.audience` column, grouped by `process_id`/`stream_id`, so this default-audience
-block sits in the same group as `P`'s other, genuinely `'beta'`-stamped blocks and
-`max('beta', MICROMEGAS_DEFAULT_AUDIENCE) = MICROMEGAS_DEFAULT_AUDIENCE` relabels `P`'s own
-`processes`/`streams` view row from `beta` to the deployment default — hidden from `beta`'s readers,
-its metadata exposed to default-audience readers instead. This is the mirror image of the
-NULL-anchor case's relabeling above, with the NULL and the real stamp on opposite sides. Unlike the
-NULL-anchor case above, the anchor here is real, so the "already public" argument does not apply: before this plan,
-the same block resolves through `P`'s process row to `beta` and is gated accordingly; after this
-plan, until the block's own `audience` is populated, it reads as the deployment default instead —
-a genuine read escalation to any default-audience reader — and `blocks` rows are immutable (§2), so
-the mislabel is permanent until the row ages out under retention. The actual bound is on the
-deployment, not the row: it requires a deployment already running production traffic under a
-non-default audience while its ingestion tier is only partway upgraded to v8, and #1373/#1482/#1519
-— the rest of the audience-stamping stack this plan builds on — are all still `## Unreleased`, so no
-deployment holds a non-default audience today. Migration & Upgrade Notes carries the operational
-guidance this bound depends on: every ingestion replica, not just one, has to reach v8 before
-audience separation can be relied on.
+resolves the block alone, off `blocks.audience`), and `processes_view`/`streams_view`'s
+`max(audience)`, which aggregates that same materialized column grouped by `process_id`/`stream_id`
+— so a mixed group's aggregate can differ from the anchor row's own label in either direction.
+`blocks` rows are immutable (§2), so a value settled this way persists until the row ages out under
+retention.
+
+Under the [governing premise](#governing-premise--the-data-already-in-the-lake-is-public) these are
+consistency artifacts of the rollout, described here so a reader can predict what a mixed-version
+lake returns — not exposure to account for. Operationally they are bounded by the deploy-order
+requirement in Migration & Upgrade Notes: every ingestion replica, not just one, reaches v8 before
+audience separation is relied on.
 
 - `processes_view.rs` / `streams_view.rs`: no change. Both the transform and merge queries keep
-  plain `max(audience)` — see "The normal case" above for the agreement this relies on, and "The
-  NULL-anchor case" and "The reverse direction" above for the two relabeling exposures it accepts
-  instead of closing.
+  plain `max(audience)` — see "The normal case" above for the agreement this relies on, and "The two
+  mixed-version shapes" above for what it resolves to when a NULL is on either side.
 - `log_entries` and `measures` have a different regression, not a relabeling one: `audience` itself
   is already the right anchor for the row (their rows come from a single block's payload, so there
   is no cross-block aggregation to average away). But every other column on the row — `exe`,
@@ -475,45 +460,34 @@ audience separation can be relied on.
   `rust/analytics/src/log_entries_table.rs`; `measures` adds `realname`/`distro`/`cpu_brand` in
   `rust/analytics/src/metrics_table.rs`) — is filled from the `processes` row the block's
   `process_id` joins to (`partition_source_data.rs`'s `ProcessMetadata` construction), not from the
-  block's own stamp. A block written under `alpha` naming victim `beta`'s `process_id` would
-  otherwise materialize with `audience = 'alpha'` (correctly labelled) but
-  `exe`/`username`/`computer`/`process_properties` copied from `beta`'s real process row —
-  `alpha`'s readers, already scoped into a view they're allowed to read, would get `beta`'s real
-  process metadata handed to them, which is worse than a mislabeled row since it costs the attacker
-  nothing it doesn't already have (a guessed `process_id`) and gives up real victim data in return.
+  block's own stamp. A block written under `alpha` naming `beta`'s `process_id` would otherwise
+  materialize with `audience = 'alpha'` (correctly labelled) but
+  `exe`/`username`/`computer`/`process_properties` copied from `beta`'s real process row, so
+  `alpha`'s readers would be handed `beta`'s process metadata inside a view they are allowed to
+  read.
   Fix: the mismatch predicate below on `blocks_view`'s own `data_sql` keeps the row out of the
   `blocks` view entirely, and `partition_source_data.rs` (`fetch_partition_source_data`) sources
   `log_entries`/`measures`' blocks from `blocks`' own materialized partitions
   (`existing_partitions.filter("blocks", "global", ...)`), not from Postgres directly — so a row the
   predicate excludes was never a candidate block for `log_entries`/`measures` in the first place,
   **for every case where the predicate actually excludes it.** It does not exclude this one when
-  victim `beta`'s `processes` row is a legacy, pre-v8 row whose `audience` is still NULL: the
-  NULL-tolerant predicate passes the block through (§4 above), so it does materialize into
-  `log_entries`/`measures` with `audience = 'alpha'` and `beta`'s real
-  `exe`/`username`/`computer`/`process_properties`. That residual exposure is accepted, not
-  closed by this design: `beta`'s process row here is NULL-anchored, i.e. pre-AbAC, so its
-  `exe`/`username`/`computer`/`process_properties` already resolve to `MICROMEGAS_DEFAULT_AUDIENCE`
-  and are already public within the deployment — `alpha`'s readers gain nothing that wasn't
-  already exposed under the default audience. See Migration & Upgrade Notes for the window's
-  lifetime. `log_table_schema()`, the measures schema, and `log_view.rs`'s and
+  `beta`'s `processes` row is a legacy, pre-v8 row whose `audience` is still NULL: the NULL-tolerant
+  predicate passes the block through, so it materializes with `audience = 'alpha'` and `beta`'s
+  `exe`/`username`/`computer`/`process_properties` — the first of the two mixed-version shapes
+  above. `log_table_schema()`, the measures schema, and `log_view.rs`'s and
   `metrics_view.rs`'s `SCHEMA_VERSION` are untouched — the mismatch predicate lives only in
   `blocks_view.rs`'s `data_sql`; no downstream view needs to carry a copy of it or repeat the check.
 - `log_stats_view.rs` aggregates `log_entries` rows with `arrow_cast(max(audience), ...)`
   `GROUP BY process_id, level, target, time_bin`. Once the `blocks_view` mismatch predicate (§4) is
   in place, a `process_id`'s group can still span two audiences whenever that process's row is a
   legacy, pre-v8 row with `audience` still NULL: the predicate's NULL-tolerant pass-through lets a
-  block stamped with a real, non-default audience (e.g. an attacker's) through alongside the
-  process's own legacy blocks (default audience), so `max(audience)` over that group would relabel
-  the victim's aggregated stats row with the attacker's stamp — the same relabeling
-  `processes_view`/`streams_view` are fixed against above, for the same reason. Adding `audience`
-  to the `GROUP BY` in **both** the transform and merge queries does act during that window: it
-  keeps that legacy-row group from merging two audiences' rows into one labelled row. But the
-  victim's own row there is a NULL-anchored, pre-v8 row, whose data is already public (it resolves
-  to `MICROMEGAS_DEFAULT_AUDIENCE` — Migration & Upgrade Notes), so what the `GROUP BY` change
-  protects during that window is not confidential; its real value is defense-in-depth against the
-  mismatch predicate being weakened later, the same as everywhere else this pattern shows up. It
-  only becomes a true no-op once the NULL-anchor window closes (see Migration & Upgrade Notes). The
-  selected column and schema are unchanged, so the
+  block stamped with a real, non-default audience through alongside the process's own legacy blocks
+  (default audience), so `max(audience)` over that group would collapse two audiences into one
+  labelled row — the first of the two mixed-version shapes above. Adding `audience` to the
+  `GROUP BY` in **both** the transform and merge queries keeps those rows separate during that
+  window; once no NULL-anchored `processes` row is left it is a no-op, and its standing value is
+  defense-in-depth against the mismatch predicate being weakened later. The selected column and
+  schema are unchanged, so the
   file-schema hash does not need to bump — but the grouping itself changes, which has its own
   regeneration cost; see Migration & Upgrade Notes, where it is mandatory, not optional.
   `audience` does **not** join the declared merge sort order: `log_stats` is the only view calling
@@ -649,11 +623,11 @@ row carries a real, non-NULL stamp, as a side effect of where §4 puts the misma
 `generate_process_jit_partitions`/`generate_stream_jit_partitions` callers query `FROM source`
 against those same partitions, exactly as `log_entries`/`measures` do), so a block the predicate
 excludes was never written into a `blocks` partition for either of them to find either. It is
-**not** closed against a victim whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience
-row — the predicate's NULL-tolerant pass-through lets an attacker's block through unchecked in that
-case. That is accepted, not left as an open question: a NULL-anchored victim row's data is already
-public (see Migration & Upgrade Notes). What is left open is
-narrower than the original gap:
+**not** closed against a target whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience
+row — the predicate's NULL-tolerant pass-through lets the block through unchecked, the first of the
+two mixed-version shapes in
+["The `max(audience)` regression"](#the-maxaudience-regression). What is left open is narrower than
+the original gap:
 
 - **The five views `OwnershipRewrite` resolves via `per_process_audience()`.** `net_spans`,
   `otel_spans`, and `images` are filtered through the `IN`-subquery built from
@@ -677,15 +651,14 @@ narrower than the original gap:
   process whose own row is a legacy, pre-v8 NULL-audience row: `find_process` resolves
   `process.audience` to the deployment default regardless of what its post-upgrade blocks are
   actually stamped with, so every block this path fetches for such a process is relabelled to the
-  default — a *value* difference, not just a mechanism one — on top of `view_instance` being denied
-  outright to a reader scoped to the block's real audience; this is accepted for the same
-  public-legacy-data reason as elsewhere (see Migration & Upgrade Notes). Carrying the block's own
-  stamp into the JIT path (splitting a
+  default — a *value* difference, not just a mechanism one — and `view_instance` is denied to a
+  reader scoped to the block's real audience. That is the mixed-version rollout artifact covered by
+  the governing premise. Carrying the block's own stamp into the JIT path (splitting a
   per-block audience out of `ProcessMetadata`) is still worth doing for its own sake — it removes
   the aggregate dependency rather than relying on it staying safe — but it is not attempted here.
 
 Both are pre-existing gaps, not new ones — this plan does not widen either, and narrows what they
-actually expose — and both are recorded in [Out of scope](#out-of-scope--follow-ups).
+resolve through — and both are recorded in [Out of scope](#out-of-scope--follow-ups).
 
 **`metadata.rs::find_process`** — `coalesced_audience_subselect("properties", 2)` becomes
 `coalesced_audience_column("processes", 2)`. Nothing else in `ProcessMetadata` changes.
@@ -1042,17 +1015,12 @@ also carrying a real stamp** — for that case, bare
 `max(audience)` is already correct, so the extra columns and the switch would have been pure
 defense-in-depth, not a prerequisite for the fix. The decision taken here is not to pay that cost:
 `blocks` keeps exactly one audience column — the block's own stamp — the mismatch predicate is the
-single control, and `processes_view`/`streams_view` keep plain `max(audience)` unchanged. The
-accepted cost is the case the columns would have hedged against: for a process/stream whose row is
-still a legacy, pre-v8 NULL-audience row, a block that survives the predicate can still relabel that
-row via `max(audience)` — but what it relabels there is already-public legacy data (Migration &
-Upgrade Notes), so the exposure is accepted on the same grounds as the rest of the NULL-anchor
-window. The mirror case is not free the same way: a real-stamped process/stream row can itself be
-relabeled by a NULL-audience block reaching it mid-rolling-upgrade — an anchor that is not
-already-public data, accepted only on the narrower, deployment-level bound that no production
-traffic runs under a non-default audience while the ingestion tier is still partway upgraded to v8;
-see [The `max(audience)` regression](#the-maxaudience-regression) for the full accounting of both
-cases.
+single control, and `processes_view`/`streams_view` keep plain `max(audience)` unchanged. What the
+extra columns would have hedged against is the two mixed-version shapes the NULL-tolerant predicate
+lets through, described once in
+[The `max(audience)` regression](#the-maxaudience-regression); under the governing premise those are
+rollout consistency artifacts, not a cost worth two columns and a schema bump on the largest view in
+the lake.
 
 **Skipping a mismatched block vs. failing its partition.** The alternative to a per-block skip is
 to fail materialization of the whole partition the block falls in when a mismatch is found. That
@@ -1100,9 +1068,9 @@ own resolved value.
 The Arrow schema this plan produces is byte-identical to what's already on disk, so this is possible
 without breaking anything — the alternative would have been to bump the hash purely to force
 re-materialization, not because the schema needed it. Doing that would mean re-materializing `blocks`,
-the largest view in the lake, plus the SqlBatchViews built over it, entirely to relabel data that
-is already public in this deployment (Migration & Upgrade Notes). Not worth it. The price is a
-consistency gap, not a confidentiality one: existing partitions keep old-semantics `audience` values
+the largest view in the lake, plus the SqlBatchViews built over it, only to relabel data the
+governing premise says is already public. Not worth it. The price is a
+consistency gap: existing partitions keep old-semantics `audience` values
 and may contain rows the §4 predicate would now exclude, alongside new partitions materialized under
 the new semantics, until the old ones age out of the retention window — or an operator runs
 `regenerate_partitions` over `blocks` deliberately, for anyone who wants uniform semantics sooner.
@@ -1130,50 +1098,21 @@ the new semantics, until the old ones age out of the retention window — or an 
   stamp. The §4 predicate's NULL-tolerant form (`x.audience IS NULL OR y.audience IS NULL OR
   x.audience = y.audience`) is what keeps those blocks materializing instead of being silently
   dropped for that process's/stream's remaining lifetime — the alternative `COALESCE`-then-compare
-  form would exclude them permanently, not just during the rollout. The same pass-through applies
-  mid-rolling-upgrade, when a pre-v8 ingestion binary writes NULL-audience blocks onto a stream a
-  v8 binary already stamped. **This is not a cosmetic trade-off — it leaves the cross-audience
-  injection attack this plan sets out to close fully open against any `processes`/`streams` row
-  whose `audience` is NULL.** A block landing on a legacy NULL-audience process/stream is not
-  checked against that row's audience at all, so an attacker in audience `zeta` who names such a
-  `process_id`/`stream_id` still materializes a row labelled `audience = 'zeta'` and, for
-  `log_entries`/`measures`, carrying the victim's real `exe`/`username`/`computer`/
-  `process_properties` (§4). A NULL row does not resolve to "the attacker's own audience" in a way
-  that makes it safe to target on that account: it resolves to
-  `MICROMEGAS_DEFAULT_AUDIENCE` at read time, which is a distinct audience from the attacker's
-  whenever the deployment default differs from the attacker's own — so targeting a NULL-anchored
-  row is exactly a cross-audience exploit, not a no-op. This window persists for as long as any
-  pre-v8 `processes`/`streams` row exists, since those rows are immutable and this plan does no
-  backfill (§2).
+  form would exclude them permanently, not just during the rollout. The window lasts as long as any
+  pre-v8 `processes`/`streams` row does. Both directions of the pass-through — a real-stamped block
+  on a NULL anchor, and a NULL-stamped block on a real anchor — and everything they resolve to are
+  described once in [The `max(audience)` regression](#the-maxaudience-regression); under the
+  governing premise they are rollout consistency artifacts.
 
-  **This is a known, accepted residual exposure, not an open question.** A NULL `audience` on a
-  `processes`/`streams` row means the row predates per-row stamping — it is pre-AbAC data that
-  resolves to `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment's public/legacy audience. The metadata
-  an attacker reaches by naming such a `process_id` — `exe`/`username`/`computer`/
-  `process_properties` — is therefore already public: the pass-through leaks nothing that was
-  confidential to begin with. That is why the alternatives are not worth their cost: a strict
-  `COALESCE`-then-compare predicate would permanently drop legitimate post-upgrade telemetry from
-  every such process/stream, not just during the rollout, and a one-time backfill of the column
-  would cost the full-table rewrite of `blocks` (and `processes`/`streams`) the v8 migration is
-  specifically designed to avoid (§2, "No backfill" above) — and would still not fully close the
-  window against a mixed-version rolling fleet, since a pre-v8 binary can keep writing NULL-audience
-  rows after any backfill pass runs. The NULL-tolerant pass-through as written stays.
-- **The reverse direction: a NULL block against a real anchor.** The same NULL-tolerant predicate
-  also passes a block whose *own* `audience` is NULL through against a `processes`/`streams` anchor
-  that already carries a real, non-NULL stamp — reachable when a pre-v8 ingestion replica (still
-  issuing the old positional `INSERT INTO blocks VALUES($1..$11)`) writes a block for a process a
-  v8 replica already registered with a real audience. Unlike every other case in this section, the
-  anchor here is not NULL, so "the row was already public" does not apply: before this plan the
-  block resolves through its process to that real audience and is gated accordingly; after this
-  plan it resolves to `MICROMEGAS_DEFAULT_AUDIENCE` until its own column is populated, which — since
-  `blocks` rows are immutable — is never. That is a genuine, if narrow, read escalation, not an
-  accepted no-op (see [The `max(audience)` regression](#the-maxaudience-regression) for the full
-  mechanism). Its bound is on the deployment, not the row: it requires production traffic already
-  running under a non-default audience while the ingestion tier is only partway upgraded to v8, and
-  #1373/#1482/#1519 — the rest of the audience-stamping stack this plan builds on — are all still
-  `## Unreleased`, so no deployment holds a non-default audience as of this plan. The operational
-  mitigation is the deploy-order guidance above, generalized: bring every ingestion replica to v8,
-  not just one, before relying on audience separation during a rolling upgrade.
+  The alternatives cost more than that: a strict `COALESCE`-then-compare predicate would permanently
+  drop legitimate post-upgrade telemetry from every such process/stream, not just during the
+  rollout, and a one-time backfill of the column would cost the full-table rewrite of `blocks` (and
+  `processes`/`streams`) the v8 migration is specifically designed to avoid (§2, "No backfill"
+  above) — and would still not close the window against a mixed-version rolling fleet, since a
+  pre-v8 binary can keep writing NULL-audience rows after any backfill pass runs. The NULL-tolerant
+  pass-through as written stays. The operational requirement it depends on is the deploy-order
+  guidance above, generalized: bring **every** ingestion replica to v8, not just one, before relying
+  on audience separation during a rolling upgrade.
 - `blocks_file_schema_hash()` stays `vec![5]` — no bump, and deliberately so rather than as a
   side effect. The Arrow schema doesn't change, so nothing would auto-invalidate `blocks` partitions
   on its own either way; on top of that, the author chose not to force a rebuild, to avoid
@@ -1181,11 +1120,10 @@ the new semantics, until the old ones age out of the retention window — or an 
   values they were written with under the old per-process-property query, and may contain rows the
   §4 mismatch predicate would now exclude; new partitions get the new per-row semantics as soon as
   the v8 ingestion binary is live, with old- and new-semantics partitions queried side by side in
-  between. Because every partition in the lake today holds public data, this is a consistency note
-  rather than a confidentiality exposure — the per-row guarantee simply takes effect for everything
-  ingested from here on, and the existing partitions age out of the retention window on the usual
-  schedule without ever having held anything non-public. `regenerate_partitions` over `blocks`
-  remains available to an operator who wants uniform, per-row semantics sooner than that.
+  between. Per the governing premise that is a consistency gap only: the per-row guarantee takes
+  effect for everything ingested from here on, and the existing partitions age out of the retention
+  window on the usual schedule. `regenerate_partitions` over `blocks` remains available to an
+  operator who wants uniform, per-row semantics sooner than that.
 - `blocks` joins that same not-auto-invalidated set deliberately (above); `processes`/`streams`/
   `log_entries`/`measures` land there too, but because their schema simply never changed rather than
   by choice. They are all `SqlBatchView`s that hash their inferred
@@ -1193,18 +1131,18 @@ the new semantics, until the old ones age out of the retention window — or an 
   `log_view.rs`/`metrics_view.rs` return a constant `vec![SCHEMA_VERSION]`, and
   `processes_view.rs`/`streams_view.rs` are equally schema-stable — so **none** of the four is
   auto-invalidated, the same as `processes`/`streams`. For a process/stream whose own row already
-  carried a real, non-NULL stamp before this change, content is identical to the old materialization
-  for a row that was actually attacked: the mismatched block never reaches `blocks` at all (§4), so
-  `processes_view`/`streams_view`'s unchanged `max(audience)` has nothing attacker-controlled left
-  to aggregate, and `log_entries`/`measures` simply omit the mismatched block's rows rather than
-  carrying its joined process metadata — so no regeneration is required on that account.
+  carried a real, non-NULL stamp before this change, content matches the old materialization: a
+  mismatched block never reaches `blocks` at all (§4), so `processes_view`/`streams_view`'s
+  unchanged `max(audience)` has nothing disagreeing left to aggregate, and `log_entries`/`measures`
+  simply omit the mismatched block's rows rather than carrying its joined process metadata — so no
+  regeneration is required on that account.
   **That is not the only source of difference.** A process/stream registered before its ingestion
   binary reached v8 has `audience = NULL` for the rest of its life (rows are immutable, §2 does no
   backfill), while every post-upgrade block of that same process/stream carries the credential's
   real, resolved audience. `find_process` and `processes_view`/`streams_view` resolve the legacy
   row to the deployment default, while its post-upgrade `blocks`/`log_entries`/`measures` rows
   carry the real audience — the two halves of the same process end up under two different
-  audiences. This is a genuine break for legitimate operation, not just an attacked row: a reader
+  audiences. This affects ordinary operation, not just mismatched rows: a reader
   scoped to the real audience sees the process's telemetry but not its `processes`/`streams` row
   (`OwnershipRewrite` filters each view on its own `audience` column), is denied
   `view_instance('log_entries'|'measures', pid)` for it (`AudienceGuard::authorize_view_instance`
@@ -1212,13 +1150,10 @@ the new semantics, until the old ones age out of the retention window — or an 
   real audience), while a reader scoped to the deployment default sees the process row but none of
   its post-upgrade telemetry. This split persists for as long as the legacy row exists and is not
   fixed by regeneration — regenerating `processes`/`streams`/`log_entries`/`measures` partitions
-  changes nothing about what `audience` a NULL `processes`/`streams` row resolves to. This split is
-  accepted for the same reason as the mismatch-predicate window above: the legacy `processes`/
-  `streams` row it stems from is pre-AbAC, public/legacy data, so a reader denied `view_instance`
-  for it, or a default-audience reader who can't see its post-upgrade telemetry, is not being denied
-  anything confidential — it is an operational rough edge of the NULL-anchor window, not a
-  confidentiality gap, and the NULL-tolerant pass-through (as written) is kept rather than traded for
-  a strict comparison or a backfill. An
+  changes nothing about what `audience` a NULL `processes`/`streams` row resolves to. It is an
+  operational rough edge of the NULL-anchor window, accepted on the same grounds as the rest of it
+  (governing premise), and the NULL-tolerant pass-through is kept rather than traded for a strict
+  comparison or a backfill. An
   operator who wants strict consistency for the disjoint, already-real-stamp case above can still
   `regenerate_partitions` over `blocks`, `processes`, `streams`, `log_entries`, `measures` for the
   retention window.
@@ -1266,13 +1201,10 @@ the new semantics, until the old ones age out of the retention window — or an 
     remains process-anchored"), which still resolve audience through the owning process/stream
     row. It also does not close it against any `processes`/`streams` row whose `audience` is
     still NULL — a row registered before its ingestion binary reached v8 — since the §4 mismatch
-    predicate's NULL-tolerant pass-through lets an attacker's block through unchecked against such
-    a row for as long as it exists (Migration & Upgrade Notes). This is an accepted, bounded
-    limitation, not an open gap: a NULL-anchored row is pre-AbAC data that already resolves to the
-    deployment's public/legacy default audience, so what an attacker reaches through it was already
-    public. Rewrite the admonition to describe
-    that narrower, remaining surface — including the NULL-anchor window and why it is accepted —
-    rather than deleting it.
+    predicate's NULL-tolerant pass-through lets a mismatched block through unchecked against such
+    a row for as long as it exists (Migration & Upgrade Notes). Rewrite the admonition to describe
+    that narrower, remaining surface — including the NULL-anchor window and the deploy-order
+    requirement that bounds it — rather than deleting it.
     Keep the process-squatting paragraphs inside it (they describe a different, already-closed
     gap) by lifting them into the surrounding prose.
   - `:205` "the two prongs read different copies of `micromegas.audience`": still true (Prong A
