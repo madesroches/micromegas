@@ -370,22 +370,83 @@ NULL-on-shape-mismatch semantics, and the fact that the UDTFs' uncorrelated-only
 now documented rather than silently hit. Purely additive to the SQL surface — no breaking-change
 clause needed.
 
+### 8. `jsonb_object_keys`: return plain `List<Utf8>` instead of `Dictionary<Int32, List<Utf8>>`
+
+This is step 3 of #1475's revised scope (see the issue comment linked at the top), pulled into
+this plan rather than left as a separate one now that steps 1–2 above give it the machinery it
+needs. **Unlike steps 1–2, this is a SQL-surface type change** under `CLAUDE.md`'s interface-
+stability rule — `jsonb_object_keys`'s declared return type changes for every caller, not just an
+addition — so it must be called out as a deliberate, documented break rather than folded silently
+into "add three new functions."
+
+**Why now, not later.** The dictionary-wrapped return type is exactly what makes
+`unnest(jsonb_object_keys(j))` fail today (`unnest() can only be applied to array, struct and
+null` — see "The gap" above) and what breaks `SELECT DISTINCT`/`GROUP BY` without the
+`arrow_cast(..., 'List(Utf8)')` workaround the docs currently recommend. Steps 1–2 built exactly
+the dictionary-fast-path machinery (`binary_dict`, `dict_fast_path`, `binary_accessor_or_err` in
+`list_udfs.rs`) this fix needs to keep the same "extract each unique blob once" performance
+property `jsonb_object_keys`'s current `HashMap`-based dedup gives it — reusing it here is small
+once those helpers exist, so there is little reason to defer.
+
+**Change**: in `rust/datafusion-extensions/src/jsonb/keys.rs`,
+- `JsonbObjectKeys::return_type` changes from `Dictionary<Int32, List<Utf8>>` to plain
+  `List<Utf8>` (item field unchanged: `Field::new_list_field(DataType::Utf8, true)`, nullable
+  items, matching the current inner list field exactly — only the dictionary wrapper is removed).
+- `invoke_with_args` drops the current hand-rolled `Binary` / `Dictionary<Int32, Binary>` branches
+  and `build_dict_list_array` dedup helper, and instead calls the shared helpers from
+  `list_udfs.rs` (promoted from private to `pub(crate)` there): `binary_dict(&args[0])` to detect
+  the `Dictionary<Int32, Binary>` case, `dict_fast_path` to build the list once per unique blob
+  and `take`-expand it to row count, `binary_accessor_or_err` for the plain-`Binary` row-by-row
+  fallback. This is the same shape as `build_binary_list` in `list_udfs.rs`, parameterized on a
+  `StringBuilder` instead of a `BinaryBuilder`. `extract_keys_from_jsonb` (the JSONB → `Vec<String>`
+  extraction) stays in `keys.rs` unchanged — it is specific to object-key extraction, not shared
+  with `extract.rs`'s object/array/path helpers.
+- Net effect: no behavior change per row (same keys, same order, same NULL-on-non-object
+  semantics, same dictionary-input performance characteristic) — only the wire type loses its
+  `Dictionary` wrapper, and `unnest(jsonb_object_keys(...))` and `SELECT DISTINCT
+  jsonb_object_keys(...)` (unnested) now work without an `arrow_cast`.
+
+**Docs**: `mkdocs/docs/query-guide/functions-reference.md`'s `jsonb_object_keys` entry — update
+the declared return type, drop the `arrow_cast(..., 'List(Utf8)')` workaround note and the
+`DISTINCT`/`GROUP BY` caveat tied to it (both now unnecessary), and update the "The gap" queries
+in this plan's own "What exists"/"The gap" tables are historical record of the old behavior and
+are not touched.
+
+**Tests**: `rust/analytics/tests/jsonb_object_keys_tests.rs` (pre-existing, predates this plan) is
+built entirely around `DictionaryArray<Int32Type>` downcasts and a `Dictionary<Int32, List<Utf8>>`
+type assertion — every test needs its result-array downcast and type assertion updated to
+`ListArray` / plain `List<Utf8>`. The dictionary-input test's "keys at indices 0 and 2 point to
+the same dictionary entry" assertion has no plain-`List` equivalent (there is no shared dictionary
+entry to point at) and is replaced with a value-equality check between the repeated rows' key
+lists instead — the fast path still extracts each unique blob once, but that is no longer
+independently observable from the query result, only from performance.
+
+**CHANGELOG**: its own bullet (or folded into step 7's, if written after this step lands),
+carrying an explicit **Minor breaking change** clause: `jsonb_object_keys`'s return type changes
+from `Dictionary<Int32, List<Utf8>>` to `List<Utf8>`; any client-side code that specifically
+handled the dictionary encoding (rather than reading the list values, which any Arrow-aware client
+does transparently either way) needs updating. No production SQL view or documented example in
+this codebase relies on the dictionary encoding specifically (checked: no `analytics-web-app` or
+`python/` usage beyond one notebook cell that reads key values, which is encoding-agnostic).
+
 ## Files to Modify
 
 | File | Change |
 |---|---|
 | `rust/datafusion-extensions/src/jsonb/extract.rs` | **New** — shared extraction helpers |
-| `rust/datafusion-extensions/src/jsonb/list_udfs.rs` | **New** — the three `ScalarUDFImpl`s |
+| `rust/datafusion-extensions/src/jsonb/list_udfs.rs` | **New** — the three `ScalarUDFImpl`s; dictionary-fast-path helpers promoted to `pub(crate)` for step 8 to reuse |
 | `rust/datafusion-extensions/src/jsonb/each.rs` | Use `extract.rs`; map `Ok(None)` to existing error |
 | `rust/datafusion-extensions/src/jsonb/array_elements.rs` | Same |
+| `rust/datafusion-extensions/src/jsonb/keys.rs` | Step 8: return plain `List<Utf8>`, reuse `list_udfs.rs`'s dictionary fast path |
 | `rust/datafusion-extensions/src/jsonb/mod.rs` | Declare the two new modules |
 | `rust/datafusion-extensions/src/lib.rs` | Register the three UDFs |
 | `rust/datafusion-extensions/tests/jsonb_list_udfs_tests.rs` | **New** — unit + SQL integration tests |
-| `mkdocs/docs/query-guide/functions-reference.md` | Document the three functions; fix the UDTF expression-argument claims; add a usage pattern |
+| `rust/analytics/tests/jsonb_object_keys_tests.rs` | Step 8: rewrite `Dictionary<Int32, List<Utf8>>` assertions for plain `List<Utf8>` |
+| `mkdocs/docs/query-guide/functions-reference.md` | Document the three functions; fix the UDTF expression-argument claims; add a usage pattern; step 8: drop the `jsonb_object_keys` `arrow_cast` workaround note |
 | `claude-plugin/skills/micromegas-query/SKILL.md` | Add the three functions to the JSONB list; note `jsonb_each`'s uncorrelated-only restriction |
 | `rust/datafusion-extensions/README.md` | Add the three functions to the crate's JSONB list |
 | `python/micromegas/tests/test_jsonb.py` | End-to-end cases against a running service |
-| `CHANGELOG.md` | Unreleased entry |
+| `CHANGELOG.md` | Unreleased entry; step 8's entry carries a **Minor breaking change** clause |
 
 ## Trade-offs
 
@@ -433,10 +494,6 @@ follow-up, listed under Out of Scope.
 
 Tracked separately under #1475:
 
-- Changing `jsonb_object_keys` to return plain `List<Utf8>` instead of
-  `Dictionary<Int32, List<Utf8>>` (would remove the `arrow_cast` workaround and fix `DISTINCT`).
-  This is a SQL-surface type change under the interface-stability rule and needs to be a deliberate
-  staged change, not a side effect of this work.
 - Making the UDTFs *reject* a column-referencing expression with a clear error at plan time. This
   plan only corrects the documentation; the code-level signpost is a separate small change.
 - Correlated table functions / `LATERAL`.
@@ -484,6 +541,11 @@ for those three cases:
    pass unchanged after step 1's extraction, including the "not a JSONB array" / "not a JSONB
    object or array" error-text assertions (`jsonb_array_elements_tests.rs:102,117`,
    `jsonb_each_tests.rs:118`).
+9. **`jsonb_object_keys` (step 8)** — `rust/analytics/tests/jsonb_object_keys_tests.rs`'s existing
+   cases (simple object, dictionary input, null input, non-object, empty object, nested object,
+   key order) pass against the new plain-`List<Utf8>` return type; `unnest(jsonb_object_keys(j))`
+   and `SELECT DISTINCT` over an unnested key column now work without the `arrow_cast` workaround
+   (superseding the "works behind `arrow_cast`" row in "The gap" above with "works directly").
 
 Then:
 
