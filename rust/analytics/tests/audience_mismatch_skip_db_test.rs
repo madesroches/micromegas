@@ -1,18 +1,13 @@
-//! DB-backed regression test for AbAC Stage 5b (#1518, §4) -- the actual attack this plan closes:
-//! a block written under audience `alpha`, carrying a `process_id` owned by `beta`, is excluded
-//! from `blocks`' own materialization by the audience-mismatch predicate on `blocks_view.rs`'s
-//! `data_sql`, and is therefore equally absent from every view that reads blocks through `blocks`'
-//! own materialized partitions (`log_entries`, `measures`, `log_stats`), while the rest of the
-//! partition -- the victim's own, correctly-stamped rows -- materializes normally.
+//! DB-backed regression test for the audience-mismatch attack: a block written under audience
+//! `alpha`, carrying a `process_id` owned by `beta`, is excluded from `blocks`' own
+//! materialization by the audience-mismatch predicate in `blocks_view.rs`, and therefore also
+//! absent from every downstream view (`log_entries`, `measures`, `log_stats`), while the
+//! victim's own correctly-stamped rows still materialize normally.
 //!
-//! Mirrors `ownership_rewrite_db_test.rs`'s harness (seed through the real ingestion pipeline,
+//! Mirrors `ownership_rewrite_db_test.rs`'s harness (seeds through the real ingestion pipeline,
 //! `#[ignore]`, requires a live `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`).
-//!
-//! Assertions are on observable state (materialized row counts, column values), never on the
-//! `warn!`/`imetric!` side effects `MetadataPartitionSpec::write` emits -- see
-//! `insert_block_dedup_db_test.rs`'s module doc for the repo's convention on this point. The
-//! `unfiltered - kept` arithmetic those side effects are built on (`mismatch_excluded_count`) is
-//! unit-tested directly in `metadata_partition_spec_tests.rs`.
+//! Assertions are on observable materialized state only, never on the `warn!`/`imetric!` side
+//! effects `MetadataPartitionSpec::write` emits.
 
 mod common;
 
@@ -178,11 +173,9 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
         .await
         .with_context(|| "insert_block (victim metrics)")?;
 
-    // The attacker: registers its OWN, fresh stream (so `streams.audience` is honestly "alpha")
-    // but names the VICTIM's `process_id` -- `insert_stream` accepts any `process_id`
-    // unconditionally (the write-side gap this plan closes on the read side, not the write
-    // side). Every row the attacker writes from here is stamped with its own credential's
-    // audience, "alpha" -- never derived from the victim's `process_id`.
+    // The attacker: registers its own fresh stream (honestly "alpha") but names the VICTIM's
+    // `process_id` -- `insert_stream` accepts any `process_id` unconditionally. Every row it
+    // writes is stamped "alpha", its own credential's audience, never the victim's.
     let mut attacker_log_stream =
         LogStream::new(1024, process_id, &[String::from("log")], HashMap::new());
     let attacker_log_stream_info = make_stream_info(&attacker_log_stream);
@@ -406,10 +399,8 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     );
 
     // --- `log_stats`: the victim's row keeps audience='beta', with no extra 'alpha' row ------
-    // The only coverage for the `GROUP BY audience` change in `log_stats_view.rs`: the mismatch
-    // predicate makes the injected-block attack structurally unreachable for `log_stats` the
-    // same way it does for `processes`/`streams` above -- the attacker's row never reached
-    // `log_entries` to be aggregated in the first place.
+    // Covers the `GROUP BY audience` change in `log_stats_view.rs`: the attacker's row never
+    // reached `log_entries`, so it can't be aggregated here either.
     let log_stats_answer = query(
         lakehouse.clone(),
         part_provider.clone(),

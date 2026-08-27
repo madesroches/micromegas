@@ -510,14 +510,6 @@ if result:
     print(f"Ingested {result.record_count} process records")
 ```
 
-!!! note "`audience` is required"
-    Every table in the schema-v8-and-later `bulk_ingest` shape carries an `audience` column
-    (the row's own write audience — see [Authentication](../admin/authentication.md)). A
-    source table missing it is rejected outright rather than silently defaulted, matching the
-    same hard-failure precedent the `streams` table's `format` column already set. The example
-    above supplies `'public'`; a real replication source should carry each row's actual
-    audience.
-
 `streams` and `blocks` need the same column, alongside their other required fields:
 
 ```python

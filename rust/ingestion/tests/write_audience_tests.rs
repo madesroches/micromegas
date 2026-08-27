@@ -1,8 +1,7 @@
-//! Unit tests (no DB) for `WriteAudience` and the `pub` `strip_reserved_properties` helper
-//! (AbAC Stage 5, #1373; collapsed to a single state by #1519; the audience stamp itself moved
-//! off `properties` onto a physical column in AbAC Stage 5b, #1518 -- see
-//! `audience_stamping_db_test.rs` for that round-trip, which needs a live database).
-//! Every case here is a pure function of its arguments.
+//! Unit tests (no DB) for `WriteAudience` and the `pub` `strip_reserved_properties` helper. The
+//! audience stamp itself lives on a physical column now; see `audience_stamping_db_test.rs` for
+//! that round-trip, which needs a live database. Every case here is a pure function of its
+//! arguments.
 
 use micromegas_ingestion::web_ingestion_service::strip_reserved_properties;
 use micromegas_ingestion::write_audience::WriteAudience;

@@ -39,9 +39,9 @@ async fn ingest_streams(
         // Hard failure (rather than a silent default) on missing `format` so a
         // v3 source replicating into a v4 target surfaces the schema mismatch loudly.
         let format_column = string_column_by_name(&b, "format")?;
-        // Same rationale, for `audience` (#1518, AbAC Stage 5b): every source built from `main`
-        // exposes `streams.audience`, so a missing column means the source predates the v8
-        // column and must fail loudly rather than silently write NULL into every replicated row.
+        // Same rationale, for `audience`: every source built from `main` exposes
+        // `streams.audience`, so a missing column means the source predates the v8 column and
+        // must fail loudly rather than silently write NULL into every replicated row.
         let audience_column = string_column_by_name(&b, "audience")?;
 
         for row in 0..b.num_rows() {
@@ -111,10 +111,10 @@ async fn ingest_processes(
             typed_column_by_name(&b, "insert_time")?;
         let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
         let properties_accessor = properties_column_by_name(&b, "properties")?;
-        // Hard failure (rather than a silent default) on missing `audience` (#1518, AbAC Stage
-        // 5b), matching the precedent `ingest_streams` set for `format` in v4: every source
-        // built from `main` exposes `processes.audience`, so a missing column means the source
-        // predates the v8 column.
+        // Hard failure (rather than a silent default) on missing `audience`, matching the
+        // precedent `ingest_streams` set for `format` in v4: every source built from `main`
+        // exposes `processes.audience`, so a missing column means the source predates the v8
+        // column.
         let audience_column = string_column_by_name(&b, "audience")?;
         for row in 0..b.num_rows() {
             let process_id = Uuid::parse_str(process_id_column.value(row)?)?;
@@ -221,10 +221,10 @@ async fn ingest_blocks(
         let payload_size_column: &Int64Array = typed_column_by_name(&b, "payload_size")?;
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
-        // Hard failure (rather than a silent default) on missing `audience` (#1518, AbAC Stage
-        // 5b), matching the precedent `ingest_streams` set for `format` in v4: every source
-        // built from `main` exposes `blocks.audience`, so a missing column means the source
-        // predates the v8 column.
+        // Hard failure (rather than a silent default) on missing `audience`, matching the
+        // precedent `ingest_streams` set for `format` in v4: every source built from `main`
+        // exposes `blocks.audience`, so a missing column means the source predates the v8
+        // column.
         let audience_column = string_column_by_name(&b, "audience")?;
         for row in 0..b.num_rows() {
             let block_id = Uuid::parse_str(block_id_column.value(row)?)?;

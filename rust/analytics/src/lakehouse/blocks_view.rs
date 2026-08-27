@@ -36,13 +36,10 @@ fn insert_time_sort_order() -> Vec<String> {
     vec![String::from("insert_time")]
 }
 
-/// The NULL-tolerant audience-mismatch *keep* predicate (Design §4): true for a block whose own
-/// `audience` stamp does not disagree with either row it joins to (a NULL on either side always
-/// passes through -- see `audience_column_mismatch`'s doc comment for why). Built from
-/// `audience_column_mismatch` so this predicate, `source_count_query`, and the audience-mismatch
-/// diagnostic query (`MetadataPartitionSpec::write`, §4) -- and the hourly
-/// `block_audience_mismatch_rows` counter (`maintenance.rs`, §5) -- can never drift
-/// independently.
+/// The NULL-tolerant audience-mismatch *keep* predicate: true for a block whose own `audience`
+/// stamp does not disagree with either row it joins to (a NULL on either side always passes
+/// through -- see `audience_column_mismatch`'s doc comment for why). Shared with
+/// `source_count_query` and the mismatch counter in `maintenance.rs` so all three stay in sync.
 fn audience_mismatch_keep_predicate() -> String {
     format!(
         "NOT ({} OR {})",
@@ -67,9 +64,9 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
-    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped block materializes under
-    /// (AbAC Stage 5b, #1518, §4: a NULL `blocks.audience`, i.e. a legacy pre-v8 row). Carried
-    /// from `LakehouseContext::default_audience` by every constructor call.
+    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped block (a NULL `blocks.audience`,
+    /// i.e. a legacy pre-v8 row) materializes under. Carried from
+    /// `LakehouseContext::default_audience` by every constructor call.
     default_audience: Arc<str>,
     ordered_merger: Arc<dyn PartitionMerger>,
     plain_merger: Arc<dyn PartitionMerger>,
@@ -154,12 +151,9 @@ impl View for BlocksView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
-        // `count` is the kept side of the audience-mismatch comparison (rows surviving
-        // `keep_predicate`, i.e. this partition's `record_count`); `unfiltered` is the same join
-        // and insert-time range with no predicate applied at all. One query gives
-        // `fetch_metadata_partition_spec` both, so `MetadataPartitionSpec::write` never needs a
-        // second round trip to recover the unfiltered count (§4) -- see `unfiltered_count`'s doc
-        // comment on that struct.
+        // `count` is the kept side of the audience-mismatch comparison (this partition's
+        // `record_count`); `unfiltered` is the same join and range with no predicate applied.
+        // One query gives `fetch_metadata_partition_spec` both, avoiding a second round trip.
         let source_count_query = format!(
             "SELECT COUNT(*) FILTER (WHERE {keep_predicate}) AS count,
                     COUNT(*) AS unfiltered
@@ -346,17 +340,13 @@ pub fn blocks_view_schema() -> Schema {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
-        // Appended last (#1482; per-row since AbAC Stage 5b, #1518): the block's own stamp --
-        // the credential that wrote *this block*, never derived from the `process_id`/
+        // Appended last: the block's own audience stamp, never derived from the `process_id`/
         // `stream_id` it joins to. Non-nullable because `data_sql` wraps the extraction in
-        // `COALESCE(blocks.audience, $3)` (see `audience.rs`), so a block that was never stamped
-        // (a legacy, pre-v8 row) materializes under the deployment default rather than as a
-        // NULL. A block whose own stamp disagrees with the `streams`/`processes` row it joins to
-        // never reaches this column at all -- `data_sql`'s NULL-tolerant mismatch predicate
-        // excludes it from materialization entirely (§4). Dictionary-encoded like every other
-        // view's audience column (`log_entries_table.rs`, `metrics_table.rs`,
-        // `log_stats_view.rs`): one distinct value per partition in practice. `sql_arrow_bridge`
-        // delivers it as plain `Utf8` (its mapping is keyed on the Postgres type name), so
+        // `COALESCE(blocks.audience, $3)`, so a never-stamped (legacy pre-v8) block materializes
+        // under the deployment default instead of NULL; a block whose stamp disagrees with the
+        // `streams`/`processes` row it joins to is excluded from materialization entirely by
+        // `data_sql`'s mismatch predicate. Dictionary-encoded like every other view's audience
+        // column; `sql_arrow_bridge` delivers it as plain `Utf8`, so
         // `metadata_partition_spec::cast_to_file_schema` casts it to this declared type before
         // the write.
         Field::new(
@@ -369,15 +359,11 @@ pub fn blocks_view_schema() -> Schema {
 
 /// Returns the file schema hash for the blocks view.
 ///
-/// Stays `vec![5]` for AbAC Stage 5b (#1518, §4) -- deliberately not bumped. The Arrow schema is
-/// unchanged: `audience` keeps its name, type, and position, so today's partitions remain
-/// byte-identical and valid to read under it. Existing partitions keep whatever `audience`
-/// values they were materialized with under the old per-process-property query (sourced from the
-/// owning process's `micromegas.audience` property rather than the block's own stamp) and
-/// predate the mismatch predicate, so a partition may contain a row the predicate would now
-/// exclude -- a consistency gap under the governing premise that all lake data before this stage
-/// is public, not a confidentiality one. `regenerate_partitions` over `blocks` gives an operator
-/// who wants uniform, per-row semantics sooner than the retention window a way to get it.
+/// Stays `vec![5]` -- deliberately not bumped, since the Arrow schema is unchanged and existing
+/// partitions remain valid to read under it. An older partition may contain a row the new
+/// audience-mismatch predicate would now exclude (all pre-existing lake data is public, so this
+/// is a consistency gap, not a confidentiality one); `regenerate_partitions` over `blocks` lets
+/// an operator get uniform, per-row semantics sooner than the retention window would.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
     vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column (#1482)
 }

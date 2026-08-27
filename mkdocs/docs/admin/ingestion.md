@@ -72,7 +72,7 @@ instead — see [API Keys](api-keys.md).
 ## What gets stamped
 
 A process, stream, and block registered under a credential that carries a write audience are
-each stamped with their own `audience` **column** (schema v8, #1518) — server-written from that
+each stamped with their own `audience` **column** — server-written from that
 credential, never trusted from the client payload. A block's or a stream's own stamp is the
 credential that wrote *that* row, never derived from the `process_id`/`stream_id` it points at.
 This is what makes the analytics-side audience filter ([Authentication](authentication.md)) a
@@ -103,8 +103,8 @@ one with none, so an unstamped row can only be a genuinely pre-v8 one.
     pre-v8 database fails every query that touches the new `audience` columns with an "undefined
     column" error, until ingestion has migrated it. A pre-v8 ingestion binary against an
     already-migrated v8 database is fine — writes just leave the column NULL, which reads as the
-    deployment default. See the CHANGELOG's Stage 5b upgrade note for the full sequencing, including
-    the mandatory `regenerate_partitions` pass over `log_stats`.
+    deployment default. Also run `regenerate_partitions` over `log_stats` for the retention
+    window as part of this rollout, since its `GROUP BY` now includes `audience`.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
 property a client sends is dropped at ingestion and logged (`warn!`), naming the key. In

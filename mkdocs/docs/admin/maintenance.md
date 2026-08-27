@@ -95,7 +95,7 @@ The hourly task performs cleanup automatically:
   processes past the horizon are removed.
 - **Deletes expired temporary files** left behind by query execution.
 
-### Integrity counts (AbAC Stage 5b, #1518)
+### Integrity counts
 
 Alongside retention cleanup, the hourly task also counts two `blocks`-row anomalies over the
 last hour, directly against Postgres. Both cost nothing on the ingestion hot path — that is

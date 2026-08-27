@@ -1,12 +1,11 @@
-//! DB-backed tests for `insert_process`'s and `insert_stream`'s conflict guards (AbAC Stage 5,
-//! #1373, §6; Stage 5b, #1518, §5) and the stamp's round-trip through the `audience` column.
-//! Requires a live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (see
+//! DB-backed tests for `insert_process`'s and `insert_stream`'s conflict guards, and the
+//! stamp's round-trip through the `audience` column. Requires a live
+//! `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (see
 //! `insert_block_dedup_db_test.rs` for the same harness pattern); does not run under a plain
 //! `cargo test`.
 //!
-//! Scoped deliberately: everything that is a pure function of its inputs
-//! (`strip_reserved_properties`, `WriteAudience`) is asserted in `write_audience_tests.rs` and is
-//! not re-asserted against a database here. What only a live Postgres can prove is `ON CONFLICT
+//! Pure-function logic (`strip_reserved_properties`, `WriteAudience`) is asserted in
+//! `write_audience_tests.rs`, not here. What only a live Postgres can prove is `ON CONFLICT
 //! (process_id|stream_id) DO NOTHING` + `rows_affected() == 0` + the follow-up `SELECT` each
 //! conflict guard runs, and that the stamp actually reads back out of the `audience` column.
 
@@ -64,11 +63,8 @@ async fn read_stream_audience_column(
         .with_context(|| "reading streams.audience")
 }
 
-/// Fabricates a legacy-shaped row: nulls the `audience` column back out on a process that
-/// `insert_process` already stamped, via a direct `UPDATE processes SET audience = NULL`. There
-/// is no `UPDATE processes` path anywhere in the production codebase -- `insert_process` always
-/// stamps now -- so this is test-only scaffolding to reproduce the shape a row written before the
-/// v8 column existed, or one written by the admin `bulk_ingest`/replication path, still has.
+/// Fabricates a legacy-shaped row by nulling the `audience` column back out after
+/// `insert_process` stamped it, reproducing the shape of a row written before schema v8.
 async fn nullify_process_audience(pool: &sqlx::PgPool, process_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE processes SET audience = NULL WHERE process_id = $1")
         .bind(process_id)
@@ -148,19 +144,13 @@ async fn different_audience_reregistration_is_a_conflict() -> Result<()> {
     Ok(())
 }
 
-/// A fabricated legacy row -- stamped, then nulled back via `nullify_process_audience`,
-/// reproducing the shape of a row registered before its ingestion binary reached schema v8
-/// (admin replication now hard-fails on a missing `audience` column, §3, so it can no longer
-/// produce one) -- re-registered under a *different* audience than the resolved default is
-/// `AudienceConflict` (#1519, §7; column since #1518): the guard resolves the legacy row's NULL
-/// column to the deployment default the same way every reader does, and `team-a` disagrees with
-/// it.
+/// A fabricated legacy row (NULL `audience`) re-registered under a *different* audience than
+/// the resolved default is `AudienceConflict`: the guard resolves the NULL column to the
+/// deployment default the same way every reader does, and `team-a` disagrees with it.
 ///
-/// The fabricating label (`seed-only`) must differ from both the deployment default (`public`)
-/// and the label each of the two re-registration cases below uses, because `insert_process`
-/// caches the audience it just confirmed conflict-free (`remember_process_audience`) and the
-/// cache's 60s TTL cannot expire within a test -- a shared label would short-circuit on the
-/// cache-hit arm and never reach the resolved comparison this test exists to exercise.
+/// The fabricating label (`seed-only`) must differ from the deployment default and from the
+/// re-registration labels below, since `insert_process` caches a confirmed-conflict-free
+/// audience for 60s and a shared label would hit that cache instead of exercising the check.
 #[ignore]
 #[tokio::test]
 async fn legacy_unstamped_row_reregistered_under_a_different_audience_is_a_conflict() -> Result<()>
@@ -201,8 +191,7 @@ async fn legacy_unstamped_row_reregistered_under_a_different_audience_is_a_confl
 }
 
 /// The same fabricated legacy row, re-registered under the *deployment default* itself, is `Ok`
-/// and leaves the row unstamped (#1519 -- "No retro-stamp, still"): only the comparison changed,
-/// not whether a matching re-registration writes anything back.
+/// and leaves the row unstamped: a matching re-registration never writes anything back.
 #[ignore]
 #[tokio::test]
 async fn legacy_unstamped_row_reregistered_under_the_default_is_ok_and_stays_unstamped()
@@ -293,8 +282,8 @@ async fn otel_reregistration_conflicts_with_native_registration() -> Result<()> 
 }
 
 // ---------------------------------------------------------------------------
-// check_stream_audience_conflict (§5, AbAC Stage 5b, #1518) -- mirrors the three
-// `insert_process` cases above, via `insert_stream`.
+// check_stream_audience_conflict -- mirrors the three `insert_process` cases above, via
+// `insert_stream`.
 // ---------------------------------------------------------------------------
 
 /// Re-registering the same `stream_id` under the *same* audience is a no-op.
@@ -325,8 +314,8 @@ async fn same_audience_stream_reregistration_is_ok() -> Result<()> {
 
 /// Re-registering an existing `stream_id` under a *different* audience is
 /// `IngestionServiceError::StreamAudienceConflict` -- without this guard, a re-pointed
-/// credential's later blocks on the same stream would be silently excluded from `blocks` by the
-/// audience-mismatch predicate (§4), with no signal at write time.
+/// credential's later blocks on the same stream would be silently excluded by the
+/// audience-mismatch predicate, with no signal at write time.
 #[ignore]
 #[tokio::test]
 async fn different_audience_stream_reregistration_is_a_conflict() -> Result<()> {
@@ -414,8 +403,8 @@ async fn legacy_unstamped_stream_reregistered_under_a_different_audience_is_a_co
 }
 
 // ---------------------------------------------------------------------------
-// Stamp round-trip (§3, AbAC Stage 5b, #1518): `insert_stream`/`insert_block_typed` under a
-// given audience land rows whose `audience` column reads back exactly that value.
+// Stamp round-trip: `insert_stream`/`insert_block_typed` under a given audience land rows whose
+// `audience` column reads back exactly that value.
 // ---------------------------------------------------------------------------
 
 #[ignore]

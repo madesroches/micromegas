@@ -6,7 +6,7 @@
 //! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`. Both
 //! predate this file and already exercise the pieces this stage added to them.
 //!
-//! `OwnerAudience::Unstamped` is gone (#1482 §4): a row with a NULL `audience` column resolves to
+//! `OwnerAudience::Unstamped` is gone: a row with a NULL `audience` column resolves to
 //! `MICROMEGAS_DEFAULT_AUDIENCE` in `owner_query_sql`'s `COALESCE`, so it is an ordinary
 //! `Audience(..)` rather than a state to special-case, and a resolved `None` -- now reachable only
 //! for an id with no row at all -- maps to `OwnerAudience::Unknown` in `merge_owner_rows`, always
@@ -16,8 +16,7 @@
 //! `is_readable` already denies `Unknown` unconditionally under `ReadScope::Audiences`.
 //!
 //! `owner_query_sql` moved from property/`unnest`-based SQL to per-row `audience`-column point
-//! queries (AbAC Stage 5b, #1518, §4) -- pinned below via the `#[doc(hidden)]`
-//! `owner_query_sql_for_test` accessor.
+//! queries, pinned below via the `#[doc(hidden)]` `owner_query_sql_for_test` accessor.
 //!
 //! Also covers, offline, that the #1486 `view_instance(...)` guard is actually wired into
 //! `MaterializedView::scan` (not just correct in isolation, which the rest of this file already
@@ -345,7 +344,7 @@ async fn authorize_view_instance_denies_non_uuid_non_global_id() {
     );
 }
 
-// --- `owner_query_sql` (AbAC Stage 5b, #1518, §4): column-based, no join/unnest -----------
+// --- `owner_query_sql`: column-based, no join/unnest --------------------------------------
 
 #[test]
 fn owner_query_sql_never_mentions_unnest_or_properties() {

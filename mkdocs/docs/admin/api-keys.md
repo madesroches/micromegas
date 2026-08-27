@@ -234,9 +234,9 @@ unconfigured" shape as `/api/maps/*`.
 ## What audience does a key carry
 
 Every `ingestion_api_keys` row carries a single, **immutable** write audience
-(migration v6) — the value every process, stream, and block that key ingests is stamped with
-(the row's own `audience` column, server-written at ingestion time, #1373; per-row column,
-schema v8, #1518). `analytics_api_keys` has no such column: its read-side equivalent is a per-key
+(migration v6) — the value every process, stream, and block that key ingests is stamped with,
+each into its own row's `audience` column, server-written at ingestion time.
+`analytics_api_keys` has no such column: its read-side equivalent is a per-key
 `read_audiences` grant, in the opposite direction (which audiences a caller may *read*, not
 which one it *writes*).
 

@@ -1,21 +1,18 @@
-//! The precedence rule every audience-carrying reader follows, and the two SQL fragments shared
-//! by the writer (`lakehouse::blocks_view`) and both enforcement prongs (`lakehouse::audience_guard`,
-//! `lakehouse::ownership_rewrite`) -- and by `metadata.rs`, the JIT / per-process path (AbAC
-//! Stage 5b, #1518, §1).
+//! The precedence rule every audience-carrying reader follows, and the two SQL fragments
+//! shared by the writer (`lakehouse::blocks_view`) and both enforcement prongs
+//! (`lakehouse::audience_guard`, `lakehouse::ownership_rewrite`) -- and by `metadata.rs`, the
+//! JIT / per-process path.
 //!
 //! **A row's own `audience` column is the authoritative label for that row.** It is the
 //! authenticated fact recorded at the moment the row was written (`processes.audience`,
-//! `streams.audience`, `blocks.audience` -- schema v8). A NULL column means the row predates
-//! this stage and resolves to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's audience
-//! is ever derived from another row's -- not through `process_id`, not through `stream_id` --
-//! for any row that carries the column. A reader with no `audience` column to read still
-//! resolves through the owning process/stream row (the five `per_process_audience()`-resolved
-//! views, and the per-process JIT `view_instance` path); see `tasks/1518_audience_row_stamping_plan.md`
-//! §4, "What remains process-anchored", for which readers those are.
+//! `streams.audience`, `blocks.audience`). A NULL column means the row predates this stage
+//! and resolves to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's audience is ever
+//! derived from another row's for any row that carries the column; a reader with no
+//! `audience` column of its own still resolves through the owning process/stream row.
 //!
-//! `check_process_audience_conflict`'s (and its stream-side mirror
-//! `check_stream_audience_conflict`'s) one-audience-per-row rule is unaffected by any of this: it
-//! still governs only the `processes` (or `streams`) row it re-registers.
+//! `check_process_audience_conflict` (and its stream-side mirror
+//! `check_stream_audience_conflict`) still governs only the `processes` (or `streams`) row it
+//! re-registers.
 
 /// `COALESCE(<qualifier>.audience, $<param>)` -- a row's own stamp, or the deployment's
 /// `MICROMEGAS_DEFAULT_AUDIENCE` for a row written before this stage (a NULL column). `qualifier`
@@ -30,20 +27,10 @@ pub fn coalesced_audience_column(qualifier: &str, param: usize) -> String {
     format!("COALESCE({qualifier}.audience, ${param})")
 }
 
-/// True when `left_qualifier.audience` and `right_qualifier.audience` do NOT agree -- the mirror
-/// image of the NULL-tolerant mismatch predicate `blocks_view.rs`'s `data_sql` filters on
-/// (`tasks/1518_audience_row_stamping_plan.md` §4). Both qualifiers must be trusted table
-/// names/aliases, never user input.
-///
-/// NULL-tolerant by construction: a row pair with a NULL `audience` on either side is *not* a
-/// mismatch under this predicate (both `IS NOT NULL` conjuncts must hold before the `<>`
-/// comparison is even reached), which is exactly the pass-through the mismatch predicate needs
-/// for a legacy, pre-v8 row on either side of the join. `blocks_view.rs`'s keep predicate is `NOT
-/// (audience_column_mismatch(blocks, streams) OR audience_column_mismatch(blocks, processes))`;
-/// by De Morgan's law that is logically (not textually) equivalent to the hand-written
-/// NULL-tolerant form `x.audience IS NULL OR y.audience IS NULL OR x.audience = y.audience`.
-/// Building the predicate and the hourly `block_audience_mismatch_rows` counter (§5) from this
-/// one function keeps the two from drifting independently.
+/// True when `left_qualifier.audience` and `right_qualifier.audience` are both set but
+/// disagree. NULL-tolerant: a NULL `audience` on either side does not count as a mismatch, so
+/// a legacy row on either side of the join passes through cleanly. Both qualifiers must be
+/// trusted table names/aliases, never user input.
 pub fn audience_column_mismatch(left_qualifier: &str, right_qualifier: &str) -> String {
     format!(
         "{left_qualifier}.audience IS NOT NULL AND {right_qualifier}.audience IS NOT NULL \

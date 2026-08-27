@@ -22,19 +22,12 @@
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
 //! does not run under a plain `cargo test`.
 //!
-//! Ingestion-time `audience` stamping now exists (Stage 5, #1373; per-row column, Stage 5b,
-//! #1518): this file stamps through the real `insert_process`/`insert_stream`/`insert_block`
-//! `&WriteAudience` parameters, exactly the path a real ingestion key exercises, rather than
-//! hand-writing a property on the `ProcessInfo` passed in (which would now be stripped anyway --
-//! `strip_reserved_properties` drops any client-supplied `micromegas.*` key, and there is no
-//! property to re-assert in the first place any more -- the stamp is a physical column). The
-//! stamp lands directly on each of `processes`/`streams`/`blocks`' own rows now, so there is no
-//! ordering requirement left between stamping a process and materializing `blocks`'s partitions
-//! the way there was when the audience rode along inside `processes.properties`. `insert_process`
-//! now stamps unconditionally (#1519), so `seed_process`'s never-stamped fixture (`process_c`) is
-//! fabricated by inserting through that same real path and then nulling the `audience` column
-//! back off with a post-insert `UPDATE` (`common::db_fixtures::strip_process_audience`) -- the
-//! real ingestion path itself no longer has a code branch that produces an unstamped row.
+//! This file stamps through the real `insert_process`/`insert_stream`/`insert_block`
+//! `&WriteAudience` parameters, the same path a real ingestion key exercises. The stamp is a
+//! physical column on each of `processes`/`streams`/`blocks`. `insert_process` always stamps, so
+//! `seed_process`'s never-stamped fixture (`process_c`) is produced by inserting through that
+//! same real path and then nulling the `audience` column back off with a post-insert `UPDATE`
+//! (`common::db_fixtures::strip_process_audience`).
 
 mod common;
 
@@ -93,12 +86,9 @@ struct ProcessFixture {
 /// produces an unstamped row on its own: the `None` arm inserts under the deployment default
 /// (`public`, matching this file's `MICROMEGAS_DEFAULT_AUDIENCE`) and then nulls the `audience`
 /// column back off the `processes` row with a post-insert `UPDATE` (`strip_process_audience`),
-/// reproducing the shape of a row registered before its ingestion binary reached schema v8 (AbAC
-/// Stage 5b, #1518) -- admin replication now hard-fails on a missing `audience` column, §3, so it
-/// can no longer produce one. The read-side `COALESCE` resolves a NULL column to
-/// `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) when the audience is read out. The cpu/log
-/// streams and blocks are always stamped with `write_audience` -- only the `processes` row is
-/// fabricated as legacy-NULL here.
+/// reproducing a legacy pre-v8 row. The read-side `COALESCE` resolves a NULL column to
+/// `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`). The cpu/log streams and blocks are always
+/// stamped with `write_audience` -- only the `processes` row is fabricated as legacy-NULL here.
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,

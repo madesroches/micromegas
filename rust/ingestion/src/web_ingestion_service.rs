@@ -77,11 +77,8 @@ pub enum IngestionServiceError {
     },
 
     /// A re-registration of an existing `stream_id` under a different audience than the one it
-    /// was originally stamped with (AbAC Stage 5b, #1518, §5) -- the stream-side mirror of
-    /// [`Self::AudienceConflict`]. Maps to 403 Forbidden: without this guard, a re-pointed
-    /// credential's later blocks on the same stream would be silently excluded from `blocks`
-    /// (and so from `log_entries`/`measures`/every other view built from it) by the
-    /// audience-mismatch predicate on `blocks_view`'s `data_sql`, with no signal at write time.
+    /// was originally stamped with -- the stream-side mirror of [`Self::AudienceConflict`].
+    /// Maps to 403 Forbidden.
     #[error(
         "Audience conflict: stream_id {stream_id} was registered under audience {existing:?}, \
          this request carries {incoming:?}"
@@ -165,11 +162,9 @@ pub struct WebIngestionService {
     process_audience_cache: Cache<Uuid, WriteAudience>,
     /// Memoizes `stream_id -> audience` for streams
     /// [`Self::check_stream_audience_conflict`] has already confirmed conflict-free -- the
-    /// stream-side mirror of [`Self::process_audience_cache`], for the same reason (a
-    /// `register_otel_stream`/`insert_stream` re-registration is the common steady-state case,
-    /// not a one-time event) and bounded the same way (a TTL, not just capacity, since
-    /// `delete_empty_streams` can delete a `streams` row and a later call re-register the same
-    /// `stream_id` under a genuinely different audience).
+    /// stream-side mirror of [`Self::process_audience_cache`]. Bounded by a TTL (not just
+    /// capacity) since `delete_empty_streams` can delete a row that a later call re-registers
+    /// under a different audience.
     stream_audience_cache: Cache<Uuid, WriteAudience>,
     /// The deployment's resolved default audience (AbAC Stage 5, #1373; #1519), resolved once at
     /// startup by the caller (`serve_ingestion`, via `micromegas_auth::policy::default_audience_from_env`
@@ -305,13 +300,11 @@ impl WebIngestionService {
     /// constructing the CBOR `Block` envelope just so `insert_block` could decode it
     /// would be wasted work.
     ///
-    /// Stamps the row with `audience` (AbAC Stage 5b, #1518, §3): the block's own column, not
-    /// derived from the `process_id`/`stream_id` it claims. This is what closes the write-side
-    /// gap this method used to carry (AbAC Stage 5b, follow-up to #1373, §7) -- a credential
-    /// bound to audience A that knows a `process_id`/`stream_id` belonging to audience B can
-    /// still append a row naming B's ids, but that row is labelled A, not B, and
-    /// `blocks_view`'s mismatch predicate (§4) excludes it from every reader's view entirely
-    /// rather than letting it surface, mislabelled, to either audience.
+    /// Stamps the row with `audience`: the block's own column, not derived from the
+    /// `process_id`/`stream_id` it claims. A credential bound to audience A that knows
+    /// another audience's `process_id`/`stream_id` can still append a row naming those ids,
+    /// but the row is labelled A, so `blocks_view`'s mismatch predicate excludes it from
+    /// every reader's view rather than surfacing it mislabelled to either audience.
     #[span_fn]
     pub async fn insert_block_typed(
         &self,
@@ -437,19 +430,17 @@ impl WebIngestionService {
     }
 
     /// Registers a stream whose blocks will be ingested in the transit format, stamping it with
-    /// `audience` (AbAC Stage 5b, #1518, §3). `audience` is resolved by the caller from the
-    /// authenticated credential, exactly as `insert_process` resolves its own.
+    /// `audience` -- resolved by the caller from the authenticated credential, exactly as
+    /// `insert_process` resolves its own.
     ///
-    /// **Known gap, not yet closed (AbAC Stage 5b, follow-up to #1373, §7).** This accepts any
-    /// `process_id` unconditionally -- there is no check that the authenticated caller is
-    /// authorized to write a stream onto that process. Unlike before this stage, this grants no
-    /// mislabelling power: the stream is stamped with the caller's own `audience`, not the
-    /// process's, so `blocks_view`'s mismatch predicate (§4) is what keeps a block later written
-    /// on this stream from surfacing under the wrong audience if `process_id` belongs to someone
+    /// This accepts any `process_id` unconditionally; there is no check that the caller is
+    /// authorized to write a stream onto that process. The stream is stamped with the caller's
+    /// own audience, not the process's, so `blocks_view`'s mismatch predicate is what keeps a
+    /// later block from surfacing under the wrong audience if `process_id` belongs to someone
     /// else.
     ///
-    /// A re-registration of an existing `stream_id` under a *different* audience than
-    /// `audience` is rejected via [`Self::check_stream_audience_conflict`] (§5), mirroring
+    /// A re-registration of an existing `stream_id` under a *different* audience is rejected
+    /// via [`Self::check_stream_audience_conflict`], mirroring
     /// [`Self::check_process_audience_conflict`].
     #[span_fn]
     pub async fn insert_stream(
@@ -504,8 +495,8 @@ impl WebIngestionService {
         Ok(())
     }
 
-    /// Registers a stream produced by an OTLP ingestion path, stamping it with `audience` (AbAC
-    /// Stage 5b, #1518, §3), exactly like [`Self::insert_stream`].
+    /// Registers a stream produced by an OTLP ingestion path, stamping it with `audience`,
+    /// exactly like [`Self::insert_stream`].
     ///
     /// `dependencies_metadata` and `objects_metadata` are filled with the CBOR sentinel
     /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
@@ -518,7 +509,8 @@ impl WebIngestionService {
     /// more formats cleanly, `dependencies_metadata`, `objects_metadata`, and `format`
     /// should be merged into a single per-format payload column.
     ///
-    /// Same conflict guard as [`Self::insert_stream`] -- see [`Self::check_stream_audience_conflict`].
+    /// Same conflict guard as [`Self::insert_stream`] -- see
+    /// [`Self::check_stream_audience_conflict`].
     #[span_fn]
     pub async fn register_otel_stream(
         &self,
@@ -561,15 +553,11 @@ impl WebIngestionService {
     }
 
     /// On a conflicting `insert_stream`/`register_otel_stream` re-registration, enforces one
-    /// audience per stream (§5, AbAC Stage 5b, #1518) -- the stream-side mirror of
-    /// [`Self::check_process_audience_conflict`], same cache-then-`SELECT` shape, same
-    /// "row disappeared concurrently" arm, same [`IngestionServiceError::StreamAudienceConflict`]
-    /// 403 shape. Closes a real gap: before this guard, `streams` had no conflict check at all
-    /// (`ON CONFLICT (stream_id) DO NOTHING`), so a stream re-pointed to a different credential's
-    /// audience would keep whatever audience it was first stamped with -- and every subsequent
-    /// block on it would then be silently excluded from `blocks` by the audience-mismatch
-    /// predicate (§4), with only the hourly `block_audience_mismatch_rows` counter (§5) as
-    /// after-the-fact signal.
+    /// audience per stream -- the stream-side mirror of
+    /// [`Self::check_process_audience_conflict`], same cache-then-`SELECT` shape and 403
+    /// response. Before this guard, a re-pointed stream would keep its original audience, and
+    /// every later block on it would be silently excluded from `blocks` by the audience-mismatch
+    /// predicate.
     async fn check_stream_audience_conflict(
         &self,
         stream_id: Uuid,
@@ -605,9 +593,8 @@ impl WebIngestionService {
             return Ok(());
         };
         // A NULL `audience` column is a legacy row registered before its ingestion binary
-        // reached this stage (admin replication now hard-fails on a missing `audience` column,
-        // §3, so it can no longer produce one). Resolve it the same way every reader does
-        // rather than treating "unstamped" as a state that matches anything.
+        // reached this stage. Resolve it the same way every reader does rather than treating
+        // "unstamped" as a state that matches anything.
         let existing = existing.unwrap_or_else(|| self.default_audience.as_str().to_string());
         if existing != incoming {
             warn!(
@@ -637,8 +624,7 @@ impl WebIngestionService {
     /// (AbAC Stage 5, #1373). `audience` is resolved by the caller from the authenticated
     /// credential (`AuthContext.bound_audience`); this method never trusts a client-supplied
     /// `micromegas.*` property -- [`strip_reserved_properties`] drops it, and there is no
-    /// property to re-append: the stamp lands on the `audience` column instead (AbAC Stage 5b,
-    /// #1518, §3).
+    /// property to re-append: the stamp lands on the `audience` column instead.
     ///
     /// A conflicting re-registration (an existing `process_id` under a *different* audience
     /// than `audience`) is rejected with [`IngestionServiceError::AudienceConflict`] (§6) rather
@@ -646,10 +632,9 @@ impl WebIngestionService {
     /// different credential is a real, reachable case, and it is what keeps Stage 2's
     /// `MAX(audience)` per-process resolution (`ownership_rewrite.rs`) sound. An existing row
     /// with a NULL `audience` column (legacy data registered before its ingestion binary reached
-    /// this stage -- admin replication now hard-fails on a missing `audience` column, §3, so it
-    /// can no longer produce one) is resolved to the deployment default the same way every reader
-    /// does, then compared like any other row; it is never retro-stamped, ever -- see the
-    /// module-level design doc.
+    /// this stage; admin replication now hard-fails on a missing `audience` column) is resolved
+    /// to the deployment default the same way every reader does, then compared like any other
+    /// row; it is never retro-stamped, ever -- see the module-level design doc.
     #[span_fn]
     pub async fn insert_process(
         &self,
@@ -702,14 +687,12 @@ impl WebIngestionService {
         Ok(())
     }
 
-    /// On a conflicting `insert_process` re-registration, enforces one audience per process
-    /// (§6, AbAC Stage 5, #1373; #1519). No-op (aside from a `debug!`) when the existing row's
-    /// audience -- resolved the same way every reader resolves it (the row's own `audience`
-    /// column, or the deployment default for a legacy/replicated row with a NULL one) -- matches
-    /// `audience` exactly; `Err(IngestionServiceError::AudienceConflict)` when it resolves to a
-    /// *different* audience than this request carries. `WriteAudience` is single-state (#1519):
-    /// there is no longer an unaudienced caller to special-case, so every call reaches this same
-    /// comparison.
+    /// On a conflicting `insert_process` re-registration, enforces one audience per process.
+    /// No-op (aside from a `debug!`) when the existing row's audience -- resolved the same way
+    /// every reader resolves it (the row's own `audience` column, or the deployment default for
+    /// a legacy/replicated row with a NULL one) -- matches `audience` exactly;
+    /// `Err(IngestionServiceError::AudienceConflict)` when it resolves to a *different* audience
+    /// than this request carries.
     ///
     /// Consults [`Self::process_audience_cache`] before touching the database: a hit for this
     /// `process_id` whose cached audience matches `audience` means a prior call already proved
@@ -752,9 +735,8 @@ impl WebIngestionService {
             return Ok(());
         };
         // An existing row with a NULL `audience` column is legacy data registered before its
-        // ingestion binary reached this stage (admin replication now hard-fails on a missing
-        // `audience` column, §3, so it can no longer produce one). Resolve it the same way every
-        // reader does, rather than treating "unstamped" as a state that matches anything.
+        // ingestion binary reached this stage. Resolve it the same way every reader does,
+        // rather than treating "unstamped" as a state that matches anything.
         let existing = existing.unwrap_or_else(|| self.default_audience.as_str().to_string());
         if existing != incoming {
             warn!(
@@ -794,10 +776,10 @@ impl WebIngestionService {
     /// `parent_process_id` is always NULL — OTel has no parent-process model.
     /// `insert_time` is the server wall clock, matching the existing `insert_process` path.
     ///
-    /// `audience` (AbAC Stage 5, #1373; column since #1518, §3) is stamped on the `audience`
-    /// column, exactly like `insert_process`; client-supplied `micromegas.*` properties are
-    /// stripped via [`strip_reserved_properties`] the same way. **Same conflict guard as
-    /// `insert_process`, §6, and for a confidentiality reason, not just consistency**: `processes` is a single table shared with
+    /// `audience` is stamped on the `audience` column, exactly like `insert_process`;
+    /// client-supplied `micromegas.*` properties are stripped via [`strip_reserved_properties`]
+    /// the same way. **Same conflict guard as `insert_process`, §6, and for a confidentiality
+    /// reason, not just consistency**: `processes` is a single table shared with
     /// the native path, and `insert_process` accepts a client-chosen `process_id` stamped with
     /// the caller's own audience. Because `process_id_from_resource`'s derivation formula is
     /// public, any ingestion credential can pre-register (via the native path) the exact

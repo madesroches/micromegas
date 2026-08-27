@@ -101,15 +101,12 @@ pub async fn reset_global_view(
     regenerate_global_view(lakehouse, view, insert_range, logger).await
 }
 
-/// Fabricates a legacy-shaped `processes` row: nulls the `audience` column back out on a process
-/// that `insert_process` already stamped, via a direct `UPDATE processes SET audience = NULL`.
-/// There is no `UPDATE processes` path anywhere in the production codebase -- `insert_process`
-/// always stamps now (#1519) -- so this is test-only scaffolding, shared by
-/// `ownership_rewrite_db_test.rs` and `prong_b_guard_db_test.rs`, to reproduce the shape a row
-/// written before the v8 `audience` column existed (AbAC Stage 5b, #1518), or one written by the
-/// admin `bulk_ingest`/replication path, still has. Cannot be shared with
-/// `rust/ingestion/tests/audience_stamping_db_test.rs`'s identical-in-spirit copy -- different
-/// crate, no shared test-support crate under `rust/`.
+/// Fabricates a legacy-shaped `processes` row by nulling its `audience` column back out after
+/// `insert_process` stamped it. Test-only scaffolding, shared by `ownership_rewrite_db_test.rs`
+/// and `prong_b_guard_db_test.rs`, reproducing the shape of a row written before per-row
+/// stamping or by an unstamped write path (e.g. admin `bulk_ingest`/replication). Duplicated in
+/// `rust/ingestion/tests/audience_stamping_db_test.rs` since there's no shared test-support
+/// crate under `rust/`.
 pub async fn strip_process_audience(pool: &sqlx::PgPool, process_id: uuid::Uuid) -> Result<()> {
     sqlx::query("UPDATE processes SET audience = NULL WHERE process_id = $1")
         .bind(process_id)

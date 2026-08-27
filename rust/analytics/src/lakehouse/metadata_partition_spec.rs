@@ -44,30 +44,20 @@ pub struct MetadataPartitionSpec {
     /// The sort guarantee this partition's rows will carry, per the caller's `data_sql`'s
     /// `ORDER BY` (e.g. `Some(["insert_time"])` for `BlocksView`). Recorded on `Partition` as-is.
     pub sort_order: Option<Vec<String>>,
-    /// The unfiltered row count over the same join and insert-time range as
-    /// `source_count_query` (AbAC Stage 5b, #1518, §4), read from that same query's `unfiltered`
-    /// column when present -- `BlocksView` folds it in alongside `count`, so this is `Some` for
-    /// every partition it produces and `None` for every other view built on this module (in
-    /// practice, the only other view). Captured once, in [`fetch_metadata_partition_spec`], so no
-    /// second query is needed to recover it later: `record_count` (from that same row's `count`
-    /// column) is already the *kept* side of the comparison, so [`Self::write`] only does the
-    /// `mismatch_excluded_count(unfiltered_count, record_count)` arithmetic plus logging --
-    /// scoped there, not in `make_batch_partition_spec`, so it fires only once a partition is
-    /// actually about to be written. `materialize_partition` calls
-    /// `view.make_batch_partition_spec(...)` before `verify_overlapping_partitions`'s
-    /// `PartitionCreationStrategy::Abort` early return, and every scheduled maintenance pass over
-    /// an insert range calls that regardless of whether anything ends up written -- logging in
-    /// `write` instead of here scopes the signal to partitions actually written.
+    /// The unfiltered row count over the same join and range as `source_count_query`, read from
+    /// that query's `unfiltered` column when present -- `Some` only for `BlocksView`, `None` for
+    /// every other caller of this module. [`Self::write`] combines it with `record_count` to log
+    /// how many rows the audience-mismatch predicate excluded; the check lives there rather than
+    /// in `make_batch_partition_spec` so it only fires for partitions actually written, not every
+    /// scheduled maintenance pass.
     pub unfiltered_count: Option<i64>,
 }
 
 /// `unfiltered - kept`, clamped at zero -- the count of rows the audience-mismatch predicate
-/// excluded from this partition's materialization (AbAC Stage 5b, #1518, §4). Pulled out as a
-/// pure function so the arithmetic behind [`MetadataPartitionSpec::write`]'s `warn!`/`imetric!`
-/// pair can be unit-tested directly rather than only through those side effects. In practice
-/// `unfiltered` and `kept` come from one atomic `COUNT(*) FILTER (WHERE ...)` query, so
-/// `kept > unfiltered` should never occur; the clamp is a defensive floor on this helper's
-/// contract, not a case this plan expects to hit.
+/// excluded from this partition's materialization. Pulled out as a pure function so the
+/// arithmetic behind [`MetadataPartitionSpec::write`]'s `warn!`/`imetric!` pair is unit-testable
+/// directly. The clamp guards `kept > unfiltered`, which the single atomic count query behind
+/// both values should never produce.
 pub fn mismatch_excluded_count(unfiltered: i64, kept: i64) -> i64 {
     (unfiltered - kept).max(0)
 }
@@ -228,7 +218,7 @@ impl PartitionSpec for MetadataPartitionSpec {
 
         // Logged/metered only here -- once a partition is actually about to be written, never on
         // a scheduled pass that decides nothing needs writing (see `unfiltered_count`'s doc
-        // comment, §4). The count itself was already fetched alongside `record_count` back in
+        // comment). The count itself was already fetched alongside `record_count` back in
         // `fetch_metadata_partition_spec`, so this is pure arithmetic, not a second query.
         if let Some(unfiltered) = self.unfiltered_count {
             let excluded = mismatch_excluded_count(unfiltered, self.record_count);

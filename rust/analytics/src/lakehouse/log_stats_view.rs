@@ -30,18 +30,12 @@ pub async fn make_log_stats_view(
     // Design §5/§7): it lets the fresh-write path record the (time_bin, process_id, level, target)
     // sort_order guarantee with_merge_sort_order below declares.
     //
-    // `audience` joins the GROUP BY (AbAC Stage 5b, #1518, §4): `log_entries.audience` is the
-    // block's own per-row stamp, not derived from `process_id` -- once `blocks_view`'s
-    // audience-mismatch predicate is in place, a `process_id`'s group can still span two
-    // audiences whenever that process's own row is a legacy, pre-v8 NULL-audience one (the
-    // predicate's NULL-tolerant pass-through lets a real-stamped block through alongside that
-    // process's own default-audience blocks). Grouping on `audience` too keeps those rows
-    // separate rather than letting `max(audience)` collapse them into one labelled row; it is a
-    // no-op once no NULL-anchored `processes` row is left, and stands as defense-in-depth against
-    // the mismatch predicate being weakened later. `audience` does **not** join the declared
-    // `ORDER BY`/`with_merge_sort_order` columns below -- see that builder's doc comment for why
-    // an extra, unordered `GROUP BY` key degrades the merge query's `InputOrderMode` to
-    // `PartiallySorted` rather than blocking the streaming aggregation outright.
+    // `audience` joins the GROUP BY: `log_entries.audience` is a per-row stamp, and a single
+    // `process_id` can still span two audiences, so grouping on it too keeps those rows separate
+    // instead of letting `max(audience)` collapse them into one mislabelled row. It does **not**
+    // join the declared `ORDER BY`/`with_merge_sort_order` columns below -- see that builder's
+    // doc comment for why an extra, unordered `GROUP BY` key degrades the merge query's
+    // `InputOrderMode` to `PartiallySorted` rather than blocking streaming aggregation outright.
     let transform_query = Arc::new(String::from(
         r#"
         SELECT date_bin('1 minute', time) as time_bin,

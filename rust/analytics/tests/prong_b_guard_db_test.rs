@@ -69,12 +69,9 @@ struct ProcessFixture {
 /// never-stamped row if `None` (the read-side `COALESCE` resolves that to
 /// `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its cpu stream and one block, through the real
 /// ingestion pipeline. `insert_process` stamps unconditionally now (#1519), so the `None` arm
-/// inserts under the deployment default (`public`) and then nulls the `audience` column back off
-/// with a post-insert `UPDATE` (`strip_process_audience`) -- see `ownership_rewrite_db_test.rs`'s
-/// identical-in-spirit helper for why stamping happens before any block is materialized
-/// (irrelevant to Prong B, which reads Postgres directly, but kept for consistency and because
-/// this file shares its seeding style). The cpu stream/block are always stamped with
-/// `write_audience` -- only the `processes` row is fabricated as legacy-NULL here.
+/// inserts under the deployment default (`public`) and then nulls `audience` back out via
+/// `strip_process_audience`. The cpu stream/block are always stamped with `write_audience`;
+/// only the `processes` row is fabricated as legacy-NULL.
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -877,14 +874,10 @@ async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> 
     Ok(())
 }
 
-/// AbAC Stage 5b (#1518, §4): a block whose `processes` row has been deleted (retention swept it,
-/// or it hasn't arrived yet) resolves `IdKind::Block` to the block's own stamp rather than
-/// falling through to `OwnerAudience::Unknown`. Before this stage, `owner_query_sql`'s
-/// `IdKind::Block` arm joined through `processes` to resolve the audience, so deleting the
-/// `processes` row denied `parse_block` (the sole `IdKind::Block` caller) on an
-/// otherwise-present, otherwise-readable block; the per-row `blocks.audience` column removes
-/// that join entirely. `get_payload` is unaffected either way -- it authorizes via
-/// `IdKind::Process`, never `IdKind::Block`.
+/// A block whose `processes` row has been deleted (retention swept it, or it hasn't arrived
+/// yet) still resolves `IdKind::Block` to the block's own `audience` stamp, rather than falling
+/// through to `OwnerAudience::Unknown` and denying `parse_block`. `get_payload` is unaffected --
+/// it authorizes via `IdKind::Process`, never `IdKind::Block`.
 #[ignore]
 #[tokio::test]
 async fn block_resolves_to_its_own_stamp_when_its_process_row_is_gone() -> Result<()> {

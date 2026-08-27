@@ -179,8 +179,8 @@ telemetry-ingestion-srv --disable-auth
     guard otherwise provides simply doesn't apply to a view set an operator has opted into that
     allowlist.
 
-    **`audience` is a physical column on `processes`, `streams`, and `blocks` (schema v8, #1518),
-    each carrying its own row's own stamp** — the credential that wrote *that* row, never derived
+    **`audience` is a physical column on `processes`, `streams`, and `blocks`, each carrying its
+    own row's own stamp** — the credential that wrote *that* row, never derived
     from the `process_id`/`stream_id` it points at. `log_entries`, `measures`, and `log_stats`
     carry the owning block's stamp straight through, and are non-nullable at that point:
     `blocks_view`'s materialization resolves a legacy, pre-v8 NULL column to
@@ -234,8 +234,8 @@ telemetry-ingestion-srv --disable-auth
 
 ### Audience stamping and the default {#audience-stamping-and-the-default}
 
-The read-side filter above is only trustworthy because of what happens on the write side
-(ingestion, #1373/#1482/#1519/#1518): each of `processes`, `streams`, and `blocks` carries its
+The read-side filter above is only trustworthy because of what happens on the write side:
+each of `processes`, `streams`, and `blocks` carries its
 own `audience` **column**, server-written from the authenticated ingestion credential, never
 trusted from the client payload. Ingestion strips any client-supplied `micromegas.*` property
 (there is no property to re-assert as a stamp any more — the audience is a physical column) and
@@ -250,8 +250,8 @@ credential-by-credential.
 **A pre-existing row with no stamp is read as the deployment default.** Every process, stream, and
 block registered through the HTTP ingestion path now carries a real, non-NULL `audience` column,
 so this applies only to a row registered before its ingestion binary reached schema v8 (nullable,
-no backfill by design — see the CHANGELOG's Stage 5b entry) — admin `bulk_ingest`/replication now
-hard-fails on a missing `audience` column rather than ever writing one with none.
+no backfill by design) — admin `bulk_ingest`/replication now hard-fails on a missing `audience`
+column rather than ever writing one with none.
 `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) is applied at each of the three places the
 audience is read out of Postgres — the `blocks` view's materialization, the per-process JIT path,
 and Prong B's id lookups — so such a row still has a real, non-null audience everywhere it is
@@ -326,7 +326,7 @@ write-side audience too, not only an already-stamped one: the guard resolves an 
 a NULL `audience` column to the deployment default the same way every reader does, then compares
 -- so a squatter claiming a different audience against a legacy or freshly pre-registered
 unstamped row is rejected exactly the same way as against a stamped one. `check_stream_audience_conflict`
-(schema v8, #1518, §5) closes the equivalent gap for `streams`: a stream re-pointed to a
+closes the equivalent gap for `streams`: a stream re-pointed to a
 different credential's audience is now rejected at the next `insert_stream`/`register_otel_stream`
 call for that `stream_id`, rather than silently keeping its original stamp while later blocks on
 it get dropped by the materialization-time exclusion below.
@@ -343,9 +343,9 @@ racing a victim's registration.
     Every `blocks`/`streams`/`processes` row, and every view derived straight from them
     (`log_entries`, `measures`, `log_stats`, `processes_view`, `streams_view`), now carries its
     own `audience` stamp — a block whose own stamp disagrees with the `streams`/`processes` row
-    it points at is excluded from materialization entirely (schema v8, #1518, §4), so an
-    attacker's block never surfaces under the victim's label, or under its own label pointing at
-    the victim's `process_id`, in any of those views. What's still open is narrower than the
+    it points at is excluded from materialization entirely, so an attacker's block never surfaces
+    under the victim's label, or under its own label pointing at the victim's `process_id`, in
+    any of those views. What's still open is narrower than the
     original gap:
 
     - **Five process/stream-anchored view sets** — `net_spans`, `otel_spans`, `images`,
@@ -361,8 +361,8 @@ racing a victim's registration.
       form lets a mismatched block through unchecked against such a row, for as long as it exists
       — deliberately, since a strict comparison would instead permanently drop that row's
       legitimate post-upgrade telemetry. This is an accepted, bounded limitation over
-      already-public legacy data (everything in the lake before this stage is public — see the
-      CHANGELOG's Stage 5b entry), not an open item to close on its own; it is bounded by bringing
+      already-public legacy data (everything in the lake before this stage is public), not an
+      open item to close on its own; it is bounded by bringing
       **every** ingestion replica to schema v8 (not just one) before relying on audience
       separation during a rolling upgrade, and shrinks as legacy rows age out under retention.
 

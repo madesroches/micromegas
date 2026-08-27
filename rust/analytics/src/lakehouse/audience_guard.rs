@@ -14,10 +14,10 @@
 //! ## One cache, one question
 //!
 //! [`AudienceIndex`] answers exactly one question, for three id kinds ([`IdKind`]): what
-//! audience is *this id's own row* stamped with (AbAC Stage 5b, #1518, §1 -- a process's for
-//! [`IdKind::Process`], a block's own for [`IdKind::Block`], a process's or a stream's own for
-//! [`IdKind::ProcessOrStream`])? It resolves from **Postgres**, by a single-table,
-//! primary-key point query per row kind -- fresher and independent of materialization, unlike
+//! audience is *this id's own row* stamped with -- a process's for [`IdKind::Process`], a
+//! block's own for [`IdKind::Block`], a process's or a stream's own for
+//! [`IdKind::ProcessOrStream`]. It resolves from **Postgres**, by a single-table, primary-key
+//! point query per row kind -- fresher and independent of materialization, unlike
 //! [`super::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot
 //! (see the plan's §11 for the consequences of the two prongs reading different copies).
 //!
@@ -25,17 +25,17 @@
 //!
 //! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
 //! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
-//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more:
-//! a process/stream/block registered through the HTTP ingestion path always carries a real,
-//! non-NULL `audience` column (#1519 -- a credential with no bound audience is stamped with the
-//! resolved deployment default explicitly); only a legacy, pre-v8 row keeps a NULL column, and
+//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more: a
+//! process/stream/block registered through the HTTP ingestion path always carries a real,
+//! non-NULL `audience` column (a credential with no bound audience is stamped with the resolved
+//! deployment default explicitly); only a legacy, pre-v8 row keeps a NULL column, and
 //! `owner_query_sql`'s `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE` here, so every
 //! *existing* id has a real owning audience either way. `Unknown` therefore means "no such row"
-//! -- deny, on the same fail-closed reasoning as before. One behaviour change from before #1518:
-//! since each arm now reads its own table directly rather than joining through `processes`, a
-//! block or stream whose `process_id` no longer resolves (retention swept it, or it hasn't
-//! arrived yet) resolves to *its own* stamp instead of falling through to `Unknown` -- see
-//! `owner_query_sql`'s doc comment. An id ambiguous between a `process_id` and a `stream_id`
+//! -- deny, on the same fail-closed reasoning as before. One behaviour change: since each arm now
+//! reads its own table directly rather than joining through `processes`, a block or stream whose
+//! `process_id` no longer resolves (retention swept it, or it hasn't arrived yet) resolves to
+//! *its own* stamp instead of falling through to `Unknown` -- see `owner_query_sql`'s doc
+//! comment. An id ambiguous between a `process_id` and a `stream_id`
 //! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
 //! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
 //! denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`] map it to a query
@@ -152,24 +152,19 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
         .collect()
 }
 
-/// The SQL shape for each [`IdKind`] (AbAC Stage 5b, #1518, §4): every arm reads the row's own
-/// `audience` column directly -- a single-table point query on a primary-key-indexed column, no
-/// join and no `unnest` any more. `IdKind::Block` resolves off `blocks.audience` alone (the
-/// block's own stamp, never derived from the `process_id` it claims); the `ProcessOrStream` arm
-/// resolves `processes.audience`/`streams.audience` directly, each on its own table.
+/// The SQL shape for each [`IdKind`]: every arm reads the row's own `audience` column directly --
+/// a single-table point query on a primary-key-indexed column, no join and no `unnest`.
+/// `IdKind::Block` resolves off `blocks.audience` alone (the block's own stamp, never derived
+/// from the `process_id` it claims); the `ProcessOrStream` arm resolves
+/// `processes.audience`/`streams.audience` directly, each on its own table.
 ///
-/// One behaviour change worth noting: a block or stream whose `process_id` no longer has a
-/// `processes` row (retention swept it, or it hasn't arrived yet) previously resolved to
-/// [`OwnerAudience::Unknown`] via the (now-removed) join to `processes`; it now resolves to its
-/// own stamp. That is the correct answer under the precedence rule in `crate::audience`'s module
-/// doc, and it makes `parse_block` (the sole `IdKind::Block` caller) work on orphaned-but-present
-/// blocks. `get_payload` is unaffected by this change: it authorizes via
-/// `readable_ids(&distinct_process_ids, IdKind::Process)`, never resolving a block id through
-/// `IdKind::Block`.
+/// Behaviour change: a block or stream whose `process_id` no longer has a `processes` row
+/// (retention swept it, or it hasn't arrived yet) now resolves to its own stamp instead of
+/// falling through to [`OwnerAudience::Unknown`] via a join. `get_payload` is unaffected, since
+/// it authorizes via `IdKind::Process`, never `IdKind::Block`.
 ///
 /// `$1` is the batch of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one
-/// query; `$2` is the default audience (the property-name bind this used to need is gone, so the
-/// default moves from `$3` to `$2`).
+/// query; `$2` is the default audience.
 ///
 /// This site reads Postgres live, so it always resolves the *current* default -- unlike Prong A,
 /// which reads whatever default was configured when the partition was materialized. The two

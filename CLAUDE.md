@@ -43,6 +43,16 @@ For an architecture overview (core crates, services, data flow), see `.github/co
 
 ## Code Style
 - Use Unix line endings (LF) in all files
+- **Comments are for *why*, not *what*.** What the code does should already be clear from
+  function/variable names and the code itself — never restate that in a comment. Only add a
+  comment when the *why* would surprise a reader: a non-obvious constraint, a deliberate
+  tradeoff, a gotcha. If the reasoning is unsurprising once you see the code, skip the comment
+  entirely. Default to no comment.
+- **Never cite GitHub issue numbers, internal stage/plan labels (e.g. "AbAC Stage 5b"), or
+  design-plan section numbers in code comments or in `mkdocs/` docs.** That kind of citation
+  belongs only in `CHANGELOG.md` and the design plan doc itself (`tasks/completed/*.md`).
+  Reference docs and comments should describe current behavior, not the history of how it got
+  there.
 
 ## Essential Commands
 

@@ -128,13 +128,12 @@ impl TaskCallback for EveryDayTask {
     }
 }
 
-/// Counts `blocks` rows whose `process_id` disagrees with their stream's own `process_id`, over
-/// the last hour (AbAC Stage 5b, #1518, §5). No longer security-critical under per-row stamping
-/// -- a block's own `audience` column governs its label regardless of what `process_id` it
-/// claims -- so this is a plain data-integrity check, run from the maintenance role rather than
-/// the hot ingestion path, exactly so it costs nothing there. Reported as an
-/// `imetric!("block_stream_process_id_mismatch", "count", n)` and a `warn!` when non-zero: the
-/// healthy baseline is a flat zero, and any non-zero reading is a bug or an attack.
+/// Counts `blocks` rows whose `process_id` disagrees with their stream's own `process_id`,
+/// over the last hour. A block's own `audience` column governs its label regardless of
+/// `process_id`, so this is a plain data-integrity check rather than a security one, run from
+/// the maintenance role so it costs nothing on the hot ingestion path. Reported via
+/// `imetric!("block_stream_process_id_mismatch", "count", n)` and a `warn!` when non-zero --
+/// the healthy baseline is a flat zero.
 async fn measure_block_stream_process_id_mismatch(
     pool: &sqlx::PgPool,
     since: DateTime<Utc>,
@@ -159,14 +158,12 @@ async fn measure_block_stream_process_id_mismatch(
 }
 
 /// Counts `blocks` rows whose own `audience` disagrees with their stream's or process's
-/// `audience`, over the last hour (AbAC Stage 5b, #1518, §5) -- the live-Postgres counterpart to
-/// the per-partition `block_audience_mismatch_excluded` metric `MetadataPartitionSpec::write`
-/// emits. Built from [`audience_column_mismatch`], the same NULL-tolerant comparison
-/// `blocks_view.rs`'s materialization-time exclusion predicate uses, so the two can never drift
-/// apart. Unlike the `process_id` counter above, a non-zero reading here is not necessarily a
-/// bug -- it may be the expected result of a re-pointed ingestion credential -- but it always
-/// means telemetry was silently dropped from `blocks` (and so from `log_entries`/`measures`/
-/// `log_stats`) by that predicate, so it is worth a `warn!` regardless. Reported as
+/// `audience`, over the last hour -- the live-Postgres counterpart to the per-partition
+/// `block_audience_mismatch_excluded` metric. Built from [`audience_column_mismatch`], the
+/// same comparison `blocks_view.rs`'s exclusion predicate uses, so the two can never drift
+/// apart. A non-zero reading is not necessarily a bug (it may be a re-pointed ingestion
+/// credential), but it always means telemetry was silently dropped from `blocks` and its
+/// downstream views, so it is worth a `warn!` regardless. Reported as
 /// `imetric!("block_audience_mismatch_rows", "count", n)`.
 async fn measure_block_audience_mismatch_rows(
     pool: &sqlx::PgPool,

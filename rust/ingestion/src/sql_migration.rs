@@ -210,32 +210,20 @@ pub async fn upgrade_data_lake_schema_v7(
 }
 
 /// Upgrades the data lake schema to version 8.
-/// Adds the per-row `audience` column to `processes`, `streams`, and `blocks` (#1518, AbAC Stage
-/// 5b): the write audience the row was actually stamped with at insert time, replacing the old
-/// `micromegas.audience` property carried on `processes` alone. Nullable, no `DEFAULT`, no
-/// backfill -- a NULL column means the row predates this stage and resolves to the deployment's
-/// `MICROMEGAS_DEFAULT_AUDIENCE` at read time, exactly as an unstamped row does today. A `DEFAULT`
-/// would let a not-yet-upgraded writer keep inserting rows that silently take a label, the same
-/// reason v6 refused one.
 ///
-/// The three `CHECK` constraints are added `NOT VALID`, deliberately unlike v6's validated
-/// `CHECK` on `ingestion_api_keys`: a validated `CHECK` folded into (or following) `ADD COLUMN`
-/// puts the table on Postgres's `ATRewriteTables` validation path, which scans every existing row
-/// under `ACCESS EXCLUSIVE` before the `ALTER TABLE` commits -- exactly the full-table
-/// lock-and-scan the v3 migration goes out of its way to avoid for `blocks`
-/// (`CREATE UNIQUE INDEX CONCURRENTLY`, run outside any transaction). `NOT VALID` skips that scan:
-/// the constraint applies to every row written from this point on (`WriteAudience::new` already
-/// validates the charset in Rust before any row reaches SQL) while existing rows are simply not
-/// checked. `ingestion_api_keys_audience_name`'s validated `CHECK` is a precedent for a small,
-/// operator-populated table where the scan cost doesn't matter; it does not apply unmodified to
-/// `blocks`, the largest table in the lake.
+/// Adds a nullable `audience` column to `processes`, `streams`, and `blocks`: the write audience
+/// the row was stamped with at insert time. No `DEFAULT` and no backfill -- a NULL column means
+/// the row predates this stage and resolves to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` at
+/// read time, exactly as an unstamped row does today.
 ///
-/// No index: nothing queries Postgres *by* audience -- Prong B looks rows up by primary key and
-/// projects the column, so an index on the hot `blocks` table would be pure write cost.
+/// The `CHECK` constraints are added `NOT VALID` so `ALTER TABLE` does not scan and lock every
+/// existing row on `blocks`, the largest table in the lake; the constraint only applies to rows
+/// written from this point on (`WriteAudience::new` already validates the charset in Rust).
 ///
-/// `sql_telemetry_db.rs`'s `create_tables` (the v1 shape) is not touched: a fresh database is
-/// created at v1 and then walks every upgrade in turn, so adding the column there too would
-/// double-apply it.
+/// No index: nothing queries Postgres by audience, so one would be pure write cost.
+///
+/// `sql_telemetry_db.rs`'s `create_tables` (the v1 shape) is not touched -- a fresh database
+/// walks every upgrade in turn, so adding the column there too would double-apply it.
 pub async fn upgrade_data_lake_schema_v8(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<()> {

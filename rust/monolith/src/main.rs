@@ -252,9 +252,10 @@ async fn main() -> Result<()> {
     // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
     // (#1482) -- a credential with no bound audience is stamped with the resolved
     // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time now (#1519);
-    // only a legacy row registered before its ingestion binary reached schema v8 (#1518) still
-    // resolves that on read -- admin replication now hard-fails on a missing `audience` column,
-    // so there is no separate query-time unstamped fallback to configure here either way.
+    // only a legacy row registered before its ingestion binary reached schema v8 still
+    // resolves that on read -- admin replication now hard-fails on a missing `audience`
+    // column, so there is no separate query-time unstamped fallback to configure here either
+    // way.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
         // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`

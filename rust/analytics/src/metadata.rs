@@ -50,14 +50,13 @@ pub struct ProcessMetadata {
     pub start_ticks: i64,
     pub parent_process_id: Option<uuid::Uuid>,
     pub properties: SharedJsonbSerialized,
-    /// The owning process's own `audience` column (AbAC Stage 5b, #1518, §1) -- always present,
-    /// never empty. A process registered through the HTTP ingestion path always carries a
-    /// real, non-NULL `audience` column now (#1519): a credential with no bound audience is
-    /// stamped with the resolved deployment default explicitly. Only a legacy, pre-v8 row keeps
-    /// a NULL column; every producer of this struct resolves that case to
-    /// `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so the `Option` stops at the database
-    /// boundary either way. Appended last: a required field with no default, so the compiler
-    /// enumerates every construction site.
+    /// The owning process's own `audience` column -- always present, never empty. A process
+    /// registered through the HTTP ingestion path always carries a real, non-NULL `audience`
+    /// column now: a credential with no bound audience is stamped with the resolved deployment
+    /// default explicitly. Only a legacy, pre-v8 row keeps a NULL column; every producer of
+    /// this struct resolves that case to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so
+    /// the `Option` stops at the database boundary either way. Appended last: a required field
+    /// with no default, so the compiler enumerates every construction site.
     pub audience: Arc<str>,
 }
 
@@ -243,9 +242,8 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
         .with_context(|| "serializing process properties to JSONB")?;
     // A NULL here (`try_get` on a String column) is a `try_get` error, and that is correct: both
     // producers of this row -- `find_process` and the `blocks` view's `data_sql` -- wrap the
-    // audience column in `COALESCE(..., <default>)` (AbAC Stage 5b, #1518, §4), so a NULL can
-    // only mean a bug in that expression or a query that bypassed it, never a legitimately
-    // never-stamped process.
+    // audience column in `COALESCE(..., <default>)`, so a NULL can only mean a bug in that
+    // expression or a query that bypassed it, never a legitimately never-stamped process.
     let audience: String = row.try_get("audience")?;
 
     Ok(ProcessMetadata {
@@ -267,11 +265,11 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
 
 /// Finds a process by its ID and returns it as ProcessMetadata with pre-serialized JSONB properties.
 ///
-/// One of the read sites that resolves a row's own `audience` column (AbAC Stage 5b, #1518, §1):
-/// `default_audience` is bound as `$2` and resolves a never-stamped (legacy, pre-v8) process's
-/// NULL column, so `view_instance('log_entries'|'measures'|'images'|'otel_spans', <process_id>)`
-/// works for such a process instead of failing in `jit_update` when `process_metadata_from_row`
-/// reads a NULL audience. Callers source it from `LakehouseContext::default_audience`.
+/// One of the read sites that resolves a row's own `audience` column: `default_audience` is
+/// bound as `$2` and resolves a never-stamped (legacy, pre-v8) process's NULL column, so
+/// `view_instance('log_entries'|'measures'|'images'|'otel_spans', <process_id>)` works for such
+/// a process instead of failing in `jit_update` when `process_metadata_from_row` reads a NULL
+/// audience. Callers source it from `LakehouseContext::default_audience`.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,

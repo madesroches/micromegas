@@ -106,12 +106,9 @@ fn columns_beyond_the_declared_schema_pass_through() {
     assert_eq!(casted.column(1).data_type(), &DataType::Utf8);
 }
 
-// --- `mismatch_excluded_count` (AbAC Stage 5b, #1518, §4): the pure arithmetic behind the
-// per-partition `warn!`/`imetric!("block_audience_mismatch_excluded", ...)` pair in
-// `MetadataPartitionSpec::write`, tested directly rather than only through those side effects. In
-// practice `unfiltered`/`kept` come from one atomic `COUNT(*) FILTER (WHERE ...)` query, so
-// `kept > unfiltered` should never occur -- the clamp is a defensive floor on the contract, not a
-// case this plan expects to hit.
+// --- `mismatch_excluded_count`: the arithmetic behind `MetadataPartitionSpec::write`'s
+// per-partition `warn!`/`imetric!("block_audience_mismatch_excluded", ...)` pair, tested
+// directly rather than only through those side effects.
 
 #[test]
 fn mismatch_excluded_count_is_zero_when_counts_agree() {

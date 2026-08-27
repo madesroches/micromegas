@@ -78,11 +78,9 @@ async fn build_v6_schema(pool: &sqlx::PgPool) {
     tr.commit().await.expect("commit v6");
 }
 
-/// Builds a throwaway schema pinned to v7 (the pre-#1518 shape: no `audience` column on
-/// `processes`/`streams`/`blocks` yet) by chaining `build_v6_schema` with the v7 step directly,
-/// for the same reason `build_v6_schema` bypasses `execute_migration` -- which, now that
-/// `LATEST_DATA_LAKE_SCHEMA_VERSION` is 8, would carry a fresh schema all the way to v8 in one
-/// call and leave nothing at v7 to migrate from.
+/// Builds a throwaway schema pinned to v7 (no `audience` column on `processes`/`streams`/`blocks`
+/// yet) by chaining `build_v6_schema` with the v7 step directly, bypassing `execute_migration`
+/// so it doesn't carry the fresh schema straight to v8, leaving nothing at v7 to migrate from.
 async fn build_v7_schema(pool: &sqlx::PgPool) {
     build_v6_schema(pool).await;
     let mut tr = pool.begin().await.expect("begin v7");
@@ -325,12 +323,11 @@ async fn v7_creates_audience_grants_table_with_constraints() {
     test_result.expect("test assertions");
 }
 
-/// The v7 -> v8 step (#1518, AbAC Stage 5b): per-row `audience` columns on `processes`,
-/// `streams`, and `blocks`, nullable with no backfill, each guarded by a `NOT VALID` `CHECK`
-/// mirroring `ingestion_api_keys_audience_name`'s charset. `execute_migration` against a v7
-/// database adds the three columns and constraints; a pre-existing (v7-era) row keeps `audience
-/// = NULL` (no `DEFAULT`, no backfill, §2 of the plan), while a fresh insert is subject to the
-/// `NOT VALID` `CHECK` going forward.
+/// The v7 -> v8 step: per-row `audience` columns on `processes`, `streams`, and `blocks`,
+/// nullable with no backfill, each guarded by a `NOT VALID` `CHECK` mirroring
+/// `ingestion_api_keys_audience_name`'s charset. `execute_migration` against a v7 database adds
+/// the three columns and constraints; a pre-existing row keeps `audience = NULL`, while a fresh
+/// insert is subject to the `CHECK` going forward.
 const SCHEMA_V8: &str = "mm_1518_sql_migration_test_schema";
 
 #[ignore]

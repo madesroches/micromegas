@@ -21,9 +21,9 @@
 //! physical `audience` column -- declared non-nullable on `blocks`/`log_entries`/`measures`, and
 //! non-null by construction (though declared nullable in their inferred `SqlBatchView` schema) on
 //! `processes`/`streams`/`log_stats` -- extracted once from Postgres's own `audience` column at
-//! the `blocks` view's materialization (its own row's stamp, since AbAC Stage 5b, #1518) and
-//! propagated structurally into every downstream view. Those six views are consequently filtered with a bare
-//! `Filter` on that column (§5 below): no semi-join, no `property_get`, no per-process aggregate.
+//! the `blocks` view's materialization (its own row's stamp) and propagated structurally into
+//! every downstream view. Those six views are consequently filtered with a bare `Filter` on that
+//! column (§5 below): no semi-join, no `property_get`, no per-process aggregate.
 //! `async_events`,
 //! `thread_spans`, `net_spans`, `otel_spans`, and `images` don't carry the column yet (out of
 //! scope for #1482 -- see that plan's Future Work), so they keep the `process_id`/`EXISTS`
@@ -35,19 +35,14 @@
 //! scans) can carry more than one historical row per `process_id` -- the partition-level
 //! `GROUP BY` in `processes_view.rs`'s transform query only collapses rows *within* a partition,
 //! not across a long-lived process's entire history. Filtering the six column-carrying views one
-//! row at a time (§5 below) is sound without any aggregate at all -- not because a row's audience
-//! is derived from some process-level invariant, but because every row (`processes`, `streams`,
-//! `blocks`, and everything `blocks` feeds -- `log_entries`, `measures`, `log_stats`) now carries
-//! its *own* stamp from the moment it was written (AbAC Stage 5b, #1518, §1's precedence rule):
-//! there is nothing to reconcile across rows of the same process, because no row's label was ever
-//! derived from another row's to begin with. The one exception is a legacy, pre-v8 row whose
-//! `audience` column is absent rather than "always present" -- it resolves through `COALESCE` at
-//! read time to the deployment default instead (§1). The `net_spans`/`otel_spans`/`images`
-//! semi-join (§4) and the `async_events`/`thread_spans` `EXISTS` shapes
+//! row at a time (§5 below) is sound without any aggregate: every row now carries its own stamp
+//! from the moment it was written, so there is nothing to reconcile across rows of the same
+//! process. The one exception is a legacy, pre-v8 row with no `audience` column at all --
+//! `COALESCE` resolves that to the deployment default at read time. The `net_spans`/
+//! `otel_spans`/`images` semi-join (§4) and the `async_events`/`thread_spans` `EXISTS` shapes
 //! (§async_events/§thread_spans below) still resolve through `per_process_audience` --
-//! `Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)` -- purely because those
-//! five views have no `audience` column of their own to filter directly; they are unaffected by
-//! any of this, since they aggregate over `blocks`' own per-row stamps exactly as before.
+//! `Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)` -- since those five
+//! views have no `audience` column of their own to filter directly.
 //!
 //! ## Branch table
 //!
@@ -75,8 +70,7 @@
 //! -- the actual `processes`/`streams` scans happen during normal execution, exactly like
 //! `TableScanRewrite`'s injected time filter.
 //!
-//! ## The `audience` column is server-written and authenticated (AbAC Stage 5, #1373; #1482;
-//! per-row column, Stage 5b, #1518)
+//! ## The `audience` column is server-written and authenticated
 //!
 //! `processes`, `streams`, and `blocks` are each stamped with their own `audience` column at
 //! write time, from the authenticated credential's `AuthContext.bound_audience`
@@ -84,37 +78,34 @@
 //! (`strip_reserved_properties` drops any client-supplied `micromegas.*` property, and there is
 //! no property to re-assert in the first place any more -- the stamp is a physical column, not a
 //! property). A credential carrying no bound audience resolves to the deployment default at the
-//! HTTP write edge and is stamped with it explicitly, the same as any other audience (#1519) --
-//! only a legacy, pre-v8 row keeps a NULL column, resolved to the deployment's
-//! `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read* instead (§1's precedence rule,
-//! `crate::audience`'s module doc). Admin replication (`replication.rs`) now hard-fails on a
-//! missing `audience` column rather than ever writing a row with none. Registration
+//! HTTP write edge and is stamped with it explicitly, the same as any other audience -- only a
+//! legacy, pre-v8 row keeps a NULL column, resolved to the deployment's
+//! `MICROMEGAS_DEFAULT_AUDIENCE` where the audience is *read* instead (see `crate::audience`'s
+//! module doc). Admin replication (`replication.rs`) now hard-fails on a missing `audience`
+//! column rather than ever writing a row with none. Registration
 //! (`insert_process`/`register_otel_process`) rejects a same-`process_id`, different-audience
 //! re-registration outright -- needed because the OTLP `process_id` derivation formula is public,
 //! so without this guard a credential could pre-register (via the native path) the exact
 //! `process_id` a victim audience's OTLP producer would later derive, silently exposing that
 //! audience's data to the squatter; this is a confidentiality gap, not merely an integrity one.
-//! The stream-side mirror, `check_stream_audience_conflict` (#1518, §5), closes the equivalent
+//! The stream-side mirror, `check_stream_audience_conflict`, closes the equivalent
 //! re-pointed-credential gap for `streams`.
 //!
-//! **What remains open, tracked separately** (narrower than before #1518 -- see that plan's §4,
-//! "What remains process-anchored"):
+//! **What remains open, tracked separately:**
 //! - **The five `per_process_audience()`-resolved views** (`net_spans`, `otel_spans`, `images`,
 //!   `async_events`, `thread_spans`) and **the per-process JIT `view_instance` path** still
 //!   resolve their audience *label* through the owning process's/stream's row rather than a
-//!   genuine per-row column of their own -- pre-existing gaps, not widened by #1518. The
-//!   cross-audience *injection* scenario (an attacker's block naming a victim's `process_id`/
-//!   `stream_id`) is closed for both, as a side effect of where #1518 §4 puts its mismatch
-//!   predicate on `blocks_view`'s own materialization -- except against a victim whose
-//!   `processes`/`streams` row is a legacy, pre-v8 NULL-audience row (next bullet).
+//!   genuine per-row column of their own. The cross-audience *injection* scenario (an attacker's
+//!   block naming a victim's `process_id`/`stream_id`) is closed for both, as a side effect of
+//!   the mismatch predicate on `blocks_view`'s own materialization -- except against a victim
+//!   whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience row (next bullet).
 //! - **The NULL-anchor window.** A `processes`/`streams` row registered before its ingestion
-//!   binary reached v8 keeps `audience = NULL` for its entire remaining life (rows are immutable,
-//!   no backfill). The mismatch predicate's NULL-tolerant pass-through lets a mismatched block
-//!   through unchecked against such a row, for as long as it exists. This is an accepted, bounded
-//!   limitation over already-public legacy data (the governing premise in
-//!   `tasks/1518_audience_row_stamping_plan.md`), not an open item to close -- it is bounded by
-//!   the deploy-order requirement (every ingestion replica reaches v8) and shrinks as legacy rows
-//!   age out under retention.
+//!   binary supported per-row stamping keeps `audience = NULL` for its entire remaining life
+//!   (rows are immutable, no backfill). The mismatch predicate's NULL-tolerant pass-through lets
+//!   a mismatched block through unchecked against such a row for as long as it exists. This is
+//!   an accepted, bounded limitation over already-public legacy data, bounded by the deploy-order
+//!   requirement (every ingestion replica upgraded) and shrinking as legacy rows age out under
+//!   retention.
 //!
 //! There is no in-product enforcement knob left for either surface; the mitigation is
 //! operational -- provision only audience-bound DB-backed ingestion credentials, and don't run
