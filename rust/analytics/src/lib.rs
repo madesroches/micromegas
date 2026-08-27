@@ -11,8 +11,8 @@ pub mod arrow_utils;
 pub mod async_block_processing;
 /// In-memory async events in arrow format
 pub mod async_events_table;
-/// The single `micromegas.audience` property constant and SQL fragment shared by the writer and
-/// both enforcement prongs (#1482)
+/// The precedence rule for a row's own `audience` column, and the `coalesced_audience_column`/
+/// `audience_column_mismatch` SQL fragments shared by the writer and both enforcement prongs.
 pub mod audience;
 /// Transforms thread events into call trees
 pub mod call_tree;

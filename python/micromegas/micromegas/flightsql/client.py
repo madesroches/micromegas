@@ -645,6 +645,7 @@ class FlightSQLClient:
             ...     'insert_time': [datetime.now(timezone.utc)],
             ...     'parent_process_id': [''],
             ...     'properties': [[]],
+            ...     'audience': ['public'],
             ... })
             >>>
             >>> # Bulk ingest process metadata
@@ -656,6 +657,12 @@ class FlightSQLClient:
             This method is primarily intended for metadata replication and
             administrative tasks. For normal telemetry data ingestion, use
             the telemetry ingestion service HTTP API instead.
+
+            Every table in the schema-v8-and-later bulk_ingest shape (processes, streams,
+            blocks) carries its own 'audience' column -- the row's own write audience. A
+            source table missing it is rejected outright rather than silently defaulted,
+            the same hard-failure precedent 'streams' already carries for its 'format'
+            column.
         """
         if not isinstance(table, pyarrow.Table):
             raise TypeError(

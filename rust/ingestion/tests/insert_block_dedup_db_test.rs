@@ -65,6 +65,7 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -73,7 +74,7 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
 
     let block1 = make_block(block_id, stream_id, process_id, b"first-arrival".to_vec());
     ingestion
-        .insert_block_typed(block1)
+        .insert_block_typed(block1, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (first arrival): {e}"))?;
 
@@ -86,7 +87,7 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
         b"second-arrival-different-bytes".to_vec(),
     );
     ingestion
-        .insert_block_typed(block2)
+        .insert_block_typed(block2, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (second arrival): {e}"))?;
 
@@ -122,6 +123,7 @@ async fn orphaned_object_is_healed_by_insert_block_typed() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -146,7 +148,7 @@ async fn orphaned_object_is_healed_by_insert_block_typed() -> Result<()> {
 
     let block = make_block(block_id, stream_id, process_id, b"heal-arrival".to_vec());
     ingestion
-        .insert_block_typed(block)
+        .insert_block_typed(block, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (healing): {e}"))?;
 
@@ -181,6 +183,7 @@ async fn row_without_object_gets_object_written_but_row_left_untouched() -> Resu
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let block_id = Uuid::new_v4();
     let stream_id = Uuid::new_v4();
@@ -191,21 +194,26 @@ async fn row_without_object_gets_object_written_but_row_left_untouched() -> Resu
     // real encoding, so a later overwrite of the row would be obvious.
     let sentinel_payload_size: i64 = 999_999;
     let insert_time = sqlx::types::chrono::Utc::now();
-    sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
-        .bind(block_id)
-        .bind(stream_id)
-        .bind(process_id)
-        .bind(sqlx::types::chrono::Utc::now())
-        .bind(0i64)
-        .bind(sqlx::types::chrono::Utc::now())
-        .bind(1i64)
-        .bind(1i32)
-        .bind(0i64)
-        .bind(sentinel_payload_size)
-        .bind(insert_time)
-        .execute(&lake.db_pool)
-        .await
-        .with_context(|| "pre-inserting the row")?;
+    sqlx::query(
+        "INSERT INTO blocks (block_id, stream_id, process_id, begin_time, begin_ticks, end_time,
+          end_ticks, nb_objects, object_offset, payload_size, insert_time, audience)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);",
+    )
+    .bind(block_id)
+    .bind(stream_id)
+    .bind(process_id)
+    .bind(sqlx::types::chrono::Utc::now())
+    .bind(0i64)
+    .bind(sqlx::types::chrono::Utc::now())
+    .bind(1i64)
+    .bind(1i32)
+    .bind(0i64)
+    .bind(sentinel_payload_size)
+    .bind(insert_time)
+    .bind("public")
+    .execute(&lake.db_pool)
+    .await
+    .with_context(|| "pre-inserting the row")?;
 
     let block = make_block(
         block_id,
@@ -214,7 +222,7 @@ async fn row_without_object_gets_object_written_but_row_left_untouched() -> Resu
         b"object-written-after-row".to_vec(),
     );
     ingestion
-        .insert_block_typed(block)
+        .insert_block_typed(block, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (row pre-exists): {e}"))?;
 
@@ -248,6 +256,7 @@ async fn distinct_blocks_yield_distinct_objects_and_rows() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let stream_id = Uuid::new_v4();
     let process_id = Uuid::new_v4();
@@ -257,11 +266,11 @@ async fn distinct_blocks_yield_distinct_objects_and_rows() -> Result<()> {
     let block_a = make_block(block_id_a, stream_id, process_id, b"payload-a".to_vec());
     let block_b = make_block(block_id_b, stream_id, process_id, b"payload-b".to_vec());
     ingestion
-        .insert_block_typed(block_a)
+        .insert_block_typed(block_a, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (a): {e}"))?;
     ingestion
-        .insert_block_typed(block_b)
+        .insert_block_typed(block_b, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (b): {e}"))?;
 

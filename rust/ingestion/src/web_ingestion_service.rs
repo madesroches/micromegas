@@ -7,8 +7,8 @@ use bytes::Buf;
 use micromegas_telemetry::blob_storage::PutIfAbsent;
 use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::property::Property;
+use micromegas_telemetry::property::RESERVED_PROPERTY_PREFIX;
 use micromegas_telemetry::property::make_properties;
-use micromegas_telemetry::property::{PROPERTY_AUDIENCE, RESERVED_PROPERTY_PREFIX};
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
@@ -75,6 +75,19 @@ pub enum IngestionServiceError {
         existing: String,
         incoming: String,
     },
+
+    /// A re-registration of an existing `stream_id` under a different audience than the one it
+    /// was originally stamped with -- the stream-side mirror of [`Self::AudienceConflict`].
+    /// Maps to 403 Forbidden.
+    #[error(
+        "Audience conflict: stream_id {stream_id} was registered under audience {existing:?}, \
+         this request carries {incoming:?}"
+    )]
+    StreamAudienceConflict {
+        stream_id: Uuid,
+        existing: String,
+        incoming: String,
+    },
 }
 
 /// Drops every client-supplied property whose key starts with the reserved `micromegas.`
@@ -106,26 +119,6 @@ pub fn strip_reserved_properties(properties: Vec<Property>) -> Vec<Property> {
         .collect()
 }
 
-/// Drops every client-supplied reserved-namespace property (see [`strip_reserved_properties`]),
-/// then appends the server-written [`PROPERTY_AUDIENCE`] property unconditionally. Client input
-/// can therefore neither assert nor suppress the stamp. `audience: &WriteAudience` is always a
-/// real label (#1519) -- a credential carrying no bound audience already resolved to the
-/// deployment default before reaching here (`resolve_write_audience`), so every process
-/// registered through this path carries a `micromegas.audience` property.
-///
-/// `pub`, not private -- see [`strip_reserved_properties`]'s doc comment for why.
-pub fn finalize_process_properties(
-    client: Vec<Property>,
-    audience: &WriteAudience,
-) -> Vec<Property> {
-    let mut properties = strip_reserved_properties(client);
-    properties.push(Property::new(
-        Arc::new(PROPERTY_AUDIENCE.to_string()),
-        Arc::new(audience.as_str().to_string()),
-    ));
-    properties
-}
-
 /// Bound on [`WebIngestionService::process_audience_cache`]. A handful of thousand entries
 /// comfortably covers the distinct processes any one deployment has live at once. See the
 /// field's doc comment for the separate, time-based bound that limits staleness.
@@ -134,6 +127,15 @@ const PROCESS_AUDIENCE_CACHE_CAPACITY: u64 = 10_000;
 /// Time-to-live on [`WebIngestionService::process_audience_cache`]. See the field's doc comment
 /// for why a bounded TTL is required rather than relying on capacity eviction alone.
 const PROCESS_AUDIENCE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Bound on [`WebIngestionService::stream_audience_cache`], mirroring
+/// [`PROCESS_AUDIENCE_CACHE_CAPACITY`] for the same reason.
+const STREAM_AUDIENCE_CACHE_CAPACITY: u64 = 10_000;
+
+/// Time-to-live on [`WebIngestionService::stream_audience_cache`], mirroring
+/// [`PROCESS_AUDIENCE_CACHE_TTL`] for the same reason (`delete_empty_streams` can delete and a
+/// later call re-register the same `stream_id` under a genuinely different audience).
+const STREAM_AUDIENCE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -158,11 +160,17 @@ pub struct WebIngestionService {
     /// fixed size instead of leaving it open for the server's entire uptime; capacity remains a
     /// separate, memory-only bound.
     process_audience_cache: Cache<Uuid, WriteAudience>,
+    /// Memoizes `stream_id -> audience` for streams
+    /// [`Self::check_stream_audience_conflict`] has already confirmed conflict-free -- the
+    /// stream-side mirror of [`Self::process_audience_cache`]. Bounded by a TTL (not just
+    /// capacity) since `delete_empty_streams` can delete a row that a later call re-registers
+    /// under a different audience.
+    stream_audience_cache: Cache<Uuid, WriteAudience>,
     /// The deployment's resolved default audience (AbAC Stage 5, #1373; #1519), resolved once at
     /// startup by the caller (`serve_ingestion`, via `micromegas_auth::policy::default_audience_from_env`
     /// -- `micromegas-ingestion` depends on neither `micromegas-auth` nor `micromegas-analytics`,
     /// so it cannot resolve this itself) and passed to [`Self::new`]. [`Self::check_process_audience_conflict`]
-    /// uses it to resolve a legacy row with no `micromegas.audience` property the same way every
+    /// uses it to resolve a legacy row with a NULL `audience` column the same way every
     /// reader already does, so the comparison is sound; the five OTLP `IdentityContext` call
     /// sites use it via [`WriteAudience::id_namespace`] to decide which id namespace a given
     /// write audience occupies.
@@ -177,6 +185,10 @@ impl WebIngestionService {
             process_audience_cache: Cache::builder()
                 .max_capacity(PROCESS_AUDIENCE_CACHE_CAPACITY)
                 .time_to_live(PROCESS_AUDIENCE_CACHE_TTL)
+                .build(),
+            stream_audience_cache: Cache::builder()
+                .max_capacity(STREAM_AUDIENCE_CACHE_CAPACITY)
+                .time_to_live(STREAM_AUDIENCE_CACHE_TTL)
                 .build(),
             default_audience,
         }
@@ -271,10 +283,14 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_block(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
+    pub async fn insert_block(
+        &self,
+        body: bytes::Bytes,
+        audience: &WriteAudience,
+    ) -> Result<(), IngestionServiceError> {
         let block: block_wire_format::Block = ciborium::from_reader(body.reader())
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing block: {e}")))?;
-        self.insert_block_typed(block).await
+        self.insert_block_typed(block, audience).await
     }
 
     /// Inserts a block whose payload is already typed (no envelope round-trip on the caller side).
@@ -284,20 +300,16 @@ impl WebIngestionService {
     /// constructing the CBOR `Block` envelope just so `insert_block` could decode it
     /// would be wasted work.
     ///
-    /// **Known gap, not yet closed (AbAC Stage 5b, follow-up to #1373, §7).** This method
-    /// accepts any `process_id`/`stream_id` unconditionally -- there is no check that the
-    /// authenticated caller is authorized to write to the process the block's `process_id`
-    /// belongs to. A credential bound to audience A that knows a `process_id`/`stream_id`
-    /// belonging to audience B can append events to B's process, and those events inherit B's
-    /// stamped audience (§3) -- so B's readers see data B did not produce. This grants no read
-    /// power (reading B still requires a read grant on B), but it is a real, tracked integrity
-    /// gap: the fix is a write-side authorization gate (resolve the target's owning audience and
-    /// let the auth layer decide) deliberately deferred to its own issue rather than folded into
-    /// this stage -- see `tasks/1373_ingestion_stamping_plan.md` §7 for why.
+    /// Stamps the row with `audience`: the block's own column, not derived from the
+    /// `process_id`/`stream_id` it claims. A credential bound to audience A that knows
+    /// another audience's `process_id`/`stream_id` can still append a row naming those ids,
+    /// but the row is labelled A, so `blocks_view`'s mismatch predicate excludes it from
+    /// every reader's view rather than surfacing it mislabelled to either audience.
     #[span_fn]
     pub async fn insert_block_typed(
         &self,
         block: block_wire_format::Block,
+        audience: &WriteAudience,
     ) -> Result<(), IngestionServiceError> {
         let encoded_payload = encode_cbor(&block.payload)
             .map_err(|e| IngestionServiceError::ParseError(format!("encoding payload: {e}")))?;
@@ -335,7 +347,11 @@ impl WebIngestionService {
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = instrument_named!(
             sqlx::query(
-                "INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (block_id) DO NOTHING;",
+                "INSERT INTO blocks (block_id, stream_id, process_id, begin_time, begin_ticks,
+                  end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time,
+                  audience)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                 ON CONFLICT (block_id) DO NOTHING;",
             )
             .bind(block_id)
             .bind(stream_id)
@@ -348,6 +364,7 @@ impl WebIngestionService {
             .bind(block.object_offset)
             .bind(payload_size as i64)
             .bind(insert_time)
+            .bind(audience.as_str())
             .execute(&self.lake.db_pool),
             "sql_insert_block"
         )
@@ -412,14 +429,25 @@ impl WebIngestionService {
         Ok(())
     }
 
-    /// Registers a stream whose blocks will be ingested in the transit format.
+    /// Registers a stream whose blocks will be ingested in the transit format, stamping it with
+    /// `audience` -- resolved by the caller from the authenticated credential, exactly as
+    /// `insert_process` resolves its own.
     ///
-    /// **Known gap, not yet closed (AbAC Stage 5b, follow-up to #1373, §7).** Like
-    /// [`Self::insert_block_typed`], this accepts any `process_id` unconditionally -- there is
-    /// no check that the authenticated caller is authorized to write a stream onto that process.
-    /// See that method's doc comment for the full write-side authorization gap this shares.
+    /// This accepts any `process_id` unconditionally; there is no check that the caller is
+    /// authorized to write a stream onto that process. The stream is stamped with the caller's
+    /// own audience, not the process's, so `blocks_view`'s mismatch predicate is what keeps a
+    /// later block from surfacing under the wrong audience if `process_id` belongs to someone
+    /// else.
+    ///
+    /// A re-registration of an existing `stream_id` under a *different* audience is rejected
+    /// via [`Self::check_stream_audience_conflict`], mirroring
+    /// [`Self::check_process_audience_conflict`].
     #[span_fn]
-    pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
+    pub async fn insert_stream(
+        &self,
+        body: bytes::Bytes,
+        audience: &WriteAudience,
+    ) -> Result<(), IngestionServiceError> {
         let stream_info: StreamInfo = ciborium::from_reader(body.reader())
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing StreamInfo: {e}")))?;
         info!(
@@ -435,8 +463,8 @@ impl WebIngestionService {
         })?;
         let result = instrument_named!(
             sqlx::query(
-                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format, audience)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON CONFLICT (stream_id) DO NOTHING;",
             )
             .bind(stream_info.stream_id)
@@ -449,6 +477,7 @@ impl WebIngestionService {
             )))
             .bind(sqlx::types::chrono::Utc::now())
             .bind(FORMAT_TRANSIT)
+            .bind(audience.as_str())
             .execute(&self.lake.db_pool),
             "sql_insert_stream"
         )
@@ -458,15 +487,16 @@ impl WebIngestionService {
         })?;
 
         if result.rows_affected() == 0 {
-            debug!(
-                "duplicate stream_id={} skipped (already exists)",
-                stream_info.stream_id
-            );
+            self.check_stream_audience_conflict(stream_info.stream_id, audience)
+                .await?;
+        } else {
+            self.remember_stream_audience(stream_info.stream_id, audience);
         }
         Ok(())
     }
 
-    /// Registers a stream produced by an OTLP ingestion path.
+    /// Registers a stream produced by an OTLP ingestion path, stamping it with `audience`,
+    /// exactly like [`Self::insert_stream`].
     ///
     /// `dependencies_metadata` and `objects_metadata` are filled with the CBOR sentinel
     /// for an empty `Vec<UserDefinedType>` so legacy decode sites continue to work.
@@ -478,6 +508,9 @@ impl WebIngestionService {
     /// metadata sentinels) is expedient for two formats but won't scale. To support
     /// more formats cleanly, `dependencies_metadata`, `objects_metadata`, and `format`
     /// should be merged into a single per-format payload column.
+    ///
+    /// Same conflict guard as [`Self::insert_stream`] -- see
+    /// [`Self::check_stream_audience_conflict`].
     #[span_fn]
     pub async fn register_otel_stream(
         &self,
@@ -485,11 +518,12 @@ impl WebIngestionService {
         process_id: Uuid,
         tags: Vec<String>,
         format: &str,
+        audience: &WriteAudience,
     ) -> Result<(), IngestionServiceError> {
         let result = instrument_named!(
             sqlx::query(
-                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties, insert_time, format, audience)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              ON CONFLICT (stream_id) DO NOTHING;",
             )
             .bind(stream_id)
@@ -500,6 +534,7 @@ impl WebIngestionService {
             .bind(Vec::<Property>::new())
             .bind(sqlx::types::chrono::Utc::now())
             .bind(format)
+            .bind(audience.as_str())
             .execute(&self.lake.db_pool),
             "sql_insert_stream"
         )
@@ -509,25 +544,97 @@ impl WebIngestionService {
         })?;
 
         if result.rows_affected() == 0 {
-            debug!("duplicate otel stream_id={stream_id} skipped (already exists)");
+            self.check_stream_audience_conflict(stream_id, audience)
+                .await?;
+        } else {
+            self.remember_stream_audience(stream_id, audience);
         }
         Ok(())
+    }
+
+    /// On a conflicting `insert_stream`/`register_otel_stream` re-registration, enforces one
+    /// audience per stream -- the stream-side mirror of
+    /// [`Self::check_process_audience_conflict`], same cache-then-`SELECT` shape and 403
+    /// response. Before this guard, a re-pointed stream would keep its original audience, and
+    /// every later block on it would be silently excluded from `blocks` by the audience-mismatch
+    /// predicate.
+    async fn check_stream_audience_conflict(
+        &self,
+        stream_id: Uuid,
+        audience: &WriteAudience,
+    ) -> Result<(), IngestionServiceError> {
+        let incoming = audience.as_str();
+        if let Some(cached) = self.stream_audience_cache.get(&stream_id)
+            && cached.as_str() == incoming
+        {
+            debug!(
+                "duplicate stream_id={stream_id} skipped (already exists, same audience, cached)"
+            );
+            return Ok(());
+        }
+        let existing: Option<Option<String>> = instrument_named!(
+            sqlx::query_scalar("SELECT audience FROM streams WHERE stream_id = $1")
+                .bind(stream_id)
+                .fetch_optional(&self.lake.db_pool),
+            "sql_select_stream_audience"
+        )
+        .await
+        .map_err(|e| {
+            IngestionServiceError::DatabaseError(format!(
+                "reading existing stream audience for conflict check: {e}"
+            ))
+        })?;
+        let Some(existing) = existing else {
+            // The row disappeared between our INSERT ... ON CONFLICT DO NOTHING and this SELECT
+            // (a concurrent delete_empty_streams sweep) -- nothing left to conflict with.
+            debug!(
+                "duplicate stream_id={stream_id} skipped (row deleted concurrently, no conflict)"
+            );
+            return Ok(());
+        };
+        // A NULL `audience` column is a legacy row registered before its ingestion binary
+        // reached this stage. Resolve it the same way every reader does rather than treating
+        // "unstamped" as a state that matches anything.
+        let existing = existing.unwrap_or_else(|| self.default_audience.as_str().to_string());
+        if existing != incoming {
+            warn!(
+                "stream_id={stream_id} audience conflict: existing={existing:?} \
+                 incoming={incoming:?} -- rejecting re-registration"
+            );
+            return Err(IngestionServiceError::StreamAudienceConflict {
+                stream_id,
+                existing,
+                incoming: incoming.to_string(),
+            });
+        }
+        debug!("duplicate stream_id={stream_id} skipped (already exists, same audience)");
+        self.remember_stream_audience(stream_id, audience);
+        Ok(())
+    }
+
+    /// Records `audience` as the confirmed-conflict-free audience for `stream_id` in
+    /// [`Self::stream_audience_cache`] -- the stream-side mirror of
+    /// [`Self::remember_process_audience`].
+    fn remember_stream_audience(&self, stream_id: Uuid, audience: &WriteAudience) {
+        self.stream_audience_cache
+            .insert(stream_id, audience.clone());
     }
 
     /// Registers a process from the native (CBOR) ingestion path, stamping it with `audience`
     /// (AbAC Stage 5, #1373). `audience` is resolved by the caller from the authenticated
     /// credential (`AuthContext.bound_audience`); this method never trusts a client-supplied
-    /// `micromegas.audience` property -- [`finalize_process_properties`] strips it.
+    /// `micromegas.*` property -- [`strip_reserved_properties`] drops it, and there is no
+    /// property to re-append: the stamp lands on the `audience` column instead.
     ///
     /// A conflicting re-registration (an existing `process_id` under a *different* audience
     /// than `audience`) is rejected with [`IngestionServiceError::AudienceConflict`] (§6) rather
     /// than silently no-op'd: `process_id` is client-chosen on this path, so a reused id under a
     /// different credential is a real, reachable case, and it is what keeps Stage 2's
     /// `MAX(audience)` per-process resolution (`ownership_rewrite.rs`) sound. An existing row
-    /// with no `micromegas.audience` property (legacy data written before the write path
-    /// resolved the default, or a row from the admin replication path, #1519 §6) is resolved to
-    /// the deployment default the same way every reader does, then compared like any other row;
-    /// it is never retro-stamped, ever -- see the module-level design doc.
+    /// with a NULL `audience` column (legacy data registered before its ingestion binary reached
+    /// this stage; admin replication now hard-fails on a missing `audience` column) is resolved
+    /// to the deployment default the same way every reader does, then compared like any other
+    /// row; it is never retro-stamped, ever -- see the module-level design doc.
     #[span_fn]
     pub async fn insert_process(
         &self,
@@ -537,13 +644,17 @@ impl WebIngestionService {
         let process_info: ProcessInfo = ciborium::from_reader(body.reader())
             .map_err(|e| IngestionServiceError::ParseError(format!("parsing ProcessInfo: {e}")))?;
 
-        let properties =
-            finalize_process_properties(make_properties(&process_info.properties), audience);
+        let properties = strip_reserved_properties(make_properties(&process_info.properties));
 
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = instrument_named!(
             sqlx::query(
-                "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (process_id) DO NOTHING;",
+                "INSERT INTO processes
+                 (process_id, exe, username, realname, computer, distro, cpu_brand,
+                  tsc_frequency, start_time, start_ticks, insert_time, parent_process_id,
+                  properties, audience)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                 ON CONFLICT (process_id) DO NOTHING;",
             )
             .bind(process_info.process_id)
             .bind(process_info.exe)
@@ -558,6 +669,7 @@ impl WebIngestionService {
             .bind(insert_time)
             .bind(process_info.parent_process_id)
             .bind(properties)
+            .bind(audience.as_str())
             .execute(&self.lake.db_pool),
             "sql_insert_process"
         )
@@ -575,13 +687,12 @@ impl WebIngestionService {
         Ok(())
     }
 
-    /// On a conflicting `insert_process` re-registration, enforces one audience per process
-    /// (§6, AbAC Stage 5, #1373; #1519). No-op (aside from a `debug!`) when the existing row's
-    /// audience -- resolved the same way every reader resolves it (a stamped property, or the
-    /// deployment default for a legacy/replicated row with none) -- matches `audience` exactly;
+    /// On a conflicting `insert_process` re-registration, enforces one audience per process.
+    /// No-op (aside from a `debug!`) when the existing row's audience -- resolved the same way
+    /// every reader resolves it (the row's own `audience` column, or the deployment default for
+    /// a legacy/replicated row with a NULL one) -- matches `audience` exactly;
     /// `Err(IngestionServiceError::AudienceConflict)` when it resolves to a *different* audience
-    /// than this request carries. `WriteAudience` is single-state (#1519): there is no longer an
-    /// unaudienced caller to special-case, so every call reaches this same comparison.
+    /// than this request carries.
     ///
     /// Consults [`Self::process_audience_cache`] before touching the database: a hit for this
     /// `process_id` whose cached audience matches `audience` means a prior call already proved
@@ -602,19 +713,19 @@ impl WebIngestionService {
             );
             return Ok(());
         }
-        let properties: Option<Vec<Property>> = instrument_named!(
-            sqlx::query_scalar("SELECT properties FROM processes WHERE process_id = $1")
+        let existing: Option<Option<String>> = instrument_named!(
+            sqlx::query_scalar("SELECT audience FROM processes WHERE process_id = $1")
                 .bind(process_id)
                 .fetch_optional(&self.lake.db_pool),
-            "sql_select_process_properties"
+            "sql_select_process_audience"
         )
         .await
         .map_err(|e| {
             IngestionServiceError::DatabaseError(format!(
-                "reading existing process properties for conflict check: {e}"
+                "reading existing process audience for conflict check: {e}"
             ))
         })?;
-        let Some(properties) = properties else {
+        let Some(existing) = existing else {
             // The row disappeared between our INSERT ... ON CONFLICT DO NOTHING and this SELECT
             // (a concurrent delete_empty_processes sweep, or an operator's manual recovery
             // DELETE) -- nothing left to conflict with.
@@ -623,15 +734,10 @@ impl WebIngestionService {
             );
             return Ok(());
         };
-        // An existing row with no `micromegas.audience` property is legacy data written before
-        // the write path resolved the default, or a row from the admin replication path (#1519
-        // §6, which writes `processes` rows' properties verbatim). Resolve it the same way every
-        // reader does, rather than treating "unstamped" as a state that matches anything.
-        let existing = properties
-            .iter()
-            .find(|p| p.key_str() == PROPERTY_AUDIENCE)
-            .map(|p| p.value_str().to_string())
-            .unwrap_or_else(|| self.default_audience.as_str().to_string());
+        // An existing row with a NULL `audience` column is legacy data registered before its
+        // ingestion binary reached this stage. Resolve it the same way every reader does,
+        // rather than treating "unstamped" as a state that matches anything.
+        let existing = existing.unwrap_or_else(|| self.default_audience.as_str().to_string());
         if existing != incoming {
             warn!(
                 "process_id={process_id} audience conflict: existing={existing:?} \
@@ -670,9 +776,10 @@ impl WebIngestionService {
     /// `parent_process_id` is always NULL — OTel has no parent-process model.
     /// `insert_time` is the server wall clock, matching the existing `insert_process` path.
     ///
-    /// `audience` (AbAC Stage 5, #1373) is stamped via [`finalize_process_properties`], exactly
-    /// like `insert_process`. **Same conflict guard as `insert_process`, §6, and for a
-    /// confidentiality reason, not just consistency**: `processes` is a single table shared with
+    /// `audience` is stamped on the `audience` column, exactly like `insert_process`;
+    /// client-supplied `micromegas.*` properties are stripped via [`strip_reserved_properties`]
+    /// the same way. **Same conflict guard as `insert_process`, §6, and for a confidentiality
+    /// reason, not just consistency**: `processes` is a single table shared with
     /// the native path, and `insert_process` accepts a client-chosen `process_id` stamped with
     /// the caller's own audience. Because `process_id_from_resource`'s derivation formula is
     /// public, any ingestion credential can pre-register (via the native path) the exact
@@ -696,14 +803,15 @@ impl WebIngestionService {
         properties: Vec<Property>,
         audience: &WriteAudience,
     ) -> Result<(), IngestionServiceError> {
-        let properties = finalize_process_properties(properties, audience);
+        let properties = strip_reserved_properties(properties);
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = instrument_named!(
             sqlx::query(
                 "INSERT INTO processes
              (process_id, exe, username, realname, computer, distro, cpu_brand,
-              tsc_frequency, start_time, start_ticks, insert_time, parent_process_id, properties)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12)
+              tsc_frequency, start_time, start_ticks, insert_time, parent_process_id, properties,
+              audience)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12,$13)
              ON CONFLICT (process_id) DO NOTHING;",
             )
             .bind(process_id)
@@ -718,6 +826,7 @@ impl WebIngestionService {
             .bind(start_ticks)
             .bind(insert_time)
             .bind(properties)
+            .bind(audience.as_str())
             .execute(&self.lake.db_pool),
             "sql_insert_process"
         )

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
+use micromegas_analytics::audience::audience_column_mismatch;
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -127,6 +128,75 @@ impl TaskCallback for EveryDayTask {
     }
 }
 
+/// Counts `blocks` rows whose `process_id` disagrees with their stream's own `process_id`,
+/// over the last hour. A block's own `audience` column governs its label regardless of
+/// `process_id`, so this is a plain data-integrity check rather than a security one, run from
+/// the maintenance role so it costs nothing on the hot ingestion path. Reported via
+/// `imetric!("block_stream_process_id_mismatch", "count", n)` and a `warn!` when non-zero --
+/// the healthy baseline is a flat zero.
+async fn measure_block_stream_process_id_mismatch(
+    pool: &sqlx::PgPool,
+    since: DateTime<Utc>,
+) -> Result<()> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM blocks b
+         JOIN streams s ON s.stream_id = b.stream_id
+         WHERE b.process_id <> s.process_id
+         AND b.insert_time >= $1",
+    )
+    .bind(since)
+    .fetch_one(pool)
+    .await
+    .with_context(|| "counting block_stream_process_id_mismatch")?;
+    if count > 0 {
+        warn!(
+            "block_stream_process_id_mismatch: {count} block(s) in the last hour disagree with their stream's process_id"
+        );
+    }
+    imetric!("block_stream_process_id_mismatch", "count", count as u64);
+    Ok(())
+}
+
+/// Counts `blocks` rows whose own `audience` disagrees with their stream's or process's
+/// `audience`, over the last hour -- the live-Postgres counterpart to the per-partition
+/// `block_audience_mismatch_excluded` metric. Built from [`audience_column_mismatch`], the
+/// same comparison `blocks_view.rs`'s exclusion predicate uses, so the two can never drift
+/// apart. A non-zero reading is not necessarily a bug (it may be a re-pointed ingestion
+/// credential), but it always means telemetry was silently dropped from `blocks` and its
+/// downstream views, so it is worth a `warn!` regardless. Reported as
+/// `imetric!("block_audience_mismatch_rows", "count", n)`.
+async fn measure_block_audience_mismatch_rows(
+    pool: &sqlx::PgPool,
+    since: DateTime<Utc>,
+) -> Result<()> {
+    let predicate = format!(
+        "({} OR {})",
+        audience_column_mismatch("b", "s"),
+        audience_column_mismatch("b", "p"),
+    );
+    let sql = format!(
+        "SELECT count(*) FROM blocks b
+         JOIN streams s ON s.stream_id = b.stream_id
+         JOIN processes p ON p.process_id = b.process_id
+         WHERE {predicate}
+         AND b.insert_time >= $1"
+    );
+    let count: i64 = sqlx::query_scalar(&sql)
+        .bind(since)
+        .fetch_one(pool)
+        .await
+        .with_context(|| "counting block_audience_mismatch_rows")?;
+    if count > 0 {
+        warn!(
+            "block_audience_mismatch_rows: {count} block(s) in the last hour disagree with their \
+             stream's or process's audience -- silently dropped from blocks/log_entries/measures/log_stats \
+             by the audience-mismatch predicate"
+        );
+    }
+    imetric!("block_audience_mismatch_rows", "count", count as u64);
+    Ok(())
+}
+
 /// task running once an hour to materialize recent partitions
 pub struct EveryHourTask {
     pub lakehouse: Arc<LakehouseContext>,
@@ -140,6 +210,10 @@ impl TaskCallback for EveryHourTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         delete_old_data(self.lakehouse.lake(), self.retention_days).await?;
         delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
+
+        let since = task_scheduled_time - TimeDelta::hours(1);
+        measure_block_stream_process_id_mismatch(&self.lakehouse.lake().db_pool, since).await?;
+        measure_block_audience_mismatch_rows(&self.lakehouse.lake().db_pool, since).await?;
 
         let partition_time_delta = TimeDelta::hours(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;

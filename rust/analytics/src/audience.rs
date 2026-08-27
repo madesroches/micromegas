@@ -1,52 +1,40 @@
-//! The single `micromegas.audience` property name and SQL fragments shared by the writer
-//! (`lakehouse::blocks_view`) and both enforcement prongs (`lakehouse::audience_guard`,
-//! `lakehouse::ownership_rewrite`) -- and by `metadata.rs`, the JIT / per-process path (#1482
-//! §1).
+//! The precedence rule every audience-carrying reader follows, and the two SQL fragments
+//! shared by the writer (`lakehouse::blocks_view`) and both enforcement prongs
+//! (`lakehouse::audience_guard`, `lakehouse::ownership_rewrite`) -- and by `metadata.rs`, the
+//! JIT / per-process path.
 //!
-//! A process registered through the HTTP ingestion path always carries a `micromegas.audience`
-//! property now: a credential with no bound audience resolves to the deployment default at the
-//! HTTP edge and is stamped with it explicitly, the same as any other audience (#1519). What
-//! still keeps **no** property is a legacy row written before that write-side resolution shipped,
-//! and a row written by the admin `bulk_ingest`/replication path
-//! (`rust/public/src/servers/flight_sql_service_impl.rs`), which writes a source lake's
-//! properties verbatim and stamps nothing of its own. For both of those, the default is applied
-//! where the audience is *read*: every read site wraps the extraction in
-//! [`coalesced_audience_subselect`], so a missing property resolves to the deployment's
-//! `MICROMEGAS_DEFAULT_AUDIENCE` and a `NULL` audience is unrepresentable downstream of Postgres.
-//! That is what lets the materialized `audience` column be non-nullable and what lets Prong B
-//! resolve every existing id to a real audience, whether it was ever stamped or not.
+//! **A row's own `audience` column is the authoritative label for that row.** It is the
+//! authenticated fact recorded at the moment the row was written (`processes.audience`,
+//! `streams.audience`, `blocks.audience`). A NULL column means the row predates this stage
+//! and resolves to the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`. No row's audience is ever
+//! derived from another row's for any row that carries the column; a reader with no
+//! `audience` column of its own still resolves through the owning process/stream row.
+//!
+//! `check_process_audience_conflict` (and its stream-side mirror
+//! `check_stream_audience_conflict`) still governs only the `processes` (or `streams`) row it
+//! re-registers.
 
-/// The reserved process property key an ingestion credential's audience is stamped under.
-/// Re-exported here (rather than each consumer importing `micromegas_telemetry` directly) so the
-/// property name stays single-sourced across the write side and both readers.
-pub use micromegas_telemetry::property_names::PROPERTY_AUDIENCE as AUDIENCE_PROPERTY;
-
-/// Builds `(SELECT value FROM unnest(<properties_expr>) WHERE key = '<AUDIENCE_PROPERTY>' LIMIT 1)`
-/// -- the correlated scalar subselect that extracts a process's audience out of its
-/// `micromegas_property[]` properties array. `properties_expr` is inlined as SQL text (not
-/// bound), so it must be a trusted column reference, never user input.
+/// `COALESCE(<qualifier>.audience, $<param>)` -- a row's own stamp, or the deployment's
+/// `MICROMEGAS_DEFAULT_AUDIENCE` for a row written before this stage (a NULL column). `qualifier`
+/// is inlined as SQL text, so it must be a trusted table name or alias, never user input; the
+/// default stays a bind parameter, since it is operator-supplied config.
 ///
-/// Yields `NULL` for a process that was never stamped. Read sites want
-/// [`coalesced_audience_subselect`] instead, which resolves that `NULL` to the deployment
-/// default; use this bare form only where a `NULL` is meaningful on its own.
-pub fn audience_subselect(properties_expr: &str) -> String {
-    format!(
-        "(SELECT value FROM unnest({properties_expr}) WHERE key = '{AUDIENCE_PROPERTY}' LIMIT 1)"
-    )
+/// This is the shared shape of every site that reads an audience out of Postgres off a physical
+/// column -- the `blocks` view's `data_sql`, `metadata::find_process`, and `audience_guard`'s
+/// `owner_query_sql`. `param` is the 1-based placeholder index the caller will bind the default
+/// to.
+pub fn coalesced_audience_column(qualifier: &str, param: usize) -> String {
+    format!("COALESCE({qualifier}.audience, ${param})")
 }
 
-/// [`audience_subselect`] wrapped in `COALESCE(..., $<param>)`: the audience of a stamped
-/// process, or the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` for one that was never stamped.
-///
-/// This is the shared shape of all three sites that read an audience out of Postgres -- the
-/// `blocks` view's `data_sql`, `metadata::find_process`, and `audience_guard`'s
-/// `owner_query_sql`. The default is a **bind parameter**, not interpolated: `properties_expr` is
-/// a trusted column reference, but the default is operator-supplied config and must stay out of
-/// the SQL text. `param` is the 1-based placeholder index the caller will bind the default to.
-pub fn coalesced_audience_subselect(properties_expr: &str, param: usize) -> String {
+/// True when `left_qualifier.audience` and `right_qualifier.audience` are both set but
+/// disagree. NULL-tolerant: a NULL `audience` on either side does not count as a mismatch, so
+/// a legacy row on either side of the join passes through cleanly. Both qualifiers must be
+/// trusted table names/aliases, never user input.
+pub fn audience_column_mismatch(left_qualifier: &str, right_qualifier: &str) -> String {
     format!(
-        "COALESCE({}, ${param})",
-        audience_subselect(properties_expr)
+        "{left_qualifier}.audience IS NOT NULL AND {right_qualifier}.audience IS NOT NULL \
+         AND {left_qualifier}.audience <> {right_qualifier}.audience"
     )
 }
 
@@ -69,16 +57,16 @@ fn is_valid_audience(aud: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Resolves `MICROMEGAS_DEFAULT_AUDIENCE` -- the audience a never-stamped process is read as --
+/// Resolves `MICROMEGAS_DEFAULT_AUDIENCE` -- the audience a never-stamped row is read as --
 /// defaulting to [`DEFAULT_AUDIENCE`] when unset. Malformed ⇒ `Err`, so a typo fails startup
-/// rather than silently relabelling every legacy process.
+/// rather than silently relabelling every legacy row.
 ///
-/// Read **once**, by `LakehouseContext`, and handed to all three read sites from there. Every
-/// role that materializes or queries the six global views builds a `LakehouseContext`, and the
-/// maintenance role is the one that bakes the resolved value into partitions -- so a deployment
-/// that sets this knob on only some roles gets partitions labelled inconsistently. Changing it
-/// is not a routine operation: already-written partitions keep the value they were materialized
-/// under until they are regenerated.
+/// Read **once**, by `LakehouseContext`, and handed to all read sites from there. Every role that
+/// materializes or queries the six global views builds a `LakehouseContext`, and the maintenance
+/// role is the one that bakes the resolved value into partitions -- so a deployment that sets
+/// this knob on only some roles gets partitions labelled inconsistently. Changing it is not a
+/// routine operation: already-written partitions keep the value they were materialized under
+/// until they are regenerated.
 ///
 /// Unprefixed, unlike `IsolationConfig`'s knobs: this is not a per-caller query-side setting but
 /// a property of the lake's contents. Two other code readers of the same variable fall back to
@@ -116,12 +104,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn coalesced_subselect_wraps_the_bare_one_and_binds_the_default() {
-        let bare = audience_subselect("processes.properties");
-        let coalesced = coalesced_audience_subselect("processes.properties", 3);
-        assert_eq!(coalesced, format!("COALESCE({bare}, $3)"));
+    fn coalesced_column_wraps_the_qualifier_and_binds_the_default() {
+        let coalesced = coalesced_audience_column("processes", 3);
+        assert_eq!(coalesced, "COALESCE(processes.audience, $3)");
         // The default is bound, never inlined: an operator-supplied label must not reach the
-        // SQL text even though `properties_expr` does.
+        // SQL text even though `qualifier` does.
         assert!(!coalesced.contains(DEFAULT_AUDIENCE));
     }
 
@@ -129,8 +116,25 @@ mod tests {
     fn each_read_site_can_pick_its_own_placeholder_index() {
         // `blocks`' `data_sql` binds $1/$2 for the insert range, so its default is $3;
         // `find_process` binds $1 for the process id, so its default is $2.
-        assert!(coalesced_audience_subselect("properties", 2).ends_with(", $2)"));
-        assert!(coalesced_audience_subselect("processes.properties", 3).ends_with(", $3)"));
+        assert!(coalesced_audience_column("processes", 2).ends_with(", $2)"));
+        assert!(coalesced_audience_column("blocks", 3).ends_with(", $3)"));
+    }
+
+    #[test]
+    fn mismatch_emits_the_expected_null_tolerant_text() {
+        let mismatch = audience_column_mismatch("blocks", "streams");
+        assert_eq!(
+            mismatch,
+            "blocks.audience IS NOT NULL AND streams.audience IS NOT NULL AND blocks.audience <> streams.audience"
+        );
+    }
+
+    #[test]
+    fn mismatch_qualifiers_are_not_swapped() {
+        let mismatch = audience_column_mismatch("blocks", "processes");
+        assert!(mismatch.starts_with("blocks.audience IS NOT NULL"));
+        assert!(mismatch.contains("processes.audience IS NOT NULL"));
+        assert!(mismatch.ends_with("blocks.audience <> processes.audience"));
     }
 
     #[test]

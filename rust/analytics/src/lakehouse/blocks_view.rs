@@ -11,7 +11,7 @@ use super::{
     view::{PartitionSpec, ScanSortColumn, View, ViewMetadata},
     view_factory::ViewFactory,
 };
-use crate::audience::coalesced_audience_subselect;
+use crate::audience::{audience_column_mismatch, coalesced_audience_column};
 use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -36,6 +36,18 @@ fn insert_time_sort_order() -> Vec<String> {
     vec![String::from("insert_time")]
 }
 
+/// The NULL-tolerant audience-mismatch *keep* predicate: true for a block whose own `audience`
+/// stamp does not disagree with either row it joins to (a NULL on either side always passes
+/// through -- see `audience_column_mismatch`'s doc comment for why). Shared with
+/// `source_count_query` and the mismatch counter in `maintenance.rs` so all three stay in sync.
+fn audience_mismatch_keep_predicate() -> String {
+    format!(
+        "NOT ({} OR {})",
+        audience_column_mismatch("blocks", "streams"),
+        audience_column_mismatch("blocks", "processes"),
+    )
+}
+
 /// True when every partition in `partitions_to_merge` either contributes no rows or already
 /// carries the exact `sort_order` this view can trust (Design §1/§4): only then can a merge
 /// safely declare and record the `insert_time` guarantee.
@@ -52,8 +64,9 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
-    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped process materializes under
-    /// (#1482). Carried from `LakehouseContext::default_audience` by every constructor call.
+    /// Bound as `data_sql`'s `$3` -- the audience a never-stamped block (a NULL `blocks.audience`,
+    /// i.e. a legacy pre-v8 row) materializes under. Carried from
+    /// `LakehouseContext::default_audience` by every constructor call.
     default_audience: Arc<str>,
     ordered_merger: Arc<dyn PartitionMerger>,
     plain_merger: Arc<dyn PartitionMerger>,
@@ -67,19 +80,21 @@ impl BlocksView {
     /// partition. Two partitions materialized under different configured defaults can disagree --
     /// changing the default requires regenerating the six views over the affected range.
     pub fn new(default_audience: Arc<str>) -> Result<Self> {
+        let keep_predicate = audience_mismatch_keep_predicate();
         let data_sql = Arc::new(format!(
             r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time, streams.format,
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties,
-           {audience_subselect} AS audience
+           {audience_column} AS audience
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
          AND blocks.process_id = processes.process_id
          AND blocks.insert_time >= $1
          AND blocks.insert_time < $2
+         AND {keep_predicate}
          ORDER BY blocks.insert_time, blocks.block_id
          ;"#,
-            audience_subselect = coalesced_audience_subselect("processes.properties", 3),
+            audience_column = coalesced_audience_column("blocks", 3),
         ));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let schema = Arc::new(blocks_view_schema());
@@ -136,29 +151,34 @@ impl View for BlocksView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
-        let source_count_query = "
-             SELECT COUNT(*) as count
+        // `count` is the kept side of the audience-mismatch comparison (this partition's
+        // `record_count`); `unfiltered` is the same join and range with no predicate applied.
+        // One query gives `fetch_metadata_partition_spec` both, avoiding a second round trip.
+        let source_count_query = format!(
+            "SELECT COUNT(*) FILTER (WHERE {keep_predicate}) AS count,
+                    COUNT(*) AS unfiltered
              FROM blocks, streams, processes
              WHERE blocks.stream_id = streams.stream_id
              AND blocks.process_id = processes.process_id
              AND blocks.insert_time >= $1
              AND blocks.insert_time < $2
-             ;";
-        Ok(Arc::new(
-            fetch_metadata_partition_spec(
-                &lakehouse.lake().db_pool,
-                source_count_query,
-                self.data_sql.clone(),
-                view_meta,
-                self.get_file_schema(),
-                insert_range,
-                self.get_time_bounds(),
-                Some(insert_time_sort_order()),
-                Some(self.default_audience.clone()),
-            )
-            .await
-            .with_context(|| "fetch_metadata_partition_spec")?,
-        ))
+             ;",
+            keep_predicate = audience_mismatch_keep_predicate(),
+        );
+        let spec = fetch_metadata_partition_spec(
+            &lakehouse.lake().db_pool,
+            &source_count_query,
+            self.data_sql.clone(),
+            view_meta,
+            self.get_file_schema(),
+            insert_range,
+            self.get_time_bounds(),
+            Some(insert_time_sort_order()),
+            Some(self.default_audience.clone()),
+        )
+        .await
+        .with_context(|| "fetch_metadata_partition_spec")?;
+        Ok(Arc::new(spec))
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
@@ -320,15 +340,15 @@ pub fn blocks_view_schema() -> Schema {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
-        // Appended last (#1482): the audience of the owning process, extracted once here from
-        // Postgres and propagated structurally into every downstream view. Non-nullable because
-        // `data_sql` wraps the extraction in `COALESCE(..., $3)` (see `audience.rs`), so a process
-        // that was never stamped materializes under the deployment default rather than as a NULL.
-        // Dictionary-encoded like every other view's audience column (`log_entries_table.rs`,
-        // `metrics_table.rs`, `log_stats_view.rs`): one distinct value per partition in practice.
-        // `sql_arrow_bridge` delivers it as plain `Utf8` (its mapping is keyed on the Postgres
-        // type name), so `metadata_partition_spec::cast_to_file_schema` casts it to this declared
-        // type before the write.
+        // Appended last: the block's own audience stamp, never derived from the `process_id`/
+        // `stream_id` it joins to. Non-nullable because `data_sql` wraps the extraction in
+        // `COALESCE(blocks.audience, $3)`, so a never-stamped (legacy pre-v8) block materializes
+        // under the deployment default instead of NULL; a block whose stamp disagrees with the
+        // `streams`/`processes` row it joins to is excluded from materialization entirely by
+        // `data_sql`'s mismatch predicate. Dictionary-encoded like every other view's audience
+        // column; `sql_arrow_bridge` delivers it as plain `Utf8`, so
+        // `metadata_partition_spec::cast_to_file_schema` casts it to this declared type before
+        // the write.
         Field::new(
             "audience",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -338,6 +358,12 @@ pub fn blocks_view_schema() -> Schema {
 }
 
 /// Returns the file schema hash for the blocks view.
+///
+/// Stays `vec![5]` -- deliberately not bumped, since the Arrow schema is unchanged and existing
+/// partitions remain valid to read under it. An older partition may contain a row the new
+/// audience-mismatch predicate would now exclude (all pre-existing lake data is public, so this
+/// is a consistency gap, not a confidentiality one); `regenerate_partitions` over `blocks` lets
+/// an operator get uniform, per-row semantics sooner than the retention window would.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
     vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column (#1482)
 }

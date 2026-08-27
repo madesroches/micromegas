@@ -44,6 +44,22 @@ pub struct MetadataPartitionSpec {
     /// The sort guarantee this partition's rows will carry, per the caller's `data_sql`'s
     /// `ORDER BY` (e.g. `Some(["insert_time"])` for `BlocksView`). Recorded on `Partition` as-is.
     pub sort_order: Option<Vec<String>>,
+    /// The unfiltered row count over the same join and range as `source_count_query`, read from
+    /// that query's `unfiltered` column when present -- `Some` only for `BlocksView`, `None` for
+    /// every other caller of this module. [`Self::write`] combines it with `record_count` to log
+    /// how many rows the audience-mismatch predicate excluded; the check lives there rather than
+    /// in `make_batch_partition_spec` so it only fires for partitions actually written, not every
+    /// scheduled maintenance pass.
+    pub unfiltered_count: Option<i64>,
+}
+
+/// `unfiltered - kept`, clamped at zero -- the count of rows the audience-mismatch predicate
+/// excluded from this partition's materialization. Pulled out as a pure function so the
+/// arithmetic behind [`MetadataPartitionSpec::write`]'s `warn!`/`imetric!` pair is unit-testable
+/// directly. The clamp guards `kept > unfiltered`, which the single atomic count query behind
+/// both values should never produce.
+pub fn mismatch_excluded_count(unfiltered: i64, kept: i64) -> i64 {
+    (unfiltered - kept).max(0)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -68,6 +84,9 @@ pub async fn fetch_metadata_partition_spec(
     )
     .await
     .with_context(|| "select count source metadata")?;
+    // `unfiltered` is only present when `source_count_query` folds it in (`BlocksView`); every
+    // other caller's query has no such column, so this is `None` for them rather than an error.
+    let unfiltered_count: Option<i64> = row.try_get("unfiltered").ok();
     Ok(MetadataPartitionSpec {
         view_metadata,
         schema,
@@ -77,6 +96,7 @@ pub async fn fetch_metadata_partition_spec(
         default_audience,
         compute_time_bounds,
         sort_order,
+        unfiltered_count,
     })
 }
 
@@ -195,6 +215,21 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
+
+        // Logged/metered only here -- once a partition is actually about to be written, never on
+        // a scheduled pass that decides nothing needs writing (see `unfiltered_count`'s doc
+        // comment). The count itself was already fetched alongside `record_count` back in
+        // `fetch_metadata_partition_spec`, so this is pure arithmetic, not a second query.
+        if let Some(unfiltered) = self.unfiltered_count {
+            let excluded = mismatch_excluded_count(unfiltered, self.record_count);
+            if excluded > 0 {
+                warn!(
+                    "{excluded} blocks excluded from {desc} by the audience-mismatch predicate \
+                     -- see block_audience_mismatch_rows for per-block detail"
+                );
+                imetric!("block_audience_mismatch_excluded", "count", excluded as u64);
+            }
+        }
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = spawn_with_context(write_partition_from_rows(

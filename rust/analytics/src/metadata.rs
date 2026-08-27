@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
-    audience::coalesced_audience_subselect,
+    audience::coalesced_audience_column,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
@@ -50,14 +50,13 @@ pub struct ProcessMetadata {
     pub start_ticks: i64,
     pub parent_process_id: Option<uuid::Uuid>,
     pub properties: SharedJsonbSerialized,
-    /// The owning process's audience (#1482) -- always present, never empty. A process
-    /// registered through the HTTP ingestion path always carries a `micromegas.audience`
-    /// property now (#1519): a credential with no bound audience is stamped with the resolved
-    /// deployment default explicitly. Only a legacy row, or one written by the admin
-    /// `bulk_ingest`/replication path, keeps no property at all; every producer of this struct
-    /// resolves that case to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so the `Option`
-    /// stops at the database boundary either way. Appended last: a required field with no
-    /// default, so the compiler enumerates every construction site.
+    /// The owning process's own `audience` column -- always present, never empty. A process
+    /// registered through the HTTP ingestion path always carries a real, non-NULL `audience`
+    /// column now: a credential with no bound audience is stamped with the resolved deployment
+    /// default explicitly. Only a legacy, pre-v8 row keeps a NULL column; every producer of
+    /// this struct resolves that case to `MICROMEGAS_DEFAULT_AUDIENCE` before it gets here, so
+    /// the `Option` stops at the database boundary either way. Appended last: a required field
+    /// with no default, so the compiler enumerates every construction site.
     pub audience: Arc<str>,
 }
 
@@ -243,8 +242,8 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
         .with_context(|| "serializing process properties to JSONB")?;
     // A NULL here (`try_get` on a String column) is a `try_get` error, and that is correct: both
     // producers of this row -- `find_process` and the `blocks` view's `data_sql` -- wrap the
-    // audience extraction in `COALESCE(..., <default>)` (#1482), so a NULL can only mean a bug in
-    // that expression or a query that bypassed it, never a legitimately never-stamped process.
+    // audience column in `COALESCE(..., <default>)`, so a NULL can only mean a bug in that
+    // expression or a query that bypassed it, never a legitimately never-stamped process.
     let audience: String = row.try_get("audience")?;
 
     Ok(ProcessMetadata {
@@ -266,11 +265,11 @@ pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessM
 
 /// Finds a process by its ID and returns it as ProcessMetadata with pre-serialized JSONB properties.
 ///
-/// The second of #1482's three read sites: `default_audience` is bound as `$2` and resolves a
-/// never-stamped process's missing property, so `view_instance('log_entries'|'measures'|'images'|
-/// 'otel_spans', <process_id>)` works for such a process instead of failing in `jit_update` when
-/// `process_metadata_from_row` reads a NULL audience. Callers source it from
-/// `LakehouseContext::default_audience`.
+/// One of the read sites that resolves a row's own `audience` column: `default_audience` is
+/// bound as `$2` and resolves a never-stamped (legacy, pre-v8) process's NULL column, so
+/// `view_instance('log_entries'|'measures'|'images'|'otel_spans', <process_id>)` works for such
+/// a process instead of failing in `jit_update` when `process_metadata_from_row` reads a NULL
+/// audience. Callers source it from `LakehouseContext::default_audience`.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -290,10 +289,10 @@ pub async fn find_process(
                 start_ticks,
                 parent_process_id,
                 properties as process_properties,
-                {audience_subselect} AS audience
+                {audience_column} AS audience
          FROM processes
          WHERE process_id = $1;",
-        audience_subselect = coalesced_audience_subselect("properties", 2),
+        audience_column = coalesced_audience_column("processes", 2),
     );
     let row = instrument_named!(
         sqlx::query(&sql)

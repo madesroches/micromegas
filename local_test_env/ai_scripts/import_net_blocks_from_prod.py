@@ -87,7 +87,17 @@ def _project(table: pyarrow.Table, columns):
 
 
 def _build_processes_table(blocks: pyarrow.Table) -> pyarrow.Table:
-    """The blocks view already carries every processes.* field we need."""
+    """The blocks view already carries every processes.* field we need.
+
+    `audience` (AbAC Stage 5b, #1518) is sourced from the single `blocks.audience` column --
+    `blocks_view` exposes exactly one `audience` column (the block's own stamp), with no separate
+    `processes.audience`/`streams.audience` alongside it. `ingest_processes` now hard-fails on a
+    missing `audience` column (the same precedent `ingest_streams` already set for `format`), so
+    this must be projected in. The mismatch predicate on `blocks_view`'s own materialization
+    guarantees this agrees with the real `processes.audience`/`streams.audience` for any block
+    that isn't NULL-anchored legacy data, which is the only case this script's source query (a
+    live lake) can produce.
+    """
     projected = _project(
         blocks,
         [
@@ -104,12 +114,18 @@ def _build_processes_table(blocks: pyarrow.Table) -> pyarrow.Table:
             ("processes.insert_time", "insert_time"),
             ("processes.parent_process_id", "parent_process_id"),
             ("processes.properties", "properties"),
+            ("audience", "audience"),
         ],
     )
     return _unique_by(projected, "process_id")
 
 
 def _build_streams_table(blocks: pyarrow.Table) -> pyarrow.Table:
+    """`format` and `audience` are both sourced from the single block-level column
+    `blocks_view` exposes for each -- see `_build_processes_table`'s `audience` note.
+    `format` was already required by `ingest_streams` (a v4 requirement); this was missing
+    before and is fixed here in the same pass rather than left as a second latent break.
+    """
     projected = _project(
         blocks,
         [
@@ -120,6 +136,8 @@ def _build_streams_table(blocks: pyarrow.Table) -> pyarrow.Table:
             ("streams.tags", "tags"),
             ("streams.properties", "properties"),
             ("streams.insert_time", "insert_time"),
+            ("streams.format", "format"),
+            ("audience", "audience"),
         ],
     )
     return _unique_by(projected, "stream_id")
@@ -140,6 +158,7 @@ def _build_blocks_table(blocks: pyarrow.Table) -> pyarrow.Table:
             ("object_offset", "object_offset"),
             ("payload_size", "payload_size"),
             ("insert_time", "insert_time"),
+            ("audience", "audience"),
         ],
     )
 

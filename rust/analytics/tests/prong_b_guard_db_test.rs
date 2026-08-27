@@ -66,14 +66,12 @@ struct ProcessFixture {
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
 /// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, fabricated as a legacy-shaped,
-/// never-stamped row if `None` (#1482's read-side `COALESCE` resolves that to
+/// never-stamped row if `None` (the read-side `COALESCE` resolves that to
 /// `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its cpu stream and one block, through the real
 /// ingestion pipeline. `insert_process` stamps unconditionally now (#1519), so the `None` arm
-/// inserts under the deployment default (`public`) and then strips the `micromegas.audience`
-/// property back off with a post-insert `UPDATE` (`strip_process_audience`) -- see
-/// `ownership_rewrite_db_test.rs`'s identical-in-spirit helper for why stamping happens before
-/// any block is materialized (irrelevant to Prong B, which reads Postgres directly, but kept for
-/// consistency and because this file shares its seeding style).
+/// inserts under the deployment default (`public`) and then nulls `audience` back out via
+/// `strip_process_audience`. The cpu stream/block are always stamped with `write_audience`;
+/// only the `processes` row is fabricated as legacy-NULL.
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -97,7 +95,10 @@ async fn seed_process(
     let cpu_stream_id = cpu_stream.stream_id();
     let cpu_stream_info = make_stream_info(&cpu_stream);
     ingestion
-        .insert_stream(bytes::Bytes::from(encode_cbor(&cpu_stream_info)?))
+        .insert_stream(
+            bytes::Bytes::from(encode_cbor(&cpu_stream_info)?),
+            &write_audience,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream (cpu): {e}"))?;
     let t0 = now();
@@ -140,7 +141,7 @@ async fn seed_process(
         .close();
     let cpu_encoded = cpu_block.encode_bin(&process_info)?;
     ingestion
-        .insert_block(bytes::Bytes::from(cpu_encoded))
+        .insert_block(bytes::Bytes::from(cpu_encoded), &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block (cpu): {e}"))?;
 
@@ -869,6 +870,49 @@ async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> 
     )
     .await
     .expect("'global' must stay readable for a scoped caller -- no JIT to trigger, Prong A filters its rows");
+
+    Ok(())
+}
+
+/// A block whose `processes` row has been deleted (retention swept it, or it hasn't arrived
+/// yet) still resolves `IdKind::Block` to the block's own `audience` stamp, rather than falling
+/// through to `OwnerAudience::Unknown` and denying `parse_block`. `get_payload` is unaffected --
+/// it authorizes via `IdKind::Process`, never `IdKind::Block`.
+#[ignore]
+#[tokio::test]
+async fn block_resolves_to_its_own_stamp_when_its_process_row_is_gone() -> Result<()> {
+    use micromegas_analytics::lakehouse::audience_guard::{AudienceIndex, IdKind, OwnerAudience};
+
+    let f = setup().await?;
+    let pool = f.lakehouse.lake().db_pool.clone();
+
+    // process_a is stamped "team-a"; its cpu block was written under that same audience.
+    let deleted = sqlx::query("DELETE FROM processes WHERE process_id = $1")
+        .bind(f.process_a.process_id)
+        .execute(&pool)
+        .await
+        .with_context(|| "deleting the processes row to fabricate an orphaned block")?;
+    assert_eq!(
+        deleted.rows_affected(),
+        1,
+        "sanity check: the processes row must actually be gone before resolving the block"
+    );
+
+    let index = Arc::new(AudienceIndex::new(
+        pool,
+        100_000,
+        std::time::Duration::from_secs(300),
+        Arc::from("public"),
+    ));
+    let resolved = index
+        .resolve(f.process_a.cpu_block_id, IdKind::Block)
+        .await
+        .with_context(|| "resolving the orphaned block's audience")?;
+    assert_eq!(
+        resolved,
+        OwnerAudience::Audience(Arc::from("team-a")),
+        "an orphaned block (no processes row) must resolve to its own stamp, not Unknown"
+    );
 
     Ok(())
 }

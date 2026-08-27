@@ -18,7 +18,7 @@
 use micromegas_ingestion::sql_migration::{
     LATEST_DATA_LAKE_SCHEMA_VERSION, execute_migration, read_data_lake_schema_version,
     upgrade_data_lake_schema_v2, upgrade_data_lake_schema_v3, upgrade_data_lake_schema_v4,
-    upgrade_data_lake_schema_v5, upgrade_data_lake_schema_v6,
+    upgrade_data_lake_schema_v5, upgrade_data_lake_schema_v6, upgrade_data_lake_schema_v7,
 };
 use micromegas_ingestion::sql_telemetry_db::create_tables;
 use sqlx::Row;
@@ -76,6 +76,18 @@ async fn build_v6_schema(pool: &sqlx::PgPool) {
         .await
         .expect("v5 -> v6");
     tr.commit().await.expect("commit v6");
+}
+
+/// Builds a throwaway schema pinned to v7 (no `audience` column on `processes`/`streams`/`blocks`
+/// yet) by chaining `build_v6_schema` with the v7 step directly, bypassing `execute_migration`
+/// so it doesn't carry the fresh schema straight to v8, leaving nothing at v7 to migrate from.
+async fn build_v7_schema(pool: &sqlx::PgPool) {
+    build_v6_schema(pool).await;
+    let mut tr = pool.begin().await.expect("begin v7");
+    upgrade_data_lake_schema_v7(&mut tr)
+        .await
+        .expect("v6 -> v7");
+    tr.commit().await.expect("commit v7");
 }
 
 async fn schema_version(pool: &sqlx::PgPool) -> i32 {
@@ -304,6 +316,215 @@ async fn v7_creates_audience_grants_table_with_constraints() {
 
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V7} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping throwaway schema");
+
+    test_result.expect("test assertions");
+}
+
+/// The v7 -> v8 step: per-row `audience` columns on `processes`, `streams`, and `blocks`,
+/// nullable with no backfill, each guarded by a `NOT VALID` `CHECK` mirroring
+/// `ingestion_api_keys_audience_name`'s charset. `execute_migration` against a v7 database adds
+/// the three columns and constraints; a pre-existing row keeps `audience = NULL`, while a fresh
+/// insert is subject to the `CHECK` going forward.
+const SCHEMA_V8: &str = "mm_1518_sql_migration_test_schema";
+
+#[ignore]
+#[tokio::test]
+async fn v8_adds_nullable_unbackfilled_audience_columns_with_not_valid_checks() {
+    let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live Postgres");
+
+    let setup_pool = sqlx::PgPool::connect(&base_conn_str)
+        .await
+        .expect("connecting to metadata Postgres");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V8} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping any stale throwaway schema from a previous failed run");
+    sqlx::query(&format!("CREATE SCHEMA {SCHEMA_V8}"))
+        .execute(&setup_pool)
+        .await
+        .expect("creating throwaway schema");
+
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)
+        .expect("valid connection string")
+        .options([("search_path", SCHEMA_V8)]);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .expect("connecting with a throwaway search_path");
+
+    let test_result: Result<(), String> = async {
+        build_v7_schema(&pool).await;
+        if schema_version(&pool).await != 7 {
+            return Err("expected the throwaway schema to start at v7".to_string());
+        }
+
+        // Pre-v8 rows: no `audience` column exists yet, so there is nothing to set.
+        let process_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO processes (process_id, exe, username, realname, computer, distro,
+              cpu_brand, tsc_frequency, start_time, start_ticks, insert_time, parent_process_id,
+              properties)
+             VALUES ($1, 'exe', 'user', 'user', 'computer', 'distro', 'cpu', 0, now(), 0, now(),
+              NULL, ARRAY[]::micromegas_property[])",
+        )
+        .bind(process_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("seeding a v7-era processes row: {e:#}"))?;
+
+        let stream_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata,
+              tags, properties, insert_time, format)
+             VALUES ($1, $2, '', '', ARRAY[]::TEXT[], ARRAY[]::micromegas_property[], now(),
+              'micromegas-transit')",
+        )
+        .bind(stream_id)
+        .bind(process_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("seeding a v7-era streams row: {e:#}"))?;
+
+        let block_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO blocks (block_id, stream_id, process_id, begin_time, begin_ticks,
+              end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time)
+             VALUES ($1, $2, $3, now(), 0, now(), 0, 0, 0, 0, now())",
+        )
+        .bind(block_id)
+        .bind(stream_id)
+        .bind(process_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("seeding a v7-era blocks row: {e:#}"))?;
+
+        execute_migration(pool.clone())
+            .await
+            .map_err(|e| format!("migrating v7 -> v8: {e:#}"))?;
+
+        let version = schema_version(&pool).await;
+        if version != LATEST_DATA_LAKE_SCHEMA_VERSION {
+            return Err(format!(
+                "expected schema version {LATEST_DATA_LAKE_SCHEMA_VERSION} after migrating, got {version} \
+                 (a forgotten `UPDATE migration SET version=8;` would surface as a startup panic \
+                 in production, not a graceful error -- this is what catches it here instead)"
+            ));
+        }
+
+        // No `DEFAULT`, no backfill: every pre-v8 row reads back NULL.
+        let process_audience: Option<String> =
+            sqlx::query("SELECT audience FROM processes WHERE process_id = $1")
+                .bind(process_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| format!("reading back the processes row: {e:#}"))?
+                .try_get("audience")
+                .map_err(|e| format!("reading processes.audience: {e:#}"))?;
+        if process_audience.is_some() {
+            return Err(format!(
+                "expected the pre-v8 processes row's audience to stay NULL (no backfill), \
+                 got {process_audience:?}"
+            ));
+        }
+
+        let stream_audience: Option<String> =
+            sqlx::query("SELECT audience FROM streams WHERE stream_id = $1")
+                .bind(stream_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| format!("reading back the streams row: {e:#}"))?
+                .try_get("audience")
+                .map_err(|e| format!("reading streams.audience: {e:#}"))?;
+        if stream_audience.is_some() {
+            return Err(format!(
+                "expected the pre-v8 streams row's audience to stay NULL (no backfill), \
+                 got {stream_audience:?}"
+            ));
+        }
+
+        let block_audience: Option<String> =
+            sqlx::query("SELECT audience FROM blocks WHERE block_id = $1")
+                .bind(block_id)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| format!("reading back the blocks row: {e:#}"))?
+                .try_get("audience")
+                .map_err(|e| format!("reading blocks.audience: {e:#}"))?;
+        if block_audience.is_some() {
+            return Err(format!(
+                "expected the pre-v8 blocks row's audience to stay NULL (no backfill), \
+                 got {block_audience:?}"
+            ));
+        }
+
+        // The `NOT VALID` CHECK does not block a fresh, well-formed write ...
+        sqlx::query(
+            "INSERT INTO processes (process_id, exe, username, realname, computer, distro,
+              cpu_brand, tsc_frequency, start_time, start_ticks, insert_time, parent_process_id,
+              properties, audience)
+             VALUES ($1, 'exe', 'user', 'user', 'computer', 'distro', 'cpu', 0, now(), 0, now(),
+              NULL, ARRAY[]::micromegas_property[], 'team-alpha')",
+        )
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("a well-formed audience should be accepted on processes: {e:#}"))?;
+
+        // ... but rejects a malformed one, on all three tables (mirroring the v6/v7 tests'
+        // own charset case rather than re-enumerating the full accept/reject table).
+        let bad_process = sqlx::query(
+            "INSERT INTO processes (process_id, exe, username, realname, computer, distro,
+              cpu_brand, tsc_frequency, start_time, start_ticks, insert_time, parent_process_id,
+              properties, audience)
+             VALUES ($1, 'exe', 'user', 'user', 'computer', 'distro', 'cpu', 0, now(), 0, now(),
+              NULL, ARRAY[]::micromegas_property[], 'group:everyone')",
+        )
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await;
+        if bad_process.is_ok() {
+            return Err("expected the processes_audience_name CHECK to reject 'group:everyone'".to_string());
+        }
+
+        let bad_stream = sqlx::query(
+            "INSERT INTO streams (stream_id, process_id, dependencies_metadata, objects_metadata,
+              tags, properties, insert_time, format, audience)
+             VALUES ($1, $2, '', '', ARRAY[]::TEXT[], ARRAY[]::micromegas_property[], now(),
+              'micromegas-transit', 'group:everyone')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(process_id)
+        .execute(&pool)
+        .await;
+        if bad_stream.is_ok() {
+            return Err("expected the streams_audience_name CHECK to reject 'group:everyone'".to_string());
+        }
+
+        let bad_block = sqlx::query(
+            "INSERT INTO blocks (block_id, stream_id, process_id, begin_time, begin_ticks,
+              end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time, audience)
+             VALUES ($1, $2, $3, now(), 0, now(), 0, 0, 0, 0, now(), 'group:everyone')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(stream_id)
+        .bind(process_id)
+        .execute(&pool)
+        .await;
+        if bad_block.is_ok() {
+            return Err("expected the blocks_audience_name CHECK to reject 'group:everyone'".to_string());
+        }
+
+        Ok(())
+    }
+    .await;
+
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V8} CASCADE"))
         .execute(&setup_pool)
         .await
         .expect("dropping throwaway schema");

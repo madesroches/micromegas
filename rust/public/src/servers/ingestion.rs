@@ -52,7 +52,8 @@ impl From<IngestionServiceError> for IngestionError {
             IngestionServiceError::ParseError(msg) => IngestionError::BadRequest(msg),
             IngestionServiceError::DatabaseError(msg) => IngestionError::Internal(msg),
             IngestionServiceError::StorageError(msg) => IngestionError::Internal(msg),
-            IngestionServiceError::AudienceConflict { .. } => {
+            IngestionServiceError::AudienceConflict { .. }
+            | IngestionServiceError::StreamAudienceConflict { .. } => {
                 IngestionError::Forbidden(err.to_string())
             }
         }
@@ -80,9 +81,14 @@ pub async fn insert_process_request(
 /// Returns 400 for malformed CBOR, 500 for database errors.
 pub async fn insert_stream_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
-    service.insert_stream(body).await.map_err(Into::into)
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
+    service
+        .insert_stream(body, &audience)
+        .await
+        .map_err(Into::into)
 }
 
 /// Handles requests to insert block information.
@@ -90,12 +96,17 @@ pub async fn insert_stream_request(
 /// Returns 400 for empty body or malformed CBOR, 500 for database/storage errors.
 pub async fn insert_block_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
+    ctx: Option<Extension<AuthContext>>,
     body: bytes::Bytes,
 ) -> Result<(), IngestionError> {
     if body.is_empty() {
         return Err(IngestionError::BadRequest("empty body".to_string()));
     }
-    service.insert_block(body).await.map_err(Into::into)
+    let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
+    service
+        .insert_block(body, &audience)
+        .await
+        .map_err(Into::into)
 }
 
 async fn ready_handler(Extension(service): Extension<Arc<WebIngestionService>>) -> StatusCode {

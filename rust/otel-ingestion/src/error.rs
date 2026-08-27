@@ -4,7 +4,7 @@
 //!  - `Parse`        → 400 (malformed protobuf, malformed gzip)
 //!  - `Database`     → 503 (transient — client should retry per OTLP/HTTP spec)
 //!  - `Storage`      → 503 (transient)
-//!  - `Denied`       → 403 (AbAC Stage 5, #1373: a conflicting re-registration under a
+//!  - `Denied`       → 403 (a conflicting process or stream re-registration under a
 //!    different audience)
 //!
 //! 415 (Content-Type / Content-Encoding) and 413 (body limit) are enforced upstream
@@ -112,9 +112,10 @@ impl OtelError {
             Self::Parse { signal, message } => format!("parse error ({signal}): {message}"),
             Self::Database { signal, .. } => format!("database error ({signal})"),
             Self::Storage { signal, .. } => format!("storage error ({signal})"),
-            // Sanitized: no internal detail (audience labels, process ids) leaks to the client.
+            // Sanitized: no internal detail (audience labels, process/stream ids) leaks to the
+            // client. Covers both the process- and stream-side conflict guards.
             Self::Denied { .. } => {
-                "write denied: process already registered under a different audience".to_string()
+                "write denied: already registered under a different audience".to_string()
             }
         }
     }
@@ -142,6 +143,19 @@ impl OtelError {
                 signal,
                 message: format!(
                     "process_id {process_id} was registered under audience {existing:?}, this \
+                     request carries {incoming:?}"
+                ),
+            },
+            // The stream-side mirror of the `AudienceConflict` arm above: `register_otel_stream`
+            // rejects a same-`stream_id`, different-audience re-registration the same way.
+            IngestionServiceError::StreamAudienceConflict {
+                stream_id,
+                existing,
+                incoming,
+            } => OtelError::Denied {
+                signal,
+                message: format!(
+                    "stream_id {stream_id} was registered under audience {existing:?}, this \
                      request carries {incoming:?}"
                 ),
             },

@@ -58,6 +58,7 @@ async fn push_and_insert_log_block(
     ingestion: &WebIngestionService,
     stream: &mut LogStream,
     process_info: &ProcessInfo,
+    audience: &WriteAudience,
 ) -> Result<()> {
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 0,
@@ -77,7 +78,7 @@ async fn push_and_insert_log_block(
         .close();
     let encoded = block.encode_bin(process_info)?;
     ingestion
-        .insert_block(bytes::Bytes::from(encoded))
+        .insert_block(bytes::Bytes::from(encoded), audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block: {e}"))?;
     Ok(())
@@ -181,12 +182,13 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
+    let audience = WriteAudience::new("public")?;
 
     let process_id = Uuid::new_v4();
     let process_info = make_process_info(process_id, None, HashMap::new());
     let process_body = bytes::Bytes::from(encode_cbor(&process_info)?);
     ingestion
-        .insert_process(process_body, &WriteAudience::new("public")?)
+        .insert_process(process_body, &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_process: {e}"))?;
 
@@ -198,7 +200,7 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     let stream_a_id = stream_a.stream_id();
     let stream_a_info = make_stream_info(&stream_a);
     ingestion
-        .insert_stream(bytes::Bytes::from(encode_cbor(&stream_a_info)?))
+        .insert_stream(bytes::Bytes::from(encode_cbor(&stream_a_info)?), &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
@@ -206,14 +208,14 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
     let stream_b_id = stream_b.stream_id();
     let stream_b_info = make_stream_info(&stream_b);
     ingestion
-        .insert_stream(bytes::Bytes::from(encode_cbor(&stream_b_info)?))
+        .insert_stream(bytes::Bytes::from(encode_cbor(&stream_b_info)?), &audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream: {e}"))?;
 
-    push_and_insert_log_block(&ingestion, &mut stream_a, &process_info).await?;
-    push_and_insert_log_block(&ingestion, &mut stream_b, &process_info).await?;
-    push_and_insert_log_block(&ingestion, &mut stream_a, &process_info).await?;
-    push_and_insert_log_block(&ingestion, &mut stream_b, &process_info).await?;
+    push_and_insert_log_block(&ingestion, &mut stream_a, &process_info, &audience).await?;
+    push_and_insert_log_block(&ingestion, &mut stream_b, &process_info, &audience).await?;
+    push_and_insert_log_block(&ingestion, &mut stream_a, &process_info, &audience).await?;
+    push_and_insert_log_block(&ingestion, &mut stream_b, &process_info, &audience).await?;
 
     // (stream_id, object_offset, begin_ticks, end_ticks, bucket_index) -- one block per bucket,
     // alternating stream_a/stream_b.

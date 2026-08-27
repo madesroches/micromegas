@@ -1,7 +1,7 @@
 //! DB-backed tests for `OwnershipRewrite` (#1370, AbAC Stage 2) -- the issue's own acceptance
-//! criteria: seed processes stamped with different `micromegas.audience` properties (plus one
-//! never stamped at all, which #1482's read-side `COALESCE` resolves to
-//! `MICROMEGAS_DEFAULT_AUDIENCE`) through the real ingestion pipeline, materialize the `blocks`/
+//! criteria: seed processes stamped with different `audience` columns (plus one never stamped at
+//! all, which the read-side `COALESCE` resolves to `MICROMEGAS_DEFAULT_AUDIENCE`) through the
+//! real ingestion pipeline, materialize the `blocks`/
 //! `processes`/`streams` batch views `OwnershipRewrite` reads its audience mapping from, then
 //! assert a session's visible rows differ by `CallerContext.read_scope` -- cross-audience denial,
 //! same-audience visibility, and `ReadScope::All` sees everything -- for `processes`/`streams`
@@ -22,22 +22,12 @@
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
 //! does not run under a plain `cargo test`.
 //!
-//! `micromegas.audience` ingestion-time stamping now exists (Stage 5, #1373): this file stamps
-//! through the real `insert_process(body, &WriteAudience)` parameter, exactly the path a real
-//! ingestion key exercises, rather than hand-writing the property on the `ProcessInfo` passed in
-//! (which would now be stripped anyway -- `finalize_process_properties` drops any
-//! client-supplied `micromegas.*` key). Critically, stamping must happen *before* the `blocks`
-//! view's partitions are materialized, not merely before the `processes` view's own
-//! materialization: `BlocksView::data_sql` snapshots `processes.properties` from Postgres into
-//! the `blocks` parquet partitions at materialization time (`blocks_view.rs`), and the
-//! `processes` `SqlBatchView`'s transform query reads `first_value("processes.properties") ...
-//! FROM blocks` -- i.e. from the already-materialized `blocks` partitions, never from Postgres
-//! directly (`processes_view.rs`). Stamping the process at creation time (before any block
-//! exists) trivially satisfies this ordering. `insert_process` now stamps unconditionally
-//! (#1519), so `seed_process`'s never-stamped fixture (`process_c`) is fabricated by inserting
-//! through that same real path and then stripping the property back off with a post-insert
-//! `UPDATE` (`common::db_fixtures::strip_process_audience`) -- the real ingestion path itself no
-//! longer has a code branch that produces an unstamped row.
+//! This file stamps through the real `insert_process`/`insert_stream`/`insert_block`
+//! `&WriteAudience` parameters, the same path a real ingestion key exercises. The stamp is a
+//! physical column on each of `processes`/`streams`/`blocks`. `insert_process` always stamps, so
+//! `seed_process`'s never-stamped fixture (`process_c`) is produced by inserting through that
+//! same real path and then nulling the `audience` column back off with a post-insert `UPDATE`
+//! (`common::db_fixtures::strip_process_audience`).
 
 mod common;
 
@@ -94,12 +84,11 @@ struct ProcessFixture {
 /// ingestion pipeline (`WebIngestionService`, the same entry point a real client hits).
 /// `insert_process` stamps unconditionally now (#1519), so there is no code path left that
 /// produces an unstamped row on its own: the `None` arm inserts under the deployment default
-/// (`public`, matching this file's `MICROMEGAS_DEFAULT_AUDIENCE`) and then strips the
-/// `micromegas.audience` property back off with a post-insert `UPDATE`
-/// (`strip_process_audience`), reproducing the shape of a row written before the write path
-/// resolved the default, or one written by the admin replication path. Either way, #1482's
-/// read-side `COALESCE` resolves a missing property to `MICROMEGAS_DEFAULT_AUDIENCE` (default
-/// `public`) when the audience is read out.
+/// (`public`, matching this file's `MICROMEGAS_DEFAULT_AUDIENCE`) and then nulls the `audience`
+/// column back off the `processes` row with a post-insert `UPDATE` (`strip_process_audience`),
+/// reproducing a legacy pre-v8 row. The read-side `COALESCE` resolves a NULL column to
+/// `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`). The cpu/log streams and blocks are always
+/// stamped with `write_audience` -- only the `processes` row is fabricated as legacy-NULL here.
 async fn seed_process(
     ingestion: &WebIngestionService,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -126,7 +115,10 @@ async fn seed_process(
     let cpu_stream_id = cpu_stream.stream_id();
     let cpu_stream_info = make_stream_info(&cpu_stream);
     ingestion
-        .insert_stream(bytes::Bytes::from(encode_cbor(&cpu_stream_info)?))
+        .insert_stream(
+            bytes::Bytes::from(encode_cbor(&cpu_stream_info)?),
+            &write_audience,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream (cpu): {e}"))?;
     let t0 = now();
@@ -169,7 +161,7 @@ async fn seed_process(
         .close();
     let cpu_encoded = cpu_block.encode_bin(&process_info)?;
     ingestion
-        .insert_block(bytes::Bytes::from(cpu_encoded))
+        .insert_block(bytes::Bytes::from(cpu_encoded), &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block (cpu): {e}"))?;
 
@@ -178,7 +170,10 @@ async fn seed_process(
     let log_stream_id = log_stream.stream_id();
     let log_stream_info = make_stream_info(&log_stream);
     ingestion
-        .insert_stream(bytes::Bytes::from(encode_cbor(&log_stream_info)?))
+        .insert_stream(
+            bytes::Bytes::from(encode_cbor(&log_stream_info)?),
+            &write_audience,
+        )
         .await
         .map_err(|e| anyhow::anyhow!("insert_stream (log): {e}"))?;
     log_stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -200,7 +195,7 @@ async fn seed_process(
         .close();
     let log_encoded = log_block.encode_bin(&process_info)?;
     ingestion
-        .insert_block(bytes::Bytes::from(log_encoded))
+        .insert_block(bytes::Bytes::from(log_encoded), &write_audience)
         .await
         .map_err(|e| anyhow::anyhow!("insert_block (log): {e}"))?;
 
