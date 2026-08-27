@@ -14,8 +14,10 @@ conclusion Prong B has already established, at the cost of a time-unbounded scan
 This plan removes that predicate for scans that are provably Prong-B-authorized, keyed on a
 structural property of the scan (does it carry an instance guard, and is its instance id
 non-`'global'`) rather than on a hardcoded view-set name list — so a view set that ever gains an
-unguarded query path keeps its predicate automatically. It is a query-planning cleanup, not a
-security change: no gap is closed and none is opened.
+unguarded query path keeps its predicate automatically. This is primarily a query-planning
+cleanup: in the ordinary case no gap is closed and none is opened. It does give up one narrow,
+already-fail-closed-elsewhere backstop — a retention-window collision that lets Prong A deny an
+access Prong B allows — detailed in Security below.
 
 ## Current State
 
@@ -113,11 +115,17 @@ Net of the collision case, what remains is Prong A / Prong B disagreement, and t
 different things: Prong B resolves a live point query against `processes`/`streams`; Prong A's
 `per_process_audience` is built from `__processes__partitions`, a time-partitioned, append-only JIT
 materialization off `blocks` (`processes_view.rs`) that is never retroactively edited once a time
-range is materialized. `delete_old_data` (`rust/analytics/src/delete.rs`) deletes a process's row
-from live `processes` once it is old and stream-empty, but that deletion neither retracts the
-process's already-materialized `__processes__partitions` rows nor the instance's own JIT partitions
-(`net_spans`/`otel_spans`/`images`/`async_events`), which is exactly the "retention swept the
-`processes` row, everything downstream of it survives" case. This produces a genuine, if narrow,
+range is materialized. `delete_old_data` (`rust/analytics/src/delete.rs:152-169`) deletes a
+process's row from live `processes` once it is old and stream-empty, and in the same pass calls
+`retire_expired_partitions` over the same `expiration` cutoff, which deletes every
+`lakehouse_partitions` row with `end_insert_time < expiration` (`write_partition.rs:94-101`) --
+including `__processes__partitions` and the instance's own JIT partitions
+(`net_spans`/`otel_spans`/`images`/`async_events`). The two cutoffs aren't identical, though:
+partitions retire on `end_insert_time < expiration` while the source blocks are deleted on
+`insert_time <= expiration`, so the boundary, day-sized partition can survive for up to one
+partition width after its source row is gone -- the same bound `tasks/completed/1482_audience_column_plan.md`
+and `tasks/completed/1371_udtf_udf_guards_plan.md` document for this identical mechanism, not an
+indefinite survival. This produces a genuine, if narrow and time-bounded,
 allow-direction skew that only the collision case makes reachable: if a client-chosen `stream_id`
 happens to equal a `process_id` that has since aged out of `processes`, the collision that used to
 be `Ambiguous` (both rows present) resolves cleanly to the surviving `streams` row once the
@@ -125,8 +133,10 @@ be `Ambiguous` (both rows present) resolves cleanly to the surviving `streams` r
 process's owner — to open `view_instance` for that id. Today's semi-join still denies them: it reads
 the stale-but-persisted `__processes__partitions` row, which still carries the original process's
 audience, and filters out any caller whose audience doesn't match it. Dropping the predicate gives
-up exactly this one backstop; the rest of the skew (a freshly-arrived process not yet visible in
-`__processes__partitions`) is invisible to Prong A in the deny direction, not the allow direction.
+up exactly this one backstop, bounded to roughly one partition width after the process row itself
+ages out of `processes` (see the partition-retirement bound above); the rest of the skew (a
+freshly-arrived process not yet visible in `__processes__partitions`) is invisible to Prong A in
+the deny direction, not the allow direction.
 
 `thread_spans` has the same process/stream anchor shift as the four above, but through a different
 pair of accessors: Prong A's `exists_for_stream` resolves the **owning process's** stamp (it joins
@@ -201,6 +211,11 @@ impl AudienceBranch {
     /// that one id sufficient, with no per-row predicate needed. False for `AudienceColumn`: its
     /// global instances span every process, and its per-process instances are filtered by a bare
     /// column comparison that costs nothing to keep.
+    ///
+    /// Assumes a guarded instance's rows can never legitimately span more than one process --
+    /// true of today's five view sets, keyed on schema shape rather than a verified proof. If a
+    /// future guarded view set's instance can legitimately span processes, revisit this method
+    /// before its branch is added here.
     fn rows_confined_to_instance(&self) -> bool {
         matches!(self, Self::ProcessIdColumn | Self::ProcessInstance | Self::StreamInstance)
     }
@@ -289,27 +304,41 @@ Narrowing to three is a one-line change to `rows_confined_to_instance` if that i
    - Add its mirror: register a second `process_id`-column view set through `add_view_set` and
      assert `view_instance('<it>', '<pid>')` plans with **no** `Filter` and no `LeftSemi Join`.
      Together the two prove the key is the query path, not the view.
+   - Before flipping the two `EXISTS` tests below, add unguarded (global-registered) counterparts
+     to `make_test_view_factory` so `exists_for_process`/`exists_for_stream` keep test coverage:
+     register an `async_events`- and a `thread_spans`-shaped view via `add_global_view` (bypassing
+     `view_instance(...)` entirely, the same way `ProcessIdOnlyView` is registered globally above)
+     and assert `SELECT * FROM <it>` still plans with the injected literal-valued `EXISTS`
+     (turned into a `LeftSemi Join` by `DecorrelatePredicateSubquery`, as today).
    - Flip `async_events_view_instance_plans_with_an_injected_exists` and
-     `thread_spans_view_instance_plans_with_an_injected_two_hop_exists` to assert the absence of an
-     injected predicate, renaming them accordingly.
+     `thread_spans_view_instance_plans_with_an_injected_two_hop_exists` (the guarded
+     `view_instance(...)` forms) to assert the absence of an injected predicate, renaming them
+     accordingly.
    - Update the `default_view_factory` inventory test (`~line 520`) from a two-way split to a
      three-way one, keyed on the `AudienceBranch` (Design §2), not on the access path:
      `AudienceColumn` — any view carrying the physical `audience` column, whether reached as a
      global table or through `view_instance(...)` (`log_entries`/`measures` are registered both
      ways and must still assert the bare `Filter` shape there) — → bare `Filter` on `audience`;
-     no `audience` column, reached as a global table → `LeftSemi Join`; no `audience` column,
-     reached through a guarded `view_instance(...)` → no injected predicate at all. The panic
+     no `audience` column, reached as a global table → `LeftSemi Join`. This arm is unreachable
+     against the real `default_view_factory` (every global view it registers today carries the
+     `audience` column) — cover it there with the synthetic unguarded views just added, noting in
+     the test that the arm is otherwise dead against production registrations; no `audience`
+     column, reached through a guarded `view_instance(...)` → no injected predicate at all. The panic
      message must keep pointing at "a view set is missing a branch in `OwnershipRewrite`" for the
      planning failure case, since `classify`'s `Err` is unchanged.
    - Add a case asserting an unrecognised view set reached through `view_instance(...)` still
      `Err`s — the guard must not turn `classify`'s fail-closed fallback into a silent pass.
-6. `rust/analytics/tests/ownership_rewrite_db_test.rs`: no code changes here. This file's only
-   `view_instance(...)` sections are `log_entries`, `async_events`, and `thread_spans` — it has no
-   `net_spans` section, and none of the three §4 view sets (`net_spans`/`otel_spans`/`images`) are
-   seeded in it. Its existing cross-audience assertions (Prong B's uniform denial text) and the
-   owning caller's `> 0` / `ReadScope::All` row-count checks for `async_events` and `thread_spans`
-   already serve as the regression net for this change: rerun this file unmodified and confirm
-   they still pass.
+6. `rust/analytics/tests/ownership_rewrite_db_test.rs`: no test-behavior changes — its assertions
+   (Prong B's uniform denial text, and the owning caller's `> 0` / `ReadScope::All` row-count
+   checks for `async_events` and `thread_spans`) already serve as the regression net for this
+   change: rerun this file unmodified and confirm they still pass. Its comments do need updating,
+   though: the module doc (`:13-17`) and the in-body comment before the `view_instance(...)`
+   section (`:408-417`) both currently say Prong A's own row-filtering behavior for
+   `async_events`/`thread_spans` "is exercised separately, by the plan-shape tests in
+   `ownership_rewrite_public_view_set_tests.rs`" — after Phase 3 step 5 those tests assert the
+   opposite for the guarded-instance path. Reword both comments to say Prong A injects no predicate
+   at all for a guarded `view_instance(...)` scan of these two view sets (coverage of the
+   `EXISTS` shape itself has moved to the new unguarded-view tests in that file).
 7. `rust/analytics/tests/audience_guard_tests.rs`: add a unit test pinning
    `instance_is_audience_guarded()` against `authorize_view_instance`'s arms — guard present +
    `'global'` → false; guard present + UUID → true; guard absent → false. This is the coupling
@@ -324,7 +353,11 @@ Narrowing to three is a one-line change to `rows_confined_to_instance` if that i
    `view_instance(...)`, where the call-level audience check on the instance id is the enforcement,
    and Prong A adds no per-row predicate. Also soften the earlier claim that "Prong A already
    row-filters every `view_instance` scan the same as the named-table form", which is now true only
-   for the view sets carrying an `audience` column.
+   for the view sets carrying an `audience` column. Also update the "Residual gap" warning box's
+   bullet (`:351-356`) — "**Five process/stream-anchored view sets** … and **the per-process JIT
+   `view_instance` path** still resolve their audience *label* through the owning process's/stream's
+   row rather than a genuine per-row column of their own" — which mirrors the same claim in
+   `ownership_rewrite.rs`'s module doc that Phase 2 step 4 rewrites there; keep the two in sync.
 9. `rust/analytics/src/lakehouse/audience_guard.rs`: update the module doc's claim that Prong B's
    `view_instance(...)` guard exists only to close a cost/availability residual "because Prong A
    already row-filters every `view_instance` scan the same as the named-table form" — after this
@@ -333,17 +366,28 @@ Narrowing to three is a one-line change to `rows_confined_to_instance` if that i
    check. Add the reverse-side pointer to `OwnershipRewrite`'s `instance_is_audience_guarded()` so
    a reader of either file finds the other. Describe this behaviourally, matching Phase 2 step 4's
    convention: no issue numbers, no stage labels.
-10. `CHANGELOG.md`, Unreleased: one entry under the analytics/query section describing the dropped
-   predicate, the view sets affected, and that it is a planning cleanup: no caller gains access to
-   another audience's rows, though a legitimate owner may now see rows that the daemon-materialized
-   `processes` snapshot's lag previously hid from the dropped predicate (#1530).
+10. `CHANGELOG.md`, Unreleased: one new entry under the analytics/query section describing the
+   dropped predicate, the view sets affected, and that it is a planning cleanup: no caller gains
+   access to another audience's rows, though a legitimate owner may now see rows that the
+   daemon-materialized `processes` snapshot's lag previously hid from the dropped predicate, and
+   the one narrow, retention-bounded backstop given up (#1530). Also amend, in place, the two prior
+   still-`## Unreleased` entries this change falsifies — matching the file's own precedent of
+   editing an unreleased entry rather than only appending (e.g. the existing `**Amended (#1482,
+   still `## Unreleased`)**` and `**Amended (#1486, still `## Unreleased`)**` notes): the #1482
+   entry's sentence "The `process_id IN (subquery)` semi-join described above now applies only to
+   `net_spans`, `otel_spans`, and `images` … `async_events` and `thread_spans` keep their
+   literal-valued `EXISTS` shapes unchanged" needs an amendment noting that all five view sets now
+   plan with no injected predicate for a guarded `view_instance(...)` scan; the #1486 entry's
+   sentence "Prong A already row-filters every `view_instance` scan the same as the named-table
+   form" needs the same treatment, since that is now true only for the `AudienceColumn` view sets.
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/materialized_view.rs` — new accessor
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs` — branch enum, skip rule, module doc
 - `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs` — plan-shape expectations
-- `rust/analytics/tests/ownership_rewrite_db_test.rs` — no changes; rerun as the regression net
+- `rust/analytics/tests/ownership_rewrite_db_test.rs` — no test-behavior changes (rerun as the
+  regression net); module doc and one in-body comment updated to match the new behavior
 - `rust/analytics/tests/audience_guard_tests.rs` — accessor/guard-arm coupling test
 - `rust/analytics/src/lakehouse/audience_guard.rs` — module doc, reverse-side coupling note
 - `mkdocs/docs/admin/authentication.md` — enforcement description
@@ -369,13 +413,23 @@ case above, and removing them converts that case from "over-filtered" to "unfilt
 
 **Replacing the semi-join with a literal `process_id = '<instance id>'` filter** instead of removing
 it. Cheap (prunable, no subquery) and it verifies confinement rather than assuming it. Rejected as
-redundant: partitions are already keyed by `view_instance_id`, so the filter can only ever be a
-tautology, and it would be wrong for a future view instance that legitimately spans processes.
+redundant: partitions are already keyed by `view_instance_id`, so under every registration this
+skip actually applies to, the filter can only ever be a tautology. `rows_confined_to_instance()`
+(Design §2) is exactly the property this filter would otherwise verify at plan time; it is keyed on
+schema shape, not on a proof of confinement, so a future guarded view set whose instance can
+legitimately span more than one process is precisely the case that method's doc comment already
+flags as needing to be revisited before the skip applies to it — not an argument for adding the
+literal filter instead.
 
-**Keeping the predicate as defence-in-depth against Prong A/B skew.** Rejected: the two prongs read
-the same per-row stamp and differ only in materialization/retention lag, which does not produce a
-false *allow*; and the semi-join provides no protection against the injection scenarios that are
-actually closed elsewhere.
+**Keeping the predicate as defence-in-depth against Prong A/B skew.** Rejected: the divergence
+between the two prongs is real (Current State) and does produce a genuine, if narrow, false
+*allow* -- but that allow-direction skew is reachable only through the retention-window collision,
+itself already fail-closed for as long as both a `processes` and a `streams` row exist (Current
+State's `merge_owner_rows`/`Ambiguous` reasoning), and bounded to roughly one partition width once
+one of them ages out (Current State). Keeping a time-unbounded scan on every guarded-instance query
+to cover a residual that narrow is not a good trade; the semi-join also provides no protection
+against the injection scenarios that are actually closed elsewhere (`blocks_view`'s mismatch
+predicate).
 
 ## Security
 
@@ -390,8 +444,8 @@ No authorization decision changes. For every reachable query:
   `process_id` that has since aged out of `processes` lets Prong B authorize that stream's own
   owner for the surviving `net_spans`/`otel_spans`/`images`/`async_events` instance partitions of
   the aged-out process, which today's semi-join still denies (it reads the audience the
-  never-retracted `__processes__partitions` row still carries) and which dropping the predicate
-  gives up.
+  `__processes__partitions` row still carries for up to roughly one partition width after the
+  process row itself is retired, per Current State) and which dropping the predicate gives up.
 - Prong B anchors on `IdKind::ProcessOrStream` — `processes.audience` or `streams.audience`,
   whichever row exists — for all five view sets, not only `thread_spans`; the fail-closed
   `Ambiguous` merge in `merge_owner_rows` is what makes that anchor safe whenever both rows exist
@@ -428,10 +482,13 @@ result size, so it is largest exactly where it hurts most — a small `view_inst
   is still denied with the uniform not-found text.
 - `cargo test -p micromegas-analytics --test audience_guard_tests` — accessor/guard-arm coupling.
 - `cargo test -p micromegas-analytics` and `cargo clippy --workspace -- -D warnings` for the rest.
-- Manual sanity check against the local test env: run `view_instance('thread_spans', <stream_id>)`
-  under an authenticated (non-`--disable-auth`) session and confirm via `EXPLAIN` that no
-  `LeftSemi Join` appears, and that the same query under a foreign audience still fails with
-  `view_instance: '<id>' not found or not accessible`.
+
+No manual sanity check against the local test env: `local_test_env/ai_scripts/start_services.py`
+launches `flight-sql-srv` with `--disable-auth` unconditionally, which resolves to
+`ReadScope::All` and skips `OwnershipRewrite` entirely, so no session obtainable from the
+documented local test env can show the `EXPLAIN` shape this change affects. The offline
+plan-shape test above already asserts exactly this shape change against a real (non-`All`)
+`ReadScope`.
 
 ## Open Questions
 
