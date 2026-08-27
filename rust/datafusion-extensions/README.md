@@ -12,6 +12,7 @@ This crate provides shared user-defined functions that work in both native and `
 - `jsonb_get` - extract nested value by key
 - `jsonb_as_string`, `jsonb_as_i64`, `jsonb_as_f64` - type casts
 - `jsonb_object_keys` - extract object keys
+- `jsonb_entries`, `jsonb_elements`, `jsonb_path_elements` - expand a JSONB value into an Arrow `List`, for per-row expansion via `unnest()`
 
 ### Histogram
 - `make_histogram` (UDAF) - create histogram from values

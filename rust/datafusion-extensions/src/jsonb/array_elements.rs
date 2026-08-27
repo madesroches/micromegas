@@ -1,3 +1,4 @@
+use crate::jsonb::extract::array_elements;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, BinaryArray, DictionaryArray, GenericBinaryArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
@@ -13,7 +14,6 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
-use jsonb::RawJsonb;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` that expands a JSONB array into rows with a single `value` column.
@@ -80,16 +80,12 @@ fn output_schema() -> SchemaRef {
     )]))
 }
 
-/// Extract element values from a JSONB array.
+/// Extract element values from a JSONB array. Errors with the UDTF's usual message if the input
+/// is not an array.
 fn extract_elements_from_jsonb(jsonb_bytes: &[u8]) -> Result<Vec<Vec<u8>>, DataFusionError> {
-    let jsonb = RawJsonb::new(jsonb_bytes);
-    match jsonb.array_values() {
-        Ok(Some(values)) => Ok(values.into_iter().map(|v| v.as_ref().to_vec()).collect()),
-        Ok(None) => Err(DataFusionError::Execution(
-            "jsonb_array_elements: input is not a JSONB array".into(),
-        )),
-        Err(e) => Err(DataFusionError::External(e.into())),
-    }
+    array_elements(jsonb_bytes)?.ok_or_else(|| {
+        DataFusionError::Execution("jsonb_array_elements: input is not a JSONB array".into())
+    })
 }
 
 fn empty_exec(projection: Option<&Vec<usize>>) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {

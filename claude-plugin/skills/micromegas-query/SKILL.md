@@ -370,7 +370,7 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `process_spans(process_id, 'thread'|'async'|'both')` — all spans for a process with `stream_id` and `thread_name` columns. **Extremely dense** — always use tight `--begin`/`--end` and `LIMIT`.
 - `list_partitions()` — list available data partitions with metadata
 - `expand_histogram(h)` — expands a histogram into rows of `(bin_center, count)` for visualization
-- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it.
+- `jsonb_each(jsonb)` — expand JSONB object/array into rows of `(key, value)`. `value` is raw JSONB (Binary) — wrap it with `jsonb_as_string()`/`jsonb_as_f64()`/`jsonb_format_json()` to read it. Like `jsonb_array_elements`, its argument must be a literal or an uncorrelated subquery — `jsonb_each(t.col)` with a bare column reference fails to plan. For per-row expansion of a column, use `jsonb_entries`/`jsonb_elements`/`jsonb_path_elements` below with `unnest()` instead.
 
 ### Property functions
 - `property_get(properties, key)` — extract property values
@@ -384,8 +384,12 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `jsonb_format_json(jsonb)` — JSONB to readable JSON string
 - `jsonb_parse(string)` — parse JSON string to JSONB
 - `jsonb_object_keys(jsonb)` — list keys of a JSONB object
+- `jsonb_array_length(jsonb)` — number of elements in a JSONB array
 - `jsonb_path_query_first(jsonb, path)` — first JSONPath match
 - `jsonb_path_query(jsonb, path)` — all JSONPath matches as array
+- `jsonb_entries(jsonb)` — expand a JSONB object/array into a `List<Struct<key, value>>`, for per-row expansion via `unnest()` (e.g. `unnest(jsonb_entries(properties))`)
+- `jsonb_elements(jsonb)` — expand a JSONB array into a `List<Binary>` of its elements, for per-row expansion via `unnest()`
+- `jsonb_path_elements(jsonb, path)` — expand all JSONPath matches into a `List<Binary>`, for per-row expansion via `unnest()`
 
 ### Histogram functions
 - `make_histogram(start, end, bins, values)` — aggregate: creates a histogram from numeric values
