@@ -387,6 +387,12 @@ injection from flooding the log while still naming every audience pair involved.
 means an integrity violation reached storage: either an injection that slipped past §5's gate, or a
 bug. It has no benign class, so the healthy baseline is a flat zero and the metric is alertable as-is.
 
+A mismatch is therefore reported once, on the tick after it lands, and not repeated. That is the
+whole reporting surface: the `warn!` lines are themselves queryable from `log_entries`, and the
+counter is queryable from `measures`, so an operator asking "what is currently wrong" runs a query
+over the sweep's own telemetry rather than a second mechanism. No ad-hoc admin query surface is
+added.
+
 **This is where the forensics live.** Per-row audience columns were rejected as a *forensics* feature
 (they record a value that is constant by construction); they are justified here because they are
 load-bearing for enforcement. What makes an investigation possible is this sweep plus §5's denial
@@ -661,11 +667,6 @@ ingestion path.
    deployment's default — a behaviour change for `processes` too, and out of scope here. Note that
    replicated rows are the one producer §8's sweep can flag but no write-time check can, since they
    bypass the HTTP edge entirely.
-4. **Should the sweep's window follow the task or the retention horizon?** Scoped to `EveryHourTask`'s
-   two-partition-delta window, a mismatch is reported once, on the tick after it lands, and never
-   again — good for alerting, bad for a "show me everything currently wrong" question. A separate
-   admin UDTF over an arbitrary range would answer the second; not proposed here, but the sweep's
-   query is the body of it if it turns out to be wanted.
 
 ## Appendix: one-audience-per-process is an invariant
 
