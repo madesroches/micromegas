@@ -77,7 +77,7 @@ fn dict_values_binary_array(
 /// dictionary key/value type (e.g. `Dictionary<Int8, Binary>`) falls through to `None` so the
 /// caller takes the `create_binary_accessor` row-by-row path and gets its actionable
 /// `Unsupported dictionary key type: …` `Execution` error instead of an opaque downcast failure.
-fn binary_dict(array: &ArrayRef) -> Option<&DictionaryArray<Int32Type>> {
+pub(crate) fn binary_dict(array: &ArrayRef) -> Option<&DictionaryArray<Int32Type>> {
     if let DataType::Dictionary(key, value) = array.data_type()
         && key.as_ref() == &DataType::Int32
         && value.as_ref() == &DataType::Binary
@@ -90,7 +90,7 @@ fn binary_dict(array: &ArrayRef) -> Option<&DictionaryArray<Int32Type>> {
 
 /// `create_binary_accessor` with the standard `Invalid input type for {func_name}: …` error
 /// wrapping shared by the three list-returning JSONB UDFs' non-dictionary fallback path.
-fn binary_accessor_or_err(
+pub(crate) fn binary_accessor_or_err(
     array: &ArrayRef,
     func_name: &str,
 ) -> Result<Box<dyn BinaryColumnAccessor + Send>> {
@@ -109,7 +109,7 @@ fn binary_accessor_or_err(
 /// `append_slot` is called only for referenced slots; it must call `list_builder.append(true)` or
 /// `list_builder.append(false)` exactly once (via the underlying `ListBuilder`, reached through
 /// its `&mut ListBuilder<T>` argument).
-fn dict_fast_path<T, F>(
+pub(crate) fn dict_fast_path<T, F>(
     dict_array: &DictionaryArray<Int32Type>,
     mut list_builder: ListBuilder<T>,
     mut append_slot: F,

@@ -429,6 +429,19 @@ does transparently either way) needs updating. No production SQL view or documen
 this codebase relies on the dictionary encoding specifically (checked: no `analytics-web-app` or
 `python/` usage beyond one notebook cell that reads key values, which is encoding-agnostic).
 
+**Status: implemented as designed**, no deviations. `binary_dict`, `dict_fast_path`, and
+`binary_accessor_or_err` were promoted from private to `pub(crate)` in `list_udfs.rs`, and
+`keys.rs` now builds its list through them exactly as described; `extract_keys_from_jsonb` and
+`build_dict_list_array` are gone. `rust/analytics/tests/jsonb_object_keys_tests.rs`'s seven
+existing cases pass unchanged in substance against the new `ListArray` assertions, plus one new
+`test_jsonb_object_keys_unnest` case confirming `unnest(jsonb_object_keys(...))` now returns one
+row per key with no `arrow_cast` (8 tests total, all passing). `functions-reference.md`'s Returns
+line was simplified to state the new type plainly rather than narrate the fast-path/encoding
+mechanics or the no-longer-relevant `arrow_cast` workaround — that level of detail belongs in this
+plan, not in user-facing reference docs — and a `SELECT DISTINCT unnest(...)` example was added.
+`cargo build`/`clippy --all-targets -- -D warnings`/`fmt --check` pass for both
+`micromegas-datafusion-extensions` and `micromegas-analytics`.
+
 ## Files to Modify
 
 | File | Change |

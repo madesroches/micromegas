@@ -686,7 +686,7 @@ jsonb_object_keys(jsonb)
    * `Binary` - Plain JSONB binary
    * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
-**Returns:** `Dictionary<Int32, List<Utf8>>` - Dictionary-encoded array of key names for memory efficiency (repeated key lists share the same dictionary entry), or NULL if input is not an object
+**Returns:** `List<Utf8>` - Array of key names, or NULL if input is not an object
 
 **Examples:**
 ```sql
@@ -698,6 +698,10 @@ SELECT jsonb_object_keys(jsonb_parse('{"name": "server", "port": 8080}')) as key
 SELECT jsonb_object_keys(properties) as prop_keys
 FROM processes
 LIMIT 5;
+
+-- One row per key, across all processes
+SELECT DISTINCT unnest(jsonb_object_keys(properties)) as prop_key
+FROM processes;
 ```
 
 ##### `jsonb_array_length(jsonb)`
