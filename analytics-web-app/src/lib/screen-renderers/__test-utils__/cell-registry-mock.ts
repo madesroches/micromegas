@@ -20,8 +20,22 @@ const MockEditorComponent = ({ config }: { config: { type: string } }) =>
 
 /** Mock renderer component factory */
 const createMockRenderer = (type: string) => {
-  const MockRenderer = ({ name, onTimeRangeSelect }: { name: string; onTimeRangeSelect?: (from: Date, to: Date) => void }) =>
-    React.createElement(
+  const MockRenderer = ({
+    name,
+    onTimeRangeSelect,
+    content,
+    status,
+  }: {
+    name: string
+    onTimeRangeSelect?: (from: Date, to: Date) => void
+    content?: string
+    status?: string
+  }) => {
+    // Markdown mirrors the real MarkdownCell's defer-until-success gate so
+    // tests can exercise idle-blank / success-rendered / live-edit behavior
+    // without pulling in the real renderer (and react-markdown) here.
+    const text = type === 'markdown' ? (status === 'success' ? content ?? '' : '') : `Cell: ${name}`
+    return React.createElement(
       'div',
       {
         'data-testid': `cell-renderer-${type}`,
@@ -31,8 +45,9 @@ const createMockRenderer = (type: string) => {
           ? () => onTimeRangeSelect(new Date('2024-01-15T00:00:00Z'), new Date('2024-01-16T00:00:00Z'))
           : undefined,
       },
-      `Cell: ${name}`
+      text
     )
+  }
   return MockRenderer
 }
 
@@ -69,6 +84,7 @@ const BASE_METADATA = {
     showTypeBadge: false,
     defaultHeight: 150,
     canBlockDownstream: false,
+    canRun: true,
   },
   variable: {
     label: 'Variable',
@@ -215,8 +231,13 @@ export function createCellRegistryMock(options: MockOptions = {}) {
       meta.EditorComponent = MockEditorComponent
     }
 
-    // Add getRendererProps (always a simple stub)
-    meta.getRendererProps = () => ({})
+    // Add getRendererProps. Markdown mirrors the real markdownMetadata
+    // (passes `content` straight through) so content-edit reactivity tests
+    // can exercise it; every other type keeps the simple stub.
+    meta.getRendererProps =
+      type === 'markdown'
+        ? (config: { content?: string }) => ({ content: config.content })
+        : () => ({})
 
     // Add renderer component if requested (mirrors getCellRenderer's return value,
     // since consumers now read metadata.renderer directly instead of calling

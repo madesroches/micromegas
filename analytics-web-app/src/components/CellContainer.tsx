@@ -94,7 +94,7 @@ export function CellContainer({
   ...divProps
 }: CellContainerProps) {
   const meta = getCellTypeMetadata(type)
-  const canRun = canRunProp ?? !!meta.execute
+  const canRun = canRunProp ?? meta.canRun ?? !!meta.execute
   const isGroup = type === 'hg'
 
   const fadeClass = useFadeOnIdle(status)

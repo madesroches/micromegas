@@ -81,7 +81,7 @@ export function HgChildPane({
   const meta = getCellTypeMetadata(child.type)
   const CellRenderer = meta.renderer
   const TitleBarRenderer = meta.titleBarRenderer
-  const canRun = !!meta.execute
+  const canRun = meta.canRun ?? !!meta.execute
 
   const statusText = buildStatusText(child, state)
 

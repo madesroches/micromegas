@@ -137,6 +137,14 @@ export interface CellTypeMetadata {
   readonly canBlockDownstream: boolean
 
   /**
+   * Whether this cell type shows a Run control, independent of whether it has
+   * an `execute` method. Defaults to `!!execute`. Markdown sets this to `true`
+   * so users get an explicit "re-render" control even though execution is a
+   * free, local, synchronous no-op (see `execute`'s absence above).
+   */
+  readonly canRun?: boolean
+
+  /**
    * Fallback selection mode when the cell config doesn't specify
    * `options.selectionMode`. Used for cells where selection is intrinsic to
    * the renderer (e.g., the map cell publishes the clicked marker without an

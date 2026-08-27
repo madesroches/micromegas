@@ -626,6 +626,26 @@ describe('HorizontalGroupCellEditor', () => {
       expect(screen.getByTestId('editor-table')).toBeInTheDocument()
     })
 
+    it('shows the Run button for a markdown child when onRun is provided (canRun fallback via metadata)', () => {
+      // Markdown has no `execute` but the shared mock gives it `canRun: true`,
+      // mirroring production — this exercises the same fallback as HgChildPane
+      // but for the full-panel child editor.
+      const onChildRun = vi.fn()
+      const mdChildren = [makeChild('notes', 'markdown')]
+      render(
+        <HorizontalGroupCellEditor
+          {...createEditorProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children: mdChildren },
+            selectedChildName: 'notes',
+          })}
+          onChildRun={onChildRun}
+        />
+      )
+      const runButton = screen.getByText('Run')
+      fireEvent.click(runButton)
+      expect(onChildRun).toHaveBeenCalledWith('notes')
+    })
+
     it('DataSourceField not shown for markdown type', () => {
       // DataSourceField only renders when data sources are loaded;
       // verify that shouldShowDataSource logic excludes markdown by checking

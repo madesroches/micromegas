@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { MarkdownCell } from '../MarkdownCell'
+import { MarkdownCell, markdownMetadata } from '../MarkdownCell'
 import { CellRendererProps } from '../../cell-registry'
 
 // Helper to create mock props
@@ -19,6 +19,13 @@ function createMockProps(overrides: Partial<CellRendererProps> = {}): CellRender
 }
 
 describe('MarkdownCell', () => {
+  describe('metadata', () => {
+    it('should declare canRun: true so it shows a Run control despite having no execute method', () => {
+      expect(markdownMetadata.canRun).toBe(true)
+      expect(markdownMetadata.execute).toBeUndefined()
+    })
+  })
+
   describe('headers', () => {
     it('should render h1 headers', () => {
       render(<MarkdownCell {...createMockProps({ content: '# Hello World' })} />)

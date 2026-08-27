@@ -397,7 +397,7 @@ function ChildEditorView({
         cellResults={cellResults}
         cellSelections={cellSelections}
       />
-      {onRun && !!meta.execute && (
+      {onRun && (meta.canRun ?? !!meta.execute) && (
         <Button onClick={onRun} className="w-full gap-2">
           <Play className="w-4 h-4" />
           Run

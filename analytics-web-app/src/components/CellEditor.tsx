@@ -92,7 +92,7 @@ export function CellEditor({
   const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 
   // Determine if this cell can run
-  const canRun = !!meta.execute
+  const canRun = meta.canRun ?? !!meta.execute
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
