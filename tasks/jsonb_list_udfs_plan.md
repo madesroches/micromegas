@@ -231,9 +231,10 @@ the batch and constant across those rows** (a single distinct non-null value, e.
 literal; any row with a NULL `path` disqualifies the batch, since the Semantics table requires a
 NULL `path` to produce a NULL list, and a per-unique-blob `take` result carries no per-row path
 nullity to apply that mask against). In that case the fast path parses the path lazily — only when
-it reaches the first referenced, non-null `values` slot that actually needs it — and reuses the
+it reaches the first referenced slot (i.e., the first non-null key) that actually needs it,
+regardless of whether that slot's `values` entry is itself null — and reuses the
 parsed `JsonPath` for every subsequent unique blob. This matters when every key in the batch is
-null or references only null `values` slots: no slot ever gets parsed, so an invalid path over such
+null: no slot is ever referenced, so no slot ever gets parsed and an invalid path over such
 a column succeeds, exactly as `eval_jsonb_path_query` never parses a path when no row has both a
 non-null JSONB and a non-null path (`path_query.rs:46-58`). Parsing up front, before any slot is
 known to need it, would error in that all-null case where the row-by-row path would not — the
