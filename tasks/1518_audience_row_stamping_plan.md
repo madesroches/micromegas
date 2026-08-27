@@ -594,11 +594,13 @@ differently and never summed: both run in the maintenance role process (`materia
 so an identically-named counter from both sites would land in the same process's `measures` stream
 with no tag to tell them apart, and any query over it would silently sum two incompatible
 quantities — materialized-partition exclusions vs. live Postgres rows in the last hour.
-`block_audience_mismatch_excluded` also double-counts across a materialization retry or a re-merge
-over an overlapping insert range, since each partition actually *written* for that range re-runs the
+`block_audience_mismatch_excluded` also double-counts across a materialization retry, or a fresh
+`CreateFromSource` re-write of a range whose source rows changed, since each such write re-runs the
 comparison and re-increments (the comparison lives in `MetadataPartitionSpec::write`, precisely so a
 pass that aborts without writing — the common case on a range that is already current — does not
-also re-count it, per the design above). It is a signal that *some* write saw a mismatch, not a
+also re-count it, per the design above). A re-merge over the same range does not: `MergeExisting`
+writes through the view's `PartitionMerger` instead, which never calls `MetadataPartitionSpec::write`
+and so cannot re-run this comparison. It is a signal that *some* write saw a mismatch, not a
 running total of distinct excluded blocks. `block_audience_mismatch_rows` (§5) has no such
 caveat — each hourly tick counts current Postgres state directly.
 
@@ -1040,8 +1042,9 @@ has no per-row `error!` the way a Rust check would, so `MetadataPartitionSpec::w
 a partition that is actually written, not on every pass that merely checks whether one is needed
 (§4) — logs one `error!` and one `imetric!("block_audience_mismatch_excluded", "count", n)` per
 affected partition, naming the count excluded but not the individual blocks (and note this count can
-still double-count across a materialization retry or a re-merge over an overlapping insert range,
-since each such write re-runs the comparison, §4). That
+still double-count across a materialization retry, or a fresh `CreateFromSource` re-write of a range
+whose source rows changed, since each such write re-runs the comparison — but not across a re-merge,
+which never calls `MetadataPartitionSpec::write`, §4). That
 partition-level signal and §5's hourly `block_audience_mismatch_rows` counter —
 which queries Postgres directly and so does carry the per-block, per-process, per-audience detail —
 are therefore not optional instrumentation but the only record that data was discarded at all; the
@@ -1267,10 +1270,11 @@ the new semantics, until the old ones age out of the retention window — or an 
   - `block_audience_mismatch_excluded` (`count`) — emitted from `MetadataPartitionSpec::write` (§4)
     only for a `blocks` partition that is actually written, not on every scheduled pass over an
     affected insert-time range and not on the hourly cadence. Document that it still double-counts
-    across a materialization retry or a re-merge over an overlapping insert range — each such write
-    re-runs the comparison — so it is a "some write saw a mismatch" signal rather than a running
-    total of distinct excluded blocks — `block_audience_mismatch_rows` is the metric to trust for
-    sizing the drop.
+    across a materialization retry, or a fresh `CreateFromSource` re-write of a range whose source
+    rows changed — each such write re-runs the comparison — but not across a re-merge, which writes
+    through the view's `PartitionMerger` and never calls `MetadataPartitionSpec::write`. So it is a
+    "some write saw a mismatch" signal rather than a running total of distinct excluded blocks —
+    `block_audience_mismatch_rows` is the metric to trust for sizing the drop.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc:
   - the "What remains open, tracked separately" paragraph is only partly obsolete — narrow it to
     the five `per_process_audience()`-resolved views, the JIT `view_instance` path (§4, "What
