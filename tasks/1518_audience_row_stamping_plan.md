@@ -197,6 +197,8 @@ Deliberate properties:
 - `rust/ingestion/src/sql_telemetry_db.rs`'s `create_tables` (the v1 shape) is **not** touched: a
   fresh database is created at v1 and then walks every upgrade, so adding the column in two places
   would double-apply.
+- Covered by a dedicated live-DB test in `rust/ingestion/tests/sql_migration_test.rs`, following
+  the file's existing v6/v7 per-migration precedent (Testing Strategy).
 
 ### 3. Write path
 
@@ -404,12 +406,16 @@ This is the part the issue body does not cover, and the reason it needs its own 
 it turns out to resolve mostly on its own once `blocks` keeps exactly one `audience` column.
 
 **The normal case.** The mismatch predicate excludes every block whose own stamp disagrees with a
-non-NULL `streams.audience`/`processes.audience` it joins to. So for any block that survives the
-predicate against **non-NULL** anchors, `audience == streams.audience == processes.audience` by
-construction — `processes_view`/`streams_view`'s existing `max(audience)` over a process's/stream's
-blocks is therefore already correct and needs no change: every block contributing to the `max()`
-agrees with every other, so the aggregate can only ever equal that one shared value. This is the
-normal case: a process/stream whose own row already carries a real, non-NULL stamp.
+non-NULL `streams.audience`/`processes.audience` it joins to. So for any block whose **own** stamp
+is also non-NULL and that survives the predicate against **non-NULL** anchors,
+`audience == streams.audience == processes.audience` by construction — among exactly those blocks,
+`processes_view`/`streams_view`'s existing `max(audience)` over a process's/stream's blocks is
+therefore already correct and needs no change: every non-NULL-stamped block contributing to the
+`max()` agrees with every other, so the aggregate can only ever equal that one shared value. This is
+the normal case: a process/stream whose own row already carries a real, non-NULL stamp, with every
+one of its blocks also carrying a real, non-NULL stamp. A block that reaches a real anchor with a
+NULL stamp of its own is a different case, covered in "The reverse direction" below, and it does
+**not** hold to this agreement.
 
 **The NULL-anchor case — kept honest, not closed.** The predicate is NULL-tolerant (§4 above): a
 block matched against a legacy `processes`/`streams` row whose `audience` is still NULL — every row
@@ -437,9 +443,16 @@ ingestion tier, not just before it starts: a v8 replica registers process `P` wi
 `VALUES($1..$11)` `INSERT INTO blocks` — writes one of `P`'s blocks with a short `VALUES` list,
 leaving `blocks.audience` NULL. That block survives the predicate on its own NULL side, and resolves
 to `COALESCE(NULL, default) = MICROMEGAS_DEFAULT_AUDIENCE` everywhere it is read: `blocks_view`'s own
-`data_sql`, `log_entries`/`measures`, and Prong B's `IdKind::Block` arm (`owner_query_sql`, which
-resolves this block alone, off `blocks.audience`, never through `P`). Unlike the NULL-anchor case
-above, the anchor here is real, so the "already public" argument does not apply: before this plan,
+`data_sql`, `log_entries`/`measures`, Prong B's `IdKind::Block` arm (`owner_query_sql`, which
+resolves this block alone, off `blocks.audience`, never through `P`), and
+`processes_view`/`streams_view`'s own `max(audience)` — which aggregates over this same
+materialized `blocks.audience` column, grouped by `process_id`/`stream_id`, so this default-audience
+block sits in the same group as `P`'s other, genuinely `'beta'`-stamped blocks and
+`max('beta', MICROMEGAS_DEFAULT_AUDIENCE) = MICROMEGAS_DEFAULT_AUDIENCE` relabels `P`'s own
+`processes`/`streams` view row from `beta` to the deployment default — hidden from `beta`'s readers,
+its metadata exposed to default-audience readers instead. This is the mirror image of the
+NULL-anchor case's relabeling above, with the NULL and the real stamp on opposite sides. Unlike the
+NULL-anchor case above, the anchor here is real, so the "already public" argument does not apply: before this plan,
 the same block resolves through `P`'s process row to `beta` and is gated accordingly; after this
 plan, until the block's own `audience` is populated, it reads as the deployment default instead —
 a genuine read escalation to any default-audience reader — and `blocks` rows are immutable (§2), so
@@ -452,7 +465,9 @@ guidance this bound depends on: every ingestion replica, not just one, has to re
 audience separation can be relied on.
 
 - `processes_view.rs` / `streams_view.rs`: no change. Both the transform and merge queries keep
-  plain `max(audience)` — see "The normal case" above.
+  plain `max(audience)` — see "The normal case" above for the agreement this relies on, and "The
+  NULL-anchor case" and "The reverse direction" above for the two relabeling exposures it accepts
+  instead of closing.
 - `log_entries` and `measures` have a different regression, not a relabeling one: `audience` itself
   is already the right anchor for the row (their rows come from a single block's payload, so there
   is no cross-block aggregation to average away). But every other column on the row — `exe`,
@@ -950,7 +965,10 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 
 ### Phase 5 — tests, docs, tooling
 
-14. Tests (see [Testing Strategy](#testing-strategy)).
+14. Tests (see [Testing Strategy](#testing-strategy)), including a new v8 case in
+    `rust/ingestion/tests/sql_migration_test.rs` (step 1/§2) — the file already carries dedicated
+    v6 and v7 migration tests, and this plan's v8 step follows that precedent rather than being
+    the first migration to skip it.
 15. `local_test_env/ai_scripts/import_net_blocks_from_prod.py`: project the single `blocks.audience`
     column (§3) into all three `_project(...)` calls, and add the missing `format` projection.
 16. Docs and `CHANGELOG.md` (see [Documentation](#documentation)).
@@ -980,7 +998,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
   only — the stale "what remains open" paragraph, narrowed per §4; `audience_column_predicate`
   itself is unchanged) — `processes_view.rs`/`streams_view.rs` need no change (§4, "The
   `max(audience)` regression": both keep plain `max(audience)`)
-- Tests: `rust/ingestion/tests/audience_stamping_db_test.rs`,
+- Tests: `rust/ingestion/tests/sql_migration_test.rs` (new v8 case, §2),
+  `rust/ingestion/tests/audience_stamping_db_test.rs`,
   `rust/ingestion/tests/write_audience_tests.rs`, `rust/analytics/tests/common/db_fixtures.rs`,
   `rust/analytics/tests/audience_guard_tests.rs`, `rust/analytics/tests/prong_b_guard_db_test.rs`,
   `rust/analytics/tests/ownership_rewrite_db_test.rs`,
@@ -991,6 +1010,7 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 - `local_test_env/ai_scripts/import_net_blocks_from_prod.py`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
   `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/maintenance.md`,
+  `mkdocs/docs/admin/flight-sql.md`,
   `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/docs/query-guide/python-api.md`,
   `python/micromegas/micromegas/flightsql/client.py`
 - `CHANGELOG.md`, `tasks/data_isolation/audience_based_access_control_plan.md`
@@ -1015,9 +1035,10 @@ should have been reading it anyway.
 **One audience column on `blocks` vs. two extra anchor columns.** An earlier draft of this plan
 appended `stream_audience`/`process_audience` to `blocks_view` so `processes_view`/`streams_view`
 could anchor their `max(audience)` on the joined row's own stamp instead of the block's. Once the
-`blocks_view` mismatch predicate (§4) is in place, every surviving block in a
+`blocks_view` mismatch predicate (§4) is in place, every surviving, non-NULL-stamped block in a
 `processes_view`/`streams_view` group has `audience == streams.audience == processes.audience`
-**for a process/stream whose own row already carries a real stamp** — for that case, bare
+**for a process/stream whose own row already carries a real stamp, with every one of its blocks
+also carrying a real stamp** — for that case, bare
 `max(audience)` is already correct, so the extra columns and the switch would have been pure
 defense-in-depth, not a prerequisite for the fix. The decision taken here is not to pay that cost:
 `blocks` keeps exactly one audience column — the block's own stamp — the mismatch predicate is the
@@ -1026,7 +1047,12 @@ accepted cost is the case the columns would have hedged against: for a process/s
 still a legacy, pre-v8 NULL-audience row, a block that survives the predicate can still relabel that
 row via `max(audience)` — but what it relabels there is already-public legacy data (Migration &
 Upgrade Notes), so the exposure is accepted on the same grounds as the rest of the NULL-anchor
-window; see [The `max(audience)` regression](#the-maxaudience-regression) for the full accounting.
+window. The mirror case is not free the same way: a real-stamped process/stream row can itself be
+relabeled by a NULL-audience block reaching it mid-rolling-upgrade — an anchor that is not
+already-public data, accepted only on the narrower, deployment-level bound that no production
+traffic runs under a non-default audience while the ingestion tier is still partway upgraded to v8;
+see [The `max(audience)` regression](#the-maxaudience-regression) for the full accounting of both
+cases.
 
 **Skipping a mismatched block vs. failing its partition.** The alternative to a per-block skip is
 to fail materialization of the whole partition the block falls in when a mismatch is found. That
@@ -1266,8 +1292,16 @@ the new semantics, until the old ones age out of the retention window — or an 
   reading against a pre-v8 database fails every read that touches the new columns
   (`blocks_view`'s `data_sql`, `find_process`, `owner_query_sql`) with an "undefined column" error
   until ingestion has migrated it. A pre-v8 ingestion binary against an already-migrated v8
-  database is fine (writes just leave the column NULL, which reads as the default).
+  database is fine (writes just leave the column NULL, which reads as the default). Note also that
+  `regenerate_partitions` over `log_stats` for the retention window is a mandatory part of this
+  rollout, not optional — see the `CHANGELOG.md` upgrade note below for why.
 - `mkdocs/docs/admin/api-keys.md:238`: the parenthetical naming the property.
+- `mkdocs/docs/admin/flight-sql.md:34` — the `MICROMEGAS_DEFAULT_AUDIENCE` row's description says
+  "a legacy **or admin-replicated row with no stamp** is **read** as (default `public`)". After §3
+  hard-fails replication on a missing `audience` column, an unstamped admin-replicated row can no
+  longer be produced — the same reason this plan drops the identical clause from
+  `ownership_rewrite.rs`'s module doc above. Narrow the clause to legacy rows only: "a legacy row
+  with no stamp is **read** as (default `public`)".
 - `CHANGELOG.md`, under `## Unreleased` → **Ingestion**: one entry describing the column, the
   closed gap, and the schema v8 bump. Because #1373/#1482/#1519 are all still `## Unreleased`,
   amend their entries in place (as #1482 and #1486 already do to earlier ones) rather than
@@ -1280,7 +1314,13 @@ the new semantics, until the old ones age out of the retention window — or an 
   monolith) apply schema v8; `LakehouseContext::from_env` (flight-sql, maintenance) never migrates,
   so a v8 binary reading a pre-v8 database fails every query that touches the new columns
   (`blocks_view`, `find_process`, `owner_query_sql`) with an "undefined column" error. A pre-v8
-  ingestion binary against an already-migrated database is fine.
+  ingestion binary against an already-migrated database is fine. **Also run
+  `regenerate_partitions` over `log_stats` for the retention window as part of this rollout** —
+  its `GROUP BY` gains `audience`, and a partition materialized before the upgrade keeps rows
+  grouped without it, which does not fix itself over time (Migration & Upgrade Notes). Running the
+  same over `blocks`, `processes`, `streams`, `log_entries`, `measures` is optional, for an
+  operator who wants uniform per-row semantics on existing partitions sooner than the retention
+  window would give them on its own.
 - `mkdocs/docs/admin/maintenance.md` — the hourly task's table row (`:87`) gains the new
   `process_id`/`stream_id` mismatch count alongside retention cleanup, and the metric gets its own
   reference section matching `materialize_view_failure`'s (`:62-68`): name
@@ -1366,6 +1406,19 @@ the new semantics, until the old ones age out of the retention window — or an 
 
 **DB-backed** (`#[ignore]`, live Postgres + object store — the existing harness pattern)
 
+- **New**, `rust/ingestion/tests/sql_migration_test.rs`: a v8 case following the file's existing
+  v6 (`v6_backfills_existing_rows_and_rejects_invalid_audiences`) and v7
+  (`v7_creates_audience_grants_table_with_constraints`) tests — this file already treats every
+  schema step as needing dedicated, live-DB coverage, and v8 is no exception. Add a
+  `build_v7_schema` helper (chaining `build_v6_schema` with the v7 step, mirroring how
+  `build_v6_schema` chains `build_v5_schema` with v6) and a throwaway-schema test that: builds a
+  v7 schema; seeds a pre-v8 row on `processes`, `streams`, and `blocks` (no `audience` to set,
+  since the column doesn't exist yet); runs `execute_migration`; asserts the version reads 8;
+  reads back each seeded row's `audience` as still NULL (no `DEFAULT`, no backfill, §2); and, on a
+  fresh insert into each of the three tables, asserts the `NOT VALID` CHECK rejects a malformed
+  `audience` (e.g. `'group:everyone'`, mirroring the v6/v7 tests' own charset case) while a
+  well-formed one is accepted — covering both the deliberate `NOT VALID` deviation from v6's
+  validated `CHECK` (§2) and that it does not block new, correctly-shaped writes.
 - `audience_stamping_db_test.rs`: rewrite `read_audience_property` → `read_audience_column`, and
   `strip_audience_property` → `UPDATE ... SET audience = NULL` for fabricating a legacy row. The
   conflict-guard cases (same audience, different audience → 403, legacy NULL row vs. default) all
