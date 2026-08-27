@@ -504,11 +504,9 @@ Then:
   This is also the query worth eyeballing for cost on a real `properties` column — it is the
   motivating use case and the one that exercises the dictionary fast path.
 
-## Open Questions
+## Resolved Questions
 
-1. **Naming.** This plan uses `jsonb_entries` / `jsonb_elements` / `jsonb_path_elements` — short
-   names paired with the Postgres-named UDTFs (`jsonb_each` → `jsonb_entries`,
-   `jsonb_array_elements` → `jsonb_elements`). Issue #1475 originally suggested a `_list` suffix
-   (`jsonb_path_query_list`), which pairs each list UDF with its scalar counterpart instead. Either
-   is defensible; the names are a permanent SQL-surface commitment, so worth confirming before
-   implementation.
+1. **Naming.** Decided: `jsonb_entries` / `jsonb_elements` / `jsonb_path_elements` — short names
+   paired with the Postgres-named UDTFs (`jsonb_each` → `jsonb_entries`, `jsonb_array_elements` →
+   `jsonb_elements`), rather than the `_list` suffix (`jsonb_path_query_list`) that issue #1475
+   originally suggested. These are the names used throughout this plan.
