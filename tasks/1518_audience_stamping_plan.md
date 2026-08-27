@@ -1,4 +1,4 @@
-# Stamp the write audience on `streams` and `blocks` Plan (#1518 — AbAC Stage 5b)
+# Stamp the write audience on `processes`, `streams` and `blocks` Plan (#1518 — AbAC Stage 5b)
 
 ## Overview
 
@@ -11,6 +11,15 @@ The fix is to **record the caller's resolved write audience on the `streams` and
 themselves**, and to source the lakehouse `audience` column from the block's own stamp instead of
 deriving it through a join to the owning process. An injected block then carries the *attacker's*
 label, surfaces only to the attacker's readers, and never reaches the victim.
+
+While the migration is open, the same treatment goes to `processes`: `micromegas.audience` is
+promoted from a `properties` array element to a real `processes.audience` column, so all three
+Postgres tables carry the audience the same way and every read site becomes a plain column read
+instead of a correlated `unnest` subselect. The property keeps being written for SQL-surface
+compatibility (§2b).
+
+A materialization-window sweep then reports any block whose stamp disagrees with its process's — the
+detection layer that catches what a write-time check structurally cannot see (§8).
 
 The original proposal on the issue was a write-side authorization gate that resolved the target's
 owning audience from `processes` and rejected a mismatch. **That design does not work**: streams and
@@ -148,14 +157,15 @@ a credential with no `bound_audience`, one whose label fails validation, and a d
 auth provider at all all resolve to `service.default_audience()`. No third state reaches the
 service, so the stamp is never absent on a freshly written row.
 
-### 2. Schema v8 — an `audience` column on `streams` and `blocks`
+### 2. Schema v8 — an `audience` column on `processes`, `streams` and `blocks`
 
 `rust/ingestion/src/sql_migration.rs`, `upgrade_data_lake_schema_v8`, bumping
 `LATEST_DATA_LAKE_SCHEMA_VERSION` from 7 to 8:
 
 ```sql
-ALTER TABLE streams ADD COLUMN audience VARCHAR(255);
-ALTER TABLE blocks  ADD COLUMN audience VARCHAR(255);
+ALTER TABLE processes ADD COLUMN audience VARCHAR(255);
+ALTER TABLE streams   ADD COLUMN audience VARCHAR(255);
+ALTER TABLE blocks    ADD COLUMN audience VARCHAR(255);
 ```
 
 **Nullable, and no backfill.** A `NULL` means "written before this shipped, or written by the admin
@@ -167,6 +177,41 @@ operation in modern Postgres, so this is O(1) on a large `blocks` table.
 
 No `CHECK` constraint: the charset is already enforced by `WriteAudience::new` on every value that
 reaches the bind, and `ingestion_api_keys.audience` constrains the upstream source.
+
+### 2b. Promote the process audience out of the properties array
+
+`processes.audience` is not merely symmetry. Today every read of a process's audience is a
+correlated scalar subselect over a `micromegas_property[]`:
+
+```sql
+(SELECT value FROM unnest(properties) WHERE key = 'micromegas.audience' LIMIT 1)
+```
+
+A real column collapses that at all four sites that pay for it:
+
+| Site | Today | With the column |
+|---|---|---|
+| `blocks_view` `data_sql` | `COALESCE(<unnest subselect>, $3)` | `COALESCE(processes.audience, <subselect>, $3)` |
+| `metadata::find_process` (`metadata.rs:293-301`) | same subselect | column read |
+| `audience_guard` — all three `IdKind` arms | `LEFT JOIN LATERAL (SELECT value FROM unnest(p.properties) …)` per arm | `p.audience`, no lateral |
+| `check_process_audience_conflict` (`web_ingestion_service.rs:591-653`) | `SELECT properties` then scan the array in Rust for `PROPERTY_AUDIENCE` | `SELECT audience`, compare directly |
+
+The last one is the biggest single simplification: the conflict guard currently pulls a whole
+`micromegas_property[]` across the wire on every duplicate `insert_process` — which, thanks to
+`ON CONFLICT DO NOTHING`, is *every re-registration of an already-known process*, i.e. the common
+case for a restarted or long-lived producer — purely to find one string in it.
+
+**The property keeps being written.** `finalize_process_properties` continues to stamp
+`micromegas.audience` into `properties` alongside the new column bind. Dropping it would silently
+break any saved query or dashboard doing `property_get(properties, 'micromegas.audience')`, which
+`CLAUDE.md`'s SQL-stability rule puts off limits without a deliberate staging. The column is
+authoritative; the property is a compatibility echo written from the same value in the same
+statement, so the two cannot diverge for a row written after this ships. Removing it is a follow-up.
+
+**No backfill**, for the same reason as §2 and following the precedent #1482's addendum set when it
+reverted exactly such a backfill: a legacy row has `audience IS NULL` and its property intact, and
+the read-side coalesce resolves it. That is what makes this a catalog-only migration on `processes`
+too.
 
 ### 3. Bind the stamp on every write path
 
@@ -186,14 +231,18 @@ each of these, with no `Default`, so the compiler enumerates every call site.
 
 ### 4. Source the lakehouse column from the block's own stamp
 
-`blocks_view.rs`'s `data_sql` — replace the process-property derivation with a two-level coalesce:
+`blocks_view.rs`'s `data_sql` — replace the process-property derivation with a layered coalesce:
 
 ```sql
-COALESCE(blocks.audience, <subselect over processes.properties>, $3) AS audience
+COALESCE(blocks.audience, processes.audience, <subselect over processes.properties>, $3) AS audience
 ```
 
-Reusing `audience_subselect` for the middle term and keeping `$3` as the bound deployment default.
-Read as a rule: *the row's own stamp, else the owning process's stamp, else the deployment default.*
+Read as a rule: *the row's own stamp, else the owning process's column, else the owning process's
+legacy property, else the deployment default.* The middle two terms belong together and are used at
+every process-audience read site, so `audience.rs` grows one helper —
+`process_audience_expr(prefix)` yielding `COALESCE(<prefix>.audience, <unnest subselect>)` — and
+`coalesced_audience_subselect` is re-expressed on top of it rather than duplicating the shape at
+four call sites.
 
 - Same column name, type (`Dictionary(Int32, Utf8)` after
   `metadata_partition_spec::cast_to_file_schema`), position (last), and non-nullability. **Not a SQL
@@ -203,14 +252,14 @@ Read as a rule: *the row's own stamp, else the owning process's stamp, else the 
 - Bump `blocks_file_schema_hash()` (`blocks_view.rs:342`), `vec![5]` → `vec![6]`, to force a rebuild.
   Per `CLAUDE.md` an internal `SCHEMA_VERSION` bump is not a SQL break.
 
-`metadata::find_process` and `audience_guard`'s `IdKind::Process` arm keep reading
-`processes.properties` — a process's audience is still its own row's business.
+`metadata::find_process` and `audience_guard`'s `IdKind::Process` arm read the process's own
+audience — now `COALESCE(p.audience, <property subselect>, $n)`, no lateral join.
 
-`audience_guard`'s `IdKind::Block` arm simplifies from a two-hop join to a single-table read with the
-same fallback:
+`audience_guard`'s `IdKind::Block` arm simplifies from a two-hop join plus a lateral to a
+single-table read with the same fallback chain:
 
 ```sql
-SELECT b.block_id AS id, COALESCE(b.audience, a.value, $3) AS audience
+SELECT b.block_id AS id, COALESCE(b.audience, p.audience, a.value, $3) AS audience
 FROM blocks b
 LEFT JOIN processes p ON p.process_id = b.process_id
 LEFT JOIN LATERAL (SELECT value FROM unnest(p.properties) WHERE key = $2 LIMIT 1) a ON TRUE
@@ -219,7 +268,8 @@ WHERE b.block_id = ANY($1::uuid[])
 
 Note the `JOIN` → `LEFT JOIN`: a stamped block now resolves even when its process row is absent, which
 is precisely the out-of-order and post-sweep case the old shape dropped to `Unknown` (deny). Same for
-`IdKind::ProcessOrStream`'s `streams` arm against `streams.audience`.
+`IdKind::ProcessOrStream`'s `streams` arm against `streams.audience`. The lateral stays only as the
+legacy-row fallback and disappears entirely once the property is dropped.
 
 ### Aggregation collapse: the consequence that needs handling
 
@@ -298,33 +348,87 @@ write time; the process's stamp governs the process row only and serves as the f
 written before this shipped. `check_process_audience_conflict` is unaffected — it compares a
 re-registration against the existing *process* row and stays exactly as it is.
 
+### 8. Report blocks whose audience disagrees with their process
+
+The write path can only compare against an anchor it can see, and §5 already establishes that the
+anchor is sometimes absent. A detection sweep covers what the write path structurally cannot: it runs
+after the fact, when both rows exist, and it catches every producer — native, OTLP, and the admin
+replication path, which stamps nothing of its own and is therefore invisible to any write-time check.
+
+Home: `EveryHourTask` (`rust/public/src/servers/maintenance.rs:130-155`), which already holds the
+lake handle and already runs `delete_old_data` on the same tick. `PgStatsTask` is the precedent for a
+maintenance task whose whole job is to read Postgres and emit metrics.
+
+Scope the sweep by `insert_time` to the window the task is already materializing (its
+`begin_range`/`end_range`, two partition deltas back) rather than scanning `blocks` whole — the
+mismatch is a property of newly-written rows, and an unbounded join over the largest table in the
+schema on an hourly tick is not something to add:
+
+```sql
+SELECT b.audience AS block_audience,
+       COALESCE(p.audience, <property subselect>, $3) AS process_audience,
+       count(*) AS nb_blocks,
+       count(DISTINCT b.process_id) AS nb_processes
+FROM blocks b
+JOIN processes p ON p.process_id = b.process_id
+WHERE b.insert_time >= $1 AND b.insert_time < $2
+  AND b.audience IS NOT NULL
+  AND b.audience IS DISTINCT FROM COALESCE(p.audience, <property subselect>, $3)
+GROUP BY 1, 2
+```
+
+`b.audience IS NOT NULL` excludes legacy and replicated rows, which are unstamped by construction and
+would otherwise report as a mismatch against every process forever. `IS DISTINCT FROM` rather than
+`<>` so a NULL on either side never silently drops a row from the comparison.
+
+Emit one `warn!` per `(block_audience, process_audience)` pair with both counts, plus an `imetric!`
+counter of total mismatched blocks. Grouping — rather than one line per block — keeps a broad
+injection from flooding the log while still naming every audience pair involved. A nonzero count
+means an integrity violation reached storage: either an injection that slipped past §5's gate, or a
+bug. It has no benign class, so the healthy baseline is a flat zero and the metric is alertable as-is.
+
+**This is where the forensics live.** Per-row audience columns were rejected as a *forensics* feature
+(they record a value that is constant by construction); they are justified here because they are
+load-bearing for enforcement. What makes an investigation possible is this sweep plus §5's denial
+counter — the two together record the attempts and the arrivals that no column could.
+
 ## Implementation Steps
 
 ### Phase 1 — Write path (stamp)
 
-1. `rust/ingestion/src/sql_migration.rs`: add `upgrade_data_lake_schema_v8` (two `ALTER TABLE ... ADD
-   COLUMN audience VARCHAR(255)`), the `if 7 == current_version` arm in `migrate_db`, and bump
+1. `rust/ingestion/src/sql_migration.rs`: add `upgrade_data_lake_schema_v8` (three `ALTER TABLE ...
+   ADD COLUMN audience VARCHAR(255)`), the `if 7 == current_version` arm in `migrate_db`, and bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to 8. Doc-comment it in the style of v7.
-2. `rust/ingestion/src/sql_telemetry_db.rs`: add the column to the fresh-install `create_streams_table`
-   / `create_blocks_table` DDL so a new lake and a migrated lake converge.
+2. `rust/ingestion/src/sql_telemetry_db.rs`: add the column to the fresh-install
+   `create_processes_table` / `create_streams_table` / `create_blocks_table` DDL so a new lake and a
+   migrated lake converge.
 3. `rust/ingestion/src/web_ingestion_service.rs`: add `audience: &WriteAudience` to `insert_stream`,
    `insert_block`, `insert_block_typed`, and `register_otel_stream`; bind it. Convert
    `insert_block_typed`'s positional `INSERT INTO blocks VALUES(...)` to an explicit column list.
+3b. Bind `audience` on both process inserts (`insert_process`'s positional
+   `INSERT INTO processes VALUES($1,…,$13)` — convert to an explicit column list — and
+   `register_otel_process`, which already has one). `finalize_process_properties` is unchanged: the
+   property is still stamped alongside the column.
+3c. Simplify `check_process_audience_conflict` to `SELECT audience FROM processes WHERE
+   process_id = $1`, falling back to the property scan only when the column is `NULL` (a legacy
+   row). The `process_audience_cache` fast path above it is untouched.
 4. `rust/public/src/servers/ingestion.rs`: thread `ctx: Option<Extension<AuthContext>>` into
    `insert_stream_request` and `insert_block_request`; call `resolve_write_audience`.
 5. `rust/otel-ingestion/src/handler.rs` (and `cloudwatch_logs.rs`): pass the already-resolved
    `audience` — these paths hold a `WriteAudience` for `id_namespace` at `handler.rs:161,185,220,318`
    and `cloudwatch_logs.rs:223`, so nothing new needs resolving.
 6. `rust/analytics/src/replication.rs`: carry the source lake's `audience` column through
-   `ingest_streams` and `ingest_blocks`, writing `NULL` when the source batch has no such column.
-   Convert `ingest_blocks`' positional insert to an explicit column list.
+   `ingest_processes`, `ingest_streams` and `ingest_blocks`, writing `NULL` when the source batch has
+   no such column. Convert `ingest_blocks`' and `ingest_processes`' positional inserts to explicit
+   column lists.
 7. Remove the known-gap doc comments on `insert_block_typed` (`:287-296`) and `insert_stream`
    (`:417-421`).
 
 ### Phase 2 — Read path (source the column, stop collapsing)
 
-8. `rust/analytics/src/audience.rs`: add the two-level coalesce helper and the precedence-rule doc
-   comment (§7).
+8. `rust/analytics/src/audience.rs`: add `process_audience_expr(prefix)`, re-express
+   `coalesced_audience_subselect` on top of it, add the block-level layered coalesce, and write the
+   precedence-rule doc comment (§7).
 9. `rust/analytics/src/lakehouse/blocks_view.rs`: use it in `data_sql`; bump
    `blocks_file_schema_hash()` to `vec![6]`.
 10. `rust/analytics/src/lakehouse/processes_view.rs` and `streams_view.rs`: `GROUP BY <id>, audience`
@@ -332,10 +436,13 @@ re-registration against the existing *process* row and stays exactly as it is.
 11. `rust/analytics/src/lakehouse/ownership_rewrite.rs`: rebuild `per_process_audience` as a distinct
     `(process_id, audience)` projection and invert the semi-join to the fail-closed `NOT IN … WHERE
     audience NOT IN (…)` shape. Update the module table at `:36-57` and the doc comment at `:159`.
-12. `rust/analytics/src/lakehouse/audience_guard.rs`: `IdKind::Block` and the `streams` arm of
-    `IdKind::ProcessOrStream` read the stamped column with the coalesce fallback; `JOIN processes` →
-    `LEFT JOIN processes`. Update the "Fail-closed" module comment — a stamped block or stream now
-    resolves without its process row.
+12. `rust/analytics/src/lakehouse/audience_guard.rs`: all three `IdKind` arms read
+    `processes.audience` instead of the lateral `unnest` (kept only as the legacy fallback);
+    `IdKind::Block` and the `streams` arm of `IdKind::ProcessOrStream` read the row's own stamped
+    column first; `JOIN processes` → `LEFT JOIN processes`. Update the "Fail-closed" module comment —
+    a stamped block or stream now resolves without its process row.
+12b. `rust/analytics/src/metadata.rs`: `find_process` reads `processes.audience` with the property
+    fallback.
 13. Regenerate the six global views over the retention window (`regenerate_partitions`, Maintenance
     role) — required by the file-schema bump, same as #1482.
 
@@ -349,6 +456,9 @@ re-registration against the existing *process* row and stays exactly as it is.
     anchor, and accept-with-a-log on a resolution error.
 16. Add the `(stream_id, process_id)` pair check as `warn!` + `imetric!` counter, reusing the stream
     lookup from step 14. Do not reject yet.
+16b. `rust/public/src/servers/maintenance.rs`: add the block-vs-process mismatch sweep to
+    `EveryHourTask::run`, scoped to the same `begin_range`/`end_range` window the task already
+    computes (§8). One `warn!` per audience pair, one `imetric!` total.
 17. `rust/public/src/servers/ingestion.rs`: the existing `AudienceConflict → IngestionError::Forbidden`
     arm (`:55-57`) already produces the sanitized 403, so the handlers need no new error mapping.
 
@@ -373,16 +483,18 @@ re-registration against the existing *process* row and stays exactly as it is.
 | File | Change |
 |---|---|
 | `rust/ingestion/src/sql_migration.rs` | v8 migration, version bump |
-| `rust/ingestion/src/sql_telemetry_db.rs` | fresh-install DDL for both columns |
-| `rust/ingestion/src/web_ingestion_service.rs` | audience params + binds, explicit column list, stream cache, gate, pair check, drop gap comments |
+| `rust/ingestion/src/sql_telemetry_db.rs` | fresh-install DDL for all three columns |
+| `rust/ingestion/src/web_ingestion_service.rs` | audience params + binds on all four insert paths, explicit column lists, simplified conflict guard, stream cache, gate, pair check, drop gap comments |
 | `rust/public/src/servers/ingestion.rs` | `AuthContext` into both handlers |
 | `rust/otel-ingestion/src/handler.rs`, `cloudwatch_logs.rs` | pass the resolved audience |
-| `rust/analytics/src/replication.rs` | carry the column through both ingest paths |
-| `rust/analytics/src/audience.rs` | two-level coalesce helper, precedence doc |
+| `rust/analytics/src/replication.rs` | carry the column through all three ingest paths |
+| `rust/analytics/src/audience.rs` | `process_audience_expr`, layered coalesce, precedence doc |
 | `rust/analytics/src/lakehouse/blocks_view.rs` | `data_sql` source, schema-hash bump |
 | `rust/analytics/src/lakehouse/processes_view.rs`, `streams_view.rs` | group by `(id, audience)` |
 | `rust/analytics/src/lakehouse/ownership_rewrite.rs` | fail-closed semi-join |
-| `rust/analytics/src/lakehouse/audience_guard.rs` | stamped-column resolution, `LEFT JOIN` |
+| `rust/analytics/src/lakehouse/audience_guard.rs` | stamped-column resolution, no lateral, `LEFT JOIN` |
+| `rust/analytics/src/metadata.rs` | `find_process` reads the column |
+| `rust/public/src/servers/maintenance.rs` | hourly block-vs-process mismatch sweep |
 | `mkdocs/docs/admin/authentication.md` | replace the residual-gap admonition |
 | `tasks/data_isolation/audience_based_access_control_plan.md` | §11b landed |
 | `CHANGELOG.md` | Ingestion + Analytics entries |
@@ -407,12 +519,32 @@ an integrity violation and every caller still sees one row after Prong A's filte
 **Dropping mismatched rows in `blocks_view` instead.** A `WHERE blocks.audience = <process audience>`
 filter would make injected blocks invisible to everyone rather than isolating them to the attacker.
 Rejected: silent row-dropping at materialization time is invisible to operators and would mask
-ordinary bugs, and the maintenance path has no good place to log it per-row. Isolation plus a denial
-counter is more debuggable.
+ordinary bugs. §8's sweep is the same detection without the silence — it reports the mismatch and
+leaves the rows isolated where an operator can inspect them.
+
+**Keeping the `micromegas.audience` property alongside the column.** The redundancy is real: two
+representations of one value. It is accepted because dropping the property is a silent SQL-surface
+break for any dashboard doing `property_get(properties, 'micromegas.audience')`, and because the two
+are written from the same value in the same statement, so they cannot diverge going forward. The
+column is authoritative everywhere; the property is never read except as the legacy fallback for rows
+that predate the column. Dropping it is a staged follow-up, not a thing to fold in here.
+
+**Promoting the process audience now vs. its own issue.** It is not needed for the integrity fix and
+could ship separately. Folding it in is cheaper: the migration, the fresh-install DDL, the
+replication path, and every read site's coalesce are all already being touched, and doing `processes`
+later means editing the same four call sites twice and running a second regeneration pass.
+
+**Sweep in `EveryHourTask` vs. at materialization.** `blocks_view`'s `data_sql` already has both
+values in the same row, so the check could ride along there for free. Rejected: the materialization
+path has no natural place to emit a per-row warning, it runs per partition rather than per lake, and
+a detection signal that only fires where partitions are being written would miss a deployment whose
+maintenance role is behind. The standalone hourly query is bounded, independent, and alertable.
 
 **Phase 3 as a separate phase.** It is genuinely optional for the integrity fix, and it reintroduces
 a (cached, amortized) hot-path query. It is recommended rather than optional only because stamping
-alone opens the small process-metadata exposure described in §5, which did not exist before.
+alone opens the small process-metadata exposure described in §5, which did not exist before. §8's
+sweep is the cheap half of Phase 3 and could ship even if the gate does not — it costs nothing on the
+ingestion path.
 
 ## Security
 
@@ -429,6 +561,9 @@ alone opens the small process-metadata exposure described in §5, which did not 
 - **Denial signal**: every rejection is a bug or an attack — there is no benign-mismatch class — so
   `warn!` plus an `imetric!` counter is the right level, and the counter's healthy baseline is a flat
   zero.
+- **Arrival signal**: §8's sweep is the counterpart for what reaches storage rather than what is
+  turned away — including from the admin replication path, which no write-time check can see. Also a
+  flat-zero baseline, also alertable as-is.
 
 ## Performance
 
@@ -441,18 +576,29 @@ alone opens the small process-metadata exposure described in §5, which did not 
 - Phase 3 adds one cached point query per **stream** per TTL, not per block. Measure cold-miss
   latency and the added p99 on `insert_block` before and after, as §7 asked; the `stream_id` key is
   what keeps this off the per-block path.
-- `audience_guard`'s `IdKind::Block` resolution loses a join.
+- `audience_guard` loses a `LEFT JOIN LATERAL (SELECT … FROM unnest(properties) …)` on **all three**
+  `IdKind` arms, and `IdKind::Block` loses a join on top of that. This is Prong B's per-query
+  cold-miss path, so it is the read-side win that pays for the column.
+- `check_process_audience_conflict` stops pulling a whole `micromegas_property[]` across the wire on
+  every duplicate `insert_process` — the common case for any restarted or long-lived producer.
+- §8's sweep is one hourly aggregate over the two most recent partition deltas of `blocks`, joined to
+  `processes` by primary key. Bounded by `insert_time`, never a full-table scan; it runs on the
+  maintenance role, off both the ingestion and query paths.
 - `ownership_rewrite`'s semi-join for the three column-less views changes from `IN` to `NOT IN` over
   a distinct projection instead of an aggregate — one less `Aggregate` node, an anti-join instead of
   a semi-join.
 
 ## Testing Strategy
 
-- **Unit, no DB**: `resolve_write_audience` already covered; add the two-level coalesce helper's SQL
-  shape and the precedence rule (row stamp > process stamp > default) as string/expression tests
-  beside the existing `audience.rs` tests.
+- **Unit, no DB**: `resolve_write_audience` already covered; add `process_audience_expr` and the
+  layered coalesce's SQL shape, and the precedence rule (row stamp > process column > process
+  property > deployment default), as string/expression tests beside the existing `audience.rs` tests.
 - **Migration**: v7 → v8 on a populated lake leaves every existing row's resolved audience unchanged
-  (the coalesce fallback is today's expression) and both columns present and `NULL`.
+  (the fallback chain reduces to today's expression) and all three columns present and `NULL`.
+- **Property/column agreement**: a process registered after v8 has `audience` and
+  `property_get(properties, 'micromegas.audience')` equal — the compatibility echo actually echoes.
+- **Conflict guard**: a re-registration under a different audience is still rejected when the
+  existing row has only the property (legacy), only the column (post-v8), and both.
 - **Write path, DB-backed** (`rust/ingestion/tests/`, beside `write_audience_tests.rs`): a stream and
   a block written under audience A land with `audience = 'A'`; an unaudienced caller lands with the
   deployment default; a client-supplied audience property on a stream is not trusted.
@@ -467,13 +613,18 @@ alone opens the small process-metadata exposure described in §5, which did not 
 - **Phase 3**: block against an existing foreign-audience stream → 403 with the sanitized text; block
   against an absent stream → accepted and stamped; mismatched `(stream_id, process_id)` → accepted
   with the counter incremented.
+- **Sweep (§8)**: a mismatched block inside the window is counted and warned once per audience pair;
+  a legacy block (`audience IS NULL`) against any process is **not** counted; a matching block is not
+  counted; a mismatched block outside the window is not counted.
 - Keep the tests proportionate — assert on returned rows and audiences, not on elaborate
   side-effect queries.
 
 ## Migration and Deployment
 
 - Roll the ingestion role first: v8 is additive and nullable, so an older analytics binary reading a
-  migrated lake simply never sees the column.
+  migrated lake simply never sees the columns. The retained `micromegas.audience` property is what
+  keeps a mixed-version fleet coherent during the roll — an old analytics binary resolves every
+  process exactly as it does today, whether or not the ingestion role has started writing the column.
 - Then the analytics/maintenance roles, then `regenerate_partitions` over the retention window for
   the six global views. Until regeneration completes, un-regenerated partitions are invisible
   (fail-closed, never fail-open) — the same window #1482 documented and accepted.
@@ -489,6 +640,11 @@ alone opens the small process-metadata exposure described in §5, which did not 
   `blocks ⋈ streams ⋈ processes` join is what still hides early-arriving and post-sweep blocks from
   every view. Relaxing it becomes possible and is worth its own issue.
 - **Flipping the pair check to a hard reject**, once the counter has run long enough to confirm zero.
+- **Dropping the `micromegas.audience` property.** Once the column has been authoritative for long
+  enough and `list_partitions`-style consumers have been checked, stop writing it and delete the
+  lateral-`unnest` fallback from all four read sites. Needs its own deprecation note in
+  `CHANGELOG.md` and a release boundary, since it is a real SQL-surface break for anyone reading the
+  property directly.
 
 ## Open Questions
 
@@ -502,7 +658,14 @@ alone opens the small process-metadata exposure described in §5, which did not 
 3. **Does the replication path need an audience of its own?** This plan carries the source's column
    through verbatim and writes `NULL` when absent, matching how it already treats
    `processes.properties`. An alternative is stamping replicated rows with the destination
-   deployment's default — a behaviour change for `processes` too, and out of scope here.
+   deployment's default — a behaviour change for `processes` too, and out of scope here. Note that
+   replicated rows are the one producer §8's sweep can flag but no write-time check can, since they
+   bypass the HTTP edge entirely.
+4. **Should the sweep's window follow the task or the retention horizon?** Scoped to `EveryHourTask`'s
+   two-partition-delta window, a mismatch is reported once, on the tick after it lands, and never
+   again — good for alerting, bad for a "show me everything currently wrong" question. A separate
+   admin UDTF over an arbitrary range would answer the second; not proposed here, but the sweep's
+   query is the body of it if it turns out to be wanted.
 
 ## Appendix: one-audience-per-process is an invariant
 
