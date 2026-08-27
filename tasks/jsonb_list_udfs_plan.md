@@ -168,7 +168,7 @@ Both argument positions accept `Binary` and `Dictionary<Int32, Binary>` via
 | empty object / array | empty list → 0 rows | empty list → 0 rows | empty list → 0 rows |
 | invalid/undecodable JSONB bytes | `DataFusionError::External`, same as `jsonb_each`'s decode failure (`each.rs:102`) | same, as `jsonb_array_elements` (`array_elements.rs:91`) | same |
 | NULL `path` | n/a | n/a | NULL list → 0 rows (matches `jsonb_path_query`, `path_query.rs:47-48`) |
-| invalid JSONPath | — | — | `DataFusionError::Execution`, same text as `jsonb_path_query` |
+| invalid JSONPath | — | — | `DataFusionError::Execution`, same message format as `jsonb_path_query`, with this function's name in the prefix |
 
 **NULL rather than an error for a shape mismatch** is the deliberate divergence from the UDTFs,
 which raise `Execution` on a non-array/non-object input. A scalar UDF is evaluated per row over a
@@ -198,18 +198,19 @@ see "What exists" above):
    `dict.values()` (`properties_udf.rs:108-113`) is the correctly-aligned precedent this follows.
    Within that full-length pass, still avoid parsing blobs no surviving row needs: compute the set
    of distinct non-null keys present in `dict.keys()` for this batch, and parse a `values` slot only
-   when its index is in that set and the slot is non-null per `values.is_null(idx)`; every other
-   slot (unreferenced, or itself null) becomes a null list entry without being parsed. This is what
-   keeps an undecodable blob in an unreferenced slot — which a sliced/filtered dictionary retains —
-   from erroring the fast path where the row-by-row path would not have touched it.
+   when its index is in that set; every other (unreferenced) slot becomes a null list entry without
+   being parsed. This is what keeps an undecodable blob in an unreferenced slot — which a
+   sliced/filtered dictionary retains — from erroring the fast path where the row-by-row path would
+   not have touched it.
 
-   The `values.is_null(idx)` check above is new to this fast path, not existing precedent:
-   `create_binary_accessor`'s dictionary accessor (`binary_column_accessor.rs:64-67`) and the
-   dictionary readers in `keys.rs:134-139` / `each.rs:176-182` all gate on the *key's* nullity
-   (`dict_array.is_null(i)`) only and never check `values.is_null(key_index)`, so today a non-null
-   key pointing at a null values slot reads there as valid (empty) bytes, not NULL. The fast path
-   deliberately does not reproduce that gap — see Testing Strategy item 6 for how the resulting
-   divergence from `create_binary_accessor`-based code is verified rather than papered over.
+   Gating is on key nullity and referenced-index membership only, with no separate
+   `values.is_null(idx)` check — matching `create_binary_accessor`'s dictionary accessor
+   (`binary_column_accessor.rs:64-67`) and the dictionary readers in `keys.rs:134-139` /
+   `each.rs:176-182`, which all read a referenced slot's bytes regardless of
+   `values.is_null(key_index)`. A referenced slot that is itself null therefore parses as an empty
+   byte string and fails to decode the same way `create_binary_accessor`-based code fails on that
+   row (`Error::InvalidEOF`), so the fast path and the row-by-row path agree row for row — see
+   Testing Strategy item 6.
 2. `arrow::compute::take(list_array, dict.keys())` to expand to the row count — valid because
    `list_array` has exactly one entry per `dict.values()` slot, the same index space `dict.keys()`
    points into.
@@ -224,8 +225,14 @@ sound when the result depends on the blob alone — i.e. when `path` is **non-nu
 the batch and constant across those rows** (a single distinct non-null value, e.g. a folded
 literal; any row with a NULL `path` disqualifies the batch, since the Semantics table requires a
 NULL `path` to produce a NULL list, and a per-unique-blob `take` result carries no per-row path
-nullity to apply that mask against). In that case the fast path parses the path once and applies
-it per unique blob, same as above. When `path` varies by row or contains any NULL (a column
+nullity to apply that mask against). In that case the fast path parses the path lazily — only when
+it reaches the first referenced, non-null `values` slot that actually needs it — and reuses the
+parsed `JsonPath` for every subsequent unique blob. This matters when every key in the batch is
+null or references only null `values` slots: no slot ever gets parsed, so an invalid path over such
+a column succeeds, exactly as `eval_jsonb_path_query` never parses a path when no row has both a
+non-null JSONB and a non-null path (`path_query.rs:46-58`). Parsing up front, before any slot is
+known to need it, would error in that all-null case where the row-by-row path would not — the
+divergence this laziness avoids. When `path` varies by row or contains any NULL (a column
 reference — `Signature::any(2, ..)` allows this, same as `JsonbPathQuery`), the dictionary
 shortcut does not apply and `jsonb_path_elements` falls back to the row-by-row builder, reading
 `path` per row exactly as `eval_jsonb_path_query` does (`path_query.rs:36-59`), which naturally
@@ -413,19 +420,18 @@ Tracked separately under #1475:
 3. **`jsonb_elements`** — array → one row per element; object and scalar → NULL; empty array →
    zero rows.
 4. **`jsonb_path_elements`** — `$.items[*]`, a nested path, a no-match path (zero rows), an
-   invalid path (error text matches `jsonb_path_query`'s).
+   invalid path (error message format matches `jsonb_path_query`'s, with this function's name in
+   the prefix).
 5. **Per-row correlation** — the case the issue is about: a multi-row table where each row has a
    different array, asserting each expanded row keeps its own source column. This must fail if
    anyone reintroduces uncorrelated evaluation.
 6. **Dictionary input** — same assertions against a `Dictionary<Int32, Binary>` column with
    repeated blobs, including a null dictionary key, so the fast path and the row-by-row
    `create_binary_accessor` path agree row for row on key nullity. Separately, a null value in the
-   dictionary's *values* array referenced by a non-null key: assert the fast path treats it as a
-   NULL list entry (per its own `values.is_null` check — see "Dictionary fast path" point 1). Do
-   **not** assert agreement with `create_binary_accessor`-based code here (`jsonb_path_elements`'s
-   row-by-row fallback, and every other existing UDF built on that accessor) — it checks only key
-   nullity and reads that slot's bytes as valid, so this one case is a known, documented divergence,
-   not a bug to reconcile in this plan. Also a sliced/filtered dictionary case — a values array
+   dictionary's *values* array referenced by a non-null key: assert the fast path and the row-by-row
+   `create_binary_accessor` path agree row for row here too — both parse that slot's empty bytes and
+   fail the same way (`Error::InvalidEOF`), since neither path special-cases `values.is_null` (see
+   "Dictionary fast path" point 1). Also a sliced/filtered dictionary case — a values array
    containing blobs no surviving row's key references, including an undecodable one in an
    unreferenced slot — asserting the fast path does not error on it and does not degrade into
    parsing every value.
