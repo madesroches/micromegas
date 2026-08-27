@@ -501,6 +501,21 @@ audience separation can be relied on.
   selected column and schema are unchanged, so the
   file-schema hash does not need to bump — but the grouping itself changes, which has its own
   regeneration cost; see Migration & Upgrade Notes, where it is mandatory, not optional.
+  `audience` does **not** join the declared merge sort order: `log_stats` is the only view calling
+  `with_merge_sort_order` (`[time_bin, process_id, level, target]`), and that builder's own
+  contract already tolerates a `GROUP BY` key beyond the declared columns ("extra keys degrade to
+  `PartiallySorted`, not a blocking sort" — `sql_batch_view.rs`'s `with_merge_sort_order` doc). A
+  fifth, unordered group key makes DataFusion's `AggregateExec` plan the merge query as
+  `InputOrderMode::PartiallySorted` instead of `Sorted` (`indices.len() != groupby_exprs.len()` in
+  `datafusion-physical-plan`'s aggregate-ordering selection): still a streaming aggregation with no
+  blocking `SortExec`, just not the fully-sorted mode. The extract query's top-level `ORDER BY` and
+  the recorded partition `sort_order` (both still exactly `[time_bin, process_id, level, target]`)
+  are unaffected — that check runs against the extract query's final, already-sorted output, not
+  against the grouping. The one thing this does break is `log_stats_ordering_tests.rs`'s
+  `log_stats_merge_query_stays_a_streaming_kway_merge`, which pins the shipped merge query's plan
+  string to `ordering_mode=Sorted`; that assertion has to relax to accept
+  `ordering_mode=PartiallySorted(...)` too, while keeping the no-`SortExec` assertion as the thing
+  that actually matters (Implementation Steps step 10, Testing Strategy).
 
 `blocks_view`'s join has no `streams.process_id = processes.process_id` predicate, so an attacker
 in audience `alpha` can insert a block naming its own `stream_id` (`streams.audience = 'alpha'`)
@@ -561,13 +576,14 @@ against the pool it is already writing through:
 
 ```sql
 SELECT COUNT(*) AS unfiltered,
-       COUNT(*) FILTER (WHERE <audience-mismatch predicate holds>) AS filtered
+       COUNT(*) FILTER (WHERE NOT (<audience-mismatch predicate holds>)) AS filtered
 FROM blocks, streams, processes
 WHERE blocks.stream_id = streams.stream_id AND blocks.process_id = processes.process_id
 AND blocks.insert_time >= $1 AND blocks.insert_time < $2
 ```
 
-— the same three-table join and predicate as `source_count_query` (§4 above), both counts read from
+— the same three-table join and the same keep predicate as `source_count_query` (§4 above, itself
+`NOT (<audience-mismatch predicate holds>)`), both counts read from
 a single atomic pass via `FILTER` rather than two independent queries (which would race against
 concurrent inserts or a `delete_expired_blocks` sweep and could come out negative), so
 `unfiltered - filtered` isolates exactly the rows the predicate excluded rather than also picking up
@@ -883,8 +899,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    without running it. `MetadataPartitionSpec::write` — called only after `verify_overlapping_partitions`
    has decided not to `Abort`, i.e. only when a partition is actually about to be written — runs it
    once directly against the pool: the same `blocks, streams, processes` join as `source_count_query`,
-   computing both the unfiltered count and the audience-mismatch-filtered count atomically in a
-   single `SELECT ... COUNT(*) FILTER (WHERE ...)` (not two separate `COUNT(*)` queries compared
+   computing both the unfiltered count and the surviving (mismatch-excluded rows kept out) count
+   atomically in a single `SELECT ... COUNT(*) FILTER (WHERE NOT (...))` (not two separate `COUNT(*)` queries compared
    across connections, which would be non-atomic and could go negative) — so the delta isolates
    exactly the excluded rows rather than also counting blocks whose `streams`/`processes` row is
    routinely absent (early arrival, post-sweep orphan), logging one `error!` and incrementing
@@ -907,7 +923,14 @@ audience_guard (Prong B)  block_id  -> blocks.audience
     a change independent of the removal above, since `log_entries.audience` is the block's own
     column and was never sourced from either of the columns this plan removes; mandatory
     regeneration of `log_stats` partitions over the retention window is part of this step, not a
-    follow-up (see Migration & Upgrade Notes).
+    follow-up (see Migration & Upgrade Notes). The declared `with_merge_sort_order` columns and the
+    transform query's top-level `ORDER BY` stay exactly `[time_bin, process_id, level, target]` —
+    `audience` does not join them (§4). Update `rust/analytics/tests/log_stats_ordering_tests.rs`'s
+    `log_stats_merge_query_stays_a_streaming_kway_merge` in the same step: relax its pinned
+    `plan_str.contains("ordering_mode=Sorted")` assertion to also accept
+    `ordering_mode=PartiallySorted(...)`, which is what the fifth, unordered `GROUP BY` key now
+    produces (§4); its no-`SortExec` assertion is unaffected and stays as the real regression
+    guard.
     `ownership_rewrite.rs` needs no code change — every audience-carrying view, `blocks` included,
     keeps its existing bare single-`audience`-column filter (§4); only its module doc is touched
     (see [Documentation](#documentation)).
@@ -962,6 +985,8 @@ audience_guard (Prong B)  block_id  -> blocks.audience
   `rust/analytics/tests/audience_guard_tests.rs`, `rust/analytics/tests/prong_b_guard_db_test.rs`,
   `rust/analytics/tests/ownership_rewrite_db_test.rs`,
   `rust/ingestion/tests/insert_block_dedup_db_test.rs` (its raw positional `INSERT INTO blocks`),
+  `rust/analytics/tests/log_stats_ordering_tests.rs` (relax the pinned `ordering_mode=Sorted`
+  assertion to also accept `PartiallySorted`, §4/step 10),
   plus every `insert_stream`/`insert_block` call site in `rust/analytics/tests/`
 - `local_test_env/ai_scripts/import_net_blocks_from_prod.py`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`,
@@ -1331,6 +1356,13 @@ the new semantics, until the old ones age out of the retention window — or an 
   side effects. In practice the two counts come from one atomic `COUNT(*) FILTER (WHERE ...)` query
   (§4), so `filtered > unfiltered` should not occur; the clamp is a defensive floor on the helper's
   contract, not a case this plan expects to hit.
+- `log_stats_ordering_tests.rs`: update `log_stats_merge_query_stays_a_streaming_kway_merge` for
+  the `GROUP BY audience` change (§4/Implementation Steps step 10) — the shipped merge query now
+  plans as `InputOrderMode::PartiallySorted` rather than `Sorted`, since `audience` is a fifth
+  group key not covered by the declared `[time_bin, process_id, level, target]` scan ordering, so
+  the assertion widens to accept either `ordering_mode=Sorted` or `ordering_mode=PartiallySorted`
+  while still asserting no `SortExec` appears. `log_stats_extract_query_satisfies_its_declared_sort_order`
+  needs no change — the extract query's top-level `ORDER BY` and declared columns are untouched.
 
 **DB-backed** (`#[ignore]`, live Postgres + object store — the existing harness pattern)
 
