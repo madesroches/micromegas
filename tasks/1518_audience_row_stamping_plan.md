@@ -374,17 +374,22 @@ The mismatch predicate itself lives in `blocks_view.rs`'s `data_sql`, which is p
 over `FROM blocks, streams, processes` (§4 above) — it can compare `streams.audience` and
 `processes.audience` directly, with no need to project either one into the Arrow output schema, so
 the two appended columns are *not* what make that comparison expressible. And because the
-predicate excludes every row whose stamps disagree, and because `processes`/`streams` rows are
-immutable, every block that survives into a `processes_view`/`streams_view` group provably has
-`audience == process_audience == stream_audience` already — so plain `max(audience)` would in fact
-be correct post-predicate, and the `max(process_audience)`/`max(stream_audience)` switch is a
-no-op given the predicate holds. Both are kept anyway, as **defense-in-depth**: if the
-`blocks_view` predicate is ever weakened, bypassed, or a caller reaches `processes_view`/
-`streams_view` through a path that doesn't route through the predicate, `max(process_audience)`/
-`max(stream_audience)` still anchor the view on the row's own stamp rather than silently reverting
-to the block-relabeling behaviour described below, and the two `blocks_view` columns are what let
-that second layer exist without re-deriving `streams.audience`/`processes.audience` at every
-downstream call site. That is a real cost, not a free hedge: a public SQL-surface addition on
+predicate excludes every row whose stamps disagree, every block that survives into a
+`processes_view`/`streams_view` group has `audience == process_audience == stream_audience`
+**only when both anchors it was compared against are non-NULL**. The predicate is NULL-tolerant
+(§4 above), so a block matched against a legacy `processes`/`streams` row whose `audience` is still
+NULL — every row registered before its ingestion binary reached v8, since those rows are immutable
+and there is no backfill (§2) — survives with its own real stamp while `process_audience`/
+`stream_audience` resolve to the deployment default via `COALESCE`. In that window plain
+`max(audience)` would take the attacker's stamp and relabel the process/stream row exactly as
+described below, so `max(process_audience)`/`max(stream_audience)` is **not** a no-op and is not
+mere defense-in-depth: it is what keeps `processes_view`/`streams_view` correctly labelled for
+every process/stream whose `processes`/`streams` row predates v8, for as long as such rows exist
+(see the new Open Questions item on NULL-anchor handling). It remains defense-in-depth only for the
+disjoint case — a process/stream whose own row already carries a real stamp — where the predicate
+alone already guarantees agreement. The two `blocks_view` columns are what let this anchoring exist
+without re-deriving `streams.audience`/`processes.audience` at every downstream call site. That is a
+real cost, not a free hedge: a public SQL-surface addition on
 `blocks_view` (`stream_audience`, `process_audience`), the `blocks_file_schema_hash()` bump this
 plan already needs for other reasons, an entry in `schema-reference.md`, and three extra column
 projections in `import_net_blocks_from_prod.py` (§3). Whether that cost is worth paying given the
@@ -425,23 +430,29 @@ stamp:
   `log_entries`/`measures`' blocks from `blocks`' own materialized partitions
   (`existing_partitions.filter("blocks", "global", ...)`), not from Postgres directly — so a row the
   predicate excludes was never a candidate block for `log_entries`/`measures` in the first place,
-  and no reader ever sees the joined columns at all. `log_table_schema()`, the measures schema, and
-  `log_view.rs`'s and `metrics_view.rs`'s `SCHEMA_VERSION` are untouched — the two extra columns
-  exist on `blocks_view` only, kept as defense-in-depth (see above) rather than because they are
-  needed to express this predicate; no downstream view needs to carry them or repeat the check.
+  **for every case where the predicate actually excludes it.** It does not exclude this one when
+  victim `beta`'s `processes` row is a legacy, pre-v8 row whose `audience` is still NULL: the
+  NULL-tolerant predicate passes the block through (§4 above), so it does materialize into
+  `log_entries`/`measures` with `audience = 'alpha'` and `beta`'s real
+  `exe`/`username`/`computer`/`process_properties` — the exact leak this fix otherwise closes. That
+  residual window is tracked as an open question (see [Open Questions](#open-questions)), not
+  closed by this design. `log_table_schema()`, the measures schema, and `log_view.rs`'s and
+  `metrics_view.rs`'s `SCHEMA_VERSION` are untouched — the two extra columns exist on `blocks_view`
+  only; no downstream view needs to carry them or repeat the check.
 - `log_stats_view.rs` aggregates `log_entries` rows with `arrow_cast(max(audience), ...)`
-  `GROUP BY process_id, level, target, time_bin`. Unlike `processes_view`/`streams_view`, this is
-  **not** a reachable relabeling once the `blocks_view` mismatch predicate (§4) is in place:
-  `log_entries` sources its blocks from `blocks_view`'s own materialized partitions (§4, "This is a
-  single choke point"), so every `log_entries` row for a given `process_id` already derives from a
-  block whose own `audience` agrees with that process's — a group can never span two audiences, and
-  `max(audience)` over it is already a no-op. Fix: add `audience` to the `GROUP BY` in **both** the
-  transform and merge queries anyway, as **defense-in-depth** matching `processes_view`/
-  `streams_view` — not because a victim's group is reachable today, but so that if the predicate is
-  ever weakened or bypassed, `log_stats` still can't silently merge two audiences' rows into one
-  labelled row. The selected column and schema are unchanged, so the file-schema hash does not need
-  to bump — but the grouping itself changes, which has its own regeneration cost; see Migration &
-  Upgrade Notes, where it is mandatory, not optional.
+  `GROUP BY process_id, level, target, time_bin`. Once the `blocks_view` mismatch predicate (§4) is
+  in place, a `process_id`'s group can still span two audiences whenever that process's row is a
+  legacy, pre-v8 row with `audience` still NULL: the predicate's NULL-tolerant pass-through lets a
+  block stamped with a real, non-default audience (e.g. an attacker's) through alongside the
+  process's own legacy blocks (default audience), so `max(audience)` over that group would relabel
+  the victim's aggregated stats row with the attacker's stamp — the same relabeling
+  `processes_view`/`streams_view` are fixed against above, for the same reason. This is **not**
+  merely defense-in-depth: adding `audience` to the `GROUP BY` in **both** the transform and merge
+  queries is what keeps that legacy-row window from merging two audiences' rows into one labelled
+  row; it only becomes a true no-op once the NULL-anchor window is closed (see
+  [Open Questions](#open-questions)). The selected column and schema are unchanged, so the
+  file-schema hash does not need to bump — but the grouping itself changes, which has its own
+  regeneration cost; see Migration & Upgrade Notes, where it is mandatory, not optional.
 
 `blocks_view`'s join has no `streams.process_id = processes.process_id` predicate, so an attacker
 in audience `alpha` can insert a block naming its own `stream_id` (audience `alpha`, so
@@ -480,8 +491,16 @@ A SQL predicate cannot emit a per-row `error!` the way a Rust check could. The s
 partition granularity instead: today `BlocksView::make_batch_partition_spec` only calls
 `fetch_metadata_partition_spec`, which owns `source_count_query` and returns just its (now
 filtered) count — there is no second query anywhere in this path. `make_batch_partition_spec`
-gains one: it runs its own unfiltered `SELECT count(*) FROM blocks WHERE insert_time >= $1 AND
-insert_time < $2` directly against `pool`, alongside the call to `fetch_metadata_partition_spec`,
+gains one: it runs its own unfiltered count directly against `pool`, alongside the call to
+`fetch_metadata_partition_spec` — the same three-table join as `source_count_query` above
+(`SELECT COUNT(*) FROM blocks, streams, processes WHERE blocks.stream_id = streams.stream_id AND
+blocks.process_id = processes.process_id AND blocks.insert_time >= $1 AND blocks.insert_time <
+$2`), differing from it only in omitting the audience-mismatch predicate, so the two queries agree
+on everything except that predicate and the delta they produce isolates exactly the rows it
+excluded rather than also picking up blocks whose `streams`/`processes` row is absent for
+unrelated reasons (early arrival, or a post-sweep orphan — see
+["Why not a write-side gate"](#why-not-a-write-side-gate) — both routine and both out of scope
+here per ["Out of scope"](#out-of-scope--follow-ups))
 and compares that count to the `record_count` the filtered `source_count_query` produced; when they
 differ, it logs one `error!` naming the view instance and insert-time range and the number of blocks excluded,
 and increments the `block_audience_mismatch_excluded` metric (§5) by that count. This is coarser
@@ -515,13 +534,17 @@ This plan closes the row-derivation gap only where a row carries its own `audien
 Two classes of reader still resolve their audience *label* through the *owning* process/stream row
 rather than a genuine per-row column, and this plan leaves both as they are today — but the
 cross-audience *injection* scenario that motivates this whole design (an attacker's block naming a
-victim's `process_id`/`stream_id`) is closed for both, as a side effect of where §4 puts the
-mismatch predicate: `blocks_view`'s own materialized partitions are what both classes below read
-their blocks from (`jit_partitions.rs::fetch_process_blocks` and its
+victim's `process_id`/`stream_id`) is closed for both against a victim whose `processes`/`streams`
+row carries a real, non-NULL stamp, as a side effect of where §4 puts the mismatch predicate:
+`blocks_view`'s own materialized partitions are what both classes below read their blocks from
+(`jit_partitions.rs::fetch_process_blocks` and its
 `generate_process_jit_partitions`/`generate_stream_jit_partitions` callers query `FROM source`
 against those same partitions, exactly as `log_entries`/`measures` do), so a block the predicate
-excludes was never written into a `blocks` partition for either of them to find either. What is
-left open is narrower than the original gap:
+excludes was never written into a `blocks` partition for either of them to find either. It is
+**not** closed against a victim whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience
+row — the predicate's NULL-tolerant pass-through lets an attacker's block through unchecked in that
+case (see Migration & Upgrade Notes and [Open Questions](#open-questions)). What is left open is
+narrower than the original gap:
 
 - **The five views `OwnershipRewrite` resolves via `per_process_audience()`.** `net_spans`,
   `otel_spans`, and `images` are filtered through the `IN`-subquery built from
@@ -538,12 +561,18 @@ left open is narrower than the original gap:
   (`jit_partitions.rs::fetch_process_blocks` sets `process: process.clone()` on each
   `PartitionSourceBlock`; `log_entries_table.rs`/`metrics_table.rs` emit `row.process.audience`).
   Only the global, blocks-view-backed instance is per-block. For a block that does survive into a
-  `blocks` partition, this is now a difference in *mechanism* rather than *value* — the mismatch
-  predicate guarantees every surviving block's own stamp already agrees with `process.audience`, so
-  stamping from `ProcessMetadata` produces the same label the block's own column would. Carrying the
-  block's own stamp into the JIT path (splitting a per-block audience out of `ProcessMetadata`) is
-  still worth doing for its own sake — it removes the aggregate dependency rather than relying on it
-  staying safe — but it is not attempted here.
+  `blocks` partition, this is a difference in *mechanism* rather than *value* only when
+  `process.audience` is itself a real, non-NULL stamp — the mismatch predicate then guarantees
+  every surviving block's own stamp already agrees with it, so stamping from `ProcessMetadata`
+  produces the same label the block's own column would. That equivalence does not hold for a
+  process whose own row is a legacy, pre-v8 NULL-audience row: `find_process` resolves
+  `process.audience` to the deployment default regardless of what its post-upgrade blocks are
+  actually stamped with, so every block this path fetches for such a process is relabelled to the
+  default — a *value* difference, not just a mechanism one — on top of `view_instance` being denied
+  outright to a reader scoped to the block's real audience (see Migration & Upgrade Notes and
+  [Open Questions](#open-questions)). Carrying the block's own stamp into the JIT path (splitting a
+  per-block audience out of `ProcessMetadata`) is still worth doing for its own sake — it removes
+  the aggregate dependency rather than relying on it staying safe — but it is not attempted here.
 
 Both are pre-existing gaps, not new ones — this plan does not widen either, and narrows what they
 actually expose — and both are recorded in [Out of scope](#out-of-scope--follow-ups).
@@ -642,9 +671,17 @@ pub fn audience_column_mismatch(left_qualifier: &str, right_qualifier: &str) -> 
 ```
 
 `blocks_view.rs`'s `data_sql`/`source_count_query` predicate (§4) is restated as `NOT
-(audience_column_mismatch("blocks", "streams") OR audience_column_mismatch("blocks", "processes"))`
-— textually identical to the hand-written NULL-tolerant form shown there, just built from the same
-function the counter uses, so the two can never drift independently. The hourly counter becomes:
+(audience_column_mismatch("blocks", "streams") OR audience_column_mismatch("blocks", "processes"))`.
+Expanding `audience_column_mismatch` and applying De Morgan's law, `NOT (a IS NOT NULL AND b IS NOT
+NULL AND a <> b)` becomes `a IS NULL OR b IS NULL OR a = b` per pair — **logically equivalent** to
+the hand-written NULL-tolerant form shown in §4, not textually identical to it (the generated SQL
+text is `NOT (blocks.audience IS NOT NULL AND streams.audience IS NOT NULL AND blocks.audience <>
+streams.audience OR blocks.audience IS NOT NULL AND processes.audience IS NOT NULL AND
+blocks.audience <> processes.audience)`, which a query planner treats the same as §4's `(blocks.audience
+IS NULL OR streams.audience IS NULL OR blocks.audience = streams.audience) AND (...)` but which is
+different SQL text). Both forms are correct and NULL-safe; what matters is that the predicate is
+built from the same function the counter uses below, so the two can never drift independently. The
+hourly counter becomes:
 
 ```sql
 SELECT count(*) FROM blocks b
@@ -733,28 +770,31 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 ### Phase 3 — read path
 
 8. `rust/analytics/src/audience.rs`: replace `audience_subselect`/`coalesced_audience_subselect`
-   with `coalesced_audience_column`, drop the `AUDIENCE_PROPERTY` re-export, and write the
-   precedence rule (§1) into the module doc.
+   with `coalesced_audience_column`, add `audience_column_mismatch` (§5), drop the
+   `AUDIENCE_PROPERTY` re-export, and write the precedence rule (§1) into the module doc.
 9. `rust/analytics/src/lakehouse/blocks_view.rs`: new `data_sql` with its two appended schema
    fields *and* the NULL-tolerant audience-mismatch predicate (§4) added to both `data_sql` and
    `make_batch_partition_spec`'s `source_count_query` — the predicate references only `$1`/`$2`, so
    `rust/analytics/src/lakehouse/metadata_partition_spec.rs`'s `fetch_metadata_partition_spec` needs
    no new bind and `MetadataPartitionSpec::default_audience`'s existing doc comment (which already
    says `source_count_query` gets no `$3` bind) stays accurate as written.
-   `make_batch_partition_spec` also runs its own unfiltered `SELECT count(*) FROM blocks WHERE
-   insert_time >= $1 AND insert_time < $2` directly against the pool and compares it against
-   `fetch_metadata_partition_spec`'s filtered `record_count`, logging one `error!` and incrementing
+   `make_batch_partition_spec` also runs its own unfiltered count directly against the pool — the
+   same `blocks, streams, processes` join as `source_count_query`, minus the audience-mismatch
+   predicate, so the delta isolates exactly the excluded rows rather than also counting blocks
+   whose `streams`/`processes` row is routinely absent (early arrival, post-sweep orphan) — and
+   compares it against `fetch_metadata_partition_spec`'s filtered `record_count`, logging one
+   `error!` and incrementing
    `imetric!("block_audience_mismatch_excluded", "count", n)` (§5) when they differ; `blocks_file_schema_hash()`
    → `vec![6]`. This one predicate is the sole
    exclusion point — `partition_source_data.rs` needs no mismatch-handling code of its own, since
    it (and every JIT-partitioned view) reads blocks from `blocks_view`'s own materialized
    partitions and so never sees a row this predicate excluded (§4).
 10. `rust/analytics/src/lakehouse/processes_view.rs` / `streams_view.rs`: transform queries switch
-    to `max(process_audience)` / `max(stream_audience)`, kept as defense-in-depth (§4, "The
-    `max(audience)` regression"). `log_stats_view.rs`: add `audience` to the `GROUP BY` in both the
-    transform and merge queries, same defense-in-depth rationale — mandatory regeneration of
-    `log_stats` partitions over the retention window is part of this step, not a follow-up (see
-    Migration & Upgrade Notes).
+    to `max(process_audience)` / `max(stream_audience)` — load-bearing, not merely
+    defense-in-depth, during the NULL-anchor window (§4, "The `max(audience)` regression").
+    `log_stats_view.rs`: add `audience` to the `GROUP BY` in both the transform and merge queries,
+    same rationale — mandatory regeneration of `log_stats` partitions over the retention window is
+    part of this step, not a follow-up (see Migration & Upgrade Notes).
     `ownership_rewrite.rs` needs no code change — every audience-carrying view, `blocks` included,
     keeps its existing bare single-`audience`-column filter (§4); only its module doc is touched
     (see [Documentation](#documentation)).
@@ -765,12 +805,12 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 
 ### Phase 4 — integrity measurement
 
-13. `rust/analytics/src/audience.rs`: add `audience_column_mismatch` (§5), used to build both the
-    `blocks_view.rs` predicate (step 9, restated in terms of it) and the hourly counter below, so
-    the two comparisons cannot drift apart. `rust/public/src/servers/maintenance.rs`: hourly
-    `block_stream_process_id_mismatch` and `block_audience_mismatch_rows` counts, each its own
-    `imetric!` + `warn!` (§5) — named distinctly from `blocks_view.rs`'s per-partition
-    `block_audience_mismatch_excluded` (step 9) since both run in the same maintenance-role process.
+13. `rust/public/src/servers/maintenance.rs`: hourly `block_stream_process_id_mismatch` and
+    `block_audience_mismatch_rows` counts, the latter built from `audience_column_mismatch` (§5,
+    added in step 8) so it shares the same comparison as the `blocks_view.rs` predicate (step 9,
+    restated in terms of it) and the two can't drift apart. Each gets its own `imetric!` + `warn!`
+    (§5) — named distinctly from `blocks_view.rs`'s per-partition `block_audience_mismatch_excluded`
+    (step 9) since both run in the same maintenance-role process.
 
 ### Phase 5 — tests, docs, tooling
 
@@ -829,12 +869,13 @@ should have been reading it anyway.
 
 **Two extra columns on `blocks_view` vs. leaving `max(audience)` alone.** Once the `blocks_view`
 mismatch predicate (§4) is in place, every surviving block in a `processes_view`/`streams_view`
-group provably has `audience == process_audience == stream_audience`, so bare `max(audience)` is
-already correct and the two columns plus the `max(process_audience)`/`max(stream_audience)` switch
-are not required to close the gap — see
-[The `max(audience)` regression](#the-maxaudience-regression) for why they are kept anyway, as
-defense-in-depth against the predicate being weakened or bypassed later, not as a prerequisite for
-the fix. That defense-in-depth is not free: it is a public SQL-surface addition on `blocks_view`
+group has `audience == process_audience == stream_audience` **for a process/stream whose own row
+already carries a real stamp** — for that case, bare `max(audience)` is already correct and the two
+columns plus the `max(process_audience)`/`max(stream_audience)` switch are pure defense-in-depth,
+not a prerequisite for the fix. That is not the whole picture: for a process/stream whose row is
+still a legacy, pre-v8 NULL-audience row, the switch is load-bearing rather than a hedge — see
+[The `max(audience)` regression](#the-maxaudience-regression) for why. That cost is not free either
+way: it is a public SQL-surface addition on `blocks_view`
 (`stream_audience`, `process_audience`), it forces the `blocks_file_schema_hash()` bump, it needs
 its own `schema-reference.md` entry, and it adds three extra column projections to
 `import_net_blocks_from_prod.py`. The alternative to carrying the two columns is re-sourcing
@@ -874,9 +915,13 @@ expected to be zero, on the hottest path in the system. An hourly bounded query 
 join gives the same number for nothing. The cost is latency to detection — up to an hour — which is
 acceptable for a signal that no longer gates security.
 
-**No backfill.** A NULL column resolving to the deployment default *is* today's semantics for an
-unstamped row, so legacy rows and admin `bulk_ingest` rows read exactly as they do now. Backfilling
-would mean a full table rewrite of `blocks` for no behavioural difference.
+**No backfill.** A NULL column resolving to the deployment default *is* today's semantics for a
+row's *own* read, so a legacy row or admin `bulk_ingest` row still resolves to the same audience it
+does today when read in isolation. It is not behaviourally inert for the §4 mismatch predicate,
+though: a backfilled column would remove the NULL escape hatch that predicate's NULL-tolerant form
+relies on, changing what it excludes (see the NULL-anchor Open Questions item). Absent that
+predicate interaction, backfilling would mean a full table rewrite of `blocks` for a legacy row's
+own resolved value.
 
 ## Migration & Upgrade Notes
 
@@ -903,11 +948,20 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   dropped for that process's/stream's remaining lifetime — the alternative `COALESCE`-then-compare
   form would exclude them permanently, not just during the rollout. The same pass-through applies
   mid-rolling-upgrade, when a pre-v8 ingestion binary writes NULL-audience blocks onto a stream a
-  v8 binary already stamped. The trade-off is that a block landing on a legacy NULL-audience
-  process/stream is *not* checked against that row's audience at all — only a genuine three-way
-  disagreement between two rows that both carry a real stamp is excluded — which is acceptable
-  because a legacy row is a leftover from the (single, then-implicit) deployment default, not a
-  distinct audience an attacker could exploit by targeting it.
+  v8 binary already stamped. **This is not a cosmetic trade-off — it leaves the cross-audience
+  injection attack this plan sets out to close fully open against any `processes`/`streams` row
+  whose `audience` is NULL.** A block landing on a legacy NULL-audience process/stream is not
+  checked against that row's audience at all, so an attacker in audience `zeta` who names such a
+  `process_id`/`stream_id` still materializes a row labelled `audience = 'zeta'` and, for
+  `log_entries`/`measures`, carrying the victim's real `exe`/`username`/`computer`/
+  `process_properties` (§4). A NULL row is not "a leftover from the (single, then-implicit)
+  deployment default" in a sense that makes it safe to target: it resolves to
+  `MICROMEGAS_DEFAULT_AUDIENCE` at read time, which is a distinct audience from the attacker's
+  whenever the deployment default differs from the attacker's own — so targeting a NULL-anchored
+  row is exactly a cross-audience exploit, not a no-op. This window persists for as long as any
+  pre-v8 `processes`/`streams` row exists, since those rows are immutable and this plan does no
+  backfill (§2); see [Open Questions](#open-questions) for the candidate resolutions and their
+  costs.
 - `blocks_file_schema_hash()` bumping forces `blocks` partitions to rebuild. Per `CLAUDE.md` this
   is not a SQL break: the queryable Arrow schema gains two appended columns and every existing
   column keeps its name, type, and position.
@@ -915,13 +969,32 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   Arrow schema (`SqlBatchView::get_file_schema_hash`), which does not change for any of them —
   `log_view.rs`/`metrics_view.rs` return a constant `vec![SCHEMA_VERSION]`, and
   `processes_view.rs`/`streams_view.rs` are equally schema-stable — so **none** of the four is
-  auto-invalidated, the same as `processes`/`streams`. Their content only differs from the old
+  auto-invalidated, the same as `processes`/`streams`. For a process/stream whose own row already
+  carried a real, non-NULL stamp before this change, content only differs from the old
   materialization for a row that was actually attacked — `processes`/`streams` relabel via
   `max(process_audience)`/`max(stream_audience)` instead of `max(audience)`, and
   `log_entries`/`measures` simply omit the mismatched block's rows (§4) rather than carrying its
-  joined process metadata — so no regeneration is required for these four; an operator who wants
-  strict consistency can still `regenerate_partitions` over `blocks`, `processes`, `streams`,
-  `log_entries`, `measures` for the retention window.
+  joined process metadata — so no regeneration is required on that account.
+  **That is not the only source of difference.** A process/stream registered before its ingestion
+  binary reached v8 has `audience = NULL` for the rest of its life (rows are immutable, §2 does no
+  backfill), while every post-upgrade block of that same process/stream carries the credential's
+  real, resolved audience. `find_process` and `processes_view`/`streams_view` resolve the legacy
+  row to the deployment default, while its post-upgrade `blocks`/`log_entries`/`measures` rows
+  carry the real audience — the two halves of the same process end up under two different
+  audiences. This is a genuine break for legitimate operation, not just an attacked row: a reader
+  scoped to the real audience sees the process's telemetry but not its `processes`/`streams` row
+  (`OwnershipRewrite` filters each view on its own `audience` column), is denied
+  `view_instance('log_entries'|'measures', pid)` for it (`AudienceGuard::authorize_view_instance`
+  resolves `IdKind::ProcessOrStream` off `processes.audience`, which reads as the default, not the
+  real audience), while a reader scoped to the deployment default sees the process row but none of
+  its post-upgrade telemetry. This split persists for as long as the legacy row exists and is not
+  fixed by regeneration — regenerating `processes`/`streams`/`log_entries`/`measures` partitions
+  changes nothing about what `audience` a NULL `processes`/`streams` row resolves to. See
+  [Open Questions](#open-questions) for the candidate resolutions (NULL-tolerant pass-through as
+  written, a strict comparison, or a backfill) and their costs — this plan does not pick one. An
+  operator who wants strict consistency for the disjoint, already-real-stamp case above can still
+  `regenerate_partitions` over `blocks`, `processes`, `streams`, `log_entries`, `measures` for the
+  retention window.
 - **`log_stats` is different: regeneration over the retention window is mandatory, not optional.**
   `log_stats_view.rs` is equally schema-stable (`SqlBatchView::get_file_schema_hash` hashes only the
   output schema, not the grouping), so nothing auto-invalidates its partitions either — but adding
@@ -964,11 +1037,20 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
     `processes_view`, `streams_view`); it does not close it for `net_spans`, `otel_spans`,
     `images`, `async_events`, `thread_spans`, or the per-process `view_instance` path (§4, "What
     remains process-anchored"), which still resolve audience through the owning process/stream
-    row. Rewrite the admonition to describe that narrower, remaining surface rather than deleting
-    it. Keep the process-squatting paragraphs inside it (they describe a different, already-closed
+    row. It also does not close it against any `processes`/`streams` row whose `audience` is
+    still NULL — a row registered before its ingestion binary reached v8 — since the §4 mismatch
+    predicate's NULL-tolerant pass-through lets an attacker's block through unchecked against such
+    a row for as long as it exists (Migration & Upgrade Notes; [Open
+    Questions](#open-questions) tracks the candidate fixes). Rewrite the admonition to describe
+    that narrower, remaining surface — including the NULL-anchor window — rather than deleting it.
+    Keep the process-squatting paragraphs inside it (they describe a different, already-closed
     gap) by lifting them into the surrounding prose.
   - `:205` "the two prongs read different copies of `micromegas.audience`": still true (Prong A
     reads a materialized snapshot, Prong B reads Postgres live), but retitle to the column.
+  - `:160`, in "Audience Filtering Activation": describes Prong A as showing "processes whose
+    (client-asserted) `micromegas.audience` property resolves to one of their own audiences" —
+    update to describe the per-row `audience` column each of the six directly-filtered views now
+    carries, not a process property.
 - `mkdocs/docs/admin/ingestion.md` "What gets stamped" (`:70-105`): the stamp now lands on all
   three metadata rows; the "a client that used to self-stamp" note stays accurate, since
   `strip_reserved_properties` still runs. Add a **deploy-order note** next to it, matching the
@@ -1011,11 +1093,21 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
     double-counts across a materialization retry or a re-merge over an overlapping insert range, so
     it is a "some partition saw a mismatch" signal rather than a running total of distinct excluded
     blocks — `block_audience_mismatch_rows` is the metric to trust for sizing the drop.
-- `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc: the "What remains open,
-  tracked separately" paragraph is only partly obsolete — narrow it to the five
-  `per_process_audience()`-resolved views and the JIT `view_instance` path (§4, "What remains
-  process-anchored"); its operational-mitigation advice (audience-bound DB-backed credentials
-  only) still applies to that narrower surface and should stay.
+- `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc:
+  - the "What remains open, tracked separately" paragraph is only partly obsolete — narrow it to
+    the five `per_process_audience()`-resolved views, the JIT `view_instance` path (§4, "What
+    remains process-anchored"), and the NULL-anchor window against a pre-v8 `processes`/`streams`
+    row (§4 Migration & Upgrade Notes; [Open Questions](#open-questions)); its
+    operational-mitigation advice (audience-bound DB-backed credentials only) still applies to
+    that narrower surface and should stay.
+  - the "One audience per process, not per row" section (`:36-47`) justifies filtering the six
+    column-carrying views one row at a time with "a process's audience is write-once and always
+    present" — under per-row stamping the *conclusion* still holds (each row's own column is
+    sound to filter on directly), but the *reason* changes: it is no longer that a row's audience
+    is derived from a process-level invariant, it is that every row now carries its own stamp from
+    the moment it was written. Update the section to state that directly, and note the NULL-anchor
+    exception (a pre-v8 row's column is absent, not "always present", until it resolves through
+    `COALESCE` at read time).
 
 ## Testing Strategy
 
@@ -1119,3 +1211,35 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
    is to accept the column as optional and bind NULL (which reads as the target's default). Hard
    failure is louder and the feature is unreleased, so nothing in the wild breaks — but confirm
    that no internal replication tooling pins an older source lake.
+2. **How to handle a NULL `processes`/`streams` anchor in the §4 mismatch predicate.**
+   `processes`/`streams` rows are immutable (`ON CONFLICT ... DO NOTHING`) and this plan does no
+   backfill (§2), so a row registered before its ingestion binary reached v8 keeps `audience = NULL`
+   for the rest of its life while its post-upgrade blocks carry a real, resolved stamp. The
+   predicate has to decide what a block compared against such a row means, and every option tried
+   so far has a real cost:
+   - **NULL-tolerant pass-through (as currently written).** `x.audience IS NULL OR y.audience IS
+     NULL OR x.audience = y.audience` lets any block through when either side is NULL. Cost: it
+     leaves the cross-audience injection attack this plan exists to close fully open against any
+     NULL-anchored `processes`/`streams` row — an attacker naming such a `process_id`/`stream_id`
+     still materializes a row under its own audience carrying the victim's real
+     `exe`/`username`/`computer`/`process_properties` (§4, Migration & Upgrade Notes). The window
+     lasts as long as any pre-v8 row exists.
+   - **Strict comparison (`COALESCE`-then-compare).** `COALESCE(x.audience, default) =
+     COALESCE(y.audience, default)` closes that hole, but at the cost of silently and permanently
+     dropping legitimate telemetry: every block a v8 binary writes under a real, non-default
+     audience for a process/stream whose row is still NULL-anchored disagrees with that row's
+     `COALESCE`d default and is excluded forever, not just during the rollout (§4). The same
+     exposure applies mid-rolling-upgrade when a pre-v8 binary writes a NULL-audience block onto an
+     already-v8-stamped stream.
+   - **One-time backfill of the column from the deployment default, in the v8 migration.** Setting
+     `audience = <default>` for every existing NULL row at migration time would let the predicate
+     use the strict form safely, since no row would carry NULL going forward except one currently
+     mid-write. Cost: it is the full-table rewrite of `blocks` (and `processes`/`streams`) this
+     plan's "No backfill" trade-off (above) rejects specifically to keep the v8 migration
+     catalog-only and lock-free; it also does not fully solve the problem on its own — during a
+     rolling upgrade a pre-v8 binary can still write a NULL-audience row *after* the backfill ran
+     against a database already on v8, so the predicate (or a repeated backfill pass) still has to
+     decide what a NULL anchor means for whatever survives that mixed-version window, unless
+     ingestion is fully drained to v8 before the backfill runs.
+   Choosing among these — or accepting the residual window some other way — is a decision for this
+   plan's author, not made here.
