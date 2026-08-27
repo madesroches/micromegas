@@ -367,13 +367,27 @@ any row's label, and a mismatched row no longer survives the join at all.
 its name, type, and position, and its meaning is *the audience this block was written under* —
 which for every legitimate block is the same value the old expression produced.
 
-`blocks_file_schema_hash()` still bumps `vec![5]` → `vec![6]`, but the schema itself gives no reason
-to: nothing about the Arrow output changed, so nothing would auto-invalidate stale partitions on its
-own. The bump forces the rebuild anyway, because every `audience` value is re-sourced (the block's
-own stamp, instead of the process's) and a mismatched block is now excluded outright — content
-changes even though the schema doesn't. Per this repo's interface-stability rules, an internal
-`SCHEMA_VERSION`-style hash bump is not a SQL break: it forces a partition rebuild while the
-queryable Arrow schema stays identical.
+`blocks_file_schema_hash()` **stays at `vec![5]` — no bump, and no forced rebuild.** `blocks` is the
+largest view in the lake, and its Arrow schema does not change: `audience` keeps its name, type, and
+position, so today's partitions remain byte-identical and perfectly valid to read under the
+unchanged schema. Nothing about that schema *requires* a bump, and the author has decided not to pay
+for a full rebuild just to force one. This is possible only because the two anchor columns an
+earlier draft would have appended to `blocks_view` were dropped (see "One audience column on
+`blocks` vs. two extra anchor columns" in Trade-offs) — with those gone, the schema this plan
+produces is exactly the schema already on disk.
+
+Consequence: existing `blocks` partitions keep whatever `audience` values they were materialized
+with under the old query — sourced from the owning process's `micromegas.audience` property rather
+than the block's own stamp — and predate the mismatch predicate (§4), so a partition may contain a
+row the predicate would now exclude. Old- and new-semantics partitions are queried together going
+forward, with nothing in the row data itself distinguishing which query produced it. In practice this
+is a consistency note rather than an open confidentiality question: every partition in the lake today
+holds public data, so a pre-change `audience` label describes public data either way, and the per-row
+guarantee this plan establishes simply takes effect for everything ingested from here on — old
+partitions carry no confidential exposure to age out of, they just age out of the retention window on
+the usual schedule. An operator who wants uniform, per-row semantics on the existing partitions sooner
+than that can run `regenerate_partitions` over `blocks`. See Migration & Upgrade Notes for the full
+accounting.
 
 #### The `max(audience)` regression
 
@@ -794,10 +808,9 @@ audience_guard (Prong B)  block_id  -> blocks.audience
    whose `streams`/`processes` row is routinely absent (early arrival, post-sweep orphan) — and
    compares it against `fetch_metadata_partition_spec`'s filtered `record_count`, logging one
    `error!` and incrementing
-   `imetric!("block_audience_mismatch_excluded", "count", n)` (§5) when they differ; `blocks_file_schema_hash()`
-   → `vec![6]` — the Arrow schema is unchanged, so nothing would auto-invalidate stale partitions on
-   its own, but every `audience` value is re-sourced and mismatched blocks are now excluded, so the
-   bump is what forces the rebuild (not a SQL break, per this repo's interface-stability rules).
+   `imetric!("block_audience_mismatch_excluded", "count", n)` (§5) when they differ;
+   `blocks_file_schema_hash()` stays `vec![5]` — no bump, no forced rebuild (§4, Migration & Upgrade
+   Notes).
    This one predicate is the sole
    exclusion point — `partition_source_data.rs` needs no mismatch-handling code of its own, since
    it (and every JIT-partitioned view) reads blocks from `blocks_view`'s own materialized
@@ -941,6 +954,17 @@ Upgrade Notes). Absent that
 predicate interaction, backfilling would mean a full table rewrite of `blocks` for a legacy row's
 own resolved value.
 
+**No forced rebuild of `blocks`.** `blocks_file_schema_hash()` stays `vec![5]`; nothing bumps it.
+The Arrow schema this plan produces is byte-identical to what's already on disk, so this is possible
+without breaking anything — the alternative would have been to bump the hash purely to force
+re-materialization, not because the schema needed it. Doing that would mean re-materializing `blocks`,
+the largest view in the lake, plus the SqlBatchViews built over it, entirely to relabel data that
+is already public in this deployment (Migration & Upgrade Notes). Not worth it. The price is a
+consistency gap, not a confidentiality one: existing partitions keep old-semantics `audience` values
+and may contain rows the §4 predicate would now exclude, alongside new partitions materialized under
+the new semantics, until the old ones age out of the retention window — or an operator runs
+`regenerate_partitions` over `blocks` deliberately, for anyone who wants uniform semantics sooner.
+
 ## Migration & Upgrade Notes
 
 - The v8 migration runs in one transaction. `ADD COLUMN` is catalog-only, and the `CHECK`
@@ -992,13 +1016,21 @@ own resolved value.
   specifically designed to avoid (§2, "No backfill" above) — and would still not fully close the
   window against a mixed-version rolling fleet, since a pre-v8 binary can keep writing NULL-audience
   rows after any backfill pass runs. The NULL-tolerant pass-through as written stays.
-- `blocks_file_schema_hash()` bumping forces `blocks` partitions to rebuild even though the Arrow
-  schema itself is unchanged — every `audience` value is re-sourced (the block's own stamp instead
-  of the process's) and mismatched blocks are now excluded, so nothing would auto-invalidate stale
-  partitions without the bump. Per `CLAUDE.md` this is not a SQL break: it forces a rebuild while
-  the queryable Arrow schema stays identical, gaining no columns and changing no existing column's
-  name, type, or position.
-- `processes`/`streams`/`log_entries`/`measures` are all `SqlBatchView`s that hash their inferred
+- `blocks_file_schema_hash()` stays `vec![5]` — no bump, and deliberately so rather than as a
+  side effect. The Arrow schema doesn't change, so nothing would auto-invalidate `blocks` partitions
+  on its own either way; on top of that, the author chose not to force a rebuild, to avoid
+  re-materializing the largest view in the lake. Existing `blocks` partitions keep the `audience`
+  values they were written with under the old per-process-property query, and may contain rows the
+  §4 mismatch predicate would now exclude; new partitions get the new per-row semantics as soon as
+  the v8 ingestion binary is live, with old- and new-semantics partitions queried side by side in
+  between. Because every partition in the lake today holds public data, this is a consistency note
+  rather than a confidentiality exposure — the per-row guarantee simply takes effect for everything
+  ingested from here on, and the existing partitions age out of the retention window on the usual
+  schedule without ever having held anything non-public. `regenerate_partitions` over `blocks`
+  remains available to an operator who wants uniform, per-row semantics sooner than that.
+- `blocks` joins that same not-auto-invalidated set deliberately (above); `processes`/`streams`/
+  `log_entries`/`measures` land there too, but because their schema simply never changed rather than
+  by choice. They are all `SqlBatchView`s that hash their inferred
   Arrow schema (`SqlBatchView::get_file_schema_hash`), which does not change for any of them —
   `log_view.rs`/`metrics_view.rs` return a constant `vec![SCHEMA_VERSION]`, and
   `processes_view.rs`/`streams_view.rs` are equally schema-stable — so **none** of the four is
