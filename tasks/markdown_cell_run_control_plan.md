@@ -161,8 +161,8 @@ button per child — no change needed beyond the `canRun` fallback above.
 
 ### Wiring `onRun`
 
-No new wiring is needed: `onRun={() => executeCellByName(cell.name)}` is
-already passed unconditionally to `CellContainer` for every cell
+Mostly no new wiring is needed: `onRun={() => executeCellByName(cell.name)}`
+is already passed unconditionally to `CellContainer` for every cell
 (`NotebookRenderer.tsx:707`), to the renderer props (`:663`), to the editor
 panel footer (`:851`), and to `HgChildPane`. It was simply unreachable
 because `canRun` hid it. Once `canRun` is `true` for markdown, clicking the
@@ -170,6 +170,16 @@ existing Play button calls `executeCellByName('cellname')` →
 `executeCell(idx)`, which hits the `!meta.execute` shortcut and sets
 `{ status: 'success', data: [] }` synchronously — no query re-execution,
 no dependency on upstream cells having already run.
+
+One gap: `CellEditor.tsx:167` already passes `onRun={onRun}` into
+`meta.EditorComponent` unconditionally for every cell type, and every other
+cell-type editor forwards it to `SyntaxEditor`'s `onRunShortcut` (Ctrl/Cmd+Enter)
+— e.g. `ChartCell.tsx:469`, `LogCell.tsx:357`, `TableCell.tsx:254`, and eight
+others. `MarkdownCellEditor` doesn't destructure `onRun` and its `SyntaxEditor`
+call omits `onRunShortcut`, so the keyboard shortcut silently wouldn't work
+even with `canRun: true`. Fix: destructure `onRun` from `CellEditorProps` in
+`MarkdownCellEditor` and pass `onRunShortcut={onRun}` to its `SyntaxEditor`,
+matching every other cell type.
 
 ### New/duplicated markdown cells
 
@@ -188,6 +198,9 @@ auto-success on creation) considered and deferred.
    - Add `canRun?: boolean` to `CellTypeMetadata`.
 2. `analytics-web-app/src/lib/screen-renderers/cells/MarkdownCell.tsx`
    - Add `canRun: true` to `markdownMetadata`.
+   - In `MarkdownCellEditor`, destructure `onRun` from `CellEditorProps` and
+     pass `onRunShortcut={onRun}` to its `SyntaxEditor`, matching every other
+     cell-type editor.
 3. `analytics-web-app/src/components/CellContainer.tsx`
    - Change `canRun = canRunProp ?? !!meta.execute` to
      `canRun = canRunProp ?? meta.canRun ?? !!meta.execute`.
@@ -204,17 +217,24 @@ auto-success on creation) considered and deferred.
      `undefined` for `cell.type === 'markdown'`.
 8. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
    - Add a test asserting `markdownMetadata.canRun === true`.
-9. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
-   - Add a case: a cell type with `execute` absent but `canRun: true`
-     (or a mock) shows the Run button; confirm "Run from here"/"Auto-run"
-     visibility is driven by the presence of the corresponding callbacks,
-     not by `canRun` alone.
-10. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
+9. `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
+   - Add `canRun: true` to `BASE_METADATA.markdown`, mirroring how
+     `canBlockDownstream: false` already mirrors production `markdownMetadata`
+     there. Without this, `getCellTypeMetadata('markdown').canRun` stays
+     `undefined` under the shared mock used by `CellContainer.test.tsx`,
+     `HorizontalGroupCell.test.tsx`, and `NotebookRenderer.test.tsx`, and the
+     new tests in steps 10-12 can't exercise the Run button for markdown.
+10. `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
+    - Add a case: a cell type with `execute` absent but `canRun: true`
+      (or a mock) shows the Run button; confirm "Run from here"/"Auto-run"
+      visibility is driven by the presence of the corresponding callbacks,
+      not by `canRun` alone.
+11. `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
     - Add a case: a markdown child selected in the per-child editor panel
       (`ChildEditorView`) shows the Run button when `onRun` is provided —
       covers the same `canRun` fallback as `HgChildPane` but for the
       full-panel editor, which the existing suite doesn't exercise.
-11. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
+12. `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
     - Update/replace the existing `'should not show run button for markdown
       cells'` test (line 506) — markdown now *does* show a Run button, but
       not "Run from here" or "Auto-run from here".
@@ -226,8 +246,8 @@ auto-success on creation) considered and deferred.
       renders blank, clicking Run flips it to rendered content, and no
       upstream query cell's `executeCell` is invoked as a result (assert via
       a spy/mock data source that no additional query fires).
-12. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
-13. Manual check with `yarn dev` (or the monolith): open a notebook with a
+13. Run `yarn lint`, `yarn type-check`, and `yarn test` in `analytics-web-app/`.
+14. Manual check with `yarn dev` (or the monolith): open a notebook with a
     slow upstream query cell and a markdown cell below it referencing
     `$variable`/`$cell.col`. Edit the markdown content after the initial
     load — confirm it updates live. Then trigger "Run from here" on the
@@ -245,6 +265,7 @@ auto-success on creation) considered and deferred.
 - `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/MarkdownCell.test.tsx`
+- `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
 - `analytics-web-app/src/components/__tests__/CellContainer.test.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/NotebookRenderer.test.tsx`
@@ -296,14 +317,15 @@ auto-success on creation) considered and deferred.
 
 ## Testing Strategy
 
-- **Automated**: see Implementation Steps 8-11 — `canRun` metadata assertion,
-  `CellContainer` Run-button visibility for a no-`execute` type with
+- **Automated**: see Implementation Steps 8-12 — `canRun` metadata assertion,
+  the shared `cell-registry-mock.ts` update so `canRun: true` is visible to
+  tests, `CellContainer` Run-button visibility for a no-`execute` type with
   `canRun: true`, the same Run-button visibility for a markdown child in the
   hg per-child editor panel (`ChildEditorView`), `NotebookRenderer` markdown
   Run button now visible while "Run from here"/"Auto-run from here" stay
   hidden, live content-edit reactivity while `status: 'success'`, and
   Run-click recovery from `idle` without touching upstream cells.
-- **Manual**: see Implementation Step 13 — the scenario the issue describes
+- **Manual**: see Implementation Step 14 — the scenario the issue describes
   (slow upstream query, markdown edit, no reload needed; Run works
   independently of an in-flight upstream re-run).
 - **Regression**: existing `NotebookRenderer.test.tsx` assertions for
@@ -321,9 +343,14 @@ auto-success on creation) considered and deferred.
   `useCellManager`'s creation paths, which today don't call into execution
   at all. Leaning toward yes as a fast follow rather than bundling it here —
   flagging for a decision before implementation.
-- **Keyboard shortcut parity with Jupyter's `Shift+Enter`.** The issue
-  frames the problem via that comparison but doesn't explicitly ask for the
-  same binding. `useNotebookKeyboardNav.ts` currently has no run-cell
-  shortcut for any cell type, so adding one would be new scope beyond
+- **Keyboard shortcut parity with Jupyter's exact `Shift+Enter` binding.**
+  The issue frames the problem via that comparison but doesn't explicitly ask
+  for the same key. Run-shortcut infrastructure already exists at the editor
+  level — `SyntaxEditor`'s `onRunShortcut` (Ctrl/Cmd+Enter) is wired into
+  every SQL-backed cell editor, and markdown now gets it too via the
+  "Wiring `onRun`" fix above — but there's no `Shift+Enter`-style binding at
+  the global-nav layer (`useNotebookKeyboardNav.ts`), and Ctrl/Cmd+Enter only
+  fires while the cell's editor has focus, not from the collapsed/rendered
+  view. Adding a `Shift+Enter` global binding would be new scope beyond
   markdown. Recommend leaving to a separate issue unless the reporter
   confirms it's wanted now.
