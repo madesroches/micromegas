@@ -343,6 +343,12 @@ only works uncorrelated (no column reference in its argument), pointing at the n
 per-row expansion. This file is what the "Discovering UDFs" section tells readers to rely on instead
 of probing, so it goes stale the same way the mkdocs reference would if left unedited.
 
+Also append `jsonb_entries`, `jsonb_elements`, and `jsonb_path_elements` to the JSONB list in
+`rust/datafusion-extensions/README.md` (the crate's own curated function list, lines 10-14) — same
+staleness reasoning as above. That list is already missing `jsonb_array_length`, `jsonb_path_query`,
+`jsonb_path_query_first`, and the two existing UDTFs; backfilling those is optional polish, not
+required by this plan.
+
 ### 6. Python integration tests — `python/micromegas/tests/test_jsonb.py`
 
 Every case here runs against a live PostgreSQL + ingestion + flight-sql stack (`test_utils.py`'s
@@ -377,6 +383,7 @@ clause needed.
 | `rust/datafusion-extensions/tests/jsonb_list_udfs_tests.rs` | **New** — unit + SQL integration tests |
 | `mkdocs/docs/query-guide/functions-reference.md` | Document the three functions; fix the UDTF expression-argument claims; add a usage pattern |
 | `claude-plugin/skills/micromegas-query/SKILL.md` | Add the three functions to the JSONB list; note `jsonb_each`'s uncorrelated-only restriction |
+| `rust/datafusion-extensions/README.md` | Add the three functions to the crate's JSONB list |
 | `python/micromegas/tests/test_jsonb.py` | End-to-end cases against a running service |
 | `CHANGELOG.md` | Unreleased entry |
 
