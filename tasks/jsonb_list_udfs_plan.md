@@ -191,17 +191,28 @@ many rows. Expanding per row would re-parse the same bytes repeatedly, so when t
 `DictionaryArray<Int32, Binary>` (matched directly on `args[0].data_type()`, the `keys.rs` shape —
 see "What exists" above):
 
-1. Build the list array once over only the dictionary slots actually referenced by a non-null key
-   in `dict.keys()` for this batch — **not** all of `dict.values()`. A `filter`/`slice` upstream
-   (e.g. a `WHERE` on `log_entries.properties`) leaves the full values array intact even though
-   most of it is unreferenced, so extracting over `dict.values()` wholesale can parse far more
-   blobs than there are rows, and can trip `DataFusionError::External` on an undecodable blob in a
-   slot no surviving row uses. Values array nulls also need their own check: every existing
-   dictionary reader in this codebase (`binary_column_accessor.rs:64-67`, `keys.rs:134-139`,
-   `each.rs:176-182`) calls `values.value(idx)` only after confirming the slot is non-null, and the
-   fast path must do the same — a null dictionary value produces a NULL list entry, not
-   `RawJsonb::new(&[])` on empty bytes.
-2. `arrow::compute::take(list_array, dict.keys())` to expand to the row count.
+1. Build the list array once, **positionally aligned with `dict.values()`** (length
+   `values.len()`) — not compacted to only the referenced slots. `dict.keys()` holds indices into
+   the *original* `dict.values()`, and `take` in step 2 indexes positionally, so a compacted array
+   would misalign every row (or panic out-of-bounds); `properties_to_array`'s `take` over the full
+   `dict.values()` (`properties_udf.rs:108-113`) is the correctly-aligned precedent this follows.
+   Within that full-length pass, still avoid parsing blobs no surviving row needs: compute the set
+   of distinct non-null keys present in `dict.keys()` for this batch, and parse a `values` slot only
+   when its index is in that set and the slot is non-null per `values.is_null(idx)`; every other
+   slot (unreferenced, or itself null) becomes a null list entry without being parsed. This is what
+   keeps an undecodable blob in an unreferenced slot — which a sliced/filtered dictionary retains —
+   from erroring the fast path where the row-by-row path would not have touched it.
+
+   The `values.is_null(idx)` check above is new to this fast path, not existing precedent:
+   `create_binary_accessor`'s dictionary accessor (`binary_column_accessor.rs:64-67`) and the
+   dictionary readers in `keys.rs:134-139` / `each.rs:176-182` all gate on the *key's* nullity
+   (`dict_array.is_null(i)`) only and never check `values.is_null(key_index)`, so today a non-null
+   key pointing at a null values slot reads there as valid (empty) bytes, not NULL. The fast path
+   deliberately does not reproduce that gap — see Testing Strategy item 6 for how the resulting
+   divergence from `create_binary_accessor`-based code is verified rather than papered over.
+2. `arrow::compute::take(list_array, dict.keys())` to expand to the row count — valid because
+   `list_array` has exactly one entry per `dict.values()` slot, the same index space `dict.keys()`
+   points into.
 
 `take` supports `ListArray`, and null dictionary keys propagate as null list entries. This is the
 same shape as `properties_to_array`'s `take`-based reconstruction (`properties_udf.rs:108-113`) and
@@ -235,8 +246,8 @@ SELECT unnest(jsonb_entries(properties)) FROM log_entries
                     |
         Dictionary?  --yes-->  downcast to DictionaryArray<Int32Type> (keys.rs shape)
                     |               |
-                    |          extract per unique dictionary value:
-                    |          ListBuilder<StructBuilder> over dict.values()
+                    |          ListBuilder<StructBuilder>, one entry per dict.values() slot:
+                    |          parse only referenced, non-null slots; else append null entry
                     |               |
                     |          take(list, dict.keys())  -->  ListArray, len = num_rows
                     |
@@ -310,6 +321,13 @@ Also, in the same pass:
   `jsonb_path_elements` + `unnest` form.
 - Add a per-row expansion example to the "JSON Data Processing" patterns section (line 1470).
 
+Also update `claude-plugin/skills/micromegas-query/SKILL.md`'s curated function list (the "JSONB
+functions" section, currently listing every JSONB scalar UDF): add the three new functions, and add
+a note next to `jsonb_each(jsonb)` under "Table functions" that it — like `jsonb_array_elements` —
+only works uncorrelated (no column reference in its argument), pointing at the new list UDFs for
+per-row expansion. This file is what the "Discovering UDFs" section tells readers to rely on instead
+of probing, so it goes stale the same way the mkdocs reference would if left unedited.
+
 ### 6. Python integration tests — `python/micromegas/tests/test_jsonb.py`
 
 Add cases in the existing style (plain `client.query`, assertions on the returned DataFrame).
@@ -333,6 +351,7 @@ clause needed.
 | `rust/datafusion-extensions/src/lib.rs` | Register the three UDFs |
 | `rust/datafusion-extensions/tests/jsonb_list_udfs_tests.rs` | **New** — unit + SQL integration tests |
 | `mkdocs/docs/query-guide/functions-reference.md` | Document the three functions; fix the UDTF expression-argument claims; add a usage pattern |
+| `claude-plugin/skills/micromegas-query/SKILL.md` | Add the three functions to the JSONB list; note `jsonb_each`'s uncorrelated-only restriction |
 | `python/micromegas/tests/test_jsonb.py` | End-to-end cases against a running service |
 | `CHANGELOG.md` | Unreleased entry |
 
@@ -399,11 +418,17 @@ Tracked separately under #1475:
    different array, asserting each expanded row keeps its own source column. This must fail if
    anyone reintroduces uncorrelated evaluation.
 6. **Dictionary input** — same assertions against a `Dictionary<Int32, Binary>` column with
-   repeated blobs, including a null dictionary key and a null value in the dictionary's values
-   array, so the fast path and the plain path are proven to agree row for row. Also a sliced/
-   filtered dictionary case — a values array containing blobs no surviving row's key references,
-   including an undecodable one in an unreferenced slot — asserting the fast path does not error
-   on it and does not degrade into parsing every value.
+   repeated blobs, including a null dictionary key, so the fast path and the row-by-row
+   `create_binary_accessor` path agree row for row on key nullity. Separately, a null value in the
+   dictionary's *values* array referenced by a non-null key: assert the fast path treats it as a
+   NULL list entry (per its own `values.is_null` check — see "Dictionary fast path" point 1). Do
+   **not** assert agreement with `create_binary_accessor`-based code here (`jsonb_path_elements`'s
+   row-by-row fallback, and every other existing UDF built on that accessor) — it checks only key
+   nullity and reads that slot's bytes as valid, so this one case is a known, documented divergence,
+   not a bug to reconcile in this plan. Also a sliced/filtered dictionary case — a values array
+   containing blobs no surviving row's key references, including an undecodable one in an
+   unreferenced slot — asserting the fast path does not error on it and does not degrade into
+   parsing every value.
 7. **Composition** — `jsonb_as_string` / `jsonb_get` / `jsonb_as_i64` applied to unnested values;
    `GROUP BY` and `SELECT DISTINCT` over an unnested key column.
 8. **UDTF regression** — existing `jsonb_each_tests.rs` and `jsonb_array_elements_tests.rs` must
