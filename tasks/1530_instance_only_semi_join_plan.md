@@ -94,24 +94,51 @@ remaining scenario to catch on this path.
 
 ### What the semi-join actually still defends against
 
-Mostly Prong A / Prong B disagreement: Prong B reads Postgres live, Prong A reads a
-daemon-materialized snapshot of `processes`. In the window where the two disagree, the semi-join
-would catch a row Prong B let through. For `net_spans`/`otel_spans`/`images`/`async_events`, both
-prongs resolve the same row's own stamp (the owning process's `audience`), so the skew there is
-purely materialization-lag/retention-lag, and a materialized-but-not-yet-visible process is
-invisible to Prong A in the *deny* direction, not the allow direction.
+Prong B does not anchor on the *process's* stamp for all five view sets — `authorize_view_instance`
+calls `authorize(id, IdKind::ProcessOrStream)` for every guarded instance, and
+`owner_query_sql(ProcessOrStream)` is a `UNION ALL` over `processes.audience` **and**
+`streams.audience`. For a process-scoped instance (`net_spans`/`otel_spans`/`images`/`async_events`)
+Prong B may therefore authorize off a *streams* row with the same id, while Prong A's
+`per_process_audience`/`exists_for_process` always resolves the *process's* materialized row — the
+same anchor shift the paragraph below documents for `thread_spans`, present in the other four too.
+Ingestion does not prevent the collision: `check_stream_audience_conflict`
+(`rust/ingestion/src/web_ingestion_service.rs`) only compares an incoming `stream_id` against
+existing `streams` rows, so a client-chosen `stream_id` may equal another audience's `process_id`.
+What makes this safe is `merge_owner_rows`' fail-closed `Ambiguous` merge: when the id resolves to
+*both* a `processes` row and a `streams` row with different audiences, `is_readable` requires every
+resolved audience to be independently readable, so a collision denies rather than authorizing off
+whichever row happens to match the caller.
 
-`thread_spans` is the exception: Prong A's `exists_for_stream` resolves the **owning process's**
-stamp (it joins `__streams__partitions` to `per_process_audience` on `process_id`), while Prong B's
-`IdKind::ProcessOrStream` arm resolves the **stream's own** `streams.audience` directly. These can
-legitimately differ — `insert_stream` accepts any `process_id` unconditionally and stamps the
-stream with the caller's own audience, not the process's. So dropping the predicate moves
-`thread_spans`' enforcement anchor from the owning process's stamp to the stream's own. That shift
-is covered by `blocks_view`'s mismatch predicate, not by the materialization-lag argument above:
-`ThreadSpansView::jit_update` generates partitions through `BlocksView`, whose mismatch predicate
-excludes a block whose stream disagrees with the owning process's row, so a stream/process audience
-mismatch never reaches this scan regardless of which stamp Prong A or Prong B reads. This is not
-treated as a realistic exposure and is not a reason to keep the predicate.
+Net of the collision case, what remains is Prong A / Prong B disagreement, and the two read very
+different things: Prong B resolves a live point query against `processes`/`streams`; Prong A's
+`per_process_audience` is built from `__processes__partitions`, a time-partitioned, append-only JIT
+materialization off `blocks` (`processes_view.rs`) that is never retroactively edited once a time
+range is materialized. `delete_old_data` (`rust/analytics/src/delete.rs`) deletes a process's row
+from live `processes` once it is old and stream-empty, but that deletion neither retracts the
+process's already-materialized `__processes__partitions` rows nor the instance's own JIT partitions
+(`net_spans`/`otel_spans`/`images`/`async_events`), which is exactly the "retention swept the
+`processes` row, everything downstream of it survives" case. This produces a genuine, if narrow,
+allow-direction skew that only the collision case makes reachable: if a client-chosen `stream_id`
+happens to equal a `process_id` that has since aged out of `processes`, the collision that used to
+be `Ambiguous` (both rows present) resolves cleanly to the surviving `streams` row once the
+`processes` row is gone, so Prong B authorizes the stream's own owner — who is not the aged-out
+process's owner — to open `view_instance` for that id. Today's semi-join still denies them: it reads
+the stale-but-persisted `__processes__partitions` row, which still carries the original process's
+audience, and filters out any caller whose audience doesn't match it. Dropping the predicate gives
+up exactly this one backstop; the rest of the skew (a freshly-arrived process not yet visible in
+`__processes__partitions`) is invisible to Prong A in the deny direction, not the allow direction.
+
+`thread_spans` has the same process/stream anchor shift as the four above, but through a different
+pair of accessors: Prong A's `exists_for_stream` resolves the **owning process's** stamp (it joins
+`__streams__partitions` to `per_process_audience` on `process_id`), while Prong B's
+`IdKind::ProcessOrStream` arm resolves the **stream's own** `streams.audience` directly (or, on a
+process_id/stream_id collision, both, fail-closed as above). These can also differ for a reason
+that is not a collision: `insert_stream` accepts any `process_id` unconditionally and stamps the
+stream with the caller's own audience, not the process's. That shift is covered by `blocks_view`'s
+mismatch predicate: `ThreadSpansView::jit_update` generates partitions through `BlocksView`, whose
+mismatch predicate excludes a block whose stream disagrees with the owning process's row, so a
+stream/process audience mismatch never reaches this scan regardless of which stamp Prong A or Prong
+B reads. This is not treated as a realistic exposure and is not a reason to keep the predicate.
 
 It notably does **not** defend against cross-audience block injection: an attacker's block naming a
 victim's `process_id` lands in the victim's instance, so `process_id IN (victim's audience)` passes.
@@ -298,7 +325,15 @@ Narrowing to three is a one-line change to `rows_confined_to_instance` if that i
    and Prong A adds no per-row predicate. Also soften the earlier claim that "Prong A already
    row-filters every `view_instance` scan the same as the named-table form", which is now true only
    for the view sets carrying an `audience` column.
-9. `CHANGELOG.md`, Unreleased: one entry under the analytics/query section describing the dropped
+9. `rust/analytics/src/lakehouse/audience_guard.rs`: update the module doc's claim that Prong B's
+   `view_instance(...)` guard exists only to close a cost/availability residual "because Prong A
+   already row-filters every `view_instance` scan the same as the named-table form" — after this
+   change that is true only for the view sets carrying a physical `audience` column; for the other
+   five, Prong B's guard is their sole confidentiality enforcement, not a redundant belt-and-braces
+   check. Add the reverse-side pointer to `OwnershipRewrite`'s `instance_is_audience_guarded()` so
+   a reader of either file finds the other. Describe this behaviourally, matching Phase 2 step 4's
+   convention: no issue numbers, no stage labels.
+10. `CHANGELOG.md`, Unreleased: one entry under the analytics/query section describing the dropped
    predicate, the view sets affected, and that it is a planning cleanup: no caller gains access to
    another audience's rows, though a legitimate owner may now see rows that the daemon-materialized
    `processes` snapshot's lag previously hid from the dropped predicate (#1530).
@@ -310,6 +345,7 @@ Narrowing to three is a one-line change to `rows_confined_to_instance` if that i
 - `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs` — plan-shape expectations
 - `rust/analytics/tests/ownership_rewrite_db_test.rs` — no changes; rerun as the regression net
 - `rust/analytics/tests/audience_guard_tests.rs` — accessor/guard-arm coupling test
+- `rust/analytics/src/lakehouse/audience_guard.rs` — module doc, reverse-side coupling note
 - `mkdocs/docs/admin/authentication.md` — enforcement description
 - `CHANGELOG.md` — Unreleased entry
 
@@ -345,16 +381,25 @@ actually closed elsewhere.
 
 No authorization decision changes. For every reachable query:
 
-- No caller gains access to another audience's rows. A caller authorized for instance *X* saw
-  *X*'s rows before, further narrowed by any Prong A/Prong B materialization-lag skew (Current
-  State); after, they see exactly *X*'s rows with that skew gone — a legitimate owner may now see
-  rows that Prong A's `processes`-materialization lag previously hid. This can only add visibility
-  for the authorized owner, never grant it to anyone else.
-- For `thread_spans`, dropping the predicate moves the enforcement anchor from the owning
-  process's stamp (Prong A's `exists_for_stream`) to the stream's own stamp (Prong B's
-  `IdKind::ProcessOrStream` arm) — see Current State. A stream stamped differently from its
-  process is already excluded by `blocks_view`'s mismatch predicate before this scan runs, so the
-  anchor shift changes no caller's visible rows.
+- In the ordinary case, no caller gains access to another audience's rows. A caller authorized for
+  instance *X* saw *X*'s rows before, further narrowed by any Prong A/Prong B materialization-lag
+  skew (Current State); after, they see exactly *X*'s rows with that skew gone — a legitimate owner
+  may now see rows that Prong A's `processes`-materialization lag previously hid. This can only add
+  visibility for the authorized owner, never grant it to anyone else. The one exception is the
+  retention-window collision documented in Current State: a client-chosen `stream_id` equal to a
+  `process_id` that has since aged out of `processes` lets Prong B authorize that stream's own
+  owner for the surviving `net_spans`/`otel_spans`/`images`/`async_events` instance partitions of
+  the aged-out process, which today's semi-join still denies (it reads the audience the
+  never-retracted `__processes__partitions` row still carries) and which dropping the predicate
+  gives up.
+- Prong B anchors on `IdKind::ProcessOrStream` — `processes.audience` or `streams.audience`,
+  whichever row exists — for all five view sets, not only `thread_spans`; the fail-closed
+  `Ambiguous` merge in `merge_owner_rows` is what makes that anchor safe whenever both rows exist
+  (see Current State and the bullet above for the one case where only one does). `thread_spans` is
+  additionally covered on its own legitimate-divergence path: `insert_stream` may stamp a stream
+  with the caller's own audience regardless of its process's, but a stream stamped differently from
+  its owning process is already excluded by `blocks_view`'s mismatch predicate before this scan
+  runs, so that particular anchor shift changes no caller's visible rows.
 - A caller not authorized for *X* was denied by Prong B at `scan` before and is denied at `scan`
   after — including the empty-`ReadScope::Audiences` case, where `is_readable` returns false rather
   than the predicate's `lit(false)` producing an empty result.
