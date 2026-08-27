@@ -23,7 +23,7 @@ column of their own, and the per-process JIT `view_instance` path, still resolve
 the owning process/stream row and are not closed by this change — see
 ["What remains process-anchored"](#what-remains-process-anchored) in §4.
 
-Two decisions taken with the issue author, both narrowing the change:
+Three decisions taken with the issue author:
 
 - **Uniform treatment.** The column goes on all three tables, not just the two that lack a stamp.
   `processes` moves off the property too, so there is exactly one shape and one precedence rule
@@ -34,12 +34,24 @@ Two decisions taken with the issue author, both narrowing the change:
   that carry a NULL column are genuinely pre-AbAC rows and admin `bulk_ingest` rows from a source
   that predates the column, and those resolve to `MICROMEGAS_DEFAULT_AUDIENCE` at read time
   exactly as they do today.
+- **`blocks` and `streams` carry their own audience, not the process's.** This is settled, not a
+  trade-off to be revisited: a block's label is the credential that wrote *that block*, and a
+  stream's is the credential that wrote *that stream*. The point of the change is precisely that
+  an attacker's block cannot borrow its victim's label by naming the victim's `process_id`. Where
+  a downstream view aggregates or joins across rows, the fix is to re-anchor the view on the
+  row's own stamp (§4) — never to relabel the row from the process it points at.
 
 Scope is integrity, not confidentiality: no read escalation is created or removed here — reading B
-still requires a read grant on B. That claim depends on `OwnershipRewrite` checking all three of
-`blocks_view`'s audience columns, not just `audience`, on the `blocks` view itself — see
-["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for why the two appended
-anchor columns would otherwise turn `blocks` into a cross-audience existence-and-label oracle.
+still requires a read grant on B. That claim depends on a mismatched row never materializing into
+any view in the first place: a block whose `audience` disagrees with the `process_audience` or
+`stream_audience` it joins to is excluded from materialization by a single predicate on
+`blocks_view`'s `data_sql` (mirrored in its `source_count_query`) — it never becomes a row of
+`blocks` at all, so it is equally absent from `log_entries`, `measures`, and every other view that
+reads blocks through the `blocks` view's own materialized partitions — see
+["The `max(audience)` regression"](#the-maxaudience-regression) in §4 for why the two anchor
+columns appended to `blocks_view` are what make that comparison possible, and, for
+`log_entries`/`measures` specifically, why letting a mismatched row materialize would leak the
+victim process's own `exe`/`username`/`computer`/`process_properties`.
 Process squatting (`check_process_audience_conflict`) and cross-audience OTLP process collision
 (audience-salted id derivation) are already closed and are untouched.
 
@@ -291,8 +303,11 @@ pub fn coalesced_audience_column(qualifier: &str, param: usize) -> String {
 
 `DEFAULT_AUDIENCE`, `is_valid_audience`, and `default_audience_from_env` are unchanged.
 
-**`blocks_view.rs`** — the audience now comes off the block's own row, and two columns are appended
-so the derived views can anchor on their own rows too:
+**`blocks_view.rs`** — the audience now comes off the block's own row, two columns are appended so
+the derived views can anchor on their own rows too, and a predicate excludes a block whose own
+stamp disagrees with either row it joins to — see
+["The `max(audience)` regression"](#the-maxaudience-regression) below for why that predicate is
+needed and why it is the single place this plan puts it:
 
 ```sql
 SELECT block_id, streams.stream_id, processes.process_id, ... ,
@@ -303,12 +318,21 @@ FROM blocks, streams, processes
 WHERE blocks.stream_id = streams.stream_id
 AND blocks.process_id = processes.process_id
 AND blocks.insert_time >= $1 AND blocks.insert_time < $2
+AND COALESCE(blocks.audience, $3) = COALESCE(streams.audience, $3)
+AND COALESCE(blocks.audience, $3) = COALESCE(processes.audience, $3)
 ORDER BY blocks.insert_time, blocks.block_id;
 ```
 
+The mismatch predicate compares the `COALESCE`d values, not the raw columns, so a legacy row that
+carries a `NULL` audience on one side and a real stamp on the other is not spuriously treated as a
+mismatch — both sides resolve to the same deployment default before being compared, exactly as they
+would for an ordinary read. `make_batch_partition_spec`'s `source_count_query` (below) carries the
+identical predicate, so the row count it uses to size partition work agrees with what `data_sql`
+actually returns.
+
 The join itself is unchanged — relaxing the inner join to `processes` is explicitly out of scope
 (see [Out of scope](#out-of-scope--follow-ups)). What changes is that the join no longer *sources*
-any row's label.
+any row's label, and a mismatched row no longer survives the join at all.
 
 `blocks_view_schema()` appends `stream_audience` and `process_audience` after the existing
 `audience` field, both `Dictionary(Int32, Utf8)` and non-nullable (the `COALESCE` guarantees it),
@@ -339,9 +363,28 @@ stamp:
 - Both **merge** queries are unchanged: they read a column already named `audience` from
   `{source}`, and `max()` over rows that now agree by construction is a no-op that costs nothing to
   leave in place.
-- `log_entries` and `measures` keep using `audience` unchanged — their rows come from a block's
-  payload, so the block's own stamp is the correct anchor, and there is no cross-block aggregation
-  to relabel a row.
+- `log_entries` and `measures` have a different regression, not a relabeling one: `audience` itself
+  is already the right anchor for the row (their rows come from a single block's payload, so there
+  is no cross-block aggregation to average away). But every other column on the row — `exe`,
+  `username`, `computer`, `process_properties` (`log_table_schema()` in
+  `rust/analytics/src/log_entries_table.rs`; `measures` adds `realname`/`distro`/`cpu_brand` in
+  `rust/analytics/src/metrics_table.rs`) — is filled from the `processes` row the block's
+  `process_id` joins to (`partition_source_data.rs`'s `ProcessMetadata` construction), not from the
+  block's own stamp. A block written under `alpha` naming victim `beta`'s `process_id` would
+  otherwise materialize with `audience = 'alpha'` (correctly labelled) but
+  `exe`/`username`/`computer`/`process_properties` copied from `beta`'s real process row —
+  `alpha`'s readers, already scoped into a view they're allowed to read, would get `beta`'s real
+  process metadata handed to them, which is worse than a mislabeled row since it costs the attacker
+  nothing it doesn't already have (a guessed `process_id`) and gives up real victim data in return.
+  Fix: the mismatch predicate below on `blocks_view`'s own `data_sql` keeps the row out of the
+  `blocks` view entirely, and `partition_source_data.rs` (`fetch_partition_source_data`) sources
+  `log_entries`/`measures`' blocks from `blocks`' own materialized partitions
+  (`existing_partitions.filter("blocks", "global", ...)`), not from Postgres directly — so a row the
+  predicate excludes was never a candidate block for `log_entries`/`measures` in the first place,
+  and no reader ever sees the joined columns at all. `log_table_schema()`, the measures schema, and
+  `log_view.rs`'s and `metrics_view.rs`'s `SCHEMA_VERSION` are untouched — the two extra columns
+  exist on `blocks_view` only, to make the predicate expressible there; no downstream view needs to
+  carry them or repeat the check.
 - `log_stats_view.rs` has the same regression as `processes_view`/`streams_view`: its transform
   and merge queries both aggregate `log_entries` rows with `arrow_cast(max(audience), ...)`
   `GROUP BY process_id, level, target, time_bin` — a group that, after per-block stamping, can
@@ -351,51 +394,96 @@ stamp:
   queries (the selected column and schema are unchanged, so the file-schema hash does not need to
   bump).
 
-`OwnershipRewrite` needs one change, confined to `blocks`. `blocks_view`'s join has no
-`streams.process_id = processes.process_id` predicate, so an attacker in audience `alpha` can
-insert a block naming its own `stream_id` (audience `alpha`, so `stream_audience='alpha'`) but a
-victim's `process_id` (audience `beta`, so `process_audience='beta'`). The row materializes with
-`audience='alpha'` — visible to the attacker — while carrying `process_audience='beta'`. If
-`audience_column_predicate` keeps filtering `blocks` on `audience` alone, as it does for the other
-five column-carrying views, `SELECT process_id, process_audience FROM blocks` becomes a
-cross-audience existence-and-label oracle: the attacker learns that `beta` owns a given
-`process_id` by probing it into blocks it can read. Fix: for the `blocks` table specifically,
-`audience_column_predicate` requires `audience`, `stream_audience`, **and** `process_audience` all
-be in the caller's read scope, not just `audience` — a legitimate block's three columns already
-agree, so this is a no-op for every row that isn't itself an attempted cross-audience probe.
-`processes`, `streams`, `log_entries`, `measures`, and `log_stats` carry only the single `audience`
-column and keep the existing bare-column filter unchanged.
+`blocks_view`'s join has no `streams.process_id = processes.process_id` predicate, so an attacker
+in audience `alpha` can insert a block naming its own `stream_id` (audience `alpha`, so
+`stream_audience='alpha'`) but a victim's `process_id` (audience `beta`, so
+`process_audience='beta'`). Left unhandled, the row would materialize with `audience='alpha'` —
+visible to the attacker — while carrying `process_audience='beta'`, and `SELECT process_id,
+process_audience FROM blocks` (and the same projection through `log_entries`/`measures`) would
+become a cross-audience existence-and-label oracle: the attacker learns that `beta` owns a given
+`process_id` by probing it into rows it can read.
+
+The author rejected filtering this at read time — no column, however discovered, should be
+suppressed once a row is materialized. Instead, a block whose own `audience` disagrees with the
+`process_audience` or `stream_audience` it joins to is **excluded from materialization** by the
+predicate on `blocks_view.rs`'s own `data_sql` (design above), mirrored on
+`make_batch_partition_spec`'s `source_count_query` so the two queries agree on how many source rows
+there are. The comparison cannot happen earlier: a stream or block routinely arrives before its
+process row exists (see [Why not a write-side gate](#why-not-a-write-side-gate)), so there is no
+point before materialization where all three columns are reliably present together — but by the
+time `blocks_view` materializes, they are, which is why the predicate belongs there and nowhere
+else.
+
+This is a single choke point, not one check per consumer. `blocks_view`'s materialized partitions
+are what every other consumer of block data reads from — not Postgres again: `log_entries` and
+`measures` (`partition_source_data.rs::fetch_partition_source_data`,
+`existing_partitions.filter("blocks", "global", ...)`), and the JIT-partitioned `net_spans`,
+`otel_spans`, `images`, `async_events`, and `thread_spans`, plus the per-process JIT `view_instance`
+path for every view (`jit_partitions.rs::fetch_process_blocks`/`generate_process_jit_partitions`/
+`generate_stream_jit_partitions`, all of which query `FROM source` against `blocks`' own partition
+files) — all read blocks this same way. A row the predicate excludes was never written into a
+`blocks` partition, so it is absent from every one of them for free; none of them needs, or gets,
+its own copy of this check. On disagreement, a `blocks` partition simply materializes with fewer
+rows than its unfiltered source count; the partition still materializes normally, it simply lacks
+that one row.
+
+A SQL predicate cannot emit a per-row `error!` the way a Rust check could. The signal moves to
+partition granularity instead: `BlocksView::make_batch_partition_spec` runs a second, unfiltered
+`COUNT(*)` alongside `source_count_query`'s filtered one and compares them; when they differ, it
+logs one `error!` naming the view instance and insert-time range and the number of blocks excluded,
+and increments the `block_audience_mismatch` metric (§5) by that count. This is coarser than a
+per-block log — it does not name the specific block, process, or the three audiences involved — but
+that per-row detail is exactly what §5's hourly `block_audience_mismatch` query gets by reading
+Postgres directly, which sees precisely the rows this predicate excludes; the partition-level
+`error!`/metric is the signal that a given partition's materialization was affected at all, and the
+hourly query is where the detail lives.
+
+`OwnershipRewrite` needs no change: every audience-carrying view keeps its existing bare
+single-`audience`-column filter, on `blocks`, `log_entries`, and `measures` exactly as on
+`processes`, `streams`, and `log_stats`. It is the `blocks_view.rs` predicate above — not
+`OwnershipRewrite`, and not any downstream consumer's own logic — that closes the `blocks`
+existence-and-label oracle: the row that would have carried `audience='alpha'` with
+`process_audience='beta'` is dropped before materialization, instead of ever becoming readable to
+`alpha` (or, mislabeled, to `beta`).
 
 #### What remains process-anchored
 
 This plan closes the row-derivation gap only where a row carries its own `audience` column.
-Two classes of reader still resolve audience through the *owning* process/stream row, and this
-plan leaves both as they are today:
+Two classes of reader still resolve their audience *label* through the *owning* process/stream row
+rather than a genuine per-row column, and this plan leaves both as they are today — but the
+cross-audience *injection* scenario that motivates this whole design (an attacker's block naming a
+victim's `process_id`/`stream_id`) is closed for both, as a side effect of where §4 puts the
+mismatch predicate: `blocks_view`'s own materialized partitions are what both classes below read
+their blocks from (`jit_partitions.rs::fetch_process_blocks` and its
+`generate_process_jit_partitions`/`generate_stream_jit_partitions` callers query `FROM source`
+against those same partitions, exactly as `log_entries`/`measures` do), so a block the predicate
+excludes was never written into a `blocks` partition for either of them to find either. What is
+left open is narrower than the original gap:
 
 - **The five views `OwnershipRewrite` resolves via `per_process_audience()`.** `net_spans`,
   `otel_spans`, and `images` are filtered through the `IN`-subquery built from
   `MAX(audience) GROUP BY process_id` over `__processes__partitions`; `async_events` and
   `thread_spans` are filtered through the equivalent `EXISTS` arms, the latter via `streams`. None
-  of these five carries its own `audience` column, so a block an attacker writes onto a victim's
-  `process_id`/`stream_id` still surfaces through them to the victim's readers, exactly as before
-  this change. Giving them their own columns is a materialization change (they are not
-  block-derived `SqlBatchView`s the way `log_entries`/`measures`/`log_stats` are) and is out of
-  scope here.
+  of these five carries its own `audience` column, so their audience label is still an aggregate
+  over a process's/stream's blocks rather than a per-row stamp — architecturally unchanged by this
+  plan. Giving them their own columns is a materialization change (they are not block-derived
+  `SqlBatchView`s the way `log_entries`/`measures`/`log_stats` are) and is out of scope here.
 - **The per-process JIT `view_instance` path.** `view_instance('log_entries'|'measures', pid)`
   (`log_view.rs`, `metrics_view.rs`, and similarly `images_view.rs`,
   `otel/spans_view.rs`) resolves one `ProcessMetadata` via `find_process` and stamps every block
   it fetches with that single `process.audience`
   (`jit_partitions.rs::fetch_process_blocks` sets `process: process.clone()` on each
   `PartitionSourceBlock`; `log_entries_table.rs`/`metrics_table.rs` emit `row.process.audience`).
-  Only the global, blocks-view-backed instance is per-block. So a block an attacker writes onto a
-  victim's `process_id` is labelled with the *victim's* audience — and is visible to the victim —
-  through `view_instance`, while the same block correctly carries the attacker's own audience in
-  the global view. Carrying the block's own stamp into the JIT path (splitting a per-block
-  audience out of `ProcessMetadata`) is a real fix but a separate change; it is not attempted
-  here.
+  Only the global, blocks-view-backed instance is per-block. For a block that does survive into a
+  `blocks` partition, this is now a difference in *mechanism* rather than *value* — the mismatch
+  predicate guarantees every surviving block's own stamp already agrees with `process.audience`, so
+  stamping from `ProcessMetadata` produces the same label the block's own column would. Carrying the
+  block's own stamp into the JIT path (splitting a per-block audience out of `ProcessMetadata`) is
+  still worth doing for its own sake — it removes the aggregate dependency rather than relying on it
+  staying safe — but it is not attempted here.
 
-Both are pre-existing gaps, not new ones — this plan does not widen either — and both are recorded
-in [Out of scope](#out-of-scope--follow-ups).
+Both are pre-existing gaps, not new ones — this plan does not widen either, and narrows what they
+actually expose — and both are recorded in [Out of scope](#out-of-scope--follow-ups).
 
 **`metadata.rs::find_process`** — `coalesced_audience_subselect("properties", 2)` becomes
 `coalesced_audience_column("processes", 2)`. Nothing else in `ProcessMetadata` changes.
@@ -430,7 +518,7 @@ answer under the precedence rule and it makes `get_payload`/`parse_block` work o
 orphaned-but-present blocks. `merge_owner_rows`, `is_readable`, the `Ambiguous` handling, the
 fail-closed treatment of `Unknown`, and the no-existence-oracle error shape are all unchanged.
 
-### 5. Block/stream `process_id` mismatch (measure, don't reject yet)
+### 5. Block/stream `process_id` and `audience` mismatch counters
 
 Issue step 4 asks for a check that a block's `process_id` matches its stream's. With per-row
 stamping this is **no longer security-critical** — the block's own stamp governs its label
@@ -458,8 +546,43 @@ bounded to the last hour, reported as an `imetric!("block_stream_process_id_mism
 and a `warn!` when non-zero. The healthy baseline is a flat zero; every non-zero reading is a bug
 or an attack.
 
-The hard reject is deferred to a follow-up, to be opened once there is a measurement to justify
-paying for the write-path lookup.
+A second counter is needed alongside it, for a divergence that is not always a bug: `blocks.audience`
+disagreeing with its stream's or process's own `audience`. `insert_stream`/`register_otel_stream`
+have no audience-conflict guard equivalent to `check_process_audience_conflict` and use
+`ON CONFLICT (stream_id) DO NOTHING` (`web_ingestion_service.rs:437-440,490-493`), so an existing
+stream keeps whatever audience it was first stamped with even if the ingestion credential's bound
+audience is later re-pointed — not hypothetical, since streams are opened lazily over a process's
+lifetime. Once the materialization-time exclusion (§4) is in place, every subsequent block on that
+stream is silently dropped from `blocks` — and so from `log_entries`, `measures`, and every other
+view built from it — for every audience, with only the per-partition `error!`/`imetric!` in
+`blocks_view.rs` and this hourly counter as signal that it happened. Add, in the same task:
+
+```sql
+SELECT count(*) FROM blocks b
+JOIN streams s ON s.stream_id = b.stream_id
+JOIN processes p ON p.process_id = b.process_id
+WHERE (b.audience IS DISTINCT FROM s.audience OR b.audience IS DISTINCT FROM p.audience)
+AND b.insert_time >= $1
+```
+
+reported as `imetric!("block_audience_mismatch", "count", n)` and a `warn!` when non-zero. Unlike
+the `process_id` counter, a non-zero reading here is not necessarily something to fix in code — it
+may be the expected result of a re-pointed credential.
+
+Both counters are a pre-flight, but for different follow-ups. The `process_id` counter sizes how
+often that mismatch happens at all, ahead of the deferred hard-reject follow-up below. The
+`audience` counter sizes something already live once §4 ships: how much otherwise-legitimate
+telemetry the materialization-time skip silently drops. The re-pointed-credential scenario above is
+exactly the case it exists to catch. A deployment should watch `block_audience_mismatch` read a
+flat zero for a representative period before trusting that the skip is only ever discarding
+attacker-injected blocks and not its own legitimate telemetry; a nonzero, non-attack reading is a
+sign to fix the underlying cause (e.g. stop re-pointing a credential's audience mid-stream) rather
+than to treat the drop as expected.
+
+The `process_id` hard reject stays deferred to a follow-up, to be opened once there is a
+measurement to justify paying for the write-path lookup. The `audience` mismatch handling is not
+deferred in the same way — the skip-and-log in §4 ships as part of this plan — but relies on this
+counter, in a given deployment, as the evidence that its drops are safe to leave silent.
 
 ### Data flow, after
 
@@ -518,15 +641,21 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 8. `rust/analytics/src/audience.rs`: replace `audience_subselect`/`coalesced_audience_subselect`
    with `coalesced_audience_column`, drop the `AUDIENCE_PROPERTY` re-export, and write the
    precedence rule (§1) into the module doc.
-9. `rust/analytics/src/lakehouse/blocks_view.rs`: new `data_sql`, two appended schema fields,
-   `blocks_file_schema_hash()` → `vec![6]`.
+9. `rust/analytics/src/lakehouse/blocks_view.rs`: new `data_sql` with its two appended schema
+   fields *and* the audience-mismatch predicate (§4) added to both `data_sql` and
+   `make_batch_partition_spec`'s `source_count_query`; `make_batch_partition_spec` also runs a
+   second, unfiltered `COUNT(*)` and compares it against `source_count_query`'s filtered result,
+   logging one `error!` and incrementing `imetric!("block_audience_mismatch", "count", n)` (§5)
+   when they differ; `blocks_file_schema_hash()` → `vec![6]`. This one predicate is the sole
+   exclusion point — `partition_source_data.rs` needs no mismatch-handling code of its own, since
+   it (and every JIT-partitioned view) reads blocks from `blocks_view`'s own materialized
+   partitions and so never sees a row this predicate excluded (§4).
 10. `rust/analytics/src/lakehouse/processes_view.rs` / `streams_view.rs`: transform queries switch
     to `max(process_audience)` / `max(stream_audience)`. `log_stats_view.rs`: add `audience` to the
     `GROUP BY` in both the transform and merge queries (§4, "The `max(audience)` regression").
-    `ownership_rewrite.rs`: `audience_column_predicate` requires `audience`, `stream_audience`,
-    and `process_audience` all be in the caller's read scope when filtering `blocks` specifically
-    (same section) — otherwise the two appended columns turn `blocks` into a cross-audience
-    existence-and-label oracle.
+    `ownership_rewrite.rs` needs no code change — every audience-carrying view, `blocks` included,
+    keeps its existing bare single-`audience`-column filter (§4); only its module doc is touched
+    (see [Documentation](#documentation)).
 11. `rust/analytics/src/metadata.rs`: `find_process` uses `coalesced_audience_column`.
 12. `rust/analytics/src/lakehouse/audience_guard.rs`: rewrite `owner_query_sql`'s three arms, drop
     the `AUDIENCE_PROPERTY` bind, renumber the default to `$2`, and update the module doc's
@@ -554,10 +683,13 @@ audience_guard (Prong B)  block_id  -> blocks.audience
 - `rust/otel-ingestion/src/handler.rs`
 - `rust/analytics/src/replication.rs`, `rust/analytics/src/audience.rs`,
   `rust/analytics/src/metadata.rs`
-- `rust/analytics/src/lakehouse/blocks_view.rs`, `processes_view.rs`, `streams_view.rs`,
-  `log_stats_view.rs`, `audience_guard.rs`, `ownership_rewrite.rs` (`audience_column_predicate`
-  gains a `blocks`-specific three-column check, §4's "`max(audience)` regression"; module doc also
-  updated — the stale "what remains open" paragraph, narrowed per §4)
+- `rust/analytics/src/lakehouse/blocks_view.rs` (the two anchor columns *and* the audience-mismatch
+  predicate on `data_sql`/`source_count_query`, plus the per-partition mismatch `error!`/`imetric!`
+  in `make_batch_partition_spec`, §4 — the single exclusion point every consumer of `blocks`
+  inherits; `partition_source_data.rs` needs no change of its own), `processes_view.rs`,
+  `streams_view.rs`, `log_stats_view.rs`, `audience_guard.rs`, `ownership_rewrite.rs` (module doc
+  only — the stale "what remains open" paragraph, narrowed per §4; `audience_column_predicate`
+  itself is unchanged)
 - Tests: `rust/ingestion/tests/audience_stamping_db_test.rs`,
   `rust/ingestion/tests/write_audience_tests.rs`, `rust/analytics/tests/common/db_fixtures.rs`,
   `rust/analytics/tests/audience_guard_tests.rs`, `rust/analytics/tests/prong_b_guard_db_test.rs`,
@@ -596,6 +728,29 @@ view, which means giving them their own partition specs and abandoning the batch
 free today: much larger, for the same result. Two dictionary-encoded columns with one distinct
 value per partition are close to free on disk.
 
+**Skipping a mismatched block vs. failing its partition.** The alternative to a per-block skip is
+to fail materialization of the whole partition the block falls in when a mismatch is found. That
+would make the *integrity* signal loud — a partition simply won't build until the bad row is dealt
+with — but it converts the integrity gap into an availability one: an attacker who only guesses a
+victim's `process_id` (no read access needed) could wedge materialization of every partition
+covering that block's time range, denying every audience the data in it, not just the victim's.
+Skipping avoids that: the row that fails the check is dropped from the `blocks` partition, the rest
+of the partition materializes normally, and no attacker input can block the pipeline. Because it is
+`blocks_view`'s own predicate that drops the row — and every other view materializes its blocks by
+reading `blocks`' own partitions rather than Postgres again (§4) — this one skip is what every
+consumer inherits; there is no second skip-and-log elsewhere to keep in sync with it. The cost is
+that mismatched telemetry — including a legitimate stream's, if its `audience` has gone stale
+against a re-pointed credential (§5) — is now silently dropped from every view rather than causing
+a visible build failure, and the drop can only be logged at partition granularity: a SQL predicate
+has no per-row `error!` the way a Rust check would, so `make_batch_partition_spec` logs one `error!`
+and one `imetric!("block_audience_mismatch", "count", n)` per affected partition (§4), naming the
+count excluded but not the individual blocks. That partition-level signal and §5's hourly counter —
+which queries Postgres directly and so does carry the per-block, per-process, per-audience detail —
+are therefore not optional instrumentation but the only record that data was discarded at all; the
+hourly counter is the pre-flight that sizes how much legitimate telemetry would be affected before
+relying on the skip in a given deployment. This is a deliberate choice of a quiet, bounded loss over
+a loud failure that an attacker can trigger on demand.
+
 **Measuring the `process_id` mismatch from maintenance vs. at write time.** A write-time check
 would reintroduce the cache-and-TTL machinery this design removes, in order to count something
 expected to be zero, on the hottest path in the system. An hourly bounded query over an indexed
@@ -629,9 +784,12 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   their inferred Arrow schema (`SqlBatchView::get_file_schema_hash`), which does not change for any
   of them — `log_view.rs`/`metrics_view.rs` return a constant `vec![SCHEMA_VERSION]`, and
   `processes_view.rs`/`streams_view.rs`/`log_stats_view.rs` are equally schema-stable — so **none**
-  of the five is auto-invalidated, the same as `processes`/`streams`. Their values only differ from
-  the old ones for a row that was actually attacked, so no regeneration is required; an operator
-  who wants strict consistency can `regenerate_partitions` over all six audience-carrying views
+  of the five is auto-invalidated, the same as `processes`/`streams`. Their content only differs
+  from the old materialization for a row that was actually attacked — `processes`/`streams` relabel
+  via `max(process_audience)`/`max(stream_audience)` instead of `max(audience)`, and
+  `log_entries`/`measures` simply omit the mismatched block's rows (§4) rather than carrying its
+  joined process metadata — so no regeneration is required; an operator who wants strict
+  consistency can `regenerate_partitions` over all six audience-carrying views
   (`blocks`, `processes`, `streams`, `log_entries`, `measures`, `log_stats`) for the retention
   window. `log_stats` is the one case where regeneration is more than a value fix: adding
   `audience` to its `GROUP BY` (§4) changes the grouping itself, so partitions materialized before
@@ -705,7 +863,13 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   `process_id`/`stream_id` mismatch count alongside retention cleanup, and the metric gets its own
   reference section matching `materialize_view_failure`'s (`:62-68`): name
   `block_stream_process_id_mismatch` (`count`), no tags, healthy baseline a flat zero — every
-  non-zero reading is a bug or an attack (§5).
+  non-zero reading is a bug or an attack (§5). Add a second reference entry for
+  `block_audience_mismatch` (`count`), also emitted per affected `blocks` partition from
+  `blocks_view.rs`'s `make_batch_partition_spec` (§4) in addition to the hourly count — note that
+  unlike the `process_id` metric, a non-zero reading is not necessarily a bug (it may reflect a
+  re-pointed credential, §5) but always means telemetry was silently dropped from `blocks` (and so
+  from `log_entries`/`measures` and every other view built from it), so it belongs in the same
+  alerting shape.
 - `rust/analytics/src/lakehouse/ownership_rewrite.rs`'s module doc: the "What remains open,
   tracked separately" paragraph is only partly obsolete — narrow it to the five
   `per_process_audience()`-resolved views and the JIT `view_instance` path (§4, "What remains
@@ -731,14 +895,26 @@ would mean a full table rewrite of `blocks` for no behavioural difference.
   carry over unchanged in intent.
 - **New**: stamp round-trip for streams and blocks — `insert_stream`/`insert_block_typed` under
   audience `alpha` land rows whose `audience` column reads back `alpha`.
-- **New, the actual regression this closes**: a block written under audience `alpha` carrying a
-  `process_id` owned by `beta` materializes into `blocks_view` with `audience = 'alpha'`, and
-  `beta`'s `processes_view`/`streams_view` rows keep `audience = 'beta'` — the `max(audience)`
-  regression guard.
-- **New, `ownership_rewrite_db_test.rs`**: an `alpha`-scoped query over `blocks` does not return
-  the row above — confirms `audience_column_predicate`'s three-column check on `blocks` keeps
-  `process_audience='beta'` from surfacing to `alpha`, i.e. `blocks` is not an existence-and-label
-  oracle for `beta`.
+- **New, `audience_mismatch_skip_db_test.rs`, the actual regression this closes**: a block written
+  under audience `alpha` carrying a `process_id` owned by `beta` is absent from the materialized
+  `blocks` partition covering its time range — the single exclusion point (§4) — while every other
+  block's rows in that same partition are present; the partition materializes successfully, it
+  simply omits the offending block. Assert the block is equally absent from `log_entries` and
+  `measures` for the same time range, as a consequence of `blocks_view`'s own exclusion rather than
+  any check of their own, and that `beta`'s `processes_view`/`streams_view` rows keep
+  `audience = 'beta'` — the excluded block never reaches the aggregate `max(process_audience)`
+  reads, so there is nothing for it to relabel. Assert `log_stats` too: the victim's `log_stats` row
+  (grouped by `process_id, level, target, time_bin`) keeps `audience = 'beta'` unchanged and gets no
+  extra `audience = 'alpha'` row from the excluded block — this is the only coverage for the
+  `GROUP BY audience` change in `log_stats_view.rs` (a schema-hash mismatch would not otherwise
+  catch it, since `SqlBatchView::get_file_schema_hash` hashes only the output schema, not the
+  grouping) and for the `max(process_audience)`/`max(stream_audience)` guard in
+  `processes_view.rs`/`streams_view.rs`, both of which this predicate makes structurally
+  unreachable by the injected-block attack they were written for — they stay in place as the
+  correct per-row-anchored expression regardless. Assert one `error!` is logged for the partition
+  naming the view instance, the insert-time range, and the number of blocks excluded, and that
+  `imetric!("block_audience_mismatch", "count", n)` is incremented by that count — both at partition
+  granularity, since a SQL predicate cannot emit a per-block log line.
 - **New**: Prong B resolves `IdKind::Block` for a block whose `processes` row has been deleted
   (orphan), returning the block's own stamp rather than `Unknown`.
 - `prong_b_guard_db_test.rs` / `ownership_rewrite_db_test.rs` / `jit_process_batch_db_test.rs` /
