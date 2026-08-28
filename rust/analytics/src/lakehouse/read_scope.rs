@@ -14,8 +14,10 @@
 //! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
 //! structurally cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function
 //! registration gate. `view_instance(...)` joined Prong B later (#1486) to close a
-//! cost/availability residual, not because Prong A can't reach it -- Prong A already filters
-//! `view_instance` scans row-by-row, same as the named-table form.
+//! cost/availability residual for the six view sets carrying a physical `audience` column, where
+//! Prong A already filters `view_instance` scans row-by-row, same as the named-table form; for
+//! the other five view sets, reachable only through a guarded `view_instance(...)`, Prong B's
+//! guard is the sole enforcement -- Prong A injects no predicate there at all.
 
 use std::sync::Arc;
 
