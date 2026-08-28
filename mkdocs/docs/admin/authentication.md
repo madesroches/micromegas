@@ -161,8 +161,13 @@ telemetry-ingestion-srv --disable-auth
     see the per-row stamping paragraph below) resolves to one of their own audiences.
     **Prong B** (`AudienceGuard`, AbAC Stage 3) covers five arg-addressed functions —
     `view_instance` joins `process_spans`, `perfetto_trace_chunks`, `parse_block`, and
-    `get_payload` to close a cost/availability residual (#1486), not because Prong A can't reach
-    it: Prong A already row-filters every `view_instance` scan the same as the named-table form.
+    `get_payload` to close a cost/availability residual (#1486) for the view sets carrying a
+    physical `audience` column, since Prong A already row-filters those `view_instance` scans the
+    same as the named-table form. For `net_spans`, `otel_spans`, `images`, `async_events`, and
+    `thread_spans` — which don't carry that column and are reachable only through
+    `view_instance(...)` — Prong B's check is not a redundant belt-and-braces layer: it is these
+    five view sets' *only* enforcement, since Prong A adds no per-row predicate to a scan it
+    already knows Prong B has authorized.
     A restricted caller's call to any of the five fails with a not-found-shaped error unless the
     id argument names a process or stream in one of their own audiences — for `view_instance`
     this replaces what used to be a silent, empty result with an error — and `list_partitions()`
@@ -190,9 +195,10 @@ telemetry-ingestion-srv --disable-auth
     [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)); only a row registered before
     its ingestion binary reached schema v8 keeps a NULL column, and every site that reads an
     audience out of Postgres resolves *that* to `MICROMEGAS_DEFAULT_AUDIENCE`. **Prong A** filters
-    those six views directly on the column; the `net_spans`/`otel_spans`/`images` view sets
-    (which don't carry the column) keep the semi-join through `processes`, and
-    `async_events`/`thread_spans` keep their literal `EXISTS` shapes. **Prong B**'s
+    those six views directly on the column; `net_spans`, `otel_spans`, `images`, `async_events`,
+    and `thread_spans` don't carry the column, and are reachable only through
+    `view_instance(...)` — the call-level audience check Prong B runs on the instance id is their
+    enforcement, and Prong A adds no per-row predicate to any of the five. **Prong B**'s
     `list_partitions()` `'global'`-row rule shows a row when its view set is on
     `MICROMEGAS_PUBLIC_VIEW_SETS` or the caller passes the lakehouse admin gate (the same boolean
     that already governs the eight admin-gated functions below) — not a query-time
@@ -351,10 +357,13 @@ racing a victim's registration.
     - **Five process/stream-anchored view sets** — `net_spans`, `otel_spans`, `images`,
       `async_events`, `thread_spans` — and **the per-process JIT `view_instance` path** still
       resolve their audience *label* through the owning process's/stream's row rather than a
-      genuine per-row column of their own. The cross-audience *injection* scenario (an attacker's
-      block naming a victim's `process_id`/`stream_id`) is closed for both, as a side effect of
-      where the materialization-time exclusion above lives — except against a victim whose
-      `processes`/`streams` row is itself a legacy, pre-v8 NULL-audience row (next bullet).
+      genuine per-row column of their own — via Prong B's instance check, the sole enforcement
+      for a guarded `view_instance(...)` scan of these five (see the Audience Filtering
+      Activation box above), not by a per-row predicate Prong A injects. The cross-audience
+      *injection* scenario (an attacker's block naming a victim's `process_id`/`stream_id`) is
+      closed for both, as a side effect of where the materialization-time exclusion above lives —
+      except against a victim whose `processes`/`streams` row is itself a legacy, pre-v8
+      NULL-audience row (next bullet).
     - **The NULL-anchor window.** A `processes`/`streams` row registered before its ingestion
       binary reached schema v8 keeps a NULL `audience` column for its entire remaining life (rows
       are immutable, and there is no backfill). The materialization-time exclusion's NULL-tolerant

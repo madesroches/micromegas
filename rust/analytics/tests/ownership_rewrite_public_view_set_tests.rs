@@ -433,11 +433,13 @@ async fn processes_own_scan_plans_with_a_direct_audience_filter_no_join() {
 }
 
 #[tokio::test]
-async fn async_events_view_instance_plans_with_an_injected_exists() {
-    // §5: `async_events` is process-scoped but has no `process_id` column to join on -- the
-    // predicate is a literal-valued `EXISTS`, keyed on `get_view_instance_id()` (parsed as the
-    // process_id UUID). A syntactically valid UUID literal is enough for a plan-shape-only test --
-    // no data is scanned.
+async fn async_events_view_instance_plans_with_no_injected_predicate() {
+    // `async_events` is reachable only through a guarded, non-`global` `view_instance(...)` call
+    // (never as a global table -- see `make_test_view_factory`'s doc comment), so
+    // `AudienceGuard::authorize_view_instance` already denies an unauthorized caller before any
+    // row is read and `OwnershipRewrite::predicate_for` skips its literal-valued `EXISTS`
+    // entirely (`MaterializedView::instance_is_audience_guarded`). A syntactically valid UUID
+    // literal is enough for a plan-shape-only test -- no data is scanned.
     let config = IsolationConfig::default();
     let process_id = "00000000-0000-0000-0000-000000000001";
     let plan = optimized_plan(
@@ -449,21 +451,18 @@ async fn async_events_view_instance_plans_with_an_injected_exists() {
     .expect("async_events' view_instance scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("LeftSemi Join")
-            && plan_text.contains(&format!(
-                "Filter: __processes__partitions.process_id = Utf8(\"{process_id}\")"
-            )),
-        "async_events' view_instance scan (§5) must plan with `DecorrelatePredicateSubquery` \
-         turning the injected literal-valued `EXISTS` into a `LeftSemi Join` against the process \
-         named by its view_instance_id, got:\n{plan_text}"
+        !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
+        "async_events' guarded view_instance scan must plan with no injected predicate at all -- \
+         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
-async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
-    // §6: `thread_spans` is stream-scoped with no `process_id`/`stream_id` column -- the predicate
-    // is a literal `EXISTS` built from a two-hop `streams` -> `per_process_audience` join, keyed on
-    // `get_view_instance_id()` (parsed as the stream_id UUID).
+async fn thread_spans_view_instance_plans_with_no_injected_predicate() {
+    // `thread_spans` is reachable only through a guarded, non-`global` `view_instance(...)` call
+    // (never as a global table), so the same skip as `async_events` above applies: Prong B's
+    // instance check already denies an unauthorized caller before any row is read, so
+    // `OwnershipRewrite::predicate_for` skips its two-hop `EXISTS` entirely.
     let config = IsolationConfig::default();
     let stream_id = "00000000-0000-0000-0000-000000000002";
     let plan = optimized_plan(
@@ -475,16 +474,46 @@ async fn thread_spans_view_instance_plans_with_an_injected_two_hop_exists() {
     .expect("thread_spans' view_instance scan must plan");
     let plan_text = format!("{plan}");
     assert!(
-        plan_text.contains("LeftSemi Join")
-            && plan_text.contains(
-                "Inner Join: __streams__partitions.process_id = __processes__partitions.process_id"
-            )
-            && plan_text.contains(&format!(
-                "Filter: __streams__partitions.stream_id = Utf8(\"{stream_id}\")"
-            )),
-        "thread_spans' view_instance scan (§6) must plan with `DecorrelatePredicateSubquery` \
-         turning the injected two-hop `EXISTS` into a `LeftSemi Join` whose right side inner-joins \
-         `streams` (resolved by its view_instance_id) to `per_process_audience`, got:\n{plan_text}"
+        !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
+        "thread_spans' guarded view_instance scan must plan with no injected predicate at all -- \
+         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn guarded_net_spans_view_instance_plans_with_no_injected_predicate() {
+    // Regression coverage against a **real** view set, not a synthetic mirror:
+    // `default_view_factory` already registers `net_spans` via `add_view_set`, so
+    // `view_instance('net_spans', '<uuid>')` is plannable with no new fixture. This, plus
+    // `non_public_process_id_only_view_plans_with_an_injected_semi_join`'s **global**
+    // `ProcessIdOnlyView` above, is what proves the skip is keyed on the query path (guarded
+    // instance vs. not), not on the view's schema: same `process_id`-only shape, opposite plan.
+    let config = IsolationConfig::default();
+    let lakehouse = make_offline_lakehouse_context().await;
+    let view_factory = Arc::new(
+        default_view_factory(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            lakehouse.default_audience(),
+        )
+        .await
+        .expect("default_view_factory"),
+    );
+    let process_id = "00000000-0000-0000-0000-000000000005";
+    let plan = optimized_plan_with_factory(
+        lakehouse,
+        view_factory,
+        scope(&["user:a"]),
+        config,
+        &format!("SELECT * FROM view_instance('net_spans', '{process_id}')"),
+    )
+    .await
+    .expect("net_spans' view_instance scan must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
+        "net_spans' guarded view_instance scan must plan with no injected predicate at all -- \
+         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
     );
 }
 
@@ -499,15 +528,19 @@ async fn real_view_factory_covers_every_registered_view_set() {
     // actual registrations via the public `get_global_views()`/`get_view_sets()` accessors --
     // rather than hardcoding a parallel list that could silently drift out of sync -- through both
     // the global and `view_instance(...)` access paths, where a given view set offers both -- and
-    // asserts each one plans successfully with an injected audience filter, not an error and not
-    // an unfiltered scan. (Every branch's injected `InSubquery`/`Exists` gets turned into a
-    // `LeftSemi Join` by `DecorrelatePredicateSubquery`, per the per-branch tests above, so a
-    // single shared assertion suffices here.) A view set added tomorrow with no branch in
+    // asserts each one plans successfully, not with an error. What it must plan *with* is a
+    // two-way split, keyed on whether the view carries a physical `audience` column, not on which
+    // access path was used: a view with the column plans a bare `Filter` on it (whether reached
+    // globally or through a guarded `view_instance(...)` -- `log_entries`/`measures` are
+    // registered both ways and must plan the same `Filter` shape either way); a view with no
+    // `audience` column, reached only through a guarded `view_instance(...)` in
+    // `default_view_factory`, plans with no injected predicate at all -- Prong B's instance check
+    // is already the sole enforcement for it. A view set added tomorrow with no branch in
     // `OwnershipRewrite::predicate_for` will now automatically show up here and fail via the §7
     // fallback, instead of staying green because a hand-maintained list never mentioned it.
     //
     // A syntactically valid UUID literal is enough for a plan-shape-only test -- no data is
-    // scanned (same rationale as the §5/§6 tests above).
+    // scanned (same rationale as the per-branch tests above).
     let process_id = "00000000-0000-0000-0000-000000000003";
     let stream_id = "00000000-0000-0000-0000-000000000004";
 
@@ -583,11 +616,16 @@ async fn real_view_factory_covers_every_registered_view_set() {
                  plan with a bare Filter on it, no join, got:\n{plan_text}"
             );
         } else {
+            // Every view set reaching this arm (`net_spans`, `otel_spans`, `images`,
+            // `async_events`, `thread_spans`) is registered only via `add_view_set`, so the only
+            // query above that reaches it is a guarded, non-`global` `view_instance(...)` scan --
+            // `MaterializedView::instance_is_audience_guarded()` is true, and
+            // `OwnershipRewrite::predicate_for` skips its predicate entirely.
             assert!(
-                plan_text.contains("LeftSemi Join"),
-                "real default_view_factory() query `{sql}` has no `audience` column and must \
-                 plan with an injected semi-join / EXISTS filter (LeftSemi Join after \
-                 DecorrelatePredicateSubquery), not an unfiltered scan, got:\n{plan_text}"
+                !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
+                "real default_view_factory() query `{sql}` has no `audience` column and is a \
+                 guarded view_instance(...) scan; it must plan with no injected predicate at \
+                 all, got:\n{plan_text}"
             );
         }
     }

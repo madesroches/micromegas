@@ -26,8 +26,9 @@
 //! column (§5 below): no semi-join, no `property_get`, no per-process aggregate.
 //! `async_events`,
 //! `thread_spans`, `net_spans`, `otel_spans`, and `images` don't carry the column yet (out of
-//! scope for #1482 -- see that plan's Future Work), so they keep the `process_id`/`EXISTS`
-//! machinery below, which still resolves through `__processes__partitions`.
+//! scope for #1482 -- see that plan's Future Work). They keep the `process_id`/`EXISTS` machinery
+//! below, which still resolves through `__processes__partitions`, but only for a scan that is
+//! *not* a guarded `view_instance(...)` -- see the skip rule in the Branch table below.
 //!
 //! ## One audience per row, not derived from the process (surviving branches only)
 //!
@@ -41,8 +42,9 @@
 //! `COALESCE` resolves that to the deployment default at read time. The `net_spans`/
 //! `otel_spans`/`images` semi-join (§4) and the `async_events`/`thread_spans` `EXISTS` shapes
 //! (§async_events/§thread_spans below) still resolve through `per_process_audience` --
-//! `Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)` -- since those five
-//! views have no `audience` column of their own to filter directly.
+//! `Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)` -- for a scan of those
+//! five that is *not* a guarded instance, since they have no `audience` column of their own to
+//! filter directly. A guarded instance skips the predicate entirely (see the Branch table below).
 //!
 //! ## Branch table
 //!
@@ -53,9 +55,10 @@
 //! | View set | Branch |
 //! |---|---|
 //! | `processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats` | §5 (new): direct `audience IN (...)` filter on the view's own column -- no join |
-//! | `net_spans`, `otel_spans`, `images` | §4: semi-join, `process_id IN (subquery)` against `per_process_audience` (outer `process_id` cast to `Utf8`: it is `Dictionary(Int32, Utf8)` in these, and nothing coerces an uncorrelated `IN` subquery's join keys once `DecorrelatePredicateSubquery` turns it into a `LeftSemi` join -- the analyzer's own `TypeCoercion` has already run by the time this rule executes) |
-//! | `async_events` | no `process_id` column either -- `§async_events`: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string, canonicalized -- see `canonical_view_instance_id`) |
-//! | `thread_spans` | no `process_id` **or** `stream_id` column -- `§thread_spans`: two-hop literal `EXISTS`, through `streams` (`get_view_instance_id()` is the stream_id string, canonicalized the same way) |
+//! | `net_spans`, `otel_spans`, `images`, `async_events`, `thread_spans`, scanned as a guarded, non-`'global'` `view_instance(...)` | `skip`: no predicate at all -- `MaterializedView::instance_is_audience_guarded()` reports `AudienceGuard::authorize_view_instance` already denies an unauthorized caller before any row is read, so the subquery predicates below would be redundant |
+//! | `net_spans`, `otel_spans`, `images`, not a guarded instance | §4: semi-join, `process_id IN (subquery)` against `per_process_audience` (outer `process_id` cast to `Utf8`: it is `Dictionary(Int32, Utf8)` in these, and nothing coerces an uncorrelated `IN` subquery's join keys once `DecorrelatePredicateSubquery` turns it into a `LeftSemi` join -- the analyzer's own `TypeCoercion` has already run by the time this rule executes) |
+//! | `async_events`, not a guarded instance | no `process_id` column either -- `§async_events`: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string, canonicalized -- see `canonical_view_instance_id`) |
+//! | `thread_spans`, not a guarded instance | no `process_id` **or** `stream_id` column -- `§thread_spans`: two-hop literal `EXISTS`, through `streams` (`get_view_instance_id()` is the stream_id string, canonicalized the same way) |
 //! | anything in `public_view_sets` | §7: no predicate at all -- checked before any of the above |
 //! | anything else | `analyze()` returns `Err` (`DataFusionError::Plan`) rather than silently leaving the scan unfiltered -- a future view set must add itself to this table, not fall through |
 //!
@@ -92,13 +95,16 @@
 //! re-pointed-credential gap for `streams`.
 //!
 //! **What remains open, tracked separately:**
-//! - **The five `per_process_audience()`-resolved views** (`net_spans`, `otel_spans`, `images`,
-//!   `async_events`, `thread_spans`) and **the per-process JIT `view_instance` path** still
-//!   resolve their audience *label* through the owning process's/stream's row rather than a
-//!   genuine per-row column of their own. The cross-audience *injection* scenario (an attacker's
-//!   block naming a victim's `process_id`/`stream_id`) is closed for both, as a side effect of
-//!   the mismatch predicate on `blocks_view`'s own materialization -- except against a victim
-//!   whose `processes`/`streams` row is a legacy, pre-v8 NULL-audience row (next bullet).
+//! - **The five instance-only view sets** (`net_spans`, `otel_spans`, `images`, `async_events`,
+//!   `thread_spans`) **and the per-process JIT `view_instance` path** still resolve their audience
+//!   *label* through the owning process's/stream's row rather than a genuine per-row column of
+//!   their own -- via Prong B's instance check (`AudienceGuard::authorize_view_instance`,
+//!   `IdKind::ProcessOrStream`) for the guarded `view_instance(...)` scan every production caller
+//!   takes, not by a predicate this rule injects (see the skip in the Branch table above). The
+//!   cross-audience *injection* scenario (an attacker's block naming a victim's
+//!   `process_id`/`stream_id`) is closed for both, as a side effect of the mismatch predicate on
+//!   `blocks_view`'s own materialization -- except against a victim whose `processes`/`streams`
+//!   row is a legacy, pre-v8 NULL-audience row (next bullet).
 //! - **The NULL-anchor window.** A `processes`/`streams` row registered before its ingestion
 //!   binary supported per-row stamping keeps `audience = NULL` for its entire remaining life
 //!   (rows are immutable, no backfill). The mismatch predicate's NULL-tolerant pass-through lets
@@ -358,6 +364,15 @@ impl OwnershipRewrite {
         {
             return Ok(None);
         }
+        // A guarded, non-`'global'` `view_instance(...)` scan is already fully authorized by
+        // `AudienceGuard::authorize_view_instance` before any row is read (see
+        // `MaterializedView::instance_is_audience_guarded`'s doc comment), so the §4/
+        // §async_events/§thread_spans subquery predicates below are redundant for it. This
+        // assumes a guarded instance's rows can never legitimately span more than one process --
+        // true for today's five view sets, but a future guarded view set whose instance can
+        // legitimately span more than one process would need to revisit this before its arm gets
+        // the same skip.
+        let skip = mat_view.instance_is_audience_guarded();
         // §5 (new, #1482): views carrying a physical `audience` column -- processes, streams,
         // blocks, log_entries, measures, log_stats (global and per-process instances alike).
         // Filtered directly, no semi-join, no property_get. Checked ahead of §4 so a view set
@@ -376,6 +391,9 @@ impl OwnershipRewrite {
         if view.get_file_schema().field_with_name("process_id").is_ok() {
             // §4: process_id-**column** views with no `audience` column of their own --
             // net_spans, otel_spans, images.
+            if skip {
+                return Ok(None);
+            }
             return Ok(Some(in_subquery(
                 cast(outer_process_id, DataType::Utf8),
                 in_subquery_plan.clone(),
@@ -385,6 +403,9 @@ impl OwnershipRewrite {
             // §async_events: process-scoped, no process_id column -- the view_instance_id *is*
             // the process_id string (`AsyncEventsView::new` parses it as a `Uuid`). Canonicalized
             // before building the literal -- see `canonical_view_instance_id`'s doc comment for why.
+            if skip {
+                return Ok(None);
+            }
             let process_id_literal = Self::canonical_view_instance_id(&view_set_name, &view)?;
             return Ok(Some(Self::exists_for_process(
                 per_process_audience,
@@ -396,6 +417,9 @@ impl OwnershipRewrite {
             // §thread_spans: stream-scoped, no process_id or stream_id column -- resolve through
             // `streams`. Same canonicalization as §async_events, keyed on `stream_id` instead of
             // `process_id`.
+            if skip {
+                return Ok(None);
+            }
             let stream_id_literal = Self::canonical_view_instance_id(&view_set_name, &view)?;
             return Ok(Some(self.exists_for_stream(
                 per_process_audience,

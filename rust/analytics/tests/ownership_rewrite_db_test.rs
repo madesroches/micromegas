@@ -9,14 +9,16 @@
 //! `log_entries`/`async_events`/`thread_spans` via `view_instance(...)`. For the three
 //! `view_instance(...)` cases, the cross-audience assertion is now satisfied by the #1486 Prong B
 //! guard (`AudienceGuard::authorize_view_instance`, called from `MaterializedView::scan` before
-//! `jit_update`) denying a foreign-audience instance outright, before Prong A's row filter (or
-//! its absence, for the two schema-less view sets `async_events`/`thread_spans`) ever runs --
-//! this file no longer exercises Prong A's own row-filtering behavior for those two view sets.
-//! That coverage (the "process_id column or bust" concern) now lives in the plan-shape tests of
-//! `ownership_rewrite_public_view_set_tests.rs`, which build logical plans but never `.collect()`
-//! them, so they aren't short-circuited by the #1486 guard. Also asserts the physical `audience`
-//! column itself (#1482) is present, non-`NULL`, and carries the expected value on
-//! `processes`/`streams`/`blocks`/`log_entries`.
+//! `jit_update`) denying a foreign-audience instance outright. For the two schema-less view sets
+//! `async_events`/`thread_spans`, that guard is the *only* enforcement: a guarded, non-`global`
+//! `view_instance(...)` scan of either now plans with no Prong A predicate injected at all
+//! (`OwnershipRewrite`'s skip, keyed on `MaterializedView::instance_is_audience_guarded()`), so
+//! this file no longer exercises any Prong A row-filtering behavior for those two view sets.
+//! That coverage (the "process_id column or bust" concern, for an *unguarded* scan) now lives in
+//! the plan-shape tests of `ownership_rewrite_public_view_set_tests.rs`, which build logical
+//! plans but never `.collect()` them, so they aren't short-circuited by the #1486 guard. Also
+//! asserts the physical `audience` column itself (#1482) is present, non-`NULL`, and carries the
+//! expected value on `processes`/`streams`/`blocks`/`log_entries`.
 //!
 //! Requires a live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (mirrors
 //! `net_spans_retire_overlap_db_test.rs`'s / `thread_spans_ordering_db_test.rs`'s convention);
@@ -409,10 +411,11 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     // instance through `view_instance(...)`. `MaterializedView::scan` runs the #1486 Prong B
     // guard (`AudienceGuard::authorize_view_instance`) before `jit_update`, so a scoped caller
     // naming a foreign-audience instance this way is denied there, before Prong A's row filter
-    // (or, for the two schema-less view sets below, its absence) ever runs. Each `expect_err`
-    // below is therefore coverage of the #1486 guard, not of Prong A's `EXISTS` predicate --
-    // Prong A's own row-filtering behavior for `async_events`/`thread_spans` (the "process_id
-    // column or bust" concern) is exercised separately, by the plan-shape tests in
+    // ever runs -- and for the two schema-less view sets below, Prong A injects no predicate at
+    // all for this guarded scan (`OwnershipRewrite`'s skip). Each `expect_err` below is therefore
+    // coverage of the #1486 guard, not of Prong A's `EXISTS` predicate -- Prong A's own
+    // row-filtering behavior for `async_events`/`thread_spans` (the "process_id column or bust"
+    // concern, for an *unguarded* scan) is exercised separately, by the plan-shape tests in
     // `ownership_rewrite_public_view_set_tests.rs`.
 
     // --- `log_entries`, a process_id-**column** view, via `view_instance` ----------------
