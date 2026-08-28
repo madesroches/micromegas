@@ -3,13 +3,20 @@
 //! [`super::ownership_rewrite::OwnershipRewrite`] (Prong A) structurally cannot reach (they bake
 //! their target id into a provider at plan time, return schemas with no `process_id` column to
 //! filter on, and some build their own inner session under `ReadScope::All`), plus
-//! `view_instance(...)`, which Prong A *can* and does reach -- it row-filters every
-//! `view_instance` scan the same as the named-table form -- but which still needs a scan-time
-//! guard of its own to stop a caller from triggering JIT materialization (real compute and
-//! object-storage writes) for an instance outside their audiences before Prong A's filter ever
-//! gets to run. See `tasks/1371_udtf_udf_guards_plan.md` and
-//! `tasks/1486_view_instance_guard_plan.md` for the full design rationale; this comment records
-//! only what a future reader of this file needs close at hand.
+//! `view_instance(...)`. For the six view sets carrying a physical `audience` column, Prong A
+//! *can* and does reach a `view_instance` scan too -- it row-filters it the same as the
+//! named-table form -- so this guard's job there is only to stop a caller from triggering JIT
+//! materialization (real compute and object-storage writes) for an instance outside their
+//! audiences before Prong A's filter ever gets to run, a cost/availability concern rather than a
+//! confidentiality one. For the other five view sets (`net_spans`, `otel_spans`, `images`,
+//! `async_events`, `thread_spans` -- reachable only through a guarded `view_instance(...)`, never
+//! as a named table), Prong A injects no per-row predicate at all once this guard is in place --
+//! see [`super::materialized_view::MaterializedView::instance_is_audience_guarded`] and
+//! `OwnershipRewrite`'s module doc for the other side of that coupling -- so this guard is their
+//! *sole* confidentiality enforcement, not a redundant belt-and-braces check. See
+//! `tasks/1371_udtf_udf_guards_plan.md` and `tasks/1486_view_instance_guard_plan.md` for the full
+//! design rationale; this comment records only what a future reader of this file needs close at
+//! hand.
 //!
 //! ## One cache, one question
 //!

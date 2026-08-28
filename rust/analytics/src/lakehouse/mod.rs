@@ -9,9 +9,13 @@ pub mod async_parquet_writer;
 /// Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486): per-id audience
 /// resolution (`AudienceIndex`) and the fail-closed guard (`AudienceGuard`) for the
 /// span/metadata UDTFs and `get_payload` UDF `OwnershipRewrite` (Prong A) structurally cannot
-/// reach, plus a scan-time guard on `view_instance(...)`, which Prong A *can* and does reach --
-/// there `view_instance` joined Prong B to close a cost/availability residual (stopping JIT
-/// materialization for a foreign-audience instance), not because Prong A can't filter it.
+/// reach, plus a scan-time guard on `view_instance(...)`. For the six view sets carrying a
+/// physical `audience` column, Prong A *can* and does reach a `view_instance` scan too,
+/// row-filtering it the same as the named-table form -- there `view_instance` joined Prong B to
+/// close a cost/availability residual (stopping JIT materialization for a foreign-audience
+/// instance), not because Prong A can't filter it. For the other five view sets, reachable only
+/// through a guarded `view_instance(...)`, Prong A injects no predicate at all, so this guard is
+/// their sole enforcement.
 pub mod audience_guard;
 /// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
 /// The batches are based on event times.

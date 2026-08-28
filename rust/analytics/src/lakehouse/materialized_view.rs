@@ -56,6 +56,25 @@ impl MaterializedView {
     pub fn get_view(&self) -> Arc<dyn View> {
         self.view.clone()
     }
+
+    /// Whether `AudienceGuard::authorize_view_instance` will resolve this view's instance id
+    /// against the caller's scope, and deny, before `scan` yields a row. True only for a
+    /// caller-named, non-`'global'` `view_instance(...)`: those take the guard's Uuid arm (or its
+    /// fail-closed fallthrough). `'global'` is excluded because the guard passes it unconditionally
+    /// -- global instances are row-filtered instead.
+    ///
+    /// Deliberately does not mirror the guard's public-view-set arm: this accessor would still
+    /// return `true` for a public view set's instance, even though the guard passes it
+    /// unconditionally before ever reaching the Uuid arm. Harmless --
+    /// `OwnershipRewrite::predicate_for`'s own public-view-set check already returns `Ok(None)`
+    /// before this accessor is ever consulted, and both checks read
+    /// `IsolationConfig::public_view_sets`.
+    ///
+    /// Kept in step with `AudienceGuard::authorize_view_instance`'s arms; changing those means
+    /// revisiting this.
+    pub fn instance_is_audience_guarded(&self) -> bool {
+        self.instance_guard.is_some() && self.view.get_view_instance_id().as_str() != "global"
+    }
 }
 
 #[async_trait]
