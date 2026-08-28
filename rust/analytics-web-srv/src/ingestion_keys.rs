@@ -537,6 +537,29 @@ async fn insert_key(
     })
 }
 
+/// Counts the audiences a caller has already claimed, for `try_claim_and_mint`'s
+/// `max_claims_per_caller` check: `$1` binds the `user:<email>` selector, `$2` the caller email.
+///
+/// Counted from `audience_grants`, not `ingestion_api_keys`: counting distinct audiences in
+/// `ingestion_api_keys` over-counts, because that table can't tell a self-service claim apart
+/// from an ordinary mint into an audience the caller already held a `mint` grant on for some
+/// other reason (an admin grant, a `group:` share). A non-admin who legitimately holds
+/// pre-existing `mint` grants on many audiences and mints keys into each would be refused on
+/// their next genuinely fresh claim despite never having claimed anything. `audience_grants`
+/// with this exact predicate -- `axis = 'mint' AND selector = 'user:<email>' AND created_by =
+/// <email>` -- matches only the row shape a lazy claim itself writes, so it counts claims and
+/// nothing else.
+///
+/// This predicate alone would be resettable (delete the caller's own `mint`/`user:<email>` row
+/// via `delete_grant`'s "remove my access" own-row arm, then re-claim), so `delete_grant`
+/// (`audience_grants.rs`) refuses that specific deletion for a non-admin -- see its own comment.
+/// That closes the reset hole without reintroducing the over-count.
+///
+/// `pub` so the shape a live database would otherwise be needed to observe can be asserted from
+/// the test crate.
+pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience_grants \
+     WHERE axis = 'mint' AND selector = $1 AND created_by = $2";
+
 /// The lazy audience claim (AbAC Stage 6, #1374, Design §4a). Reached only from `mint_key`, only
 /// for a non-admin caller who explicitly named `audience`, has a known `caller.email`, and whose
 /// `MintPolicy::resolve_audience` call was just denied because `audience` carried no matching
@@ -714,30 +737,12 @@ async fn try_claim_and_mint(
         // Best-effort under concurrency: exact against another claim for *this same* audience
         // (serialized by the lock above), but not against concurrent claims by the same caller
         // for other, distinct fresh audience names, which take different locks.
-        //
-        // Counted from `audience_grants`, not `ingestion_api_keys`: counting distinct audiences
-        // in `ingestion_api_keys` over-counts, because that table can't tell a self-service claim
-        // apart from an ordinary mint into an audience the caller already held a `mint` grant on
-        // for some other reason (an admin grant, a `group:` share). A non-admin who legitimately
-        // holds pre-existing `mint` grants on many audiences and mints keys into each would be
-        // refused on their next genuinely fresh claim despite never having claimed anything.
-        // `audience_grants` with this exact predicate -- `axis = 'mint' AND selector =
-        // 'user:<email>' AND created_by = <email>` -- matches only the row shape a lazy claim
-        // itself writes below, so it counts claims and nothing else.
-        //
-        // This predicate alone would be resettable (delete the caller's own `mint`/`user:<email>`
-        // row via `delete_grant`'s "remove my access" own-row arm, then re-claim), so
-        // `delete_grant` (`audience_grants.rs`) refuses that specific deletion for a non-admin --
-        // see its own comment. That closes the reset hole without reintroducing the over-count.
         if !caller.is_admin {
-            let claim_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(DISTINCT audience) FROM audience_grants \
-                 WHERE axis = 'mint' AND selector = $1 AND created_by = $2",
-            )
-            .bind(&selector)
-            .bind(caller_email)
-            .fetch_one(&mut *tx)
-            .await?;
+            let claim_count: i64 = sqlx::query_scalar(CLAIM_COUNT_SQL)
+                .bind(&selector)
+                .bind(caller_email)
+                .fetch_one(&mut *tx)
+                .await?;
             if claim_count >= state.max_claims_per_caller {
                 tx.rollback().await?;
                 return Err(IngestionKeyError::Forbidden(format!(
