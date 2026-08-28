@@ -580,6 +580,11 @@ fn mint_statement_names_ingestion_table_only() {
 /// `#[ignore]`d live suite below, which never runs in `cargo test`.
 #[test]
 fn claim_count_statement_counts_grants_not_keys() {
+    let src = include_str!("../src/ingestion_keys.rs");
+    assert!(
+        src.contains("query_scalar(CLAIM_COUNT_SQL)"),
+        "expected the claim count to be read via the CLAIM_COUNT_SQL constant, not an inlined query"
+    );
     assert!(
         CLAIM_COUNT_SQL.contains("FROM audience_grants"),
         "the claim count must be read from audience_grants, got: {CLAIM_COUNT_SQL}"
