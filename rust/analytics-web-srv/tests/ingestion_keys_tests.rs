@@ -34,7 +34,7 @@
 use analytics_web_srv::audience_grants::{AudienceGrantsState, audience_grants_router};
 use analytics_web_srv::auth::{AuthToken, ValidatedUser};
 use analytics_web_srv::ingestion_keys::{
-    IngestionKeysState, ingestion_keys_router, resolve_audience,
+    CLAIM_COUNT_SQL, IngestionKeysState, ingestion_keys_router, resolve_audience,
 };
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
 use micromegas::auth::policy::PUBLIC_AUDIENCE;
@@ -570,6 +570,41 @@ fn mint_statement_names_ingestion_table_only() {
         !src.contains("INTO analytics_api_keys") && !src.contains("UPDATE analytics_api_keys"),
         "this module must never write to analytics_api_keys"
     );
+}
+
+/// The per-caller claim bound must count real claims in `audience_grants`, never distinct
+/// audiences in `ingestion_api_keys` -- the earlier shape conflated an ordinary mint into an
+/// audience an admin had granted the caller with a self-service claim, and so refused a fresh
+/// claim from a caller who had claimed nothing. The whole distinction lives in this one
+/// statement and only Postgres can execute it, so its shape is asserted here rather than in the
+/// `#[ignore]`d live suite below, which never runs in `cargo test`.
+#[test]
+fn claim_count_statement_counts_grants_not_keys() {
+    let src = include_str!("../src/ingestion_keys.rs");
+    assert!(
+        src.contains("query_scalar(CLAIM_COUNT_SQL)"),
+        "expected the claim count to be read via the CLAIM_COUNT_SQL constant, not an inlined query"
+    );
+    assert!(
+        CLAIM_COUNT_SQL.contains("FROM audience_grants"),
+        "the claim count must be read from audience_grants, got: {CLAIM_COUNT_SQL}"
+    );
+    assert!(
+        !CLAIM_COUNT_SQL.contains("ingestion_api_keys"),
+        "the claim count must never be read from ingestion_api_keys, got: {CLAIM_COUNT_SQL}"
+    );
+    // Dropping any one of these widens the count past the row shape a claim writes.
+    for clause in [
+        "COUNT(DISTINCT audience)",
+        "axis = 'mint'",
+        "selector = $1",
+        "created_by = $2",
+    ] {
+        assert!(
+            CLAIM_COUNT_SQL.contains(clause),
+            "the claim count must keep the claim-shaped predicate {clause}, got: {CLAIM_COUNT_SQL}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,9 +1224,9 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
 /// same `analytics_web_srv` lib crate, so pulling in the other module's router from this test
 /// binary is unremarkable. Before this round's fix the count was read from `ingestion_api_keys`
 /// instead, which over-counted a different way (see
-/// `live_claim_survives_pre_existing_mint_grants_on_other_audiences` below); this test checks the
-/// row-deletion half of the current fix, and that the claim count is consequently unaffected
-/// since the marker row survives.
+/// `claim_count_statement_counts_grants_not_keys`); this test checks the row-deletion half of the
+/// current fix, and that the claim count is consequently unaffected since the marker row
+/// survives.
 #[ignore]
 #[tokio::test]
 async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
@@ -1266,75 +1301,6 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
 
     cleanup_audience(&pool, &audience).await;
     cleanup_audience(&pool, &second_audience).await;
-}
-
-/// The actual bug this round reported: a non-admin who holds pre-existing `mint` grants on
-/// several audiences -- never claimed, just granted (e.g. by an admin) -- and has minted a key
-/// into each one (ordinary use of `max_keys_per_caller`'s separate bound, not a claim) must still
-/// be able to claim a genuinely new, unowned audience without tripping `max_claims_per_caller`.
-/// Before this round's fix, counting distinct audiences in `ingestion_api_keys` conflated those
-/// ordinary mints with real claims and refused this caller even though they had claimed nothing.
-#[ignore]
-#[tokio::test]
-async fn live_claim_survives_pre_existing_mint_grants_on_other_audiences() {
-    let pool = live_pool().await;
-    let caller = unique_non_admin_user();
-    let caller_email = caller.email.clone().expect("caller has an email");
-    let selector = format!("user:{caller_email}");
-
-    // Three pre-existing `mint` grants the caller never claimed -- granted by someone else -- each
-    // with a live key minted into it, exactly like a normal, non-claiming caller who was handed
-    // access by an admin.
-    let mut granted_audiences = Vec::new();
-    for i in 0..3 {
-        let audience = format!("self-service-pre-granted-{i}-{}", uuid::Uuid::new_v4());
-        insert_mint_grant(&pool, &audience, &selector).await;
-        let key_id = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
-             VALUES ($1, $2, $3, now(), $4, $5)",
-        )
-        .bind(key_id)
-        .bind(vec![2u8; 32])
-        .bind(format!("granted-key-{key_id}"))
-        .bind(&caller_email)
-        .bind(&audience)
-        .execute(&pool)
-        .await
-        .expect("seed key minted into a pre-existing grant");
-        granted_audiences.push(audience);
-    }
-
-    // A bound of 1 -- well below the 3 pre-existing grants above -- would deny this claim under
-    // the over-counting bug; with the fix it counts zero real claims, so it succeeds.
-    let fresh_audience = format!("self-service-fresh-after-grants-{}", uuid::Uuid::new_v4());
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(pool.clone()),
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 1,
-            max_keys_per_caller: 100,
-        },
-        caller,
-    );
-    let response = app
-        .oneshot(post_request(
-            "/api/ingestion-api-keys",
-            &format!(r#"{{"name": "fresh-claim-key", "audience": "{fresh_audience}"}}"#),
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(
-        response.status(),
-        StatusCode::CREATED,
-        "pre-existing mint grants that were never claimed must not count against the claim bound"
-    );
-
-    for audience in &granted_audiences {
-        cleanup_audience(&pool, audience).await;
-    }
-    cleanup_audience(&pool, &fresh_audience).await;
 }
 
 /// `max_keys_per_caller` (§3, §4): a caller who already holds the configured limit of live keys
