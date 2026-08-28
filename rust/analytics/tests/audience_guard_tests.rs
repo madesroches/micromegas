@@ -549,9 +549,11 @@ async fn materialized_view_scan_denies_before_jit_update_for_foreign_audience_in
 /// `AudienceGuard::authorize_view_instance`'s own arms (the coupling its doc comment calls out):
 /// true only when a guard is present *and* the instance id is not `"global"` -- the exact
 /// condition under which `authorize_view_instance` takes its Uuid-resolution arm (or its
-/// fail-closed fallthrough) rather than one of its unconditional-pass short-circuits. A future
-/// edit to either side that breaks this correspondence should fail this test, not silently change
-/// which of `OwnershipRewrite`'s subquery predicates get skipped.
+/// fail-closed fallthrough) rather than one of its unconditional-pass short-circuits. Each case
+/// below asserts the accessor's value *and* actually drives `authorize_view_instance` to the
+/// behaviour that value implies, so a future edit to either side that breaks this correspondence
+/// fails this test, not silently changes which of `OwnershipRewrite`'s subquery predicates get
+/// skipped.
 #[tokio::test]
 async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
     let lakehouse = make_offline_lakehouse_context().await;
@@ -565,7 +567,8 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
 
     // guard present + "global" -> false: `authorize_view_instance` passes this unconditionally
     // (global instances are row-filtered, not call-guarded), so there is nothing for
-    // `OwnershipRewrite` to skip.
+    // `OwnershipRewrite` to skip. Prove the "unconditionally" part too: it must succeed with no
+    // I/O even though the guard's own index is unroutable.
     let global_view: Arc<dyn View> = Arc::new(JitUpdateMustNotRunView::new(
         jit_update_called.clone(),
         "global",
@@ -583,12 +586,22 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
         "a guard present over the 'global' instance id must report false: \
          authorize_view_instance passes it unconditionally"
     );
+    guard
+        .authorize_view_instance("test_guarded_view_set", "global")
+        .await
+        .expect(
+            "instance_is_audience_guarded()==false for 'global' must correspond to \
+             authorize_view_instance's unconditional, no-I/O pass -- it must succeed even over \
+             an unroutable index",
+        );
 
     // guard present + UUID -> true: `authorize_view_instance` takes its Uuid-resolution arm (or
-    // its fail-closed fallthrough) for this instance id.
+    // its fail-closed fallthrough) for this instance id. Prove the "resolves and can deny it"
+    // part too: against the unroutable index it must actually fail, not pass unconditionally.
+    let uuid_instance_id = Uuid::new_v4().to_string();
     let uuid_view: Arc<dyn View> = Arc::new(JitUpdateMustNotRunView::new(
         jit_update_called.clone(),
-        &Uuid::new_v4().to_string(),
+        &uuid_instance_id,
     ));
     let uuid_mat_view = MaterializedView::new(
         lakehouse.clone(),
@@ -596,17 +609,25 @@ async fn instance_is_audience_guarded_matches_authorize_view_instance_arms() {
         uuid_view,
         Arc::new(NullPartitionProvider {}),
         None,
-        Some(guard),
+        Some(guard.clone()),
     );
     assert!(
         uuid_mat_view.instance_is_audience_guarded(),
         "a guard present over a UUID instance id must report true: authorize_view_instance \
          resolves and can deny it"
     );
+    guard
+        .authorize_view_instance("test_guarded_view_set", &uuid_instance_id)
+        .await
+        .expect_err(
+            "instance_is_audience_guarded()==true for a UUID instance id must correspond to \
+             authorize_view_instance actually attempting resolution -- against an unroutable \
+             index that must fail, not silently pass",
+        );
 
     // guard absent -> false: this is a server-constructed MaterializedView (e.g. a global table
     // or OwnershipRewrite's own processes/streams source), never reachable through the guard's
-    // arms at all.
+    // arms at all -- there is no `AudienceGuard` here to call `authorize_view_instance` on.
     let no_guard_view: Arc<dyn View> = Arc::new(JitUpdateMustNotRunView::new(
         jit_update_called,
         &Uuid::new_v4().to_string(),
