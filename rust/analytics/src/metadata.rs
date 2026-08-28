@@ -317,10 +317,14 @@ pub async fn find_process_with_latest_timing(
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
-    // `ReadScope::All` here is intentional (#1371 §7), not a latent bypass -- see
-    // `find_stream_from_view`'s identical comment above for the full rationale: only ever called
-    // from a `jit_update`, before the caller's own scan, returning process *metadata* used to
-    // build the caller's own partition rather than rows returned to the caller directly.
+    // `ReadScope::All` here is intentional, not a latent bypass: this function is called from
+    // three JIT callers -- `net_spans_view.rs`, `async_events_view.rs`, and
+    // `thread_spans_view.rs` -- and all three view sets are registered only via `add_view_set`,
+    // reachable only through a guarded, non-`'global'` `view_instance(...)` scan, so
+    // `AudienceGuard::authorize_view_instance` is the sole enforcement for all three, same
+    // reasoning as `find_stream_from_view`'s comment above though not identical to it. Each call
+    // happens before the caller's own scan, and returns process *metadata* used to build the
+    // caller's own partition rather than rows returned to the caller directly.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,

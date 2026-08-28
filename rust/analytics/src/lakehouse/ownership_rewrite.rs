@@ -344,9 +344,11 @@ impl OwnershipRewrite {
             })
     }
 
-    /// Builds the predicate to wrap `mat_view`'s scan in. `Ok(None)` means "no predicate at all"
-    /// (§7's public-view-set skip); `Err` is §7's fallback for a view set matching none of the
-    /// branches -- see the module doc comment's branch table.
+    /// Builds the predicate to wrap `mat_view`'s scan in. `Ok(None)` means "no predicate at all",
+    /// for either of two reasons: §7's public-view-set skip, or a guarded `view_instance(...)`
+    /// scan that `MaterializedView::instance_is_audience_guarded()` reports is already fully
+    /// authorized by `AudienceGuard::authorize_view_instance` (Prong B); `Err` is §7's fallback
+    /// for a view set matching none of the branches -- see the module doc comment's branch table.
     fn predicate_for(
         &self,
         table_name: &TableReference,
@@ -460,7 +462,8 @@ impl OwnershipRewrite {
             in_subquery_plan,
         )?
         else {
-            // §7: public view set -- no predicate.
+            // No predicate: a public view set (§7), or a guarded `view_instance(...)` scan
+            // Prong B already authorized.
             return Ok(Transformed::no(plan));
         };
         let filter = Filter::try_new(predicate, Arc::new(plan.clone()))?;
