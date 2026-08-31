@@ -193,6 +193,8 @@ than waiting for the long-term grant store: **an audience is now an opaque label
 identity-derived audience anywhere** — not `{user:<email>}`, not a mintable/readable set derived
 from `caller.groups`/`MICROMEGAS_IMPLICIT_GROUPS`. Access is a separate, explicit grant map
 (`AudienceGrants`, `{prefix}_AUDIENCE_GRANTS`), with `public` the sole built-in read grant.
+*(Superseded by #1535: the built-in read grant is removed — `public` read now requires the seeded
+`('public', 'read', '*')` DB row.)*
 `MICROMEGAS_IMPLICIT_GROUPS` is removed. This is **two deliberate overrides** of what this document
 originally said, recorded here rather than silently edited away:
 
@@ -321,6 +323,8 @@ ReadScope::Principals(
 As of Stage 4, this is instead a pure grant-map lookup —
 `{public} ∪ {a : selector ∈ grants[a].read matches caller} ∪ caller.read_audiences` — with `public`
 the sole built-in and no identity-derived term (no `∪ {user:<email>}`, no implicit groups).
+*(Superseded by #1535: the `{public}` term is no longer built in — it is a grant like any other,
+the seeded `('public', 'read', '*')` row in production.)*
 
 The union is **branch-free — no `auth_type` check anywhere**: an OIDC caller carries no
 `read_audiences`, and an API key carries no email and no groups claim (`api_key.rs:116-127`,
@@ -341,6 +345,8 @@ needs a per-user audience *and* a grant, deferred to Stage 6 (#1374); open — e
 already includes `public` (the built-in), with `MICROMEGAS_UNSTAMPED_AUDIENCE=public` covering
 never-stamped legacy data — no grant map entry needed at all. See
 `mkdocs/docs/admin/authentication.md#audiences-and-grants` for the worked profiles.
+*(Superseded by #1535: "the built-in" is now the schema-v9 seeded `('public', 'read', '*')` row,
+not a hardcoded arm — still no operator action needed on a fresh deployment, but removable.)*
 
 ### 3. Ingestion stamps `audience`
 
@@ -697,6 +703,9 @@ enforcement on **before any stamping exists** — legacy `NULL`-audience data co
 grant for every authenticated principal, so no companion knob is needed the way
 `MICROMEGAS_IMPLICIT_GROUPS` used to be). No backfill, no retention wait, no
 mode flip, nothing ever disappears.
+*(Superseded by #1535: `public` is readable via the schema-v9 seeded `('public', 'read', '*')`
+row, not a built-in arm — a fresh deployment still needs no companion knob, since the row ships
+seeded.)*
 
 **Activation story:** while the stages ship, absence of all isolation config = enforcement
 inactive (exactly today's behavior, plus a startup warning once the machinery exists). At the GA
@@ -751,6 +760,8 @@ the top of this document.** There is no identity-derived term in the shipped for
 caller's readable set is `⋃ { read_grants(g) : g ∈ closure(caller) } ∪ {public}` (public built in,
 not a closure-derived grant) `∪ caller.read_audiences`, full stop. A personal audience needs an
 explicit grant like any other; there is no free `{user:<email>}` union member standing in for one.
+*(Superseded by #1535: `public` is no longer built in either — it is the seeded
+`('public', 'read', '*')` row, an ordinary grant a closure-derived lookup would also find.)*
 
 Users belong to groups, groups belong to groups, and a group is granted a set of audiences it may
 read. Nothing about the **stamp** changes — ingestion still writes one `micromegas.audience` per
@@ -1426,6 +1437,8 @@ status update near the top of this document):
   client-visible change) → stamp the ingestion keys `public` (Stage 4 — the v6 backfill's default,
   and `import`'s fallback for keys imported later) → set `MICROMEGAS_UNSTAMPED_AUDIENCE=public`
   (no `{prefix}_AUDIENCE_GRANTS` needed at all — `public` is a built-in read grant)
+  *(Superseded by #1535: "built-in" is now the schema-v9 seeded `('public', 'read', '*')` DB row —
+  still nothing to configure on a fresh deployment.)*
   → identical behavior forever; no flip, no backfill, nothing disappears.
 - *Privacy*: key store + management API (Stage 0) → audience on ingestion keys (Stage 4) → audience
   resolution on mint (Stage 6) → users mint personal ingestion keys, each stamping data under its own

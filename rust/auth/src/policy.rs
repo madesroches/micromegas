@@ -28,7 +28,9 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// The reserved audience every authenticated principal may read.
+/// The conventional shared audience. Not a built-in read grant -- every-principal readability
+/// comes from the seeded `('public', 'read', '*')` row (schema v9), an ordinary grant like any
+/// other, removable the same way.
 pub const PUBLIC_AUDIENCE: &str = "public";
 
 /// `true` if `aud` is a valid audience name: `[A-Za-z0-9_-]{1,255}`, checked in bytes -- the
@@ -239,17 +241,17 @@ impl<'de> Deserialize<'de> for RawAudienceGrants {
 /// A bare-array value is read-only shorthand: an omitted `"mint"` list is therefore always empty,
 /// never defaulted from `"read"` -- a read grant confers no mint authority, by construction.
 ///
-/// `public` is not stored here: it is the sole built-in read grant, applied by
-/// `AudienceReadPolicy::resolve` directly rather than needing a `{"public": ["*"]}` entry (though
-/// writing one changes nothing).
+/// `public` is stored the same way as any other audience -- via a `{"public": ["*"]}` entry here,
+/// or, in production, the seeded `('public', 'read', '*')` DB row (schema v9). It has no built-in
+/// grant on either axis; nothing here or in `AudienceReadPolicy::resolve` treats it specially.
 #[derive(Debug, Clone, Default)]
 pub struct AudienceGrants {
     entries: BTreeMap<String, GrantEntry>,
 }
 
 impl AudienceGrants {
-    /// No grants at all -- every audience but `public` is unreadable and unmintable by anyone
-    /// non-admin. Used as the disabled-auth / no-explicit-policy default.
+    /// No grants at all -- every audience, `public` included, is unreadable and unmintable by
+    /// anyone non-admin. Used as the disabled-auth / no-explicit-policy default.
     pub fn empty() -> Self {
         Self::default()
     }
@@ -441,8 +443,7 @@ pub trait MintPolicy: Send + Sync + Debug {
 /// snapshot -- with no identity derivation anywhere. Resolves the readable set:
 ///
 /// ```text
-/// { PUBLIC_AUDIENCE }
-///   ∪ { a : "*"            ∈ grants[a].read }
+/// { a : "*"            ∈ grants[a].read }
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
 ///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.groups }
 ///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
@@ -479,10 +480,10 @@ impl AudienceReadPolicy {
 
     /// Resolves the grant map from `{prefix}_AUDIENCE_GRANTS` (falling back to
     /// `MICROMEGAS_AUDIENCE_GRANTS`) via [`AudienceGrants::from_env`]. Unset ⇒ an empty grant map
-    /// ⇒ the readable set degenerates to `{public}` plus `read_audiences`, which
-    /// `OwnershipRewrite` (#1370, AbAC Stage 2) enforces. A malformed grant map is `Err`, not a
-    /// silently-emptied one, so a startup `?` turns a typo into a fail-fast instead of a
-    /// silently-inactive knob.
+    /// ⇒ the readable set degenerates to `read_audiences` alone (`public` included only if a DB
+    /// store attached via `with_store` resolves the seeded row), which `OwnershipRewrite`
+    /// (#1370, AbAC Stage 2) enforces. A malformed grant map is `Err`, not a silently-emptied
+    /// one, so a startup `?` turns a typo into a fail-fast instead of a silently-inactive knob.
     pub fn from_env(prefix: &str) -> Result<Self> {
         let grants = AudienceGrants::from_env(prefix)?;
         Ok(Self {
@@ -510,7 +511,6 @@ impl ReadPolicy for AudienceReadPolicy {
             None => None,
         };
         let mut set = BTreeSet::new();
-        set.insert(PUBLIC_AUDIENCE.to_string());
         // The env map and the store snapshot are checked as two separate sources -- a selector
         // present in either grants access -- rather than merged into one map, so neither side is
         // deep-cloned on every request (#1489, AbAC Stage 6a).
@@ -536,9 +536,9 @@ impl ReadPolicy for AudienceReadPolicy {
 
 /// The shipped `MintPolicy`. Non-admin callers may mint only an audience in their **mint** set --
 /// `grants[a].mint`, never `grants[a].read` (a read grant confers no mint authority, unchanged
-/// from `AudienceReadPolicy`'s split); being able to *read* `public`, which every authenticated
-/// principal is, does not imply being able to *mint into* it, unless some grant names `public` in
-/// a `"mint"` list.
+/// from `AudienceReadPolicy`'s split); being able to *read* `public` via its seeded read grant
+/// does not imply being able to *mint into* it -- that requires its own grant naming `public` in
+/// a `"mint"` list (in production, the seeded `('public', 'mint', '*')` row, schema v9).
 ///
 /// `is_admin` callers may mint **any** valid audience, `public` included -- `mint_key`
 /// (`analytics-web-srv/src/ingestion_keys.rs`) delegates authorization to this policy for every

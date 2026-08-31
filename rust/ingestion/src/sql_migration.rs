@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 8;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 9;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -260,6 +260,30 @@ pub async fn upgrade_data_lake_schema_v8(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 9.
+///
+/// Seeds `('public', 'read', '*')` and `('public', 'mint', '*')` into `audience_grants`. The
+/// read row replaces the built-in `PUBLIC_AUDIENCE` arm removed from `AudienceReadPolicy::resolve`;
+/// the mint row is what lets a non-admin mint a key bound to `public` without an operator having
+/// to discover and create the row by hand. `ON CONFLICT DO NOTHING` because an operator may
+/// already have created either row before upgrading -- this must not fail the migration.
+pub async fn upgrade_data_lake_schema_v9(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+         VALUES ('public', 'read', '*', now(), 'default'),
+                ('public', 'mint', '*', now(), 'default')
+         ON CONFLICT DO NOTHING;",
+    )
+    .await
+    .with_context(|| "seeding public read/mint grants")?;
+    tr.execute("UPDATE migration SET version=9;")
+        .await
+        .with_context(|| "updating data lake schema version to 9")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -391,6 +415,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v8");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v8(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 8 == current_version {
+        info!("upgrading data_lake_schema to v9");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v9(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

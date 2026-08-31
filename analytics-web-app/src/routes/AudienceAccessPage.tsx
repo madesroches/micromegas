@@ -459,6 +459,13 @@ function MintKeyDialog({
                   ))}
                   <option value="__new__">New audience…</option>
                 </select>
+                {!isAdmin && (
+                  <p className="mt-1 text-xs text-theme-text-muted">
+                    <code className="font-mono">public</code> is readable by every authenticated
+                    user. Pick <em>New audience…</em> to give this key&apos;s data its own
+                    audience, with read access managed separately.
+                  </p>
+                )}
                 {audienceChoice === '__new__' && (
                   <div className="mt-2">
                     <input
@@ -839,9 +846,11 @@ function AudienceAccessPageContent() {
               and the rows on this page are live.
             </p>
             <p>
-              <strong className="text-theme-text-secondary">Scope:</strong>{' '}
-              <code>public</code> is always readable by every authenticated principal — no row
-              needed.
+              <strong className="text-theme-text-secondary">Defaults:</strong>{' '}
+              <code>public</code> ships with Read and Mint grants for everyone (attributed to{' '}
+              <code>default</code> on the admin view). They are ordinary grants: removing the
+              Read row stops public data from being universally readable; removing the Mint row
+              limits minting into <code>public</code> to admins.
             </p>
             <p>
               <strong className="text-theme-text-secondary">Env-map grants:</strong> read access
@@ -928,8 +937,8 @@ function AudienceAccessPageContent() {
               {isAdmin ? (
                 <>
                   <p className="text-theme-text-muted mb-4 max-w-md">
-                    No audience grants yet. Every authenticated principal can already read{' '}
-                    <code>public</code>; add a grant to open up a named audience.
+                    No audience grants yet. With none at all, nothing is readable or mintable by
+                    a non-admin; add a grant to open up an audience.
                   </p>
                   <Button onClick={openAddDialog} className="gap-1.5">
                     <Plus className="w-4 h-4" />
@@ -939,8 +948,9 @@ function AudienceAccessPageContent() {
               ) : (
                 <>
                   <p className="text-theme-text-muted mb-4 max-w-md">
-                    You hold no audience grants. You can read <code>public</code>. Mint an
-                    ingestion key into a new audience to claim one, or ask an admin for a grant.
+                    You hold no audience grants of your own. You can read <code>public</code> via
+                    its Read grant. Mint an ingestion key into a new audience to claim one, or ask
+                    an admin for a grant.
                   </p>
                   {showMintButton && (
                     <Button onClick={() => openMintDialog()} className="gap-1.5">
@@ -991,8 +1001,9 @@ function AudienceAccessPageContent() {
                               </>
                             ) : (
                               <>
-                                No read grants — only <code>public</code> and any env-map grants
-                                apply here.
+                                No read grants — this audience is unreadable except through the{' '}
+                                <code>MICROMEGAS_AUDIENCE_GRANTS</code> env map or a per-key{' '}
+                                <code>read_audiences</code> list, neither shown here.
                               </>
                             )}
                           </div>

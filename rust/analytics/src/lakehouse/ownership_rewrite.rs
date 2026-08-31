@@ -212,8 +212,9 @@ impl OwnershipRewrite {
     /// `resolved_audience IN (audiences)`, or `lit(false)` when `audiences` is empty -- the
     /// fail-closed reading of "caller has no audiences" rather than emitting `IN ()` and leaving
     /// its behavior to DataFusion (`ReadScope::Audiences` can legitimately resolve to an empty
-    /// set -- a caller matching no grant resolves to `{public}`, but a bare-array read-only
-    /// audience with no matching selector contributes nothing). No `coalesce` here: the column is
+    /// set -- `public` has no built-in read grant, so a caller matching no grant at all,
+    /// including the seeded `('public', 'read', '*')` row, resolves to the empty set, and that
+    /// empty set is now reachable in production, not just in tests). No `coalesce` here: the column is
     /// non-null by construction (#1482), because the extraction sites already coalesced a
     /// never-stamped process's missing property to the deployment default before it was
     /// materialized.

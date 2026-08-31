@@ -722,10 +722,13 @@ async fn visible_grants(
     Ok(Json(rows))
 }
 
-/// Derives the caller-scoped namespace prefix `micromegas-setup-telemetry` mints fresh audiences
-/// under (AbAC Stage 6, #1374, Design §5). `pub`, not module-private, and pure/sync -- no DB, no
-/// `AuthContext` needed beyond the plain `Option<String>` email -- so the whole sanitization is
-/// unit-testable directly, the same reason `ingestion_keys::resolve_audience` is `pub`.
+/// Derives the caller-scoped namespace prefix used to *suggest* a fresh audience name -- the web
+/// app's Mint dialog composes it live before commit, and `micromegas-setup-telemetry`'s CLI uses
+/// it only to render a concrete `--claim <prefix><name>` suggestion in its zero-match error; the
+/// CLI's own `--claim` claims the name it is given verbatim, never prefixing it itself.
+/// `pub`, not module-private, and pure/sync -- no DB, no `AuthContext` needed beyond the plain
+/// `Option<String>` email -- so the whole sanitization is unit-testable directly, the same reason
+/// `ingestion_keys::resolve_audience` is `pub`.
 ///
 /// Takes the local part of `email` (everything before the first `@`), lowercases it, replaces
 /// every character outside `[a-z0-9_-]` with `-`, collapses any run of `-` to a single `-`, trims

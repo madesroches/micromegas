@@ -468,10 +468,16 @@ not a bug: this function is a SQL auditing surface, ungated for every authentica
 `list_query_denials()` above, and the plan behind it does not invent a second gating channel just
 for this one function.
 
-**Does not show effective read access.** The DB table is one of several sources
-`AudienceReadPolicy` unions to decide what a caller may actually read — `public`, the
-`MICROMEGAS_AUDIENCE_GRANTS` env map, and a per-key `read_audiences` list all also apply and none
-of them appear here.
+**Does not show every source of effective read access.** The DB table is one of several sources
+`AudienceReadPolicy` unions to decide what a caller may actually read; the
+`MICROMEGAS_AUDIENCE_GRANTS` env map and a per-key `read_audiences` list also apply, and neither
+appears here for any caller. `public` is different: it has no built-in read grant of its own — it
+reads only through an ordinary DB row, the schema-v9 seeded `('public', 'read', '*')` grant — so
+that row *is* in this table, and does appear here, but only for an admin caller (`GrantVisibility::All`).
+A non-admin caller gets `GrantVisibility::Held`, which strips `"*"` from the bound selectors
+before querying, so the seeded `('public', axis, '*')` rows stay invisible to them the same way
+any other `"*"` row does — they see only the row's *effect* (that they can read/mint `public`),
+never the row itself.
 
 ### Incident runbook
 

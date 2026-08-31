@@ -204,6 +204,17 @@ explanatory panel instead of the normal list, with no Add grant / Share / Mint /
   same self-service mint the CLI (`micromegas-setup-telemetry`) already exposes, now with a
   browser dialog.
 
+**`public` ships with seeded Read and Mint rows, visible on this page like any other grant.**
+Schema v9 seeds `('public', 'read', '*')` and `('public', 'mint', '*')` — an admin sees both under
+`public`'s Read and Mint columns, attributed to `default` rather than a colleague's identity;
+`public` is not a special case with an empty Mint column, it is two ordinary rows. A non-admin
+never sees the rows themselves (the page's held-pair rule strips `*`-selector rows from their
+view, the same as any other `*` grant), only their effect: `public` shows up in the audiences they
+can read and mint. To open a *custom* deployment default (`MICROMEGAS_DEFAULT_AUDIENCE` set to
+something other than `public`) the same way, an admin uses the **Add grant** dialog with Axis =
+Mint and Selector = **Everyone** on that audience — the same recipe the seeded `public` row is an
+instance of.
+
 With the knob off, the page still renders — it shows only the caller's own rows and disables
 Share/Remove/Revoke/Mint, with a note explaining why.
 

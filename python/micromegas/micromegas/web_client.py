@@ -184,17 +184,24 @@ class WebClient:
         Caller-scoped, so no admin access is required -- this reveals only
         whether *this* caller's own email/groups match a mint selector,
         plus facts about the caller's own identity. Returns
-        `{"is_admin", "audiences", "mint_prefix", "email"}`:
+        `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs"}`:
 
         - `is_admin`: whether the caller is an admin (no other route
           reachable with a Bearer token exposes this).
         - `audiences`: the audiences whose `mint` selectors match this
           caller today (meaningless for an admin, whose mint authority
           never depends on a grant row at all -- see `is_admin` instead).
-        - `mint_prefix`: the caller-derived namespace prefix a fresh,
-          non-admin claim should be minted under, or `None` if the caller
-          has no email (and so cannot claim at all).
+        - `mint_prefix`: the caller-derived namespace prefix used only to
+          *suggest* a fresh audience name (the web app's Mint dialog
+          composes it live before commit; this CLI uses it to render a
+          concrete `--claim` suggestion). `None` if the caller has no
+          email (and so cannot claim at all). Not something a claim is
+          minted under -- `--claim` claims the name it is given verbatim.
         - `email`: the caller's own email, or `None`.
+        - `held_pairs`: `"{audience}:{axis}"` for every pair the caller
+          holds via an identity selector (`"*"` excluded) -- distinguishes
+          an audience the caller personally holds a grant on from one they
+          can merely see via a wildcard grant.
         """
         resp = self.session.get(
             self._api_url("audience-grants/my-audiences"),

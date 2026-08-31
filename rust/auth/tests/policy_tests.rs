@@ -86,9 +86,12 @@ fn is_valid_audience_does_not_normalize() {
 // AudienceReadPolicy::resolve
 // ---------------------------------------------------------------------------
 
+/// `public` has no built-in read grant -- it is readable exactly when a grant names it, the same
+/// as any other audience. In production this is the seeded `('public', 'read', '*')` DB row
+/// (schema v9); a `{"public": ["*"]}` entry in the env-map grants is the equivalent here.
 #[tokio::test]
-async fn read_policy_public_is_always_present() {
-    let policy = AudienceReadPolicy::new(AudienceGrants::empty());
+async fn read_policy_public_is_present_when_granted() {
+    let policy = AudienceReadPolicy::new(grants(r#"{"public": ["*"]}"#));
     let ctx = caller(None, vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
     assert!(resolved.into_inner().contains(&PUBLIC_AUDIENCE.to_string()));
@@ -141,24 +144,20 @@ async fn read_policy_no_self_audience_rule() {
     );
 }
 
-/// The fail-closed guarantee, restated for the grant-map model: a caller matching no selector
-/// anywhere resolves to exactly `{public}` -- not a superset, not the empty set. Without this
-/// exactness assertion, "public is always present" would pass just as well for a policy that
-/// over-grants.
+/// The fail-closed guarantee, restated now that `public` has no built-in arm: a caller matching
+/// no selector anywhere, with no store attached, resolves to the empty set -- not `{public}`, not
+/// any other superset.
 #[tokio::test]
-async fn read_policy_grantless_caller_resolves_to_exactly_public() {
+async fn read_policy_grantless_caller_resolves_to_the_empty_set() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
     let ctx = caller(None, vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert_eq!(
-        sorted(resolved.into_inner()),
-        vec![PUBLIC_AUDIENCE.to_string()]
-    );
+    assert_eq!(sorted(resolved.into_inner()), Vec::<String>::new());
 }
 
-/// `read_audiences` (Stage 4b's per-key direct grant) still folds into the read axis, with no
-/// `user:`-shaped element -- unlike the shipped identity-derived model, a service-account-shaped
-/// caller (no email, no groups) contributes nothing but its direct grants plus `public`.
+/// `read_audiences` (Stage 4b's per-key direct grant) still folds into the read axis independently
+/// of `public`: a service-account-shaped caller (no email, no groups) with no grant naming `public`
+/// gets exactly its direct grants, nothing more.
 #[tokio::test]
 async fn read_policy_read_audiences_folds_into_the_read_axis() {
     let policy = AudienceReadPolicy::new(AudienceGrants::empty());
@@ -171,11 +170,7 @@ async fn read_policy_read_audiences_folds_into_the_read_axis() {
     let resolved = policy.resolve(&ctx).await.expect("resolve");
     assert_eq!(
         sorted(resolved.into_inner()),
-        vec![
-            PUBLIC_AUDIENCE.to_string(),
-            "team-a".to_string(),
-            "team-b".to_string(),
-        ]
+        vec!["team-a".to_string(), "team-b".to_string(),]
     );
 }
 
@@ -226,8 +221,10 @@ async fn mint_policy_read_audiences_never_enter_the_mintable_set() {
     );
 }
 
-/// `PUBLIC_AUDIENCE` is always in a non-admin's readable set but never in their mintable set
-/// unless a grant explicitly names it in a `"mint"` list.
+/// From an empty grant map, `PUBLIC_AUDIENCE` is not mintable -- it takes a grant explicitly
+/// naming it in a `"mint"` list, the same as any other audience. This says nothing about a grant
+/// map that *does* name `public`; see `mint_policy_wildcard_selector_grants_mint_to_any_caller`
+/// below for that, complementary case.
 #[tokio::test]
 async fn mint_policy_public_is_not_mintable_by_default() {
     let policy = AudienceMintPolicy::new(AudienceGrants::empty());
@@ -236,6 +233,29 @@ async fn mint_policy_public_is_not_mintable_by_default() {
     assert!(
         result.is_err(),
         "public must not be mintable without an explicit mint grant"
+    );
+}
+
+/// `"*"` on the mint axis grants mint to any caller, including one with no email and no groups --
+/// this is what the seeded `('public', 'mint', '*')` row (schema v9) relies on. Pinned here
+/// because nothing previously exercised `"*"` on the mint axis specifically; it was only ever an
+/// emergent property of `selector_matches`, and it is now load-bearing for a documented operator
+/// recipe.
+#[tokio::test]
+async fn mint_policy_wildcard_selector_grants_mint_to_any_caller() {
+    let policy = AudienceMintPolicy::new(grants(r#"{"public": {"read": [], "mint": ["*"]}}"#));
+    let ctx = caller(None, vec![], vec![], false);
+    let resolved = policy
+        .resolve_audience(&ctx, Some(PUBLIC_AUDIENCE))
+        .await
+        .expect("a wildcard mint selector should grant mint to any caller");
+    assert_eq!(resolved, PUBLIC_AUDIENCE);
+
+    // The row widens exactly one audience name, not every audience.
+    let result = policy.resolve_audience(&ctx, Some("team-alpha")).await;
+    assert!(
+        result.is_err(),
+        "the wildcard mint grant on public must not widen a different audience"
     );
 }
 
@@ -599,12 +619,12 @@ impl Drop for EnvGuard {
 }
 
 /// An unconfigured deployment (`{prefix}_AUDIENCE_GRANTS` unset) still resolves a scope -- the
-/// `{public}` singleton, not an error and not something permissive -- rather than leaving the
-/// knob silently inert. Uses a prefix no other test/env touches, so "unset" holds regardless of
+/// empty set, not an error and not something permissive -- with no store attached to resolve
+/// `public`'s seeded row. Uses a prefix no other test/env touches, so "unset" holds regardless of
 /// test execution order.
 #[tokio::test]
 #[serial]
-async fn from_env_with_unset_var_resolves_to_public_only() {
+async fn from_env_with_unset_var_resolves_to_the_empty_set() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
@@ -614,10 +634,7 @@ async fn from_env_with_unset_var_resolves_to_public_only() {
     let policy = AudienceReadPolicy::from_env(PREFIX).expect("from_env");
     let ctx = caller(Some("alice@example.com"), vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert_eq!(
-        sorted(resolved.into_inner()),
-        vec![PUBLIC_AUDIENCE.to_string()]
-    );
+    assert_eq!(sorted(resolved.into_inner()), Vec::<String>::new());
 }
 
 #[tokio::test]
@@ -673,8 +690,9 @@ impl Drop for DefaultKeyAudienceEnvGuard {
     }
 }
 
-/// Unset resolves to `public`, the one built-in read grant every authenticated principal holds --
-/// there is no "no default configured" state left to represent (#1482): one knob, always a value.
+/// Unset resolves to `public`, the deployment default -- there is no "no default configured"
+/// state left to represent (#1482): one knob, always a value. This is `default_audience_from_env`
+/// resolving its own default, independent of whether `public` is readable via a grant.
 #[test]
 #[serial]
 fn default_audience_from_env_neither_var_set_is_public() {

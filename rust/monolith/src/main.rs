@@ -248,7 +248,9 @@ async fn main() -> Result<()> {
 
     // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12; grant map rewrite
     // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
-    // -> an empty grant map -> a real caller's resolved scope is just `{public}`, filtered by
+    // -> an empty grant map -> a real caller's resolved scope is exactly what the DB-store
+    // snapshot below resolves, which is `{public}` once the seeded `('public', 'read', '*')` row
+    // (schema v9) has migrated in -- `public` has no built-in read grant of its own -- filtered by
     // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
     // (#1482) -- a credential with no bound audience is stamped with the resolved
     // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time now (#1519);

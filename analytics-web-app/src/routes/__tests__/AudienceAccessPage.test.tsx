@@ -257,6 +257,22 @@ describe('AudienceAccessPage — admin', () => {
     await waitFor(() => expect(screen.getByText(/No audience grants yet/)).toBeInTheDocument())
     expect(screen.getAllByRole('button', { name: /Add grant/i }).length).toBeGreaterThan(0)
   })
+
+  it('does not show the public-readability help line in the Mint dialog for an admin', async () => {
+    installFetchMock({ grants: [] })
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Mint ingestion key/i }).length).toBeGreaterThan(0)
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint ingestion key/i })[0])
+
+    const heading = await screen.findByRole('heading', { name: 'Mint ingestion key' })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+    expect(
+      within(dialogRoot).queryByText(/is readable by every authenticated user/)
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('AudienceAccessPage — non-admin', () => {
@@ -499,6 +515,29 @@ describe('AudienceAccessPage — non-admin', () => {
     await waitFor(() => expect(screen.getByText('mmk_secret')).toBeInTheDocument())
     expect(screen.getByText(/You claimed/)).toBeInTheDocument()
     expect(screen.getByText('reader-myproj')).toBeInTheDocument()
+  })
+
+  it('shows the public-readability help line under the Mint dialog audience select', async () => {
+    installFetchMock({
+      grants: [],
+      myAudiences: {
+        is_admin: false,
+        audiences: ['team-alpha'],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:mint'],
+      },
+    })
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Mint ingestion key/i }).length).toBeGreaterThan(0)
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint ingestion key/i })[0])
+
+    const heading = await screen.findByRole('heading', { name: 'Mint ingestion key' })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+    expect(within(dialogRoot).getByText(/is readable by every authenticated user/)).toBeInTheDocument()
   })
 })
 

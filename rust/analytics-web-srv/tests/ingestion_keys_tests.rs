@@ -1091,20 +1091,25 @@ async fn live_concurrent_claims_for_the_same_fresh_audience_never_double_claim()
     cleanup_audience(&pool, &audience).await;
 }
 
-/// `public` is never claimable by a non-admin: the reserved-name check runs inside
-/// `try_claim_and_mint`'s fresh-audience branch, after its own existence check (§4a) -- needs the
-/// same live DB as the other claim tests, not the non-live-DB harness (since `public` typically
-/// already carries rows in a real deployment, the denial can come from either check, but it is
-/// always a 403 either way).
+/// `MintGate` rejects a non-admin's request for `public` before `mint_key`'s body -- and so before
+/// `AudienceMintPolicy` is ever consulted -- whenever `MICROMEGAS_SELF_SERVICE_MINT` is off,
+/// regardless of what grant rows exist on `public` (schema v9 seeds `('public', 'mint', '*')`,
+/// which would otherwise make this request succeed). Needs the live DB, not the non-live-DB
+/// harness, for the same reason the other claim tests do: `mint_key` builds its policy from a
+/// per-request point query against `audience_grants`.
+///
+/// Deliberately does **not** call `cleanup_audience(&pool, "public")` -- that would delete the
+/// v9-seeded rows from the shared dev database. This test creates and deletes nothing on
+/// `public`.
 #[ignore]
 #[tokio::test]
-async fn live_mint_rejects_a_non_admin_claim_of_the_public_audience() {
+async fn live_mint_rejects_a_non_admin_when_self_service_mint_is_disabled() {
     let pool = live_pool().await;
     let app = build_handler_router_with_user(
         IngestionKeysState {
             pool: Some(pool),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
+            self_service_mint_enabled: false,
             max_claims_per_caller: 25,
             max_keys_per_caller: 100,
         },
