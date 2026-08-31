@@ -605,10 +605,14 @@ they personally hold it or `prefillAudience` names it explicitly.
 
 **Phase 6 — docs and changelog**
 
-11. `mkdocs/docs/admin/authentication.md`, `admin/api-keys.md`, `admin/web-app.md`,
-   `query-guide/python-api.md` — see *Documentation*.
-12. `CHANGELOG.md` — two things: the schema-v9 seeded default, naming the row and how to remove
-   it; and an amendment to the
+11. `mkdocs/docs/admin/authentication.md`, `admin/functions-reference.md`, `admin/api-keys.md`,
+   `admin/web-app.md`, `query-guide/python-api.md` — see *Documentation*.
+12. `CHANGELOG.md` — three things: the schema-v9 seeded default, naming the row and how to remove
+   it; the built-in public-read-grant removal (public read now requires the seeded
+   `('public','read','*')` row), with its own **Deploy-order requirement** paragraph — roll v9
+   before or with the `flight-sql-srv`/`analytics-web-srv` upgrade, mirroring the existing v7
+   `audience_grants` entry's deploy-order paragraph for the same flight-sql-srv-vs-`migrate_db`
+   skew (`CHANGELOG.md:69`); and an amendment to the
    existing `## Unreleased` `micromegas-setup-telemetry` entry describing the new `--audience`/`--claim`
    split in place (no **Minor breaking change** clause — that entry has never shipped in a release,
    so there is no compatibility window to call out; see *Trade-offs* and the repo's own precedent
@@ -630,7 +634,8 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
-| `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples |
+| `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples; v9 deploy-order note; built-in-read-grant correction |
+| `mkdocs/docs/admin/functions-reference.md` | correct `list_audience_grants()`'s "none of them appear here" claim about `public` |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
 | `mkdocs/docs/query-guide/python-api.md` | `micromegas-setup-telemetry` reference |
@@ -784,9 +789,15 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   `--claim`, and correct `:255-256` ("`public` is the one built-in: ... no grant entry needed in
   either source"), the one other place in the docs beside `authentication.md` that asserts the
   built-in read grant §2 removes.
-- **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): the Add grant dialog's
-  Mint + Everyone combination as the way to open the deployment default, and that `public`'s empty
-  Mint column does not mean "no grant needed" the way its read scope does.
+- **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): document that `public` ships
+  with seeded Read and Mint rows, visible to an admin (attributed to `default`) like any other
+  grant on the page — not a special case with an empty Mint column — and the Add grant dialog's
+  Mint + Everyone combination as the recipe for opening a *custom* deployment default the same way.
+- **`mkdocs/docs/admin/authentication.md`**, *DB-backed audience grants* section, beside the
+  existing v7 **Deploy-order requirement** paragraph (`:766-778`): add a matching note for v9's
+  seed — the same `flight-sql-srv`/`analytics-web-srv`-vs-`migrate_db` skew window applies (no
+  seeded row, no built-in arm, every query returns nothing until the migration lands), pointing to
+  the matching CHANGELOG entry the same way the v7 paragraph does.
 - **`mkdocs/docs/query-guide/python-api.md:924-975`**: rewrite the `--audience` bullet list for the
   new rule, document `--claim`, and document the `held_pairs`-based auto-resolution. Delete "There
   is no flag to bypass this prefixing" and the self-service-reach rationale under it: the CLI no
@@ -797,7 +808,16 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   is passed through and fails with the route's 403 if the name is taken.
 - **`mkdocs/docs/admin/authentication.md`**, grant-model section: `public` read is no longer a
   built-in — it is a seeded row like any other, and removing it removes public read. This is the
-  most consequential doc change here; anywhere the docs say public read needs no grant is now wrong.
+  most consequential doc change here. Two specific sites need correcting, not just the general
+  claim: the Query-Enforcement section's "every authenticated caller's readable set always
+  includes `public`, regardless of identity — there is no caller kind whose resolved set is
+  otherwise empty" (`:207-212`), which states the built-in as an identity-independent invariant
+  rather than as "needs no grant" and so needs its own rewording; and
+  `mkdocs/docs/admin/functions-reference.md:472` ("`public`, the `MICROMEGAS_AUDIENCE_GRANTS` env
+  map, and a per-key `read_audiences` list all also apply and none of them appear here"), which
+  claims `list_audience_grants()` cannot show `public`'s effective read access — after §2 `public`
+  read *is* a DB-table row and does appear there, so the sentence should say only the env map and
+  per-key `read_audiences` stay outside the function's view.
 - Per `CLAUDE.md`, none of the new prose cites issue numbers or stage labels.
 
 ## Testing Strategy
