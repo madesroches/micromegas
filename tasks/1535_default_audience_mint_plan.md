@@ -7,7 +7,9 @@ Issue: [#1535](https://github.com/madesroches/micromegas/issues/1535)
 The issue asks for two things. **(1)** Let a non-admin mint into the deployment default audience
 (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset). **(2)** Stop
 `micromegas-setup-telemetry` from silently rewriting an explicit `--audience X` it believes the
-caller cannot mint into `{mint_prefix}X`.
+caller cannot mint into `{mint_prefix}X`. The replacement flag, `--claim`, does not prefix either:
+the name passed is the name claimed, and namespacing moves into the documented invocation
+templates.
 
 **(1) needs no policy code — it needs a seeded default.** A single grant row,
 `('public', 'mint', '*')`, already delivers it through the shipped `AudienceMintPolicy`; it is
@@ -130,7 +132,17 @@ change at all. Without the row, `public` is absent and the silent rewrite fires.
 
 `mkdocs/docs/query-guide/python-api.md:948-953` documents the rewrite as intentional ("There is no
 flag to bypass this prefixing"), on the grounds that it keeps bare names like `prod`/`ci` out of
-self-service reach. That guardrail is worth keeping — but it does not require *silence*.
+self-service reach.
+
+**That rationale does not hold, and the docs overstate it.** The prefix is composed entirely in this
+one Python client. `try_claim_and_mint` (`rust/analytics-web-srv/src/ingestion_keys.rs:709-735`)
+rejects exactly two names — `PUBLIC_AUDIENCE` and `state.default_audience` — then applies
+`max_claims_per_caller`; it has no notion of a caller namespace and never inspects `mint_prefix`.
+Any authenticated non-admin who posts to the mint route directly claims bare `prod` today. So the
+prefix buys naming hygiene, not a boundary: it keeps casual script users from colliding in a flat
+namespace, and nothing more. If land-grab protection is actually wanted it has to be enforced
+server-side, which is out of scope here — but the plan must not carry the claim that the client
+already provides it.
 
 ### The one thing a seeded `public` mint row perturbs
 
@@ -319,9 +331,25 @@ from "deliberately empty" — the exact ambiguity the seed exists to remove.
 `--audience`:
 
 ```
---claim NAME    Claim a fresh audience under your own namespace. Minted as
-                "{mint_prefix}NAME" (e.g. "alice-ci-runner"), never the bare name.
+--claim NAME    Claim NAME as a fresh audience, verbatim. Fails if it already
+                exists and you hold no grant for it.
 ```
+
+**`--claim` does not prefix.** The name passed is the name claimed. The CLI's real callers are
+scripts and agent skills, not people at a prompt, and for those a silent rewrite is strictly worse
+than for a human: the input stops determining the output, so the caller has to read back
+`MintResponse.audience` (`ingestion_keys.rs:276`) to learn what it got. Verbatim keeps the resolved
+name predictable *before* the call. Namespacing moves into the documented invocation templates
+(§ Documentation), where the convention is visible in the line the user copies rather than applied
+behind their back.
+
+This diverges from the web app deliberately, and the asymmetry is principled rather than an
+oversight. `AudienceAccessPage.tsx:376,479` composes `{mint_prefix}{newAudience}` too, but renders
+*"Will claim `alice-ci-runner`"* live as the user types — the prefix is visible before commit. A
+CLI cannot show that, which is exactly why the same rule reads as helpful in the dialog and as a
+surprise on the command line. The web app keeps composing; `mint_prefix` stays on
+`MyAudiencesResponse`, since `AudienceAccessPage.tsx:375` needs it and the CLI still uses it to
+suggest a namespaced name in the zero-match error.
 
 `resolve_audience`'s new rule:
 
@@ -329,8 +357,8 @@ from "deliberately empty" — the exact ambiguity the seed exists to remove.
 |---|---|
 | both `--audience` and `--claim` | `parser.error` |
 | `--claim NAME`, admin caller | `parser.error` — an admin's brand-new audience is claimed server-side; use `--audience NAME` |
-| `--claim NAME`, no `mint_prefix` | `parser.error` (unchanged text: no email to claim with) |
-| `--claim NAME` | `f"{mint_prefix}{NAME}"`, announced on stderr (today's fresh-claim path, now reached only on request) |
+| `--claim NAME`, no `email` | `parser.error` — no email to claim with |
+| `--claim NAME` | `NAME` verbatim, announced on stderr |
 | `--audience X`, `X in audiences` | `X` verbatim (unchanged — and this is the branch `public` lands in once the grant row exists) |
 | `--audience X`, admin | `X` verbatim (unchanged) |
 | `--audience X`, otherwise | `parser.error` (**was**: silent `{mint_prefix}X`) |
@@ -341,7 +369,7 @@ The final error names the reason and every way forward:
 ```
 cannot mint audience 'public': it is not in this caller's mintable set
   mintable audiences: team-alpha
-  to claim a fresh audience under your own namespace: --claim public  (mints as 'alice-public')
+  to claim a fresh audience of your own: --claim alice-public
   otherwise, ask an admin to grant it:
       micromegas-grants --url <url> create public mint 'user:alice@example.com'
     or, to open it to every authenticated caller:
@@ -358,10 +386,23 @@ and none of the 33 `AudienceGrantsState { .. }` test literals. The server alread
 everything it needs, because the mechanism is a grant row and grant rows are what
 `/my-audiences` reports.
 
-**The bare-name guardrail survives.** A non-admin still cannot mint bare `prod` through this
-script — the outcome changes from a silent rename to a loud error. (The *route* still accepts any
-valid unclaimed name from an authorized non-admin; the prefixing was always a script convention and
-remains one.)
+The suggested name is still namespaced — the CLI composes `{mint_prefix}{args.audience}` for the
+hint — but it is a suggestion in text the caller can edit, not a rewrite of what they typed. When
+`mint_prefix` is `None` the hint degrades to `--claim <new-name>`.
+
+**What claiming a bare name now does.** `--claim prod` is passed through, so the outcome is
+whatever the route already decides: a 403 `"audience 'prod' already exists and the caller has no
+grant for it"` if someone holds it, a successful claim against `max_claims_per_caller` if it is
+genuinely free. That is a real behaviour change for this script, and it is the honest one — the
+route has always accepted bare names from an authorized non-admin, and the old rewrite only hid
+that from users of this one client. The CLI should surface the 403 verbatim rather than
+re-interpreting it.
+
+**The `--claim` precondition is `email`, not `mint_prefix`.** Building the name no longer needs the
+prefix; what still needs an identity is the server's lazy claim, which writes a `user:<email>` grant
+row. Guarding on `my_audiences["email"] is None` tests that directly. The two differ: `mint_prefix_for`
+also returns `None` when the local part sanitizes to empty (`audience_grants_tests.rs:356` —
+`+++@example.com`), a caller who has an email and can now claim fine.
 
 `my_audiences.get("email")` rather than `[...]`, consistent with the existing `.get("mint_prefix")`.
 
@@ -611,6 +652,15 @@ the repo's own precedent for exactly this situation (`CHANGELOG.md:87`, the `MIC
 removal) is to ship the break directly and say so in the existing Unreleased entry, not to open a
 warn-only period for behaviour nobody has depended on yet.
 
+**`--claim` claims verbatim, at the cost of a flat namespace.** Prefixing was the only thing keeping
+casual users of this script from competing for names like `ci` and `prod`, and dropping it means the
+first caller to claim a good name keeps it. Accepted, for two reasons: it was never a boundary — the
+route accepts bare names from any authorized non-admin regardless of client — so the protection was
+illusory for anyone not using this script; and the script's callers are automation, for which a name
+that survives the round trip unchanged is worth more than collision avoidance. A collision is a loud
+403, not silent breakage. Real enforcement, if wanted later, belongs in `try_claim_and_mint` where it
+would apply to every client.
+
 **`'*'` on `mint` is a real widening, unlike `'*'` on `read`.** A `*` read row exposes data; a `*`
 mint row lets any authenticated caller obtain a standing write credential for that audience. For
 the *deployment default* this is close to a no-op (see *Current State* — those callers can already
@@ -682,16 +732,21 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   placeholder row" checklist (`:541-560`), which now overlaps the seed for `public`. Amend the existing
   "`public` and the deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed" sentence to
   keep *claimable* and *mintable* visibly distinct. Update the two `micromegas-setup-telemetry`
-  examples: the fresh-claim one becomes `--claim ci-runner`, plus an `--audience public` example.
+  examples: the fresh-claim one becomes `--claim "$USER-ci-runner"`, plus an `--audience public`
+  example.
 - **`mkdocs/docs/admin/api-keys.md`**: update the naming-convention paragraph (`:281-295`) for
   `--claim`.
 - **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): the Add grant dialog's
   Mint + Everyone combination as the way to open the deployment default, and that `public`'s empty
   Mint column does not mean "no grant needed" the way its read scope does.
 - **`mkdocs/docs/query-guide/python-api.md:924-975`**: rewrite the `--audience` bullet list for the
-  new rule, document `--claim`, document the `held_pairs`-based auto-resolution, and replace "There
-  is no flag to bypass this prefixing" — false in letter now (there is a flag to *request* it),
-  still true in spirit (a non-admin still cannot mint a bare name here).
+  new rule, document `--claim`, and document the `held_pairs`-based auto-resolution. Delete "There
+  is no flag to bypass this prefixing" and the self-service-reach rationale under it: the CLI no
+  longer prefixes at all, and the claim was never true of the route. Replace it with copyable
+  invocation templates that carry the namespacing convention in the visible text — e.g.
+  `micromegas-setup-telemetry --claim "$USER-ci-runner"` — since the script's callers are other
+  scripts and agent skills rather than people at a prompt. Say plainly that a bare `--claim prod`
+  is passed through and fails with the route's 403 if the name is taken.
 - **`mkdocs/docs/admin/authentication.md`**, grant-model section: `public` read is no longer a
   built-in — it is a seeded row like any other, and removing it removes public read. This is the
   most consequential doc change here; anywhere the docs say public read needs no grant is now wrong.
@@ -738,9 +793,13 @@ deletes the v9-seeded rows from the shared dev database.
   `micromegas-grants` commands with the audience and email substituted. This is the regression test
   for the reported bug; it replaces
   `test_fresh_audience_non_admin_is_prefixed_and_announced_to_stderr`
-- `--claim ci-runner`, `mint_prefix == "alice-"` → `"alice-ci-runner"`, announced on stderr
-- `--claim` with `mint_prefix is None` → error; `--claim` as an admin → error;
+- `--claim alice-ci-runner` → `"alice-ci-runner"` verbatim, announced on stderr
+- `--claim ci-runner` with `mint_prefix == "alice-"` → `"ci-runner"` verbatim, **not**
+  `"alice-ci-runner"` — pins that the prefix is never applied to what the caller passed
+- `--claim` with `email is None` → error; `--claim` as an admin → error;
   `--audience` + `--claim` together → error
+- `--audience prod` zero-match error with `mint_prefix == "alice-"` → hint reads
+  `--claim alice-prod`; with `mint_prefix is None` → hint degrades to `--claim <new-name>`
 - omitted, `audiences == ["public", "team-alpha"]`, `held_pairs == ["team-alpha:mint"]` →
   `"team-alpha"` silently (§4's headline case)
 - omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`
