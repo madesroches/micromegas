@@ -562,7 +562,12 @@ they personally hold it or `prefillAudience` names it explicitly.
    unused `client` parameter; update `--audience`'s help text, the function docstring, and the
    module docstring.
 6. `python/micromegas/tests/cli/test_setup_telemetry.py`: update existing cases for the new
-   signature and add the new ones (see *Testing Strategy*).
+   signature and add the new ones (see *Testing Strategy*). This also touches the shared fixtures —
+   `make_args`'s defaults gain a `claim` key and `FakeClient`'s default `my_audiences_result` gains
+   a `held_pairs` key, since §4 reads `my_audiences["held_pairs"]` directly — and converts
+   `test_run_non_admin_claim_does_not_call_create_audience_grant`, which currently drives `run()`
+   with a non-admin, `audiences: []`, and `--audience laptop`, to the `--claim laptop` path (its
+   `--audience` input is now a hard `parser.error` under §3).
 
 **Phase 4 — pin the mechanism**
 
@@ -635,15 +640,18 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples; v9 deploy-order note; built-in-read-grant correction |
-| `mkdocs/docs/admin/functions-reference.md` | correct `list_audience_grants()`'s "none of them appear here" claim about `public` |
+| `mkdocs/docs/admin/functions-reference.md` | correct `list_audience_grants()`'s "none of them appear here" claim about `public` — seeded rows appear only for an admin caller |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
 | `mkdocs/docs/query-guide/python-api.md` | `micromegas-setup-telemetry` reference |
+| `rust/analytics-web-srv/src/audience_grants.rs` | correct `mint_prefix_for`'s doc comment: the prefix is now the web app's claim composition plus the CLI's suggested name, not something the CLI mints under |
 | `CHANGELOG.md` | Unreleased entry |
 
-**No route or mint-policy changes.** `rust/analytics-web-srv/src/*` and `web_server.rs` are
-untouched — `AudienceMintPolicy` gains nothing, and the migration adds rows, not columns (no
-`SCHEMA_VERSION` file-schema concern, no Arrow schema change). The web-app changes are confined to
+**No route or mint-policy behaviour change.** `web_server.rs` is untouched, and `AudienceMintPolicy`
+gains nothing — the migration adds rows, not columns (no `SCHEMA_VERSION` file-schema concern, no
+Arrow schema change). The one `rust/analytics-web-srv/src/*` edit is the `mint_prefix_for`
+doc-comment correction above: its claim that the CLI mints fresh audiences under the prefix no
+longer holds once §3 lands. The web-app changes are confined to
 `AudienceAccessPage.tsx`: the legend string, and the Mint dialog's default-selection fix (§5) — the
 Add grant dialog already does everything needed for granting
 (`AudienceAccessPage.tsx:265-266, :166`), and the *separate* ingestion-key mint dialog on
@@ -816,8 +824,13 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   `mkdocs/docs/admin/functions-reference.md:472` ("`public`, the `MICROMEGAS_AUDIENCE_GRANTS` env
   map, and a per-key `read_audiences` list all also apply and none of them appear here"), which
   claims `list_audience_grants()` cannot show `public`'s effective read access — after §2 `public`
-  read *is* a DB-table row and does appear there, so the sentence should say only the env map and
-  per-key `read_audiences` stay outside the function's view.
+  read *is* a DB-table row, but whether it appears in this function's result still depends on the
+  caller: an admin gets `GrantVisibility::All` and sees the seeded rows directly; a non-admin gets
+  `GrantVisibility::Held`, which strips `"*"` from `grant_selectors` before binding
+  (`list_audience_grants_table_function.rs:151-171`), so the seeded `('public', axis, '*')` rows
+  stay invisible to them — they see only the effect, never the row. So the sentence should say the
+  seeded `public` rows appear here for an admin caller only, while the env map and per-key
+  `read_audiences` stay outside the function's view for everyone.
 - Per `CLAUDE.md`, none of the new prose cites issue numbers or stage labels.
 
 ## Testing Strategy
@@ -871,7 +884,14 @@ deletes the v9-seeded rows from the shared dev database.
   `"team-alpha"` silently (§4's headline case)
 - omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`, whose
   claim advice reads `--claim <new-name>`, not `--audience <new-name>`
-- existing omitted-`--audience` and admin cases otherwise unchanged
+- existing omitted-`--audience` cases (`test_omitted_audience_non_admin_exactly_one_match_is_used_silently`,
+  `..._multiple_matches_is_an_error`) keep their outcomes once their `my_audiences` fixtures gain a
+  matching `held_pairs` entry (e.g. `held_pairs: ["team-alpha:mint"]`) — without one, §4's personal
+  filter now removes the caller's only candidate before the zero/one/many rule ever runs; admin
+  cases are otherwise unchanged
+- `test_run_non_admin_claim_does_not_call_create_audience_grant` is converted from driving `run()`
+  with `--audience laptop` (now a hard error) to `--claim laptop`, asserting the mint call and
+  minted audience are the verbatim name rather than a `{mint_prefix}`-composed one
 
 **`analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx`**: the Add grant dialog's
 Mint/Everyone path is already covered
