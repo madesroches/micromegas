@@ -440,11 +440,12 @@ What the field does lack is any statement of the alternative. Add one help line 
 `<select>`, shown to non-admins:
 
 > `public` is readable by every authenticated user. Pick *New audience…* to give this key's data its
-> own audience, with read access you manage separately.
+> own audience, with read access managed separately.
 
-"Manage separately" is deliberate over "keep it to yourself" — a claimed audience is not a private
-hole, it is a scope whose readers are granted afterwards, by the claimer via Share or by an admin.
-The line names the trade without promising exclusivity the model does not offer.
+"Managed separately" is deliberate over "keep it to yourself" — a claimed audience is not a private
+hole, it is a scope whose readers are granted afterwards. The passive matters too: the claimer grants
+via Share, but so can an admin, so the copy does not pin the managing to the caller. The line names
+the trade without promising exclusivity the model does not offer.
 
 ## Implementation Steps
 
