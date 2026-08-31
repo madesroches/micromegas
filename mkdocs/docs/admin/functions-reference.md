@@ -474,10 +474,12 @@ for this one function.
 appears here for any caller. `public` is different: it has no built-in read grant of its own — it
 reads only through an ordinary DB row, the schema-v9 seeded `('public', 'read', '*')` grant — so
 that row *is* in this table, and does appear here, but only for an admin caller (`GrantVisibility::All`).
-A non-admin caller gets `GrantVisibility::Held`, which strips `"*"` from the bound selectors
-before querying, so the seeded `('public', axis, '*')` rows stay invisible to them the same way
-any other `"*"` row does — they see only the row's *effect* (that they can read/mint `public`),
-never the row itself.
+A non-admin caller gets `GrantVisibility::Held`, which strips `"*"` from the caller's own bound
+selectors before querying for held `(audience, axis)` pairs — but the query still returns every
+row on a pair it matches, `"*"` rows included. So the seeded `('public', axis, '*')` row stays
+invisible only to a non-admin who holds no other grant on that same `(audience, axis)` pair; one
+who does (e.g. an admin-created `('public', 'read', 'user:<id>')` row) sees the seeded row too,
+same as any other row on a pair they hold.
 
 ### Incident runbook
 

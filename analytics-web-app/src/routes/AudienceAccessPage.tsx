@@ -359,7 +359,13 @@ function MintKeyDialog({
           setAudienceChoice(prefillAudience)
           setNewAudience('')
         } else if (me?.audiences.length) {
-          setAudienceChoice(me.audiences[0])
+          // Prefer an audience the caller personally holds a mint grant on over
+          // `audiences[0]`: the seeded `('public','mint','*')` row puts `public` in
+          // every non-admin's `audiences` list, so a plain lexicographic pick can
+          // default to the wildcard-only shared pool instead of the caller's own
+          // audience -- mirrors the CLI's `resolve_audience` `held_pairs` filter.
+          const personal = me.audiences.find((a) => me.held_pairs.includes(`${a}:mint`))
+          setAudienceChoice(personal ?? me.audiences[0])
           setNewAudience('')
         } else {
           setAudienceChoice('__new__')
