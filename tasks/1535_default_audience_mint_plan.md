@@ -90,7 +90,7 @@ discoverability problem, not a missing capability.
 fresh deployment starts with an empty table and *zero* expressed policy — every default it appears
 to have is really a hardcoded arm somewhere:
 
-- `AudienceReadPolicy::resolve` (`policy.rs:512`) inserts `PUBLIC_AUDIENCE` unconditionally.
+- `AudienceReadPolicy::resolve` (`policy.rs:513`) inserts `PUBLIC_AUDIENCE` unconditionally.
   `AudienceGrants`'s own doc comment (`:242-244`) states the intent: "`public` is not stored here:
   it is the sole built-in read grant, applied by `AudienceReadPolicy::resolve` directly rather than
   needing a `{"public": ["*"]}` entry (though writing one changes nothing)."
@@ -218,14 +218,14 @@ existing documented rule that self-service mint grants must live in the DB table
 
 ### §2 — Delete the built-in public read grant
 
-One line goes (`policy.rs:512`):
+One line goes (`policy.rs:513`):
 
 ```rust
 set.insert(PUBLIC_AUDIENCE.to_string());   // deleted
 ```
 
 `PUBLIC_AUDIENCE` stays as a const — `default_audience_from_env` (`:94`) and
-`ingestion_keys.rs`'s reserved-name check still use it. `policy.rs:512` is the **only** place the
+`ingestion_keys.rs`'s reserved-name check still use it. `policy.rs:513` is the **only** place the
 read path hardcodes it; nothing in `rust/analytics/src` or `rust/public/src` does. The resolved set
 becomes exactly:
 
@@ -423,16 +423,21 @@ the same rephrasing, as `public`'s Read grant rather than a hardcoded exception.
 note (`:993-994`, "No read grants — only `public` and any env-map grants apply here") is now simply
 wrong for any other audience with no read rows — it needs correcting, not just rewording.
 
-**A fifth string, on a different page, asserts the same special case.** The shared API-keys mint
-dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:235-237`) presents
-public readability as intrinsic. Behaviour is unaffected (the dialog is admin-gated), but reword it
-the same way: `public` is readable via its seeded Read grant, not built in.
+**A fifth string, on a different page, states the same effect as a permanent one.** The shared
+API-keys mint dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:235-237`)
+reads "`public` is readable by every authenticated principal; use a named audience to restrict it".
+That stays *true* after §1/§2 — the seeded Read row preserves exactly this effect — so this is not a
+false claim to correct. It goes stale only in a deployment whose operator deletes that row, which
+*Manual* has them do. Align the copy so it reads as a consequence of the grant rather than a
+property of the audience; the dialog is admin-gated, so behaviour is unaffected either way. Optional
+polish, not a correctness fix.
 
 **The Mint dialog keeps its default and gains a help line.** The dialog's `useEffect`
 (`AudienceAccessPage.tsx:361-362`) seeds `audienceChoice` from `me.audiences[0]` with no prefill,
-and the `<select>` (`:455`) lists `me.audiences`, sorted server-side. Once the seed lands, `public`
-is in every non-admin's `audiences` and sorts ahead of most personal audience names, so the dialog
-opens pre-selected on `public`. That default stays: the value is visible before commit, the name
+and the `<select>` (`:450`) lists `me.audiences`, sorted server-side. Once the seed lands, `public`
+is in every non-admin's `audiences`, and the dialog opens on whichever entry sorts first — `public`
+for a caller who holds nothing else, and for anyone whose own audiences sort after it (personal names
+are `{email-local-part}-…`, so a local part starting p–z lands there). That default stays: the value is visible before commit, the name
 says what it is, and changing it is one interaction — unlike the CLI's silent auto-resolution, which
 is why §4 guards that path and this one needs no equivalent.
 
@@ -529,7 +534,7 @@ the trade without promising exclusivity the model does not offer.
    `analytics-web-app/src/components/ApiKeysAdminPage.tsx`'s shared mint-dialog audience hint
    (`:235-237`) per §5's fifth string — `public` readable via its seeded Read grant, not built in.
 10. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: add the §5 help line under the Mint
-   dialog's audience `<select>` (`:455`), for non-admins only. The dialog's default selection,
+   dialog's audience `<select>` (`:450`), for non-admins only. The dialog's default selection,
    `prefillAudience` precedence, and the admin path are all unchanged.
 
 **Phase 6 — docs and changelog**
@@ -568,7 +573,7 @@ the trade without promising exclusivity the model does not offer.
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | repurpose the public-claim live case to knob-off → 403 (step 8) |
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); add the Mint dialog's audience help line (§5) |
-| `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
+| `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; one help-line visibility case (non-admin sees it, admin does not) |
 | `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | reword the shared mint dialog's audience hint (§5) — public readability is a removable grant, not intrinsic |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples; v9 deploy-order note; built-in-read-grant correction |
 | `mkdocs/docs/admin/functions-reference.md` | correct `list_audience_grants()`'s "none of them appear here" claim about `public` — seeded rows appear only for an admin caller |
