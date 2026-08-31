@@ -176,23 +176,31 @@ Access → `public` → Mint → Remove, or:
 micromegas-grants --url https://analytics.example.com delete public mint '*'
 ```
 
-To **add** the equivalent for a custom default — and its read companion, or callers can write where
-they cannot read back:
+To **add** the equivalent mint row for a custom default:
 
 ```
 Audience:  unassigned      Axis: Mint    Selector: Everyone
-Audience:  unassigned      Axis: Read    Selector: Everyone
 ```
 
 ```bash
 micromegas-grants --url ... create unassigned mint '*'
-micromegas-grants --url ... create unassigned read '*'
 ```
 
-A deployment with a custom default and the knob on that skips this step has no mintable default and
-will hit the CLI error (§4) until it does. A startup `warn!` for that case ("self-service mint is on
-and `<default>` has no mint grant") is cheap and would be a natural companion to the seed, but is not
-planned here — it is a separate, additive change, not required for this issue.
+**Do not pair it with `read '*'` by reflex.** A custom `MICROMEGAS_DEFAULT_AUDIENCE` is, by the
+argument in *Security*, a deployment that has already opted into an isolation posture the built-in
+`public` seed does not carry — `unassigned` starts out readable only through explicit grants.
+`micromegas-grants create unassigned read '*'` erases exactly that: it makes `unassigned` readable
+by every authenticated caller, i.e. a second `public`, which is the posture a custom default exists
+to avoid. If callers writing where they cannot read back is a real problem for such a deployment,
+the isolation-preserving fix is per-user or per-group read grants on the default
+(`micromegas-grants create unassigned read 'user:<email>'` / `'group:<g>'` for the callers who need
+to read back what they wrote), not a blanket `'*'`.
+
+A deployment with a custom default and the knob on that skips the mint row above has no mintable
+default and will hit the CLI error (§4) until it does. A startup `warn!` for that case
+("self-service mint is on and `<default>` has no mint grant") is cheap and would be a natural
+companion to the seed, but is not planned here — it is a separate, additive change, not required for
+this issue.
 
 **No `rust/` policy code changes** — only the migration. What this buys over an implicit
 `open_audience` arm on `AudienceMintPolicy`:
@@ -282,7 +290,13 @@ not enough for a silent failure.
 Make it loud: `FlightSqlServer::build_and_serve` (`rust/public/src/servers/flight_sql_server.rs`)
 checks the data-lake schema version right after it obtains `lakehouse` — the earliest point in that
 function with a DB pool, whether `lakehouse` came from `LakehouseContext::from_env()` or was
-injected — and refuses to proceed below v9. There is precedent for the message —
+injected — and refuses to proceed below v9. **The floor is v9 specifically, not
+`LATEST_DATA_LAKE_SCHEMA_VERSION`.** `default_provider.rs:130-137` is the only existing precedent
+for a startup schema floor, and it too names a specific version ("has the schema reached migration
+v5?") rather than "latest" — a LATEST-based floor would impose a hard rollout ordering constraint on
+every future migration, which nothing in the codebase does today (v7 and v8 skew was handled with
+CHANGELOG deploy-order notes instead); that is a separate, more sweeping change than what this issue
+needs. There is precedent for the message, too —
 `default_provider.rs:130-137` already tells the operator "the ingestion binary or monolith must run
 the migration before flight-sql starts in a split deployment" for the v5 key tables.
 `read_data_lake_schema_version` (`rust/ingestion/src/sql_migration.rs`, `pub`, currently only
@@ -357,26 +371,21 @@ admin branch's list calls — drop it, since every caller and test is being touc
 ### §4 — Keep auto-resolution working now that `public` is in every caller's list
 
 `--audience`-omitted resolution filters `audiences` to the caller's **personally held** mint
-audiences before applying the existing zero/one/many rule — but only when the response actually
-carries `held_pairs`; an older server that predates it must fall back to today's unfiltered
-behaviour rather than filtering against a key that was never sent:
+audiences before applying the existing zero/one/many rule:
 
 ```python
-if "held_pairs" in my_audiences:
-    held = set(my_audiences["held_pairs"])
-    personal = [a for a in audiences if f"{a}:mint" in held]
-else:
-    personal = audiences  # older server, no held_pairs field: today's behaviour
+held = set(my_audiences["held_pairs"])
+personal = [a for a in audiences if f"{a}:mint" in held]
 ```
 
 `held_pairs` (`audience_grants.rs:772-786`) is exactly this: `"{audience}:{axis}"` for every pair
 the caller holds via an *identity* selector, with `"*"` filtered out of `caller_selectors` before
 the query. It already exists on the response and needs no server change; it was added so the web
 app could tell "a pair I hold" from "a pair I can merely see", which is the same distinction needed
-here. A missing key (older server) and a present-but-empty list (current server, caller holds no
-mint grant of their own) are different facts and must not be conflated: `.get("held_pairs", [])`
-would treat both as "holds nothing" and filter the older server down to zero matches instead of
-preserving its existing behaviour.
+here. `/my-audiences` and `held_pairs` shipped together, both still `## Unreleased` — no released
+server can return a `my_audiences` response missing the key at all (`client.my_audiences()`
+fails first, on the 404), so there is no "older server" case to fall back for. Read the key directly
+and let a genuinely malformed response raise, same as any other unexpected shape from this client.
 
 Effects:
 
@@ -404,7 +413,7 @@ caller must pass `--audience` explicitly once the seed lands. Rejected as
 the default because it degrades the headline recipe for every caller in the deployment, but it is a
 one-line difference if preferred.
 
-### §5 — The page legend stops describing a special case
+### §5 — The page legend stops describing a special case, and the Mint dialog stops defaulting to it
 
 The Audience Access page's legend (`AudienceAccessPage.tsx:842-846`) currently reads:
 
@@ -425,6 +434,22 @@ The legend gets shorter and stops describing a special case, because after this 
 one — every grant on the page is a row on the page, for an admin. That is the real payoff of §2, and
 this is where a reader sees it — as an admin; a non-admin still cannot see either seeded row (only
 their effect on what audiences they can read and mint), which is unchanged from today.
+
+**The Mint dialog's own default must change, not just its legend.** The header "Mint ingestion key"
+button (`AudienceAccessPage.tsx:744`, `showMintButton`) is offered to any non-admin once the knob is
+on, and its dialog's `useEffect` (`:361-362`) seeds `audienceChoice` from `me.audiences[0]` with no
+prefill — the `<select>` (`:455`) lists `me.audiences` verbatim, sorted server-side by
+`my_audiences` (`audience_grants.rs`). Once the seed lands, `public` is in every non-admin's
+`audiences` and sorts ahead of most personal audience names, so the dialog opens pre-selected on
+`public` for anyone who hasn't personally claimed something earlier alphabetically — silently
+defaulting a non-admin's key to the shared audience, the exact hazard §4 exists to prevent on the
+CLI. Apply the same rule here: default `audienceChoice` from the caller's **personally held** mint
+audiences (`me.held_pairs`, already read elsewhere on this page at `:644` — filter `me.audiences` to
+entries with `"{audience}:mint"` in `held_pairs`, the same test §4 applies), taking the first match;
+fall back to `'__new__'` when the caller holds none, exactly as today's `!me?.audiences.length`
+branch does. `public` (or any other `'*'`-only audience) stays selectable in the dropdown — nothing
+is hidden — it is just never the initial selection unless the caller personally holds it or
+`prefillAudience` names it explicitly.
 
 ## Implementation Steps
 
@@ -448,7 +473,8 @@ their effect on what audiences they can read and mint), which is unchanged from 
    same env+store-backed default the `use_default_auth` branch builds at `:311-321`. Add a comment
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
 4. `rust/public/src/servers/flight_sql_server.rs`: in `FlightSqlServer::build_and_serve`, right after
-   `lakehouse` is obtained (either path), refuse to proceed below data-lake schema v9 via
+   `lakehouse` is obtained (either path), refuse to proceed below data-lake schema **v9 specifically**
+   (not a general `LATEST_DATA_LAKE_SCHEMA_VERSION` floor — see §2) via
    `micromegas_ingestion::sql_migration::read_data_lake_schema_version`, with the split-deployment
    message `default_provider.rs:130-137` already uses as its model. Applies unconditionally,
    including on the `--disable-auth` and injected-lakehouse (monolith) paths.
@@ -490,17 +516,23 @@ their effect on what audiences they can read and mint), which is unchanged from 
    `('public','mint','*')` row present, `self_service_mint_enabled: false`), so it keeps pinning that
    `MintGate` rejects before the policy is ever consulted.
 
-**Phase 5 — the page legend**
+**Phase 5 — the page legend and Mint dialog default**
 
 10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:842-846`: extend the **Scope:** legend line
    per §5. Check whether `AudienceAccessPage.test.tsx` asserts on that text.
+11. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
+   open-effect to default `audienceChoice` from `me.held_pairs`-filtered `me.audiences` (first
+   match), falling back to `'__new__'`, per §5. `prefillAudience` keeps taking priority, unchanged.
 
 **Phase 6 — docs and changelog**
 
-11. `mkdocs/docs/admin/authentication.md`, `admin/api-keys.md`, `admin/web-app.md`,
+12. `mkdocs/docs/admin/authentication.md`, `admin/api-keys.md`, `admin/web-app.md`,
    `query-guide/python-api.md` — see *Documentation*.
-12. `CHANGELOG.md` — two things: the schema-v9 seeded default, naming the row and how to remove it,
-   and the **Minor breaking change** clause for `--audience`.
+13. `CHANGELOG.md` — two things: the schema-v9 seeded default, naming the row and how to remove it,
+   and an amendment to the existing `## Unreleased` `micromegas-setup-telemetry` entry describing
+   the new `--audience`/`--claim` split in place (no **Minor breaking change** clause — that entry
+   has never shipped in a release, so there is no compatibility window to call out; see *Trade-offs*
+   and the repo's own precedent for this exact situation, `CHANGELOG.md:87`).
 
 ## Files to Modify
 
@@ -515,7 +547,7 @@ their effect on what audiences they can read and mint), which is unchanged from 
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
-| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line (§5) |
+| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line; default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
@@ -524,10 +556,11 @@ their effect on what audiences they can read and mint), which is unchanged from 
 
 **No route or mint-policy changes.** `rust/analytics-web-srv/src/*` and `web_server.rs` are
 untouched — `AudienceMintPolicy` gains nothing, and the migration adds rows, not columns (no
-`SCHEMA_VERSION` file-schema concern, no Arrow schema change). The only web-app change is one legend
-string — the Add grant dialog already does everything
-needed (`AudienceAccessPage.tsx:265-266, :166`), and the ingestion-key mint dialog is behind
-`AuthGuard requireAdmin` (`src/routes/IngestionApiKeysPage.tsx:47`) and unaffected.
+`SCHEMA_VERSION` file-schema concern, no Arrow schema change). The web-app changes are confined to
+`AudienceAccessPage.tsx`: the legend string, and the Mint dialog's default-selection fix (§5) — the
+Add grant dialog already does everything needed for granting
+(`AudienceAccessPage.tsx:265-266, :166`), and the *separate* ingestion-key mint dialog on
+`IngestionApiKeysPage.tsx` is behind `AuthGuard requireAdmin` (`:47`) and unaffected.
 
 ## Trade-offs
 
@@ -571,7 +604,12 @@ explicitly.
 overloaded with two meanings, which is the shape that produced the bug. A separate value flag makes
 each flag mean one thing, and makes the error message a literal command the user can paste. Cost:
 `--audience <fresh-name>` scripts must be edited — the breaking half of the change, called out as
-such, with the replacement named in the error.
+such, with the replacement named in the error. No compatibility window or deprecation period for
+this: `micromegas-setup-telemetry` and its `--audience`-prefixing rule have never shipped in a
+release (`## Unreleased` in `CHANGELOG.md`), so there is no installed base to stage a rollout for —
+the repo's own precedent for exactly this situation (`CHANGELOG.md:87`, the `MICROMEGAS_UNSTAMPED_AUDIENCE`
+removal) is to ship the break directly and say so in the existing Unreleased entry, not to open a
+warn-only period for behaviour nobody has depended on yet.
 
 **`'*'` on `mint` is a real widening, unlike `'*'` on `read`.** A `*` read row exposes data; a `*`
 mint row lets any authenticated caller obtain a standing write credential for that audience. For
@@ -591,8 +629,12 @@ holds. Reinforcing that:
   rejects every non-admin before `mint_key` runs, so the row is inert. That is the default.
 - A knob-**on** deployment has already opted into non-admin self-service mint, and its callers can
   already write into `public` interactively (see above) — what they gain is the standing credential.
-- A deployment with a custom `MICROMEGAS_DEFAULT_AUDIENCE` is untouched: the seed names `public`
-  literally, and their unaudienced writes do not land there.
+- A deployment with a custom `MICROMEGAS_DEFAULT_AUDIENCE` is untouched by the seed itself: it names
+  `public` literally, and their unaudienced writes do not land there. But the §1 recipe such a
+  deployment follows to open its own default carries a real widening if followed carelessly: pairing
+  the mint row with a blanket `read '*'` companion turns the custom default into a second `public`,
+  undoing the isolation the custom default was chosen for. §1 recommends per-user/per-group read
+  grants instead, precisely to keep that posture intact.
 - The row is visible on the Audience Access page immediately after upgrade, labelled `default`, and
   removable from that same page.
 
@@ -632,9 +674,11 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
 
 - **`mkdocs/docs/admin/authentication.md`**, *Self-service ingestion key mint*: new subsection —
   the seeded `('public','mint','*')` default, why the knob still gates it, how to remove it, the
-  custom-default case (add your own row, plus the read companion or callers write where they cannot
-  read back), and a note that a `*` mint row is a deliberate choice for the shared default rather
-  than a general pattern. Also update the existing "before turning on the knob, pre-create a
+  custom-default case (add your own mint row; warn against pairing it with a blanket `read '*'`,
+  which turns the custom default into a second `public`, and point to per-user/per-group read
+  grants instead for a deployment that needs callers to read back what they wrote), and a note
+  that a `*` mint row is a deliberate choice for the shared default rather than a general pattern.
+  Also update the existing "before turning on the knob, pre-create a
   placeholder row" checklist (`:541-560`), which now overlaps the seed for `public`. Amend the existing
   "`public` and the deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed" sentence to
   keep *claimable* and *mintable* visibly distinct. Update the two `micromegas-setup-telemetry`
@@ -700,14 +744,16 @@ deletes the v9-seeded rows from the shared dev database.
 - omitted, `audiences == ["public", "team-alpha"]`, `held_pairs == ["team-alpha:mint"]` →
   `"team-alpha"` silently (§4's headline case)
 - omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`
-- omitted, response with no `held_pairs` key (older server) → falls back to today's behaviour, no
-  `KeyError`
 - existing omitted-`--audience` and admin cases otherwise unchanged
 
-**`analytics-web-app`**: no new behaviour to test — the Add grant dialog's Mint/Everyone path is
-already covered (`AudienceAccessPage.test.tsx:176-187` asserts the Everyone default submits `'*'`;
-`:285-297` asserts Everyone is absent from the non-admin Share dialog). Only fix any snapshot or
-text assertion the §5 legend edit disturbs.
+**`analytics-web-app`**: the Add grant dialog's Mint/Everyone path is already covered
+(`AudienceAccessPage.test.tsx:176-187` asserts the Everyone default submits `'*'`; `:285-297` asserts
+Everyone is absent from the non-admin Share dialog) and needs only a fix to any snapshot or text
+assertion the §5 legend edit disturbs. The Mint dialog's default selection is new behaviour and
+needs its own cases: opening the dialog with `me.audiences == ['public', 'team-alpha']` and
+`held_pairs == ['team-alpha:mint']` defaults `audienceChoice` to `'team-alpha'`, not `'public'`;
+with `held_pairs == []` (only the seeded `public` row visible) it defaults to `'__new__'`; a
+`prefillAudience` still wins over both.
 
 **Manual**, against `local_test_env` with `MICROMEGAS_SELF_SERVICE_MINT=true`: on a freshly
 migrated DB, confirm the Audience Access page shows both seeded rows under `public` (Read and Mint,
@@ -725,12 +771,6 @@ disappear from an ordinary caller's queries, proving the row is genuinely what g
 1. ~~**Is the unconditional seed on upgrade acceptable?**~~ Resolved: yes. Live deployments are
    fully open today, so the seed records the existing posture rather than changing one. No
    conditional guard, no upgrade warning.
-2. **Should `flight-sql-srv`'s schema floor be v9 specifically, or "latest known"?** A floor at v9
-   is the minimum that makes this change safe. A general "refuse to start below
-   `LATEST_DATA_LAKE_SCHEMA_VERSION`" is stricter and would prevent a whole class of split-deployment
-   skew, but it makes every future migration a hard ordering constraint on rollout. Recommending the
-   v9 floor; the general version is a separate call.
-3. **CLI compatibility window** — `--audience <fresh-name>` breaks immediately. A warn-only
-   deprecation period was considered and rejected: the substitution is silent by nature, so a
-   warning-only period preserves exactly the failure being fixed. Flagged in case a staged rollout
-   is preferred.
+
+None outstanding. (The schema-floor and CLI-compatibility-window questions previously listed here
+are resolved in §2 and *Trade-offs* respectively, and reflected in Implementation Steps 4 and 13.)
