@@ -161,19 +161,26 @@ arm in `execute_migration:390-398`) seeds one row:
 
 ```sql
 INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
-VALUES ('public', 'read', '*', now(), 'default'),
-       ('public', 'mint', '*', now(), 'default')
+VALUES ('public', 'read', '*', now(), 'system:migration-v9'),
+       ('public', 'mint', '*', now(), 'system:migration-v9')
 ON CONFLICT DO NOTHING;
 ```
 
 Two rows, one per axis. The `read` row replaces the built-in arm removed in §2; the `mint` row is
 what the issue asks for.
 
-`created_by = 'default'` rather than a user identity, so the rows are self-describing on the
-Audience Access page and in `list_audience_grants()`: an operator can see they were shipped, not
-added by a colleague. `ON CONFLICT DO NOTHING` because an operator who already created either row by
-hand (the path the issue describes for `mint`, and the `{"public": ["*"]}` env entry the docs say
-"changes nothing" for `read`) must not fail the migration.
+`created_by = 'system:migration-v9'` rather than a bare word like `default` or a user identity, so
+the rows are self-describing on the Audience Access page and in `list_audience_grants()` — an
+operator can see they were shipped, not added by a colleague — **and** so no caller identity can
+ever equal the sentinel. `delete_grant`'s non-admin branch (`audience_grants.rs:545-597`) authorizes
+a delete on `selector = 'user:<email>' OR created_by = $deleted_by`, where `$deleted_by` is
+`caller_identity(&caller)` = `email.unwrap_or(subject)` (`:222-231`); a bare `'default'` sits in the
+same namespace as a real caller identity, so a caller whose `email`/`sub` claim happened to be the
+literal string `default` (neither is shape-validated anywhere) could delete the seeded `'*'` rows as
+a non-admin. `:` cannot appear in an email's local part, so `system:migration-v9` closes that off
+rather than merely accepting it. `ON CONFLICT DO NOTHING` because an operator who already created
+either row by hand (the path the issue describes for `mint`, and the `{"public": ["*"]}` env entry
+the docs say "changes nothing" for `read`) must not fail the migration.
 
 **Literal `public`, not `MICROMEGAS_DEFAULT_AUDIENCE`.** A migration that reads an env var bakes in
 whatever the variable happened to be at upgrade time and silently goes stale when it changes. A
@@ -465,8 +472,8 @@ the current viewer — `visible_grants` (`audience_grants.rs:672-720`) strips `"
 `caller_selectors` on both non-admin branches, so a non-admin viewer never sees the seeded
 `('public', axis, '*')` rows themselves, only their effect:
 
-> **Defaults:** `public` ships with Read and Mint grants for everyone (attributed to `default` on
-> the admin view). They are ordinary grants: removing the Read row stops public data from being
+> **Defaults:** `public` ships with Read and Mint grants for everyone (attributed to
+> `system:migration-v9` on the admin view). They are ordinary grants: removing the Read row stops public data from being
 > universally readable; removing the Mint row limits minting into `public` to admins.
 
 The legend gets shorter and stops describing a special case, because after this change there isn't
@@ -549,7 +556,12 @@ they personally hold it or `prefillAudience` names it explicitly.
    (`AudienceReadPolicy::from_env`), `:31` (`PUBLIC_AUDIENCE`), and `:539` (`AudienceMintPolicy`);
    plus the same assertion in `rust/analytics/src/lakehouse/ownership_rewrite.rs:215`,
    `rust/monolith/src/main.rs:250-252`, `rust/public/src/servers/flight_sql_server.rs:146`
-   (`with_read_policy`'s builder doc), and `rust/auth/tests/policy_tests.rs:676`.
+   (`with_read_policy`'s builder doc), and `rust/auth/tests/policy_tests.rs:676`. Also annotate
+   `tasks/data_isolation/audience_based_access_control_plan.md` — the living AbAC epic plan, not
+   `completed/` — at every place it records "`public` is the sole built-in read grant" as the
+   current model (`:195`, `:322`, `:341`, `:696`, `:751`, `:1428`), the same way its eight existing
+   `Superseded by …` notes mark prior overrides: state that this is superseded by the v9 seeded
+   `('public','read','*')` row.
 3. `rust/public/src/servers/flight_sql_server.rs:282-291`: give the injected-provider branch the
    same env+store-backed default the `use_default_auth` branch builds at `:311-321`. Add a comment
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
@@ -610,7 +622,9 @@ they personally hold it or `prefillAudience` names it explicitly.
    (`:931-932`, still reachable — see §5), rephrase the non-admin empty state (`:941-942`), and
    correct the per-audience no-read-grants note (`:993-994`). Check whether
    `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` asserts on any of that
-   text — it already pins the admin empty state's copy in the two tests named in §5.
+   text — it already pins the admin empty state's copy in the two tests named in §5. Also reword
+   `analytics-web-app/src/components/ApiKeysAdminPage.tsx`'s shared mint-dialog audience hint
+   (`:235-237`) per §5's fifth string — `public` readable via its seeded Read grant, not built in.
 10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
    open-effect so a **non-admin** caller defaults `audienceChoice` from `me.held_pairs`-filtered
    `me.audiences` (first match), falling back to `'__new__'`, per §5; an **admin** caller keeps
@@ -621,7 +635,12 @@ they personally hold it or `prefillAudience` names it explicitly.
 **Phase 6 — docs and changelog**
 
 11. `mkdocs/docs/admin/authentication.md`, `admin/functions-reference.md`, `admin/api-keys.md`,
-   `admin/web-app.md`, `query-guide/python-api.md` — see *Documentation*.
+   `admin/web-app.md`, `query-guide/python-api.md` — see *Documentation*. Also correct the two
+   remaining stale `mint_prefix` doc strings this reword touches:
+   `rust/analytics-web-srv/src/audience_grants.rs`'s `mint_prefix_for` doc comment (`:725-739`) and
+   `python/micromegas/micromegas/web_client.py`'s `my_audiences()` docstring (`:180-192`) — both
+   currently say the prefix is what a fresh claim is minted under; correct that and add `held_pairs`
+   to the documented response keys in the latter.
 12. `CHANGELOG.md` — three things: the schema-v9 seeded default, naming the row and how to remove
    it; the built-in public-read-grant removal (public read now requires the seeded
    `('public','read','*')` row), with its own **Deploy-order requirement** paragraph — roll v9
@@ -644,6 +663,7 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `rust/monolith/src/main.rs` | correct the wiring-site comment's built-in-read-grant assertion |
 | `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; correct the `with_read_policy` builder-doc's built-in-read-grant assertion |
 | `rust/auth/tests/policy_tests.rs` | read-side assertions supply `public` via a grant map; pin `"*"` on mint; correct the built-in-read-grant assertion at `:676` |
+| `tasks/data_isolation/audience_based_access_control_plan.md` | annotate the six built-in-public-read-grant statements (`:195`, `:322`, `:341`, `:696`, `:751`, `:1428`) as superseded by the v9 seeded `('public','read','*')` row |
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
@@ -754,8 +774,8 @@ holds. Reinforcing that:
   shows. Conditional seeding would make a migration's result depend on an env var, which is worse.
   Only the mint half is at issue — `public` is world-readable in every deployment today through the
   built-in arm §2 removes, so the seeded read row codifies the status quo everywhere.
-- The row is visible on the Audience Access page immediately after upgrade, labelled `default`, and
-  removable from that same page.
+- The row is visible on the Audience Access page immediately after upgrade, labelled
+  `system:migration-v9`, and removable from that same page.
 
 So this is an ordinary CHANGELOG entry naming the new row and how to remove it — not an upgrade
 warning.
@@ -811,7 +831,7 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   either source"), the one other place in the docs beside `authentication.md` that asserts the
   built-in read grant §2 removes.
 - **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): document that `public` ships
-  with seeded Read and Mint rows, visible to an admin (attributed to `default`) like any other
+  with seeded Read and Mint rows, visible to an admin (attributed to `system:migration-v9`) like any other
   grant on the page — not a special case with an empty Mint column — and the Add grant dialog's
   Mint + Everyone combination as the recipe for opening a *custom* deployment default the same way.
 - **`mkdocs/docs/admin/authentication.md`**, *DB-backed audience grants* section, beside the
@@ -935,7 +955,7 @@ defaults to `'public'` (`me.audiences[0]`), unaffected by the `held_pairs` filte
 
 **Manual**, against `local_test_env` with `MICROMEGAS_SELF_SERVICE_MINT=true`: on a freshly
 migrated DB, confirm the Audience Access page shows both seeded rows under `public` (Read and Mint,
-`default` attribution) and that ordinary queries still return data — i.e. the read path now runs
+`system:migration-v9` attribution) and that ordinary queries still return data — i.e. the read path now runs
 through the row rather than the deleted arm. Then, as a non-admin OIDC login, run
 `micromegas-setup-telemetry --audience public` and confirm the key's `audience` column reads
 `public`; send OTLP with it and confirm the process is visible to a plain `public` reader through
