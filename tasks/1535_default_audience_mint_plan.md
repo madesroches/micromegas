@@ -300,37 +300,20 @@ nothing. Fix it by giving that branch the same env+store-backed default the `use
 branch builds at `:311-321` — `lake_pool_for_keys` is already in scope, so it is a few lines. The
 "defensive empty default" was only ever safe because of the arm being removed.
 
-**The split-deployment ordering window.** Only `telemetry-ingestion-srv` and `micromegas-monolith`
-run migrations (`connect_to_remote_data_lake` → `migrate_db`); `flight-sql-srv` and
-`analytics-web-srv` do not. So a split deployment that upgrades flight-sql-srv *before* the
-ingestion binary has applied v9 gets new code reading a v8 database: no seeded row, no built-in arm,
-every query silently empty. That is the real risk in this section, and documenting a deploy order is
-not enough for a silent failure.
+**The split-deployment ordering window — not guarded.** Only `telemetry-ingestion-srv` and
+`micromegas-monolith` run migrations (`connect_to_remote_data_lake` → `migrate_db`);
+`flight-sql-srv` and `analytics-web-srv` do not. So a split deployment that upgrades flight-sql-srv
+*before* the ingestion binary has applied v9 would get new code reading a v8 database: no seeded
+row, no built-in arm, every query empty until the migration lands.
 
-Make it loud: `FlightSqlServer::build_and_serve` (`rust/public/src/servers/flight_sql_server.rs`)
-checks the data-lake schema version right after it obtains `lakehouse` — the earliest point in that
-function with a DB pool, whether `lakehouse` came from `LakehouseContext::from_env()` or was
-injected — and refuses to proceed below v9. **The floor is v9 specifically, not
-`LATEST_DATA_LAKE_SCHEMA_VERSION`.** `default_provider.rs:130-137` is the only existing precedent
-for a startup schema floor, and it too names a specific version ("has the schema reached migration
-v5?") rather than "latest" — a LATEST-based floor would impose a hard rollout ordering constraint on
-every future migration, which nothing in the codebase does today (v7 and v8 skew was handled with
-CHANGELOG deploy-order notes instead); that is a separate, more sweeping change than what this issue
-needs. There is precedent for the message, too —
-`default_provider.rs:130-137` already tells the operator "the ingestion binary or monolith must run
-the migration before flight-sql starts in a split deployment" for the v5 key tables.
-`read_data_lake_schema_version` (`rust/ingestion/src/sql_migration.rs`, `pub`, currently only
-called from `remote_data_lake.rs`) is the existing read-only helper the new `pub async fn
-require_data_lake_schema_version(pool, min)` wraps, so the version check and its error message live
-in `sql_migration.rs` and can be unit-tested there directly, independent of `build_and_serve`. The
-check runs unconditionally,
-before the `--disable-auth` / `use_default_auth` / injected-provider branch is chosen: split-deployment
-skew is a property of the database, not of the auth path, so it also covers the monolith's own call
-into `build_and_serve` (redundant there, since the monolith runs the migration itself first, but
-harmless) and the `--disable-auth` path (whose `ReadScope::All` doesn't depend on the schema, but
-which should not mask a stale DB either). This converts a data blackout into a startup failure naming
-the fix, and is worth having independent of this change — flight-sql-srv validates no schema version
-at all today.
+**No startup schema floor is added for this.** The window only opens for a deployment that upgrades
+its binaries independently and lets them skew, which is not how this is deployed — the monolith
+migrates before it serves, and split deployments here upgrade together. Guarding it would mean a new
+`pub` helper in `sql_migration.rs`, a startup DB round-trip in `build_and_serve`, and tests, all for
+a state nobody reaches. The failure it would catch is fail-closed anyway: empty result sets, never
+leaked rows. `default_provider.rs:130-137` already carries the analogous v5 message if a deployment
+does manage to skew, and v7/v8 skew was handled the same way — a CHANGELOG deploy-order note, not a
+refusal to boot.
 
 **Not doing:** a conditional fallback ("insert `public` if the store snapshot and env map are both
 empty"). That is the hardcode with extra steps, and it makes "nothing configured yet" indistinguishable
@@ -533,15 +516,7 @@ they personally hold it or `prefillAudience` names it explicitly.
 3. `rust/public/src/servers/flight_sql_server.rs:282-291`: give the injected-provider branch the
    same env+store-backed default the `use_default_auth` branch builds at `:311-321`. Add a comment
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
-4. `rust/ingestion/src/sql_migration.rs`: add `pub async fn require_data_lake_schema_version(pool,
-   min)` beside `read_data_lake_schema_version`, returning an error naming the required version and
-   the split-deployment fix (the `default_provider.rs:130-137` message as its model) when the
-   current version is below `min`. `rust/public/src/servers/flight_sql_server.rs`: in
-   `FlightSqlServer::build_and_serve`, right after `lakehouse` is obtained (either path), call it
-   with **v9 specifically** (not a general `LATEST_DATA_LAKE_SCHEMA_VERSION` floor — see §2) and fail
-   startup on its error. Applies unconditionally, including on the `--disable-auth` and
-   injected-lakehouse (monolith) paths.
-5. `rust/auth/tests/policy_tests.rs`: update the read-side assertions that assume the built-in arm
+4. `rust/auth/tests/policy_tests.rs`: update the read-side assertions that assume the built-in arm
    (`read_policy_public_is_always_present` `:89-95`, `read_policy_grantless_caller_resolves_to_exactly_public`
    `:148-157`, `read_policy_read_audiences_folds_into_the_read_axis` `:161-180`, plus `:615-620`
    and `:685-690`) to supply `public` through a grant map instead. They get better in the process:
@@ -549,21 +524,21 @@ they personally hold it or `prefillAudience` names it explicitly.
 
 **Phase 3 — CLI**
 
-6. `python/micromegas/micromegas/cli/setup_telemetry.py`: add `--claim`; rewrite `resolve_audience`
+5. `python/micromegas/micromegas/cli/setup_telemetry.py`: add `--claim`; rewrite `resolve_audience`
    per §3's table; add §4's `held_pairs` filter to the omitted branch; drop the unused `client`
    parameter; update `--audience`'s help text, the function docstring, and the module docstring.
-7. `python/micromegas/tests/cli/test_setup_telemetry.py`: update existing cases for the new
+6. `python/micromegas/tests/cli/test_setup_telemetry.py`: update existing cases for the new
    signature and add the new ones (see *Testing Strategy*).
 
 **Phase 4 — pin the mechanism**
 
-8. `rust/auth/tests/policy_tests.rs`: add `mint_policy_wildcard_selector_grants_mint_to_any_caller`.
+7. `rust/auth/tests/policy_tests.rs`: add `mint_policy_wildcard_selector_grants_mint_to_any_caller`.
    Nothing currently asserts `"*"` on the **mint** axis at all — it is only exercised on `read`.
    That behaviour is now load-bearing for a documented operator recipe, so it should be pinned
    rather than left as an emergent property of `selector_matches`. Amend the doc comment on
    `mint_policy_public_is_not_mintable_by_default` to say it pins "from an empty grant map", so the
    two tests read as complementary rather than contradictory.
-9. `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `#[ignore]` live-DB section (`:903+`):
+8. `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `#[ignore]` live-DB section (`:903+`):
    one end-to-end case — non-admin, knob on, `('public','mint','*')` row present,
    `{"audience": "public"}` → 201 with `audience == "public"` and `claimed == false`, and **no new
    `audience_grants` row for the caller** (mintable is not claimable; the reserved-name arm in
@@ -581,21 +556,19 @@ they personally hold it or `prefillAudience` names it explicitly.
 
 **Phase 5 — the page legend and Mint dialog default**
 
-10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:842-846`: extend the **Scope:** legend line
+9. `analytics-web-app/src/routes/AudienceAccessPage.tsx:842-846`: extend the **Scope:** legend line
    per §5. Check whether `AudienceAccessPage.test.tsx` asserts on that text.
-11. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
+10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
    open-effect so a **non-admin** caller defaults `audienceChoice` from `me.held_pairs`-filtered
    `me.audiences` (first match), falling back to `'__new__'`, per §5; an **admin** caller keeps
    today's `me.audiences[0]` default, unchanged. `prefillAudience` keeps taking priority, unchanged.
 
 **Phase 6 — docs and changelog**
 
-12. `mkdocs/docs/admin/authentication.md`, `admin/api-keys.md`, `admin/web-app.md`,
+11. `mkdocs/docs/admin/authentication.md`, `admin/api-keys.md`, `admin/web-app.md`,
    `query-guide/python-api.md` — see *Documentation*.
-13. `CHANGELOG.md` — three things: the schema-v9 seeded default, naming the row and how to remove
-   it, with an **Upgrade note** (matching the v8 entry's precedent, `CHANGELOG.md:84`) that
-   flight-sql-srv now refuses to start below schema v9, so ingestion (or the monolith) must run and
-   apply the migration before it is restarted in a split deployment; and an amendment to the
+12. `CHANGELOG.md` — two things: the schema-v9 seeded default, naming the row and how to remove
+   it; and an amendment to the
    existing `## Unreleased` `micromegas-setup-telemetry` entry describing the new `--audience`/`--claim`
    split in place (no **Minor breaking change** clause — that entry has never shipped in a release,
    so there is no compatibility window to call out; see *Trade-offs* and the repo's own precedent
@@ -605,8 +578,8 @@ they personally hold it or `prefillAudience` names it explicitly.
 
 | File | Change |
 |---|---|
-| `rust/ingestion/src/sql_migration.rs` | schema v9: seed `('public','read','*')` + `('public','mint','*')`; add `require_data_lake_schema_version` helper |
-| `rust/ingestion/tests/sql_migration_test.rs` | `build_v8_schema` fixture; v9 seed assertions; `require_data_lake_schema_version` cases |
+| `rust/ingestion/src/sql_migration.rs` | schema v9: seed `('public','read','*')` + `('public','mint','*')` |
+| `rust/ingestion/tests/sql_migration_test.rs` | `build_v8_schema` fixture; v9 seed assertions |
 | `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; correct the built-in-read-grant doc comments (`AudienceGrants`, `AudienceGrants::empty()`, `AudienceReadPolicy`, `AudienceReadPolicy::from_env`, `PUBLIC_AUDIENCE`, `AudienceMintPolicy`) |
 | `rust/analytics/src/lakehouse/ownership_rewrite.rs` | correct the fail-closed comment's built-in-read-grant assertion |
 | `rust/monolith/src/main.rs` | correct the wiring-site comment's built-in-read-grant assertion |
@@ -779,10 +752,6 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
 - **`mkdocs/docs/admin/authentication.md`**, grant-model section: `public` read is no longer a
   built-in — it is a seeded row like any other, and removing it removes public read. This is the
   most consequential doc change here; anywhere the docs say public read needs no grant is now wrong.
-- **`mkdocs/docs/admin/authentication.md`**: note the new v9 startup floor — flight-sql-srv now
-  refuses to start against a pre-v9 schema, so in a split deployment the ingestion binary (or the
-  monolith) must run and apply the migration before flight-sql-srv is restarted, mirroring the
-  existing v5 key-table guidance.
 - Per `CLAUDE.md`, none of the new prose cites issue numbers or stage labels.
 
 ## Testing Strategy
@@ -793,11 +762,7 @@ chain, then: a DB migrated from that pre-v9 snapshot through `execute_migration`
 the two seeded `('public','read','*')` / `('public','mint','*')` rows and
 `LATEST_DATA_LAKE_SCHEMA_VERSION`; running `execute_migration` twice is a no-op (the `ON CONFLICT`);
 a DB where an operator already created either row by hand migrates cleanly and does not duplicate
-or overwrite its `created_by`; `require_data_lake_schema_version(pool, 9)` returns an error naming
-the migration and the split-deployment fix when run against the same pre-v9 (`build_v8_schema`)
-snapshot, and succeeds once that snapshot is migrated to v9 — this is the startup-floor check
-exercised at the helper level; there is no harness in the repo for standing up a live
-`flight-sql-srv` process to test `build_and_serve` itself.
+or overwrite its `created_by`.
 
 **Read side** — `rust/auth/tests/policy_tests.rs`, after the built-in arm is gone:
 
@@ -807,10 +772,6 @@ exercised at the helper level; there is no harness in the repo for standing up a
 - a store snapshot containing `('public','read','*')` resolves to `{public}` — the production path
   (`db_audience_grants_tests.rs` is where a store-backed case belongs)
 - `read_audiences` still folds in independently of `public`
-
-(The v9 startup floor itself is tested at the `require_data_lake_schema_version` helper level, in
-the **Migration** section above — `rust/auth/tests/policy_tests.rs` has no DB and no server to
-start.)
 
 **Mint side** — `rust/auth/tests/policy_tests.rs` (no DB):
 
