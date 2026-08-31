@@ -364,7 +364,7 @@ function MintKeyDialog({
           // every non-admin's `audiences` list, so a plain lexicographic pick can
           // default to the wildcard-only shared pool instead of the caller's own
           // audience -- mirrors the CLI's `resolve_audience` `held_pairs` filter.
-          const personal = me.audiences.find((a) => me.held_pairs.includes(`${a}:mint`))
+          const personal = me.audiences.find((a) => (me.held_pairs ?? []).includes(`${a}:mint`))
           setAudienceChoice(personal ?? me.audiences[0])
           setNewAudience('')
         } else {
