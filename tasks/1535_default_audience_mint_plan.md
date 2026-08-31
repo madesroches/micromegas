@@ -312,8 +312,8 @@ migrates before it serves, and split deployments here upgrade together. Guarding
 `pub` helper in `sql_migration.rs`, a startup DB round-trip in `build_and_serve`, and tests, all for
 a state nobody reaches. The failure it would catch is fail-closed anyway: empty result sets, never
 leaked rows. `default_provider.rs:130-137` already carries the analogous v5 message if a deployment
-does manage to skew, and v7/v8 skew was handled the same way — a CHANGELOG deploy-order note, not a
-refusal to boot.
+does manage to skew, and v7/v8 skew was handled the same way — no startup refusal to boot, which is
+this repo's established norm, not a gap this plan opens.
 
 **Not doing:** a conditional fallback ("insert `public` if the store snapshot and env map are both
 empty"). That is the hardcode with extra steps, and it makes "nothing configured yet" indistinguishable
@@ -434,7 +434,11 @@ Effects:
   stock deployment that is `public`; on a deployment with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`
   and its own seeded mint row (§1) it is `unassigned` instead, so the hint never names an audience
   the caller cannot actually mint. This is the right outcome: a caller with no audience of their own
-  should not silently publish into the shared pool because they omitted a flag.
+  should not silently publish into the shared pool because they omitted a flag. The visible-audience
+  hint is new text; the error's existing claim advice also has to change, from `--audience
+  <new-name>` to `--claim <new-name>` — under §3, `--audience` for a name outside the caller's
+  mintable set is now a hard error, so pointing the caller at it here would send them straight into
+  that error.
 - Admins are unaffected: `held_pairs` is always empty for an admin, and an admin must already pass
   `--audience` explicitly.
 
@@ -472,8 +476,15 @@ their effect on what audiences they can read and mint), which is unchanged from 
 
 **Three more strings on the same page assert the same now-false special case.** The admin empty
 state (`:931-932`, "Every authenticated principal can already read `public`; add a grant to open up
-a named audience") is also unreachable once the seed lands — `grants.length` is now always >= 2 —
-so drop it rather than reword it. The non-admin empty state (`:941-942`, "You hold no audience
+a named audience") is still reachable, not unreachable: `visible_grants`
+(`audience_grants.rs:672-720`) returns every row to an admin, so `grants.length === 0` holds only
+while both seeded rows are absent — a pre-v9 or partially-migrated DB, or an operator who has
+deleted both rows, which §1, §5, and the *Manual* testing section all treat as a supported operator
+action. Two existing tests in `AudienceAccessPage.test.tsx` pin this state — `shows the Add grant
+header button and allows a * selector` (~:164, mocks `grants: []` and waits on `/No audience grants
+yet/`) and `shows the empty state with an Add action when there are no grants` (~:253) — so reword
+the string the same way as the other three below (no grants at all now means nothing is readable or
+mintable by a non-admin) rather than dropping it. The non-admin empty state (`:941-942`, "You hold no audience
 grants. You can read `public`.") restates the same special case the legend above stops describing;
 rephrase it the same way, as `public`'s Read grant rather than a hardcoded exception. The
 per-audience note (`:993-994`, "No read grants — only `public` and any env-map grants apply here")
@@ -546,8 +557,10 @@ they personally hold it or `prefillAudience` names it explicitly.
 **Phase 3 — CLI**
 
 5. `python/micromegas/micromegas/cli/setup_telemetry.py`: add `--claim`; rewrite `resolve_audience`
-   per §3's table; add §4's `held_pairs` filter to the omitted branch; drop the unused `client`
-   parameter; update `--audience`'s help text, the function docstring, and the module docstring.
+   per §3's table; add §4's `held_pairs` filter to the omitted branch, including rewriting its
+   zero-match error's claim advice from `--audience <new-name>` to `--claim <new-name>`; drop the
+   unused `client` parameter; update `--audience`'s help text, the function docstring, and the
+   module docstring.
 6. `python/micromegas/tests/cli/test_setup_telemetry.py`: update existing cases for the new
    signature and add the new ones (see *Testing Strategy*).
 
@@ -578,10 +591,11 @@ they personally hold it or `prefillAudience` names it explicitly.
 **Phase 5 — the page legend and Mint dialog default**
 
 9. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: extend the **Scope:** legend line
-   (`:842-846`) per §5, and fix its three companion strings — drop the now-unreachable admin empty
-   state (`:931-932`), rephrase the non-admin empty state (`:941-942`), and correct the per-audience
-   no-read-grants note (`:993-994`). Check whether `AudienceAccessPage.test.tsx` asserts on any of
-   that text.
+   (`:842-846`) per §5, and fix its three companion strings — reword the admin empty state
+   (`:931-932`, still reachable — see §5), rephrase the non-admin empty state (`:941-942`), and
+   correct the per-audience no-read-grants note (`:993-994`). Check whether
+   `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` asserts on any of that
+   text — it already pins the admin empty state's copy in the two tests named in §5.
 10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
    open-effect so a **non-admin** caller defaults `audienceChoice` from `me.held_pairs`-filtered
    `me.audiences` (first match), falling back to `'__new__'`, per §5; an **admin** caller keeps
@@ -609,12 +623,13 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; correct the built-in-read-grant doc comments (`AudienceGrants`, `AudienceGrants::empty()`, `AudienceReadPolicy`, `AudienceReadPolicy::from_env`, `PUBLIC_AUDIENCE`, `AudienceMintPolicy`) |
 | `rust/analytics/src/lakehouse/ownership_rewrite.rs` | correct the fail-closed comment's built-in-read-grant assertion |
 | `rust/monolith/src/main.rs` | correct the wiring-site comment's built-in-read-grant assertion |
-| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; refuse to start below schema v9 in `build_and_serve`; correct the `with_read_policy` builder-doc's built-in-read-grant assertion |
+| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; correct the `with_read_policy` builder-doc's built-in-read-grant assertion |
 | `rust/auth/tests/policy_tests.rs` | read-side assertions supply `public` via a grant map; pin `"*"` on mint; correct the built-in-read-grant assertion at `:676` |
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
+| `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
@@ -722,7 +737,7 @@ warning.
 **Removing the built-in read grant is fail-closed, not fail-open.** Every way it can go wrong
 (missing seed, un-migrated DB, an embedder's unset policy) results in *less* access, never more:
 queries return nothing. That is the right direction for a confidentiality control, and it is why the
-work in §2 is about making those failures loud (a startup refusal below v9, a real default on the
+work in §2 is about making those failures loud (a real default on the
 injected-provider branch) rather than about containing an over-grant. The one thing to verify in
 review is that no path can resolve an *empty* readable set and have a caller interpret it as
 `ReadScope::All` — `ReadPolicy`'s contract already forbids that softening, and the disabled-auth
@@ -811,7 +826,7 @@ or overwrite its `created_by`.
 - `mint_policy_public_is_not_mintable_by_default` unchanged, doc comment clarified
 
 **`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**, `#[ignore]` live-DB section: the
-end-to-end case in Implementation Step 9, plus knob-off → 403 from `MintGate` with the row present
+end-to-end case in Implementation Step 8, plus knob-off → 403 from `MintGate` with the row present
 (the row is inert until the operator opts in) — this is
 `live_mint_rejects_a_non_admin_claim_of_the_public_audience` repurposed, since its current
 knob-on/403 assertion is exactly what the new e2e case supersedes. Both `public` cases must skip
@@ -834,11 +849,13 @@ deletes the v9-seeded rows from the shared dev database.
   `--claim alice-prod`; with `mint_prefix is None` → hint degrades to `--claim <new-name>`
 - omitted, `audiences == ["public", "team-alpha"]`, `held_pairs == ["team-alpha:mint"]` →
   `"team-alpha"` silently (§4's headline case)
-- omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`
+- omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`, whose
+  claim advice reads `--claim <new-name>`, not `--audience <new-name>`
 - existing omitted-`--audience` and admin cases otherwise unchanged
 
-**`analytics-web-app`**: the Add grant dialog's Mint/Everyone path is already covered
-(`AudienceAccessPage.test.tsx:176-187` asserts the Everyone default submits `'*'`; `:285-297` asserts
+**`analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx`**: the Add grant dialog's
+Mint/Everyone path is already covered
+(`:176-187` asserts the Everyone default submits `'*'`; `:285-297` asserts
 Everyone is absent from the non-admin Share dialog) and needs only a fix to any snapshot or text
 assertion the §5 legend edit disturbs. The Mint dialog's default selection is new behaviour and
 needs its own cases: opening the dialog with `me.audiences == ['public', 'team-alpha']` and
@@ -870,5 +887,6 @@ being present on this same `local_test_env` database.
    fully open today, so the seed records the existing posture rather than changing one. No
    conditional guard, no upgrade warning.
 
-None outstanding. (The schema-floor and CLI-compatibility-window questions previously listed here
-are resolved in §2 and *Trade-offs* respectively, and reflected in Implementation Steps 4 and 13.)
+None outstanding. (The schema-floor question is resolved in §2 — no startup floor is added — and
+the CLI-compatibility-window question is resolved in *Trade-offs*; the latter is reflected in
+Implementation Step 12's CHANGELOG entry.)
