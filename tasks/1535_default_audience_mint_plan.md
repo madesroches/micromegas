@@ -470,6 +470,16 @@ one — every grant on the page is a row on the page, for an admin. That is the 
 this is where a reader sees it — as an admin; a non-admin still cannot see either seeded row (only
 their effect on what audiences they can read and mint), which is unchanged from today.
 
+**Three more strings on the same page assert the same now-false special case.** The admin empty
+state (`:931-932`, "Every authenticated principal can already read `public`; add a grant to open up
+a named audience") is also unreachable once the seed lands — `grants.length` is now always >= 2 —
+so drop it rather than reword it. The non-admin empty state (`:941-942`, "You hold no audience
+grants. You can read `public`.") restates the same special case the legend above stops describing;
+rephrase it the same way, as `public`'s Read grant rather than a hardcoded exception. The
+per-audience note (`:993-994`, "No read grants — only `public` and any env-map grants apply here")
+is now simply wrong for any other audience with no read rows — it grants nothing — so it needs
+correcting, not just rewording.
+
 **The Mint dialog's own default must change, not just its legend.** The header "Mint ingestion key"
 button (`AudienceAccessPage.tsx:744`, `showMintButton = me !== null && (isAdmin || !selfServiceOff)`)
 is offered to an admin unconditionally and to a non-admin once the knob is on, and its dialog's
@@ -488,7 +498,13 @@ hard-coded empty for an admin caller (`audience_grants.rs:835`, `let held_pairs 
 caller.is_admin { Vec::new() }`, pinned by
 `live_my_audiences_admin_gets_a_normal_response_regardless_of_knob`), so filtering by it would
 always fall through to `'__new__'` even when `me.audiences` holds real entries — a regression the
-fix must not introduce. `public` (or any other `'*'`-only audience) stays selectable in the dropdown
+fix must not introduce. That only says why the `held_pairs` filter doesn't apply to an admin, not
+why leaving the admin pre-selected on `public` is safe; the reason is separate: an admin's dropdown
+selection isn't the exposure. `AudienceMintPolicy::resolve_audience`'s `is_admin` arm already lets
+that caller mint into *any* format-valid audience by typing it into the same field — `public`
+pre-selected saves a click, not a widened capability. The hazard this section and §4 guard against
+is a **non-admin** silently getting a standing credential for an audience they could not otherwise
+reach, which does not describe an admin. `public` (or any other `'*'`-only audience) stays selectable in the dropdown
 for everyone — nothing is hidden — it is just never the initial selection for a non-admin unless
 they personally hold it or `prefillAudience` names it explicitly.
 
@@ -518,9 +534,14 @@ they personally hold it or `prefillAudience` names it explicitly.
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
 4. `rust/auth/tests/policy_tests.rs`: update the read-side assertions that assume the built-in arm
    (`read_policy_public_is_always_present` `:89-95`, `read_policy_grantless_caller_resolves_to_exactly_public`
-   `:148-157`, `read_policy_read_audiences_folds_into_the_read_axis` `:161-180`, plus `:615-620`
-   and `:685-690`) to supply `public` through a grant map instead. They get better in the process:
-   they will exercise the configuration production actually runs.
+   `:148-157`, `read_policy_read_audiences_folds_into_the_read_axis` `:161-180`) to supply `public`
+   through a grant map instead. They get better in the process: they will exercise the configuration
+   production actually runs. `:615-620` (`from_env_with_unset_var_resolves_to_public_only`) pins an
+   *unset* env var, not the built-in arm — supplying a grant map there would destroy that premise, so
+   instead change its assertion to the empty set and rename it accordingly. `:685-690`
+   (`default_audience_from_env_neither_var_set_is_public`) asserts `default_audience_from_env(...) ==
+   PUBLIC_AUDIENCE` and builds no read policy at all, so it needs no change here — its doc comment at
+   `:676` is already covered by step 2.
 
 **Phase 3 — CLI**
 
@@ -556,12 +577,17 @@ they personally hold it or `prefillAudience` names it explicitly.
 
 **Phase 5 — the page legend and Mint dialog default**
 
-9. `analytics-web-app/src/routes/AudienceAccessPage.tsx:842-846`: extend the **Scope:** legend line
-   per §5. Check whether `AudienceAccessPage.test.tsx` asserts on that text.
+9. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: extend the **Scope:** legend line
+   (`:842-846`) per §5, and fix its three companion strings — drop the now-unreachable admin empty
+   state (`:931-932`), rephrase the non-admin empty state (`:941-942`), and correct the per-audience
+   no-read-grants note (`:993-994`). Check whether `AudienceAccessPage.test.tsx` asserts on any of
+   that text.
 10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
    open-effect so a **non-admin** caller defaults `audienceChoice` from `me.held_pairs`-filtered
    `me.audiences` (first match), falling back to `'__new__'`, per §5; an **admin** caller keeps
-   today's `me.audiences[0]` default, unchanged. `prefillAudience` keeps taking priority, unchanged.
+   today's `me.audiences[0]` default, unchanged — accepted rather than filtered, per §5's
+   justification (an admin's own selection is never the exposure). `prefillAudience` keeps taking
+   priority, unchanged.
 
 **Phase 6 — docs and changelog**
 
@@ -588,7 +614,7 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
-| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line; default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
+| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
@@ -731,13 +757,18 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   user is the obvious default for one. Note in a sentence that a deployment running a custom
   `MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` row and can delete it — no extended
   warning, no recommended posture. Also update the existing "before turning on the knob, pre-create a
-  placeholder row" checklist (`:541-560`), which now overlaps the seed for `public`. Amend the existing
+  placeholder row" checklist (`:541-560`), which now overlaps the seed for `public` — and replace its
+  `micromegas-grants create legacy-default read '*'` example with an identity-selector placeholder
+  (e.g. `read 'group:eng'`), so the example agrees with §1's guidance against a blanket read wildcard
+  on a custom default. Amend the existing
   "`public` and the deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed" sentence to
   keep *claimable* and *mintable* visibly distinct. Update the two `micromegas-setup-telemetry`
   examples: the fresh-claim one becomes `--claim "$USER-ci-runner"`, plus an `--audience public`
   example.
 - **`mkdocs/docs/admin/api-keys.md`**: update the naming-convention paragraph (`:281-295`) for
-  `--claim`.
+  `--claim`, and correct `:255-256` ("`public` is the one built-in: ... no grant entry needed in
+  either source"), the one other place in the docs beside `authentication.md` that asserts the
+  built-in read grant §2 removes.
 - **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): the Add grant dialog's
   Mint + Everyone combination as the way to open the deployment default, and that `public`'s empty
   Mint column does not mean "no grant needed" the way its read scope does.
@@ -826,7 +857,12 @@ through the row rather than the deleted arm. Then, as a non-admin OIDC login, ru
 `micromegas-query`. Then remove the Mint row from the same page and confirm the CLI errors with the
 suggested command instead of minting `jane-doe-public` — i.e. that removing the default actually
 restores per-caller isolation. Removing the **Read** row is the sharper check: public data should
-disappear from an ordinary caller's queries, proving the row is genuinely what grants it.
+disappear from an ordinary caller's queries, proving the row is genuinely what grants it. **Restore
+both rows immediately afterward** — Add grant → `public` / Read / Everyone and `public` / Mint /
+Everyone, or `micromegas-grants create public read '*'` and `micromegas-grants create public mint
+'*'` — since `execute_migration` only runs the v8→v9 arm once and will not re-seed them on a DB
+already at v9, and the new `#[ignore]` cases in `ingestion_keys_tests.rs` assert against these rows
+being present on this same `local_test_env` database.
 
 ## Open Questions
 
