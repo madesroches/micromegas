@@ -189,6 +189,11 @@ micromegas-grants --url ... create unassigned mint '*'
 micromegas-grants --url ... create unassigned read '*'
 ```
 
+A deployment with a custom default and the knob on that skips this step has no mintable default and
+will hit the CLI error (§4) until it does. A startup `warn!` for that case ("self-service mint is on
+and `<default>` has no mint grant") is cheap and would be a natural companion to the seed, but is not
+planned here — it is a separate, additive change, not required for this issue.
+
 **No `rust/` policy code changes** — only the migration. What this buys over an implicit
 `open_audience` arm on `AudienceMintPolicy`:
 
@@ -235,12 +240,20 @@ becomes exactly:
 ∪ caller.read_audiences                                         per-key direct grant
 ```
 
-Doc comments to correct, since both currently assert the built-in as intended design:
+Doc comments to correct, since all five currently assert the built-in as intended design:
 
 - `AudienceGrants` (`:242-244`): "`public` is not stored here: it is the sole built-in read grant
   … (though writing one changes nothing)." It *is* stored now, and writing one is how it works.
 - `AudienceReadPolicy` (`:440-461`): the formula at `:444` loses its leading `{ PUBLIC_AUDIENCE }`
   term.
+- `PUBLIC_AUDIENCE`'s own doc comment (`policy.rs:31`): "The reserved audience every authenticated
+  principal may read" is no longer true of the const itself — it stays true only because of the
+  seeded row now.
+- `ownership_rewrite.rs:215`: "a caller matching no grant resolves to `{public}`" is the rationale
+  given for that code's fail-closed `lit(false)` arm; the empty set is now reachable in production
+  (missing seed, un-migrated DB) for the first time, so the comment needs to say so.
+- `monolith/main.rs:250-252`: "an empty grant map -> a real caller's resolved scope is just
+  `{public}`" describes the exact wiring site §2 depends on and needs the same correction.
 
 **Closing the one path where this could go dark.** `AudienceReadPolicy` has four construction
 sites; three are already safe, one is not:
@@ -266,13 +279,21 @@ ingestion binary has applied v9 gets new code reading a v8 database: no seeded r
 every query silently empty. That is the real risk in this section, and documenting a deploy order is
 not enough for a silent failure.
 
-Make it loud: `flight-sql-srv` checks the data-lake schema version at startup and refuses to start
-below v9. There is precedent for the message —`default_provider.rs:130-137` already tells the
-operator "the ingestion binary or monolith must run the migration before flight-sql starts in a
-split deployment" for the v5 key tables. `read_data_lake_schema_version`
-(`rust/ingestion/src/remote_data_lake.rs`) is the existing read-only helper. This converts a data
-blackout into a startup failure naming the fix, and is worth having independent of this change —
-flight-sql-srv validates no schema version at all today.
+Make it loud: `FlightSqlServer::build_and_serve` (`rust/public/src/servers/flight_sql_server.rs`)
+checks the data-lake schema version right after it obtains `lakehouse` — the earliest point in that
+function with a DB pool, whether `lakehouse` came from `LakehouseContext::from_env()` or was
+injected — and refuses to proceed below v9. There is precedent for the message —
+`default_provider.rs:130-137` already tells the operator "the ingestion binary or monolith must run
+the migration before flight-sql starts in a split deployment" for the v5 key tables.
+`read_data_lake_schema_version` (`rust/ingestion/src/sql_migration.rs`, `pub`, currently only
+called from `remote_data_lake.rs`) is the existing read-only helper. The check runs unconditionally,
+before the `--disable-auth` / `use_default_auth` / injected-provider branch is chosen: split-deployment
+skew is a property of the database, not of the auth path, so it also covers the monolith's own call
+into `build_and_serve` (redundant there, since the monolith runs the migration itself first, but
+harmless) and the `--disable-auth` path (whose `ReadScope::All` doesn't depend on the schema, but
+which should not mask a stale DB either). This converts a data blackout into a startup failure naming
+the fix, and is worth having independent of this change — flight-sql-srv validates no schema version
+at all today.
 
 **Not doing:** a conditional fallback ("insert `public` if the store snapshot and env map are both
 empty"). That is the hardcode with extra steps, and it makes "nothing configured yet" indistinguishable
@@ -336,17 +357,26 @@ admin branch's list calls — drop it, since every caller and test is being touc
 ### §4 — Keep auto-resolution working now that `public` is in every caller's list
 
 `--audience`-omitted resolution filters `audiences` to the caller's **personally held** mint
-audiences before applying the existing zero/one/many rule:
+audiences before applying the existing zero/one/many rule — but only when the response actually
+carries `held_pairs`; an older server that predates it must fall back to today's unfiltered
+behaviour rather than filtering against a key that was never sent:
 
 ```python
-personal = [a for a in audiences if f"{a}:mint" in set(my_audiences.get("held_pairs", []))]
+if "held_pairs" in my_audiences:
+    held = set(my_audiences["held_pairs"])
+    personal = [a for a in audiences if f"{a}:mint" in held]
+else:
+    personal = audiences  # older server, no held_pairs field: today's behaviour
 ```
 
 `held_pairs` (`audience_grants.rs:772-786`) is exactly this: `"{audience}:{axis}"` for every pair
 the caller holds via an *identity* selector, with `"*"` filtered out of `caller_selectors` before
 the query. It already exists on the response and needs no server change; it was added so the web
 app could tell "a pair I hold" from "a pair I can merely see", which is the same distinction needed
-here.
+here. A missing key (older server) and a present-but-empty list (current server, caller holds no
+mint grant of their own) are different facts and must not be conflated: `.get("held_pairs", [])`
+would treat both as "holds nothing" and filter the older server down to zero matches instead of
+preserving its existing behaviour.
 
 Effects:
 
@@ -354,9 +384,13 @@ Effects:
   exactly as today. The `eval "$(micromegas-setup-telemetry --name my-laptop)"` recipe keeps
   working.
 - A caller whose only mint authority is the seeded row → zero matches → the existing "no mintable
-  audience found" error, whose text gains `--audience public` as a first suggestion. This is the
-  right outcome: a caller with no audience of their own should not silently publish into the shared
-  pool because they omitted a flag.
+  audience found" error, whose text gains a suggestion built from data the CLI already has: the
+  entries of `audiences` that are not in `personal` (i.e. `[a for a in audiences if a not in
+  personal]`) — visible-but-not-personally-held audiences the caller could pass explicitly. On the
+  stock deployment that is `public`; on a deployment with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`
+  and its own seeded mint row (§1) it is `unassigned` instead, so the hint never names an audience
+  the caller cannot actually mint. This is the right outcome: a caller with no audience of their own
+  should not silently publish into the shared pool because they omitted a flag.
 - Admins are unaffected: `held_pairs` is always empty for an admin, and an admin must already pass
   `--audience` explicitly.
 
@@ -378,15 +412,19 @@ The Audience Access page's legend (`AudienceAccessPage.tsx:842-846`) currently r
 
 That sentence is the page-level version of the bug: it tells an operator `public` needs no row,
 which was true for read and never true for mint. After §1 and §2 it is simply false — `public` has
-two rows, and they are what grant its access. Replace it:
+two rows, and they are what grant its access. Replace it, without claiming the rows are listed for
+the current viewer — `visible_grants` (`audience_grants.rs:672-720`) strips `"*"` from
+`caller_selectors` on both non-admin branches, so a non-admin viewer never sees the seeded
+`('public', axis, '*')` rows themselves, only their effect:
 
-> **Defaults:** `public` ships with Read and Mint grants for everyone, shown below as `default`
-> rows. They are ordinary grants: remove the Read row and public data stops being universally
-> readable; remove the Mint row and only admins can issue keys stamped `public`.
+> **Defaults:** `public` ships with Read and Mint grants for everyone (attributed to `default` on
+> the admin view). They are ordinary grants: removing the Read row stops public data from being
+> universally readable; removing the Mint row limits minting into `public` to admins.
 
 The legend gets shorter and stops describing a special case, because after this change there isn't
-one — every grant on the page is a row on the page. That is the real payoff of §2, and this is where
-a reader sees it.
+one — every grant on the page is a row on the page, for an admin. That is the real payoff of §2, and
+this is where a reader sees it — as an admin; a non-admin still cannot see either seeded row (only
+their effect on what audiences they can read and mint), which is unchanged from today.
 
 ## Implementation Steps
 
@@ -395,17 +433,25 @@ a reader sees it.
 1. `rust/ingestion/src/sql_migration.rs`: add `upgrade_data_lake_schema_v9` with the seed INSERT,
    bump `LATEST_DATA_LAKE_SCHEMA_VERSION`, and add the `if 8 == current_version` arm in
    `execute_migration` (`:390-398` is the v8 arm to mirror). Check whether
-   `rust/analytics-web-srv/tests/migration_test.rs` pins the version.
+   `rust/ingestion/tests/sql_migration_test.rs` pins the version — it will need a new
+   `build_v8_schema` helper (chaining `build_v7_schema` with the v8 step directly, bypassing
+   `execute_migration`, in the same style as `build_v6_schema`/`build_v7_schema`) so a v9 test has a
+   pre-v9 fixture to migrate from.
 
 **Phase 2 — remove the built-in read grant**
 
 2. `rust/auth/src/policy.rs`: delete `set.insert(PUBLIC_AUDIENCE.to_string())` (`:512`); correct the
-   `AudienceGrants` (`:242-244`) and `AudienceReadPolicy` (`:440-461`) doc comments.
+   `AudienceGrants` (`:242-244`), `AudienceReadPolicy` (`:440-461`), and `PUBLIC_AUDIENCE` (`:31`)
+   doc comments, plus the built-in-read-grant assertions in
+   `rust/analytics/src/lakehouse/ownership_rewrite.rs:215` and `rust/monolith/src/main.rs:250-252`.
 3. `rust/public/src/servers/flight_sql_server.rs:282-291`: give the injected-provider branch the
    same env+store-backed default the `use_default_auth` branch builds at `:311-321`. Add a comment
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
-4. `rust/flight-sql-srv/src/main.rs`: refuse to start below data-lake schema v9, with the
-   split-deployment message `default_provider.rs:130-137` already uses as its model.
+4. `rust/public/src/servers/flight_sql_server.rs`: in `FlightSqlServer::build_and_serve`, right after
+   `lakehouse` is obtained (either path), refuse to proceed below data-lake schema v9 via
+   `micromegas_ingestion::sql_migration::read_data_lake_schema_version`, with the split-deployment
+   message `default_provider.rs:130-137` already uses as its model. Applies unconditionally,
+   including on the `--disable-auth` and injected-lakehouse (monolith) paths.
 5. `rust/auth/tests/policy_tests.rs`: update the read-side assertions that assume the built-in arm
    (`read_policy_public_is_always_present` `:89-95`, `read_policy_grantless_caller_resolves_to_exactly_public`
    `:148-157`, `read_policy_read_audiences_folds_into_the_read_axis` `:161-180`, plus `:615-620`
@@ -432,7 +478,17 @@ a reader sees it.
    one end-to-end case — non-admin, knob on, `('public','mint','*')` row present,
    `{"audience": "public"}` → 201 with `audience == "public"` and `claimed == false`, and **no new
    `audience_grants` row for the caller** (mintable is not claimable; the reserved-name arm in
-   `try_claim_and_mint` is never reached because the policy already said `Ok`).
+   `try_claim_and_mint` is never reached because the policy already said `Ok`). Unlike every other
+   case in this section, this one must **not** call `cleanup_audience(&pool, "public")` at the
+   end — that helper runs `DELETE FROM audience_grants WHERE audience = $1` against the real
+   `MICROMEGAS_SQL_CONNECTION_STRING` database, and for `public` it would delete both v9-seeded
+   rows, silently revoking public read/mint for the deployment and breaking every later run.
+   Assert against the seeded rows and leave them in place; do not create or delete anything on
+   `public`. This new case supersedes `live_mint_rejects_a_non_admin_claim_of_the_public_audience`
+   (`:1094-1120`), which asserts the opposite outcome against the same live DB and starts failing
+   once the v9 seed lands: repurpose it into the knob-off → 403 case instead (same request, non-admin,
+   `('public','mint','*')` row present, `self_service_mint_enabled: false`), so it keeps pinning that
+   `MintGate` rejects before the policy is ever consulted.
 
 **Phase 5 — the page legend**
 
@@ -451,9 +507,10 @@ a reader sees it.
 | File | Change |
 |---|---|
 | `rust/ingestion/src/sql_migration.rs` | schema v9: seed `('public','read','*')` + `('public','mint','*')` |
-| `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; correct two doc comments |
-| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch |
-| `rust/flight-sql-srv/src/main.rs` | refuse to start below schema v9 |
+| `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; correct three doc comments |
+| `rust/analytics/src/lakehouse/ownership_rewrite.rs` | correct the fail-closed comment's built-in-read-grant assertion |
+| `rust/monolith/src/main.rs` | correct the wiring-site comment's built-in-read-grant assertion |
+| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; refuse to start below schema v9 in `build_and_serve` |
 | `rust/auth/tests/policy_tests.rs` | read-side assertions supply `public` via a grant map; pin `"*"` on mint |
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
@@ -598,10 +655,13 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
 
 ## Testing Strategy
 
-**Migration** (`rust/analytics-web-srv/tests/migration_test.rs` / the ingestion migration tests):
-a DB migrated from a pre-v9 snapshot ends with exactly one `('public','mint','*')` row; running
-`execute_migration` twice is a no-op (the `ON CONFLICT`); a DB where an operator already created
-that row by hand migrates cleanly and does not duplicate or overwrite its `created_by`.
+**Migration** (`rust/ingestion/tests/sql_migration_test.rs`, live-DB, `#[ignore]`d): add a
+`build_v8_schema` helper alongside the existing `build_v5_schema`/`build_v6_schema`/`build_v7_schema`
+chain, then: a DB migrated from that pre-v9 snapshot through `execute_migration` ends with exactly
+the two seeded `('public','read','*')` / `('public','mint','*')` rows and
+`LATEST_DATA_LAKE_SCHEMA_VERSION`; running `execute_migration` twice is a no-op (the `ON CONFLICT`);
+a DB where an operator already created either row by hand migrates cleanly and does not duplicate
+or overwrite its `created_by`.
 
 **Read side** — `rust/auth/tests/policy_tests.rs`, after the built-in arm is gone:
 
@@ -620,8 +680,12 @@ that row by hand migrates cleanly and does not duplicate or overwrite its `creat
 - `mint_policy_public_is_not_mintable_by_default` unchanged, doc comment clarified
 
 **`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**, `#[ignore]` live-DB section: the
-end-to-end case in Implementation Step 4, plus knob-off → 403 from `MintGate` with the row present
-(the row is inert until the operator opts in).
+end-to-end case in Implementation Step 9, plus knob-off → 403 from `MintGate` with the row present
+(the row is inert until the operator opts in) — this is
+`live_mint_rejects_a_non_admin_claim_of_the_public_audience` repurposed, since its current
+knob-on/403 assertion is exactly what the new e2e case supersedes. Both `public` cases must skip
+the section's usual `cleanup_audience(&pool, &audience)` teardown — run against `"public"` it
+deletes the v9-seeded rows from the shared dev database.
 
 **`python/micromegas/tests/cli/test_setup_telemetry.py`**:
 
@@ -661,20 +725,12 @@ disappear from an ordinary caller's queries, proving the row is genuinely what g
 1. ~~**Is the unconditional seed on upgrade acceptable?**~~ Resolved: yes. Live deployments are
    fully open today, so the seed records the existing posture rather than changing one. No
    conditional guard, no upgrade warning.
-2. **Should a custom `MICROMEGAS_DEFAULT_AUDIENCE` get a startup hint?** The seed names `public`
-   literally, so a deployment with a custom default and the knob on has no mintable default and will
-   hit the CLI error. A one-line `warn!` at startup ("self-service mint is on and `<default>` has no
-   mint grant") is cheap and non-committal. Not planned, but it is the natural companion to the
-   seed.
-3. **Should `flight-sql-srv`'s schema floor be v9 specifically, or "latest known"?** A floor at v9
+2. **Should `flight-sql-srv`'s schema floor be v9 specifically, or "latest known"?** A floor at v9
    is the minimum that makes this change safe. A general "refuse to start below
    `LATEST_DATA_LAKE_SCHEMA_VERSION`" is stricter and would prevent a whole class of split-deployment
    skew, but it makes every future migration a hard ordering constraint on rollout. Recommending the
    v9 floor; the general version is a separate call.
-4. **`--claim` as an admin** — planned as an error pointing at `--audience`, since an admin typing
-   `--claim prod` almost certainly wants `prod`, not `admin-prod` (the same substitution shape this
-   issue is about).
-5. **CLI compatibility window** — `--audience <fresh-name>` breaks immediately. A warn-only
+3. **CLI compatibility window** — `--audience <fresh-name>` breaks immediately. A warn-only
    deprecation period was considered and rejected: the substitution is silent by nature, so a
    warning-only period preserves exactly the failure being fixed. Flagged in case a staged rollout
    is preferred.
