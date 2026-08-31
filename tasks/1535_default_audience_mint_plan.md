@@ -392,7 +392,7 @@ relies on auto-resolution picking it will now get the zero-match error instead. 
 requires a pre-existing `*` mint row, which nothing in the docs currently recommends) and moves in
 the same direction as the rest of the change — explicit beats implicit for a shared audience.
 
-### §5 — The page legend stops describing a special case, and the Mint dialog stops defaulting to it
+### §5 — The page legend stops describing a special case, and the Mint dialog explains the choice
 
 The Audience Access page's legend (`AudienceAccessPage.tsx:842-846`) currently reads:
 
@@ -428,22 +428,23 @@ dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:2
 public readability as intrinsic. Behaviour is unaffected (the dialog is admin-gated), but reword it
 the same way: `public` is readable via its seeded Read grant, not built in.
 
-**The Mint dialog's own default must change, not just its legend.** The dialog's `useEffect`
+**The Mint dialog keeps its default and gains a help line.** The dialog's `useEffect`
 (`AudienceAccessPage.tsx:361-362`) seeds `audienceChoice` from `me.audiences[0]` with no prefill,
 and the `<select>` (`:455`) lists `me.audiences`, sorted server-side. Once the seed lands, `public`
 is in every non-admin's `audiences` and sorts ahead of most personal audience names, so the dialog
-opens pre-selected on `public` — silently defaulting a non-admin's key to the shared audience, the
-exact hazard §4 prevents on the CLI. Apply the fix on the **non-admin path only**: default
-`audienceChoice` from the caller's **personally held** mint audiences (filter `me.audiences` to
-entries with `"{audience}:mint"` in `me.held_pairs`, already read on this page at `:644`), taking
-the first match; fall back to `'__new__'` when the caller holds none, exactly as today's
-`!me?.audiences.length` branch does. **An admin keeps today's `me.audiences[0]` default,
-unchanged** — `held_pairs` is hard-coded empty for an admin caller (`audience_grants.rs:835`), so
-filtering by it would regress the default to `'__new__'`; and an admin can already mint into any
-format-valid audience by typing it into the same field, so `public` pre-selected widens nothing.
-`public` (or any other `'*'`-only audience) stays selectable for everyone — it is just never the
-initial selection for a non-admin unless they personally hold it or `prefillAudience` names it
-explicitly.
+opens pre-selected on `public`. That default stays: the value is visible before commit, the name
+says what it is, and changing it is one interaction — unlike the CLI's silent auto-resolution, which
+is why §4 guards that path and this one needs no equivalent.
+
+What the field does lack is any statement of the alternative. Add one help line under the
+`<select>`, shown to non-admins:
+
+> `public` is readable by every authenticated user. Pick *New audience…* to give this key's data its
+> own audience, with read access you manage separately.
+
+"Manage separately" is deliberate over "keep it to yourself" — a claimed audience is not a private
+hole, it is a scope whose readers are granted afterwards, by the claimer via Share or by an admin.
+The line names the trade without promising exclusivity the model does not offer.
 
 ## Implementation Steps
 
@@ -516,7 +517,7 @@ explicitly.
    `live_mint_succeeds_for_non_admin_with_a_matching_grant_no_claim_attempted`, `"*"` on the mint
    axis by step 7's unit test, and the seeded rows by the migration test.
 
-**Phase 5 — the page legend and Mint dialog default**
+**Phase 5 — the page legend and the Mint dialog help line**
 
 9. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: extend the **Scope:** legend line
    (`:842-846`) per §5, and fix its three companion strings — reword the admin empty state
@@ -526,12 +527,9 @@ explicitly.
    text — it already pins the admin empty state's copy in the two tests named in §5. Also reword
    `analytics-web-app/src/components/ApiKeysAdminPage.tsx`'s shared mint-dialog audience hint
    (`:235-237`) per §5's fifth string — `public` readable via its seeded Read grant, not built in.
-10. `analytics-web-app/src/routes/AudienceAccessPage.tsx:361-362`: change the Mint dialog's
-   open-effect so a **non-admin** caller defaults `audienceChoice` from `me.held_pairs`-filtered
-   `me.audiences` (first match), falling back to `'__new__'`, per §5; an **admin** caller keeps
-   today's `me.audiences[0]` default, unchanged — accepted rather than filtered, per §5's
-   justification (an admin's own selection is never the exposure). `prefillAudience` keeps taking
-   priority, unchanged.
+10. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: add the §5 help line under the Mint
+   dialog's audience `<select>` (`:455`), for non-admins only. The dialog's default selection,
+   `prefillAudience` precedence, and the admin path are all unchanged.
 
 **Phase 6 — docs and changelog**
 
@@ -568,7 +566,7 @@ explicitly.
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | repurpose the public-claim live case to knob-off → 403 (step 8) |
-| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
+| `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); add the Mint dialog's audience help line (§5) |
 | `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
 | `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | reword the shared mint dialog's audience hint (§5) — public readability is a removable grant, not intrinsic |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples; v9 deploy-order note; built-in-read-grant correction |
@@ -585,7 +583,7 @@ gains nothing — the migration adds rows, not columns (no `SCHEMA_VERSION` file
 Arrow schema change). The one `rust/analytics-web-srv/src/*` edit is the `mint_prefix_for`
 doc-comment correction above: its claim that the CLI mints fresh audiences under the prefix no
 longer holds once §3 lands. The web-app changes are otherwise confined to
-`AudienceAccessPage.tsx`: the legend string, and the Mint dialog's default-selection fix (§5) — the
+`AudienceAccessPage.tsx`: the legend string, and the Mint dialog's help line (§5) — the
 Add grant dialog already does everything needed for granting
 (`AudienceAccessPage.tsx:265-266, :166`). The *separate* ingestion-key mint dialog rendered by
 `ApiKeysAdminPage.tsx` (behind `AuthGuard requireAdmin` on `IngestionApiKeysPage.tsx:47`) needs only
@@ -835,13 +833,9 @@ against `"public"` — that deletes the v9-seeded rows from the shared dev datab
 Mint/Everyone path is already covered
 (`:176-187` asserts the Everyone default submits `'*'`; `:285-297` asserts
 Everyone is absent from the non-admin Share dialog) and needs only a fix to any snapshot or text
-assertion the §5 legend edit disturbs. The Mint dialog's default selection is new behaviour and
-needs its own cases: opening the dialog with `me.audiences == ['public', 'team-alpha']` and
-`held_pairs == ['team-alpha:mint']` defaults `audienceChoice` to `'team-alpha'`, not `'public'`;
-with `held_pairs == []` (only the seeded `public` row visible) it defaults to `'__new__'`; a
-`prefillAudience` still wins over both; and an **admin** caller with
-`me.audiences == ['public', 'team-alpha']` (`held_pairs` empty, as it always is for an admin) still
-defaults to `'public'` (`me.audiences[0]`), unaffected by the `held_pairs` filter.
+assertion the §5 legend edit disturbs. The Mint dialog needs one added case: a non-admin opening
+it sees the help line, and an admin does not. No default-selection cases — the default is unchanged,
+and `:457` already covers opening the dialog.
 
 **Manual**, against `local_test_env` with `MICROMEGAS_SELF_SERVICE_MINT=true`: on a freshly
 migrated DB, confirm the Audience Access page shows both seeded rows under `public` (Read and Mint,
