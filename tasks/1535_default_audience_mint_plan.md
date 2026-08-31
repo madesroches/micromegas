@@ -491,6 +491,16 @@ per-audience note (`:993-994`, "No read grants — only `public` and any env-map
 is now simply wrong for any other audience with no read rows — it grants nothing — so it needs
 correcting, not just rewording.
 
+**A fifth string, on a different page, asserts the same special case.** The shared API-keys mint
+dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:235-237`, shown when
+`config.showAudience` is set — true for the ingestion-key mint dialog on
+`IngestionApiKeysPage.tsx:29`, which is admin-only via `AuthGuard requireAdmin`) reads *"The write
+audience this key is scoped to. `public` is readable by every authenticated principal; use a named
+audience to restrict it."* Behaviour is unaffected (the dialog is admin-gated either way), but the
+sentence presents public readability as intrinsic, which after §2 it is not — it is `public`'s
+seeded Read row, removable like any other. Reword it the same way as the strings above: `public` is
+readable via its seeded Read grant, not built in.
+
 **The Mint dialog's own default must change, not just its legend.** The header "Mint ingestion key"
 button (`AudienceAccessPage.tsx:744`, `showMintButton = me !== null && (isAdmin || !selfServiceOff)`)
 is offered to an admin unconditionally and to a non-admin once the knob is on, and its dialog's
@@ -639,23 +649,26 @@ they personally hold it or `prefillAudience` names it explicitly.
 | `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
+| `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | reword the shared mint dialog's audience hint (§5) — public readability is a removable grant, not intrinsic |
 | `mkdocs/docs/admin/authentication.md` | the Mint/Everyone recipe; mint-vs-claim distinction; updated script examples; v9 deploy-order note; built-in-read-grant correction |
 | `mkdocs/docs/admin/functions-reference.md` | correct `list_audience_grants()`'s "none of them appear here" claim about `public` — seeded rows appear only for an admin caller |
 | `mkdocs/docs/admin/api-keys.md` | `--claim` in the naming-convention paragraph |
 | `mkdocs/docs/admin/web-app.md` | Audience Access section: opening the default from the Add grant dialog |
 | `mkdocs/docs/query-guide/python-api.md` | `micromegas-setup-telemetry` reference |
 | `rust/analytics-web-srv/src/audience_grants.rs` | correct `mint_prefix_for`'s doc comment: the prefix is now the web app's claim composition plus the CLI's suggested name, not something the CLI mints under |
+| `python/micromegas/micromegas/web_client.py` | correct `my_audiences()`'s docstring: `mint_prefix` is now the web app's claim composition plus the CLI's suggested name, not something a fresh claim is minted under; add `held_pairs` to the documented response keys |
 | `CHANGELOG.md` | Unreleased entry |
 
 **No route or mint-policy behaviour change.** `web_server.rs` is untouched, and `AudienceMintPolicy`
 gains nothing — the migration adds rows, not columns (no `SCHEMA_VERSION` file-schema concern, no
 Arrow schema change). The one `rust/analytics-web-srv/src/*` edit is the `mint_prefix_for`
 doc-comment correction above: its claim that the CLI mints fresh audiences under the prefix no
-longer holds once §3 lands. The web-app changes are confined to
+longer holds once §3 lands. The web-app changes are otherwise confined to
 `AudienceAccessPage.tsx`: the legend string, and the Mint dialog's default-selection fix (§5) — the
 Add grant dialog already does everything needed for granting
-(`AudienceAccessPage.tsx:265-266, :166`), and the *separate* ingestion-key mint dialog on
-`IngestionApiKeysPage.tsx` is behind `AuthGuard requireAdmin` (`:47`) and unaffected.
+(`AudienceAccessPage.tsx:265-266, :166`). The *separate* ingestion-key mint dialog rendered by
+`ApiKeysAdminPage.tsx` (behind `AuthGuard requireAdmin` on `IngestionApiKeysPage.tsx:47`) needs only
+its audience hint reworded (§5) — its behaviour is unaffected.
 
 ## Trade-offs
 
@@ -806,6 +819,14 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   seed — the same `flight-sql-srv`/`analytics-web-srv`-vs-`migrate_db` skew window applies (no
   seeded row, no built-in arm, every query returns nothing until the migration lands), pointing to
   the matching CHANGELOG entry the same way the v7 paragraph does.
+- **`mkdocs/docs/query-guide/python-api.md:671-674`**, the `my_audiences()` client reference: reword
+  `mint_prefix` the same way as `web_client.py`'s own docstring (the web app's claim composition plus
+  the CLI's suggested name, not something a fresh claim is minted under), and add `held_pairs` to the
+  documented response keys.
+- **`mkdocs/docs/admin/authentication.md:655`**, the `/my-audiences` route table row: reword the same
+  stale `mint_prefix` sentence ("the caller-derived namespace prefix a fresh claim mints under") the
+  same way — this row already lists `held_pairs` among the response keys, so only the `mint_prefix`
+  wording needs correcting here.
 - **`mkdocs/docs/query-guide/python-api.md:924-975`**: rewrite the `--audience` bullet list for the
   new rule, document `--claim`, and document the `held_pairs`-based auto-resolution. Delete "There
   is no flag to bypass this prefixing" and the self-service-reach rationale under it: the CLI no
@@ -848,9 +869,14 @@ or overwrite its `created_by`.
 - an empty grant map with no store resolves to the **empty** set for a grantless caller (the
   inverse of today's `read_policy_grantless_caller_resolves_to_exactly_public`)
 - a grant map naming `{"public": ["*"]}` resolves to `{public}` for any caller — the env-map path
-- a store snapshot containing `('public','read','*')` resolves to `{public}` — the production path
-  (`db_audience_grants_tests.rs` is where a store-backed case belongs)
 - `read_audiences` still folds in independently of `public`
+
+No new store-backed case is needed for the `*`-on-read-through-the-store path: the store-wiring
+half is already pinned by `db_audience_grants_tests.rs`'s
+`live_read_policy_with_store_grants_a_store_granted_selector` (a store row grants read through
+`AudienceReadPolicy::resolve`), and the `"*"` selector's behaviour on the read axis is already
+pinned by `policy_tests.rs::read_policy_star_selector_grants_everyone` (via the env map) — between
+them nothing about the seeded row's specific shape is left unpinned.
 
 **Mint side** — `rust/auth/tests/policy_tests.rs` (no DB):
 
@@ -885,10 +911,12 @@ deletes the v9-seeded rows from the shared dev database.
 - omitted, `audiences == ["public"]`, `held_pairs == []` → error naming `--audience public`, whose
   claim advice reads `--claim <new-name>`, not `--audience <new-name>`
 - existing omitted-`--audience` cases (`test_omitted_audience_non_admin_exactly_one_match_is_used_silently`,
-  `..._multiple_matches_is_an_error`) keep their outcomes once their `my_audiences` fixtures gain a
-  matching `held_pairs` entry (e.g. `held_pairs: ["team-alpha:mint"]`) — without one, §4's personal
-  filter now removes the caller's only candidate before the zero/one/many rule ever runs; admin
-  cases are otherwise unchanged
+  `..._multiple_matches_is_an_error`, `..._no_matches_is_an_error`) keep their outcomes once their
+  `my_audiences` fixtures gain a matching `held_pairs` entry (e.g. `held_pairs: ["team-alpha:mint"]`
+  for the first two, `held_pairs: []` for the no-matches case) — without one, §4's personal filter
+  reads a missing key and raises `KeyError` instead of reaching the zero/one/many rule at all; admin
+  cases are otherwise unchanged (`test_omitted_audience_admin_is_always_an_error` is unaffected — the
+  admin arm errors before the filter runs)
 - `test_run_non_admin_claim_does_not_call_create_audience_grant` is converted from driving `run()`
   with `--audience laptop` (now a hard error) to `--claim laptop`, asserting the mint call and
   minted audience are the verbatim name rather than a `{mint_prefix}`-composed one
