@@ -169,15 +169,9 @@ ON CONFLICT DO NOTHING;
 Two rows, one per axis. The `read` row replaces the built-in arm removed in §2; the `mint` row is
 what the issue asks for.
 
-`created_by = 'default'` rather than a user identity, so the rows are self-describing on the
-Audience Access page and in `list_audience_grants()` — an operator can see they were shipped, not
-added by a colleague. The sentinel shares a namespace with caller identities, and that overlap is
-accepted: `delete_grant`'s non-admin branch (`audience_grants.rs:545-597`) authorizes a delete on
-`selector = 'user:<email>' OR created_by = $deleted_by`, where `$deleted_by` is
-`caller_identity(&caller)` = `email.unwrap_or(subject)` (`:222-231`), so a caller whose `email`/`sub`
-claim is the literal string `default` (neither is shape-validated anywhere) could delete the seeded
-`'*'` rows as a non-admin. Nothing issues such an identity today, and a qualified sentinel would cost
-the plainness the attribution is for. `ON CONFLICT DO NOTHING` because an operator who already created
+`created_by = 'default'` rather than a user identity, so the rows read as shipped, not added by a
+colleague; the sentinel shares a namespace with caller identities, and that overlap is accepted —
+see *Security*. `ON CONFLICT DO NOTHING` because an operator who already created
 either row by hand (the path the issue describes for `mint`, and the `{"public": ["*"]}` env entry
 the docs say "changes nothing" for `read`) must not fail the migration.
 
@@ -210,32 +204,12 @@ readable by every authenticated caller, i.e. a second `public`. Per-user or per-
 (`create unassigned read 'user:<email>'`) cover the read-back case without that.
 
 A deployment with a custom default and the knob on that skips the mint row above has no mintable
-default and will hit the CLI error (§4) until it does. A startup `warn!` for that case
-("self-service mint is on and `<default>` has no mint grant") is cheap and would be a natural
-companion to the seed, but is not planned here — it is a separate, additive change, not required for
-this issue.
+default and will hit the CLI error (§4) until it does.
 
-**No `rust/` policy code changes** — only the migration. What this buys over an implicit
-`open_audience` arm on `AudienceMintPolicy`:
-
-- **Auditable, on the same page that creates it.** The row shows up under `public`'s Mint column on
-  the Audience Access page and in `list_audience_grants()`, so an operator can see *why* every
-  caller can mint into `public`, and revoke it there. An implicit code arm is invisible on both
-  surfaces — an operator auditing "who may mint into `public`" would read an empty Mint column and
-  be wrong.
-- **Revocable and tunable per deployment.** `delete` the row, or narrow `'*'` to `group:eng`. The
-  code arm is all-or-nothing and tied to a knob that governs four other things.
-- **Composes.** The read half of the problem (a custom default that callers can write but not read)
-  is the same mechanism with `read` instead of `mint`. A code arm would need a second code arm.
-- **Already gated.** `MintGate` blocks knob-off non-admins, so the row is inert until the operator
-  opts into self-service — no new gating logic, no second place for the knob to be checked.
-- **Consistent with existing guidance.** The docs already tell operators to pre-create a
-  placeholder row for the default before turning the knob on
-  (`mkdocs/docs/admin/authentication.md:541-560`). This is that same row, with axis `mint`.
-
-The cost is that the default now has to be *chosen* rather than left implicit, and applied to
-existing deployments by a migration — see *Security* for the upgrade question that raises, which is
-the one genuinely contentious decision in this plan.
+**No `rust/` policy code changes** — only the migration. Why a row beats an implicit
+`open_audience` arm on `AudienceMintPolicy` is argued once, in *Trade-offs*. The cost is that the
+default now has to be *chosen* rather than left implicit, and applied to existing deployments by a
+migration — see *Security*.
 
 **Env-map config cannot do this.** `MICROMEGAS_AUDIENCE_GRANTS` is never consulted on the mint
 route — `mint_key` builds its `AudienceGrants` purely from the DB point query. This matches the
@@ -261,33 +235,12 @@ becomes exactly:
 ∪ caller.read_audiences                                         per-key direct grant
 ```
 
-Doc comments to correct, since each currently asserts the built-in as intended design:
-
-- `AudienceGrants` (`:242-244`): "`public` is not stored here: it is the sole built-in read grant
-  … (though writing one changes nothing)." It *is* stored now, and writing one is how it works.
-- `AudienceGrants::empty()` (`policy.rs:251`): "every audience but `public` is unreadable and
-  unmintable by anyone non-admin" needs the same correction — `public` is no longer special-cased,
-  it is unreadable (and unmintable) too from an empty grant map.
-- `AudienceReadPolicy` (`:440-461`): the formula at `:444` loses its leading `{ PUBLIC_AUDIENCE }`
-  term.
-- `AudienceReadPolicy::from_env` (`policy.rs:482`): "the readable set degenerates to `{public}` plus
-  `read_audiences`" needs the same correction.
-- `PUBLIC_AUDIENCE`'s own doc comment (`policy.rs:31`): "The reserved audience every authenticated
-  principal may read" is no longer true of the const itself — it stays true only because of the
-  seeded row now.
-- `AudienceMintPolicy` (`policy.rs:539`): "being able to *read* `public`, which every authenticated
-  principal is" needs the same correction — read of `public` is no longer automatic.
-- `flight_sql_server.rs:146` (`with_read_policy`, a **published builder-API doc**): "readable set
-  degenerates to `{public}`" needs the same correction — worth flagging since `flight_sql_server.rs`
-  is in *Files to Modify* only for the two behaviour changes in §2, so this doc site would
-  otherwise be missed.
-- `ownership_rewrite.rs:215`: "a caller matching no grant resolves to `{public}`" is the rationale
-  given for that code's fail-closed `lit(false)` arm; the empty set is now reachable in production
-  (missing seed, un-migrated DB) for the first time, so the comment needs to say so.
-- `monolith/main.rs:250-252`: "an empty grant map -> a real caller's resolved scope is just
-  `{public}`" describes the exact wiring site §2 depends on and needs the same correction.
-- `policy_tests.rs:676`: "`public`, the one built-in read grant every authenticated principal
-  holds" needs the same correction.
+Doc comments asserting the built-in as intended design need correcting — most notably
+`AudienceGrants` (`:242-244`, "`public` is not stored here … (though writing one changes nothing)":
+it *is* stored now, and writing one is how it works) and `PUBLIC_AUDIENCE`'s own comment
+(`policy.rs:31`: every-principal readability now comes from the seeded row, not the const). Step 2
+enumerates every site; `ownership_rewrite.rs:215`'s should also note the empty resolved set is now
+reachable in production.
 
 **Closing the one path where this could go dark.** `AudienceReadPolicy` has four construction
 sites; three are already safe, one is not:
@@ -312,18 +265,9 @@ branch builds at `:311-321` — `lake_pool_for_keys` is already in scope, so it 
 *before* the ingestion binary has applied v9 would get new code reading a v8 database: no seeded
 row, no built-in arm, every query empty until the migration lands.
 
-**No startup schema floor is added for this.** The window only opens for a deployment that upgrades
-its binaries independently and lets them skew, which is not how this is deployed — the monolith
-migrates before it serves, and split deployments here upgrade together. Guarding it would mean a new
-`pub` helper in `sql_migration.rs`, a startup DB round-trip in `build_and_serve`, and tests, all for
-a state nobody reaches. The failure it would catch is fail-closed anyway: empty result sets, never
-leaked rows. `default_provider.rs:130-137` already carries the analogous v5 message if a deployment
-does manage to skew, and v7/v8 skew was handled the same way — no startup refusal to boot, which is
-this repo's established norm, not a gap this plan opens.
-
-**Not doing:** a conditional fallback ("insert `public` if the store snapshot and env map are both
-empty"). That is the hardcode with extra steps, and it makes "nothing configured yet" indistinguishable
-from "deliberately empty" — the exact ambiguity the seed exists to remove.
+**No startup schema floor is added for this.** The skew failure is fail-closed (empty result sets,
+never leaked rows), and this repo's norm for skew is a runtime message
+(`default_provider.rs:130-137`), not a refusal to boot.
 
 ### §3 — CLI: `--audience` means what it says, `--claim` claims
 
@@ -343,13 +287,10 @@ name predictable *before* the call. Namespacing moves into the documented invoca
 (§ Documentation), where the convention is visible in the line the user copies rather than applied
 behind their back.
 
-This diverges from the web app deliberately, and the asymmetry is principled rather than an
-oversight. `AudienceAccessPage.tsx:376,479` composes `{mint_prefix}{newAudience}` too, but renders
-*"Will claim `alice-ci-runner`"* live as the user types — the prefix is visible before commit. A
-CLI cannot show that, which is exactly why the same rule reads as helpful in the dialog and as a
-surprise on the command line. The web app keeps composing; `mint_prefix` stays on
-`MyAudiencesResponse`, since `AudienceAccessPage.tsx:375` needs it and the CLI still uses it to
-suggest a namespaced name in the zero-match error.
+The web app keeps composing (`AudienceAccessPage.tsx:376,479`) — it renders the composed name live
+before commit, which a CLI cannot. `mint_prefix` stays on `MyAudiencesResponse`, since
+`AudienceAccessPage.tsx:375` needs it and the CLI still uses it to suggest a namespaced name in the
+zero-match error.
 
 `resolve_audience`'s new rule:
 
@@ -436,11 +377,9 @@ Effects:
 - A caller whose only mint authority is the seeded row → zero matches → the existing "no mintable
   audience found" error, whose text gains a suggestion built from data the CLI already has: the
   entries of `audiences` that are not in `personal` (i.e. `[a for a in audiences if a not in
-  personal]`) — visible-but-not-personally-held audiences the caller could pass explicitly. On the
-  stock deployment that is `public`; on a deployment with `MICROMEGAS_DEFAULT_AUDIENCE=unassigned`
-  and its own seeded mint row (§1) it is `unassigned` instead, so the hint never names an audience
-  the caller cannot actually mint. This is the right outcome: a caller with no audience of their own
-  should not silently publish into the shared pool because they omitted a flag. The visible-audience
+  personal]`) — visible-but-not-personally-held audiences the caller could pass explicitly. This is
+  the right outcome: a caller with no audience of their own should not silently publish into the
+  shared pool because they omitted a flag. The visible-audience
   hint is new text; the error's existing claim advice also has to change, from `--audience
   <new-name>` to `--claim <new-name>` — under §3, `--audience` for a name outside the caller's
   mintable set is now a hard error, so pointing the caller at it here would send them straight into
@@ -452,11 +391,6 @@ Behaviour change to declare: a deployment that already has a `*` mint row on som
 relies on auto-resolution picking it will now get the zero-match error instead. This is niche (it
 requires a pre-existing `*` mint row, which nothing in the docs currently recommends) and moves in
 the same direction as the rest of the change — explicit beats implicit for a shared audience.
-
-Simpler alternative, if the filter feels like too much: skip §4 entirely and accept that every
-caller must pass `--audience` explicitly once the seed lands. Rejected as
-the default because it degrades the headline recipe for every caller in the deployment, but it is a
-one-line difference if preferred.
 
 ### §5 — The page legend stops describing a special case, and the Mint dialog stops defaulting to it
 
@@ -481,59 +415,35 @@ this is where a reader sees it — as an admin; a non-admin still cannot see eit
 their effect on what audiences they can read and mint), which is unchanged from today.
 
 **Three more strings on the same page assert the same now-false special case.** The admin empty
-state (`:931-932`, "Every authenticated principal can already read `public`; add a grant to open up
-a named audience") is still reachable, not unreachable: `visible_grants`
-(`audience_grants.rs:672-720`) returns every row to an admin, so `grants.length === 0` holds only
-while both seeded rows are absent — a pre-v9 or partially-migrated DB, or an operator who has
-deleted both rows, which §1, §5, and the *Manual* testing section all treat as a supported operator
-action. Two existing tests in `AudienceAccessPage.test.tsx` pin this state — `shows the Add grant
-header button and allows a * selector` (~:164, mocks `grants: []` and waits on `/No audience grants
-yet/`) and `shows the empty state with an Add action when there are no grants` (~:253) — so reword
-the string the same way as the other three below (no grants at all now means nothing is readable or
-mintable by a non-admin) rather than dropping it. The non-admin empty state (`:941-942`, "You hold no audience
-grants. You can read `public`.") restates the same special case the legend above stops describing;
-rephrase it the same way, as `public`'s Read grant rather than a hardcoded exception. The
-per-audience note (`:993-994`, "No read grants — only `public` and any env-map grants apply here")
-is now simply wrong for any other audience with no read rows — it grants nothing — so it needs
-correcting, not just rewording.
+state (`:931-932`) is still reachable — a pre-v9 DB, or an operator who has deleted both rows — and
+its copy is pinned by two tests in `AudienceAccessPage.test.tsx` (~:164, ~:253); reword it (no
+grants at all now means nothing is readable or mintable by a non-admin) rather than dropping it.
+The non-admin empty state (`:941-942`, "You hold no audience grants. You can read `public`.") gets
+the same rephrasing, as `public`'s Read grant rather than a hardcoded exception. The per-audience
+note (`:993-994`, "No read grants — only `public` and any env-map grants apply here") is now simply
+wrong for any other audience with no read rows — it needs correcting, not just rewording.
 
 **A fifth string, on a different page, asserts the same special case.** The shared API-keys mint
-dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:235-237`, shown when
-`config.showAudience` is set — true for the ingestion-key mint dialog on
-`IngestionApiKeysPage.tsx:29`, which is admin-only via `AuthGuard requireAdmin`) reads *"The write
-audience this key is scoped to. `public` is readable by every authenticated principal; use a named
-audience to restrict it."* Behaviour is unaffected (the dialog is admin-gated either way), but the
-sentence presents public readability as intrinsic, which after §2 it is not — it is `public`'s
-seeded Read row, removable like any other. Reword it the same way as the strings above: `public` is
-readable via its seeded Read grant, not built in.
+dialog's audience hint (`analytics-web-app/src/components/ApiKeysAdminPage.tsx:235-237`) presents
+public readability as intrinsic. Behaviour is unaffected (the dialog is admin-gated), but reword it
+the same way: `public` is readable via its seeded Read grant, not built in.
 
-**The Mint dialog's own default must change, not just its legend.** The header "Mint ingestion key"
-button (`AudienceAccessPage.tsx:744`, `showMintButton = me !== null && (isAdmin || !selfServiceOff)`)
-is offered to an admin unconditionally and to a non-admin once the knob is on, and its dialog's
-`useEffect` (`:361-362`) seeds `audienceChoice` from `me.audiences[0]` with no prefill — the
-`<select>` (`:455`) lists `me.audiences` verbatim, sorted server-side by `my_audiences`
-(`audience_grants.rs`). Once the seed lands, `public` is in every non-admin's `audiences` and sorts
-ahead of most personal audience names, so the dialog opens pre-selected on `public` for anyone who
-hasn't personally claimed something earlier alphabetically — silently defaulting a non-admin's key to
-the shared audience, the exact hazard §4 exists to prevent on the CLI. Apply the fix on the
-**non-admin path only**: default `audienceChoice` from the caller's **personally held** mint
-audiences (`me.held_pairs`, already read elsewhere on this page at `:644` — filter `me.audiences` to
-entries with `"{audience}:mint"` in `held_pairs`, the same test §4 applies), taking the first match;
-fall back to `'__new__'` when the caller holds none, exactly as today's `!me?.audiences.length`
-branch does. **An admin keeps today's `me.audiences[0]` default, unchanged** — `held_pairs` is
-hard-coded empty for an admin caller (`audience_grants.rs:835`, `let held_pairs = if
-caller.is_admin { Vec::new() }`, pinned by
-`live_my_audiences_admin_gets_a_normal_response_regardless_of_knob`), so filtering by it would
-always fall through to `'__new__'` even when `me.audiences` holds real entries — a regression the
-fix must not introduce. That only says why the `held_pairs` filter doesn't apply to an admin, not
-why leaving the admin pre-selected on `public` is safe; the reason is separate: an admin's dropdown
-selection isn't the exposure. `AudienceMintPolicy::resolve_audience`'s `is_admin` arm already lets
-that caller mint into *any* format-valid audience by typing it into the same field — `public`
-pre-selected saves a click, not a widened capability. The hazard this section and §4 guard against
-is a **non-admin** silently getting a standing credential for an audience they could not otherwise
-reach, which does not describe an admin. `public` (or any other `'*'`-only audience) stays selectable in the dropdown
-for everyone — nothing is hidden — it is just never the initial selection for a non-admin unless
-they personally hold it or `prefillAudience` names it explicitly.
+**The Mint dialog's own default must change, not just its legend.** The dialog's `useEffect`
+(`AudienceAccessPage.tsx:361-362`) seeds `audienceChoice` from `me.audiences[0]` with no prefill,
+and the `<select>` (`:455`) lists `me.audiences`, sorted server-side. Once the seed lands, `public`
+is in every non-admin's `audiences` and sorts ahead of most personal audience names, so the dialog
+opens pre-selected on `public` — silently defaulting a non-admin's key to the shared audience, the
+exact hazard §4 prevents on the CLI. Apply the fix on the **non-admin path only**: default
+`audienceChoice` from the caller's **personally held** mint audiences (filter `me.audiences` to
+entries with `"{audience}:mint"` in `me.held_pairs`, already read on this page at `:644`), taking
+the first match; fall back to `'__new__'` when the caller holds none, exactly as today's
+`!me?.audiences.length` branch does. **An admin keeps today's `me.audiences[0]` default,
+unchanged** — `held_pairs` is hard-coded empty for an admin caller (`audience_grants.rs:835`), so
+filtering by it would regress the default to `'__new__'`; and an admin can already mint into any
+format-valid audience by typing it into the same field, so `public` pre-selected widens nothing.
+`public` (or any other `'*'`-only audience) stays selectable for everyone — it is just never the
+initial selection for a non-admin unless they personally hold it or `prefillAudience` names it
+explicitly.
 
 ## Implementation Steps
 
@@ -556,11 +466,9 @@ they personally hold it or `prefillAudience` names it explicitly.
    plus the same assertion in `rust/analytics/src/lakehouse/ownership_rewrite.rs:215`,
    `rust/monolith/src/main.rs:250-252`, `rust/public/src/servers/flight_sql_server.rs:146`
    (`with_read_policy`'s builder doc), and `rust/auth/tests/policy_tests.rs:676`. Also annotate
-   `tasks/data_isolation/audience_based_access_control_plan.md` — the living AbAC epic plan, not
-   `completed/` — at every place it records "`public` is the sole built-in read grant" as the
-   current model (`:195`, `:322`, `:341`, `:696`, `:751`, `:1428`), the same way its eight existing
-   `Superseded by …` notes mark prior overrides: state that this is superseded by the v9 seeded
-   `('public','read','*')` row.
+   `tasks/data_isolation/audience_based_access_control_plan.md` at `:195`, `:322`, `:341`, `:696`,
+   `:751`, `:1428` with its existing `Superseded by …` convention: the built-in read grant is
+   superseded by the v9 seeded `('public','read','*')` row.
 3. `rust/public/src/servers/flight_sql_server.rs:282-291`: give the injected-provider branch the
    same env+store-backed default the `use_default_auth` branch builds at `:311-321`. Add a comment
    on the disabled-auth branch (`:333`) noting that its never-resolved property is now load-bearing.
@@ -598,21 +506,15 @@ they personally hold it or `prefillAudience` names it explicitly.
    rather than left as an emergent property of `selector_matches`. Amend the doc comment on
    `mint_policy_public_is_not_mintable_by_default` to say it pins "from an empty grant map", so the
    two tests read as complementary rather than contradictory.
-8. `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `#[ignore]` live-DB section (`:903+`):
-   one end-to-end case — non-admin, knob on, `('public','mint','*')` row present,
-   `{"audience": "public"}` → 201 with `audience == "public"` and `claimed == false`, and **no new
-   `audience_grants` row for the caller** (mintable is not claimable; the reserved-name arm in
-   `try_claim_and_mint` is never reached because the policy already said `Ok`). Unlike every other
-   case in this section, this one must **not** call `cleanup_audience(&pool, "public")` at the
-   end — that helper runs `DELETE FROM audience_grants WHERE audience = $1` against the real
-   `MICROMEGAS_SQL_CONNECTION_STRING` database, and for `public` it would delete both v9-seeded
-   rows, silently revoking public read/mint for the deployment and breaking every later run.
-   Assert against the seeded rows and leave them in place; do not create or delete anything on
-   `public`. This new case supersedes `live_mint_rejects_a_non_admin_claim_of_the_public_audience`
-   (`:1094-1120`), which asserts the opposite outcome against the same live DB and starts failing
-   once the v9 seed lands: repurpose it into the knob-off → 403 case instead (same request, non-admin,
-   `('public','mint','*')` row present, `self_service_mint_enabled: false`), so it keeps pinning that
-   `MintGate` rejects before the policy is ever consulted.
+8. `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`:
+   `live_mint_rejects_a_non_admin_claim_of_the_public_audience` (`:1094-1120`) starts failing once
+   the v9 seed lands (the policy now grants the mint). Repurpose it into the knob-off → 403 case
+   (same request, non-admin, `self_service_mint_enabled: false`), keeping the pin that `MintGate`
+   rejects before the policy is ever consulted. Do not create or delete anything on `public` —
+   `cleanup_audience(&pool, "public")` would delete both v9-seeded rows from the shared dev
+   database. No new end-to-end case: grant-row → 201 → no-claim is already pinned by
+   `live_mint_succeeds_for_non_admin_with_a_matching_grant_no_claim_attempted`, `"*"` on the mint
+   axis by step 7's unit test, and the seeded rows by the migration test.
 
 **Phase 5 — the page legend and Mint dialog default**
 
@@ -657,15 +559,15 @@ they personally hold it or `prefillAudience` names it explicitly.
 |---|---|
 | `rust/ingestion/src/sql_migration.rs` | schema v9: seed `('public','read','*')` + `('public','mint','*')` |
 | `rust/ingestion/tests/sql_migration_test.rs` | `build_v8_schema` fixture; v9 seed assertions |
-| `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; correct the built-in-read-grant doc comments (`AudienceGrants`, `AudienceGrants::empty()`, `AudienceReadPolicy`, `AudienceReadPolicy::from_env`, `PUBLIC_AUDIENCE`, `AudienceMintPolicy`) |
-| `rust/analytics/src/lakehouse/ownership_rewrite.rs` | correct the fail-closed comment's built-in-read-grant assertion |
-| `rust/monolith/src/main.rs` | correct the wiring-site comment's built-in-read-grant assertion |
-| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; correct the `with_read_policy` builder-doc's built-in-read-grant assertion |
-| `rust/auth/tests/policy_tests.rs` | read-side assertions supply `public` via a grant map; pin `"*"` on mint; correct the built-in-read-grant assertion at `:676` |
-| `tasks/data_isolation/audience_based_access_control_plan.md` | annotate the six built-in-public-read-grant statements (`:195`, `:322`, `:341`, `:696`, `:751`, `:1428`) as superseded by the v9 seeded `('public','read','*')` row |
+| `rust/auth/src/policy.rs` | delete the built-in `PUBLIC_AUDIENCE` read insert; doc-comment sweep (step 2) |
+| `rust/analytics/src/lakehouse/ownership_rewrite.rs` | doc-comment sweep (step 2) |
+| `rust/monolith/src/main.rs` | doc-comment sweep (step 2) |
+| `rust/public/src/servers/flight_sql_server.rs` | real env+store default on the injected-provider branch; doc-comment sweep (step 2) |
+| `rust/auth/tests/policy_tests.rs` | read-side assertions supply `public` via a grant map; pin `"*"` on mint; doc-comment sweep (step 2) |
+| `tasks/data_isolation/audience_based_access_control_plan.md` | six `Superseded by` annotations (step 2) |
 | `python/micromegas/micromegas/cli/setup_telemetry.py` | `--claim`; `resolve_audience` rewrite; `held_pairs` filter |
 | `python/micromegas/tests/cli/test_setup_telemetry.py` | updated + new cases |
-| `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | one `#[ignore]` live-DB end-to-end case |
+| `rust/analytics-web-srv/tests/ingestion_keys_tests.rs` | repurpose the public-claim live case to knob-off → 403 (step 8) |
 | `analytics-web-app/src/routes/AudienceAccessPage.tsx` | extend the **Scope:** legend line and its three companion strings (admin/non-admin empty states, per-audience note); default the Mint dialog's audience choice from `held_pairs`, not `me.audiences[0]` (§5) |
 | `analytics-web-app/src/routes/__tests__/AudienceAccessPage.test.tsx` | fix any snapshot/text assertion the legend edit disturbs; four new Mint-dialog default-selection cases |
 | `analytics-web-app/src/components/ApiKeysAdminPage.tsx` | reword the shared mint dialog's audience hint (§5) — public readability is a removable grant, not intrinsic |
@@ -759,12 +661,8 @@ not present `create <anything> mint '*'` as a general pattern.
 open — every audience mechanism shipped so far is a *forward*-looking isolation seam, and no live
 deployment is relying on `public` being un-mintable to keep anything apart. Seeding
 `('public','mint','*')` writes down what is already true rather than changing a posture anyone
-holds. Reinforcing that:
+holds. Two caveats:
 
-- A knob-**off** deployment is unaffected regardless: `MintGate` (`ingestion_keys.rs:293-319`)
-  rejects every non-admin before `mint_key` runs, so the row is inert. That is the default.
-- A knob-**on** deployment has already opted into non-admin self-service mint, and its callers can
-  already write into `public` interactively (see above) — what they gain is the standing credential.
 - The no-widening argument holds exactly where the deployment default *is* `public`. A deployment
   running a custom `MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` mint row, and its
   callers could not previously mint into `public` — so with the knob on, that deployment does gain a
@@ -773,8 +671,6 @@ holds. Reinforcing that:
   shows. Conditional seeding would make a migration's result depend on an env var, which is worse.
   Only the mint half is at issue — `public` is world-readable in every deployment today through the
   built-in arm §2 removes, so the seeded read row codifies the status quo everywhere.
-- The row is visible on the Audience Access page immediately after upgrade, labelled
-  `default`, and removable from that same page.
 - **`created_by = 'default'` shares a namespace with caller identities — accepted.** `delete_grant`
   lets a non-admin delete a row whose `created_by` equals their own `caller_identity`
   (`email.unwrap_or(subject)`), and neither claim is shape-validated, so an identity that is literally
@@ -896,13 +792,6 @@ or overwrite its `created_by`.
 - a grant map naming `{"public": ["*"]}` resolves to `{public}` for any caller — the env-map path
 - `read_audiences` still folds in independently of `public`
 
-No new store-backed case is needed for the `*`-on-read-through-the-store path: the store-wiring
-half is already pinned by `db_audience_grants_tests.rs`'s
-`live_read_policy_with_store_grants_a_store_granted_selector` (a store row grants read through
-`AudienceReadPolicy::resolve`), and the `"*"` selector's behaviour on the read axis is already
-pinned by `policy_tests.rs::read_policy_star_selector_grants_everyone` (via the env map) — between
-them nothing about the seeded row's specific shape is left unpinned.
-
 **Mint side** — `rust/auth/tests/policy_tests.rs` (no DB):
 
 - `"*"` on the mint axis grants mint to a caller with no email, no groups, `is_admin: false`
@@ -910,12 +799,8 @@ them nothing about the seeded row's specific shape is left unpinned.
 - `mint_policy_public_is_not_mintable_by_default` unchanged, doc comment clarified
 
 **`rust/analytics-web-srv/tests/ingestion_keys_tests.rs`**, `#[ignore]` live-DB section: the
-end-to-end case in Implementation Step 8, plus knob-off → 403 from `MintGate` with the row present
-(the row is inert until the operator opts in) — this is
-`live_mint_rejects_a_non_admin_claim_of_the_public_audience` repurposed, since its current
-knob-on/403 assertion is exactly what the new e2e case supersedes. Both `public` cases must skip
-the section's usual `cleanup_audience(&pool, &audience)` teardown — run against `"public"` it
-deletes the v9-seeded rows from the shared dev database.
+repurposed knob-off → 403 case from Implementation Step 8. It must not run `cleanup_audience`
+against `"public"` — that deletes the v9-seeded rows from the shared dev database.
 
 **`python/micromegas/tests/cli/test_setup_telemetry.py`**:
 
@@ -968,18 +853,10 @@ through the row rather than the deleted arm. Then, as a non-admin OIDC login, ru
 suggested command instead of minting `jane-doe-public` — i.e. that removing the default actually
 restores per-caller isolation. Removing the **Read** row is the sharper check: public data should
 disappear from an ordinary caller's queries, proving the row is genuinely what grants it. **Restore
-both rows immediately afterward** — Add grant → `public` / Read / Everyone and `public` / Mint /
-Everyone, or `micromegas-grants create public read '*'` and `micromegas-grants create public mint
-'*'` — since `execute_migration` only runs the v8→v9 arm once and will not re-seed them on a DB
-already at v9, and the new `#[ignore]` cases in `ingestion_keys_tests.rs` assert against these rows
-being present on this same `local_test_env` database.
+both rows immediately afterward** — `micromegas-grants create public read '*'` and
+`micromegas-grants create public mint '*'` — since `execute_migration` only runs the v8→v9 arm once
+and will not re-seed them on a DB already at v9.
 
 ## Open Questions
 
-1. ~~**Is the unconditional seed on upgrade acceptable?**~~ Resolved: yes. Live deployments are
-   fully open today, so the seed records the existing posture rather than changing one. No
-   conditional guard, no upgrade warning.
-
-None outstanding. (The schema-floor question is resolved in §2 — no startup floor is added — and
-the CLI-compatibility-window question is resolved in *Trade-offs*; the latter is reflected in
-Implementation Step 12's CHANGELOG entry.)
+None.
