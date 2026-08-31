@@ -161,24 +161,23 @@ arm in `execute_migration:390-398`) seeds one row:
 
 ```sql
 INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
-VALUES ('public', 'read', '*', now(), 'system:migration-v9'),
-       ('public', 'mint', '*', now(), 'system:migration-v9')
+VALUES ('public', 'read', '*', now(), 'default'),
+       ('public', 'mint', '*', now(), 'default')
 ON CONFLICT DO NOTHING;
 ```
 
 Two rows, one per axis. The `read` row replaces the built-in arm removed in §2; the `mint` row is
 what the issue asks for.
 
-`created_by = 'system:migration-v9'` rather than a bare word like `default` or a user identity, so
-the rows are self-describing on the Audience Access page and in `list_audience_grants()` — an
-operator can see they were shipped, not added by a colleague — **and** so no caller identity can
-ever equal the sentinel. `delete_grant`'s non-admin branch (`audience_grants.rs:545-597`) authorizes
-a delete on `selector = 'user:<email>' OR created_by = $deleted_by`, where `$deleted_by` is
-`caller_identity(&caller)` = `email.unwrap_or(subject)` (`:222-231`); a bare `'default'` sits in the
-same namespace as a real caller identity, so a caller whose `email`/`sub` claim happened to be the
-literal string `default` (neither is shape-validated anywhere) could delete the seeded `'*'` rows as
-a non-admin. `:` cannot appear in an email's local part, so `system:migration-v9` closes that off
-rather than merely accepting it. `ON CONFLICT DO NOTHING` because an operator who already created
+`created_by = 'default'` rather than a user identity, so the rows are self-describing on the
+Audience Access page and in `list_audience_grants()` — an operator can see they were shipped, not
+added by a colleague. The sentinel shares a namespace with caller identities, and that overlap is
+accepted: `delete_grant`'s non-admin branch (`audience_grants.rs:545-597`) authorizes a delete on
+`selector = 'user:<email>' OR created_by = $deleted_by`, where `$deleted_by` is
+`caller_identity(&caller)` = `email.unwrap_or(subject)` (`:222-231`), so a caller whose `email`/`sub`
+claim is the literal string `default` (neither is shape-validated anywhere) could delete the seeded
+`'*'` rows as a non-admin. Nothing issues such an identity today, and a qualified sentinel would cost
+the plainness the attribution is for. `ON CONFLICT DO NOTHING` because an operator who already created
 either row by hand (the path the issue describes for `mint`, and the `{"public": ["*"]}` env entry
 the docs say "changes nothing" for `read`) must not fail the migration.
 
@@ -473,7 +472,7 @@ the current viewer — `visible_grants` (`audience_grants.rs:672-720`) strips `"
 `('public', axis, '*')` rows themselves, only their effect:
 
 > **Defaults:** `public` ships with Read and Mint grants for everyone (attributed to
-> `system:migration-v9` on the admin view). They are ordinary grants: removing the Read row stops public data from being
+> `default` on the admin view). They are ordinary grants: removing the Read row stops public data from being
 > universally readable; removing the Mint row limits minting into `public` to admins.
 
 The legend gets shorter and stops describing a special case, because after this change there isn't
@@ -775,7 +774,13 @@ holds. Reinforcing that:
   Only the mint half is at issue — `public` is world-readable in every deployment today through the
   built-in arm §2 removes, so the seeded read row codifies the status quo everywhere.
 - The row is visible on the Audience Access page immediately after upgrade, labelled
-  `system:migration-v9`, and removable from that same page.
+  `default`, and removable from that same page.
+- **`created_by = 'default'` shares a namespace with caller identities — accepted.** `delete_grant`
+  lets a non-admin delete a row whose `created_by` equals their own `caller_identity`
+  (`email.unwrap_or(subject)`), and neither claim is shape-validated, so an identity that is literally
+  the string `default` could revoke the seeded rows without admin rights. No issuer hands out such an
+  identity, and a qualified sentinel would cost the attribution its plainness on the admin view. Worth
+  revisiting only if identity shape validation lands.
 
 So this is an ordinary CHANGELOG entry naming the new row and how to remove it — not an upgrade
 warning.
@@ -831,7 +836,7 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
   either source"), the one other place in the docs beside `authentication.md` that asserts the
   built-in read grant §2 removes.
 - **`mkdocs/docs/admin/web-app.md`**, *Audience Access* (`:193-204`): document that `public` ships
-  with seeded Read and Mint rows, visible to an admin (attributed to `system:migration-v9`) like any other
+  with seeded Read and Mint rows, visible to an admin (attributed to `default`) like any other
   grant on the page — not a special case with an empty Mint column — and the Add grant dialog's
   Mint + Everyone combination as the recipe for opening a *custom* deployment default the same way.
 - **`mkdocs/docs/admin/authentication.md`**, *DB-backed audience grants* section, beside the
@@ -955,7 +960,7 @@ defaults to `'public'` (`me.audiences[0]`), unaffected by the `held_pairs` filte
 
 **Manual**, against `local_test_env` with `MICROMEGAS_SELF_SERVICE_MINT=true`: on a freshly
 migrated DB, confirm the Audience Access page shows both seeded rows under `public` (Read and Mint,
-`system:migration-v9` attribution) and that ordinary queries still return data — i.e. the read path now runs
+`default` attribution) and that ordinary queries still return data — i.e. the read path now runs
 through the row rather than the deleted arm. Then, as a non-admin OIDC login, run
 `micromegas-setup-telemetry --audience public` and confirm the key's `audience` column reads
 `public`; send OTLP with it and confirm the process is visible to a plain `public` reader through
