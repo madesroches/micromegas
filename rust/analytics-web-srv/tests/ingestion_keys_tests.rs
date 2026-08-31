@@ -928,6 +928,51 @@ async fn cleanup_audience(pool: &sqlx::PgPool, audience: &str) {
         .expect("cleanup grants");
 }
 
+/// A non-admin explicitly naming a custom, unseeded `default_audience` hits
+/// `try_claim_and_mint`'s reserved-name check directly -- unlike `public`, which schema v9 seeds a
+/// `('public', 'mint', '*')` grant for, so a non-admin naming `public` never reaches the claim
+/// path at all. The audience must be named explicitly, not left to default: `mint_key` only calls
+/// `try_claim_and_mint` for a non-admin when the caller's request named the audience itself, so
+/// leaving `audience` out of the body (as
+/// `live_admin_mint_of_the_default_audience_is_never_claimed` does for the admin arm of this same
+/// check) would instead hit the earlier, ordinary "not in the caller's mintable set" denial and
+/// never reach this branch at all.
+#[ignore]
+#[tokio::test]
+async fn live_mint_rejects_a_non_admin_claim_of_the_default_audience() {
+    let pool = live_pool().await;
+    let audience = format!("non-admin-reserved-test-{}", uuid::Uuid::new_v4());
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(pool.clone()),
+            default_audience: audience.clone(),
+            self_service_mint_enabled: true,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        non_admin_user(),
+    );
+    let name = format!("non-admin-reserved-key-{}", uuid::Uuid::new_v4());
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let grant_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE audience = $1")
+            .bind(&audience)
+            .fetch_one(&pool)
+            .await
+            .expect("query grants");
+    assert_eq!(grant_rows, 0);
+
+    cleanup_audience(&pool, &audience).await;
+}
+
 /// A non-admin caller with a real, already-committed `mint` grant for the requested audience
 /// mints successfully via `MintPolicy::resolve_audience`'s per-request point query (§4) -- no
 /// lazy claim attempted, so no extra `read` grant row is written alongside the pre-existing
