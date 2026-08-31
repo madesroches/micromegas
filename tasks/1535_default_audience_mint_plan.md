@@ -177,20 +177,13 @@ hand (the path the issue describes for `mint`, and the `{"public": ["*"]}` env e
 
 **Literal `public`, not `MICROMEGAS_DEFAULT_AUDIENCE`.** A migration that reads an env var bakes in
 whatever the variable happened to be at upgrade time and silently goes stale when it changes. A
-deployment with a custom default gets the literal `('public','mint','*')` row regardless — `public`
-is not that deployment's default, so its ordinary callers had no path to write into `public` before
-(see *Security*); the seed now gives every authenticated caller there a standing, world-readable
-write path into `public` that did not previously exist. That is accepted rather than special-cased:
-the seed means the same thing in every deployment, and an operator running a custom default who does
-not want it removes it (below) and adds its own mint row for its actual default. Restriction is a
-one-command operation against a visible row; conditional seeding would make the migration's result
-depend on an env var, which is a worse trade (see *Security*).
+deployment with a custom default gets the literal `('public','mint','*')` row regardless. Its callers
+gain a standing write path into `public` they did not have (see *Security*); that is accepted, not
+special-cased — the seed means one thing everywhere, and a deployment that wants otherwise deletes
+the row and adds its own mint row for its actual default.
 
 The row is then an ordinary grant, so both shipped admin surfaces manage it with no new UI or CLI
-work. To **remove** it — the deliberate step for a deployment with a custom
-`MICROMEGAS_DEFAULT_AUDIENCE` that does not want the standing write path into `public` described
-above, or for any deployment that wants stricter per-caller isolation with the knob on — Audience
-Access → `public` → Mint → Remove, or:
+work. To **remove** it — Audience Access → `public` → Mint → Remove, or:
 
 ```bash
 micromegas-grants --url https://analytics.example.com delete public mint '*'
@@ -206,15 +199,9 @@ Audience:  unassigned      Axis: Mint    Selector: Everyone
 micromegas-grants --url ... create unassigned mint '*'
 ```
 
-**Do not pair it with `read '*'` by reflex.** A custom `MICROMEGAS_DEFAULT_AUDIENCE` is, by the
-argument in *Security*, a deployment that has already opted into an isolation posture the built-in
-`public` seed does not carry — `unassigned` starts out readable only through explicit grants.
-`micromegas-grants create unassigned read '*'` erases exactly that: it makes `unassigned` readable
-by every authenticated caller, i.e. a second `public`, which is the posture a custom default exists
-to avoid. If callers writing where they cannot read back is a real problem for such a deployment,
-the isolation-preserving fix is per-user or per-group read grants on the default
-(`micromegas-grants create unassigned read 'user:<email>'` / `'group:<g>'` for the callers who need
-to read back what they wrote), not a blanket `'*'`.
+A `read '*'` companion is a separate decision, not an automatic one: it makes the custom default
+readable by every authenticated caller, i.e. a second `public`. Per-user or per-group read grants
+(`create unassigned read 'user:<email>'`) cover the read-back case without that.
 
 A deployment with a custom default and the knob on that skips the mint row above has no mintable
 default and will hit the CLI error (§4) until it does. A startup `warn!` for that case
@@ -719,27 +706,14 @@ holds. Reinforcing that:
   rejects every non-admin before `mint_key` runs, so the row is inert. That is the default.
 - A knob-**on** deployment has already opted into non-admin self-service mint, and its callers can
   already write into `public` interactively (see above) — what they gain is the standing credential.
-- The no-widening argument above holds only where the deployment default *is* `public`. A deployment
-  running a custom `MICROMEGAS_DEFAULT_AUDIENCE` is a different case: the seed still names `public`
-  literally, so unaudienced writes keep landing in `<default>`, not `public` — but nothing today lets
-  such a deployment's ordinary callers mint or write into `public` itself, and the seed's mint row now
-  lets any authenticated caller do exactly that, backed by the co-seeded read row that makes the
-  result world-readable. That is a genuine widening — a standing, world-readable write path into
-  `public` this deployment did not have before — and it is **deliberately not special-cased**. The
-  seed is unconditional and identical everywhere: one row, one meaning, whatever the deployment's
-  default is. Making the mint half conditional on the default being `public` would buy a narrow
-  safety property at the cost of a migration whose result depends on an env var, so that the same
-  schema version means different things in two deployments — and, read from the Audience Access
-  page, a `public` Mint column whose emptiness no longer distinguishes "never granted" from "seeded
-  elsewhere". Open-by-default is the simple, uniform choice; a deployment that wants otherwise runs
-  `micromegas-grants delete public mint '*'` (§1), which is one command against a visible row. The
-  read half is not part of this gap at all: `public` is
-  world-readable today in every deployment, custom-default included, through the built-in arm §2
-  removes, so the seeded `('public','read','*')` row codifies the existing status quo everywhere.
-  Separately, the §1 recipe such a deployment follows to open its *own* default carries its own real
-  widening if followed carelessly: pairing that mint row with a blanket `read '*'` companion turns the
-  custom default into a second `public`, undoing the isolation the custom default was chosen for. §1
-  recommends per-user/per-group read grants instead, precisely to keep that posture intact.
+- The no-widening argument holds exactly where the deployment default *is* `public`. A deployment
+  running a custom `MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` mint row, and its
+  callers could not previously mint into `public` — so with the knob on, that deployment does gain a
+  standing write path into a world-readable audience. Deliberately not special-cased: the seed means
+  one thing everywhere, and deleting the row is one command against a row the Audience Access page
+  shows. Conditional seeding would make a migration's result depend on an env var, which is worse.
+  Only the mint half is at issue — `public` is world-readable in every deployment today through the
+  built-in arm §2 removes, so the seeded read row codifies the status quo everywhere.
 - The row is visible on the Audience Access page immediately after upgrade, labelled `default`, and
   removable from that same page.
 
@@ -778,16 +752,12 @@ the placeholder-row guidance for names that exist only in `{prefix}_AUDIENCE_GRA
 ## Documentation
 
 - **`mkdocs/docs/admin/authentication.md`**, *Self-service ingestion key mint*: new subsection —
-  the seeded `('public','mint','*')` default, why the knob still gates it, how to remove it, the
-  custom-default case (the seed is unconditional, so those callers gain a standing write path into
-  `public` they did not have before, since `public` is not their default; a deployment that does not
-  want it runs `micromegas-grants delete public mint '*'`, then adds its own mint row for the actual
-  default;
-  warn against pairing that row with a blanket `read '*'`, which turns the custom default into a
-  second `public`, and point to per-user/per-group read grants instead for a deployment that needs
-  callers to read back what they wrote), and a note that a `*` mint row is a deliberate choice for
-  the shared default rather than a general pattern.
-  Also update the existing "before turning on the knob, pre-create a
+  the seeded `('public','mint','*')` default, that the knob still gates it, and how to remove it
+  (`micromegas-grants delete public mint '*'`, or the Audience Access page). Keep this short: anyone
+  who can mint a key chooses its audience, and a shared audience readable by every authenticated
+  user is the obvious default for one. Note in a sentence that a deployment running a custom
+  `MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` row and can delete it — no extended
+  warning, no recommended posture. Also update the existing "before turning on the knob, pre-create a
   placeholder row" checklist (`:541-560`), which now overlaps the seed for `public`. Amend the existing
   "`public` and the deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed" sentence to
   keep *claimable* and *mintable* visibly distinct. Update the two `micromegas-setup-telemetry`
