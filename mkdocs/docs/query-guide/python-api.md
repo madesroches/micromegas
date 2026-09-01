@@ -35,7 +35,8 @@ The installed package version is available as `micromegas.__version__`.
 #### Connecting via a named profile
 
 For a remote or authenticated deployment, use `connect_with_profile()` instead. It reads
-`~/.micromegas/config.json` (see [Connection Configuration](#connection-configuration) below)
+`~/.micromegas/config.json` (see [Config file
+(~/.micromegas/config.json)](#config-file-micromegasconfigjson) below)
 and picks the auth mechanism the resolved profile names -- a static API key, OIDC, or none:
 
 ```python
@@ -806,7 +807,7 @@ Each setting is resolved independently once a profile (if any) is selected, so y
 | `MICROMEGAS_CLIENT_AGENT` | Override for the auto-detected `x-client-agent` value (see Client Attribution above) | auto-detected |
 | `MICROMEGAS_CLIENT_ENTRYPOINT` | Override for the auto-detected `x-client-entrypoint` value (see Client Attribution above); the CLI always passes `"cli-query"` regardless of this var | auto-detected |
 
-**Config file (`~/.micromegas/config.json`):**
+#### Config file (~/.micromegas/config.json)
 
 A small JSON file you can drop in your home directory to avoid setting env vars. Every key is optional, and any env var with the same role overrides it.
 
@@ -835,6 +836,11 @@ There are three auth mechanisms, checked in this order: a static API key, when `
 resolves; OIDC, when both an issuer and a client ID are resolved (from any source); otherwise the
 CLI connects without auth. A profile (or flat config) that resolves both `api_key_file` and a
 complete OIDC pair is a configuration error — see Named profiles below.
+
+Only `micromegas-query` and `connect_with_profile()` honor `api_key_file`. Every other CLI
+(`micromegas-grants`, `-import-keys`, `-setup-telemetry`) calls `resolve_connection()` directly and
+only branches on the OIDC fields, so a profile that resolves `api_key_file` and nothing else
+silently yields an unauthenticated connection on those tools — they remain OIDC-only.
 
 **Named profiles:**
 
@@ -1052,8 +1058,9 @@ things:
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a
 required flag only when that env var is unset. `--env-file PATH` writes the exports to a `0o600`
 file instead of stdout (parent directory created `0o700` if needed) — useful for sourcing from a
-shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, same
-as every other CLI here.
+shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, but
+(like `-grants`/`-import-keys`) only its OIDC fields are honored — an `api_key_file`-only profile
+yields no auth here.
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`.
 

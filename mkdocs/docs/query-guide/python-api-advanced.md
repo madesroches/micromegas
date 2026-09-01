@@ -67,9 +67,11 @@ client = FlightSQLClient(
 ### Static Headers (Deprecated)
 
 !!! warning "Deprecated"
-    The `headers` parameter is deprecated and will be removed in a future version. Use
-    `StaticTokenAuthProvider` (for a static API key) or another `auth_provider` instead — both
-    give automatic token refresh support where applicable.
+    The `headers` parameter is deprecated and will be removed in a future version. Use an
+    `auth_provider` instead — an OIDC-based provider (`OidcAuthProvider`,
+    `OidcClientCredentialsProvider`) gives automatic token refresh; `StaticTokenAuthProvider`
+    does not refresh, but keeps the key out of application code and off the wire except as a
+    bearer token.
 
 For legacy integrations, you can still use static headers:
 

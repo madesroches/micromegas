@@ -162,10 +162,10 @@ def _two_mechanism_message(name) -> str:
 def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
     """Build ConnectionConfig with priority: env vars > active profile > defaults.
 
-    Raises `ProfileError` if `api_key_file` is present but not a string, or
-    if the resolved config names both a static API key (`api_key_file`) and
-    a complete OIDC pair (issuer and client_id) — a profile must use exactly
-    one auth mechanism.
+    Raises `ProfileError` if `api_key_file` is present but not a non-empty
+    string, or if the resolved config names both a static API key
+    (`api_key_file`) and a complete OIDC pair (issuer and client_id) — a
+    profile must use exactly one auth mechanism.
     """
     config = load_config(config_path)
     name, active = resolve_active_profile(config, profile)
@@ -175,8 +175,10 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
     audience = issuers[0].get("audience") if issuers else None
 
     api_key_file = active.get("api_key_file")
-    if api_key_file is not None and not isinstance(api_key_file, str):
-        raise ProfileError("api_key_file must be a path (string)")
+    if api_key_file is not None and (
+        not isinstance(api_key_file, str) or not api_key_file.strip()
+    ):
+        raise ProfileError("api_key_file must be a non-empty path (string)")
 
     oidc_issuer = _pick("MICROMEGAS_OIDC_ISSUER", issuer)
     oidc_client_id = _pick("MICROMEGAS_OIDC_CLIENT_ID", active.get("client_id"))

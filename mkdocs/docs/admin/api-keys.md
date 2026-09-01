@@ -262,7 +262,7 @@ A freshly minted analytics key is consumed from Python via
 `StaticTokenAuthProvider` — see [Static Analytics API
 Keys](../query-guide/python-api.md#static-analytics-api-keys) and the
 `api_key_file` profile setting in the [Python API
-Reference](../query-guide/python-api.md#connection-configuration). The
+Reference](../query-guide/python-api.md#config-file-micromegasconfigjson). The
 Grafana plugin consumes the same key the same way — see [Grafana
 Authentication](../grafana/authentication.md).
 

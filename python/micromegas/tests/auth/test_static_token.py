@@ -31,6 +31,21 @@ def test_non_string_token_raises_value_error():
         StaticTokenAuthProvider(12345)
 
 
+def test_token_with_internal_whitespace_raises_value_error():
+    with pytest.raises(ValueError):
+        StaticTokenAuthProvider("mmk_abc 123")
+
+
+def test_token_with_internal_newline_raises_value_error():
+    with pytest.raises(ValueError):
+        StaticTokenAuthProvider("mmk_abc\n123")
+
+
+def test_token_with_non_ascii_character_raises_value_error():
+    with pytest.raises(ValueError):
+        StaticTokenAuthProvider("mmk_abcé123")
+
+
 def test_from_file_reads_and_strips_trailing_newline(tmp_path):
     key_file = tmp_path / "local.key"
     key_file.write_text("mmk_abc123\n", encoding="utf-8")

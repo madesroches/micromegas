@@ -527,6 +527,20 @@ def test_non_string_api_key_file_raises_profile_error_not_type_error(tmp_path):
         resolve_connection(config_path=cfg_file)
 
 
+def test_empty_string_api_key_file_raises_profile_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {"uri": "grpc+tls://prod-host:50051", "api_key_file": ""},
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
 def test_flat_config_with_api_key_file_behaves_identically(tmp_path):
     cfg_file = tmp_path / "config.json"
     data = {
