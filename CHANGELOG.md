@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Web App:**
+  * Make `/admin` and `/admin/ingestion-keys` viewable by every authenticated user instead of admin-only, with content filtered by role: a non-admin sees a reduced Admin hub (only the cards they have some capability in — Ingestion API Keys, Audience Access) and a mint-only Ingestion API Keys page (no list/revoke table), reusing the self-service mint dialog already built for the Audience Access page. No backend change — `list_keys`/`revoke_key` stay admin-only server-side (#1544).
   * Add a Run control to markdown cells, mirroring Jupyter's `Shift+Enter`: it re-renders the cell in place against whatever upstream results are currently resolved, without re-running any query cell. Previously the only way to render a newly edited or added markdown cell was a full sequential notebook execution pass (in practice, a page reload). "Run from here" and "Auto-run from here" stay suppressed for markdown, and a raw-JSON-editor path that could otherwise trigger an unwanted downstream auto-run on every keystroke is now closed (#1522).
   * Make the Analytics/Ingestion API Keys admin page's row-per-page count an injectable `pageSize` prop, defaulting to the server's max list limit.
   * Require and pre-fill the audience field in the ingestion API key mint dialog: it now defaults to `public` instead of hinting that a blank value falls back to a server-side default audience, and the Mint button is gated on a non-blank value.

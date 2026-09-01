@@ -20,11 +20,14 @@ function makeKeys(count: number) {
   }))
 }
 
-// Force useAuth to report an admin user so AuthGuard renders the page.
+const authState = vi.hoisted(() => ({
+  user: { sub: 'admin', is_admin: true } as { sub: string; is_admin?: boolean },
+}))
+
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     status: 'authenticated',
-    user: { sub: 'admin', is_admin: true },
+    user: authState.user,
     error: null,
   }),
 }))
@@ -57,6 +60,10 @@ function renderPage(pageSize?: number) {
 }
 
 describe('IngestionApiKeysPage', () => {
+  beforeEach(() => {
+    authState.user = { sub: 'admin', is_admin: true }
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -406,5 +413,143 @@ describe('IngestionApiKeysPage', () => {
       expect(deleteCall).toBeDefined()
       expect(deleteCall![0]).toBe('/mmlocal/api/ingestion-api-keys/key-1')
     })
+  })
+})
+
+/**
+ * Non-admin: the page renders `IngestionKeysSelfServicePanel` instead of the
+ * `ApiKeysAdminPage` list/mint/revoke table — mint only, reusing `useMyAudiences` /
+ * `MintIngestionKeyDialog` (the same machinery `AudienceAccessPage.test.tsx` already exercises).
+ */
+describe('IngestionApiKeysPage — non-admin', () => {
+  beforeEach(() => {
+    authState.user = { sub: 'reader', is_admin: false }
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function jsonResponse(status: number, body: unknown) {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: () => Promise.resolve(body),
+    } as unknown as Response
+  }
+
+  it('renders the mint-only panel, with no keys table or revoke UI', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(200, {
+          is_admin: false,
+          audiences: ['team-alpha'],
+          mint_prefix: 'reader-',
+          email: 'reader@example.com',
+        })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Mint Key/i })).toBeInTheDocument()
+    )
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Revoke/i })).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/ingestion-api-keys?'))).toBe(
+      false
+    )
+  })
+
+  it('mints a key and shows the one-time-key banner', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(200, {
+          is_admin: false,
+          audiences: ['team-alpha'],
+          mint_prefix: 'reader-',
+          email: 'reader@example.com',
+        })
+      }
+      if (url.includes('/ingestion-api-keys') && method === 'POST') {
+        const body = init?.body ? JSON.parse(init.body as string) : {}
+        return jsonResponse(201, {
+          key_id: 'key-1',
+          name: body.name,
+          created_at: '2026-01-01T00:00:00Z',
+          audience: body.audience ?? 'team-alpha',
+          key: 'mmk_secret',
+          claimed: false,
+        })
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Mint Key/i })).toBeInTheDocument()
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Mint Key/i }))
+
+    const nameInput = await screen.findByPlaceholderText('my-laptop')
+    fireEvent.change(nameInput, { target: { value: 'my-key' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Mint' }))
+    })
+
+    await waitFor(() => expect(screen.getByText('mmk_secret')).toBeInTheDocument())
+  })
+
+  it('shows the disabled note and hides Mint Key when self-service is off', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(403, { code: 'FORBIDDEN', message: 'self-service minting is disabled' })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText(/Self-service is disabled on this deployment/)).toBeInTheDocument()
+    )
+    expect(screen.queryByRole('button', { name: /Mint Key/i })).not.toBeInTheDocument()
+  })
+
+  it('shows an error banner and hides Mint Key on a genuine fetch failure, then retries', async () => {
+    let myAudiencesCalls = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/my-audiences')) {
+        myAudiencesCalls += 1
+        return jsonResponse(500, { code: 'INTERNAL', message: 'Something went wrong' })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText('Failed to load your audiences')).toBeInTheDocument()
+    )
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Mint Key/i })).not.toBeInTheDocument()
+    expect(myAudiencesCalls).toBe(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(myAudiencesCalls).toBe(2))
   })
 })

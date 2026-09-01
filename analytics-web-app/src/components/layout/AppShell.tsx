@@ -4,14 +4,26 @@ import { useAuth } from '@/lib/auth'
 import { PageLoader } from '@/router'
 import { Sidebar } from './Sidebar'
 
+// `/admin` and `/admin/ingestion-keys` are viewable by every authenticated user (role-filtered
+// content), so they're deliberately excluded here — only the routes still fully gated by
+// `<AuthGuard requireAdmin>` need Sidebar hidden from a non-admin.
+const ADMIN_ONLY_PATHS = [
+  '/admin/data-sources',
+  '/admin/export-screens',
+  '/admin/import-screens',
+  '/admin/maps',
+  '/admin/analytics-keys',
+  '/admin/query-deny-list',
+]
+
 export function AppShell() {
   const { status, user } = useAuth()
   const { pathname } = useLocation()
-  // `/admin` prefix stands in for each admin page's own `<AuthGuard requireAdmin>`
-  // check — an admin-only route added outside `/admin` would mount Sidebar here
-  // even though AuthGuard would go on to block the page.
-  const isAdminRoute = pathname.startsWith('/admin')
-  const showSidebar = status === 'authenticated' && (!isAdminRoute || user?.is_admin)
+  // Mirrors each admin-only page's own `<AuthGuard requireAdmin>` check — an admin-only route
+  // added here without a matching path in ADMIN_ONLY_PATHS would mount Sidebar even though
+  // AuthGuard would go on to block the page.
+  const isAdminOnlyRoute = ADMIN_ONLY_PATHS.some((p) => pathname.startsWith(p))
+  const showSidebar = status === 'authenticated' && (!isAdminOnlyRoute || user?.is_admin)
 
   return (
     <div className="h-screen bg-app-bg">

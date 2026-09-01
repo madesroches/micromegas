@@ -305,7 +305,7 @@ export function Sidebar() {
             </AppLink>
           ))}
         </nav>
-        {user?.is_admin && (
+        {user && (
           <div className="mt-auto">
             <div className="h-px bg-theme-border mx-2 mb-1" />
             <nav className="flex flex-col gap-1">

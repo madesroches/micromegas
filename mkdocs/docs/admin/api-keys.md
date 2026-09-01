@@ -361,18 +361,36 @@ is now the way to discover a `key_id` to revoke — there is no more
 
 ## Web app admin pages
 
-Two admin pages in the web app, both under **Admin** in the sidebar, and both
-requiring an OIDC admin session (`AuthGuard requireAdmin`):
+Two admin pages in the web app, both reachable from **Admin** (`/admin`) in the sidebar:
 
 - **Analytics API Keys** (`/admin/analytics-keys`) — calls
   `analytics-web-srv`'s own `/api/analytics-api-keys*` routes directly
-  (above).
+  (above). Fully admin-gated (`AuthGuard requireAdmin`) — analytics keys have no self-service
+  story, so there is nothing for a non-admin to do here.
 - **Ingestion API Keys** (`/admin/ingestion-keys`) — calls
   `analytics-web-srv`'s own `/api/ingestion-api-keys*` routes directly
   (above). No proxy, no forwarding to ingestion, no service credential:
   ingestion itself exposes no key-management HTTP surface at all.
 
-Both pages stay visible even when the backing pool isn't configured; in that
+**`/admin` and `/admin/ingestion-keys` are viewable by every authenticated user, with
+role-filtered content** — an old bookmark, a link an admin pasted, or the natural place to look
+for "Ingestion API Keys" no longer dead-ends a non-admin. `AuthGuard` on both routes carries no
+`requireAdmin`; each branches on the caller's role instead:
+
+- On `/admin/ingestion-keys`, an admin sees the full list/mint/revoke table (`ApiKeysAdminPage`,
+  unchanged); a non-admin sees a mint-only panel — the same self-service mint dialog Audience
+  Access uses, no table, no revoke UI. `list_keys`/`revoke_key` stay admin-only server-side
+  (below), so there is nothing this panel could show for those. Mint only appears once
+  `MICROMEGAS_SELF_SERVICE_MINT` is on and the caller holds a matching `mint` grant (or names a
+  fresh audience, lazily claiming it); with the knob off, the panel explains why and points to
+  Audience Access to review held grants.
+- On `/admin`, see [Admin hub](web-app.md#admin-hub) for the role-filtered card grid.
+
+Every other admin page under `/admin` — Data Sources, Export Screens, Import Screens, Maps,
+Analytics API Keys, Query Deny List — stays fully gated by `AuthGuard requireAdmin`, both
+directly and via the sidebar's own route-based gate.
+
+Both ingestion/analytics pages stay visible even when the backing pool isn't configured; in that
 case the page surfaces the 503 the route returns, same as `MapsPage` does for
 an unconfigured maps store. Neither page has an "import" button — the import
 routes exist for the `micromegas-import-keys` CLI tool only, since a browser
@@ -380,8 +398,9 @@ form for pasting a legacy key in would reintroduce the "key transits a
 browser" exposure mint already avoids.
 
 **A third page, open to every authenticated user, not just admins**: **Audience Access**
-(`/audiences`) is the self-service counterpart of these two admin-only pages — it drives the
-ingestion mint route's non-admin path (claim-and-mint) from a browser dialog, plus the
+(`/audiences`) is the self-service counterpart of the ingestion-key mint flow — it drives the
+ingestion mint route's non-admin path (claim-and-mint) from a browser dialog (the same dialog
+`/admin/ingestion-keys`'s non-admin panel reuses), plus the
 audience-grant read/write routes covered in
 [Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a).
 See [`web-app.md`](web-app.md#audience-access) for the full page reference.
