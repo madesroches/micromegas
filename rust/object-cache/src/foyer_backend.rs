@@ -119,16 +119,16 @@ impl Code for CachedBlock {
 /// On-disk format version for the foyer disk tier. The serialized value layout
 /// (`CachedBlock`'s `Code` impl) carries no self-describing version, so a layout
 /// change would otherwise misdecode entries recovered from a persisted store on
-/// restart (see #1287, #1283). On startup the store directory is wiped iff the
-/// persisted marker does not match this constant.
+/// restart. On startup the store directory is wiped iff the persisted marker
+/// does not match this constant.
 ///
 /// BUMP THIS whenever `CachedBlock`'s `Code` encode/decode (or any on-disk
 /// layout foyer persists for us) changes.
 ///
 /// History:
-/// - v1: `CachedBlock` = `[i64 LE disk_write_ms][length-prefixed Bytes]` (#1283).
-///   (The pre-#1283 `Bytes`-only layout was unversioned; upgrading onto a store
-///   it wrote is the crash this guard prevents.)
+/// - v1: `CachedBlock` = `[i64 LE disk_write_ms][length-prefixed Bytes]`. The
+///   unversioned predecessor layout was `Bytes`-only; upgrading onto a store
+///   it wrote is the crash this guard prevents.
 pub const DISK_FORMAT_VERSION: u32 = 1;
 
 /// Marker filename holding the decimal `DISK_FORMAT_VERSION`, stored alongside
@@ -191,8 +191,8 @@ fn reason_str(reason: Event) -> &'static str {
 /// (all reasons) and `object_cache_ram_tier_eviction_age_ms`
 /// (capacity-driven `Event::Evict` only -- the thrashing signal). Runs
 /// synchronously inside foyer's insert path, possibly on a foyer-internal
-/// thread; see the hot-path note on `dispatch`'s global metrics mutex in the
-/// design doc for why this is safe from any thread.
+/// thread; safe from any thread because the metrics macros (`imetric!`,
+/// `fmetric!`) serialize through dispatch's own global mutex.
 struct RamEvictionListener {
     tags: Arc<EvictionTagTable>,
     /// Set immediately before `FoyerBackend::close()`'s full-tier flush, so
@@ -220,7 +220,7 @@ impl EventListener for RamEvictionListener {
             // The close-time full-tier flush evicts every entry to zero,
             // which would otherwise emit both gauges for the *entire* RAM
             // tier on every clean shutdown -- indistinguishable from real
-            // capacity thrashing (#1281). See `mark_shutting_down`.
+            // capacity thrashing. See `mark_shutting_down`.
             return;
         }
         let t = self.tags.classify(key);
@@ -280,9 +280,9 @@ type SharedLoad = Shared<BoxFuture<'static, Option<Bytes>>>;
 pub struct FoyerBackend {
     cache: HybridCache<String, CachedBlock>,
     tags: Arc<EvictionTagTable>,
-    /// Per-key single-flight for step-2 disk loads, replacing foyer's own
-    /// (buggy, see #1318) inflight coalescing now that `get` no longer
-    /// routes through `HybridCache::get`/`get_or_fetch`.
+    /// Per-key single-flight for step-2 disk loads. `get` does not route
+    /// through `HybridCache::get`/`get_or_fetch`, so it cannot rely on
+    /// foyer's own inflight coalescing, which is unreliable anyway.
     loads: Arc<Mutex<HashMap<String, SharedLoad>>>,
     /// Shared with `RamEvictionListener`; see `mark_shutting_down`.
     shutting_down: Arc<AtomicBool>,
@@ -407,14 +407,14 @@ fn promote_if_valid(
     if value.bytes.len() as u64 != expected_len {
         // The short entry is left in place: the heal's put(Demand) will
         // supersede it, and until then other probes coalesce on the origin
-        // single-flight (see the design doc's poisoned-short-prefetch note).
+        // single-flight.
         imetric!("range_cache_promotion_len_mismatch", "count", 1_u64);
         return None;
     }
     if is_block_key(key) {
         let t = tags.classify(key);
         imetric!("object_cache_disk_tier_hit", "count", t.prefix, 1_u64);
-        // Promotion volume (#1321). This length-validated insert below is the
+        // Promotion volume. This length-validated insert below is the
         // single disk->RAM crossing, so promotion_count == disk_tier_hit by
         // construction; it exists as the named companion and denominator to
         // promotion_bytes (mean promoted block size = bytes / count) -- the
@@ -428,9 +428,9 @@ fn promote_if_valid(
         );
     }
     if value.disk_write_ms != DISK_WRITE_NONE {
-        // See the disk-tier limitation note in the design doc: this per-read
-        // age is the observable disk-exit signal foyer 0.22 exposes, and its
-        // max/high-quantiles estimate the (unobservable) reclaim age.
+        // This per-read age is the observable disk-exit signal foyer 0.22
+        // exposes, and its max/high-quantiles estimate the (unobservable)
+        // reclaim age.
         let age_ms = (chrono::Utc::now().timestamp_millis() - value.disk_write_ms) as f64;
         let t = tags.classify(key);
         fmetric!(

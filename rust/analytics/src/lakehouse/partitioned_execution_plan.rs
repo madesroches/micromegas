@@ -42,9 +42,8 @@ pub enum OrderingBounds {
 /// `partition_bounds` coherently: the sort key stays `min_event_time`; the non-overlap check below
 /// compares the previous partition's *true* max `begin` against the next's block-derived min
 /// (which can never strictly overlap for cuts at block boundaries of a producer using a shared
-/// flush timestamp -- see `tasks/completed/thread_spans_segment_boundary_overlap_plan.md`); and
-/// `attach_ordering_statistics` attaches a tighter, exact `begin` max statistic. The fallback
-/// preserves today's behavior bit-for-bit for legacy partitions.
+/// flush timestamp); and `attach_ordering_statistics` attaches a tighter, exact `begin` max
+/// statistic. The fallback preserves bit-for-bit behavior for legacy partitions.
 fn partition_bounds(
     p: &Partition,
     bounds: OrderingBounds,
@@ -146,8 +145,7 @@ fn attach_ordering_statistics(
 /// readers for a downstream `SortPreservingMergeExec`). `Unordered` and `Concatenated` build and
 /// execute the identical single-file-group scan -- they differ only in whether the resulting order
 /// is declared to DataFusion, not in scan shape or execution strategy (see
-/// `ScanOrdering::declares_concatenated_ordering` and Design §2 of
-/// `tasks/1491_merge_scan_memory_plan.md`).
+/// `ScanOrdering::declares_concatenated_ordering`).
 #[derive(Clone, Debug)]
 pub enum ScanOrdering {
     /// No declared ordering (today's default).
@@ -213,9 +211,8 @@ pub fn make_lex_ordering(
 /// {view}")`); `reason` supplies the full, call-site-specific trailing sentence(s) explaining what
 /// a non-single-partition plan means here -- executing such a plan would coalesce partitions and
 /// silently destroy a declared ordering before it is safe to record or execute. Shared by the
-/// query-execution paths that must verify this before executing (Design §2/§3 of
-/// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): `QueryMerger::execute_concatenated_merge`
-/// (only when its ordering is declared -- see Design §2 of `tasks/1491_merge_scan_memory_plan.md`),
+/// query-execution paths that must verify this before executing:
+/// `QueryMerger::execute_concatenated_merge` (only when its ordering is declared),
 /// `QueryMerger::execute_sorted_merge`, and `SqlPartitionSpec::execute_extract_query`.
 pub fn assert_single_partition(
     plan: &Arc<dyn ExecutionPlan>,
@@ -241,7 +238,7 @@ pub fn assert_single_partition(
 /// `"per-file merge"` or `"extract-query"`); `subject` names the query for the bail message;
 /// `reason` supplies the full, call-site-specific trailing text of the bail message (what was
 /// declared, and any guidance for diagnosing a mismatch). Shared by the two paths that record a
-/// `sort_order` guarantee (Design §2/§3): `QueryMerger::execute_sorted_merge` and
+/// `sort_order` guarantee: `QueryMerger::execute_sorted_merge` and
 /// `SqlPartitionSpec::execute_extract_query`. `QueryMerger::execute_concatenated_merge` does not
 /// call this -- its ordering is a structural property of the sorted, non-overlapping file group
 /// rather than a query-plan sort DataFusion could get wrong.
@@ -276,7 +273,7 @@ pub fn assert_ordering_satisfied(
 ///
 /// `scan_ordering` declares how the scan's already-satisfied ordering (see
 /// `View::get_scan_output_ordering`), if any, is realized:
-/// - `Unordered`: behavior is unchanged from before this parameter existed.
+/// - `Unordered`: no ordering is declared to DataFusion.
 /// - `Concatenated { columns, bounds }`: the file group is sorted by the leading column's bound
 ///   (read per `bounds`) and checked for non-overlap (erroring if violated), per-file min/max
 ///   statistics are attached so DataFusion accepts the declared ordering, and the ordering is

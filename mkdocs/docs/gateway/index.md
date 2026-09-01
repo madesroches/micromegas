@@ -91,11 +91,7 @@ curl -X POST http://localhost:3000/gateway/query \
   }'
 ```
 
-**Benefits:**
-- **Partition elimination**: Time range filters are applied before query execution, eliminating entire partitions
-- **Better performance**: Significantly faster than SQL time filters for large datasets
-- **Consistent API**: Matches FlightSQL service and Python client behavior
-- **RFC3339 format**: Standard timestamp format with timezone support
+Time range filters are applied before query execution, eliminating entire partitions — significantly faster than an equivalent SQL `WHERE` clause on large datasets, and consistent with the FlightSQL service and Python client.
 
 **Requirements:**
 - Both `time_range_begin` and `time_range_end` must be provided together
@@ -162,7 +158,7 @@ The gateway maps gRPC errors to HTTP status codes:
 | 400 Bad Request | Invalid request | Empty SQL, query too large (>1MB), or invalid SQL (syntax error, unknown column/function, etc.) |
 | 401 Unauthorized | Auth failed | Invalid/missing token (from FlightSQL) |
 | 403 Forbidden | Permission denied | User not authorized (from FlightSQL) |
-| 500 Internal Error | Server error | Server-side execution failure, a query that exceeded a resource budget, or an unimplemented feature (gRPC `Unimplemented`) (none yet mapped to their own HTTP status; a follow-up) |
+| 500 Internal Error | Server error | Server-side execution failure, a query that exceeded a resource budget, or an unimplemented feature (gRPC `Unimplemented`) |
 | 503 Service Unavailable | Backend down | Cannot connect to FlightSQL |
 
 **Error response format:**
@@ -310,12 +306,6 @@ graph TD
 - Validates API keys via HashMap lookup
 - Returns 401 Unauthorized for invalid tokens
 - Returns 403 Forbidden for permission denials
-
-**Benefits:**
-- Simpler gateway implementation
-- Centralized auth logic in FlightSQL
-- Consistent auth behavior across all clients
-- No token caching vulnerabilities in gateway
 
 ### User Impersonation Prevention
 

@@ -1,7 +1,6 @@
 // Unit tests for `micromegas::servers::http_utils::get_client_ip`'s selection,
-// fallback, and anti-spoofing rules -- see the auth/flightsql observability
-// gaps plan (Design §3) for the rationale behind picking the *rightmost*
-// `X-Forwarded-For` entry of the *last* header field line.
+// fallback, and anti-spoofing rules: picks the *rightmost* `X-Forwarded-For`
+// entry of the *last* header field line.
 
 use axum::extract::ConnectInfo;
 use http::{Extensions, HeaderMap};

@@ -1,17 +1,15 @@
-//! Offline (no live DB) plan-shape tests for `OwnershipRewrite` (#1370, AbAC Stage 2): asserts on
-//! the *optimized* `LogicalPlan` text only -- no query execution, no seeded row data (contrast
+//! Offline (no live DB) plan-shape tests for `OwnershipRewrite`: asserts on the *optimized*
+//! `LogicalPlan` text only -- no query execution, no seeded row data (contrast
 //! `ownership_rewrite_db_test.rs`). Planning through `into_optimized_plan()` (rather than stopping
 //! at the analyzed-but-unoptimized plan) runs `DecorrelatePredicateSubquery`, the optimizer rule
 //! that turns `OwnershipRewrite`'s injected `InSubquery`/`Exists` into a join -- and that join is
-//! what previously surfaced an ambiguous-column error for an unqualified outer `process_id`
-//! reference (#1370 issue 1), which analysis alone never caught. Covers the public-view-set
-//! allowlist (§7) plus two fail-closed guards that would otherwise ship with no coverage: an
-//! unhandled view set (§7's fallback) and an empty `ReadScope::Audiences(Arc::from([]))` (§3's
-//! empty-audience-set short-circuit).
+//! what can surface an ambiguous-column error for an unqualified outer `process_id` reference,
+//! which analysis alone never catches. Covers the public-view-set allowlist plus two fail-closed
+//! guards that would otherwise ship with no coverage: an unhandled view set (the fallback) and an
+//! empty `ReadScope::Audiences(Arc::from([]))` (the empty-audience-set short-circuit).
 //!
 //! Unlike `lakehouse_admin_gate_test.rs`'s `ViewFactory::new(vec![])`, the `ViewFactory` here
-//! registers real `processes`/`streams` global views (Design §2 of
-//! `tasks/1370_ownership_rewrite_plan.md` requires them for `OwnershipRewrite` to even be
+//! registers real `processes`/`streams` global views (required for `OwnershipRewrite` to even be
 //! constructed under a restricted `ReadScope`), built the same offline way
 //! `read_policy_threading_tests.rs`'s fixture is: `SqlBatchView::new` and `register_table` only
 //! *plan* SQL (`ctx.sql(...)`, never `.collect()`ed), so a `connect_lazy` Postgres pool and an
@@ -72,9 +70,9 @@ impl DataFrameTimeBounds for UnusedTimeBounds {
     }
 }
 
-/// A minimal view set matching none of `OwnershipRewrite`'s §3-§7 branches: not named
+/// A minimal view set matching none of `OwnershipRewrite`'s branches: not named
 /// `"processes"`/`"async_events"`/`"thread_spans"`, no `process_id` column, and (by construction
-/// of the test) never listed in `public_view_sets`. Exercises §7's fallback: `analyze()` must
+/// of the test) never listed in `public_view_sets`. Exercises the fallback: `analyze()` must
 /// `Err` rather than silently plan an unfiltered scan.
 #[derive(Debug)]
 struct NoBranchView {
@@ -142,9 +140,8 @@ impl View for NoBranchView {
 }
 
 /// A minimal view carrying a `process_id` column but no `audience` column of its own -- stands
-/// in for `net_spans`/`otel_spans`/`images` (#1482 §4: those three still take the semi-join
-/// branch, since they haven't gained the physical column). Otherwise identical in spirit to
-/// [`NoBranchView`].
+/// in for `net_spans`/`otel_spans`/`images` (those three still take the semi-join branch, since
+/// they haven't gained the physical column). Otherwise identical in spirit to [`NoBranchView`].
 #[derive(Debug)]
 struct ProcessIdOnlyView {
     view_set_name: Arc<String>,
@@ -214,11 +211,11 @@ impl View for ProcessIdOnlyView {
     }
 }
 
-/// Builds a `ViewFactory` registering real `processes`/`streams` (required by Design §2 for
-/// `OwnershipRewrite` to be constructed at all under a restricted `ReadScope`), `blocks` (a
-/// process_id-**column** view, used below as the "public view set"), [`NoBranchView`] (the
-/// "matches no branch" view set), and the `async_events`/`thread_spans` view sets (§5/§6 -- reached
-/// only via `view_instance(...)`, never as a global table, so they are registered with
+/// Builds a `ViewFactory` registering real `processes`/`streams` (required for `OwnershipRewrite`
+/// to be constructed at all under a restricted `ReadScope`), `blocks` (a process_id-**column**
+/// view, used below as the "public view set"), [`NoBranchView`] (the "matches no branch" view
+/// set), and the `async_events`/`thread_spans` view sets (reached only via `view_instance(...)`,
+/// never as a global table, so they are registered with
 /// `add_view_set` rather than as a global view, mirroring `view_factory.rs::default_view_factory`).
 async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory> {
     let blocks_view =
@@ -270,8 +267,7 @@ async fn make_test_view_factory(lakehouse: &LakehouseContext) -> Arc<ViewFactory
 /// `DecorrelatePredicateSubquery` (an optimizer, not analyzer, rule) has rewritten
 /// `OwnershipRewrite`'s injected `InSubquery`/`Exists` into a join. Stopping at the
 /// analyzed-but-unoptimized plan would miss ambiguous-column errors that only
-/// `DecorrelatePredicateSubquery`'s join surfaces (#1370 issue 1: an unqualified outer
-/// `process_id` reference).
+/// `DecorrelatePredicateSubquery`'s join surfaces (an unqualified outer `process_id` reference).
 async fn optimized_plan_with_factory(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
@@ -339,10 +335,10 @@ async fn public_view_set_plans_with_no_injected_predicate() {
 
 #[tokio::test]
 async fn non_public_process_id_only_view_plans_with_an_injected_semi_join() {
-    // §4: a view that carries a `process_id` column but no `audience` column of its own (e.g.
+    // A view that carries a `process_id` column but no `audience` column of its own (e.g.
     // net_spans/otel_spans/images in the real system, `test_process_id_only` here) still goes
-    // through the semi-join. `streams`/`processes`/`blocks` all carry `audience` directly now
-    // (#1482) and take the new §5 branch instead -- see the tests below.
+    // through the semi-join. `streams`/`processes`/`blocks` all carry `audience` directly and
+    // take the direct-filter branch instead -- see the tests below.
     let config = IsolationConfig::default();
     let plan = optimized_plan(
         scope(&["user:a"]),
@@ -363,8 +359,8 @@ async fn non_public_process_id_only_view_plans_with_an_injected_semi_join() {
 
 #[tokio::test]
 async fn streams_plans_with_a_direct_audience_filter_no_join() {
-    // §5 (#1482): `streams` now carries a physical `audience` column, so it is filtered
-    // directly -- no semi-join, no `property_get`, no per-process aggregate.
+    // `streams` carries a physical `audience` column, so it is filtered directly -- no
+    // semi-join, no `property_get`, no per-process aggregate.
     let config = IsolationConfig::default();
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM streams")
         .await
@@ -389,7 +385,7 @@ async fn unhandled_view_set_fails_analysis_loudly() {
     let msg = err.to_string();
     assert!(
         msg.contains("OwnershipRewrite: no audience rule defined for view set 'test_no_branch'"),
-        "expected the named §7 fallback error, got: {msg}"
+        "expected the named fallback error, got: {msg}"
     );
 }
 
@@ -407,16 +403,16 @@ async fn empty_audience_set_plans_a_literal_false_predicate() {
     assert!(
         plan_text.contains("EmptyRelation"),
         "an empty ReadScope::Audiences must plan a lit(false) predicate directly on `streams`' \
-         own `audience` column (#1482 §5); the optimizer folds that constant-false filter all \
-         the way down to an `EmptyRelation` -- not an unfiltered scan, got:\n{plan_text}"
+         own `audience` column; the optimizer folds that constant-false filter all the way down \
+         to an `EmptyRelation` -- not an unfiltered scan, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
 async fn processes_own_scan_plans_with_a_direct_audience_filter_no_join() {
-    // §5 (#1482): `processes` -- the audience source itself -- now carries the physical
-    // `audience` column too, and is the *first* member of the new column-carrying branch rather
-    // than a special case (the old §3 self-referential semi-join is gone entirely).
+    // `processes` -- the audience source itself -- carries the physical `audience` column too,
+    // and is a member of the column-carrying branch rather than a special case (there is no
+    // self-referential semi-join).
     let config = IsolationConfig::default();
     let plan = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM processes")
         .await
@@ -453,15 +449,15 @@ async fn async_events_view_instance_plans_with_no_injected_predicate() {
     assert!(
         !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
         "async_events' guarded view_instance scan must plan with no injected predicate at all -- \
-         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
+         the call-level guard's instance check is the only enforcement here, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
 async fn thread_spans_view_instance_plans_with_no_injected_predicate() {
     // `thread_spans` is reachable only through a guarded, non-`global` `view_instance(...)` call
-    // (never as a global table), so the same skip as `async_events` above applies: Prong B's
-    // instance check already denies an unauthorized caller before any row is read, so
+    // (never as a global table), so the same skip as `async_events` above applies: the
+    // call-level guard's instance check already denies an unauthorized caller before any row is read, so
     // `OwnershipRewrite::predicate_for` skips its two-hop `EXISTS` entirely.
     let config = IsolationConfig::default();
     let stream_id = "00000000-0000-0000-0000-000000000002";
@@ -476,7 +472,7 @@ async fn thread_spans_view_instance_plans_with_no_injected_predicate() {
     assert!(
         !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
         "thread_spans' guarded view_instance scan must plan with no injected predicate at all -- \
-         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
+         the call-level guard's instance check is the only enforcement here, got:\n{plan_text}"
     );
 }
 
@@ -513,31 +509,31 @@ async fn guarded_net_spans_view_instance_plans_with_no_injected_predicate() {
     assert!(
         !plan_text.contains("Filter") && !plan_text.contains("LeftSemi Join"),
         "net_spans' guarded view_instance scan must plan with no injected predicate at all -- \
-         Prong B's instance check is the only enforcement here, got:\n{plan_text}"
+         the call-level guard's instance check is the only enforcement here, got:\n{plan_text}"
     );
 }
 
 #[tokio::test]
 async fn real_view_factory_covers_every_registered_view_set() {
-    // Regression coverage for #1370 review issue 3: every test above plans against this file's
-    // own synthetic `make_test_view_factory`, so nothing actually exercises `predicate_for`'s
-    // branch table against `default_view_factory()` -- the real, production view-set inventory.
-    // A future view set registered there with no matching branch in `ownership_rewrite.rs` would
-    // compile and pass CI cleanly today, then fail every restricted-caller query in production
-    // with the §7 fallback `DataFusionError::Plan`. This test *enumerates* `default_view_factory`'s
-    // actual registrations via the public `get_global_views()`/`get_view_sets()` accessors --
-    // rather than hardcoding a parallel list that could silently drift out of sync -- through both
-    // the global and `view_instance(...)` access paths, where a given view set offers both -- and
-    // asserts each one plans successfully, not with an error. What it must plan *with* is a
-    // two-way split, keyed on whether the view carries a physical `audience` column, not on which
-    // access path was used: a view with the column plans a bare `Filter` on it (whether reached
-    // globally or through a guarded `view_instance(...)` -- `log_entries`/`measures` are
-    // registered both ways and must plan the same `Filter` shape either way); a view with no
-    // `audience` column, reached only through a guarded `view_instance(...)` in
-    // `default_view_factory`, plans with no injected predicate at all -- Prong B's instance check
-    // is already the sole enforcement for it. A view set added tomorrow with no branch in
-    // `OwnershipRewrite::predicate_for` will now automatically show up here and fail via the §7
-    // fallback, instead of staying green because a hand-maintained list never mentioned it.
+    // Every test above plans against this file's own synthetic `make_test_view_factory`, so
+    // nothing else exercises `predicate_for`'s branch table against `default_view_factory()` --
+    // the real, production view-set inventory. A future view set registered there with no
+    // matching branch in `ownership_rewrite.rs` would compile and pass CI cleanly today, then
+    // fail every restricted-caller query in production with the fallback `DataFusionError::Plan`.
+    // This test *enumerates* `default_view_factory`'s actual registrations via the public
+    // `get_global_views()`/`get_view_sets()` accessors -- rather than hardcoding a parallel list
+    // that could silently drift out of sync -- through both the global and `view_instance(...)`
+    // access paths, where a given view set offers both -- and asserts each one plans
+    // successfully, not with an error. What it must plan *with* is a two-way split, keyed on
+    // whether the view carries a physical `audience` column, not on which access path was used: a
+    // view with the column plans a bare `Filter` on it (whether reached globally or through a
+    // guarded `view_instance(...)` -- `log_entries`/`measures` are registered both ways and must
+    // plan the same `Filter` shape either way); a view with no `audience` column, reached only
+    // through a guarded `view_instance(...)` in `default_view_factory`, plans with no injected
+    // predicate at all -- the call-level guard's instance check is already the sole enforcement
+    // for it. A view set added tomorrow with no branch in `OwnershipRewrite::predicate_for` will
+    // automatically show up here and fail via the fallback, instead of staying green because a
+    // hand-maintained list never mentioned it.
     //
     // A syntactically valid UUID literal is enough for a plan-shape-only test -- no data is
     // scanned (same rationale as the per-branch tests above).
@@ -556,9 +552,9 @@ async fn real_view_factory_covers_every_registered_view_set() {
     );
 
     // Global instances, implicitly available with no view_instance(...) call. Keyed on whether
-    // the view's own file schema carries `audience` (#1482 §5) -- the same schema
-    // introspection `OwnershipRewrite::predicate_for` itself uses -- to know which shape each
-    // query must plan with.
+    // the view's own file schema carries `audience` -- the same schema introspection
+    // `OwnershipRewrite::predicate_for` itself uses -- to know which shape each query must plan
+    // with.
     let mut queries: Vec<(String, bool)> = inventory_view_factory
         .get_global_views()
         .iter()
@@ -605,8 +601,8 @@ async fn real_view_factory_covers_every_registered_view_set() {
         });
         let plan_text = format!("{plan}");
         if *has_audience {
-            // §5 (#1482): a view carrying the physical `audience` column is filtered directly --
-            // no join, no property_get. This is the regression test for the optimization itself.
+            // A view carrying the physical `audience` column is filtered directly -- no join, no
+            // property_get. This is the regression test for the optimization itself.
             assert!(
                 plan_text.contains("Filter")
                     && plan_text.contains("audience")

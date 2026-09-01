@@ -1,6 +1,6 @@
-// Lightweight (no live database) tests for the process-audience cache added to
-// `check_process_audience_conflict` (perf follow-up to AbAC Stage 5, #1373). The service is
-// built with an unreachable `PgPool` (lazy connect, per `readiness.rs`'s precedent), so any test
+// Lightweight (no live database) tests for the process-audience cache used by
+// `check_process_audience_conflict`. The service is built with an unreachable `PgPool` (lazy
+// connect, per `readiness.rs`'s precedent), so any test
 // that reaches the database at all fails -- letting these tests prove a cache hit skips the
 // `SELECT` entirely, rather than merely asserting a return value that a real DB call could also
 // have produced.

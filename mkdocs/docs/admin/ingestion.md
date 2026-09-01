@@ -107,24 +107,16 @@ one with none, so an unstamped row can only be a genuinely pre-v8 one.
     window as part of this rollout, since its `GROUP BY` now includes `audience`.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
-property a client sends is dropped at ingestion and logged (`warn!`), naming the key. In
-particular, a native client that used to self-stamp `micromegas.audience` directly no longer has
-any effect — there is no property to re-assert any more, and its data gets the deployment default
-instead, unless its credential is switched to a DB ingestion key bound to the audience it wants
-to keep.
+property a client sends is dropped at ingestion and logged (`warn!`), naming the key. A client
+cannot self-stamp `micromegas.audience` — data gets the deployment default unless its credential
+is a DB ingestion key bound to the audience it should carry.
 
-**OTLP `process_id` churn on this upgrade is narrower than "starts stamping."** Because every
-audience gets its own OTLP id namespace and the deployment default keeps the pre-existing,
-un-salted namespace, traffic that carries no bound audience keeps deriving the *exact same*
-`process_id`/`stream_id`/`block_id` across this change — there is no churn for it. The only
-population that re-derives is a DB-backed ingestion key **explicitly bound to a label equal to
-the deployment default**: it moves out of its own salted namespace into the un-salted one, once,
-at upgrade. In practice that is every DB-backed key today, since no deployment sets
-`MICROMEGAS_DEFAULT_AUDIENCE` and every existing audience is `public`. This is a tolerated,
-one-time consequence, not something to plan a migration around — see
-[Authentication → Audience stamping and the default](authentication.md#audience-stamping-and-the-default)
-for the full mechanism and the separate, still-relevant churn case (rotating a key to a
-*different* audience).
+Each audience gets its own OTLP id namespace, except the deployment default, which keeps the
+un-salted namespace — so traffic with no bound audience always derives the same
+`process_id`/`stream_id`/`block_id`. Rotating a DB-backed ingestion key to a different audience
+splits a long-lived producer's history across two process ids, since the data now genuinely
+belongs to two audiences — see [Authentication → Audience stamping and the
+default](authentication.md#audience-stamping-and-the-default) for the full mechanism.
 
 ## Health and readiness
 

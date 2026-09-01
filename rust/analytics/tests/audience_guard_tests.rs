@@ -1,24 +1,24 @@
-//! Offline (no live DB) tests for Query Enforcement Prong B (#1371, AbAC Stage 3):
+//! Offline (no live DB) tests for the call-level guard:
 //! `is_readable`'s truth table and `AudienceGuard`'s no-I/O short-circuit under `ReadScope::All`.
 //!
 //! `IsolationConfig::from_env`'s knob is covered by `ownership_rewrite_config_tests.rs`;
 //! the mutating-function registration gate's states (driven by
-//! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`. Both
-//! predate this file and already exercise the pieces this stage added to them.
+//! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`, so
+//! this file doesn't retest either.
 //!
-//! `OwnerAudience::Unstamped` is gone: a row with a NULL `audience` column resolves to
+//! `OwnerAudience::Unstamped` doesn't exist: a row with a NULL `audience` column resolves to
 //! `MICROMEGAS_DEFAULT_AUDIENCE` in `owner_query_sql`'s `COALESCE`, so it is an ordinary
-//! `Audience(..)` rather than a state to special-case, and a resolved `None` -- now reachable only
+//! `Audience(..)` rather than a state to special-case, and a resolved `None` -- reachable only
 //! for an id with no row at all -- maps to `OwnerAudience::Unknown` in `merge_owner_rows`, always
 //! denied under `ReadScope::Audiences`. That mapping itself is private and DB-backed
 //! (`fetch_owner_rows`/`merge_owner_rows`); see `prong_b_guard_db_test.rs` for end-to-end coverage
 //! against a real row with a NULL `audience` column. What's covered here is the pure half:
 //! `is_readable` already denies `Unknown` unconditionally under `ReadScope::Audiences`.
 //!
-//! `owner_query_sql` moved from property/`unnest`-based SQL to per-row `audience`-column point
-//! queries, pinned below via the `#[doc(hidden)]` `owner_query_sql_for_test` accessor.
+//! `owner_query_sql` uses per-row `audience`-column point queries, not property/`unnest`-based
+//! SQL, pinned below via the `#[doc(hidden)]` `owner_query_sql_for_test` accessor.
 //!
-//! Also covers, offline, that the #1486 `view_instance(...)` guard is actually wired into
+//! Also covers, offline, that the `view_instance(...)` guard is actually wired into
 //! `MaterializedView::scan` (not just correct in isolation, which the rest of this file already
 //! covers): every test that proves the hook fires end-to-end
 //! (`prong_b_guard_db_test.rs`/`ownership_rewrite_db_test.rs`) is `#[ignore]`d and DB-backed, so
@@ -96,8 +96,8 @@ fn all_passes_everything_including_unknown() {
 
 #[test]
 fn audiences_denies_unknown_always() {
-    // `Unknown` now covers both "no such row" and (post-backfill) "a row that violates the
-    // stamp-at-write-time invariant" -- either way, always denied under a restricted scope.
+    // `Unknown` covers both "no such row" and "a row that violates the stamp-at-write-time
+    // invariant" -- either way, always denied under a restricted scope.
     let scope = audiences(&["team-alpha"]);
     assert!(!is_readable(&scope, &OwnerAudience::Unknown));
 }
@@ -195,7 +195,7 @@ async fn authorize_under_restricted_scope_denies_on_resolution_error_not_pass() 
     let _ = err;
 }
 
-// --- `global_rows_visible` (list_partitions' 'global'-row rule, #1482 §4) ----------------
+// --- `global_rows_visible` (list_partitions' 'global'-row rule) ----------------
 
 // `unroutable_index()` builds a `sqlx::PgPool` via `connect_lazy`, which -- despite never
 // touching the network -- requires a Tokio runtime context to construct (it registers pool
@@ -222,9 +222,8 @@ async fn global_rows_visible_via_public_view_sets() {
 
 #[tokio::test]
 async fn global_rows_visible_via_lakehouse_admin() {
-    // #1482 §4: the removed `unstamped_audience`-in-scope disjunct is replaced by the same
-    // lakehouse-admin gate that already governs the mutating UDTFs/UDFs -- no new authority, no
-    // new knob.
+    // The same lakehouse-admin gate that governs the mutating UDTFs/UDFs also governs this --
+    // no separate authority, no separate knob.
     let admin_guard =
         AudienceGuard::new(audiences(&["team-alpha"]), true, vec![], unroutable_index());
     assert!(admin_guard.global_rows_visible("log_entries"));
@@ -252,7 +251,7 @@ async fn global_rows_hidden_by_default_under_restricted_scope() {
     assert!(!guard.global_rows_visible("log_entries"));
 }
 
-// --- `authorize_view_instance` (the `view_instance(...)` scan-time guard, #1486) ---------
+// --- `authorize_view_instance` (the `view_instance(...)` scan-time guard) ---------
 
 #[tokio::test]
 async fn authorize_view_instance_under_read_scope_all_performs_no_io() {
@@ -283,7 +282,7 @@ async fn authorize_view_instance_allows_public_view_set_with_no_io() {
 #[tokio::test]
 async fn authorize_view_instance_allows_global_with_no_io_admin_or_not_public_or_not() {
     // Rule (3) deliberately differs from `global_rows_visible`: `'global'` is passed through
-    // uncalled and left to Prong A's row filter, for both an admin and a non-admin guard, and
+    // uncalled and left to the row-level filter, for both an admin and a non-admin guard, and
     // for a view set that is *not* on the public allowlist -- pin it, since it's the one rule
     // in this method that isn't just `global_rows_visible` reused.
     let non_admin_non_public = AudienceGuard::new(
@@ -415,7 +414,7 @@ impl DataFrameTimeBounds for UnusedTimeBounds {
 
 /// A minimal `View` standing in for a real caller-named `view_instance(...)` target.
 /// `jit_update` flips `jit_update_called` and then fails -- proof, if `MaterializedView::scan`
-/// ever reaches it, that the #1486 guard check was skipped or misordered.
+/// ever reaches it, that the guard check was skipped or misordered.
 #[derive(Debug)]
 struct JitUpdateMustNotRunView {
     view_set_name: Arc<String>,

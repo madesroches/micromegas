@@ -1,13 +1,12 @@
-//! Admin-managed query deny list (`tasks/query_deny_list_plan.md`): a small set of admin-authored
-//! rules, stored in Postgres, cached in every `flight-sql-srv` replica, and evaluated at the front
-//! of `execute_query` -- before the session context is built and before planning -- so a matching
-//! query is rejected for a few microseconds of work instead of a memory-pool reservation and a
-//! wave of object-store reads.
+//! Admin-managed query deny list: a small set of admin-authored rules, stored in Postgres, cached
+//! in every `flight-sql-srv` replica, and evaluated at the front of `execute_query` -- before the
+//! session context is built and before planning -- so a matching query is rejected for a few
+//! microseconds of work instead of a memory-pool reservation and a wave of object-store reads.
 //!
-//! A rule is a boolean SQL expression (§3 of the plan) over a fixed, documented match context
-//! ([`match_schema`]) -- parsed and evaluated by DataFusion itself, so there is no grammar of our
-//! own to specify or keep in sync, and no evaluator of our own to get subtly wrong. Rules stand
-//! until an admin removes them explicitly; there is no expiry.
+//! A rule is a boolean SQL expression over a fixed, documented match context ([`match_schema`])
+//! -- parsed and evaluated by DataFusion itself, so there is no grammar of our own to specify or
+//! keep in sync, and no evaluator of our own to get subtly wrong. Rules stand until an admin
+//! removes them explicitly; there is no expiry.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -60,7 +59,7 @@ pub fn max_rules() -> usize {
 }
 
 // ---------------------------------------------------------------------------------------------
-// §2: normalized SQL fingerprint
+// Normalized SQL fingerprint
 // ---------------------------------------------------------------------------------------------
 
 /// Literal-stripped fingerprint of a statement: the first 16 hex chars of the SHA-256 of the
@@ -117,7 +116,7 @@ fn hash_hex16(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// §3: the match context and expression compilation
+// The match context and expression compilation
 // ---------------------------------------------------------------------------------------------
 
 /// The fixed, documented schema every deny rule is a predicate over -- every attribute
@@ -282,7 +281,7 @@ pub fn compile_match_expr(
     Ok(physical)
 }
 
-/// The primary escape hatch (plan §5): the deny-list check is skipped when the caller can reach
+/// The primary escape hatch: the deny-list check is skipped when the caller can reach
 /// the admin functions at all -- the same predicate `register_lakehouse_functions` gates
 /// `deny_queries`/`remove_query_denial` on -- **and** the statement mentions one of
 /// `deny_queries` / `remove_query_denial` / `list_query_denials`: three `contains` checks over
@@ -300,7 +299,7 @@ pub fn skip_for_admin_recovery(sql: &str, is_admin: bool, admin_principal_possib
 }
 
 // ---------------------------------------------------------------------------------------------
-// §4: rule model, evaluation, and cache
+// Rule model, evaluation, and cache
 // ---------------------------------------------------------------------------------------------
 
 /// The DB row, exactly as `list_query_denials()` returns it and as `insert` echoes back. No
@@ -362,7 +361,7 @@ pub fn rule_tags(rule_id: &Uuid) -> &'static PropertySet {
 
 /// The compiled rules, ordered by `(created_at, rule_id)`, oldest first -- so the first match is
 /// always the oldest matching rule, on every replica. An alias, not a newtype: nothing hangs
-/// behind it (see the plan's §4 for the full reasoning). `Arc<[_]>` rather than `Arc<Vec<_>>`:
+/// behind it. `Arc<[_]>` rather than `Arc<Vec<_>>`:
 /// the snapshot is immutable once built, and this drops a pointer hop off the per-query path.
 pub type DenySnapshot = Arc<[Arc<QueryDenyRule>]>;
 

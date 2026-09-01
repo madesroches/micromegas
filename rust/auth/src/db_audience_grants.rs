@@ -1,14 +1,14 @@
-//! DB-backed audience grant store (#1489, AbAC Stage 6a): a whole-table snapshot cache over the
-//! `audience_grants` table (migration v7, `rust/ingestion/src/sql_migration.rs`), checked
-//! alongside the existing `{prefix}_AUDIENCE_GRANTS` env map by
+//! DB-backed audience grant store: a whole-table snapshot cache over the `audience_grants` table
+//! (migration v7, `rust/ingestion/src/sql_migration.rs`), checked alongside the existing
+//! `{prefix}_AUDIENCE_GRANTS` env map by
 //! [`crate::policy::AudienceReadPolicy`]/[`crate::policy::AudienceMintPolicy`] -- a selector
 //! present in either source grants access, without either side being deep-cloned or merged into
 //! a combined map (`current()` hands back the cached grants behind an `Arc`). This is what makes
 //! a grant creatable without a service restart -- the env map stays the static/bootstrap layer.
 //!
 //! Modeled on `db_api_key.rs`'s config/pool conventions, but a single cached value rather than a
-//! per-key `moka` cache: the issue is explicit that the whole map is small enough to hold as one
-//! snapshot, so `moka`'s eviction/LRU machinery has nothing to do here.
+//! per-key `moka` cache: the whole map is small enough to hold as one snapshot, so `moka`'s
+//! eviction/LRU machinery has nothing to do here.
 
 use crate::db_api_key::resolve_u64;
 use crate::policy::{AudienceGrants, GrantAxis};

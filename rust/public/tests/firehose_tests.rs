@@ -50,8 +50,8 @@ fn make_auth_provider() -> Arc<dyn AuthProvider> {
     Arc::new(ApiKeyAuthProvider::new(keyring))
 }
 
-/// A stub `AuthProvider` returning a fixed `AuthContext` carrying `bound_audience: Some(..)`
-/// (AbAC Stage 5, #1373). `ApiKeyAuthProvider`'s own keys always carry `bound_audience: None`
+/// A stub `AuthProvider` returning a fixed `AuthContext` carrying `bound_audience: Some(..)`.
+/// `ApiKeyAuthProvider`'s own keys always carry `bound_audience: None`
 /// (`auth/src/api_key.rs`) -- only a live `DbApiKeyAuthProvider` (needs Postgres) ever produces
 /// `Some(..)` -- so this is the only way to exercise a bound-audience credential on this
 /// DB-less harness. Mirrors `public/tests/read_policy_threading_tests.rs`'s `GroupsAuthProvider`
@@ -197,8 +197,8 @@ async fn auth_context_probe(ctx: Option<Extension<AuthContext>>) -> String {
 
 #[tokio::test]
 async fn firehose_auth_middleware_propagates_bound_audience_to_the_extension() {
-    // Regression guard for #1373's context-propagation fix: `firehose_auth_middleware`'s
-    // success arm used to discard the validated `AuthContext` entirely (`Ok(_ctx) => { ... }`).
+    // Guards that `firehose_auth_middleware`'s success arm propagates the validated
+    // `AuthContext` into the request extensions.
     // This harness's lazy pool is never reachable, so asserting a stamped `micromegas.audience`
     // on a resulting process would need real DB writes it cannot do; instead, this lays
     // `firehose_auth_middleware` (made `pub` for exactly this) directly over a test-local probe
@@ -318,8 +318,8 @@ async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
     let response = app.clone().oneshot(request).await.expect("call service");
     assert_eq!(response.status(), StatusCode::OK);
 
-    // A single Firehose record can also pack two length-delimited messages back to back
-    // (issue #1381) — assert both decode and land as separate blocks.
+    // A single Firehose record can also pack two length-delimited messages back to back —
+    // assert both decode and land as separate blocks.
     let mut packed_record = make_request("metric.c", 3).encode_length_delimited_to_vec();
     packed_record.extend(make_request("metric.d", 4).encode_length_delimited_to_vec());
     let packed_body = format!(

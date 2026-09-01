@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI tool for managing DB-backed audience grants (#1489, AbAC Stage 6a; #1510).
+"""CLI tool for managing DB-backed audience grants.
 
 Talks to `analytics-web-srv`'s `/api/audience-grants` routes over HTTP via
 `WebClient` -- never direct Postgres access, the same convention every CLI in
@@ -8,8 +8,7 @@ this codebase follows (`screens.py`, `import_keys.py`). Modeled on
 `screens.py`'s local-config-file shape: there is no local state to track here,
 just a thin wrapper over two HTTP calls (`create`/`delete`).
 
-**No `list` subcommand.** The `GET /api/audience-grants` route it used to
-call is deleted server-side (#1510): listing now goes through
+**No `list` subcommand.** Listing goes through
 `micromegas-query --all "SELECT * FROM list_audience_grants()"` instead,
 which as a bonus gives a non-admin caller their own scoped view and an admin
 `WHERE`/`ORDER BY` to work with.

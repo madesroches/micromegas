@@ -1,10 +1,10 @@
 //! DB-backed tests for the `RetireMatch::Overlap` contract as `net_spans_view` uses it.
 //!
-//! `net_spans_view` received the same treatment as `thread_spans_view` in the #1429 branch
-//! (`BlockOrder::EventTime` grouping, `blocks_insert_time_range` bounds, `RetireMatch::Overlap`
-//! retirement with a `same_run_ranges` accumulator, `SCHEMA_VERSION` 1 -> 2), but unlike
-//! `thread_spans` it has no end-to-end coverage: net events are produced only by the Unreal /
-//! C-API side, so there is no Rust-side stream type an ingestion test could push blocks through
+//! `net_spans_view` uses the same `BlockOrder::EventTime` grouping, `blocks_insert_time_range`
+//! bounds, and `RetireMatch::Overlap` retirement with a `same_run_ranges` accumulator as
+//! `thread_spans_view`, but unlike `thread_spans` it has no end-to-end coverage: net events are
+//! produced only by the Unreal / C-API side, so there is no Rust-side stream type an ingestion
+//! test could push blocks through
 //! (contrast `ThreadStream` in `thread_spans_ordering_db_test.rs`). Synthesizing transit-encoded
 //! net event payloads by hand would test the encoder more than the partitioning.
 //!

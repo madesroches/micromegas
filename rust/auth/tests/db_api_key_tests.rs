@@ -117,17 +117,16 @@ fn table_name_maps_to_expected_literals() {
     assert_eq!(ApiKeyTable::Analytics.table_name(), "analytics_api_keys");
 }
 
-/// `has_audience()` (AbAC Stage 4, #1372) is a pure function of the enum -- `true` only for
-/// `Ingestion`, the sole table with a v6 `audience` column. Moved into default `cargo test`
-/// rather than left covered only transitively through the `#[ignore]`d live tests below, which
-/// is how it was reached before this test existed.
+/// `has_audience()` is a pure function of the enum -- `true` only for `Ingestion`, the sole table
+/// with a v6 `audience` column. Covered here directly rather than only transitively through the
+/// `#[ignore]`d live tests below.
 #[test]
 fn has_audience_is_true_only_for_ingestion() {
     assert!(ApiKeyTable::Ingestion.has_audience());
     assert!(!ApiKeyTable::Analytics.has_audience());
 }
 
-/// `allow_delegation`'s derivation (AbAC Stage 4, #1372) -- `db_api_key.rs` sets it from
+/// `allow_delegation`'s derivation -- `db_api_key.rs` sets it from
 /// `ApiKeyTable::allows_delegation()`, the method pinned here. This is the non-live regression
 /// guard for the property `live_row_authenticates_with_expected_context` below only *confirms*:
 /// an ingestion key is never a delegating service account.
@@ -326,15 +325,14 @@ async fn live_row_authenticates_with_expected_context() {
         micromegas_auth::types::AuthType::ApiKey
     ));
     assert!(!ctx.is_admin);
-    // AbAC Stage 4 (#1372): an ingestion write credential is not a delegating service
-    // account -- this inverts the pre-#1372 expectation, and is the regression test for
-    // that half of the change (the compiler cannot catch it).
+    // An ingestion write credential is never a delegating service account; the compiler
+    // cannot catch a regression here, hence this assertion.
     assert!(!ctx.allow_delegation);
 
     cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
 }
 
-/// The audience reaches `bound_audience` unchanged (AbAC Stage 4, #1372) -- a string-typed path
+/// The audience reaches `bound_audience` unchanged -- a string-typed path
 /// end to end (the loader's `RETURNING` list is chosen by `table.has_audience()`, then read back
 /// with `try_get("audience")` by name), where getting the table branch wrong would surface as a
 /// runtime `LookupError::Db`, not a compile error.

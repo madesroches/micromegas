@@ -1,6 +1,5 @@
-//! `list_query_denials()` -- admin UDTF listing every query-deny-list rule currently in force
-//! (`tasks/query_deny_list_plan.md` §8). Registered inside the same admin-gated block as
-//! `list_partitions()`'s mutating siblings.
+//! `list_query_denials()` -- admin UDTF listing every query-deny-list rule currently in force.
+//! Registered inside the same admin-gated block as `list_partitions()`'s mutating siblings.
 
 use super::query_deny_list::QueryDenyList;
 use async_trait::async_trait;

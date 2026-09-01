@@ -448,8 +448,7 @@ async fn upgrade_v5_to_v6(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
 
 async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     // Nullable, no backfill needed: NULL means "no ordering guarantee", which is automatically
-    // correct for every partition written before this column existed (see
-    // tasks/blocks_view_ordered_merges_plan.md's Design §4).
+    // correct for every partition written before this column existed.
     tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN sort_order TEXT[];")
         .await
         .with_context(|| "adding sort_order column to lakehouse_partitions")?;
@@ -533,9 +532,8 @@ async fn upgrade_v6_to_v7(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
 async fn upgrade_v7_to_v8(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     // Nullable, no backfill: NULL means "not recorded" -- either the partition was written
     // before this column existed, or its view never declares a `Concatenated` event-time
-    // ordering (see tasks/completed/thread_spans_segment_boundary_overlap_plan.md, Part B §1). This is
-    // the same nullable/no-backfill shape as upgrade_v6_to_v7's sort_order column; unlike that
-    // migration, this one adds no constraint.
+    // ordering. This is the same nullable/no-backfill shape as upgrade_v6_to_v7's sort_order
+    // column; unlike that migration, this one adds no constraint.
     tr.execute("ALTER TABLE lakehouse_partitions ADD COLUMN max_sort_key_time TIMESTAMPTZ;")
         .await
         .with_context(|| "adding max_sort_key_time column to lakehouse_partitions")?;
@@ -546,8 +544,8 @@ async fn upgrade_v7_to_v8(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
 }
 
 async fn upgrade_v8_to_v9(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
-    // Admin-managed query deny list (tasks/query_deny_list_plan.md §1). One `match_expr` column,
-    // not a column per matcher -- see the plan for why. No index: the table holds at most
+    // Admin-managed query deny list. One `match_expr` column,
+    // not a column per matcher. No index: the table holds at most
     // `MICROMEGAS_QUERY_DENY_MAX_RULES` rows and every replica reads all of it on each refresh
     // tick. No `SCHEMA_VERSION` (partition file-schema) change -- no partition content is affected.
     tr.execute(

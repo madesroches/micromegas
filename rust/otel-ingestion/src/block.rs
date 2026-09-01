@@ -194,19 +194,18 @@ fn nanos_to_datetime(nanos: i64) -> DateTime<Utc> {
 }
 
 /// Prepends `"aud{SEPARATOR}{audience}{SEPARATOR}"` to `payload_bytes` before hashing when
-/// `ctx.audience` is `Some` (AbAC Stage 5, #1373, §4; id-namespace rule, #1519, §6) -- ahead of
-/// `ctx.extra_hash_input`, which the webhook path already folds in -- so two audiences posting
-/// byte-identical payloads never dedup against each other. `block_id_from_payload`'s signature
-/// stays a plain `&[u8]`; the prepend is caller-side concatenation here, exactly like the
-/// webhook path's own `extra_hash_input` before it.
+/// `ctx.audience` is `Some` -- ahead of `ctx.extra_hash_input`, which the webhook path already
+/// folds in -- so two audiences posting byte-identical payloads never dedup against each other.
+/// `block_id_from_payload`'s signature stays a plain `&[u8]`; the prepend is caller-side
+/// concatenation here, exactly like the webhook path's own `extra_hash_input`.
 ///
 /// `ctx.audience: None` means "the resolved write audience is the deployment default"
 /// (`WriteAudience::id_namespace`), not "the credential carried no audience" -- the write path
-/// always resolves a real audience now, and the deployment default is the one that keeps this
+/// always resolves a real audience, and the deployment default is the one that keeps this
 /// unprefixed shape.
 fn block_id_with_context(ctx: IdentityContext, payload_bytes: &[u8]) -> Uuid {
     if ctx.audience.is_none() && ctx.extra_hash_input.is_empty() {
-        // Byte-identical to pre-Stage-5 behavior when there is nothing to fold in.
+        // Nothing to fold in -- hash the payload directly.
         return block_id_from_payload(payload_bytes);
     }
     let audience_prefix = ctx
@@ -307,9 +306,9 @@ fn build_prepared_block(
 /// resource attrs, so without this, any other header (a delivery-id, a signature, an event-type
 /// header) would have zero influence on `block_id` — two deliveries with the same body but
 /// different unrecognized headers would collide and dedup as if they were retries of each other.
-/// `ctx.audience` (AbAC Stage 5, #1373, §4) is folded into both `process_id` and `block_id` --
-/// see [`crate::identity::IdentityContext`]. `IdentityContext::default()` (both fields absent)
-/// reproduces the pre-Stage-5, OTLP-only behavior exactly.
+/// `ctx.audience` is folded into both `process_id` and `block_id` -- see
+/// [`crate::identity::IdentityContext`]. `IdentityContext::default()` (both fields absent)
+/// reproduces plain OTLP-only identity derivation, with no audience folded in.
 pub fn split_logs(
     req: crate::proto::ExportLogsServiceRequest,
     ctx: IdentityContext,

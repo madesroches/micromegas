@@ -1,12 +1,12 @@
 # Performance Guide
 
-Guidelines for writing efficient Micromegas SQL queries and avoiding common performance pitfalls.
+Guidelines for writing efficient Micromegas SQL queries.
 
 ## Critical Performance Rules
 
 ### 1. Always Use Time Ranges (via Python API)
 
-**⚡ Performance Tip:** Always specify time ranges through the Python API parameters, not in SQL WHERE clauses.
+Always specify time ranges through the Python API parameters, not in SQL WHERE clauses.
 
 **❌ Inefficient - SQL time filter:**
 ```python

@@ -90,7 +90,7 @@ Runtime verbosity is a 0–4 enum:
 
 Note that root RPC bit_size (`ObjectDepth == 0` at `EndRPC`) still accumulates into `NetConnectionEndEvent.bit_size` at every verbosity ≥ `Packets`, regardless of whether the `NetRPC*` events themselves are emitted. Only the per-RPC event records require level 4.
 
-**Snapshot invariant (Decision 6).** The writer captures `EffectiveVerbosity` at the **outermost** `BeginConnection` and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the **next** outer connection scope, never mid-scope. This eliminates orphaned Begin/End pairs and partially-gated subtrees.
+**Snapshot invariant.** The writer captures `EffectiveVerbosity` at the **outermost** `BeginConnection` and uses that snapshot for every gating decision in the scope. CVar-driven changes take effect at the **next** outer connection scope, never mid-scope. This eliminates orphaned Begin/End pairs and partially-gated subtrees.
 
 ### Content-attribution vs wire-bit semantics
 
@@ -103,7 +103,7 @@ Net tracing emits two distinct families of data. Pick the right one for your que
 | What's the connection's true bandwidth on the wire? | `sum(net.packet_sent_bits)` filtered by `connection_name` |
 | What fraction is unattributed (control bunches, voice, etc.)? | `1 − sum(net_spans.bit_size where depth = 1) / sum(net.packet_*_bits)` |
 
-`bit_size` on the `NetConnectionEndEvent` is the sum of **all** root-level (depth 1) Object and RPC bits inside the connection scope — content scopes (§3.7 / §3.10 / §3.11) **and** the named wire-framing events from §3.14. With both kinds instrumented, that sum closes to within a few percent of the wire metric. Pre-§3.14, it only contained content and was deliberately a lower bound — leaving the residual to identify framing overhead.
+`bit_size` on the `NetConnectionEndEvent` is the sum of **all** root-level (depth 1) Object and RPC bits inside the connection scope — content scopes (§3.7 / §3.10 / §3.11) **and** the named wire-framing events from §3.14. With both kinds instrumented, that sum closes to within a few percent of the wire metric.
 
 The depth-based separation is what makes this clean: actor/RPC events at depth 1 sit alongside framing events at depth 1, both peers to each other. Nested scopes (Iris subobjects, classic fast-array) sit at depth 2+ and roll into their parent's `bit_size` rather than into the connection total — preventing double-count.
 
@@ -121,7 +121,7 @@ Why: Iris serializes an object and all its subobjects into a single batch, so th
 
 **Consequence for queries.** Queries that walk hierarchy must handle both shapes — or filter on a per-process flag that identifies Iris vs classic processes.
 
-### Non-nesting invariant (Decision 6)
+### Non-nesting invariant
 
 **Connection scopes do not nest.** Only the outermost `BeginConnection` emits and resets writer state; nested ones are classified at Begin time and recorded on a per-scope `EScopeKind` stack so the matching End knows exactly what bookkeeping it owns. The classification:
 
@@ -439,7 +439,7 @@ Three sites.
     }
     ```
 
-- **Why:** when an RPC fires for an actor whose channel isn't up to date, `ReplicateActor` is forced — emitting a full actor + subobject + fast-array walk that needs connection attribution. The brace bounds the RAII lifetime so `EndConnection` fires immediately after `SetForcedSerializeFromRPC(false)`. If reached while another scope is open (e.g. inside §3.3), Decision-6 absorbs the nested Begin/End as no-ops.
+- **Why:** when an RPC fires for an actor whose channel isn't up to date, `ReplicateActor` is forced — emitting a full actor + subobject + fast-array walk that needs connection attribution. The brace bounds the RAII lifetime so `EndConnection` fires immediately after `SetForcedSerializeFromRPC(false)`. If reached while another scope is open (e.g. inside §3.3), the non-nesting rule absorbs the nested Begin/End as no-ops.
 
 #### 3.9.3 `FObjectReplicator::ReceivedRPC`
 
@@ -745,7 +745,7 @@ Each entry below gives a **symptom** you'd see in the lakehouse or the log, the 
 
 - **Symptom:** a diagnostic log line repeats at runtime with the same inner/outer connection name+direction (visible at `VeryVerbose`).
 - **Cause:** a real re-entry path — the inner scope opens while the outer is still active. Same name + same direction is silently absorbed (no log); the log fires only when the names differ or the directions disagree.
-- **Fix:** identify the call path. If the inner work shouldn't be attributed (demo, replay, server-side simulation), add `MICROMEGAS_NET_SUSPEND_SCOPE()` at the inner call site instead of a connection scope. If it **should** be attributed and shares the outer's direction, accept the Decision-6 absorption. If the directions disagree (reply RPC, NAK echo), the writer auto-suspends the inner scope so its `OBJECT_EVENT`s don't emit nested under a wrong-direction parent — see "Children measure on a different bit stream than parent" below.
+- **Fix:** identify the call path. If the inner work shouldn't be attributed (demo, replay, server-side simulation), add `MICROMEGAS_NET_SUSPEND_SCOPE()` at the inner call site instead of a connection scope. If it **should** be attributed and shares the outer's direction, accept the absorption. If the directions disagree (reply RPC, NAK echo), the writer auto-suspends the inner scope so its `OBJECT_EVENT`s don't emit nested under a wrong-direction parent — see "Children measure on a different bit stream than parent" below.
 - **Generalization:** any synchronous engine callback that can fire from inside a packet/replication scope (e.g. `PostLogin`, `OnRep_*` calling into game code, RPC dispatch from inside `FlushNet`, NAK handling from inside `ReceivedRawPacket`) is a re-entry candidate.
 
 ### Children measure on a different bit stream than parent (reply RPC / NAK)

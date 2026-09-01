@@ -187,8 +187,6 @@ fn status_label(status: StatusCode) -> &'static str {
 /// Thin wrapper around `head_handler_inner`, mirroring
 /// `get_range_handler`/`post_ranges_handler`: counts every outcome (not just
 /// the success path) with a `status`/`prefix`-tagged `object_cache_head_requests`.
-/// Before this, HEAD traffic had no direct counter and could only be inferred
-/// as a residual of the size/HEAD-tier metrics (#1280).
 pub async fn head_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
@@ -241,9 +239,8 @@ async fn head_handler_inner(key: String, state: AppState) -> Result<Response, St
 /// the handler body can produce (not just the success path): runs the inner
 /// handler, derives the final `status` from its `Ok`/`Err` result, and emits
 /// `object_cache_get_requests` exactly once per call, tagged with `status`
-/// and `prefix`. This is what fixes the success-only undercounting bug (see
-/// the plan's "Correctness fixes") -- a `400`/`404`/`416`/`500` GET used to
-/// go uncounted entirely.
+/// and `prefix`, so a `400`/`404`/`416`/`500` GET is counted the same as a
+/// success.
 pub async fn get_range_handler(
     Path(key): Path<String>,
     State(state): State<AppState>,
@@ -361,7 +358,7 @@ async fn get_range_handler_inner(
 
     // `_with_size` reuses the `file_size` already resolved above instead of
     // resolving it again inside `stream_ranges`, so `range_cache_size_backend_hit`
-    // fires exactly once per ranged GET (see the plan's "Correctness fixes").
+    // fires exactly once per ranged GET.
     let mut inner = match state
         .cache
         .stream_ranges_with_size(
@@ -398,8 +395,8 @@ async fn get_range_handler_inner(
         None => unreachable!("stream_ranges yielded no chunks for a non-degenerate range"),
     };
 
-    // Time to first byte, now that streaming (#1189/#1222) has landed --
-    // measured from handler entry to the point the first chunk is in hand.
+    // Time to first byte, measured from handler entry to the point the
+    // first chunk is in hand.
     fmetric!(
         "object_cache_ttfb_ms",
         "ms",

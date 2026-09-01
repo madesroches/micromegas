@@ -140,7 +140,7 @@ impl FlightSqlServerBuilder {
     }
 
     /// Set an explicit `ReadPolicy`, resolved once per request against the caller's
-    /// `AuthContext` (#1369, AbAC Stage 1). This policy wins on every `build_and_serve` branch,
+    /// `AuthContext`. This policy wins on every `build_and_serve` branch,
     /// overriding that branch's own default. When never called, the default depends on how auth
     /// is configured: with `with_default_auth()` or `with_auth_provider(..)`,
     /// `AudienceReadPolicy::from_env("")` backed by the DB grant store (so the seeded `public`
@@ -156,8 +156,8 @@ impl FlightSqlServerBuilder {
     }
 
     /// Set an explicit `IsolationConfig` -- the data-isolation deployment knob
-    /// (`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by Prong A
-    /// (`OwnershipRewrite`, #1370, AbAC Stage 2). Mirrors `with_read_policy`: wins on
+    /// (`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by the row-level filter
+    /// (`OwnershipRewrite`). Mirrors `with_read_policy`: wins on
     /// every `build_and_serve` branch, overriding that branch's own default
     /// (`IsolationConfig::from_env("")` on the `use_default_auth` branch, `IsolationConfig::default()`
     /// on the other two).
@@ -271,15 +271,13 @@ impl FlightSqlServerBuilder {
                 .await?
             };
 
-        // Auth/policy resolution moved above `FlightSqlServiceImpl::new` (#1369, AbAC Stage 1
-        // step 12): the service now takes the resolved `ReadPolicy` as a constructor argument, so
-        // it can no longer be constructed before its auth state is known.
+        // `FlightSqlServiceImpl::new` takes the resolved `ReadPolicy` as a constructor argument,
+        // so auth/policy resolution happens here, before construction.
         //
         // `self.read_policy` (set via `with_read_policy`) must win on every branch below --
         // each branch only computes its own *default*, used solely when the caller never set an
         // explicit policy. This keeps `with_read_policy` order-independent with respect to
-        // `with_auth_provider` / `with_default_auth`, unlike an earlier version that resolved the
-        // override inside the `auth_provider` arm only and silently dropped it on the other two.
+        // `with_auth_provider` / `with_default_auth`.
         let (auth_provider, default_policy, default_isolation_config): AuthAndDefaults =
             if let Some(provider) = self.auth_provider {
                 // Injected-provider path (the monolith's `with_auth_provider` call): the caller is
@@ -329,7 +327,7 @@ impl FlightSqlServerBuilder {
                         );
                     }
                 };
-                // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from
+                // One shared snapshot cache for this process, built from
                 // its own dedicated pool -- not `key_store_pool` above, which
                 // `DbApiKeyAuthProvider` already owns -- via the same `dedicated_key_store_pool`
                 // convention. Same prefix (`""`) `AudienceReadPolicy::from_env` beside it
@@ -406,9 +404,9 @@ impl FlightSqlServerBuilder {
         let grace_secs = self.shutdown_grace.as_secs();
         let grace = self.shutdown_grace;
 
-        // Admin-managed query deny list (tasks/query_deny_list_plan.md §4): refreshes the
-        // shared snapshot every `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`, once immediately and
-        // then on a tick, until this replica shuts down.
+        // Admin-managed query deny list: refreshes the shared snapshot every
+        // `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`, once immediately and then on a tick, until
+        // this replica shuts down.
         query_denials.spawn_refresh_task(fanout.subscribe());
 
         if let Some(health_addr) = self.health_listen_addr {

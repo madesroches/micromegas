@@ -248,24 +248,22 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_auth` (#1369, AbAC Stage 1 step 12; grant map rewrite
-    // #1372, Stage 4): unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS`
-    // -> an empty grant map -> a real caller's resolved scope is exactly what the DB-store
-    // snapshot below resolves, which is `{public}` once the seeded `('public', 'read', '*')` row
-    // (schema v9) has migrated in -- `public` has no built-in read grant of its own -- filtered by
-    // `OwnershipRewrite` (#1370, AbAC Stage 2) directly on the physical `audience` column
-    // (#1482) -- a credential with no bound audience is stamped with the resolved
-    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time now (#1519);
-    // only a legacy row registered before its ingestion binary reached schema v8 still
-    // resolves that on read -- admin replication now hard-fails on a missing `audience`
-    // column, so there is no separate query-time unstamped fallback to configure here either
-    // way.
+    // Resolved alongside `analytics_auth`: unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/
+    // `MICROMEGAS_AUDIENCE_GRANTS` -> an empty grant map -> a real caller's resolved scope is
+    // exactly what the DB-store snapshot below resolves, which is `{public}` once the seeded
+    // `('public', 'read', '*')` row (schema v9) has migrated in -- `public` has no built-in read
+    // grant of its own -- filtered by `OwnershipRewrite` directly on the physical `audience`
+    // column: a credential with no bound audience is stamped with the resolved
+    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time; only a legacy
+    // row registered before its ingestion binary reached schema v8 still resolves that on read
+    // -- admin replication hard-fails on a missing `audience` column, so there is no separate
+    // query-time unstamped fallback to configure here either way.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
-        // One shared snapshot cache for this process (#1489, AbAC Stage 6a), built from its own
-        // dedicated pool via the same `dedicated_key_store_pool` convention `analytics_auth`
-        // above already uses. Resolved under the same `MICROMEGAS_ANALYTICS` prefix
-        // `AudienceReadPolicy::from_env` beside it uses, so the cache-TTL knob follows the same
-        // `{prefix}_` fallback every other knob at this wiring site does.
+        // One shared snapshot cache for this process, built from its own dedicated pool via
+        // the same `dedicated_key_store_pool` convention `analytics_auth` above already uses.
+        // Resolved under the same `MICROMEGAS_ANALYTICS` prefix `AudienceReadPolicy::from_env`
+        // beside it uses, so the cache-TTL knob follows the same `{prefix}_` fallback every
+        // other knob at this wiring site does.
         let pool = lake_pool
             .clone()
             .expect("lakehouse must be Some when flightsql role is enabled");
@@ -290,10 +288,10 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_read_policy` (#1370, AbAC Stage 2): `OwnershipRewrite`'s two
-    // data-isolation deployment knobs, parsed in `micromegas-analytics` (the crate that consumes
-    // them) rather than `micromegas-auth`. The mutating-function registration gate (#1371, AbAC
-    // Stage 3) is derived from the auth provider at server startup instead, not a knob here.
+    // Resolved alongside `analytics_read_policy`: `OwnershipRewrite`'s two data-isolation
+    // deployment knobs, parsed in `micromegas-analytics` (the crate that consumes them) rather
+    // than `micromegas-auth`. The mutating-function registration gate is derived from the auth
+    // provider at server startup instead, not a knob here.
     let analytics_isolation_config = if roles.flightsql && !args.disable_auth {
         Some(Arc::new(IsolationConfig::from_env("MICROMEGAS_ANALYTICS")?))
     } else {

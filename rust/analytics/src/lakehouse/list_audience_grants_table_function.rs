@@ -1,5 +1,5 @@
-//! `list_audience_grants()` -- caller-scoped UDTF listing rows of the `audience_grants` table
-//! (#1489, AbAC Stage 6b). Modeled on `list_query_denials_table_function.rs`'s shape (a
+//! `list_audience_grants()` -- caller-scoped UDTF listing rows of the `audience_grants` table.
+//! Modeled on `list_query_denials_table_function.rs`'s shape (a
 //! `TableFunctionImpl` whose sync `call_with_args` returns a lazy `TableProvider`, an async
 //! `scan` that runs the DB query and builds arrays), but registered **outside** the admin gate
 //! in `register_lakehouse_functions`, next to `list_view_sets()` -- every authenticated caller
@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 /// How much of the `audience_grants` table [`ListAudienceGrantsTableFunction::scan`] returns,
 /// decided once at registration time in `register_lakehouse_functions` from
-/// `CallerContext::is_admin`/`grant_selectors` (#1489, AbAC Stage 6b, Design §2).
+/// `CallerContext::is_admin`/`grant_selectors`.
 #[derive(Debug, Clone)]
 pub enum GrantVisibility {
     /// Every row -- an admin caller.
@@ -82,10 +82,10 @@ const SELECT_ALL_SQL: &str = "
     FROM audience_grants
     ORDER BY audience, axis, selector";
 
-/// Held-pair, non-admin-visibility query (Design §2): every row on a `(audience, axis)` pair
+/// Held-pair, non-admin-visibility query: every row on a `(audience, axis)` pair
 /// the caller holds a matching grant on, not just the caller's own rows -- deliberately wider,
 /// since "who else can see this" is the question this function answers, and it is the same set
-/// a non-admin may modify (`analytics-web-srv`'s write policy, Design §3).
+/// a non-admin may modify (`analytics-web-srv`'s write policy).
 const SELECT_HELD_SQL: &str = "
     SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by
     FROM audience_grants g

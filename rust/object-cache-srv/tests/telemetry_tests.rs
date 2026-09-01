@@ -103,9 +103,9 @@ fn integer_metric_values(sink: &InMemorySink, name: &str) -> Vec<u64> {
     out
 }
 
-/// Regression guard for the success-only request-counting bug (#1206): every
-/// outcome `get_range_handler`'s body can produce -- not just 200/206 -- must
-/// bump `object_cache_get_requests`, tagged with the final `status`.
+/// Every outcome `get_range_handler`'s body can produce -- not just
+/// 200/206 -- must bump `object_cache_get_requests`, tagged with the final
+/// `status`.
 #[tokio::test]
 #[serial]
 async fn get_range_handler_counts_every_outcome() {
@@ -285,8 +285,7 @@ async fn post_ranges_handler_counts_every_outcome() {
 
 /// A `{"ranges":[]}` request must fire `object_cache_ranges_requests`
 /// exactly once via the wrapper -- not a second time from the inner
-/// handler's empty-ranges short-circuit (the double-count the plan calls
-/// out fixing).
+/// handler's empty-ranges short-circuit.
 #[tokio::test]
 #[serial]
 async fn empty_ranges_request_is_not_double_counted() {
@@ -313,17 +312,16 @@ async fn empty_ranges_request_is_not_double_counted() {
     );
 }
 
-/// Reproduction for #1279: `object_cache_get_bytes_served` is emitted from
-/// `count_bytes_served`'s `on_complete` callback, which historically only
-/// fired once the wrapped stream was polled to a terminal `None`. A `GET`
-/// response is framed with an explicit `Content-Length` header, so the
-/// transport (hyper) stops polling the body once the declared byte count has
-/// been written and never performs that terminal poll -- the metric was a
-/// structural zero under real HTTP serving despite every direct-call test in
-/// this file passing. Driving the handler through actual HTTP (`axum::serve`
-/// plus a real client reading the full body), rather than calling the
-/// handler directly or draining its body in-process, is what surfaces the
-/// bug and proves the fix.
+/// `object_cache_get_bytes_served` is emitted from `count_bytes_served`'s
+/// `on_complete` callback, which only fires once the wrapped stream is
+/// polled to a terminal `None`. A `GET` response is framed with an explicit
+/// `Content-Length` header, so the transport (hyper) stops polling the body
+/// once the declared byte count has been written and never performs that
+/// terminal poll -- the metric is a structural zero under real HTTP serving
+/// even though a direct call to the handler, or draining its body
+/// in-process, would still trigger `on_complete`. Only driving the handler
+/// through actual HTTP (`axum::serve` plus a real client reading the full
+/// body) exercises this.
 #[tokio::test]
 #[serial]
 async fn get_range_bytes_served_fires_over_real_http() {

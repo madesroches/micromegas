@@ -1,6 +1,6 @@
 # Python API Reference
 
-The Micromegas Python client provides a simple but powerful interface for querying observability data using SQL. This page covers all client methods, connection options, and advanced features.
+Reference for the Micromegas Python client: connection options, client methods, and the bundled CLI tools.
 
 ## Installation
 
@@ -175,7 +175,7 @@ print(f"Memory usage: {table.nbytes:,} bytes")
 
 ## Dictionary Encoding for Memory Efficiency
 
-When working with large datasets containing repeated values (like properties), dictionary encoding can reduce memory usage by 50-80%. Micromegas provides built-in support for dictionary encoding:
+For large datasets with repeated values (like properties), dictionary encoding cuts memory usage by 50-80%.
 
 ### Using Dictionary-Encoded Properties
 
@@ -311,8 +311,7 @@ client = FlightSQLClient("grpc://localhost:50051")
 - `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider`. This is the recommended way to handle authentication
 - `client_entrypoint` (str, optional): Explicit label for how this client was invoked (e.g. `"cli-query"`, the label `micromegas-query` passes). When omitted, the entrypoint is auto-detected. Raises `ValueError` if the value isn't a safe gRPC header value (printable ASCII, 64 chars or fewer). See Client Attribution below.
 
-**Authentication Note:**
-The `auth_provider` parameter is the recommended authentication method as it supports automatic token refresh. The `headers` parameter is deprecated and will be removed in a future version. See the [Authentication Guide](../admin/authentication.md) for details on setting up OIDC authentication.
+See the [Authentication Guide](../admin/authentication.md) for setting up OIDC authentication.
 
 ### Client Attribution
 
@@ -341,10 +340,10 @@ and, like the existing `x-client-type` header, trivially spoofable or omittable 
 characters or fewer; an invalid override is silently ignored in favor of the auto-detected value
 (unlike the `client_entrypoint` constructor parameter, which raises `ValueError` instead).
 
-Note that the top-level `micromegas.connect()` helper does not expose a `client_entrypoint`
-parameter — auto-detection always runs for it. If you want an explicit label, construct
-`FlightSQLClient` directly, or use `oidc_connection.connect()`/the CLI's `connection.connect()`,
-both of which do take `client_entrypoint`.
+The top-level `micromegas.connect()` helper does not expose a `client_entrypoint` parameter —
+auto-detection always runs for it. For an explicit label, construct `FlightSQLClient` directly, or
+use `oidc_connection.connect()`/the CLI's `connection.connect()`, both of which take
+`client_entrypoint`.
 
 ## Schema Discovery
 
@@ -655,7 +654,7 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
 
 **⚠️ DESTRUCTIVE OPERATION:** Irreversible. Always preview first.
 
-### `WebClient` — self-service mint (AbAC Stage 6, #1374)
+### `WebClient` — self-service mint
 
 `micromegas.web_client.WebClient` is the HTTP client `micromegas-setup-telemetry` (and every other
 `analytics-web-srv`-facing CLI — `-import-keys`, `-grants`, `-screens`) is built on, talking to
@@ -691,11 +690,9 @@ print(result["key"])  # cleartext key, returned exactly once
 
 The Micromegas Python client includes CLI tools for quick queries and administrative tasks.
 
-### query.py - Run SQL Queries
+### micromegas-query - Run SQL Queries
 
 Execute arbitrary SQL queries against the analytics service from the command line.
-
-**Location:** `python/micromegas/cli/query.py`
 
 **Usage:**
 ```bash
@@ -896,10 +893,10 @@ Pass `--version` to print the installed package and interpreter version and exit
 ### micromegas-grants
 
 Creates and deletes DB-backed audience grants (`audience_grants` table) via
-`analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. Since #1510,
-these two write routes are no longer admin-only: a non-admin caller with a matching hold on the
-pair can share it too, once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
-[Authentication → DB-backed audience grants](../admin/authentication.md#db-backed-audience-grants-1489-abac-stage-6a)).
+`analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. These two write
+routes are not admin-only: a non-admin caller with a matching hold on the pair can share it too,
+once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
+[Authentication → DB-backed audience grants](../admin/authentication.md#db-backed-audience-grants)).
 
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
@@ -929,11 +926,10 @@ Pass `--version` to print the installed package and interpreter version and exit
 ### micromegas-setup-telemetry
 
 Mints a personal `ingestion_api_keys` key for the caller and prints the OTLP exporter env vars
-needed to send that caller's own telemetry to the deployment (AbAC Stage 6, #1374). Named for what
-it does from the user's point of view ("set up telemetry"), not the server-side term
-("ingestion"). Requires self-service mint to be enabled on the target deployment
-(`MICROMEGAS_SELF_SERVICE_MINT`; see
-[Self-service mint](../admin/authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374))
+needed to send that caller's own telemetry to the deployment. Named for what it does from the
+user's point of view ("set up telemetry"), not the server-side term ("ingestion"). Requires
+self-service mint to be enabled on the target deployment (`MICROMEGAS_SELF_SERVICE_MINT`; see
+[Self-service mint](../admin/authentication.md#self-service-ingestion-key-mint))
 unless the caller is an admin.
 
 ```bash
@@ -966,7 +962,7 @@ things:
   (concretely, with the audience and the caller's email already substituted). A name from an
   **admin** caller is always used verbatim, even when not already in `audiences` — deliberate
   operational naming; if the named audience is brand-new, the mint route itself claims it
-  server-side (#1510), writing that admin's own `read`/`mint` grant in the same request, and the
+  server-side, writing that admin's own `read`/`mint` grant in the same request, and the
   printed mint line adds `claimed audience <name>` when it did.
 - **`--claim NAME`**: claims `NAME` as a fresh audience, verbatim — the name passed is the name
   claimed, with no prefix ever applied. Requires a non-admin caller with an email (the lazy claim
@@ -1028,11 +1024,9 @@ recent_time = datetime.datetime.now(datetime.timezone.utc) - parse_time_delta('2
 
 ### Query Streaming Benefits
 
-Use `query_stream()` for large datasets to:
-
-- **Reduce memory usage**: Process data in chunks instead of loading everything
-- **Improve responsiveness**: Start processing before the query completes
-- **Handle large results**: Query datasets larger than available RAM
+Use `query_stream()` for large datasets: it processes data in chunks instead of loading
+everything into memory, starts returning results before the query completes, and can handle
+result sets larger than available RAM.
 
 ```python
 # Example: Process week of data in batches
@@ -1056,34 +1050,9 @@ print(f"Total: {total_rows} rows, {total_errors} errors")
 
 ### FlightSQL Protocol Benefits
 
-Micromegas uses Apache Arrow FlightSQL for optimal performance:
-
-- **Columnar data transfer**: Orders of magnitude faster than JSON
-- **Binary protocol**: No serialization/deserialization overhead  
-- **Native compression**: Efficient network utilization
-- **Vectorized operations**: Optimized for analytical workloads
-- **Zero-copy operations**: Direct memory mapping from network buffers
-
-### Connection Configuration
-
-```python
-# Connect to local server (default)
-client = micromegas.connect()
-
-# Connect with dictionary preservation for memory efficiency
-client = micromegas.connect(preserve_dictionary=True)
-
-# For remote servers with authentication, use FlightSQLClient with auth_provider
-from micromegas.flightsql.client import FlightSQLClient
-from micromegas.auth import OidcAuthProvider
-
-# Recommended: OIDC authentication with automatic token refresh
-auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
-client = FlightSQLClient(
-    "grpc+tls://remote-server:50051",
-    auth_provider=auth
-)
-```
+Micromegas uses Apache Arrow FlightSQL: columnar, binary data transfer with no
+serialization/deserialization overhead, native compression, and zero-copy reads from network
+buffers.
 
 ## Error Handling
 

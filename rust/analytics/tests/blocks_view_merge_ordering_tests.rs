@@ -1,7 +1,7 @@
-//! Offline (no live DB) regression tests for `tasks/blocks_view_ordered_merges_plan.md`:
-//! - `make_partitioned_execution_plan` under `OrderingBounds::InsertTime` (§1): non-overlapping
+//! Offline (no live DB) regression tests for ordered-merge query planning:
+//! - `make_partitioned_execution_plan` under `OrderingBounds::InsertTime`: non-overlapping
 //!   insert-time ranges elide the redundant `Sort`, overlapping ranges are rejected loudly.
-//! - `QueryMerger::execute_merge_query`'s ordered path (§1/§4): a declared `insert_time` scan
+//! - `QueryMerger::execute_merge_query`'s ordered path: a declared `insert_time` scan
 //!   ordering over disjoint blocks-view partitions elides the merge's own `Sort` node -- including
 //!   the single-non-empty-file shape -- and the plan-shape check fails open (`ordering_honored:
 //!   false`, not an `Err`) when elision doesn't happen but the plan is still single-partition.
@@ -340,8 +340,8 @@ async fn ordered_merge_elides_sort_for_single_non_empty_file() {
 async fn defeated_elision_reports_ordering_not_honored_without_erroring() {
     // A query direction (DESC) that contradicts the declared ascending ordering forces a real
     // Sort node to remain even with repartition_file_scans disabled (single partition, so no
-    // SortPreservingMergeExec either) -- the fail-open regression signal from Design §1/Trade-offs:
-    // the merge must still succeed and report ordering_honored: false, not error out.
+    // SortPreservingMergeExec either) -- the fail-open regression signal: the merge must still
+    // succeed and report ordering_honored: false, not error out.
     let lakehouse = make_offline_lakehouse_context().await;
     let t0 = Utc::now();
     let part_a = make_insert_time_partition(

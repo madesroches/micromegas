@@ -1,4 +1,4 @@
-//! Analytics key management API for `analytics-web-srv` (#1411).
+//! Analytics key management API for `analytics-web-srv`.
 //!
 //! Bound to `ValidatedUser`/cookie auth (via the `AdminUser` extractor), and
 //! to a dedicated [`AnalyticsKeysState`] (holding a small pool into the

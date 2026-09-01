@@ -104,7 +104,7 @@ pub fn create_valid_token(
     keypair.create_token(claims)
 }
 
-/// Create a valid test token carrying a flat `groups` claim (#1369, AbAC Stage 1).
+/// Create a valid test token carrying a flat `groups` claim.
 pub fn create_token_with_groups(
     keypair: &TestKeyPair,
     issuer: &str,

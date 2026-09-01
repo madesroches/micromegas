@@ -88,7 +88,7 @@ NON_ASCII_CLIENT_ID = "client-—-café-日本語"
 
 
 def test_oidc_token_load_non_ascii_locale(tmp_path):
-    """Regression test for issue #1399: OidcAuthProvider.from_file()'s
+    """Regression test: OidcAuthProvider.from_file()'s
     token-file read must be UTF-8, not locale-dependent.
 
     save()'s json.dump keeps ensure_ascii=True, so a save()/from_file()

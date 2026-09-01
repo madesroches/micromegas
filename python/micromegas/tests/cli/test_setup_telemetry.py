@@ -301,8 +301,8 @@ def test_audience_outside_mintable_set_hint_degrades_with_no_mint_prefix():
 
 
 def test_admin_audience_is_used_verbatim_even_when_not_in_my_audiences():
-    """The admin branch no longer decides (or reports) whether the name is
-    brand-new (#1510) -- the server's mint route runs that check itself and
+    """The admin branch does not decide (or report) whether the name is
+    brand-new -- the server's mint route runs that check itself and
     claims the audience server-side when appropriate."""
     my_audiences = {
         "is_admin": True,
@@ -421,9 +421,9 @@ def test_run_non_admin_claim_does_not_call_create_audience_grant(monkeypatch, ca
 
 
 def test_run_never_calls_create_audience_grant(monkeypatch):
-    """The server now claims a brand-new audience itself as part of the mint
-    request, for admin and non-admin callers alike (#1510, §4) -- `run()`
-    never writes a grant row client-side any more."""
+    """The server claims a brand-new audience itself as part of the mint
+    request, for admin and non-admin callers alike -- `run()`
+    never writes a grant row client-side."""
     client = FakeClient(
         my_audiences={
             "is_admin": True,

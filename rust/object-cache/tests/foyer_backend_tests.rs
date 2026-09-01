@@ -77,13 +77,12 @@ fn integer_metric_values(sink: &InMemorySink, name: &str) -> Vec<u64> {
     out
 }
 
-// foyer 0.22.3's default hash builder is `BuildHasherDefault<XxHash64>`
-// (`DefaultHasher`), which foyer documents as guaranteeing the same key hashes
-// identically across different runs/instances -- unlike foyer 0.14's
-// per-instance random ahash seed, which this test used to work around by
-// staying within a single `FoyerBackend` instance. Forcing eviction from the
-// RAM tier still exercises the disk serialize/deserialize path directly,
-// without needing a second instance or a process restart.
+// foyer's default hash builder (`BuildHasherDefault<XxHash64>`, aka
+// `DefaultHasher`) guarantees the same key hashes identically across
+// different runs/instances, so forcing eviction from the RAM tier within a
+// single `FoyerBackend` instance is enough to exercise the disk
+// serialize/deserialize path directly, without needing a second instance or
+// a process restart.
 //
 // TODO: if this test ever needs to wait on background disk activity, prefer a
 // deterministic wait (like `FoyerBackend::close`, which awaits the flusher)
@@ -138,13 +137,12 @@ async fn round_trip_through_disk_tier() {
     assert_eq!(got, data);
 }
 
-// This is the load-bearing case for the 1291 shutdown plan's Design §4 claim:
 // close()'s default eviction-to-zero flush persists a RAM-resident demand
 // fill even with no eviction pressure at all. Every other put->close->get
 // case in this file either forces eviction first with a tiny `ram_bytes` (see
 // `round_trip_through_disk_tier` above) or uses `FillHint::Prefetch`'s
-// `.force()` storage-only writer, so none of them today exercises a demand
-// entry surviving *only* because `close()` flushed it.
+// `.force()` storage-only writer, so none of them exercises a demand entry
+// surviving *only* because `close()` flushed it.
 #[tokio::test]
 async fn demand_fill_survives_close_without_eviction() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -232,11 +230,11 @@ async fn prefetch_fill_lands_on_disk_not_ram() {
 
 // A demand-admitted block must be detached (copied) from its coalesced-GET
 // parent buffer, or the RAM tier's eviction structure keeps the whole parent
-// allocation alive even though the weigher only charges the slice length --
-// see the demand-fill-copy plan (#1276). `ram_bytes` is generous (well above
-// the 4096-byte block) so the `get` below deterministically hits the memory
-// tier rather than the disk tier, which would deserialize into a fresh buffer
-// regardless of the fix and make the assertion pass vacuously.
+// allocation alive even though the weigher only charges the slice length.
+// `ram_bytes` is generous (well above the 4096-byte block) so the `get`
+// below deterministically hits the memory tier rather than the disk tier,
+// which would deserialize into a fresh buffer regardless of detaching and
+// make the assertion pass vacuously.
 #[tokio::test]
 async fn demand_fill_detaches_from_parent_buffer() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -289,7 +287,7 @@ impl Drop for DropFlag {
 // A prefetch fill must be detached (copied) from its coalesced-GET parent
 // buffer, or the async disk-write pipeline (submit queue, io buffer encode,
 // pending piece_refs) keeps the whole parent allocation alive for as long as
-// the entry is in flight -- see #1317.
+// the entry is in flight.
 #[tokio::test]
 async fn prefetch_fill_detaches_from_parent_buffer() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -538,11 +536,11 @@ async fn disk_read_age_metric_fires_on_disk_read() {
 // A disk->RAM promotion of a `blk:`-prefixed key must fire exactly one
 // `object_cache_promotion_count{prefix=other}` (value 1) and exactly one
 // `object_cache_promotion_bytes{prefix=other}` (value == the block length),
-// verifying the promotion-volume telemetry added alongside `disk_tier_hit`
-// in `promote_if_valid` (#1321). The key is `blk:`-prefixed (rather than the
-// bare `"blobs/key"` used elsewhere in this file) because both new metrics
-// only fire inside `promote_if_valid`'s `is_block_key` branch; `prefix=other`
-// is expected (not `"blobs"`) because a `blk:`-prefixed key never matches a
+// verifying the promotion-volume telemetry emitted alongside `disk_tier_hit`
+// in `promote_if_valid`. The key is `blk:`-prefixed (rather than the bare
+// `"blobs/key"` used elsewhere in this file) because both metrics only fire
+// inside `promote_if_valid`'s `is_block_key` branch; `prefix=other` is
+// expected (not `"blobs"`) because a `blk:`-prefixed key never matches a
 // content-label prefix (see `is_block_key`'s doc comment and the caveat in
 // `mkdocs/docs/admin/object-cache.md`).
 #[tokio::test]
@@ -625,15 +623,15 @@ async fn promotion_volume_metrics_fire_on_disk_read() {
     );
 }
 
-// -- Validated-promotion two-step read (#1318) -------------------------------
+// -- Validated-promotion two-step read ---------------------------------------
 
 // A disk entry whose stored length does not match the caller's
-// `expected_len` (the poisoned-short-prefetch scenario the design doc's
-// promotion gate exists for) must never be promoted into RAM: `get` reports
-// it as a miss and RAM usage stays flat, and neither promotion metric fires
-// (#1321 -- a mismatch must not count as a promotion; only
-// `range_cache_promotion_len_mismatch` covers that case). A subsequent
-// `put(Demand)` with the full-length bytes then heals the key normally.
+// `expected_len` (the poisoned-short-prefetch scenario the promotion gate
+// exists for) must never be promoted into RAM: `get` reports it as a miss
+// and RAM usage stays flat, and neither promotion metric fires -- a mismatch
+// must not count as a promotion; only `range_cache_promotion_len_mismatch`
+// covers that case. A subsequent `put(Demand)` with the full-length bytes
+// then heals the key normally.
 // `#[serial]`: `init_in_memory_tracing` touches global dispatch state shared
 // by every test in this file that uses it.
 #[tokio::test]
@@ -843,12 +841,11 @@ async fn concurrent_gets_on_cold_key_coalesce_to_one_disk_read() {
     );
 }
 
-// Regression for the original foyer #1318 clobber: a short (poisoned) disk
-// entry seeded under a key, healed by a `put(Demand)` racing many concurrent
-// reader loops. With every RAM write now promotion-gated or canonical, no
-// writer in the system can ever produce non-canonical RAM contents, so the
-// final read deterministically observes the healed bytes regardless of how
-// the readers and the heal interleave.
+// A short (poisoned) disk entry seeded under a key, healed by a
+// `put(Demand)` racing many concurrent reader loops. Every RAM write is
+// promotion-gated or canonical, so no writer in the system can ever produce
+// non-canonical RAM contents, and the final read deterministically observes
+// the healed bytes regardless of how the readers and the heal interleave.
 #[tokio::test]
 async fn heal_survives_concurrent_readers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -900,7 +897,7 @@ async fn heal_survives_concurrent_readers() {
     assert_eq!(got, healed_data);
 }
 
-// -- Disk format-version guard (#1287) ---------------------------------------
+// -- Disk format-version guard -----------------------------------------------
 
 /// Force a RAM->disk eviction the same way `round_trip_through_disk_tier`
 /// does, then `close()` so the write is durable. Leaves at least one

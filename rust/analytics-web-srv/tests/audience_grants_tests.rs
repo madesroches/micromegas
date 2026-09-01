@@ -1,5 +1,4 @@
-//! Tests for `audience_grants.rs` — the audience-grant routes (#1489, AbAC Stage 6a; self-service
-//! write policy #1510, AbAC Stage 6c).
+//! Tests for `audience_grants.rs` — the audience-grant routes.
 //!
 //! Modeled on `ingestion_keys_tests.rs`'s pattern exactly: routes are wired the same way
 //! `build_protected_routes` wires them, but with `cookie_auth_middleware` bypassed by
@@ -13,7 +12,7 @@
 //! handler body starts, the latter by `create_grant`'s own check, which runs before the
 //! per-pair hold check that would otherwise touch the pool. The 400 cases fail validation before
 //! touching the pool, and the `NotConfigured` cases use `AudienceGrantsState { pool: None,
-//! self_service_mint_enabled: false }`, which never touches `state.pool` at all. Every other §3
+//! self_service_mint_enabled: false }`, which never touches `state.pool` at all. Every other
 //! branch -- held-pair create, own-row/created-by delete, `GET .../visible`'s three visibility
 //! cases -- reaches Postgres and is `#[ignore]`d, run manually against a real, v7-migrated
 //! Postgres, per `ingestion_keys_tests.rs`'s precedent.
@@ -73,8 +72,8 @@ fn auth_context_for(user: &ValidatedUser, groups: Vec<String>) -> AuthContext {
 /// Wires `audience_grants_router` the same way `build_protected_routes` does (state layered as
 /// `Extension<AudienceGrantsState>`), with auth bypassed by pre-inserting a synthetic
 /// `ValidatedUser` -- the same shape `--disable-auth` uses -- instead of standing up an OIDC mock
-/// and running `cookie_auth_middleware` for real. Also layers a matching `AuthContext` (AbAC
-/// Stage 6, #1374): `AuthenticatedUser` (used by `/my-audiences`) reads `AuthContext`, not
+/// and running `cookie_auth_middleware` for real. Also layers a matching `AuthContext`:
+/// `AuthenticatedUser` (used by `/my-audiences`) reads `AuthContext`, not
 /// `ValidatedUser`, so without this every `/my-audiences` test would otherwise hit the
 /// `Unauthenticated` rejection.
 fn build_handler_router_with_user(state: AudienceGrantsState, user: ValidatedUser) -> Router {
@@ -166,7 +165,7 @@ async fn delete_grant_403_for_non_admin_when_knob_disabled() {
 
 // ---------------------------------------------------------------------------
 // A non-admin caller may never grant `*` -- rejected by `create_grant`'s own check, before the
-// per-pair hold check that would otherwise touch the pool (Design §3).
+// per-pair hold check that would otherwise touch the pool.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -284,7 +283,7 @@ async fn create_grant_400_for_overlong_selector() {
 }
 
 // ---------------------------------------------------------------------------
-// /my-audiences -- AbAC Stage 6, #1374, Design §5. The knob-off-non-admin case is rejected by
+// /my-audiences. The knob-off-non-admin case is rejected by
 // `my_audiences`'s own gate check before `require_pool`/any DB access, so it needs no live DB,
 // same harness as every 403 case above; a knob-off *admin* is exempt from that gate and does
 // reach the DB query, so that case is a live-DB test alongside the others, below.
@@ -325,7 +324,7 @@ async fn my_audiences_503_when_pool_unconfigured() {
 }
 
 // ---------------------------------------------------------------------------
-// mint_prefix_for -- pure, sync (AbAC Stage 6, #1374, Design §5); no DB or `AuthContext` needed.
+// mint_prefix_for -- pure, sync; no DB or `AuthContext` needed.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -443,9 +442,8 @@ async fn json_body(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("parsing response body as json")
 }
 
-/// Reads the rows for one audience directly via `sqlx` -- the round trip below no longer has a
-/// list route to read back through (`list_grants` is deleted, Design §3); ad-hoc auditing now
-/// goes through `micromegas-query`/`list_audience_grants()` instead.
+/// Reads the rows for one audience directly via `sqlx` -- there is no list route to read back
+/// through; ad-hoc auditing goes through `micromegas-query`/`list_audience_grants()` instead.
 async fn direct_read(pool: &sqlx::PgPool, audience: &str) -> Vec<(String, String, String)> {
     sqlx::query_as::<_, (String, String, String)>(
         "SELECT audience, axis, selector FROM audience_grants WHERE audience = $1 \
@@ -520,7 +518,7 @@ async fn live_create_delete_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
-// #[ignore], live DB -- non-admin write policy (#1510, AbAC Stage 6c, Design §3)
+// #[ignore], live DB -- non-admin write policy
 // ---------------------------------------------------------------------------
 
 async fn insert_grant(
@@ -578,7 +576,7 @@ async fn live_create_grant_403_when_caller_does_not_hold_the_pair() {
 }
 
 /// A non-admin who holds `(audience, axis)` only via a `group:` row may still share it with a
-/// `user:`/`group:` selector -- holding through a group counts (Design §3).
+/// `user:`/`group:` selector -- holding through a group counts.
 #[ignore]
 #[tokio::test]
 async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
@@ -948,7 +946,7 @@ async fn live_delete_grant_404_for_a_nonexistent_row() {
 }
 
 // ---------------------------------------------------------------------------
-// #[ignore], live DB -- GET .../visible (#1510, Design §3)
+// #[ignore], live DB -- GET .../visible
 // ---------------------------------------------------------------------------
 
 #[ignore]

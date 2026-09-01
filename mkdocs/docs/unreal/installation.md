@@ -29,7 +29,7 @@ This guide walks through installing and configuring the Micromegas Unreal Engine
 
 ### Step 2: Configure Build Dependencies
 
-Since MicromegasTracing is now part of the Core module, you only need to add the plugin:
+MicromegasTracing is part of the Core module, so you only need to add the plugin:
 
 ```csharp
 // YourGame.Build.cs
@@ -312,8 +312,6 @@ void ATestActor::BeginPlay()
 ### Consoles
 - Special network configuration required
 - Contact your platform representative for network policy compliance
-
-
 
 ## Next Steps
 

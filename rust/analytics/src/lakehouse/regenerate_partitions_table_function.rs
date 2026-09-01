@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for force-regenerating lakehouse partitions directly from
 /// source data, bypassing the "already up to date" freshness check `materialize_partitions` stops
-/// at. See `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
+/// at.
 #[derive(Debug)]
 pub struct RegeneratePartitionsTableFunction {
     lakehouse: Arc<LakehouseContext>,

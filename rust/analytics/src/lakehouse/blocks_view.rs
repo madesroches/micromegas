@@ -49,8 +49,8 @@ fn audience_mismatch_keep_predicate() -> String {
 }
 
 /// True when every partition in `partitions_to_merge` either contributes no rows or already
-/// carries the exact `sort_order` this view can trust (Design §1/§4): only then can a merge
-/// safely declare and record the `insert_time` guarantee.
+/// carries the exact `sort_order` this view can trust: only then can a merge safely declare and
+/// record the `insert_time` guarantee.
 fn all_inputs_ordered_or_empty(partitions_to_merge: &[Partition]) -> bool {
     let wanted = insert_time_sort_order();
     partitions_to_merge
@@ -74,7 +74,7 @@ pub struct BlocksView {
 
 impl BlocksView {
     /// `default_audience` is the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`, sourced from
-    /// `LakehouseContext::default_audience`. It is the first of #1482's three read sites and the
+    /// `LakehouseContext::default_audience`. It is one of three read sites, and the
     /// only one whose resolved value is *baked into a partition*: every row of one materialization
     /// sees the same bound value, so a never-stamped process is labelled consistently within a
     /// partition. Two partitions materialized under different configured defaults can disagree --
@@ -365,5 +365,5 @@ pub fn blocks_view_schema() -> Schema {
 /// is a consistency gap, not a confidentiality one); `regenerate_partitions` over `blocks` lets
 /// an operator get uniform, per-row semantics sooner than the retention window would.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column (#1482)
+    vec![5] // Bumped from vec![3] for the dictionary-encoded `audience` column
 }

@@ -707,17 +707,15 @@ class TestCmdPull:
 
 class TestCmdApply:
     def test_unreadable_warning_printed_once(self, tmp_path, monkeypatch, capsys):
-        """cmd_apply must scan the directory once per invocation: compute_plan
-        used to re-scan (via list_local_screens) and cmd_apply scanned again
-        afterwards, so each unreadable-file warning printed twice in a single
-        `apply` run. It must now print exactly once.
+        """cmd_apply must scan the directory once per invocation, so each
+        unreadable-file warning prints exactly once in a single `apply` run
+        rather than once per scan.
 
         A valid `ok.json` screen (absent from the server) is included so that
         `creates` is non-empty and `cmd_apply` proceeds past its "No changes"
-        early return into the create/update/delete code path that previously
-        re-scanned the directory -- without it, the double-scan bug this test
-        guards against is never reached and the test would pass regardless of
-        whether the bug is present."""
+        early return into the create/update/delete code path -- without it,
+        the double-scan bug this test guards against is never reached and the
+        test would pass regardless of whether the bug is present."""
         monkeypatch.chdir(tmp_path)
         managed_by = "https://github.com/org/repo/tree/main/screens"
         with open("micromegas-screens.json", "w") as f:
@@ -809,7 +807,7 @@ NON_ASCII_CONTENT = "em dash —, accented café, CJK 日本語"
 
 class TestNonAsciiEncodingRegression:
     def test_read_survives_non_utf8_locale(self, tmp_path):
-        """Regression test for issue #1399: read_screen_file must decode a
+        """Regression test: read_screen_file must decode a
         UTF-8-encoded screen file correctly even when the process's
         locale-preferred encoding is not UTF-8 (e.g. LC_ALL=C on Linux, or the
         default console codepage on Windows). Forcing LC_ALL=C alone is not
@@ -868,7 +866,7 @@ class TestNonAsciiEncodingRegression:
         assert result == NON_ASCII_CONTENT
 
     def test_write_survives_non_utf8_locale(self, tmp_path):
-        """Regression test for issue #1399: write_screen_file must be able to
+        """Regression test: write_screen_file must be able to
         write non-ASCII content without raising, and must write it as literal
         UTF-8 bytes (not ensure_ascii-style \\uXXXX escapes), even when the
         process's locale-preferred encoding is not UTF-8.
@@ -882,11 +880,10 @@ class TestNonAsciiEncodingRegression:
         travel through argv or os.environ, matching the technique used for
         the stdin case in test_query.py.
 
-        Verified empirically: under LC_ALL=C PYTHONUTF8=0, the pre-fix
-        write_screen_file (plain open(path, "w"), no encoding=) raises
-        UnicodeEncodeError on this content, since ensure_ascii=False content
-        containing e.g. an em dash cannot be encoded by the locale's ASCII
-        default.
+        Without an explicit encoding=, open(path, "w") falls back to the
+        locale's preferred encoding: under LC_ALL=C PYTHONUTF8=0 that's ASCII,
+        which raises UnicodeEncodeError on ensure_ascii=False content
+        containing e.g. an em dash.
         """
         screen_path = tmp_path / "non-ascii-write.json"
         script = textwrap.dedent("""

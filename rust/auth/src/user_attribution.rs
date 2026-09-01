@@ -18,8 +18,7 @@ use tonic::{Status, metadata::MetadataMap};
 /// client-supplied or "unknown" values -- that fallback is correct for its purpose (crediting a
 /// query to a human on whose behalf a service account is acting) and would be a client-controlled
 /// impersonation vector if it were ever used to decide what data a query may read. `ReadScope`
-/// resolution must read `AuthContext` from the request extension instead (see
-/// `tasks/1369_policy_seam_plan.md` §2).
+/// resolution must read `AuthContext` from the request extension instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserAttribution {
     /// The resolved user identifier (from x-user-id or auth token)

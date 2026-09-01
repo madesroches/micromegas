@@ -1,9 +1,9 @@
-//! Offline (no live DB) regression tests for `tasks/1491_merge_scan_memory_plan.md`:
-//! - `make_merge_session_context` (Design §1) forces a merge's source scan into a single
+//! Offline (no live DB) regression tests for merge-scan memory bounding:
+//! - `make_merge_session_context` forces a merge's source scan into a single
 //!   sequential reader, regardless of `ScanOrdering` -- unlike the other offline merge tests in
 //!   this crate, this one asserts against the wrapper itself rather than a bare config-mutating
 //!   helper the test drives by hand, so it guards the wrapper's own plan shape.
-//! - `QueryMerger::execute_merge_query`'s collapsed two-arm dispatch (Design §2) still runs the
+//! - `QueryMerger::execute_merge_query`'s collapsed two-arm dispatch still runs the
 //!   concatenating strategy for the default, undeclared `ScanOrdering::Unordered` ordering, and
 //!   still produces the inputs concatenated in the order they were passed in.
 

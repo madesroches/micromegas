@@ -205,8 +205,8 @@ fn compile_rejects_aggregate() {
 }
 
 // -------------------------------------------------------------------------------------------
-// "No coercion pass" (§3 step 3): the accepted subset is pinned as a property of DataFusion's
-// physical planner, over a batch built from `QueryAttribution::to_batch`.
+// "No coercion pass": the accepted subset is pinned as a property of DataFusion's physical
+// planner, over a batch built from `QueryAttribution::to_batch`.
 // -------------------------------------------------------------------------------------------
 
 #[test]

@@ -850,9 +850,9 @@ async fn oversized_prefetch_size_fails_fill_without_storing() {
 }
 
 // A corrupt/misdecoded 8-byte cached size (e.g. from an old-format disk entry
-// misframed by a new decoder, #1287) must degrade to a miss and re-resolve
-// from origin instead of being trusted, since a garbage size can otherwise
-// drive a catastrophic allocation downstream.
+// misframed by a new decoder) must degrade to a miss and re-resolve from
+// origin instead of being trusted, since a garbage size can otherwise drive
+// a catastrophic allocation downstream.
 #[tokio::test]
 async fn implausible_cached_size_degrades_to_a_miss() {
     use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};

@@ -1,5 +1,5 @@
 //! `deny_queries(match_expr, reason)` -- admin UDTF that validates and inserts a new query-deny-
-//! list rule (`tasks/query_deny_list_plan.md` §8). `call_with_args` runs every validation
+//! list rule. `call_with_args` runs every validation
 //! synchronously and fail-loud with `plan_err!`: expression compilation (`compile_match_expr`,
 //! against the bare `SessionContext` `QueryDenyList` holds for exactly this, not the caller's own
 //! session -- rule compilation must produce the same result on every replica regardless of whose
@@ -73,7 +73,7 @@ impl TableFunctionImpl for DenyQueriesTableFunction {
         }
         // Compiled here, synchronously, against the bare `SessionContext` the list holds for
         // exactly this -- not `args.session()` -- so compilation is independent of which
-        // replica's session triggered it (§3/§4 of the plan).
+        // replica's session triggered it.
         let compiled = compile_match_expr(self.query_denials.compile_ctx(), &match_expr)?;
 
         let query_denials = self.query_denials.clone();

@@ -124,7 +124,7 @@ fn bearer_request_parts(token: &str) -> HttpRequestParts {
     }
 }
 
-/// A token with a flat `groups` array populates `AuthContext.groups` (#1369, AbAC Stage 1 §4).
+/// A token with a flat `groups` array populates `AuthContext.groups`.
 #[tokio::test]
 async fn test_groups_claim_populates_auth_context() {
     let keypair = TestKeyPair::generate();

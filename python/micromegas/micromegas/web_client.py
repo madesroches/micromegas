@@ -97,12 +97,11 @@ class WebClient:
         self._check_response(resp)
 
     def mint_ingestion_api_key(self, name, audience=None):
-        """Mint a fresh ingestion API key (AbAC Stage 6, #1374) via
-        `POST /api/ingestion-api-keys`.
+        """Mint a fresh ingestion API key via `POST /api/ingestion-api-keys`.
 
         Unlike `import_ingestion_api_key`, this generates a brand-new key
-        server-side rather than carrying one forward -- the route is no
-        longer purely admin-gated: a non-admin caller with a matching
+        server-side rather than carrying one forward -- the route is not
+        purely admin-gated: a non-admin caller with a matching
         `mint` grant (or naming a brand-new audience explicitly, which
         lazily claims it) can mint their own key once the deployment has
         `MICROMEGAS_SELF_SERVICE_MINT` enabled. `audience` is omitted from
@@ -178,8 +177,8 @@ class WebClient:
         return resp.json()
 
     def my_audiences(self):
-        """List the audiences the caller may mint into today (AbAC Stage 6,
-        #1374) via `GET /api/audience-grants/my-audiences`.
+        """List the audiences the caller may mint into today via
+        `GET /api/audience-grants/my-audiences`.
 
         Caller-scoped, so no admin access is required -- this reveals only
         whether *this* caller's own email/groups match a mint selector,
@@ -212,7 +211,7 @@ class WebClient:
         return resp.json()
 
     def import_ingestion_api_key(self, name, key, audience=None):
-        """Import an existing ingestion API key string (#1458).
+        """Import an existing ingestion API key string.
 
         Hashes and stores `key` verbatim via
         `POST /api/ingestion-api-keys/import` rather than minting a fresh one
@@ -222,7 +221,7 @@ class WebClient:
         `{"key_id", "name", "created_at", "created_by", "revoked_at",
         "imported", "audience"}`.
 
-        `audience` (#1372, AbAC Stage 4) is omitted from the request body when
+        `audience` is omitted from the request body when
         `None`, so the server applies its own deployment default
         (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) rather than
         receiving an explicit `null`.
@@ -240,8 +239,8 @@ class WebClient:
         return resp.json()
 
     def create_audience_grant(self, audience, axis, selector):
-        """Create (or report the pre-existing) audience grant row (#1489, AbAC
-        Stage 6a) via `POST /api/audience-grants`.
+        """Create (or report the pre-existing) audience grant row via
+        `POST /api/audience-grants`.
 
         `axis` is `"read"` or `"mint"`; `selector` is `"*"`, `"user:<id>"`, or
         `"group:<id>"` -- the server re-validates both. Returns
@@ -276,7 +275,7 @@ class WebClient:
         self._check_response(resp)
 
     def import_analytics_api_key(self, name, key):
-        """Import an existing analytics API key string (#1411).
+        """Import an existing analytics API key string.
 
         Hashes and stores `key` verbatim via `POST /api/analytics-api-keys/import`
         rather than minting a fresh one -- this is what lets a legacy env-keyring

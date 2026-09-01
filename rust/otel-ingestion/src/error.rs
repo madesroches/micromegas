@@ -52,9 +52,8 @@ pub enum OtelError {
     #[error("OTLP storage error ({signal}): {message}")]
     Storage { signal: Signal, message: String },
 
-    /// A conflicting re-registration under a different audience (AbAC Stage 5, #1373). Maps to
-    /// 403 -- never retryable, since retrying with the same credential produces the same
-    /// denial.
+    /// A conflicting re-registration under a different audience. Maps to 403 -- never
+    /// retryable, since retrying with the same credential produces the same denial.
     #[error("OTLP write denied ({signal}): {message}")]
     Denied { signal: Signal, message: String },
 }
@@ -131,9 +130,9 @@ impl OtelError {
             IngestionServiceError::DatabaseError(m) => OtelError::Database { signal, message: m },
             IngestionServiceError::StorageError(m) => OtelError::Storage { signal, message: m },
             // Reachable: `register_otel_process` runs the same conflict guard as the native
-            // `insert_process` path (`web_ingestion_service.rs`'s doc comment, AbAC Stage 5 §6),
-            // and rejects a same-`process_id`, different-audience OTLP registration with this
-            // variant -- closing cross-path squatting where a credential pre-registers (via
+            // `insert_process` path (see `web_ingestion_service.rs`'s doc comment), and rejects
+            // a same-`process_id`, different-audience OTLP registration with this variant --
+            // closing cross-path squatting where a credential pre-registers (via
             // `insert_process`) the `process_id` a victim's OTLP producer would later derive.
             IngestionServiceError::AudienceConflict {
                 process_id,

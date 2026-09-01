@@ -1,23 +1,22 @@
-//! The analytics-side half of the authorization seam (#1369, AbAC Stage 1).
+//! The analytics-side half of the authorization seam.
 //!
 //! `ReadScope` is the query planner's authorization input -- what a `ReadPolicy`
 //! (`micromegas-auth`) resolves down to. `micromegas-analytics` does not depend on
-//! `micromegas-auth` (see `tasks/1369_policy_seam_plan.md` §1: that edge would pull in the whole
-//! OIDC/JWT dependency tree behind one enum), so `ReadScope` carries resolved audiences only --
-//! no group vocabulary, no policy trait, nothing that requires a store. The `rust/public` bridge
-//! is the only place a `ReadableAudiences` (from `micromegas-auth`) becomes a `ReadScope`.
+//! `micromegas-auth`: that edge would pull in the whole OIDC/JWT dependency tree behind one enum,
+//! so `ReadScope` carries resolved audiences only -- no group vocabulary, no policy trait, nothing
+//! that requires a store. The `rust/public` bridge is the only place a `ReadableAudiences` (from
+//! `micromegas-auth`) becomes a `ReadScope`.
 //!
-//! **Stage 2 (#1370) consumes `ReadScope`.** [`super::ownership_rewrite::OwnershipRewrite`] --
-//! Prong A of the two-pronged enforcement design -- reads it out of [`CallerContext`] inside
-//! `query.rs::make_session_context` and injects an audience predicate into every
-//! `MaterializedView`-backed scan. **Stage 3 (#1371) adds Prong B**: the UDTF/UDF guards
-//! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions Prong A
-//! structurally cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function
-//! registration gate. `view_instance(...)` joined Prong B later (#1486) to close a
-//! cost/availability residual for the six view sets carrying a physical `audience` column, where
-//! Prong A already filters `view_instance` scans row-by-row, same as the named-table form; for
-//! the other five view sets, reachable only through a guarded `view_instance(...)`, Prong B's
-//! guard is the sole enforcement -- Prong A injects no predicate there at all.
+//! Enforcement has two layers. [`super::ownership_rewrite::OwnershipRewrite`] (the row-level filter) reads
+//! `ReadScope` out of [`CallerContext`] inside `query.rs::make_session_context` and injects an
+//! audience predicate into every `MaterializedView`-backed scan. The call-level guard is the UDTF/UDF guards
+//! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions the row-level filter structurally
+//! cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function registration
+//! gate. `view_instance(...)` is also guarded by the call-level guard, closing a cost/availability residual for
+//! the six view sets carrying a physical `audience` column, where the row-level filter already filters
+//! `view_instance` scans row-by-row, same as the named-table form; for the other five view sets,
+//! reachable only through a guarded `view_instance(...)`, the call-level guard is the sole enforcement
+//! -- the row-level filter injects no predicate there at all.
 
 use std::sync::Arc;
 
@@ -40,8 +39,8 @@ pub enum ReadScope {
 
 /// Bundles the orthogonal authorization inputs `make_session_context` and friends need --
 /// audience scope (`read_scope`) and the `is_admin`/`admin_principal_possible`
-/// mutating-function-registration capability (#1376/#1377, #1371) -- into one struct instead of
-/// adjacent, transposable positional parameters.
+/// mutating-function-registration capability -- into one struct instead of adjacent,
+/// transposable positional parameters.
 ///
 /// Required (not `Option`/defaulted) at every call site by design: a defaulting parameter would
 /// let a future call site inherit `ReadScope::All` by omission, which is exactly the failure this
@@ -50,42 +49,38 @@ pub enum ReadScope {
 #[derive(Debug, Clone)]
 pub struct CallerContext {
     /// The audience scope to plan queries under. Consumed by
-    /// [`super::ownership_rewrite::OwnershipRewrite`] (#1370, AbAC Stage 2) inside
-    /// `query.rs::make_session_context`.
+    /// [`super::ownership_rewrite::OwnershipRewrite`] inside `query.rs::make_session_context`.
     pub read_scope: ReadScope,
-    /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs (unchanged from
-    /// today's `is_admin: bool` parameter).
+    /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs.
     pub is_admin: bool,
     /// Per-service data-isolation deployment config (`MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved
-    /// once at server startup, not per request, but
-    /// bundled here rather than as a new `make_session_context` parameter (#1370 Design §8):
-    /// per-request resolved values ride the context, per-service objects live on the service,
-    /// and this rides along with `read_scope` at every real call site anyway.
+    /// once at server startup, not per request, but bundled here rather than as a new
+    /// `make_session_context` parameter: per-request resolved values ride the context,
+    /// per-service objects live on the service, and this rides along with `read_scope` at every
+    /// real call site anyway.
     pub isolation_config: Arc<IsolationConfig>,
     /// Whether this *deployment* -- not this caller -- can ever produce an admin principal at
     /// all, derived once at startup from `AuthProvider::can_grant_admin`
     /// (`rust/public/src/servers/flight_sql_server.rs`) and copied onto every `CallerContext`
-    /// unchanged, the same treatment `isolation_config` gets. Consumed by `query.rs`'s mutating
-    /// UDTF/UDF registration gate (#1371, AbAC Stage 3, Prong B):
-    /// `caller.is_admin || !caller.admin_principal_possible`. Named for the fact it represents
-    /// (can this deployment ever produce an admin?), not its effect -- when `false` (an
-    /// API-key-only deployment, which can never mint an admin), the mutating functions are
-    /// registered for any authenticated caller rather than staying admin-only, since otherwise
-    /// they would be unreachable by anyone.
+    /// unchanged, the same treatment `isolation_config` gets. Consumed by the call-level guard's mutating
+    /// UDTF/UDF registration gate in `query.rs`: `caller.is_admin ||
+    /// !caller.admin_principal_possible`. Named for the fact it represents (can this deployment
+    /// ever produce an admin?), not its effect -- when `false` (an API-key-only deployment,
+    /// which can never mint an admin), the mutating functions are registered for any
+    /// authenticated caller rather than staying admin-only, since otherwise they would be
+    /// unreachable by anyone.
     pub admin_principal_possible: bool,
-    /// The caller's identity, as recorded in `deny_queries`'s `created_by` column
-    /// (`tasks/query_deny_list_plan.md` §1/§7). `None` on internal/maintenance paths -- such a
-    /// caller cannot call `deny_queries`, which requires `Some` (§8). One string, not a struct:
-    /// `created_by` is the only consumer anywhere in that plan, so a richer identity type would
-    /// be written at every construction site and read nowhere.
+    /// The caller's identity, as recorded in `deny_queries`'s `created_by` column. `None` on
+    /// internal/maintenance paths -- such a caller cannot call `deny_queries`, which requires
+    /// `Some`. One string, not a struct: `created_by` is the only consumer, so a richer identity
+    /// type would be written at every construction site and read nowhere.
     pub identity: Option<String>,
     /// The grant selectors this caller matches -- `"*"`, `"user:<email>"` when an email is present,
     /// and one `"group:<g>"` per claimed group -- precomputed by `rust/public` from the
     /// `AuthContext` (`micromegas_auth::policy::caller_selectors`), so `micromegas-analytics` never
     /// needs the auth crate. Empty for internal and maintenance callers and for a request with no
     /// `AuthContext` at all (`--disable-auth`). Consumed by `list_audience_grants()`
-    /// (`list_audience_grants_table_function.rs`, #1489, AbAC Stage 6b); admins do not need it --
-    /// they see every row.
+    /// (`list_audience_grants_table_function.rs`); admins do not need it -- they see every row.
     pub grant_selectors: Arc<[String]>,
 }
 
@@ -124,17 +119,17 @@ impl CallerContext {
 }
 
 /// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
-/// (#1370, AbAC Stage 2, Prong A). Per-service, resolved once at server startup from environment
-/// variables -- see [`IsolationConfig::from_env`].
+/// (the row-level filter). Per-service, resolved once at server startup from environment variables -- see
+/// [`IsolationConfig::from_env`].
 ///
 /// `#[derive(Default)]`: `public_view_sets` is the only field, and its empty-by-default matches
 /// [`Self::from_env`]'s own default.
 #[derive(Debug, Clone, Default)]
 pub struct IsolationConfig {
     /// View-set names `OwnershipRewrite` skips entirely -- no predicate injected at all,
-    /// regardless of scope. Off (empty) by default, matching the AbAC plan's "off by default,
-    /// fail-closed" framing for this operator-responsibility allowlist. Parsed from
-    /// `{prefix}_PUBLIC_VIEW_SETS`, falling back to `MICROMEGAS_PUBLIC_VIEW_SETS`.
+    /// regardless of scope. Off (empty) by default, fail-closed for this
+    /// operator-responsibility allowlist. Parsed from `{prefix}_PUBLIC_VIEW_SETS`, falling back
+    /// to `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub public_view_sets: Vec<String>,
 }
 
@@ -192,15 +187,13 @@ impl IsolationConfig {
     /// a typo into a fail-fast instead of a silently-inert knob.
     ///
     /// `{prefix}_UNSTAMPED_AUDIENCE` / `MICROMEGAS_UNSTAMPED_AUDIENCE`, if set at all (including
-    /// to an empty string), is a startup error rather than being silently ignored: the knob has
-    /// never shipped in a release (removed here, in the same #1482 change that introduces it, as
-    /// an **Unreleased** CHANGELOG entry), so no released deployment can be relying on it, but a
-    /// deployment built from `main` between the two changes might be -- for a fail-closed
-    /// posture, silently dropping the knob would be exactly the kind of silent behavior change
-    /// this project's env-var conventions exist to avoid. The fix named in the error is
-    /// `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that replaces it (#1482).
-    /// That knob lives on `LakehouseContext`, not here: it is a property of the lake's contents,
-    /// needed by the maintenance daemon, which never builds an `IsolationConfig`.
+    /// to an empty string), is a startup error rather than being silently ignored: this knob does
+    /// not exist, and for a fail-closed posture, silently ignoring it would be exactly the kind
+    /// of silent behavior change this project's env-var conventions exist to avoid. The fix named
+    /// in the error is `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that
+    /// replaces it. That knob lives on `LakehouseContext`, not here: it is a property of the
+    /// lake's contents, needed by the maintenance daemon, which never builds an
+    /// `IsolationConfig`.
     pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
         let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
         if std::env::var(&unstamped_var).is_ok() {

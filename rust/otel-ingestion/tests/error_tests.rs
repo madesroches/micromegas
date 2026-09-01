@@ -1,11 +1,11 @@
-//! Tests for `OtelError`'s mapping from `IngestionServiceError` (AbAC Stage 5, #1373).
+//! Tests for `OtelError`'s mapping from `IngestionServiceError`.
 
 use micromegas_ingestion::web_ingestion_service::IngestionServiceError;
 use micromegas_otel_ingestion::{OtelError, Signal};
 use uuid::Uuid;
 
 /// `IngestionServiceError::AudienceConflict` -- raised by `register_otel_process`'s conflict
-/// guard (§6) -- must map to `OtelError::Denied`, so an OTLP client actually sees a 403/
+/// guard -- must map to `OtelError::Denied`, so an OTLP client actually sees a 403/
 /// PERMISSION_DENIED rather than a generic failure.
 #[test]
 fn audience_conflict_maps_to_denied_403() {

@@ -1,6 +1,5 @@
 //! Post-axum graceful shutdown for `object-cache-srv`: stop the prefetch
-//! producer, drain in-flight origin fetches, then close the foyer cache --
-//! see `tasks/1291_graceful_shutdown_detached_fetch_plan.md` (Design §3/§4).
+//! producer, drain in-flight origin fetches, then close the foyer cache.
 //!
 //! Axum's own HTTP drain is awaited directly in `main()`, outside this
 //! module entirely, and keeps the full shutdown grace period. `run` owns a
@@ -56,7 +55,7 @@ pub async fn run(
         // Stage 3: persist the RAM tier. `mark_shutting_down()` is set
         // immediately before the close -- the only place it's needed, so
         // `RamEvictionListener::on_leave` can tell this flush apart from
-        // capacity-driven thrashing (#1281).
+        // capacity-driven thrashing.
         foyer.mark_shutting_down();
         match foyer.close().await {
             Ok(()) => info!("foyer cache closed"),

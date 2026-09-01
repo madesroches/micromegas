@@ -1,4 +1,4 @@
-//! Tests for `micromegas_auth::db_audience_grants` (#1489, AbAC Stage 6a).
+//! Tests for `micromegas_auth::db_audience_grants`.
 //!
 //! The "no DB" section builds a `DbAudienceGrantsSource` against a pool that is never actually
 //! reachable (`connect_lazy` with a short `acquire_timeout` — the `db_api_key_tests.rs` trick),

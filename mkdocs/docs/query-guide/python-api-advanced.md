@@ -1,9 +1,9 @@
 # Python API Advanced Guide
 
-This guide covers advanced usage patterns, performance optimization techniques, and specialized features for power users of the Micromegas Python client.
+Advanced usage patterns for the Micromegas Python client: authentication, schema introspection, and batched execution of large queries.
 
 !!! tip "Prerequisites"
-    Before reading this guide, familiarize yourself with the [Python API Reference](python-api.md) for basic usage patterns.
+    Read the [Python API Reference](python-api.md) first for basic usage.
 
 ## Advanced Connection Patterns
 
@@ -260,9 +260,7 @@ stats = executor.execute_large_query(
 
 ## Next Steps
 
-- **[Schema Reference](schema-reference.md)** - Understand table structures and relationships
-- **[Functions Reference](functions-reference.md)** - Available SQL functions and operators  
+- **[Schema Reference](schema-reference.md)** - Table structures and relationships
+- **[Functions Reference](functions-reference.md)** - Available SQL functions and operators
 - **[Query Patterns](query-patterns.md)** - Common observability query patterns
 - **[Performance Guide](performance.md)** - Query optimization techniques
-
-For complex integration scenarios or custom tooling, consider the patterns in this guide as starting points for your specific use case.

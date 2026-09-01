@@ -37,25 +37,24 @@ pub const NS_OTEL_BLOCK_V1: Uuid = uuid!("5829a6f7-0577-4c8c-862f-cf4fdab445cc")
 /// ASCII unit separator — used between concatenated string fields in identity formulas
 /// to prevent tuple-boundary collisions like `("abc", "")` vs `("ab", "c")`.
 ///
-/// `pub(crate)`, not private (AbAC Stage 5, #1373, §4): `block.rs` prepends an
-/// audience-tagged prefix ahead of its own hash input using this exact separator, rather than a
-/// `\x1F` string literal, so the two modules can never drift on what the separator character is.
+/// `pub(crate)`, not private: `block.rs` prepends an audience-tagged prefix ahead of its own
+/// hash input using this exact separator, rather than a `\x1F` string literal, so the two
+/// modules can never drift on what the separator character is.
 pub(crate) const SEPARATOR: char = '\x1F';
 const SEPARATOR_STR: &str = "\x1F";
 
-/// Identity inputs beyond the OTLP payload itself (AbAC Stage 5, #1373, §4).
+/// Identity inputs beyond the OTLP payload itself.
 ///
-/// `Default` reproduces pre-Stage-5 ids byte for byte -- both fields are no-ops when absent, so
-/// the deployment default's un-salted namespace (or any call site that hasn't been threaded with
-/// a real audience yet) sees zero id churn.
+/// `Default` (both fields absent) is a no-op: the deployment default's un-salted namespace, or
+/// any call site with no audience threaded through it, sees zero id churn.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityContext<'a> {
     /// Authenticated write audience. Folded into `process_id` and `block_id` so two audiences
     /// posting identical resources/payloads never collapse onto one process or dedup against
     /// each other. `None` means the resolved write audience is the deployment default, which
-    /// keeps the un-salted namespace and reproduces pre-Stage-5 ids byte for byte.
+    /// keeps the un-salted namespace.
     pub audience: Option<&'a str>,
-    /// Webhook-only: canonicalized incoming header bytes (formerly `extra_hash_input`).
+    /// Webhook-only: canonicalized incoming header bytes.
     pub extra_hash_input: &'a [u8],
 }
 
@@ -206,25 +205,23 @@ pub fn is_degenerate_resource(attrs: &[KeyValue]) -> bool {
 /// the same pattern used when `process.owner` was added. Long-term stability of `process_id`
 /// values is not a design goal; re-deriving existing ids is always acceptable.
 ///
-/// `ctx.audience` (AbAC Stage 5, #1373, §4; id-namespace rule, #1519, §6) domain-separates the
-/// hash, **only when `Some`**: a present audience derives a per-audience namespace UUID
-/// (`NS_OTEL_PROCESS_V1` salted with the audience) and hashes the joined field key under *that*
-/// namespace, rather than appending the audience string onto the joined key with the same
-/// `\x1F` separator that joins the 31 fields above. Concatenating into the shared-separator
-/// string would let a crafted resource-attribute value ending in `\x1F<victim-audience>`
-/// reproduce the exact byte string a real stamped request would hash, defeating the audience
-/// scoping this exists to provide -- OTLP attribute values are arbitrary UTF-8, and `norm` only
-/// trims and lower-cases, it does not escape `\x1F`.
+/// `ctx.audience` domain-separates the hash, **only when `Some`**: a present audience derives a
+/// per-audience namespace UUID (`NS_OTEL_PROCESS_V1` salted with the audience) and hashes the
+/// joined field key under *that* namespace, rather than appending the audience string onto the
+/// joined key with the same `\x1F` separator that joins the 31 fields above. Concatenating into
+/// the shared-separator string would let a crafted resource-attribute value ending in
+/// `\x1F<victim-audience>` reproduce the exact byte string a real stamped request would hash,
+/// defeating the audience scoping this exists to provide -- OTLP attribute values are arbitrary
+/// UTF-8, and `norm` only trims and lower-cases, it does not escape `\x1F`.
 ///
 /// `ctx.audience: None` means "the resolved write audience is the deployment default"
-/// (`WriteAudience::id_namespace`, `micromegas-ingestion`) -- not, as before #1519, "the
-/// credential carried no audience": the write path now always resolves a real audience, and the
-/// deployment default is the one that keeps this un-salted namespace,
-/// `Uuid::new_v5(&NS_OTEL_PROCESS_V1, key)`, byte-identical to before Stage 5. This is what stops
-/// two audiences sending identical resource attributes (the same containerized app in two
-/// tenants, a degenerate resource, a CloudWatch namespace) from silently colliding on one
-/// `process_id`, including via a crafted attribute value -- the mapping audience → namespace
-/// stays injective, with every non-default audience salted and the default alone un-salted.
+/// (`WriteAudience::id_namespace`, `micromegas-ingestion`) -- the write path always resolves a
+/// real audience, and the deployment default is the one that keeps this un-salted namespace,
+/// `Uuid::new_v5(&NS_OTEL_PROCESS_V1, key)`. This is what stops two audiences sending identical
+/// resource attributes (the same containerized app in two tenants, a degenerate resource, a
+/// CloudWatch namespace) from silently colliding on one `process_id`, including via a crafted
+/// attribute value -- the mapping audience → namespace stays injective, with every non-default
+/// audience salted and the default alone un-salted.
 pub fn process_id_from_resource(resource: Option<&Resource>, ctx: IdentityContext) -> Uuid {
     let attrs = resource.map(|r| r.attributes.as_slice()).unwrap_or(&[]);
 
@@ -285,10 +282,8 @@ pub fn stream_id_from_process_signal(process_id: Uuid, signal: SignalKey) -> Uui
 /// Derives `block_id` by hashing whatever bytes the caller hands it. `Uuid::new_v5` SHA-1s its
 /// input internally, so we don't pre-hash.
 ///
-/// This is no longer just "the re-encoded protobuf bytes of one Resource submessage" -- the
-/// signature is unchanged, but callers now routinely concatenate up to three inputs ahead of
-/// calling this: the webhook path's canonicalized header set (`extra_hash_input`, since before
-/// this doc was corrected), and, as of AbAC Stage 5 (#1373, §4), an
+/// The signature is a plain `&[u8]`, but callers routinely concatenate up to three inputs ahead
+/// of calling this: the webhook path's canonicalized header set (`extra_hash_input`), and an
 /// `"aud{SEPARATOR}{audience}{SEPARATOR}"` prefix (`block.rs`) so two audiences posting
 /// byte-identical payloads never dedup against each other. See `block.rs`'s `split_logs` /
 /// `split_metrics` / `split_traces` for the actual hash-input assembly.

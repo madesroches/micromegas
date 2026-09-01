@@ -140,8 +140,8 @@ impl QueryMerger {
 
     /// The concatenating merge path: one sequential reader over one file group, covering both
     /// `ScanOrdering::Unordered` and `ScanOrdering::Concatenated` -- they build and execute the
-    /// identical scan (Design §2 of `tasks/1491_merge_scan_memory_plan.md`), differing only in
-    /// whether `declared` is `true`, i.e. whether the resulting order is declared to DataFusion.
+    /// identical scan, differing only in whether `declared` is `true`, i.e. whether the
+    /// resulting order is declared to DataFusion.
     /// `repartition_file_scans = false` is applied to every merge by the caller's
     /// `make_merge_session_context` session, not here; this method just builds the physical plan
     /// once, inspects it, and executes that exact plan -- never planning or building twice.
@@ -200,12 +200,10 @@ impl QueryMerger {
         })
     }
 
-    /// The `PerFile` k-way merge path (Design §2 of
-    /// `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`): four optimizer settings keep the merge
+    /// The `PerFile` k-way merge path: four optimizer settings keep the merge
     /// a bounded-memory streaming k-way merge instead of fanning out to `target_partitions` --
     /// `repartition_file_scans = false` is the fifth, applied to every merge by the caller's
-    /// `make_merge_session_context` session rather than set here (Design §1 of
-    /// `tasks/1491_merge_scan_memory_plan.md`) -- an unconditional logical-plan `DataFrame::sort`
+    /// `make_merge_session_context` session rather than set here -- an unconditional logical-plan `DataFrame::sort`
     /// makes the declared ordering a property of the query plan rather than of an optimizer
     /// preference (so a wrong or missing merge-query sort is not representable), and three checks
     /// -- two hard, one warn-only -- run against the physical plan before it is executed.
@@ -422,7 +420,7 @@ pub async fn create_merged_partition(
         .with_context(|| "write_log_entry")?;
     let merge_start = Instant::now();
     filtered_partitions.sort_by_key(|p| p.begin_insert_time());
-    // Computed before merge_partitions runs: a pure function of the input slice alone (Design §4).
+    // Computed before merge_partitions runs: a pure function of the input slice alone.
     let merged_sort_order = view.get_merged_partition_sort_order(&filtered_partitions);
     let merge_result = view
         .merge_partitions(

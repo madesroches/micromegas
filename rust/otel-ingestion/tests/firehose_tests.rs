@@ -8,8 +8,8 @@
 //! each record's `data`); it has no protobuf framing knowledge, so several fixtures below
 //! deliberately use an unframed `encode_to_vec()`/`decode()` round-trip — that shape is
 //! sufficient to exercise this decoder but does **not** match real Firehose wire data,
-//! which is always length-delimited (see the `decode_next_length_delimited` tests further
-//! down, which are the framing-aware ones added for issue #1381).
+//! which is always length-delimited (see the framing-aware `decode_next_length_delimited`
+//! tests further down).
 
 mod fixtures;
 
@@ -142,8 +142,8 @@ fn missing_request_id_defaults_to_empty_string() {
 // ---------------------------------------------------------------------------
 // `decode_next_length_delimited` — CloudWatch Metric Streams packs one-or-more
 // `[varint32 length][message bytes]` entries per record; these tests cover that framing
-// directly (issue #1381: a fresh `M::decode` per record misreads the second message's
-// length-prefix byte as a protobuf tag once a record carries more than one message).
+// directly, since a fresh `M::decode` per record misreads the second message's
+// length-prefix byte as a protobuf tag once a record carries more than one message.
 // ---------------------------------------------------------------------------
 
 #[test]

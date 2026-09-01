@@ -114,8 +114,8 @@ pub async fn upgrade_data_lake_schema_v4(
 }
 
 /// Upgrades the data lake schema to version 5.
-/// Adds `ingestion_api_keys` and `analytics_api_keys`, the DB-backed API key store
-/// (#1383): a `key_id` UUID primary key (a non-secret handle for `DELETE`/`GET`,
+/// Adds `ingestion_api_keys` and `analytics_api_keys`, the DB-backed API key store:
+/// a `key_id` UUID primary key (a non-secret handle for `DELETE`/`GET`,
 /// distinct from the `key_hash` lookup value), a SHA-256 `key_hash` with a unique
 /// index for O(1) validation lookups, and a `created_at`/`created_by`/`last_used_at`/
 /// `revoked_at`/`revoked_by` audit trail. The two tables are identical in shape but
@@ -165,14 +165,14 @@ pub async fn upgrade_data_lake_schema_v5(
 }
 
 /// Upgrades the data lake schema to version 6.
-/// Adds the `audience` column to `ingestion_api_keys` (#1372, AbAC Stage 4): the write
-/// audience a key is immutably bound to. Backfilled to `'public'` before `SET NOT NULL` --
-/// every pre-existing row is a pre-AbAC key, and `public` is the accurate description of
-/// its current, unstamped-and-visible-to-everyone state, not a new grant. No `DEFAULT` on
-/// the column: that would let a not-yet-upgraded `analytics-web-srv` keep inserting rows
-/// that silently take `public`, defeating the fail-closed property this stage relies on.
-/// `analytics_api_keys` is untouched -- its read-side mirror is `read_audiences` (Stage
-/// 4b), a set-valued grant in the opposite direction.
+/// Adds the `audience` column to `ingestion_api_keys`: the write audience a key is
+/// immutably bound to. Backfilled to `'public'` before `SET NOT NULL` -- every pre-existing
+/// row predates audience stamping, and `public` is the accurate description of its current,
+/// unstamped-and-visible-to-everyone state, not a new grant. No `DEFAULT` on the column:
+/// that would let a not-yet-upgraded `analytics-web-srv` keep inserting rows that silently
+/// take `public`, defeating the column's fail-closed property. `analytics_api_keys` is
+/// untouched -- its read-side mirror is `read_audiences`, a set-valued grant in the opposite
+/// direction.
 pub async fn upgrade_data_lake_schema_v6(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<()> {
@@ -198,7 +198,7 @@ pub async fn upgrade_data_lake_schema_v6(
 }
 
 /// Upgrades the data lake schema to version 7.
-/// Adds `audience_grants` (#1489, AbAC Stage 6a): the DB-backed audience grant store, a 1:1
+/// Adds `audience_grants`: the DB-backed audience grant store, a 1:1
 /// stand-in for the long-term model's `group_read_grants`/`group_mint_grants` tables. One table
 /// with an `axis` column (`'read'`/`'mint'`) rather than two, mirroring today's single env-var
 /// grant map (`{prefix}_AUDIENCE_GRANTS`); `(audience, axis, selector)` is the row's own natural

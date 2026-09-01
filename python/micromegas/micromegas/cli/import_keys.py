@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """CLI tool for importing legacy env-keyring API keys into the DB-backed
-key store (#1411, revised by #1458).
+key store.
 
 Carries a pre-existing key string forward via `analytics-web-srv`'s
 `.../import` HTTP routes -- no `psql`, no direct Postgres network access, an
 HTTP-reachable workstation is enough. Both `--table` values go through
 `analytics-web-srv`: ingestion itself exposes no key-management HTTP surface
-at all (#1458).
+of its own.
 """
 
 import argparse
@@ -46,7 +46,7 @@ def read_keyring(args, parser):
     """Parse the legacy keyring's real shape -- a JSON array of
     `{"name": ..., "key": ...}` objects, exactly what `parse_key_ring` reads
     (`rust/auth/src/api_key.rs`'s `KeyRingEntry`), plus an optional per-entry
-    `"audience"` field (#1372, AbAC Stage 4) -- from the named env var or a
+    `"audience"` field -- from the named env var or a
     file. Returns a list of `(name, key, audience)` triples, in source order;
     `audience` is `None` when the entry carries none.
 
@@ -181,9 +181,9 @@ def build_auth_provider(args, parser):
 
 def make_client(args, parser):
     """`--url` always points at `analytics-web-srv`'s base URL, for both
-    `--table` values (#1458) -- ingestion no longer exposes any
-    key-management HTTP routes of its own, so there is nothing left for a
-    `--table ingestion` run to call directly.
+    `--table` values -- ingestion exposes no key-management HTTP routes of
+    its own, so there is nothing for a `--table ingestion` run to call
+    directly.
     """
     auth_provider = build_auth_provider(args, parser)
     return WebClient(args.url, auth_provider=auth_provider)

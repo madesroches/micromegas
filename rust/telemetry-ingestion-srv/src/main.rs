@@ -10,7 +10,7 @@
 //!  - `MICROMEGAS_OIDC_CONFIG` : (optional) OIDC configuration JSON
 //!
 //! Authentication is satisfied by any of: `MICROMEGAS_API_KEYS`,
-//! `MICROMEGAS_OIDC_CONFIG`, or a non-empty `ingestion_api_keys` DB table (#1383)
+//! `MICROMEGAS_OIDC_CONFIG`, or a non-empty `ingestion_api_keys` DB table
 //! — the last of these is always checked, since this binary always attaches a
 //! DB-backed key store built from the data lake's own connection.
 

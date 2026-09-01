@@ -135,12 +135,11 @@ impl TableProvider for ListPartitionsTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        // Query Enforcement Prong B (#1371): `ReadScope::All` keeps today's path unchanged,
-        // including the `LIMIT` pushdown. A restricted caller instead fetches every row
-        // unlimited and row-filters per plan §8, with `filter_rows` itself enforcing `limit` by
-        // stopping as soon as enough matching rows are kept -- filtering after a pushed-down
-        // limit would return fewer rows than asked for while more matching rows exist, silently
-        // wrong.
+        // The call-level guard: `ReadScope::All` keeps the unrestricted path unchanged,
+        // including the `LIMIT` pushdown. A restricted caller instead fetches every row unlimited
+        // and row-filters, with `filter_rows` itself enforcing `limit` by stopping as soon as
+        // enough matching rows are kept -- filtering after a pushed-down limit would return fewer
+        // rows than asked for while more matching rows exist, silently wrong.
         let restricted = *self.guard.read_scope() != ReadScope::All;
 
         // Build query with optional LIMIT clause pushed down to PostgreSQL, but only when
@@ -209,7 +208,7 @@ impl ListPartitionsTableProvider {
     /// at most a handful of audience-resolution round trips instead of one unbounded batch.
     const RESOLVE_CHUNK_ROWS: usize = 1_000;
 
-    /// Row filtering for a `ReadScope::Audiences` caller (plan §8): a `view_instance_id` that
+    /// Row filtering for a `ReadScope::Audiences` caller: a `view_instance_id` that
     /// parses as a `Uuid` is kept iff it resolves (as `IdKind::ProcessOrStream`) to a readable
     /// audience; the literal `'global'` is kept iff `AudienceGuard::global_rows_visible` says so
     /// for that row's `view_set_name`; anything else is dropped (fail-closed -- nothing produces

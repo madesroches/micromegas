@@ -18,8 +18,7 @@ use tokio::sync::mpsc;
 ///
 /// The channel carries `Result<(time, msg), String>`: an `Err` item ends the stream with a
 /// genuine `RecordBatchStream` error (propagating through `execute_stream`/`collect` as a query
-/// execution failure) instead of being folded into one more `(time, msg)` log row -- see
-/// `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
+/// execution failure) instead of being folded into one more `(time, msg)` log row.
 pub struct AsyncLogStream {
     schema: SchemaRef,
     rx: mpsc::Receiver<Result<(chrono::DateTime<chrono::Utc>, String), String>>,

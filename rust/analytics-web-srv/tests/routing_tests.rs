@@ -385,7 +385,7 @@ async fn test_empty_base_path_produces_root_base_href() {
 
 // ---------------------------------------------------------------------------
 // `--disable-auth`: both key-management prefixes answer with the static 503
-// router, not the real mint/list/revoke/forward handlers (#1411). Calls the
+// router, not the real mint/list/revoke/forward handlers. Calls the
 // real `build_protected_routes` with `auth_state: &None` (the exact
 // `--disable-auth` shape `run_web_server` builds), rather than
 // reimplementing the merge branching standalone, so this stays a regression

@@ -1,20 +1,16 @@
 //! Integration coverage for `shutdown_sequence::run`: the post-axum
 //! orchestration that aborts the prefetch worker, drains in-flight origin
-//! fetch tasks, then closes the foyer cache -- see
-//! `tasks/1291_graceful_shutdown_detached_fetch_plan.md` (Design §3/§4).
+//! fetch tasks, then closes the foyer cache.
 //!
-//! An earlier draft of this coverage (dropped in 6c5b48a9, "Replace the
-//! prefetch shutdown signal with abort-then-await") drove `run` against stub
-//! doubles -- a `Notify`-backed fake `JoinHandle`, a gated fake `RangeCache`
-//! -- purely to assert that its three awaits execute in the order they're
-//! written. That's guaranteed by `run`'s single linear async body and isn't a
-//! real regression risk, which is why it was cut. The tests below instead
-//! drive `run` against real components (a real `spawn_prefetch_worker`
-//! handle, a real `FoyerBackend`-backed `RangeCache`) and assert genuinely
-//! observable behavior: a queued prefetch item abandoned by the abort, the
-//! fetch-task drain actually blocking on real outstanding work, the overall
-//! deadline actually bounding `run`'s wall-clock time, and `close()` actually
-//! persisting to disk.
+//! The tests below drive `run` against real components (a real
+//! `spawn_prefetch_worker` handle, a real `FoyerBackend`-backed `RangeCache`)
+//! and assert genuinely observable behavior: a queued prefetch item
+//! abandoned by the abort, the fetch-task drain actually blocking on real
+//! outstanding work, the overall deadline actually bounding `run`'s
+//! wall-clock time, and `close()` actually persisting to disk. Driving `run`
+//! against stub doubles instead would only prove that its three awaits
+//! execute in the order they're written, which is already guaranteed by its
+//! single linear async body.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

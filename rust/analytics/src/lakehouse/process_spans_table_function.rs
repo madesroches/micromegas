@@ -122,11 +122,10 @@ impl TableFunctionImpl for ProcessSpansTableFunction {
                 arg1
             );
         };
-        // Parsed as a `Uuid` at plan time -- a malformed id is now a plan-time error instead of
-        // reaching the inner SQL these queries build for it (`process_streams.rs`), which
-        // previously interpolated the caller's raw string verbatim. The canonical hyphenated
-        // rendering is what's actually stored in `process_id` columns, so it's kept (not the
-        // caller's original spelling) for the inner literal comparisons below to match.
+        // Parsed as a `Uuid` at plan time -- a malformed id becomes a plan-time error instead of
+        // reaching the inner SQL these queries build for it (`process_streams.rs`). The canonical
+        // hyphenated rendering is what's actually stored in `process_id` columns, so it's kept
+        // (not the caller's original spelling) for the inner literal comparisons below to match.
         let Ok(process_uuid) = Uuid::parse_str(&process_id_arg) else {
             return plan_err!(
                 "First argument to process_spans must be a valid UUID (the process ID), given '{process_id_arg}'"
@@ -184,9 +183,8 @@ pub struct ProcessSpansExecutionPlan {
     guard: Arc<AudienceGuard>,
     /// Set only by [`ProcessSpansTableProvider::scan`], after `AudienceGuard::authorize`
     /// succeeds -- `None` here means this plan never went through `scan`, so `execute` refuses
-    /// to run it. See the plan's §3/§6 for why this witness exists (fail-closed by construction,
-    /// not by convention) and §6 for why the inner session below runs under the witness's
-    /// internal caller rather than the caller's own scope.
+    /// to run it: fail-closed by construction, not by convention. The inner session below also
+    /// runs under the witness's internal caller rather than the caller's own scope.
     authorized: Option<Authorized>,
     properties: Arc<PlanProperties>,
 }
@@ -318,8 +316,7 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
             // statement below is server-constructed and confined to the process id the guard
             // just authorized (`process_streams::get_process_thread_list`, the `view_instance`
             // calls further down) -- if that process is readable, everything these statements
-            // can reach is readable too. A deliberate deviation from naive scope inheritance;
-            // see `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
+            // can reach is readable too. A deliberate deviation from naive scope inheritance.
             let ctx = super::query::make_session_context(
                 lakehouse,
                 part_provider,

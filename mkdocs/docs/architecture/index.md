@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Micromegas is built on a modern lakehouse architecture designed for high-performance observability data collection and analytics.
+Micromegas is a lakehouse for observability data: high-throughput collection, object storage, and SQL analytics over the same lake.
 
 ## Core Components
 

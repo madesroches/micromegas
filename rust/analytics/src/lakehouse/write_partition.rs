@@ -171,9 +171,7 @@ pub enum RetireMatch {
     /// yet (a sibling later in the same `jit_update` loop covers it) is transiently missing until
     /// that sibling is written -- or, if the loop fails, until the next successful `jit_update`.
     /// Tolerable because JIT partitions are regenerated on demand from `blocks_view` and are not
-    /// the source of truth for their own data. See
-    /// `tasks/1429_jit_event_time_block_ordering_plan.md` §6 for the derivation, the rejected
-    /// shape-based alternatives to `same_run_ranges`, and the concurrent-writers argument.
+    /// the source of truth for their own data.
     Overlap,
 }
 
@@ -496,8 +494,7 @@ async fn insert_partition_transaction(
     // differently-ranged, already-committed partition before this insert), so two concurrent
     // writers of different, overlapping ranges are instead reconciled by the next `jit_update`'s
     // exact-equality `is_jit_partition_up_to_date` check, not by the exclusion constraint -- see
-    // `RetireMatch::Overlap`'s docs and `tasks/1429_jit_event_time_block_ordering_plan.md` §6
-    // ("Concurrent writers").
+    // `RetireMatch::Overlap`'s docs.
     instrument_named!(
         sqlx::query("SELECT pg_advisory_xact_lock($1);")
             .bind(lock_key)
@@ -680,7 +677,7 @@ pub struct RowSetTrackingResult {
     pub max_sort_key_time: Option<DateTime<Utc>>,
 }
 
-/// Guards a declared non-nullable field against a `NULL` slipping through undetected (#1482 §1).
+/// Guards a declared non-nullable field against a `NULL` slipping through undetected.
 ///
 /// The parquet writer does not enforce declared nullability itself: for a required top-level
 /// leaf, `ArrowLevels` has no definition levels, so `write_leaf` treats every index as non-null
@@ -692,7 +689,7 @@ pub struct RowSetTrackingResult {
 /// batch (`SqlBatchView` transforms, every merge). One `null_count()` per declared non-nullable
 /// column per batch.
 fn check_non_nullable_columns(batch: &RecordBatch, file_schema: &Schema, desc: &str) -> Result<()> {
-    // Positional, not by-name (Current State): the parquet writer zips the declared schema's
+    // Positional, not by-name: the parquet writer zips the declared schema's
     // fields against the batch's columns by position with no name check, and a batch's column
     // names need not match the declared schema's at all (e.g. `blocks`, whose batch is built
     // from Postgres column aliases while the declared schema uses `processes.foo`-style names).
@@ -958,8 +955,8 @@ pub async fn write_partition_from_rows(
         // Explicitly enable page-level statistics for clarity (this is the default in Arrow 57.0+)
         // This generates ColumnIndex structures with proper null_pages field
         .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
-        // 8x finer than the 1 Mi default, so a clustered sort key (tasks/completed/1392_kway_merge_sorted_partitions_plan.md
-        // Design §6) actually pays off in row-group pruning; only affects newly written partitions.
+        // 8x finer than the 1 Mi default, so a clustered sort key actually pays off in row-group
+        // pruning; only affects newly written partitions.
         .set_max_row_group_row_count(Some(128 * 1024))
         .build();
     let mut arrow_writer =

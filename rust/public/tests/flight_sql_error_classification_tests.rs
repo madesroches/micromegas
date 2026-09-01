@@ -1,5 +1,5 @@
 // Unit tests for `micromegas::servers::flight_sql_service_impl`'s error-classification
-// helpers (issue #1435):
+// helpers:
 // - `classify_datafusion_error`: gRPC `Code` for every `DataFusionError` variant the mapping
 //   table cares about, including wrapped in `Context`/`Diagnostic`/`Collection`.
 // - `client_error`: the returned `Status`'s code/message -- no `.rs:` file:line pattern, a
@@ -408,7 +408,7 @@ fn classify_flight_error_non_external_variant_is_internal() {
     assert_eq!(status.code(), Code::Internal);
 }
 
-// --- build_denial_warn_line (query_deny_list_plan.md §5/§6) -----------------
+// --- build_denial_warn_line -----------------
 
 #[test]
 fn build_denial_warn_line_contains_rule_id_sql_hash_and_attribution() {

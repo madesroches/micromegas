@@ -34,8 +34,8 @@ pub struct MetadataPartitionSpec {
     pub insert_range: TimeRange,
     pub record_count: i64,
     pub data_sql: Arc<String>,
-    /// Bound as `$3` when `data_sql` runs -- the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
-    /// (#1482), which `BlocksView`'s `COALESCE` resolves a never-stamped process's missing
+    /// Bound as `$3` when `data_sql` runs -- the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`,
+    /// which `BlocksView`'s `COALESCE` resolves a never-stamped process's missing
     /// audience to. `None` for a `data_sql` that references only `$1`/`$2`; `BlocksView` is the
     /// only view that uses this module, so in practice it is always `Some`. Note the separate
     /// `source_count_query` deliberately does **not** get this bind -- it has no `$3`.

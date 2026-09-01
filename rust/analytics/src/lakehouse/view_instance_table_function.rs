@@ -23,8 +23,8 @@ use std::sync::Arc;
 /// df_spans = client.query(sql, begin_spans, end_spans)
 /// ```
 ///
-/// The only site that supplies an [`AudienceGuard`] to the [`MaterializedView`]s it builds
-/// (#1486): every caller-named instance goes through this table function, so this is where the
+/// The only site that supplies an [`AudienceGuard`] to the [`MaterializedView`]s it builds:
+/// every caller-named instance goes through this table function, so this is where the
 /// scan-time audience check gets wired in.
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
