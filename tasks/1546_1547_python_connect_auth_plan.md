@@ -20,14 +20,14 @@ They are done together because both converge on `cli/connection.py`'s auth branc
 
 **Auth providers** — `python/micromegas/micromegas/auth/` holds `oidc.py` only, exporting
 `OidcAuthProvider` (browser/PKCE, refresh, token file) and `OidcClientCredentialsProvider`
-(service account, `from_env()`). `auth/__init__.py:3` lists exactly those two in `__all__`.
+(service account, `from_env()`). `auth/__init__.py:5` lists exactly those two in `__all__`.
 
 The provider protocol is a single method, `get_token() -> str`. Both consumers turn it into the
 same header:
 
 - `DynamicAuthMiddleware.sending_headers()` (`flightsql/client.py:53-56`) →
   `{"authorization": b"Bearer <token>"}` on every FlightSQL call.
-- `WebClient._headers()` (`web_client.py:21-26`) → the same `Authorization` header on every REST
+- `WebClient._headers()` (`web_client.py:20-25`) → the same `Authorization` header on every REST
   call.
 
 So a static provider is a three-line class, and it works for `WebClient` for free.
@@ -54,8 +54,9 @@ The third is the one users want and the one they cannot find. Its whole body is 
 `ConnectionConfig` (frozen, slots), `resolve_connection()` with env > profile > default precedence,
 `resolve_active_profile()` with `--profile` > `MICROMEGAS_PROFILE` > `default_profile`,
 `ProfileError`, `_validate_profile_name`, and per-profile `tokens-<name>.json`. It has no
-static-key field. Its callers are `cli/connection.py`, `cli/grants.py:45`,
-`cli/import_keys.py:152`, and `cli/setup_telemetry.py`.
+static-key field. Its direct callers are `cli/connection.py`, `cli/grants.py:45`, and
+`cli/import_keys.py:163`; `cli/setup_telemetry.py` calls it only indirectly, via
+`import_keys.make_client` (`setup_telemetry.py:32`).
 
 ## Design
 
@@ -77,8 +78,8 @@ class StaticTokenAuthProvider:
   authentication error on the first query rather than at the call site.
 - `from_file(path)` expands `~`, reads UTF-8, strips. `echo key > file` leaves a trailing
   newline, so stripping is the normal case, not a nicety. An empty-after-strip file raises
-  `ValueError` naming the path; `OSError` from an unreadable path propagates unchanged — the
-  config layer (below) is what translates both into a `ProfileError`.
+  `ValueError` naming the path; `OSError` from an unreadable path propagates unchanged —
+  `connect_with_profile` (§4) is what translates both into a `ProfileError`.
 - No `from_env()`. See Decisions.
 - `__repr__` masks the token. A notebook echoes the last expression into saved output, and
   `StaticTokenAuthProvider(...)` as a cell's value must not write a live credential into a
@@ -96,9 +97,10 @@ api_key_file: Optional[str] = None
 It holds the **path**, not the secret. Two consequences, both wanted: the frozen dataclass's
 auto-generated `repr` can never leak a key (a `print(cfg)` while debugging is a realistic leak
 path), and `resolve_connection` performs no file I/O, so it stays pure config resolution and the
-three other callers (`grants`, `import_keys`, `setup_telemetry`) are unaffected. The file is read
-exactly once, at connect time, by `StaticTokenAuthProvider.from_file()` — the read/strip/validate
-logic lives in one place.
+three other callers (`grants`, `import_keys`, `setup_telemetry`) are unaffected by the file I/O
+(they can still hit §3's new two-mechanism `ProfileError`, which each already catches). The file
+is read exactly once, at connect time, by `StaticTokenAuthProvider.from_file()` — the
+read/strip/validate logic lives in one place.
 
 Resolution: from the active profile's (or flat config's) `api_key_file` key only. No environment
 variable is introduced — see Decisions.
@@ -128,7 +130,7 @@ Provenance is recomputed inside the error path (re-checking whether each `MICROM
 set) rather than threaded through `_pick`'s return type — it is needed for the message and nowhere
 else.
 
-`ProfileError`'s class docstring (`cli/config.py:16-23`) currently promises "profile-selection
+`ProfileError`'s class docstring (`cli/config.py:15-21`) currently promises "profile-selection
 problems only ... never for downstream connection failures". It already also covers malformed
 `profiles`/entry shapes, so the docstring is behind the code; extend it to cover profile
 *content* problems — an unreadable or empty `api_key_file`, and a two-mechanism profile — while
@@ -140,7 +142,7 @@ because `cli/query.py:143` turns `ProfileError` into a clean `parser.error` inst
 New module `micromegas/connection.py`:
 
 ```
-def connect_with_profile(profile=None, preserve_dictionary=False, client_entrypoint=None)
+def connect_with_profile(profile=None, client_entrypoint=None, preserve_dictionary=False)
 ```
 
 Three branches, in order:
@@ -156,19 +158,17 @@ else:                     -> FlightSQLClient(cfg.uri, client_entrypoint=..., pre
 
 Static key first, so a profile that names one never triggers a browser flow. The
 `OSError`/`ValueError` from `from_file` is wrapped into `ProfileError` naming the profile and the
-path, per §3.
+path, per §3's widened `ProfileError` scope.
 
 Two details to preserve:
 
 - **Keep the `FlightSQLClient` and `oidc_connection` imports function-local.** The existing tests
   monkeypatch the module attributes `flightsql_client.FlightSQLClient` and
-  `oidc_connection.connect` (`tests/cli/test_connection.py:35,71`) and depend on the name being
+  `oidc_connection.connect` (`tests/cli/test_connection.py:31,73`) and depend on the name being
   looked up at call time. A module-level `from ... import FlightSQLClient` would bind the real
-  class at import and silently break both tests.
+  class at import and silently break that test.
 - **`preserve_dictionary` is new and reaches all three branches.** Today the profile connect
-  cannot request dictionary preservation at all — a real gap for notebook users, five of whom
-  reach for `micromegas.connect(preserve_dictionary=True)` precisely because the profile path
-  doesn't offer it.
+  cannot request dictionary preservation at all — a real gap for notebook users.
 - **`client_entrypoint` also reaches all three branches, including the new static-key one.**
   `cli/query.py` passes `client_entrypoint="cli-query"` through this function; dropping it on the
   static-key branch would silently lose attribution for that auth mode.
@@ -179,7 +179,7 @@ Two details to preserve:
 from micromegas.connection import connect_with_profile as connect
 ```
 
-`cli/query.py:142` (`connection.connect(...)`) keeps working untouched.
+`cli/query.py:141` (`connection.connect(...)`) keeps working untouched.
 
 `micromegas/__init__.py` adds `connect_with_profile` and re-exports `ProfileError`, so a caller can
 catch the error without importing from a `cli` submodule — the same discoverability complaint the
@@ -316,6 +316,10 @@ Modify:
   rule, and the error text.
 - `### micromegas-logout` (line 846) — a static-key profile caches no token, so logout is a no-op
   for it; revoking such a key is server-side (`DELETE /api/analytics-api-keys/{key_id}`).
+- Line ~343 ("The top-level `micromegas.connect()` helper does not expose a `client_entrypoint`
+  parameter …") — update to name `connect_with_profile` alongside `FlightSQLClient`,
+  `oidc_connection.connect()`, and the now-aliased `cli.connection.connect()`, mirroring the
+  `attribution.py` docstring edit above.
 
 `mkdocs/docs/admin/api-keys.md` — from "Minting an analytics key over HTTP" (line ~249), point at
 the Python static-key path so a freshly minted key has an obvious Python consumer.
@@ -326,7 +330,7 @@ a `StaticTokenAuthProvider` instead of passing a raw `headers=` dict, and retarg
 warning to name `StaticTokenAuthProvider`.
 
 `mkdocs/docs/query-guide/python-api-advanced.md` — add a `StaticTokenAuthProvider` example to
-"Advanced Connection Patterns" (line ~16) beside `OidcAuthProvider` and
+"Advanced Connection Patterns" (line ~8) beside `OidcAuthProvider` and
 `OidcClientCredentialsProvider`; retarget "Static Headers (Deprecated)" (line ~49) to name
 `StaticTokenAuthProvider` instead of just saying "Use `auth_provider` instead".
 
