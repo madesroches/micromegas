@@ -97,6 +97,13 @@ A hand-written literal uses `decode('04', 'hex')`, which returns `DataType::Bina
 present, and treats a null in it exactly like a null in any other argument (per-row
 `"ERROR: all arguments must be non-null"`).
 
+In DataFusion 54.1, `coerced_from` (`datafusion-expr-54.1.0/src/type_coercion/functions.rs`) has
+no arm coercing `BinaryView` into a `Binary` `Exact` slot, so the `Binary` slot accepts only
+`Binary`, `Dictionary(_, Binary)`, and `Null`. Both documented callers —
+`list_partitions().file_schema_hash` and `decode(...)` — already produce `Binary`, so this is
+moot in practice; a caller that somehow plans a `BinaryView` argument fails loudly at planning
+with a coercion error rather than misbehaving silently.
+
 ### 2. Resolve to exactly one row, then delete that row by all five columns
 
 `retire_partition_in_transaction` gains a `file_schema_hash: Option<&[u8]>` parameter. One `SELECT`
@@ -178,8 +185,10 @@ surface beyond the f-string SQL this function already builds.
    (`#[ignore]`, live-DB, following `net_spans_retire_overlap_db_test.rs` for synthetic partition
    rows and `prong_b_guard_db_test.rs` for an admin `make_session_context`).
 
-5. **Python test** (`python/micromegas/tests/test_admin.py`) — extend `MockFlightSQLClient` and
-   add SQL-shape assertions.
+5. **Python test** (`python/micromegas/tests/test_admin.py`) — add SQL-shape assertions, and
+   convert the `incompatible_schema_hash` fixtures at `:92`, `:126`, `:178`, `:225`, `:310` from
+   `str` to `bytes` (`MockFlightSQLClient`'s regex already matches the five-argument call and
+   needs no change).
 
 6. **Docs** — `mkdocs/docs/admin/functions-reference.md`,
    `mkdocs/docs/query-guide/functions-reference.md`.
@@ -211,10 +220,6 @@ each file for cleanup would fix the storage leak but keep the data loss: the cur
 partition would still disappear. Erroring is the only behavior that preserves the invariant the
 caller actually wants.
 
-**Delete by the resolved row's hash vs. by the caller's argument.** Using the argument would leave
-the four-argument path's `DELETE` hash-blind, so the READ COMMITTED race stays open. Reading the
-hash back from the `SELECT` costs one extra column and closes it for both arities.
-
 ## Decisions
 
 - The success message gains a `schema_hash=<hex>` suffix; only the `SUCCESS:`/`ERROR:` prefix is
@@ -230,6 +235,12 @@ hash back from the `SELECT` costs one extra column and closes it for both aritie
   Changing the heading changes its slug, so update the cross-link in
   `mkdocs/docs/query-guide/functions-reference.md:97` in the same commit; `mkdocs/site/` is
   generated output and is not edited by hand.
+- `mkdocs/docs/admin/functions-reference.md:181-183` — update the **Returns** block, which quotes
+  the success/failure strings verbatim, to match the `schema_hash=<hex>` suffix from Design §3 and
+  add the new ambiguity error string from Design §2.
+- `mkdocs/docs/admin/functions-reference.md:591` — update "For each partition, calls
+  `retire_partition_by_metadata()` with the partition's natural identifiers" to note it now also
+  passes `file_schema_hash`.
 - `mkdocs/docs/query-guide/functions-reference.md:93` — mirror the signature in the heading.
 - `mkdocs/docs/admin/maintenance.md:234` and `mkdocs/docs/query-guide/python-api.md:640` mention
   the function only by name and by admin requirement; no change needed.
@@ -257,8 +268,12 @@ five-argument spelling, so both arities stay behind the admin gate and both keep
 
 **Python** — in `test_admin.py`, assert the SQL that `retire_incompatible_partitions` emits
 contains `decode('<expected hex>', 'hex')` for a fixture whose `incompatible_schema_hash` is
-`b"\x04"`, and that the retirement still succeeds end-to-end through the mock. Existing tests must
-keep passing after `MockFlightSQLClient`'s regex is widened for the extra argument.
+`b"\x04"`, and that the retirement still succeeds end-to-end through the mock.
+`MockFlightSQLClient`'s regex already matches a five-argument call and needs no change; what
+must change is the `incompatible_schema_hash` fixture values at `test_admin.py:92`, `:126`,
+`:178`, `:225`, and `:310`, which are currently Python `str` (e.g. `"[3]"`) and must become
+`bytes` (e.g. `b"\x03"`) so `bytes(partition["incompatible_schema_hash"])` in
+`retire_incompatible_partitions` does not raise `TypeError`.
 
 **Manual** — against the local test env, bump a view's `SCHEMA_VERSION`, materialize over a range
 already covered by an old-schema partition to create a real collision, then confirm
@@ -267,8 +282,4 @@ removes only it.
 
 ## Open Questions
 
-None blocking. One thing to confirm at implementation time: that DataFusion 54's `OneOf` coercion
-accepts a `BinaryView`-typed expression for the `Binary` slot (relevant only if a caller passes a
-value that plans as `BinaryView`; `list_partitions().file_schema_hash` and `decode(...)` both
-produce `Binary`). If it does not, the five-argument variant can additionally accept `Utf8` and
-hex-decode in Rust.
+None.
