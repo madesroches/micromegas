@@ -129,14 +129,6 @@ The false promise is the other half of the fix:
 - Note on `build_chain` that it runs no existence query, so it cannot fail the way `build()` can
   on a schema short of v5.
 
-### Callers
-
-None change. `flight_sql_server.rs`, `monolith/src/main.rs` (×2) and
-`telemetry-ingestion-srv/src/main.rs` all want the guard and stay on `build()`; their `bail!`
-messages remain accurate. `build_chain()` has no in-repo call site other than tests — it exists
-for downstream embedders of this published crate — but it is not dead code: `build()` and
-`build_chain()` are the two users of `compose`.
-
 ## Implementation Steps
 
 1. `rust/auth/src/default_provider.rs`: extract `compose(&mut self)` from the top of `build()`,
@@ -166,8 +158,12 @@ and the table. **Chosen**: a second entry point, which leaves `use_default_auth`
 
 Also considered and rejected: giving `build_chain` an `Option`-free variant of the existence query
 (e.g. to keep the migration-v5 diagnostic as a `warn!`). It would reintroduce the DB round trip
-this method exists to avoid, and the same diagnostic already reaches an embedder through
-`warn_if_data_lake_schema_stale`, which the FlightSQL wiring calls on both auth branches.
+this method exists to avoid, and the same diagnostic is already reachable through
+`warn_if_data_lake_schema_stale`: the FlightSQL wiring's `use_default_auth` branch calls it
+unconditionally, but its injected-provider branch (`with_auth_provider(..)`, the path this plan's
+`build_chain()` embedder uses) only calls it when the caller left `read_policy` unset. An embedder
+that sets its own read policy — the in-repo monolith always does — is expected to call
+`warn_if_data_lake_schema_stale` itself if it wants the diagnostic.
 
 ## Documentation
 
@@ -190,14 +186,17 @@ New tests in `rust/auth/tests/default_provider_tests.rs`:
    existing deferred-`Result` pattern so the schema is dropped even when an assertion fails; the
    throwaway table needs the full column set `DbApiKeyAuthProvider` reads, not just
    `key_id`/`revoked_at`.
-2. `build_chain_ignores_missing_relation` (`#[ignore]`, `#[serial]`, live PG) — the mirror of
-   `missing_relation_is_err_not_none`: the same nonexistent-`search_path` throwaway pool, asserting
-   `build_chain()` returns `Ok` where `build()` returns `Err`.
+2. `build_chain_ignores_missing_relation` (no DB, not `#[ignore]`) — `build_chain()` never calls
+   `key_store_has_live_rows`, so composing it issues no query. Reuse `db_api_key_tests.rs`'s
+   `unreachable_pool()` (`PgPoolOptions::new().acquire_timeout(50ms).connect_lazy(..)`), same
+   precedent as `dedicated_key_store_pool_is_small_and_lazy`: assert `build_chain()` returns `Ok`
+   promptly against that pool, where `build()` returns `Err` (its existence query fails on
+   connect).
 3. `build_chain_with_env_keys_only_authenticates` (`#[serial]`, no DB, not `#[ignore]`) — no key
    store attached, `MICROMEGAS_API_KEYS` set; assert the returned chain authenticates the env key.
-   Cheap, and the only new test that runs in ordinary CI.
+   Cheap, and one of the two new tests that runs in ordinary CI.
 
 Then `cargo test -p micromegas-auth`, plus `cargo clippy` / `cargo fmt` over the workspace. The
-three `#[ignore]` cases need a live migrated Postgres via `MICROMEGAS_SQL_CONNECTION_STRING`
+one remaining `#[ignore]` case needs a live migrated Postgres via `MICROMEGAS_SQL_CONNECTION_STRING`
 (`python3 local_test_env/ai_scripts/start_services.py`) and `cargo test -p micromegas-auth --
 --ignored`.
