@@ -125,7 +125,9 @@ async fn cleanup(pool: &sqlx::PgPool, view_instance_id: &str) {
 }
 
 /// Calls `retire_partition_by_metadata` through SQL on a fresh admin `SessionContext`, returning
-/// the single result string.
+/// the first result string. On error the UDF appends a trailing `ROLLED_BACK: ...` marker to the
+/// same result array, so a single-row input can legally produce two output rows; this only checks
+/// that the second row, when present, is that marker.
 async fn retire(
     lakehouse: Arc<LakehouseContext>,
     view_instance_id: &str,
@@ -161,7 +163,13 @@ async fn retire(
             results.push(col.value(i).to_string());
         }
     }
-    assert_eq!(results.len(), 1, "expected exactly one result row");
+    assert!(!results.is_empty(), "expected at least one result row");
+    if let Some(second) = results.get(1) {
+        assert!(
+            second.starts_with("ROLLED_BACK:"),
+            "unexpected second result row: {second}"
+        );
+    }
     Ok(results.into_iter().next().expect("one result"))
 }
 
