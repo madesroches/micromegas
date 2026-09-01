@@ -417,7 +417,7 @@ describe('IngestionApiKeysPage', () => {
 })
 
 /**
- * Non-admin (#1544): the page renders `IngestionKeysSelfServicePanel` instead of the
+ * Non-admin: the page renders `IngestionKeysSelfServicePanel` instead of the
  * `ApiKeysAdminPage` list/mint/revoke table — mint only, reusing `useMyAudiences` /
  * `MintIngestionKeyDialog` (the same machinery `AudienceAccessPage.test.tsx` already exercises).
  */
@@ -525,5 +525,31 @@ describe('IngestionApiKeysPage — non-admin', () => {
       expect(screen.getByText(/Self-service is disabled on this deployment/)).toBeInTheDocument()
     )
     expect(screen.queryByRole('button', { name: /Mint Key/i })).not.toBeInTheDocument()
+  })
+
+  it('shows an error banner and hides Mint Key on a genuine fetch failure, then retries', async () => {
+    let myAudiencesCalls = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/audience-grants/my-audiences')) {
+        myAudiencesCalls += 1
+        return jsonResponse(500, { code: 'INTERNAL', message: 'Something went wrong' })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText('Failed to load your audiences')).toBeInTheDocument()
+    )
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Mint Key/i })).not.toBeInTheDocument()
+    expect(myAudiencesCalls).toBe(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(myAudiencesCalls).toBe(2))
   })
 })

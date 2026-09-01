@@ -183,7 +183,7 @@ into. Admins see the whole store and keep every power they have today (any selec
 `*`; delete any row); a non-admin sees a scoped, fewer-controls version of the same page.
 
 Reachable from a new **Audience access** item in the header user menu (everyone) and from an
-**Audience Access** card on the Admin page (admins).
+**Audience Access** card on the [Admin hub](#admin-hub) page (also every authenticated user).
 
 **Reads go through SQL for auditing, REST for the page itself.** The page's own list calls the
 small, unpaginated `GET {base_path}/api/audience-grants/visible` route (below) against this

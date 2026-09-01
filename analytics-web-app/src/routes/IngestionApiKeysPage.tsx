@@ -41,7 +41,7 @@ const ingestionApiKeysPageConfig: ApiKeysAdminPageConfig = {
 /**
  * A non-admin's view of `/admin/ingestion-keys`: mint only, no list/revoke table -- `list_keys`
  * and `revoke_key` stay `AdminUser`-gated server-side, so there is nothing this panel could show
- * for them (#1544). Reuses the same self-service mint machinery `/audiences` already built
+ * for them. Reuses the same self-service mint machinery `/audiences` already built
  * (`useMyAudiences`, `MintIngestionKeyDialog`) instead of a second copy.
  */
 function IngestionKeysSelfServicePanel() {

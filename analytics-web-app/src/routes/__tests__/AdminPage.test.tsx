@@ -1,7 +1,7 @@
 /**
- * `AdminPage` (#1544): the hub is viewable by every authenticated user, with its card grid
- * filtered by role — an admin sees all eight cards, a non-admin only the two with a real
- * non-admin capability (Ingestion API Keys, Audience Access).
+ * `AdminPage`: the hub is viewable by every authenticated user, with its card grid filtered by
+ * role — an admin sees all eight cards, a non-admin only the two with a real non-admin
+ * capability (Ingestion API Keys, Audience Access).
  */
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'

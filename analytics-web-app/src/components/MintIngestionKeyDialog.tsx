@@ -8,8 +8,8 @@ import type { MintApiKeyResponse } from '@/lib/api-keys-shared'
 
 /**
  * The self-service ingestion-key mint dialog. Extracted from `AudienceAccessPage.tsx`'s local
- * `MintKeyDialog` (#1510) so `/admin/ingestion-keys`'s non-admin panel (#1544) can reuse the
- * exact same mint UI instead of a second copy.
+ * `MintKeyDialog` so `/admin/ingestion-keys`'s non-admin panel can reuse the exact same mint UI
+ * instead of a second copy.
  */
 export function MintIngestionKeyDialog({
   open,

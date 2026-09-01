@@ -72,7 +72,7 @@ vi.mock('@/routes/ExportScreensPage', () => ({ default: () => <div>export-screen
 vi.mock('@/routes/ImportScreensPage', () => ({ default: () => <div>import-screens-page</div> }))
 vi.mock('@/routes/MapsPage', () => ({ default: () => <div>maps-page</div> }))
 vi.mock('@/routes/NotFoundPage', () => ({ default: () => <div>not-found-page</div> }))
-// `/admin/ingestion-keys` is no longer fully admin-gated (#1544): its real component mounts a
+// `/admin/ingestion-keys` is no longer fully admin-gated: its real component mounts a
 // self-service panel whose effect calls `fetchMyAudiences`/`listIngestionApiKeys` against
 // `fetch`, which this file never stubs. Stubbed here so the sidebar-gate cases below exercise
 // only `AppShell`'s own gate.

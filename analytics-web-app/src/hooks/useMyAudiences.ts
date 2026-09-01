@@ -16,7 +16,7 @@ export interface UseMyAudiencesReturn {
 
 /**
  * `GET {base}/api/audience-grants/my-audiences`, wrapped in the load/error state every
- * self-service-mint consumer needs. Extracted from `AudienceAccessPage.tsx` (#1544) so
+ * self-service-mint consumer needs. Extracted from `AudienceAccessPage.tsx` so
  * `IngestionApiKeysPage.tsx`'s non-admin panel can share the same identity/knob-detection logic
  * instead of a second copy.
  */
