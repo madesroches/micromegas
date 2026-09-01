@@ -18,9 +18,9 @@ background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0
 - **`muzzy_decay_ms:0`** — jemalloc 5.3's own default, pinned explicitly so it can't drift with an
   upstream release; `0` means muzzy pages are `MADV_DONTNEED`'d immediately.
 
-This is compiled in, not read from an environment variable: it's exported as the weak
-`_rjem_malloc_conf` symbol jemalloc's `conf.c` resolves at startup (`tikv-jemalloc-sys` builds
-with the `_rjem_` prefix).
+This is compiled in, not read from an environment variable: it's exported as a strong
+`_rjem_malloc_conf` definition, overriding jemalloc's own weak one, that `conf.c` resolves at
+startup (`tikv-jemalloc-sys` builds with the `_rjem_` prefix).
 
 ## Overriding at deployment time
 
