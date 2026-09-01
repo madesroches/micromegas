@@ -103,12 +103,19 @@ linked in full, so the definition survives there.
 ### The macro
 
 New module `rust/telemetry-sink/src/jemalloc_conf.rs`, hosting the conf string and a
-`#[macro_export] macro_rules! declare_jemalloc_conf`. `micromegas-telemetry-sink` is the right home:
-it already owns the jemalloc surface (`system_monitor`'s gauges, the `jemalloc` feature), and every
-one of the eight binaries already depends on `micromegas`, which re-exports it. The macro itself
-pulls in no dependency — it expands to a byte string and two attributes — so it can be declared
-unconditionally, outside the `jemalloc` feature and outside the `wasm32` gating that wraps the
-other native modules.
+`#[macro_export] macro_rules! declare_jemalloc_conf`, both behind the crate's existing `jemalloc`
+feature. `micromegas-telemetry-sink` already owns the jemalloc surface (`system_monitor`'s gauges,
+the `jemalloc` feature), and every one of the eight binaries already depends on `micromegas` with
+`features = ["jemalloc-metrics"]`, which forwards to `micromegas-telemetry-sink/jemalloc` — so the
+feature gate costs no per-binary Cargo.toml change while keeping allocator policy out of the
+published instrumentation surface. The gate matters because the gauges only *read* jemalloc while
+this conf *sets* it: an instrumented app depending on `micromegas` for `TelemetryGuardBuilder`
+should not find a server-tuned conf string in its API. `rust/public` re-exports the macro behind
+`jemalloc-metrics` for the same reason.
+
+The gate is on the module rather than on the macro alone. The macro pulls in no dependency — it
+expands to a byte string and two attributes — but `CONF` lives in the module, so gating only the
+macro would still publish the string.
 
 `jemalloc_conf.rs` defines the conf string once, module-level:
 
@@ -164,13 +171,16 @@ unconfigured — the concern the issue raises directly.
    `pub const CONF: &[u8] = b"background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0\0";`
    (NUL-terminated, since jemalloc reads it as a `const char *`) and
    `#[macro_export] macro_rules! declare_jemalloc_conf`, whose expansion references
-   `$crate::jemalloc_conf::CONF`. Register `pub mod jemalloc_conf;` in
-   `rust/telemetry-sink/src/lib.rs`, ungated (the surrounding native modules are
-   `cfg(not(target_arch = "wasm32"))`; this one needs no gate because it expands to nothing on
-   Windows and is inert unless invoked).
-2. **`rust/public/src/lib.rs`** — `pub use micromegas_telemetry_sink::declare_jemalloc_conf;` at
-   crate root, alongside the existing `pub use micromegas_proc_macros::*;`, so binaries spell it
-   `micromegas::declare_jemalloc_conf!()`.
+   `$crate::jemalloc_conf::CONF`. Register it in `rust/telemetry-sink/src/lib.rs` as
+   `#[cfg(feature = "jemalloc")] pub mod jemalloc_conf;`. No `wasm32` gate is needed on top: the
+   `jemalloc` feature already pulls `tikv-jemalloc-ctl` only for
+   `cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))`, and the macro's own
+   `not(target_os = "windows")` gate handles Windows.
+2. **`rust/public/src/lib.rs`** — `#[cfg(feature = "jemalloc-metrics")] pub use
+   micromegas_telemetry_sink::declare_jemalloc_conf;` at crate root, alongside the existing
+   `pub use micromegas_proc_macros::*;`, so binaries spell it
+   `micromegas::declare_jemalloc_conf!()`. All eight already enable `jemalloc-metrics`, so no
+   binary's Cargo.toml changes.
 3. **Invoke it in all eight binaries**, immediately below the existing `#[global_allocator]`
    static in each entry point listed under Current State.
 4. **`rust/telemetry-sink/tests/jemalloc_conf_tests.rs`** — new test binary (see Testing Strategy);
@@ -189,10 +199,10 @@ unconfigured — the concern the issue raises directly.
 | File | Change |
 |---|---|
 | `rust/telemetry-sink/src/jemalloc_conf.rs` | **New** — conf string + `declare_jemalloc_conf!` |
-| `rust/telemetry-sink/src/lib.rs` | Register the module |
+| `rust/telemetry-sink/src/lib.rs` | Register the module behind the `jemalloc` feature |
 | `rust/telemetry-sink/Cargo.toml` | `[[test]]` entry for the new test binary |
 | `rust/telemetry-sink/tests/jemalloc_conf_tests.rs` | **New** — asserts the conf took effect |
-| `rust/public/src/lib.rs` | Re-export the macro at crate root |
+| `rust/public/src/lib.rs` | Re-export the macro at crate root behind `jemalloc-metrics` |
 | `rust/object-cache-srv/src/object_cache_srv.rs` | Invoke the macro |
 | `rust/flight-sql-srv/src/flight_sql_srv.rs` | Invoke the macro |
 | `rust/http-gateway/src/http_gateway_srv.rs` | Invoke the macro |
@@ -253,6 +263,10 @@ is otherwise strictly a reduction in idle memory.
   retention relative to jemalloc 5.3's default.
 - No new configuration knob is added. `_RJEM_MALLOC_CONF` is the documented per-deployment
   override.
+- The conf module and macro stay in `micromegas-telemetry-sink` but behind its `jemalloc` feature,
+  rather than moving to a dedicated crate. All eight binaries already enable it through
+  `micromegas/jemalloc-metrics`, so the gate keeps allocator policy off the instrumentation
+  crates' default API surface without a new crate or any per-binary Cargo.toml change.
 
 ## Performance
 
