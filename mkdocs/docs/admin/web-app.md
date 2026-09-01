@@ -77,12 +77,11 @@ export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetr
 # mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
 export MICROMEGAS_DEFAULT_AUDIENCE="public"
 
-# Self-service ingestion key mint (AbAC Stage 6, #1374) -- off by default, so
-# upgrading keeps today's admin-only mint behavior until explicitly enabled.
-# Lets a non-admin caller with a matching `mint` grant (or lazily claiming a
-# brand-new audience) mint their own key, and gates
+# Self-service ingestion key mint -- off by default, admin-only mint until
+# explicitly enabled. Lets a non-admin caller with a matching `mint` grant
+# (or lazily claiming a brand-new audience) mint their own key, and gates
 # GET .../audience-grants/my-audiences the same way -- see
-# mkdocs/docs/admin/authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374.
+# mkdocs/docs/admin/authentication.md#self-service-ingestion-key-mint.
 export MICROMEGAS_SELF_SERVICE_MINT="false"
 
 # Per-caller bounds once MICROMEGAS_SELF_SERVICE_MINT is on -- backstops
@@ -196,8 +195,8 @@ authenticated caller, never admin-gated, and applies the same held-pair visibili
 `/visible` does for a non-admin — except that it cannot see (and so cannot apply)
 `analytics-web-srv`'s self-service knob the way `/visible` does, and so is always as wide open
 for a non-admin as the knob-on case. See
-[Self-service ingestion key mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
-for the knob and [DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a)
+[Self-service ingestion key mint](authentication.md#self-service-ingestion-key-mint)
+for the knob and [DB-backed audience grants](authentication.md#db-backed-audience-grants)
 for the write policy the page's Share/Remove/Revoke controls drive.
 
 **Unavailable under `--disable-auth`.** The page's `/visible` and `/my-audiences` reads (and

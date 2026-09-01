@@ -1,6 +1,6 @@
 # Quick Start
 
-Get up and running with Micromegas SQL queries in minutes. This guide shows you the essential patterns for querying your observability data.
+Essential patterns for querying observability data with Micromegas SQL.
 
 ## Basic Connection
 
@@ -18,7 +18,7 @@ The `connect()` function connects to the analytics service at `grpc://localhost:
 
 ## Your First Query
 
-Let's query recent log entries to see what data is available:
+Query recent log entries:
 
 ```python
 # Set up time range for queries
@@ -66,13 +66,9 @@ filtered = result[result['exe'].str.contains('analytics')]
 print(filtered.head())
 ```
 
-This makes it easy to work with results using the entire pandas ecosystem for analysis, visualization, and data processing.
-
 ## Essential Query Patterns
 
 ### 1. Process Information
-
-Get an overview of processes sending telemetry:
 
 ```python
 processes = client.query("""
@@ -85,8 +81,6 @@ print(processes)
 ```
 
 ### 2. Recent Log Entries
-
-Query logs with error filtering:
 
 ```python
 error_logs = client.query("""
@@ -101,8 +95,6 @@ print(error_logs)
 
 ### 3. Performance Metrics
 
-Query numeric measurements:
-
 ```python
 metrics = client.query("""
     SELECT time, process_id, name, value, unit
@@ -116,7 +108,7 @@ print(metrics)
 
 ### 4. Process-Specific Data
 
-Use view instances for better performance when focusing on specific processes:
+Use view instances for better performance when focused on one process:
 
 ```python
 process_id = "your_process_id_here"  # Replace with actual process ID
@@ -151,8 +143,6 @@ Micromegas uses numeric log levels for efficient filtering:
 - `level <= 4` - All messages except debug and trace
 
 ## Time Range Best Practices
-
-### Always Use Time Ranges
 
 ```python
 # ✅ Good - efficient and memory-safe
@@ -201,12 +191,10 @@ count = client.query("SELECT COUNT(*) FROM log_entries;")
 
 ## Next Steps
 
-Now that you can run basic queries:
-
-1. **[Explore the Python API](python-api.md)** - Learn about streaming and advanced features
-2. **[Review the Schema](schema-reference.md)** - Understand all available fields and data types
-3. **[Try Query Patterns](query-patterns.md)** - Common observability query patterns
-4. **[Optimize Performance](performance.md)** - Learn to write efficient queries
+1. **[Python API](python-api.md)** - Streaming and advanced features
+2. **[Schema Reference](schema-reference.md)** - All available fields and data types
+3. **[Query Patterns](query-patterns.md)** - Common observability query patterns
+4. **[Performance Guide](performance.md)** - Writing efficient queries
 
 ## Quick Reference
 

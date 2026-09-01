@@ -14,24 +14,11 @@ This guide covers configuring the Micromegas datasource in Grafana.
 
 ### Host Configuration
 
-**Host**: The address of your FlightSQL server
-
-- **Format**: `hostname:port`
-- **Example**: `localhost:50051`
-- **Production**: `analytics.example.com:50051`
-
-!!! tip "Default Port"
-    The default FlightSQL port for Micromegas is 50051.
+**Host**: The address of your FlightSQL server, as `hostname:port` (e.g. `localhost:50051`). The default FlightSQL port is 50051.
 
 ### TLS/SSL Settings
 
-**Require TLS/SSL**: Enable if your server uses TLS encryption
-
-- **Development**: Usually disabled (localhost connections)
-- **Production**: Strongly recommended for security
-
-!!! warning "Security Recommendation"
-    Always enable TLS/SSL for production deployments to encrypt data in transit.
+**Require TLS/SSL**: Enable if your server uses TLS encryption. Recommended for any deployment beyond localhost.
 
 ## Authentication
 
@@ -99,31 +86,11 @@ Metadata:
 
 ## Testing Configuration
 
-After configuration, click **Save & Test** to verify:
-
-✅ **Success**: "Data source is working"
-
-- Connection successful
-- Authentication valid
-- Server responding
-
-❌ **Error**: Check error message for details:
-
-- Connection errors → Verify host and port
-- Authentication errors → Check credentials
-- TLS errors → Verify TLS settings
+Click **Save & Test** to verify. On error, check host/port (connection), credentials (authentication), or TLS settings, depending on the message shown.
 
 ## Updating Configuration
 
-To update an existing data source:
-
-1. Navigate to **Configuration** → **Data Sources**
-2. Select your Micromegas data source
-3. Update settings
-4. Click **Save & Test**
-
-!!! warning "Credential Updates"
-    When updating credentials, Grafana may require you to re-enter secure fields (API keys, client secrets).
+To update an existing data source, go to **Configuration** → **Data Sources**, select it, update settings, and click **Save & Test**. Grafana may require you to re-enter secure fields (API keys, client secrets) when updating credentials.
 
 ## Next Steps
 

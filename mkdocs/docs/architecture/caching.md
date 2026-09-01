@@ -1,10 +1,9 @@
 # Caching Architecture
 
-Caching is central to Micromegas read performance. Queries read the same Parquet
-partitions and Parquet footers over and over, and the origin object store (S3/GCS)
-is the slowest and most expensive hop in that path. Micromegas answers this with a
-small family of caches that share one design principle — **the lake is write-once,
-so cached bytes never go stale** — and therefore need no invalidation logic at all.
+Queries read the same Parquet partitions and footers repeatedly, and the origin object store
+(S3/GCS) is the slowest and most expensive hop in that path. Micromegas caches these reads with a
+small family of caches that share one design principle — **the lake is write-once, so cached bytes
+never go stale** — so none of them need invalidation logic.
 
 This page describes the caching subsystem as a whole: *what* the tiers are and *why*
 they exist. For operator concerns — environment variables, CLI flags, deployment,
@@ -70,12 +69,12 @@ The eviction-policy difference is intentional. L1 has a small in-process RAM bud
 L2's RAM tier fronts a large SSD tier, so its job is to catch **recency** (LRU), with the SSD tier
 providing capacity behind it.
 
-Graceful shutdown is another point where the two deployments diverge, not just share behavior: both
-get the same accurate panic-vs-shutdown log for a detached fetch task that never completes, but only
-L2 (`object-cache-srv`) drains outstanding origin fetches and persists its disk tier on `SIGTERM` —
+Graceful shutdown also differs between the two deployments: both get the same accurate
+panic-vs-shutdown log for a detached fetch task that never completes, but only L2
+(`object-cache-srv`) drains outstanding origin fetches and persists its disk tier on `SIGTERM` —
 see [Service Lifecycle](../admin/service-lifecycle.md#how-it-works). L1 has no disk tier to persist
 and lives inside the query process rather than behind its own `SIGTERM` handling, so an in-flight L1
-origin fetch is simply dropped when the query process exits, same as before this drain existed.
+origin fetch is simply dropped when the query process exits.
 
 ### Why it works: the write-once lake invariant
 
@@ -131,12 +130,10 @@ Two more caches affect query performance and belong in the end-to-end picture.
 ### Parsed partition-metadata cache
 
 A separate in-process cache maps a Parquet file path to its **parsed** footer metadata, sized by
-`MICROMEGAS_METADATA_CACHE_MB` (default 50 MB). It is what makes the **Postgres partition-metadata
-bypass** work: the `partition_metadata` table was removed, and partition metadata is now read from
-the Parquet **footer** through the object cache. The footer bytes flow
-through the *same* L1/L2 byte cache as the data, and this cache holds the parsed result on top — so
-a hot footer is neither re-fetched nor re-parsed. It was a deliberate caching decision to move a
-hot metadata read off Postgres and onto the cached object path.
+`MICROMEGAS_METADATA_CACHE_MB` (default 50 MB). Partition metadata is read from the Parquet
+**footer** through the object cache rather than from Postgres. The footer bytes flow through the
+*same* L1/L2 byte cache as the data, and this cache holds the parsed result on top — so a hot
+footer is neither re-fetched nor re-parsed.
 
 ### `PartitionCache` is not a shared cache
 
@@ -165,13 +162,6 @@ are not covered there:
 - **L1 byte cache**: the same `range_cache_*` hit/miss counters as L2, but **aggregate only** — L1
   reports `prefix="other"` for every hit/miss, so its parquet and static-table traffic can't be
   split apart.
-
-## Forward-looking
-
-The in-process cache family is designed to grow. A **planned DataFusion metadata cache** would land
-as a second in-process tier alongside the byte-range L1 — another cache over the same write-once
-lake, warmed and evicted independently. The `MICROMEGAS_OBJECT_CACHE_*` env-var naming was chosen
-in part to leave room for it.
 
 ## Configuration summary
 

@@ -128,12 +128,3 @@ For in-depth, dollar-for-dollar comparisons with specific platforms:
 - [Micromegas vs. New Relic](cost-comparisons/newrelic.md)
 - [Micromegas vs. Splunk](cost-comparisons/splunk.md)
 
-## Getting Started with Cost Optimization
-
-1. **Start small** - Deploy minimal infrastructure and scale as needed
-2. **Monitor usage** - Use cloud billing dashboards to track costs
-3. **Optimize retention** - Balance storage costs with analysis needs
-4. **Leverage tail sampling** - Store everything, process selectively
-5. **Right-size compute** - Match instance types to actual workload demands
-
-The goal is predictable, transparent costs that scale efficiently with your observability needs.

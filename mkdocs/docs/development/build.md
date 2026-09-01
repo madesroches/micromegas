@@ -337,8 +337,6 @@ The build caches live in a named Docker volume (`micromegas-runner-cache`) mount
 
 This assumes a single worker per workstation — two concurrent workers sharing the volume would corrupt cargo's locks. To wipe the cache, stop the worker and run `docker volume rm micromegas-runner-cache`.
 
-See `tasks/container_based_dev_worker_plan.md` for the full design.
-
 ## Next Steps
 
 - **[Contributing Guide](../contributing.md)** - How to contribute to the project

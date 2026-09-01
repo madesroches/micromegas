@@ -47,8 +47,7 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 ### Option 2: Build from Source
 
-!!! info "Development Setup"
-    This method is recommended for development or if you need to customize the plugin.
+Recommended for development or customizing the plugin.
 
 1. Clone the repository:
    ```bash
@@ -104,11 +103,7 @@ services:
       - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-micromegas-datasource
 ```
 
-!!! warning "Unsigned Plugin"
-    During development, you may need to allow unsigned plugins with:
-    ```bash
-    GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-micromegas-datasource
-    ```
+`GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS` is required during development, since the plugin isn't signed.
 
 ## Verify Installation
 

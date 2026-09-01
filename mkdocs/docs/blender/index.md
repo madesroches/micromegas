@@ -83,12 +83,10 @@ disabling and re-enabling the add-on inside a running Blender normally leaves it
 inactive until Blender is restarted — which tooling that re-enables the add-on
 on every launch (notably the VS Code *Blender Development* extension) hits on
 every debug session.  With **Keep Alive** on, the live session is parked on
-disable instead of shut down and the next enable in the same process reuses it
-(same `session_id`).  A session that is already parked is reused on the next
-enable even if the preference has since been turned off, since a second one
-cannot be initialized.  Turning the preference off does still take effect, on
-the *following* disable — that one shuts the session down for good, and the
-add-on stays inactive until Blender is restarted.
+disable instead of shut down, and the next enable in the same process reuses it
+(same `session_id`). A session that is already parked stays reusable even if the
+preference is turned off afterward; turning it off only takes effect on the
+next disable, which then shuts the session down for good until Blender restarts.
 
 ## What is captured
 
@@ -198,19 +196,16 @@ as ERROR-level logs to the `blender.exception` target with the full traceback
 | `blender.object_count` | count | Objects in the active scene, sampled every ~30 s |
 | `blender.frame` | frame | Current frame number at frame-change |
 
-### Crash capture (Phase 1: harvest on next launch)
+### Crash capture (harvest on next launch)
 
 On startup the add-on scans for `*.crash.txt` files written by Blender after
 an abnormal exit.  If found, the file is claimed via atomic rename and
 uploaded as a FATAL-level log entry.
 
-This approach is:
-
 - **Dedup-safe**: two concurrent Blender instances each try to `rename()` the
   crash file; only the winner uploads it.
-- **Best-effort**: if the upload fails after claiming, the crash is lost (no
-  retry queue).  This is intentional — Phase 1 measures how lossy the free
-  path is before investing in a Crashpad-based Phase 2.
+- **Best-effort**: if the upload fails after claiming, the crash is lost —
+  there is no retry queue.
 
 ## Cardinality
 

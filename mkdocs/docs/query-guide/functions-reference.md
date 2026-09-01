@@ -287,7 +287,7 @@ FROM parse_block('550e8400-e29b-41d4-a716-446655440000');
 - For OTLP blocks, `object_index` is a positional index only and is **not** guaranteed to match `nb_objects` from `list_partitions()`/`blocks`, since Summary data points are over-counted there (`SUMMARY_MAX_ROWS_PER_POINT = 4`).
 - Non-finite `f64` values (NaN/±Infinity) in an OTLP source payload render as JSON `null` in `value`, indistinguishable from an absent field — the `serde_json` conversion path doesn't preserve OTLP/JSON's `"NaN"`/`"Infinity"` string encoding.
 - `asInt` (metrics `NumberDataPoint`) and `Exemplar.as_int` render as bare JSON numbers rather than OTLP/JSON's quoted-string int64 form.
-- A block absent from `blocks` for the queried time range now errors instead of returning zero rows — widen `--begin` or pass `--all`. A `streams.format` with no registered decoder also errors, listing the known formats.
+- A block absent from `blocks` for the queried time range errors instead of returning zero rows — widen `--begin` or pass `--all`. A `streams.format` with no registered decoder also errors, listing the known formats.
 - When a `LIMIT` is used without filters, the function stops parsing early for efficiency (for OTLP blocks, this still avoids the JSONB conversion cost even though the whole proto message is decoded up front). When filters are present, all objects are materialized first so DataFusion can apply the filter.
 - Use with JSONB functions like `jsonb_get`, `jsonb_format_json`, and `jsonb_as_string` to extract and display object contents.
 
@@ -899,7 +899,7 @@ SELECT time, name, value
 FROM measures
 WHERE property_get(properties, 'source') = 'system_monitor';
 
--- Direct JSONB property access (post-migration default)
+-- Direct JSONB property access (default)
 SELECT time, msg, property_get(properties, 'service') as service
 FROM log_entries
 WHERE property_get(properties, 'env') = 'production';
@@ -1470,179 +1470,8 @@ FROM scaled;
 ## Standard SQL Functions
 
 Micromegas supports all standard DataFusion SQL functions including math, string, date/time, conditional, and array functions. For a complete list with examples, see the [DataFusion Scalar Functions documentation](https://datafusion.apache.org/user-guide/sql/scalar_functions.html).
-## Advanced Query Patterns
 
-### Histogram Analysis
-
-```sql
--- Create performance histogram (0-100ms, 10 bins)
-SELECT make_histogram(0.0, 100.0, 10, duration / 1000000.0) as response_time_ms_histogram
-FROM view_instance('thread_spans', 'web_server')
-WHERE name = 'handle_request'
-  AND duration > 1000000;  -- > 1ms
-```
-
-```sql
--- Analyze histogram statistics
-SELECT 
-    quantile_from_histogram(response_time_histogram, 0.5) as median_ms,
-    quantile_from_histogram(response_time_histogram, 0.95) as p95_ms,
-    quantile_from_histogram(response_time_histogram, 0.99) as p99_ms,
-    variance_from_histogram(response_time_histogram) as variance,
-    count_from_histogram(response_time_histogram) as sample_count,
-    sum_from_histogram(response_time_histogram) as total_time_ms
-FROM performance_histograms
-WHERE time_bin >= NOW() - INTERVAL '1 hour';
-```
-
-```sql
--- Aggregate histograms across multiple processes
-SELECT 
-    time_bin,
-    sum_histograms(cpu_usage_histo) as combined_cpu_histogram,
-    quantile_from_histogram(sum_histograms(cpu_usage_histo), 0.95) as p95_cpu
-FROM cpu_usage_per_process_per_minute
-WHERE time_bin >= NOW() - INTERVAL '1 day'
-GROUP BY time_bin
-ORDER BY time_bin;
-```
-
-### Property Extraction and Filtering
-
-```sql
--- Find logs with specific thread names
-SELECT time, level, msg, property_get(process_properties, 'thread-name') as thread
-FROM log_entries
-WHERE property_get(process_properties, 'thread-name') LIKE '%worker%'
-ORDER BY time DESC;
-```
-
-### High-Performance JSONB Property Access
-
-```sql
--- Convert properties to JSONB for better performance
-SELECT
-    time,
-    msg,
-    property_get(properties_to_jsonb(properties), 'service') as service,
-    property_get(properties_to_jsonb(properties), 'version') as version
-FROM log_entries
-WHERE property_get(properties_to_jsonb(properties), 'env') = 'production'
-  AND time >= NOW() - INTERVAL '1 hour'
-ORDER BY time DESC;
-```
-
-```sql
--- Efficient property filtering with JSONB
-WITH jsonb_logs AS (
-    SELECT
-        time,
-        level,
-        msg,
-        properties_to_jsonb(properties) as jsonb_props
-    FROM log_entries
-    WHERE time >= NOW() - INTERVAL '1 day'
-)
-SELECT
-    time,
-    level,
-    msg,
-    property_get(jsonb_props, 'service') as service,
-    property_get(jsonb_props, 'request_id') as request_id
-FROM jsonb_logs
-WHERE property_get(jsonb_props, 'error_code') IS NOT NULL
-ORDER BY time DESC;
-```
-
-```sql
--- Property aggregation with optimal performance
-SELECT
-    property_get(properties_to_jsonb(properties), 'service') as service,
-    property_get(properties_to_jsonb(properties), 'env') as environment,
-    COUNT(*) as event_count,
-    COUNT(CASE WHEN level <= 2 THEN 1 END) as error_count
-FROM log_entries
-WHERE time >= NOW() - INTERVAL '1 hour'
-  AND property_get(properties_to_jsonb(properties), 'service') IS NOT NULL
-GROUP BY service, environment
-ORDER BY error_count DESC;
-```
-
-### JSON Data Processing
-
-```sql
--- Parse and extract configuration from JSON logs
-SELECT 
-    time,
-    msg,
-    jsonb_as_string(jsonb_get(jsonb_parse(msg), 'service')) as service_name,
-    jsonb_as_i64(jsonb_get(jsonb_parse(msg), 'port')) as port,
-    jsonb_as_f64(jsonb_get(jsonb_parse(msg), 'cpu_limit')) as cpu_limit
-FROM log_entries
-WHERE msg LIKE '%{%'  -- Contains JSON
-  AND jsonb_parse(msg) IS NOT NULL
-ORDER BY time DESC;
-```
-
-```sql
--- Aggregate metrics from JSON payloads
-SELECT 
-    jsonb_as_string(jsonb_get(jsonb_parse(msg), 'service')) as service,
-    COUNT(*) as event_count,
-    AVG(jsonb_as_f64(jsonb_get(jsonb_parse(msg), 'response_time'))) as avg_response_ms
-FROM log_entries
-WHERE msg LIKE '%response_time%'
-  AND jsonb_parse(msg) IS NOT NULL
-GROUP BY service
-ORDER BY avg_response_ms DESC;
-```
-
-```sql
--- Per-row expansion: one row per property, per log entry (uses the dictionary fast path
--- automatically, since `properties` is dictionary-encoded)
-SELECT time, kv['key'] as key, jsonb_as_string(kv['value']) as value
-FROM (SELECT time, unnest(jsonb_entries(properties)) as kv FROM log_entries)
-WHERE time >= NOW() - INTERVAL '1 hour';
-
--- Per-row expansion of a nested array selected by a JSONPath, keeping the source row's columns
-SELECT time, jsonb_as_string(jsonb_get(commit, 'id')) as commit_id
-FROM (
-    SELECT time, unnest(jsonb_path_elements(jsonb_parse(msg), '$.commits[*]')) as commit
-    FROM log_entries
-    WHERE msg LIKE '%commits%'
-);
-```
-
-### Time-based Aggregation
-
-```sql
--- Hourly error counts
-SELECT 
-    date_trunc('hour', time) as hour,
-    COUNT(*) as error_count
-FROM log_entries
-WHERE level <= 2  -- Fatal and Error
-  AND time >= NOW() - INTERVAL '24 hours'
-GROUP BY date_trunc('hour', time)
-ORDER BY hour;
-```
-
-### Performance Trace Analysis
-
-```sql
--- Top 10 slowest functions with statistics
-SELECT 
-    name,
-    COUNT(*) as call_count,
-    AVG(duration) / 1000000.0 as avg_ms,
-    MAX(duration) / 1000000.0 as max_ms,
-    STDDEV(duration) / 1000000.0 as stddev_ms
-FROM view_instance('thread_spans', 'my_process')
-WHERE duration > 100000  -- > 0.1ms
-GROUP BY name
-ORDER BY avg_ms DESC
-LIMIT 10;
-```
+For example queries combining these functions (histograms, property extraction, JSON processing, time-based aggregation), see [Query Patterns](query-patterns.md).
 
 ## DataFusion Reference
 

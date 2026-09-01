@@ -1,27 +1,18 @@
 # Query Guide Overview
 
-Micromegas provides a powerful SQL interface for querying observability data including logs, metrics, spans, and traces. **Micromegas SQL is an extension of [Apache DataFusion SQL](https://datafusion.apache.org/user-guide/sql/)** - you can use all standard DataFusion SQL features plus Micromegas-specific functions and views optimized for observability workloads.
+Micromegas provides a SQL interface for querying logs, metrics, spans, and traces. Micromegas SQL is an extension of [Apache DataFusion SQL](https://datafusion.apache.org/user-guide/sql/) — all standard DataFusion SQL features are available, plus Micromegas-specific functions and views for observability workloads.
 
-## Key Concepts
+## Data Architecture
 
-### SQL Engine
-Micromegas uses **Apache DataFusion** as its SQL engine, which means you get:
-
-- Full SQL standard compliance
-- Advanced query optimization
-- Vectorized execution engine
-- Columnar data processing with Apache Arrow
-
-### Data Architecture
 - **Raw data** stored in object storage (S3/GCS) in Parquet format
 - **Metadata** stored in PostgreSQL for fast lookups
 - **Views** provide logical organization of telemetry data
 - **On-demand ETL** processes data only when queried
 
-## Available Interfaces
+## Interfaces
 
 ### Python API
-The primary interface for querying Micromegas data programmatically. All queries return **[pandas DataFrames](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html)**, making it easy to work with results using the pandas ecosystem:
+The primary interface for querying Micromegas data programmatically. Queries return [pandas DataFrames](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html):
 
 ```python
 import micromegas
@@ -33,8 +24,6 @@ df = client.query("SELECT * FROM log_entries LIMIT 10;")
 Use the same SQL capabilities in Grafana dashboards through the [Micromegas Grafana plugin](https://github.com/madesroches/micromegas-grafana).
 
 ## Data Views
-
-Micromegas organizes telemetry data into several queryable views:
 
 | View | Description |
 |------|-------------|
@@ -50,25 +39,10 @@ Micromegas organizes telemetry data into several queryable views:
 
 ## Query Capabilities
 
-### Standard SQL Features
-- SELECT, FROM, WHERE, ORDER BY, GROUP BY
-- JOINs between views
-- Aggregation functions (COUNT, SUM, AVG, etc.)
-- Window functions and CTEs
-- Complex filtering and sorting
-
-### Observability Extensions
-- Time-range filtering for performance
-- Process-scoped view instances
-- Histogram generation functions
-- Log level filtering and analysis
-- Span relationship queries
-
-### Performance Features
-- Query streaming for large datasets
-- Predicate pushdown to storage layer
-- Automatic view materialization
-- Memory-efficient processing
+- Standard SQL: SELECT, JOINs, aggregation, window functions, CTEs
+- Time-range filtering, process-scoped view instances
+- Histogram generation, log-level filtering, span relationship queries
+- Query streaming, predicate pushdown, automatic view materialization
 
 ## Getting Started
 
@@ -77,7 +51,7 @@ Micromegas organizes telemetry data into several queryable views:
 3. **[Schema Reference](schema-reference.md)** - Detailed view and field documentation
 4. **[Functions Reference](functions-reference.md)** - Available SQL functions
 5. **[Query Patterns](query-patterns.md)** - Common observability query patterns
-6. **[Async Performance Analysis](async-performance-analysis.md)** - Comprehensive async operation analysis with depth tracking
+6. **[Async Performance Analysis](async-performance-analysis.md)** - Async operation analysis with depth tracking
 7. **[Performance Guide](performance.md)** - Optimize your queries for best performance
 8. **[Advanced Features](advanced-features.md)** - View materialization and custom views
 

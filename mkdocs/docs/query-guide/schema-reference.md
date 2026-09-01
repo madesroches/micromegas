@@ -1,6 +1,6 @@
 # Schema Reference
 
-This page provides a complete reference to all views, data types, and field definitions available in Micromegas SQL queries.
+Reference for all views, data types, and field definitions available in Micromegas SQL queries.
 
 ## Views Overview
 
@@ -205,7 +205,7 @@ ORDER BY level;
 
 ### `log_stats`
 
-Materialized view providing aggregated log statistics by process, minute, level, and target. This view is optimized for analyzing log volume trends and patterns over time.
+Materialized view of aggregated log statistics by process, minute, level, and target — for analyzing log volume trends and patterns over time.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -216,11 +216,8 @@ Materialized view providing aggregated log statistics by process, minute, level,
 | `count` | `Int64` | Number of log entries in this aggregation |
 | `audience` | `Dictionary(Int32, Utf8)` | The audience of the blocks aggregated into this row (grouped separately per audience); never `NULL` |
 
-**Key Features:**
-- Pre-aggregated by 1-minute intervals for efficient time-series queries
-- Materialized for fast query performance
-- Automatically updated as new log data arrives
-- Daily partitioning for efficient storage and querying
+Pre-aggregated by 1-minute intervals and daily-partitioned; updated automatically as new log data
+arrives.
 
 **Example Queries:**
 ```sql
@@ -643,10 +640,8 @@ Key-value pairs stored as dictionary-encoded JSONB with the following structure:
 Dictionary(Int32, Binary)
 ```
 
-This format provides:
-- **Dictionary compression** - Repeated property sets stored once and referenced by index
-- **JSONB efficiency** - Native binary JSON format for fast property access
-- **Storage optimization** - Significant memory and storage savings over legacy formats
+This format gives dictionary compression (repeated property sets stored once and referenced by
+index) and JSONB efficiency (native binary JSON format for fast property access).
 
 **Common properties fields:**
 
@@ -666,28 +661,17 @@ FROM log_entries
 WHERE properties_length(properties) > 0;
 ```
 
-**Legacy Support:**
-Micromegas maintains full backward compatibility. Existing queries using `property_get()` and `properties_length()` work unchanged with the new JSONB format.
-
 ### Dictionary Compression
 
 String fields in the event tables use dictionary compression (`Dictionary(Int32, Utf8)`)
 for storage efficiency: `log_entries`, `log_stats`, `measures`, `thread_spans`,
 `async_events`, `net_spans`, `otel_spans`, and `images` (see each table's field reference
 above). The `processes`/`streams` metadata tables store their string columns as plain
-`Utf8`. Dictionary compression:
-
-- Reduces storage space for repeated values
-- Improves query performance
-- Transparent to SQL queries - use as normal strings
+`Utf8`. Dictionary-compressed fields are transparent to SQL — query them as normal strings.
 
 ### Timestamps
 
-All time fields use `Timestamp(Nanosecond)` precision:
-
-- Nanosecond resolution for high-precision timing
-- UTC timezone assumed
-- Compatible with standard SQL time functions
+All time fields use `Timestamp(Nanosecond)` precision, UTC.
 
 ## View Relationships
 

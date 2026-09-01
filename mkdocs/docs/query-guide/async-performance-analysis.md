@@ -1,6 +1,6 @@
 # Async Performance Analysis Guide
 
-This guide provides comprehensive patterns and examples for analyzing asynchronous operation performance using the `async_events` view with depth tracking.
+Patterns for analyzing asynchronous operation performance using the `async_events` view with depth tracking.
 
 ## Understanding Async Event Depth
 
@@ -272,5 +272,3 @@ SELECT
 FROM top_operations
 ORDER BY analysis_type, avg_duration DESC;
 ```
-
-This comprehensive approach enables effective async performance analysis and optimization based on call hierarchy depth information.

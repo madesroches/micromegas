@@ -74,7 +74,7 @@ SELECT * FROM list_partitions();
     readable audience, and a `'global'` row (a multi-audience partition, no single audience to
     check) is kept only when its view set is on `MICROMEGAS_PUBLIC_VIEW_SETS`, the caller passes
     the lakehouse admin gate (the same boolean gating `retire_partitions`/`regenerate_partitions`
-    below — #1482), or the caller holds `ReadScope::All`. See
+    below), or the caller holds `ReadScope::All`. See
     [Authentication](authentication.md#audience-filtering-activation).
 
 **Example**:
@@ -423,12 +423,11 @@ three functions, from a caller who could reach them anyway.
 ### `list_audience_grants()`
 
 !!! note "Caller-scoped, not admin-gated"
-    Registered for **every** authenticated caller (#1510, AbAC Stage 6b) — unlike every other
-    function on this page, it is not admin-only. What each caller sees differs by visibility
-    rule, below.
+    Registered for **every** authenticated caller — unlike every other function on this page, it
+    is not admin-only. What each caller sees differs by visibility rule, below.
 
 **Description**: Lists rows of the `audience_grants` table (the DB-backed audience grant store —
-see [Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants-1489-abac-stage-6a)),
+see [Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants)),
 scoped to what the calling principal may see.
 
 **Usage**:

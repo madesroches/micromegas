@@ -4,18 +4,23 @@ Micromegas supports unified authentication across all services using both API ke
 
 ## Overview
 
-Both the analytics server (flight-sql-srv) and ingestion server (telemetry-ingestion-srv) support two authentication methods:
+Both the analytics server (`flight-sql-srv`) and ingestion server
+(`telemetry-ingestion-srv`) support two authentication methods:
 
-- **OIDC (OpenID Connect)** - For human users and service accounts via federated identity providers (Google, Azure AD, Okta, Auth0, etc.)
-- **API Keys** - Legacy support for simple bearer token authentication
+- **OIDC (OpenID Connect)** — for human users and service accounts via
+  federated identity providers (Google, Azure AD, Okta, Auth0, etc.)
+- **API Keys** — bearer token authentication
 
-Both methods can be enabled simultaneously. When multiple providers are configured, they are tried in order until one succeeds (API key first for performance, then OIDC).
+Both methods can be enabled simultaneously. When multiple providers are
+configured, they are tried in order until one succeeds (API key first for
+performance, then OIDC).
 
 ## Authentication Methods
 
 ### OIDC Authentication (Recommended)
 
-OIDC provides secure federated authentication with automatic token refresh and support for multiple identity providers.
+OIDC provides federated authentication with automatic token refresh and
+support for multiple identity providers.
 
 **Benefits:**
 
@@ -38,12 +43,11 @@ OIDC provides secure federated authentication with automatic token refresh and s
 
 Bearer token authentication. Two flavors coexist:
 
-- **Env keyring (legacy/bootstrap)** — `MICROMEGAS_API_KEYS`, a JSON array parsed once
-  at startup. Still the only option for `object-cache-srv` (which has no DB
-  connection and stays env-only permanently); a transitional bootstrap path for
-  ingestion and flight-sql.
-- **DB-backed keys (steady state)** — `ingestion_api_keys` / `analytics_api_keys`
-  rows, validated by hash lookup. Minted, listed, and revoked over HTTP without a
+- **Env keyring** — `MICROMEGAS_API_KEYS`, a JSON array parsed once at
+  startup. The only option for `object-cache-srv` (no DB connection);
+  also usable as a bootstrap path for ingestion and flight-sql.
+- **DB-backed keys** — `ingestion_api_keys` / `analytics_api_keys` rows,
+  validated by hash lookup. Minted, listed, and revoked over HTTP without a
   redeploy. See [API Keys](api-keys.md) for the full reference.
 
 **Benefits (both flavors):**
@@ -55,23 +59,17 @@ Bearer token authentication. Two flavors coexist:
 
 **Limitations:**
 
-- No automatic expiration (this design adds *revocation*, not expiry — a
-  DB-backed key with no `revoked_at` is valid indefinitely)
-- Manual key distribution and rotation for the env keyring; DB-backed keys add
-  `created_by`/`revoked_by` audit trail and HTTP mint/list/revoke, but rotation
-  is still a manual operator action, not automatic
-- No user identity for audit logging with the env keyring; DB-backed keys record
-  `created_by`/`revoked_by` (the OIDC identity that minted/revoked), but not a
-  per-request identity beyond the key's own `name`
+- No automatic expiration — this design adds *revocation*, not expiry; a
+  DB-backed key with no `revoked_at` is valid indefinitely
+- Rotation is a manual operator action either way
+- No per-request user identity beyond the key's own `name`; DB-backed keys
+  additionally record `created_by`/`revoked_by`
 
 ## Server Configuration
 
 ### OIDC Configuration
 
-Configure OIDC authentication using environment variables:
-
 ```bash
-# OIDC Configuration
 export MICROMEGAS_OIDC_CONFIG='{
   "issuers": [
     {
@@ -103,22 +101,20 @@ export MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com"]'
 | `token_cache_size` | Maximum validated tokens to cache | 1000 |
 | `token_cache_ttl_secs` | Token cache TTL in seconds | 300 |
 
-**Admin Configuration:**
-
-The `MICROMEGAS_ADMINS` environment variable is a JSON array of user identifiers (email or subject) that have administrative privileges. Admin users can perform operations like partition management.
+`MICROMEGAS_ADMINS` is a JSON array of user identifiers (email or subject)
+with administrative privileges — partition management and other admin SQL
+functions.
 
 ### API Key Configuration
 
-**Steady state: DB-backed keys.** Mint an ingestion key with
-`POST /api/ingestion-api-keys`, or an analytics key with
-`POST /api/analytics-api-keys` — both on `analytics-web-srv` (OIDC + admin
-required) — see [API Keys](api-keys.md) for the full route reference and the
-`mmk_`-prefixed key shape.
+**DB-backed keys.** Mint an ingestion key with `POST /api/ingestion-api-keys`,
+or an analytics key with `POST /api/analytics-api-keys` — both on
+`analytics-web-srv` (OIDC + admin required). See [API Keys](api-keys.md) for
+the full route reference and the `mmk_`-prefixed key shape.
 
-**Legacy/bootstrap: the env keyring.** Still the only option for
-`object-cache-srv` (env-only permanently — see [Object Cache](object-cache.md)),
-and still usable as a bootstrap path for ingestion/flight-sql before any
-DB-backed key exists:
+**Env keyring.** The only option for `object-cache-srv` (permanently — see
+[Object Cache](object-cache.md)), and usable as a bootstrap path for
+ingestion/flight-sql before any DB-backed key exists:
 
 ```bash
 export MICROMEGAS_API_KEYS='[
@@ -136,8 +132,6 @@ export MICROMEGAS_API_KEYS='[
 
 ### Disable Authentication (Development Only)
 
-For local development and testing, authentication can be disabled:
-
 ```bash
 # Analytics server
 flight-sql-srv --disable-auth
@@ -152,253 +146,256 @@ telemetry-ingestion-srv --disable-auth
 ### Audience Filtering Activation
 
 !!! danger "Enabling auth can silently zero out every query result"
-    Configuring any authentication method above — OIDC, API keys, or both — does more than gate
-    access to the server: it flips every session from the internal `ReadScope::All` marker to
-    `ReadScope::Audiences`, which activates query-time audience filtering across both enforcement
-    prongs. **Prong A** (`OwnershipRewrite`, AbAC Stage 2) injects an audience predicate into
-    every `MaterializedView`-backed query plan, so a caller only sees rows whose own per-row
-    `audience` column (`processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats` —
-    see the per-row stamping paragraph below) resolves to one of their own audiences.
-    **Prong B** (`AudienceGuard`, AbAC Stage 3) covers five arg-addressed functions —
-    `view_instance` joins `process_spans`, `perfetto_trace_chunks`, `parse_block`, and
-    `get_payload` to close a cost/availability residual (#1486) for the view sets carrying a
-    physical `audience` column, since Prong A already row-filters those `view_instance` scans the
-    same as the named-table form. For `net_spans`, `otel_spans`, `images`, `async_events`, and
-    `thread_spans` — which don't carry that column and are reachable only through
-    `view_instance(...)` — Prong B's check is not a redundant belt-and-braces layer: it is these
-    five view sets' *only* enforcement, since Prong A adds no per-row predicate to a scan it
-    already knows Prong B has authorized.
-    A restricted caller's call to any of the five fails with a not-found-shaped error unless the
-    id argument names a process or stream in one of their own audiences — for `view_instance`
-    this replaces what used to be a silent, empty result with an error — and `list_partitions()`
-    silently omits every row (including `'global'` rows) that isn't theirs to see. `'global'`
-    instances are the one exception `view_instance`'s guard makes: `view_instance(<view set>,
-    'global')` is exempt from the check entirely and stays readable for any scoped caller, since
-    no `'global'` instance has anything for `jit_update` to materialize and Prong A already
-    filters its rows one at a time — a different rule from `list_partitions()`'s `'global'`-row
-    visibility described below, which gates *partition metadata about* a `'global'` file rather
-    than the rows of the file itself. A view set on `MICROMEGAS_PUBLIC_VIEW_SETS` is also exempt
-    from `view_instance`'s guard entirely: any authenticated caller can still trigger JIT
-    materialization of any of its instances, since denying materialization of a view set every
-    row of which is already readable would be incoherent — the cost/availability hardening this
-    guard otherwise provides simply doesn't apply to a view set an operator has opted into that
-    allowlist.
+    Configuring any authentication method — OIDC, API keys, or both — flips
+    every session from the internal `ReadScope::All` marker to
+    `ReadScope::Audiences`, which activates query-time audience filtering
+    across two enforcement layers.
 
-    **`audience` is a physical column on `processes`, `streams`, and `blocks`, each carrying its
-    own row's own stamp** — the credential that wrote *that* row, never derived
-    from the `process_id`/`stream_id` it points at. `log_entries`, `measures`, and `log_stats`
-    carry the owning block's stamp straight through, and are non-nullable at that point:
-    `blocks_view`'s materialization resolves a legacy, pre-v8 NULL column to
-    `MICROMEGAS_DEFAULT_AUDIENCE` via `COALESCE` before it ever reaches those views. There is no
-    `MICROMEGAS_UNSTAMPED_AUDIENCE` knob to configure: a credential with no bound audience is
-    stamped with the resolved deployment default explicitly at write time (see
-    [Ingestion → What gets stamped](ingestion.md#what-gets-stamped)); only a row registered before
-    its ingestion binary reached schema v8 keeps a NULL column, and every site that reads an
-    audience out of Postgres resolves *that* to `MICROMEGAS_DEFAULT_AUDIENCE`. **Prong A** filters
-    those six views directly on the column; `net_spans`, `otel_spans`, `images`, `async_events`,
-    and `thread_spans` don't carry the column, and are reachable only through
-    `view_instance(...)` — the call-level audience check Prong B runs on the instance id is their
-    enforcement, and Prong A adds no per-row predicate to any of the five. **Prong B**'s
-    `list_partitions()` `'global'`-row rule shows a row when its view set is on
-    `MICROMEGAS_PUBLIC_VIEW_SETS` or the caller passes the lakehouse admin gate (the same boolean
-    that already governs the eight admin-gated functions below) — not a query-time
-    audience-in-scope check.
+    **Row-level filtering** (`OwnershipRewrite`) injects an audience
+    predicate into every `MaterializedView`-backed query plan, so a caller
+    only sees rows whose own per-row `audience` column (`processes`,
+    `streams`, `blocks`, `log_entries`, `measures`, `log_stats`) resolves to
+    one of their own audiences.
 
-    **API keys and no-`email`-claim OIDC tokens are covered by `public`, via a grant like any
-    other, with no second knob.** Under the grant-map model (see
-    [Audiences and Grants](#audiences-and-grants) below), `public` has no built-in read grant — a
-    fresh deployment ships with the seeded `('public', 'read', '*')` DB row, which is what makes
-    every authenticated caller's readable set include `public`, regardless of identity. There is
-    no caller kind whose resolved set is otherwise empty the way an API key's was under the
-    identity-derived model this replaced, as long as that row (or an equivalent grant) exists;
-    delete it and `public` stops being universally readable for every caller kind alike.
-    `MICROMEGAS_DEFAULT_AUDIENCE`'s default of `public` (see
-    [Ingestion](ingestion.md#environment-variables)) restores visibility for every caller kind
-    that never binds an audience of its own.
+    **Call-level filtering** (`AudienceGuard`) covers five arg-addressed
+    functions — `view_instance` joins `process_spans`, `perfetto_trace_chunks`,
+    `parse_block`, and `get_payload`. For view sets carrying a physical
+    `audience` column, row-level filtering already covers the underlying
+    scan; for `net_spans`, `otel_spans`, `images`, `async_events`, and
+    `thread_spans` — which don't carry that column and are reachable only
+    through `view_instance(...)` — call-level filtering is their *only*
+    enforcement.
 
-    **The two prongs read different copies of the `audience` column, with different freshness.**
-    Prong A reads a daemon-materialized parquet snapshot (unchanged from Stage 2 — a process the
-    maintenance role hasn't caught up on is invisible to everyone, including its owner); Prong B
-    reads Postgres directly, so it is fresher for a just-ingested process, but denies (rather than
-    falls back to the stale snapshot) once retention has deleted a process's Postgres row even if
-    a merged/compacted lakehouse partition of its data still exists. Both copies resolve a
-    real row's own stamp the same way, so the prongs can never disagree about the *value* for a
-    row either has stamped — the remaining skew is purely this materialization-lag/retention-lag
-    timing, not a second interpretation of missing data. See the CHANGELOG's AbAC Stage 3 entry
-    for the full mechanism and its accepted trade-offs.
+    A restricted caller's call to any of the five fails with a
+    not-found-shaped error unless the id argument names a process or stream
+    in one of their own audiences, and `list_partitions()` silently omits
+    every row (including `'global'` rows) that isn't theirs to see.
+    `'global'` instances are exempt from `view_instance`'s guard entirely
+    and stay readable for any scoped caller, since no `'global'` instance
+    has anything to materialize and row-level filtering already covers its
+    rows one at a time — a different rule from `list_partitions()`'s
+    `'global'`-row visibility below, which gates *partition metadata about*
+    a `'global'` file rather than the rows of the file itself. A view set on
+    `MICROMEGAS_PUBLIC_VIEW_SETS` is also exempt from `view_instance`'s
+    guard: any authenticated caller can trigger JIT materialization of any
+    of its instances, since every row of that view set is already readable.
 
-    **Eight admin-gated lakehouse UDTFs/UDFs** (`retire_partitions`, `materialize_partitions`,
-    `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, and the
-    [query deny list](functions-reference.md#query-deny-list)'s `list_query_denials`,
-    `deny_queries`, `remove_query_denial`) are gated on whether this *deployment* can ever
-    produce an admin principal at all — not on a knob an operator sets. An OIDC provider can
-    grant admin whenever it has at least one configured admin user; an API-key provider never
-    can. At startup, the server asks every configured auth provider "can you ever produce an
-    admin?" and, if none of them can, registers these eight functions for *any* authenticated
-    caller instead of admin-only — otherwise an API-key-only deployment would have no path to
-    them at all. **Deployment-wide, not per-audience**: none of the eight functions filters by
-    audience, so on a deployment with no admin principal, every authenticated caller gets
-    destructive access to every audience's partitions, not just their own, and can also deny
-    every query in the deployment via `deny_queries` — safe only when no admin principal exists
-    in the deployment, unsafe the moment it also has personal or per-team audiences.
+    **`audience` is a physical column on `processes`, `streams`, and
+    `blocks`**, each carrying its own row's own stamp — the credential that
+    wrote *that* row, never derived from the `process_id`/`stream_id` it
+    points at. `log_entries`, `measures`, and `log_stats` carry the owning
+    block's stamp straight through and are non-nullable at that point:
+    `blocks_view`'s materialization resolves a legacy NULL column to
+    `MICROMEGAS_DEFAULT_AUDIENCE` via `COALESCE` before it reaches those
+    views. A credential with no bound audience is stamped with the resolved
+    deployment default explicitly at write time (see [Ingestion → What gets
+    stamped](ingestion.md#what-gets-stamped)); only a row registered before
+    schema v8 keeps a NULL column, and every reader resolves that to
+    `MICROMEGAS_DEFAULT_AUDIENCE`.
+
+    **API keys and no-`email`-claim OIDC tokens are covered by `public`, via
+    a grant like any other, with no second knob.** Under the grant-map model
+    (see [Audiences and Grants](#audiences-and-grants) below), `public` has
+    no built-in read grant — a fresh deployment ships with the seeded
+    `('public', 'read', '*')` DB row, which makes every authenticated
+    caller's readable set include `public` regardless of identity. Delete
+    that row and `public` stops being universally readable for every caller
+    kind alike. `MICROMEGAS_DEFAULT_AUDIENCE`'s default of `public` (see
+    [Ingestion](ingestion.md#environment-variables)) restores visibility for
+    every caller kind that never binds an audience of its own.
+
+    **The two enforcement layers read different copies of the `audience`
+    column, with different freshness.** Row-level filtering reads a
+    daemon-materialized parquet snapshot (a process the maintenance role
+    hasn't caught up on is invisible to everyone, including its owner);
+    call-level filtering reads Postgres directly, so it is fresher for a
+    just-ingested process, but denies (rather than falling back to the stale
+    snapshot) once retention has deleted a process's Postgres row even if a
+    merged/compacted lakehouse partition of its data still exists. Both
+    copies resolve a real row's own stamp identically, so they can never
+    disagree about the *value* for a row either has stamped — the remaining
+    skew is purely this materialization-lag/retention-lag timing.
+
+    **Eight admin-gated lakehouse UDTFs/UDFs** (`retire_partitions`,
+    `materialize_partitions`, `regenerate_partitions`,
+    `retire_partition_by_file`, `retire_partition_by_metadata`, and the
+    [query deny list](functions-reference.md#query-deny-list)'s
+    `list_query_denials`, `deny_queries`, `remove_query_denial`) are gated on
+    whether this *deployment* can ever produce an admin principal at all —
+    not on a knob an operator sets. An OIDC provider can grant admin whenever
+    it has at least one configured admin user; an API-key provider never can.
+    At startup, the server asks every configured auth provider "can you ever
+    produce an admin?" and, if none can, registers these eight functions for
+    *any* authenticated caller instead of admin-only — otherwise an
+    API-key-only deployment would have no path to them at all.
+    **Deployment-wide, not per-audience**: none of the eight functions
+    filters by audience, so on a deployment with no admin principal, every
+    authenticated caller gets destructive access to every audience's
+    partitions, not just their own, and can also deny every query via
+    `deny_queries` — safe only when no admin principal exists in the
+    deployment.
 
 ### Audience stamping and the default {#audience-stamping-and-the-default}
 
-The read-side filter above is only trustworthy because of what happens on the write side:
-each of `processes`, `streams`, and `blocks` carries its
-own `audience` **column**, server-written from the authenticated ingestion credential, never
-trusted from the client payload. Ingestion strips any client-supplied `micromegas.*` property
-(there is no property to re-assert as a stamp any more — the audience is a physical column) and
-stamps every row it writes at insert time — a block's or a stream's own stamp is the credential
-that wrote *that* row, never derived from the `process_id`/`stream_id` it points at. A credential
-with a bound audience (a DB-backed `ingestion_api_keys` row) is stamped with that; one with none —
-an env-keyring key, an OIDC token, or no auth provider at all — resolves to the deployment default
-and is stamped with it explicitly, the same as any other audience. See
-[Ingestion → What gets stamped](ingestion.md#what-gets-stamped) for the full mechanism,
-credential-by-credential.
+The read-side filter above is only trustworthy because of the write side:
+each of `processes`, `streams`, and `blocks` carries its own `audience`
+**column**, server-written from the authenticated ingestion credential,
+never trusted from the client payload. Ingestion strips any client-supplied
+`micromegas.*` property and stamps every row it writes at insert time — a
+block's or a stream's own stamp is the credential that wrote *that* row,
+never derived from the `process_id`/`stream_id` it points at. A credential
+with a bound audience (a DB-backed `ingestion_api_keys` row) is stamped with
+that; one with none — an env-keyring key, an OIDC token, or no auth provider
+at all — resolves to the deployment default and is stamped with it
+explicitly.
 
-**A pre-existing row with no stamp is read as the deployment default.** Every process, stream, and
-block registered through the HTTP ingestion path now carries a real, non-NULL `audience` column,
-so this applies only to a row registered before its ingestion binary reached schema v8 (nullable,
-no backfill by design) — admin `bulk_ingest`/replication now hard-fails on a missing `audience`
-column rather than ever writing one with none.
-`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) is applied at each of the three places the
-audience is read out of Postgres — the `blocks` view's materialization, the per-process JIT path,
-and Prong B's id lookups — so such a row still has a real, non-null audience everywhere it is
-enforced, without anything being written back to it. Set it on **every role that builds a
-lakehouse — including ingestion now**: FlightSQL, maintenance, the monolith, and ingestion. The
-maintenance role is the one that bakes the value into partitions, and ingestion is the one that
-stamps new rows with it, so a deployment that sets the knob on only some of these roles gets new
-rows physically stamped under one label while legacy rows keep reading under another.
+**A pre-existing row with no stamp is read as the deployment default.**
+Every process, stream, and block registered through the HTTP ingestion path
+carries a real, non-NULL `audience` column; this applies only to a row
+registered before its ingestion binary reached schema v8 (nullable, no
+backfill) — admin `bulk_ingest`/replication now hard-fails on a missing
+`audience` column rather than ever writing one with none.
+`MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) is applied at each place the
+audience is read out of Postgres — the `blocks` view's materialization, the
+per-process JIT path, and the call-level lookup — so such a row still has a
+real, non-null audience everywhere it is enforced. Set it identically on
+**every role that builds a lakehouse — including ingestion**: FlightSQL,
+maintenance, the monolith, and ingestion. The maintenance role bakes the
+value into partitions and ingestion stamps new rows with it, so a deployment
+that sets the knob on only some of these roles gets new rows physically
+stamped under one label while legacy rows read under another.
 
 !!! warning "Changing the default is not a routine operation"
-    A partition keeps the default that was configured when it was materialized. Changing
-    `MICROMEGAS_DEFAULT_AUDIENCE` does **not** retroactively relabel already-written partitions
-    — regenerate the six views (see the
-    [Maintenance](maintenance.md) role's `regenerate_partitions`) over any range that should
-    reflect the new value. This regeneration only ever relabels rows that carry **no** stamp
-    (a legacy row registered before its ingestion binary reached schema v8) — it has never
-    relabelled a row that was actually stamped, and still doesn't. Two consequences follow from
-    the same rule:
-    partitions materialized on either side of a change disagree about such a row, and
-    `FROM log_entries` can disagree with `view_instance('log_entries', <pid>)` for it, since the
-    two are materialized at different times. Prong B is not affected — it reads Postgres live, so
-    it always uses the *current* default.
+    A partition keeps the default that was configured when it was
+    materialized. Changing `MICROMEGAS_DEFAULT_AUDIENCE` does **not**
+    retroactively relabel already-written partitions — regenerate the six
+    views (see the [Maintenance](maintenance.md) role's
+    `regenerate_partitions`) over any range that should reflect the new
+    value. This regeneration only relabels rows that carry **no** stamp (a
+    legacy row registered before schema v8) — it never relabels an actually
+    stamped row. Two consequences follow: partitions materialized on either
+    side of a change disagree about such a row, and `FROM log_entries` can
+    disagree with `view_instance('log_entries', <pid>)` for it, since the two
+    are materialized at different times. Call-level filtering is not
+    affected — it reads Postgres live, so it always uses the current
+    default.
 
-    **Flipping this knob now also has a write-path effect (#1519).** The deployment default
-    keeps the un-salted OTLP id namespace, so which label is live as the default determines which
-    namespace is un-salted. A flip can leave unaudienced traffic presenting an un-salted
-    `process_id` against rows stamped under the *old* default — registration then rejects that
-    re-registration with a 403 (see the residual-gap warning below), with no retro-stamp to
-    reconcile it, until those rows age out or are deleted. This is the reason changing the
-    default is not routine; the accompanying id re-derivation itself needs no separate warning
-    (see below).
+    **Flipping this knob also has a write-path effect.** The deployment
+    default keeps the un-salted OTLP id namespace, so which label is live as
+    the default determines which namespace is un-salted. A flip can leave
+    unaudienced traffic presenting an un-salted `process_id` against rows
+    stamped under the *old* default — registration then rejects that
+    re-registration with a 403 (see the residual-gap warning below), with no
+    retro-stamp to reconcile it, until those rows age out or are deleted.
 
-Two consequences worth knowing before you flip this stage on:
+Two consequences worth knowing before you flip this on:
 
-- **OTLP `process_id` re-derivation.** OTLP-derived identity (`process_id`, and therefore
-  `block_id`) is now audience-scoped, so two audiences posting identical resource attributes
-  never collapse onto one process. Each audience gets its own id namespace, and the deployment
-  default keeps the pre-existing, un-salted namespace — so **no re-derivation** happens for
-  traffic that carries no bound audience or resolves to the deployment default; it keeps
-  deriving the exact same ids across this upgrade. What *does* re-derive, once: a DB-backed key
-  **explicitly bound to a label equal to `MICROMEGAS_DEFAULT_AUDIENCE`** moves out of its own
-  salted namespace into the un-salted one at upgrade — in practice that is every DB-backed key
-  today, since no deployment sets the knob and every existing audience is `public`. The same
-  logical process appears as a new row in that case; its pre-upgrade data keeps the old id.
-  Rotating an ingestion key to a genuinely *different* audience likewise splits a long-lived
-  producer's history across two process ids — expected, since the data now genuinely belongs to
-  two audiences, and unrelated to the upgrade-time re-derivation above.
-- **Client self-stamping stops taking effect.** Before Stage 5, a native client setting its own
-  `micromegas.audience` property was the *only* thing that stamped a process at all. That
-  self-stamp is now stripped (there is no property to re-assert any more — the stamp is a
-  physical column) and replaced by the credential's authenticated audience, or the deployment
-  default when the credential carries none (an env-keyring key or an OIDC token). A producer that
-  relied on self-stamping while authenticating with one of those now gets the deployment default
-  instead of its own asserted label. To keep its own label, move it onto a DB ingestion key bound
-  to that audience.
+- **OTLP `process_id` re-derivation.** OTLP-derived identity (`process_id`,
+  and therefore `block_id`) is audience-scoped, so two audiences posting
+  identical resource attributes never collapse onto one process. Each
+  audience gets its own id namespace, and the deployment default keeps the
+  pre-existing, un-salted namespace — so **no re-derivation** happens for
+  traffic that carries no bound audience or resolves to the deployment
+  default. What *does* re-derive, once: a DB-backed key **explicitly bound
+  to a label equal to `MICROMEGAS_DEFAULT_AUDIENCE`** moves out of its own
+  salted namespace into the un-salted one. The same logical process appears
+  as a new row in that case; its earlier data keeps the old id. Rotating an
+  ingestion key to a genuinely *different* audience likewise splits a
+  long-lived producer's history across two process ids — expected, since the
+  data now genuinely belongs to two audiences.
+- **Client self-stamping has no effect.** A native client setting its own
+  `micromegas.audience` property is stripped at ingestion (there is no
+  property to re-assert — the stamp is a physical column) and replaced by
+  the credential's authenticated audience, or the deployment default when
+  the credential carries none. To get its own label, a producer needs a DB
+  ingestion key bound to that audience.
 
-**Process registration is confidentiality-sensitive, and this is closed.** `processes` is a
-single table shared by the native and OTLP paths, and the OTLP `process_id` derivation formula is
-public (see [OTLP Ingestion](../otlp/index.md)). Any ingestion credential could otherwise
-pre-register (via the native `insert_process` path) the exact `process_id` a victim audience's
-OTLP producer would later derive; the genuine producer's stream/blocks would then silently land
-on a row stamped with the squatter's audience, leaking that audience's data to the squatter.
-`insert_process` and `register_otel_process` both reject a same-`process_id`, different-audience
-re-registration with a 403 (§6) -- since a stamped process's audience is immutable (there is no
-`UPDATE processes` path anywhere in the codebase), the victim's producer can never successfully
-register that `process_id` again until an operator manually deletes the squatted row (e.g.
-`DELETE FROM processes WHERE process_id = ...`). The maintenance daemon's automatic
-`delete_empty_processes` sweep (`rust/analytics/src/delete.rs`) only reclaims it on its own once
-the squatted row has no streams and the retention window has elapsed -- a squatter that also
-writes a stream keeps the row alive indefinitely. This closes the gap for a squatted row's
-write-side audience too, not only an already-stamped one: the guard resolves an existing row with
-a NULL `audience` column to the deployment default the same way every reader does, then compares
--- so a squatter claiming a different audience against a legacy or freshly pre-registered
-unstamped row is rejected exactly the same way as against a stamped one. `check_stream_audience_conflict`
-closes the equivalent gap for `streams`: a stream re-pointed to a
-different credential's audience is now rejected at the next `insert_stream`/`register_otel_stream`
-call for that `stream_id`, rather than silently keeping its original stamp while later blocks on
-it get dropped by the materialization-time exclusion below.
+**Process registration is confidentiality-sensitive, and this is closed.**
+`processes` is a single table shared by the native and OTLP paths, and the
+OTLP `process_id` derivation formula is public (see [OTLP
+Ingestion](../otlp/index.md)). Any ingestion credential could otherwise
+pre-register (via the native `insert_process` path) the exact `process_id` a
+victim audience's OTLP producer would later derive; the genuine producer's
+stream/blocks would then silently land on a row stamped with the squatter's
+audience. `insert_process` and `register_otel_process` both reject a
+same-`process_id`, different-audience re-registration with a 403 — since a
+stamped process's audience is immutable (there is no `UPDATE processes` path
+anywhere), the victim's producer can never successfully register that
+`process_id` again until an operator manually deletes the squatted row
+(`DELETE FROM processes WHERE process_id = ...`). The maintenance daemon's
+`delete_empty_processes` sweep only reclaims it once the squatted row has no
+streams and the retention window has elapsed — a squatter that also writes a
+stream keeps the row alive indefinitely. The guard resolves an existing row
+with a NULL `audience` column to the deployment default the same way every
+reader does, then compares — so a squatter claiming a different audience
+against a legacy or freshly pre-registered unstamped row is rejected the
+same way as against a stamped one. `check_stream_audience_conflict` closes
+the equivalent gap for `streams`: a stream re-pointed to a different
+credential's audience is rejected at the next
+`insert_stream`/`register_otel_stream` call for that `stream_id`.
 
-**No retro-stamp, still.** Either guard compares against the existing row's *resolved* audience
-but never writes anything back: a matching re-registration of a row with a NULL `audience` column
-remains `Ok` and leaves it unstamped. This is no longer a gap a squatter can exploit, though --
-since every process/stream registered through this HTTP path is now stamped explicitly (see
-[Ingestion → What gets stamped](ingestion.md#what-gets-stamped)), an unstamped row only ever
-arises from data written before its ingestion binary reached schema v8, never from a squatter
-racing a victim's registration.
+**No retro-stamp, still.** Either guard compares against the existing row's
+*resolved* audience but never writes anything back: a matching
+re-registration of a row with a NULL `audience` column remains `Ok` and
+leaves it unstamped. Since every process/stream registered through this HTTP
+path is now stamped explicitly (see [Ingestion → What gets
+stamped](ingestion.md#what-gets-stamped)), an unstamped row only arises from
+data written before schema v8.
 
 !!! warning "Residual gap: cross-audience write injection, narrower than before (tracked, not yet closed)"
-    Every `blocks`/`streams`/`processes` row, and every view derived straight from them
-    (`log_entries`, `measures`, `log_stats`, `processes_view`, `streams_view`), now carries its
-    own `audience` stamp — a block whose own stamp disagrees with the `streams`/`processes` row
-    it points at is excluded from materialization entirely, so an attacker's block never surfaces
-    under the victim's label, or under its own label pointing at the victim's `process_id`, in
-    any of those views. What's still open is narrower than the
-    original gap:
+    Every `blocks`/`streams`/`processes` row, and every view derived
+    straight from them (`log_entries`, `measures`, `log_stats`,
+    `processes_view`, `streams_view`), carries its own `audience` stamp — a
+    block whose own stamp disagrees with the `streams`/`processes` row it
+    points at is excluded from materialization entirely, so an attacker's
+    block never surfaces under the victim's label, or under its own label
+    pointing at the victim's `process_id`, in any of those views. What's
+    still open:
 
-    - **Five process/stream-anchored view sets** — `net_spans`, `otel_spans`, `images`,
-      `async_events`, `thread_spans` — and **the per-process JIT `view_instance` path** still
-      resolve their audience *label* through the owning process's/stream's row rather than a
-      genuine per-row column of their own — via Prong B's instance check, the sole enforcement
-      for a guarded `view_instance(...)` scan of these five (see the Audience Filtering
-      Activation box above), not by a per-row predicate Prong A injects. The cross-audience
-      *injection* scenario (an attacker's block naming a victim's `process_id`/`stream_id`) is
-      closed for both, as a side effect of where the materialization-time exclusion above lives —
-      except against a victim whose `processes`/`streams` row is itself a legacy, pre-v8
+    - **Five process/stream-anchored view sets** — `net_spans`, `otel_spans`,
+      `images`, `async_events`, `thread_spans` — and **the per-process JIT
+      `view_instance` path** still resolve their audience *label* through
+      the owning process's/stream's row rather than a genuine per-row column
+      of their own, via call-level filtering (the sole enforcement for a
+      guarded `view_instance(...)` scan of these five). The cross-audience
+      *injection* scenario is closed for both, as a side effect of where the
+      materialization-time exclusion above lives — except against a victim
+      whose `processes`/`streams` row is itself a legacy, pre-v8
       NULL-audience row (next bullet).
-    - **The NULL-anchor window.** A `processes`/`streams` row registered before its ingestion
-      binary reached schema v8 keeps a NULL `audience` column for its entire remaining life (rows
-      are immutable, and there is no backfill). The materialization-time exclusion's NULL-tolerant
-      form lets a mismatched block through unchecked against such a row, for as long as it exists
-      — deliberately, since a strict comparison would instead permanently drop that row's
-      legitimate post-upgrade telemetry. This is an accepted, bounded limitation over
-      already-public legacy data (everything in the lake before this stage is public), not an
-      open item to close on its own; it is bounded by bringing
-      **every** ingestion replica to schema v8 (not just one) before relying on audience
-      separation during a rolling upgrade, and shrinks as legacy rows age out under retention.
+    - **The NULL-anchor window.** A `processes`/`streams` row registered
+      before schema v8 keeps a NULL `audience` column for its entire
+      remaining life (rows are immutable, and there is no backfill). The
+      materialization-time exclusion's NULL-tolerant form lets a mismatched
+      block through unchecked against such a row, deliberately — a strict
+      comparison would instead permanently drop that row's legitimate
+      post-upgrade telemetry. This is an accepted, bounded limitation over
+      already-public legacy data (everything in the lake before this stage
+      is public); it is bounded by bringing **every** ingestion replica to
+      schema v8 before relying on audience separation during a rolling
+      upgrade, and shrinks as legacy rows age out under retention.
 
-    There is no in-product enforcement knob left for either surface; the mitigation is
-    operational -- provision only audience-bound DB-backed ingestion credentials, and don't run
-    ingestion with an env-keyring key, OIDC, or `--disable-auth` alongside them.
+    There is no in-product enforcement knob left for either surface; the
+    mitigation is operational — provision only audience-bound DB-backed
+    ingestion credentials, and don't run ingestion with an env-keyring key,
+    OIDC, or `--disable-auth` alongside them.
 
 ## Audiences and Grants
 
-**A user sees their own grants, and can share/mint self-service, from the Audience Access page**
-(`/audiences` in the web app, open to every authenticated user — see
-[`web-app.md`](web-app.md#audience-access)) or from SQL via `list_audience_grants()`
-(`micromegas-query --all "SELECT * FROM list_audience_grants()"`). The rest of this section
-covers the underlying model the page and the CLI below both drive.
+**A user sees their own grants, and can share/mint self-service, from the
+Audience Access page** (`/audiences` in the web app, open to every
+authenticated user — see [`web-app.md`](web-app.md#audience-access)) or from
+SQL via `list_audience_grants()`
+(`micromegas-query --all "SELECT * FROM list_audience_grants()"`). The rest
+of this section covers the underlying model.
 
 An audience is an **opaque label on data** — `public`, `team-alpha`,
-`payments-svc` — not an encoding of any principal's identity. What determines
-who can read or mint into an audience is separate, editable configuration: a
-grant map, resolved once at startup from `{prefix}_AUDIENCE_GRANTS` (falling
-back to the unprefixed `MICROMEGAS_AUDIENCE_GRANTS`). This is the model
+`payments-svc` — not an encoding of any principal's identity. Who can read or
+mint into an audience is separate, editable configuration: a grant map,
+resolved once at startup from `{prefix}_AUDIENCE_GRANTS` (falling back to
+the unprefixed `MICROMEGAS_AUDIENCE_GRANTS`). This is the model
 `AudienceReadPolicy`/`AudienceMintPolicy` (`micromegas_auth::policy`) resolve
 against; the [Audience Filtering Activation](#audience-filtering-activation)
-section above is what actually consumes the *read* half of it.
+section above consumes the *read* half of it.
 
 ```json
 {
@@ -414,10 +411,8 @@ section above is what actually consumes the *read* half of it.
 Keys are audience names (`[A-Za-z0-9_-]{1,255}`, case-sensitive, no
 normalization). Each value is either a bare array — read-only shorthand, the
 common case — or an object with separate `"read"`/`"mint"` lists, needed only
-when the audience should also grant *mint* authority (minting a new
-`ingestion_api_keys` row stamped with that audience). An omitted `"mint"`
-list is always empty, never derived from `"read"`: a read grant never confers
-mint authority. Selectors:
+when the audience should also grant *mint* authority. An omitted `"mint"`
+list is always empty, never derived from `"read"`. Selectors:
 
 | Selector | Matches |
 |---|---|
@@ -425,40 +420,36 @@ mint authority. Selectors:
 | `user:<email>` | the caller's `email` claim |
 | `group:<g>` | any value in the caller's `groups` claim |
 
-**One built-in rule, and nothing else:**
+**There is no self-audience rule.** A caller is never granted an audience
+merely for being named like one — an API key named `team-alpha` does not
+thereby read the `team-alpha` audience. A personal audience is an ordinary
+audience with an ordinary grant entry (e.g. `"alice-laptop":
+["user:alice@example.com"]`); self-service mint (below) removes the need to
+provision one per user by hand.
 
-- **There is no self-audience rule.** A caller is never granted an audience
-  merely for being named like one — an API key named `team-alpha` does not
-  thereby read the `team-alpha` audience. A personal audience is an ordinary
-  audience with an ordinary grant entry (e.g. `"alice-laptop":
-  ["user:alice@example.com"]`); provisioning one per user by hand this way is
-  what self-service mint (#1374, below) removes the need for.
+**`public` has no built-in read grant of its own — it is a seeded row, not a
+special case.** A fresh deployment's DB-backed grant store (below) ships
+with `('public', 'read', '*')` already inserted, so `public` reads exactly
+as if you had written `{"public": ["*"]}` yourself. Writing that entry in
+the env-map grants above changes nothing on top of the seeded row — remove
+it (`micromegas-grants delete public read '*'`, or the Audience Access page)
+and `public` stops being universally readable, the same as removing any
+other grant. This covers data that arrives without a bound audience only
+while `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is
+stamped with the knob's value at write time (see [Audience stamping and the
+default](#audience-stamping-and-the-default)), with only a pre-existing
+unstamped row still resolved to it at query time.
 
-**`public` has no built-in read grant of its own — it is a seeded row, not a special case.** A
-fresh deployment's DB-backed grant store (below) ships with `('public', 'read', '*')` already
-inserted (schema v9), so `public` reads exactly as if you had written `{"public": ["*"]}`
-yourself. Writing that entry in the env-map grants above changes nothing on top of the seeded
-row, but the seeded row is what does the work — remove it (`micromegas-grants delete public read
-'*'`, or the Audience Access page) and `public` stops being universally readable, the same as
-removing any other grant. Note this covers data that arrives without a bound audience only while
-`MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is now stamped with the knob's
-value at write time (see
-[Audience stamping and the default](#audience-stamping-and-the-default)), with only a
-pre-existing unstamped row — one registered before its ingestion binary reached schema v8 —
-still resolved to it at query time. Pointing the knob at another label puts all of that under
-that label's grants instead.
-
-**Re-sharing already-ingested data is a grants edit, never a restamp.** Since
-the audience *value* stamped on data never changes, widening who can see
-`team-alpha` is a one-line config change — add a selector to its `"read"`
-list — that takes effect for every already-ingested process immediately
-(bounded by the mint-time key-store cache TTL for callers, not by anything
-about the data itself).
+**Re-sharing already-ingested data is a grants edit, never a restamp.**
+Since the audience *value* stamped on data never changes, widening who can
+see `team-alpha` is a one-line config change — add a selector to its
+`"read"` list — that takes effect for every already-ingested process
+immediately (bounded by the mint-time key-store cache TTL for callers, not
+by anything about the data itself).
 
 **A malformed grant map fails startup, not silently**: an unknown-shaped
 key, an unrecognized selector prefix, or a duplicate JSON key for the same
-audience are all a startup `Err`, the same "typo fails fast" convention every
-other knob on this page follows.
+audience are all a startup `Err`.
 
 **Worked profiles**, open and privacy:
 
@@ -466,29 +457,29 @@ other knob on this page follows.
 # Open deployment: everyone reads everything, no grant map needed at all.
 # MICROMEGAS_DEFAULT_AUDIENCE can be left unset -- it defaults to public.
 
-# Privacy deployment: a team's data stays inside the team. One knob covers both
-# sides (#1482/#1519): keys minted without an explicit audience, and processes
-# whose credential carried no bound audience, are both stamped with this label
-# explicitly at write time. Point it at a label nobody is granted, so anything
-# that omits an audience is invisible rather than published, and name the
-# audience explicitly on every key you mint. Set it on every role that builds
-# a lakehouse -- FlightSQL, maintenance, monolith, and ingestion -- since
-# ingestion now reads it too; a deployment that sets it on only the first
-# three gets new processes physically stamped `public` while legacy rows
-# still read as `unassigned`. Regenerating the six views only ever relabels
-# rows that carry no stamp (legacy rows, and rows from the admin replication
-# path) if you ever change it -- a stamped row's label has never been
-# regeneration's to change. Flipping the knob after this ships also has a
-# write-path effect: see the "Changing the default is not a routine
-# operation" warning above.
+# Privacy deployment: a team's data stays inside the team. One knob covers
+# both sides: keys minted without an explicit audience, and processes whose
+# credential carried no bound audience, are both stamped with this label
+# explicitly at write time. Point it at a label nobody is granted, so
+# anything that omits an audience is invisible rather than published, and
+# name the audience explicitly on every key you mint. Set it on every role
+# that builds a lakehouse -- FlightSQL, maintenance, monolith, and
+# ingestion -- since ingestion reads it too; a deployment that sets it on
+# only the first three gets new processes physically stamped `public` while
+# legacy rows still read as `unassigned`. Regenerating the six views only
+# relabels rows that carry no stamp (legacy rows, and rows from the admin
+# replication path) -- a stamped row's label is never regeneration's to
+# change. Flipping the knob after data exists also has a write-path effect:
+# see the "Changing the default is not a routine operation" warning above.
 export MICROMEGAS_AUDIENCE_GRANTS='{"team-alpha": ["group:eng"]}'
 export MICROMEGAS_DEFAULT_AUDIENCE=unassigned
 ```
 
-Worked **mint** profile, granting a non-admin caller mint authority for their
-own personal audience — see [self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
-below for the full picture (the knob that gates this, the per-caller bounds,
-and `micromegas-setup-telemetry`):
+Worked **mint** profile, granting a non-admin caller mint authority for
+their own personal audience — see [self-service
+mint](#self-service-ingestion-key-mint) below for the full picture (the
+knob that gates this, the per-caller bounds, and
+`micromegas-setup-telemetry`):
 
 ```bash
 # One admin-created grant per personal audience, mint only (read is granted
@@ -498,13 +489,13 @@ micromegas-grants --url https://analytics.example.com create alice-laptop read u
 ```
 
 A non-admin caller with this grant can now mint their own `alice-laptop` key
-directly (`POST /api/ingestion-api-keys`), once `MICROMEGAS_SELF_SERVICE_MINT`
-is on (below) — no further admin step needed for that audience. **Self-service
-mint grants must live in the DB `audience_grants` table, never in
-`{prefix}_AUDIENCE_GRANTS`** — unlike the read axis (which still unions both
-sources, above), the mint axis is DB-only once this stage lands: a mint
-audience declared only in the env map is invisible to the lazy claim's
-existence check (below) and so could be claimed out from under it by another
+directly (`POST /api/ingestion-api-keys`), once
+`MICROMEGAS_SELF_SERVICE_MINT` is on (below) — no further admin step needed
+for that audience. **Self-service mint grants must live in the DB
+`audience_grants` table, never in `{prefix}_AUDIENCE_GRANTS`** — unlike the
+read axis (which still unions both sources), the mint axis is DB-only: a
+mint audience declared only in the env map is invisible to the lazy claim's
+existence check (below) and could be claimed out from under it by another
 caller. Keep every mint-relevant audience's grants in the DB once
 `MICROMEGAS_SELF_SERVICE_MINT` is on.
 
@@ -518,11 +509,11 @@ pre-create a placeholder DB row (any axis, any selector) for **every**
 audience name that appears anywhere in `{prefix}_AUDIENCE_GRANTS`, not just
 the ones with a `mint` entry — see the placeholder-row example below.
 
-### Self-service ingestion key mint (AbAC Stage 6, #1374)
+### Self-service ingestion key mint {#self-service-ingestion-key-mint}
 
 Given a `mint` grant already exists (the worked profile above), a non-admin
 caller can mint their own ingestion key directly — `POST
-{base_path}/api/ingestion-api-keys` is no longer purely admin-gated.
+{base_path}/api/ingestion-api-keys` is not purely admin-gated.
 `MintPolicy::resolve_audience` (a per-request point query against
 `audience_grants`, never a cached snapshot) is the authorization instead of
 an admin gate; an admin's own mint is unaffected either way. This is gated
@@ -530,49 +521,52 @@ behind one off-by-default deployment knob:
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default, so a deployment that upgrades to this stage keeps its exact pre-stage mint authorization surface (admin-only) until an operator explicitly opts in. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing (see below). |
-| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota — reaching it is a pathological event. Best-effort under concurrency. |
+| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Off by default. Also gates `GET {base_path}/api/audience-grants/my-audiences` (below) for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing (see below). |
+| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Caps how many distinct audiences one non-admin caller may lazily claim (below). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
-| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into), excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, excluding the caller's own `user:<email>` rows, which are claim/self-access rows, not shares). Best-effort under concurrency. |
 
-**`public` ships mintable, by a seeded grant.** Schema v9 seeds `('public', 'mint', '*')` into
-`audience_grants` (alongside the read-side default described in
-[Audiences and Grants](#audiences-and-grants) above) — once `MICROMEGAS_SELF_SERVICE_MINT` is on,
-any authenticated non-admin can mint an ingestion key bound to `public` with no further admin
-step, since the row already exists. The knob still gates this like everything else in this
-section — the row confers nothing while it is off. Remove the row to require an explicit
-per-caller grant for `public` instead:
+**`public` ships mintable, by a seeded grant.** Schema v9 seeds `('public',
+'mint', '*')` into `audience_grants` (alongside the read-side default
+described in [Audiences and Grants](#audiences-and-grants) above) — once
+`MICROMEGAS_SELF_SERVICE_MINT` is on, any authenticated non-admin can mint
+an ingestion key bound to `public` with no further admin step, since the row
+already exists. The knob still gates this — the row confers nothing while
+it is off. Remove the row to require an explicit per-caller grant for
+`public` instead:
 
 ```bash
 micromegas-grants --url https://analytics.example.com delete public mint '*'
 ```
 
-or the Audience Access page's `public` → Mint → Remove. A deployment running a custom
-`MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` row, since the seed means one thing
-everywhere rather than depending on the deployment's default; it can delete it the same way.
+or the Audience Access page's `public` → Mint → Remove. A deployment
+running a custom `MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal
+`public` row, since the seed means one thing everywhere rather than
+depending on the deployment's default.
 
-**Audiences are created lazily, not pre-provisioned.** A non-admin caller who
-names a brand-new, never-before-granted audience *and supplies the name
+**Audiences are created lazily, not pre-provisioned.** A non-admin caller
+who names a brand-new, never-before-granted audience *and supplies the name
 explicitly* claims it atomically, as part of the same mint request, once
 `MICROMEGAS_SELF_SERVICE_MINT` is on: the claim writes `user:<email>` grant
 rows on **both** the `mint` and `read` axes (so the caller who just claimed
 the audience can read back what their own new key uploads), inside the same
 transaction that mints the key. Naming an audience that already has *any*
 grant row — admin-created, self-claimed earlier, or someone else's
-in-flight claim — still requires a matching grant exactly as above; only a
-genuinely fresh, unowned name is claimable this way. `public` and the
-deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be *claimed* — a distinct property from
-being *mintable*: `public` ships mintable, via its own seeded grant (above), precisely because it
-already has grant rows and so never reaches the lazy-claim path at all.
+in-flight claim — still requires a matching grant; only a genuinely fresh,
+unowned name is claimable this way. `public` and the deployment's own
+`MICROMEGAS_DEFAULT_AUDIENCE` can never be *claimed* — a distinct property
+from being *mintable*: `public` ships mintable via its own seeded grant
+precisely because it already has grant rows and so never reaches the
+lazy-claim path.
 
 **Before turning on `MICROMEGAS_SELF_SERVICE_MINT`, pre-create a placeholder
 grant row — any selector, on either axis — for every audience name that
-exists only outside the DB:** a custom `MICROMEGAS_DEFAULT_AUDIENCE`
-(the seeded `public` row already covers the case of leaving it at its
-`public` default — see above), and *every* key of `{prefix}_AUDIENCE_GRANTS`
-(mint-relevant or read-only alike; see the note above). Via the admin grants
-API, prefer an identity selector over a blanket `'*'` — a custom default should not become a
-second `public` merely to satisfy this check:
+exists only outside the DB:** a custom `MICROMEGAS_DEFAULT_AUDIENCE` (the
+seeded `public` row already covers leaving it at its default), and *every*
+key of `{prefix}_AUDIENCE_GRANTS` (mint-relevant or read-only alike). Via
+the admin grants API, prefer an identity selector over a blanket `'*'` — a
+custom default should not become a second `public` merely to satisfy this
+check:
 
 ```bash
 micromegas-grants --url https://analytics.example.com create legacy-default read 'group:eng'
@@ -580,11 +574,11 @@ micromegas-grants --url https://analytics.example.com create legacy-default read
 micromegas-grants --url https://analytics.example.com create team-alpha read 'group:eng'
 ```
 
-Without those placeholder rows, the lazy claim's existence check (which reads
-only `audience_grants` and `ingestion_api_keys`, never a role-prefixed env
-knob it has no reason to know about) would see any of these names as unowned
-and let a non-admin claim exclusive mint+read rights over a name the operator
-already believes is spoken for.
+Without those placeholder rows, the lazy claim's existence check (which
+reads only `audience_grants` and `ingestion_api_keys`, never a role-prefixed
+env knob) would see any of these names as unowned and let a non-admin claim
+exclusive mint+read rights over a name the operator already believes is
+spoken for.
 
 The setup script, `micromegas-setup-telemetry`, wraps all of this for an end
 user — OIDC login, mint, and printing the `OTEL_EXPORTER_OTLP_*` env vars
@@ -614,30 +608,25 @@ for the full CLI reference, and [`api-keys.md`](api-keys.md) for the mint
 route's error shapes (`FORBIDDEN`, `UNAVAILABLE`, `UNAUTHENTICATED`,
 `CLAIM_CONTENDED`).
 
-**The same knob now also governs sharing and removal on the Audience Access page** (`/audiences`,
-open to every authenticated user — see [`web-app.md`](web-app.md#audience-access)): a non-admin
-may create/delete a grant row (per the write policy below) only when
-`MICROMEGAS_SELF_SERVICE_MINT` is on, exactly as for minting. Sharing an audience you already
-hold is the second half of the self-service feature this knob introduced — claim an audience,
-then let your team in — so it rides the same switch rather than a second knob.
+**The same knob also governs sharing and removal on the Audience Access
+page** (`/audiences`, open to every authenticated user — see
+[`web-app.md`](web-app.md#audience-access)): a non-admin may create/delete a
+grant row (per the write policy below) only when
+`MICROMEGAS_SELF_SERVICE_MINT` is on, exactly as for minting.
 
-**An admin caller minting into a brand-new audience is now also claimed server-side**, the same
-way a non-admin's lazy claim already is: `mint_key` runs the same ownership check
-(`try_claim_and_mint` uses internally) as a pre-check for an admin caller, and if the audience
-looks unclaimed, writes the admin's own `user:<email>` `mint`+`read` rows in the same transaction
-as the key insert. This is exactly what `setup_telemetry.py`'s admin branch used to do
-client-side (writing the grant via the admin API after minting); it is now the server's job, and
-the mint response's new `claimed` field says whether it happened. An admin with no email is
-unaffected either way — that caller was never eligible for the client-side grant either.
+**An admin minting into a brand-new audience is also claimed server-side**,
+the same way a non-admin's lazy claim is: `mint_key` runs the same ownership
+check as a pre-check for an admin caller, and if the audience looks
+unclaimed, writes the admin's own `user:<email>` `mint`+`read` rows in the
+same transaction as the key insert. The mint response's `claimed` field says
+whether it happened. An admin with no email is unaffected.
 
-### DB-backed audience grants (#1489, AbAC Stage 6a)
+### DB-backed audience grants
 
 `{prefix}_AUDIENCE_GRANTS` is resolved once at startup, so creating one
 per-user grant means editing an env var and restarting every service that
-reads it — workable for a handful of teams, not for a per-user privacy
-profile where each new user needs one more grant row. The `audience_grants`
-Postgres table (migration v7) is the same grant model, minted, listed, and
-deleted over HTTP without a redeploy:
+reads it. The `audience_grants` Postgres table is the same grant model,
+minted, listed, and deleted over HTTP without a redeploy:
 
 ```sql
 CREATE TABLE audience_grants (
@@ -654,31 +643,21 @@ CREATE TABLE audience_grants (
 ```
 
 One table with an `axis` column, not two — a 1:1 image of the env map's
-single map covering both the read and mint axes, kept splittable later
-(without any change to `ReadPolicy`/`MintPolicy`) if the long-term
-group-membership model ever needs it.
+single map covering both the read and mint axes.
 
 **Additive, never a replacement.** Each flight-sql process — standalone
 `flight-sql-srv`, or the monolith's flight-sql role — holds one whole-table
-snapshot in memory (small enough that the issue treats "cache the whole map"
-as the right shape, unlike the per-key `moka` cache backing the [DB-backed
-key store](api-keys.md)), unioned with the env map before matching a
-caller's selectors. `analytics-web-srv` is the write surface only (the HTTP
-admin routes below) — it never constructs a `DbAudienceGrantsSource` and
-caches nothing itself. For the **read** axis, a selector present in
-the env map, the store, or both grants exactly the same access — there is no
-"the store wins" or "the env map wins" precedence to reason about, and no
-forced migration off `{prefix}_AUDIENCE_GRANTS`: a deployment that never
-touches the store keeps working exactly as documented above. This is no
-longer true for the **mint** axis once self-service mint (#1374, below)
-lands: mint grants are DB-only, so an env-map-only `"mint"` selector is
-inert — it is never consulted by `mint_key`'s per-request authorization
-check.
+snapshot in memory, unioned with the env map before matching a caller's
+selectors. `analytics-web-srv` is the write surface only (the HTTP admin
+routes below) — it never constructs a `DbAudienceGrantsSource` and caches
+nothing itself. For the **read** axis, a selector present in the env map,
+the store, or both grants exactly the same access — no precedence to reason
+about, and no forced migration off `{prefix}_AUDIENCE_GRANTS`. This is not
+true for the **mint** axis: mint grants are DB-only, so an env-map-only
+`"mint"` selector is inert — it is never consulted by `mint_key`'s
+per-request authorization check.
 
-**HTTP routes** (#1510, AbAC Stage 6c widens these from admin-only to a
-self-service policy — see [self-service mint](#self-service-ingestion-key-mint-abac-stage-6-1374)
-below for the knob, and [`web-app.md`](web-app.md#audience-access) for the page that drives
-them):
+**HTTP routes:**
 
 | Route | Body / result |
 |---|---|
@@ -687,49 +666,38 @@ them):
 | `GET {base_path}/api/audience-grants/visible` | 200 `[{"audience","axis","selector","created_at","created_by"}]` — the caller-scoped read backing the Audience Access page's own list (below) |
 | `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix used only to *suggest* a fresh audience name (the web app's Mint dialog composes it live before commit; the CLI renders a `--claim` suggestion from it, but never mints under it itself), the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
 
-There is no more paginated `GET` over the whole collection — that route is
-deleted outright. Listing arbitrary rows from SQL now goes through the
-caller-scoped `list_audience_grants()` table function (below) instead, and
-the page's own list reads `GET .../visible`.
+There is no paginated `GET` over the whole collection. Listing arbitrary rows
+from SQL goes through the caller-scoped `list_audience_grants()` table
+function (below); the page's own list reads `GET .../visible`.
 
-**`POST`/`DELETE` gate**, `GrantGate` (a `FromRequestParts` extractor
-modeled on the mint route's own `MintGate`): an admin acts unconditionally,
-exactly as before. A non-admin is admitted only when
-`MICROMEGAS_SELF_SERVICE_MINT` is on, and then further constrained per call:
+**`POST`/`DELETE` gate**, `GrantGate`: an admin acts unconditionally. A
+non-admin is admitted only when `MICROMEGAS_SELF_SERVICE_MINT` is on, and
+then further constrained per call:
 
 - **Create**: `selector` must be `user:…`/`group:…` (never `*` — a caller
   who can read an audience must not be able to open it to every
   authenticated principal), and the caller must **hold** `(audience, axis)`
-  via an identity selector (`user:`/`group:`, not a `*` row — a `*` grant is
-  publicly readable/mintable but must not let every authenticated caller
-  plant durable rows that would outlive it). Delegation is per axis: a
-  `read` grant lets you share `read`, a `mint` grant lets you share `mint`,
-  and neither confers the other.
+  via an identity selector (`user:`/`group:`, not a `*` row). Delegation is
+  per axis: a `read` grant lets you share `read`, a `mint` grant lets you
+  share `mint`, and neither confers the other.
 - **Delete**: the row must be the caller's own direct `user:<email>` row
-  ("remove my access" — never offered for `group:`/`*` rows, since those
-  would affect other principals and there are no negative grants), or a row
-  the caller themselves created (the revoke-a-share counterpart of
-  sharing) — except their own `mint`/`user:<email>` row, which "remove my
-  access" does not cover: that row is the self-service claim marker
-  `max_claims_per_caller` counts from, so a non-admin can't delete it
-  themselves (an admin still can). A row that doesn't exist at all is 404;
-  one that exists but matches no condition is 403.
+  ("remove my access" — never offered for `group:`/`*` rows), or a row the
+  caller themselves created — except their own `mint`/`user:<email>` row,
+  which "remove my access" does not cover: that row is the self-service
+  claim marker `max_claims_per_caller` counts from, so a non-admin can't
+  delete it themselves (an admin still can). A row that doesn't exist at all
+  is 404; one that exists but matches no condition is 403.
 
-`DELETE` still takes the natural key as query parameters rather than path
-segments: a `group:<id>` selector can contain `/` or other URL-significant
-characters a raw path segment can't safely carry.
+`DELETE` takes the natural key as query parameters rather than path
+segments: a `group:<id>` selector can contain `/` or other
+URL-significant characters a raw path segment can't safely carry.
 
 **`GET .../visible`'s own visibility rule, by caller**: admin sees every
 row; a non-admin with the knob on sees every grant on each pair they hold a
 matching grant on (the same held-pair rule `list_audience_grants()` uses,
-below); a non-admin with the knob off sees only their own rows — never a
-sibling's `selector`/`created_by`, since this route (unlike the table
-function) *can* check the knob and a default knob-off deployment must not
-hand a browsing non-admin that disclosure for free.
+below); a non-admin with the knob off sees only their own rows.
 
-The `micromegas-grants` CLI wraps the two write routes, the same
-HTTP-only-via-`analytics-web-srv` convention every CLI in this codebase
-follows (never direct Postgres access); listing goes through
+The `micromegas-grants` CLI wraps the two write routes; listing goes through
 `micromegas-query` instead:
 
 ```bash
@@ -738,87 +706,74 @@ micromegas-query --all "SELECT * FROM list_audience_grants()" --profile analytic
 micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
 ```
 
-### `list_audience_grants()` (#1510, AbAC Stage 6b)
+### `list_audience_grants()`
 
-A caller-scoped SQL table function over the `audience_grants` table, registered for **every**
-authenticated caller (never admin-gated) — like `list_query_denials()`, it is a SQL auditing
-surface, not a REST route. No arguments; filter with `WHERE`. Columns: `audience`, `axis`,
-`selector`, `created_at`, `created_by`.
+A caller-scoped SQL table function over the `audience_grants` table,
+registered for **every** authenticated caller (never admin-gated) — like
+`list_query_denials()`, it is a SQL auditing surface, not a REST route. No
+arguments; filter with `WHERE`. Columns: `audience`, `axis`, `selector`,
+`created_at`, `created_by`.
 
-**Visibility**: an admin sees every row. A non-admin sees every grant on each `(audience, axis)`
-pair they hold a matching grant on — deliberately wider than "rows whose selector matches me":
-if you may read `team-alpha`, you may see who else may, which is exactly the "who can see this
-audience" question the function (and the Audience Access page) exists to answer, and it is the
-same set a non-admin may modify via the write routes above. Only a non-admin caller with an empty
-selector set (e.g. `CallerContext::internal()`) sees zero rows; a maintenance caller and a
-`--disable-auth` request are both treated as admin and see every row instead.
+**Visibility**: an admin sees every row. A non-admin sees every grant on
+each `(audience, axis)` pair they hold a matching grant on — deliberately
+wider than "rows whose selector matches me": if you may read `team-alpha`,
+you may see who else may. Only a non-admin caller with an empty selector set
+sees zero rows; a maintenance caller and a `--disable-auth` request are both
+treated as admin.
 
-**Unlike `GET .../visible`, this function always applies the held-pair rule for a non-admin,
-knob or no knob** — it runs in `flight-sql-srv`/`micromegas-analytics`, which has no visibility
-into `analytics-web-srv`'s `MICROMEGAS_SELF_SERVICE_MINT` config, so it structurally cannot apply
-the same knob-off narrowing `/visible` does. This is a deliberate, accepted asymmetry between the
-two read paths, not a bug. See [Admin Functions Reference](functions-reference.md#list_audience_grants)
-for the full schema and query shape.
+**Unlike `GET .../visible`, this function always applies the held-pair rule
+for a non-admin, knob or no knob** — it runs in
+`flight-sql-srv`/`micromegas-analytics`, which has no visibility into
+`analytics-web-srv`'s `MICROMEGAS_SELF_SERVICE_MINT` config. See [Admin
+Functions Reference](functions-reference.md#list_audience_grants) for the
+full schema and query shape.
 
 ```bash
 micromegas-query --all "SELECT * FROM list_audience_grants() WHERE audience = 'team-alpha'"
 ```
 
-**Cache-TTL knob**, following the same `{prefix}_` fallback shape as every
-other knob on this page:
+**Cache-TTL knob:**
 
 | Variable | Default | Description |
 |---|---|---|
 | `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` | `60` | How long a process serves its in-memory snapshot before re-querying `audience_grants`. Accepts a role prefix on the monolith (`MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), falling back to the unprefixed name. |
 
-**Revocation takes effect within the cache TTL (default 60s), not
-instantly.** This is a stated property, not an oversight: a `DELETE` above
-removes the row from `audience_grants` immediately, but every flight-sql
-process keeps serving its cached snapshot — and so keeps granting the removed
-read access — until its next refresh, up to one full TTL window later.
+Revocation takes effect within the cache TTL (default 60s), not instantly: a
+`DELETE` above removes the row immediately, but every flight-sql process
+keeps serving its cached snapshot — and so keeps granting the removed access
+— until its next refresh.
 
 **Outage behavior is deliberately different from the DB-backed key store's.**
 Once a process has loaded the table successfully at least once, a later
-refresh failure keeps serving that last good snapshot — unbounded, for as
-long as the outage lasts, not just for one more TTL window the way the
-per-key cache's TTL eviction bounds a key-lookup outage. The trade favors a
-single, deployment-wide grant view degrading to *staleness* over degrading to
-*everyone loses every grant simultaneously* on a transient DB blip. A fresh
-process whose very first query hits a down DB has no "last good" to serve, so
-that case still fails closed like everything else on this seam — `resolve()`
-denies exactly as documented, at a rate capped by the same cache-TTL knob
-rather than once per request. A sustained outage surfaces on an operator's
-dashboard (`audience_grant_refresh_error_count`), not on the request path.
+refresh failure keeps serving that last good snapshot, unbounded, for as
+long as the outage lasts. A fresh process whose very first query hits a down
+DB has no "last good" to serve, so that case fails closed — `resolve()`
+denies, at a rate capped by the same cache-TTL knob. A sustained outage
+surfaces on `audience_grant_refresh_error_count`, not on the request path.
 
 **A malformed row still can't reach a policy decision.** The table's own
 `CHECK` constraints are re-validated independently in Rust on every load, so
-a row that somehow bypassed them (a manual `psql` fix, a future migration)
-fails the *whole* snapshot load loudly instead of silently producing an
-unparseable or unreadable grant.
+a row that somehow bypassed them fails the *whole* snapshot load loudly.
 
-**Deploy-order requirement.** `audience_grants` is created by migration v7,
-which only `telemetry-ingestion-srv` and the monolith run (via
-`connect_to_remote_data_lake`/`migrate_db`). A standalone `flight-sql-srv`
-builds its lakehouse context with `LakehouseContext::from_env()`, which runs
-only `migrate_lakehouse` and never touches `migrate_db` — so it never creates
-the table itself. Roll the v7 migration (by upgrading ingestion or the
-monolith) before or in the same deploy as upgrading `flight-sql-srv` to a
-build that wires `DbAudienceGrantsSource`. Upgrading `flight-sql-srv` first
-against a still-v6 database is not a startup failure: the process comes up
-fine and then fails every `resolve()` call with "relation audience_grants
-does not exist" (throttled to one DB attempt per cache-TTL window), failing
-every authenticated query with `unavailable` -- `public`-only queries
-included -- until the migration lands (see the matching CHANGELOG entry for
-this change).
+**Deploy-order requirement.** `audience_grants` is created by a migration
+that only `telemetry-ingestion-srv` and the monolith run. A standalone
+`flight-sql-srv` never creates the table itself. Roll that migration (by
+upgrading ingestion or the monolith) before or in the same deploy as
+upgrading `flight-sql-srv` to a build that wires `DbAudienceGrantsSource`.
+Upgrading `flight-sql-srv` first against a still-old database is not a
+startup failure: the process comes up fine and then fails every `resolve()`
+call with "relation audience_grants does not exist" (throttled to one DB
+attempt per cache-TTL window), failing every authenticated query with
+`unavailable` — `public`-only queries included — until the migration lands.
 
-**The same skew window applies to migration v9's seeded `public` rows.** `public` has no
-built-in read grant any more (see [Audiences and Grants](#audiences-and-grants) above) — it reads
-only through the seeded `('public', 'read', '*')` row. A standalone `flight-sql-srv` (or
-`analytics-web-srv`) that upgrades to code built against v9 *before* `telemetry-ingestion-srv` or
-the monolith has applied the v9 migration sees a database with no seeded row and no built-in arm:
-every query returns nothing (fail-closed, not an error) until the migration lands. Roll v9 (by
-upgrading ingestion or the monolith) before or in the same deploy as upgrading
-`flight-sql-srv`/`analytics-web-srv` — see the matching CHANGELOG entry for this change.
+**The same skew window applies to the seeded `public` rows.** `public` has
+no built-in read grant — it reads only through the seeded `('public',
+'read', '*')` row. A standalone `flight-sql-srv` (or `analytics-web-srv`)
+that upgrades to newer code *before* `telemetry-ingestion-srv` or the
+monolith has applied that migration sees a database with no seeded row:
+every query returns nothing (fail-closed, not an error) until the migration
+lands. Roll it (by upgrading ingestion or the monolith) before or in the
+same deploy as upgrading `flight-sql-srv`/`analytics-web-srv`.
 
 ## Client Configuration
 
@@ -933,7 +888,7 @@ micromegas-logout
 
 *Required for some providers (e.g., Google) even with PKCE
 
-### Python Client with API Keys (Legacy)
+### Python Client with API Keys
 
 ```python
 from micromegas.flightsql.client import FlightSQLClient
@@ -951,11 +906,9 @@ df = client.query("SELECT * FROM processes LIMIT 10")
 
 ## Ingestion Service Authentication
 
-The telemetry ingestion service (telemetry-ingestion-srv) uses the same authentication infrastructure as the analytics service.
+The telemetry ingestion service (`telemetry-ingestion-srv`) uses the same authentication infrastructure as the analytics service.
 
 ### Server Configuration
-
-The ingestion server uses the same environment variables as the analytics server:
 
 ```bash
 # Start ingestion server with authentication
@@ -1327,60 +1280,14 @@ This prevents authorization code interception attacks even if the client secret 
 3. Ensure audience (client_id) matches for each provider
 4. Review server logs for OIDC discovery failures per issuer
 
-## Migration from Env API Keys to DB-Backed Keys and OIDC
+## Migrating Machine Credentials off the Env Keyring
 
-OIDC is the destination for human/service-account identities. It is **not** the
-destination for machine credentials — service keys and Firehose access keys
-migrate to DB-backed `ingestion_api_keys` instead, not OIDC. See
-[API Keys](api-keys.md) for the full picture (schema, HTTP routes, the
-`micromegas-import-keys`-driven
-[legacy-key import procedure](api-keys.md#migrating-from-the-env-keyring), and
-the `object-cache-srv` exception, which never migrates).
-
-1. **Deploy the new binaries.** The migration creates `ingestion_api_keys` /
-   `analytics_api_keys` (schema v5). Nothing changes yet: the env keyring still
-   authenticates every existing key, and the DB tables are empty.
-2. **Populate the tables** from the existing env keyring using the
-   `micromegas-import-keys` CLI tool (see
-   [Migrating from the env keyring](api-keys.md#migrating-from-the-env-keyring)
-   for the exact commands), or mint fresh keys via `POST /api/ingestion-api-keys`
-   on `analytics-web-srv` for callers you can update. A key valid on both
-   ingestion and flight-sql today must become two distinct keys — "never both"
-   is enforced at the code level once the tables are in use.
-3. **Set up an OIDC provider** (Google, Azure AD, etc.) for human/service-account
-   identities, if you haven't already.
-4. **Update clients**: machine credentials point at their new DB-backed key;
-   human/service-account clients switch to OIDC.
-5. **Remove `MICROMEGAS_API_KEYS`** (and prefixed variants) only after the tables
-   are populated — a non-empty key store counts as "auth configured" on its own,
-   so unsetting the env var is safe once step 2 is done, but unsetting it
-   *before* the tables are populated leaves machine clients unauthenticated.
-   `object-cache-srv` keeps its `MICROMEGAS_API_KEYS` permanently; do not remove
-   it there.
-
-**Example Migration:**
-
-```bash
-# Step 1/2: Add OIDC configuration and populate ingestion_api_keys (env keys
-# still work during this window)
-export MICROMEGAS_API_KEYS='[{"name": "service1", "key": "old-key"}]'
-export MICROMEGAS_OIDC_CONFIG='{
-  "issuers": [{
-    "issuer": "https://accounts.google.com",
-    "audience": "new-client-id.apps.googleusercontent.com"
-  }]
-}'
-# See api-keys.md#migrating-from-the-env-keyring for the exact commands
-micromegas-import-keys --table ingestion --source env --var MICROMEGAS_API_KEYS \
-  --url https://analytics.example.com
-
-# Step 3/4: Update clients to use OIDC (human/service-account) or their new
-# DB-backed key (machine credentials). Test both authentication methods work.
-
-# Step 5: Remove the env keyring once the tables are confirmed populated
-unset MICROMEGAS_API_KEYS
-# DB-backed keys and OIDC remain
-```
+OIDC is the destination for human/service-account identities, not machine
+credentials — service keys migrate to DB-backed `ingestion_api_keys`/
+`analytics_api_keys` instead. See [API Keys → Migrating from the env
+keyring](api-keys.md#migrating-from-the-env-keyring) for the exact
+procedure and commands; `object-cache-srv` is the one service that keeps
+`MICROMEGAS_API_KEYS` permanently (see [Object Cache](object-cache.md)).
 
 ## Best Practices
 

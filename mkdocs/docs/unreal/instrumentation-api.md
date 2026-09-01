@@ -742,7 +742,6 @@ Runtime control commands and CVars available in the Unreal console:
 5. **Limit context cardinality** — context keys/values are interned and never freed
 6. **Queue caps** — the HTTP sink has a soft cap (Traces dropped first) and hard cap (Logs/Metrics dropped too); adjust `telemetry.max_queue_bytes` if you see `DroppedUploads` metrics during outages
 
-
 ### Error Handling
 
 Always check for null pointers when using the context API:
