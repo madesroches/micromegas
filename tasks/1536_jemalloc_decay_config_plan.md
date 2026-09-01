@@ -214,6 +214,12 @@ not apply to `cargo install` or to any downstream consumer, and it forces a full
 on change. It also sits at precedence 0, the weakest source. The exported symbol is committed code
 that travels with the binary.
 
+**Exported symbol vs. `tikv-jemallocator`'s `background_threads` cargo feature.** This feature
+turns into `--with-malloc-conf=background_thread:true` at the `tikv-jemalloc-sys` build-script
+level, needing no Rust code. Rejected: it only sets `background_thread`, leaving
+`dirty_decay_ms`/`muzzy_decay_ms` unconfigured, so the exported symbol would still be needed for
+decay — and it forces a jemalloc C rebuild on change, same as the env-var option above.
+
 **Exported symbol vs. runtime `mallctl`.** `background_thread` alone is writable at runtime
 (`tikv_jemalloc_ctl::background_thread::write(true)`), but decay is not: `arenas.dirty_decay_ms`
 only affects arenas created *after* the write, so already-live arenas would need a per-arena walk
