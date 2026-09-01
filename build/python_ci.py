@@ -27,6 +27,7 @@ HERMETIC_TEST_ARGS = [
     "tests/test_screen_files.py",
     "tests/auth/test_oidc_unit.py",
     "tests/auth/test_client_credentials_unit.py",
+    "tests/auth/test_static_token.py",
 ]
 
 

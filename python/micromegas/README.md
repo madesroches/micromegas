@@ -4,6 +4,10 @@ Python analytics client for https://github.com/madesroches/micromegas/
 
 📖 **[Complete Python API Documentation](https://micromegas.info/docs/query-guide/python-api/)** - Comprehensive guide with all methods, examples, and advanced patterns
 
+For a remote or authenticated deployment, use `micromegas.connect_with_profile("prod")` instead
+of `micromegas.connect()` — it reads a named profile from `~/.micromegas/config.json` and picks
+the auth mechanism it names (a static API key, OIDC, or none).
+
 ## Example usage
 
 Query the 2 most recent log entries from the flightsql service

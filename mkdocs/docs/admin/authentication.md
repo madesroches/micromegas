@@ -890,19 +890,30 @@ micromegas-logout
 
 ### Python Client with API Keys
 
+Mint a static analytics API key (see [Minting an analytics key over
+HTTP](api-keys.md#minting-an-analytics-key-over-http)), store it in a file readable only by you
+(`chmod 0600`), and load it with `StaticTokenAuthProvider`:
+
 ```python
 from micromegas.flightsql.client import FlightSQLClient
+from micromegas.auth import StaticTokenAuthProvider
 
+auth = StaticTokenAuthProvider.from_file("~/.micromegas/local.key")
 client = FlightSQLClient(
     "grpc://localhost:50051",
-    headers={"authorization": "Bearer your-api-key"}
+    auth_provider=auth
 )
 
 df = client.query("SELECT * FROM processes LIMIT 10")
 ```
 
+The key travels verbatim as the bearer token, with no refresh and no OIDC flow. A named profile
+(`~/.micromegas/config.json`) can also source one via the `api_key_file` key — see [Static
+Analytics API Keys](../query-guide/python-api.md#static-analytics-api-keys).
+
 !!! warning "Deprecated API"
-    The `headers` parameter is deprecated. Use `auth_provider` with `OidcAuthProvider` instead.
+    The `headers` parameter is deprecated. Use `auth_provider` with `StaticTokenAuthProvider` (a
+    static API key) or `OidcAuthProvider` (OIDC) instead.
 
 ## Ingestion Service Authentication
 

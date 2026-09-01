@@ -214,7 +214,9 @@ class FlightSQLClient:
                 Defaults to False for backward compatibility.
             auth_provider (optional): Authentication provider that implements get_token() method.
                 When provided, tokens are automatically refreshed before each request.
-                Example: OidcAuthProvider. This is the recommended way to handle authentication.
+                Example: OidcAuthProvider (browser/PKCE with refresh) or
+                StaticTokenAuthProvider (a pre-minted analytics API key, sent verbatim).
+                This is the recommended way to handle authentication.
             client_entrypoint (str, optional): Explicit label for how this client was
                 invoked (e.g. "cli-query"), sent as the `x-client-entrypoint` header on
                 every query. When omitted, the entrypoint is auto-detected (`script`,

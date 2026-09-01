@@ -24,12 +24,27 @@ client = micromegas.connect()
 client = micromegas.connect(preserve_dictionary=True)
 ```
 
-The `connect()` function connects to the analytics service at `grpc://localhost:50051`.
+The `connect()` function connects to the analytics service at a plain URI. It never reads
+`~/.micromegas/config.json` and never authenticates the connection it returns.
 
 The installed package version is available as `micromegas.__version__`.
 
 **Parameters:**
 - `preserve_dictionary` (bool, optional): Enable dictionary encoding preservation for memory-efficient data transfer. Default: `False`
+
+#### Connecting via a named profile
+
+For a remote or authenticated deployment, use `connect_with_profile()` instead. It reads
+`~/.micromegas/config.json` (see [Config file
+(~/.micromegas/config.json)](#config-file-micromegasconfigjson) below)
+and picks the auth mechanism the resolved profile names -- a static API key, OIDC, or none:
+
+```python
+import micromegas
+
+# Uses the "prod" profile from ~/.micromegas/config.json
+client = micromegas.connect_with_profile("prod")
+```
 
 ### Simple Queries
 
@@ -294,6 +309,15 @@ client = FlightSQLClient(
     auth_provider=auth
 )
 
+# Connect with a static analytics API key
+from micromegas.auth import StaticTokenAuthProvider
+
+auth = StaticTokenAuthProvider.from_file("~/.micromegas/local.key")
+client = FlightSQLClient(
+    "grpc+tls://remote-server:50051",
+    auth_provider=auth
+)
+
 # Connect with dictionary preservation for memory efficiency
 client = FlightSQLClient(
     "grpc://localhost:50051",
@@ -308,7 +332,7 @@ client = FlightSQLClient("grpc://localhost:50051")
 - `uri` (str): FlightSQL server URI. Use `grpc://` for unencrypted or `grpc+tls://` for TLS connections
 - `headers` (dict, optional): **Deprecated.** Use `auth_provider` instead. Static headers for authentication. This parameter is deprecated because it doesn't support automatic token refresh
 - `preserve_dictionary` (bool, optional): When True, preserve dictionary encoding in Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs. Defaults to False
-- `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider`. This is the recommended way to handle authentication
+- `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider` (browser/PKCE with refresh) or `StaticTokenAuthProvider` (a pre-minted analytics API key, sent verbatim). This is the recommended way to handle authentication
 - `client_entrypoint` (str, optional): Explicit label for how this client was invoked (e.g. `"cli-query"`, the label `micromegas-query` passes). When omitted, the entrypoint is auto-detected. Raises `ValueError` if the value isn't a safe gRPC header value (printable ASCII, 64 chars or fewer). See Client Attribution below.
 
 See the [Authentication Guide](../admin/authentication.md) for setting up OIDC authentication.
@@ -340,10 +364,30 @@ and, like the existing `x-client-type` header, trivially spoofable or omittable 
 characters or fewer; an invalid override is silently ignored in favor of the auto-detected value
 (unlike the `client_entrypoint` constructor parameter, which raises `ValueError` instead).
 
-The top-level `micromegas.connect()` helper does not expose a `client_entrypoint` parameter —
-auto-detection always runs for it. For an explicit label, construct `FlightSQLClient` directly, or
-use `oidc_connection.connect()`/the CLI's `connection.connect()`, both of which take
+Of the two top-level connect functions, plain `micromegas.connect()` does not expose a
+`client_entrypoint` parameter — auto-detection always runs for it. `micromegas.connect_with_profile()`
+does take it, forwarded on every auth branch. For an explicit label, use
+`connect_with_profile()`, construct `FlightSQLClient` directly, or use
+`oidc_connection.connect()`/the now-aliased `cli.connection.connect()`, all of which take
 `client_entrypoint`.
+
+### Static Analytics API Keys
+
+A static analytics API key is minted server-side — via `POST /api/analytics-api-keys` or the
+Admin page — and travels verbatim as the bearer token on every request; there is no exchange or
+wrapping. Store it in a file readable only by you (`chmod 0600`) and load it with
+`StaticTokenAuthProvider.from_file(...)`:
+
+```python
+from micromegas.auth import StaticTokenAuthProvider
+from micromegas.flightsql.client import FlightSQLClient
+
+auth = StaticTokenAuthProvider.from_file("~/.micromegas/local.key")
+client = FlightSQLClient("grpc+tls://remote-server:50051", auth_provider=auth)
+```
+
+See [Minting an analytics key over HTTP](../admin/api-keys.md#minting-an-analytics-key-over-http)
+for how to mint a key.
 
 ## Schema Discovery
 
@@ -763,7 +807,7 @@ Each setting is resolved independently once a profile (if any) is selected, so y
 | `MICROMEGAS_CLIENT_AGENT` | Override for the auto-detected `x-client-agent` value (see Client Attribution above) | auto-detected |
 | `MICROMEGAS_CLIENT_ENTRYPOINT` | Override for the auto-detected `x-client-entrypoint` value (see Client Attribution above); the CLI always passes `"cli-query"` regardless of this var | auto-detected |
 
-**Config file (`~/.micromegas/config.json`):**
+#### Config file (~/.micromegas/config.json)
 
 A small JSON file you can drop in your home directory to avoid setting env vars. Every key is optional, and any env var with the same role overrides it.
 
@@ -786,8 +830,17 @@ A small JSON file you can drop in your home directory to avoid setting env vars.
 | `client_id` | `MICROMEGAS_OIDC_CLIENT_ID` | OAuth client ID |
 | `issuers[0].issuer` | `MICROMEGAS_OIDC_ISSUER` | First issuer entry is used |
 | `issuers[0].audience` | `MICROMEGAS_OIDC_AUDIENCE` | First issuer entry is used |
+| `api_key_file` | — (no env var; see Named profiles below) | Path to a static analytics API key file |
 
-OIDC authentication is activated when both an issuer and a client ID are resolved (from any source). Otherwise the CLI connects without auth.
+There are three auth mechanisms, checked in this order: a static API key, when `api_key_file`
+resolves; OIDC, when both an issuer and a client ID are resolved (from any source); otherwise the
+CLI connects without auth. A profile (or flat config) that resolves both `api_key_file` and a
+complete OIDC pair is a configuration error — see Named profiles below.
+
+Only `micromegas-query` and `connect_with_profile()` honor `api_key_file`. Every other CLI
+(`micromegas-grants`, `-import-keys`, `-setup-telemetry`) calls `resolve_connection()` directly and
+only branches on the OIDC fields, so a profile that resolves `api_key_file` and nothing else
+silently yields an unauthenticated connection on those tools — they remain OIDC-only.
 
 **Named profiles:**
 
@@ -808,14 +861,30 @@ optional `profiles` map, selected by `--profile` or `MICROMEGAS_PROFILE`:
       "client_id": "...",
       "issuers": [{ "issuer": "https://issuer.example.com/v2.0", "audience": "..." }]
     },
+    "ci": {
+      "uri": "grpc+tls://analytics.example.com:50051",
+      "api_key_file": "~/.micromegas/ci.key"
+    },
     "local": { "uri": "grpc://localhost:50051" }
   }
 }
 ```
 
 Each entry under `profiles` has exactly the shape of the flat config above (`uri`, `client_id`,
-`issuers`). The flat shape shown earlier is still fully supported — omit `profiles` entirely and
-the whole file is used as a single connection, exactly as before.
+`issuers`, `api_key_file`). The flat shape shown earlier is still fully supported — omit
+`profiles` entirely and the whole file is used as a single connection, exactly as before.
+
+A profile (or the flat config) must use exactly one auth mechanism. Naming `api_key_file`
+alongside a complete OIDC pair (an `issuers`/`client_id` pair, from the profile or from
+`MICROMEGAS_OIDC_ISSUER`/`MICROMEGAS_OIDC_CLIENT_ID`) is a configuration error, not a precedence
+rule — `connect_with_profile()` and the CLI both raise before attempting either auth mechanism,
+naming the real source of each side, e.g.:
+
+```
+profile 'prod' resolves two auth mechanisms: a static API key (profile key 'api_key_file')
+and OIDC (issuer from MICROMEGAS_OIDC_ISSUER, client_id from profile key 'client_id').
+A profile must use exactly one -- remove 'api_key_file', or unset the OIDC settings.
+```
 
 **Selection precedence**, once a `profiles` map is present: `--profile` (flag) > `MICROMEGAS_PROFILE`
 (env var) > `default_profile` (config key). There is no implicit selection, even with a single
@@ -825,8 +894,9 @@ resolves to a profile, or the resolved name isn't one of the keys under `profile
 with a usage error listing the available profile names rather than guessing.
 
 !!! warning "Don't mix flat keys with a `profiles` map"
-    Once a `profiles` map is present, it takes over completely: any top-level `uri`/`client_id`/
-    `issuers` left in the same file are ignored in favor of the selected profile's values. If
+    Once a `profiles` map is present, it takes over completely: any top-level
+    `uri`/`client_id`/`issuers`/`api_key_file` left in the same file are ignored in favor of the
+    selected profile's values. If
     you're migrating from a flat config to `profiles`, move those values into a profile entry
     rather than leaving them at the top level — they'd otherwise become dead config with no error
     or warning. Similarly, `default_profile` has no effect at all unless a `profiles` map is also
@@ -862,6 +932,10 @@ micromegas-logout --profile prod
 
 `micromegas-logout` doesn't read `config.json` and doesn't look at `MICROMEGAS_PROFILE` — `--profile`
 is its only narrowing mechanism.
+
+A static-key profile (`api_key_file`) caches no token, so `micromegas-logout` is a no-op for it —
+there's no `tokens-<profile>.json` to clear. Revoking such a key is a server-side operation:
+`DELETE /api/analytics-api-keys/{key_id}`.
 
 Pass `--version` to print the installed package and interpreter version and exit.
 
@@ -984,8 +1058,9 @@ things:
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a
 required flag only when that env var is unset. `--env-file PATH` writes the exports to a `0o600`
 file instead of stdout (parent directory created `0o700` if needed) — useful for sourcing from a
-shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, same
-as every other CLI here.
+shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, but
+(like `-grants`/`-import-keys`) only its OIDC fields are honored — an `api_key_file`-only profile
+yields no auth here.
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`.
 
