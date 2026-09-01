@@ -182,6 +182,7 @@ SELECT retire_partition_by_metadata(
 **Returns**: String message indicating success or failure:
 - Success: `"SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>"`
 - Failure: `"ERROR: Partition not found: <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>"`
+- Failure: `"ERROR: Ambiguous match: <n> rows for <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>, file_paths=[...]"` (see **Safety** below)
 
 **Safety**:
 - Surgical precision - only targets the exact specified partition by its natural identifiers, including `file_schema_hash`
@@ -203,13 +204,13 @@ SELECT retire_partition_by_metadata(
 
 -- Batch retire incompatible partitions
 SELECT
-    view_set_name,
-    view_instance_id,
+    p.view_set_name,
+    p.view_instance_id,
     retire_partition_by_metadata(
-        view_set_name,
-        view_instance_id,
-        begin_insert_time,
-        end_insert_time,
+        p.view_set_name,
+        p.view_instance_id,
+        p.begin_insert_time,
+        p.end_insert_time,
         p.file_schema_hash
     ) as result
 FROM list_partitions() p
@@ -516,8 +517,8 @@ same as any other row on a pair they hold.
 | `view_instance_id` | str | Instance ID |
 | `begin_insert_time` | timestamp | Begin insert time of the partition |
 | `end_insert_time` | timestamp | End insert time of the partition |
-| `incompatible_schema_hash` | str | Old schema version in partition |
-| `current_schema_hash` | str | Current schema version |
+| `incompatible_schema_hash` | Binary | Old schema version in partition |
+| `current_schema_hash` | Binary | Current schema version |
 | `file_path` | str | File path for the partition (NULL for empty partitions) |
 | `file_size` | int | Size in bytes of the partition file (0 for empty partitions) |
 

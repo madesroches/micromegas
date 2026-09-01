@@ -60,7 +60,6 @@ fn base_time() -> Result<DateTime<Utc>> {
 /// Inserts a synthetic partition row directly, bypassing the write path so a collision that would
 /// otherwise require two concurrent writers racing the exclusion constraint can be set up
 /// deterministically. `file_path` is `None` for an empty partition.
-#[allow(clippy::too_many_arguments)]
 async fn insert_partition_row(
     pool: &sqlx::PgPool,
     view_instance_id: &str,
