@@ -157,8 +157,9 @@ else:                     -> FlightSQLClient(cfg.uri, client_entrypoint=..., pre
 ```
 
 Static key first, so a profile that names one never triggers a browser flow. The
-`OSError`/`ValueError` from `from_file` is wrapped into `ProfileError` naming the profile and the
-path, per §3's widened `ProfileError` scope.
+`OSError`/`ValueError` from `from_file` is wrapped into `ProfileError` naming the `api_key_file`
+key, the path, and the underlying error, per §3's widened `ProfileError` scope. `resolve_connection`
+returns only a `ConnectionConfig` (no profile name), so the message cannot name the profile itself.
 
 Two details to preserve:
 
