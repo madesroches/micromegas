@@ -102,8 +102,7 @@ impl WebServerConfig {
 }
 
 /// Parses a boolean env knob the same `v == "true" || v == "1"` way `secure_cookies` above
-/// already does -- one more instance of this codebase's existing boolean-knob convention, not a
-/// new one (AbAC Stage 6, #1374, Design §3).
+/// already does -- one more instance of this codebase's existing boolean-knob convention.
 fn resolve_bool_env(var: &str, default: bool) -> bool {
     std::env::var(var)
         .map(|v| v == "true" || v == "1")
@@ -112,7 +111,7 @@ fn resolve_bool_env(var: &str, default: bool) -> bool {
 
 /// Parses an unsigned integer env knob, warn-and-default on an unparseable value -- the same
 /// shape `micromegas_auth::db_api_key::resolve_u64` and `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` above
-/// already use elsewhere in this codebase (AbAC Stage 6, #1374, Design §3). Parsing unsigned
+/// already use elsewhere in this codebase. Parsing unsigned
 /// settles both sub-questions for free: a negative value is simply a parse failure (warned and
 /// defaulted), and `0` is a valid, meaningful parse -- "none permitted."
 fn resolve_u64_env(var: &str, default: u64) -> u64 {
@@ -449,9 +448,9 @@ pub fn build_protected_routes(
                 issuer: "local".to_string(),
                 is_admin: true,
             }))
-            // Defensive parity only (AbAC Stage 6, #1374, Design §2): the key-management routers
+            // Defensive parity only: the key-management routers
             // are never merged in this branch at all (`key_management_disabled_router` above), so
-            // `AuthenticatedUser`/`MintGate` never actually run under `--disable-auth` today. This
+            // `AuthenticatedUser`/`MintGate` never actually run under `--disable-auth`. This
             // layer exists so `AuthenticatedUser` is never the one extractor in this crate that
             // silently 500s (an unhandled `Extension<AuthContext>` miss) if a future refactor ever
             // merges the real routers here. Mirrors the hardcoded admin `ValidatedUser` above
@@ -711,10 +710,9 @@ pub async fn run_web_server(
         pool: analytics_keys_pool.clone(),
     };
 
-    // Off by default (AbAC Stage 6, #1374, Design §3): an existing deployment that upgrades to
-    // this stage keeps today's admin-only mint behavior, unchanged, until an operator explicitly
-    // opts in. Resolved once at startup, empty-prefix convention (this service's own knobs never
-    // take a role prefix, unlike the monolith's per-role vars).
+    // Off by default: mint stays admin-only until an operator explicitly opts in. Resolved once
+    // at startup, empty-prefix convention (this service's own knobs never take a role prefix,
+    // unlike the monolith's per-role vars).
     let self_service_mint_enabled = resolve_bool_env("MICROMEGAS_SELF_SERVICE_MINT", false);
     let max_claims_per_caller =
         resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25);
@@ -733,8 +731,7 @@ pub async fn run_web_server(
     // opening a second one.
     //
     // Resolved once at startup, per `default_audience_from_env`'s doc comment, so a typo
-    // in `MICROMEGAS_DEFAULT_AUDIENCE` fails fast rather than surfacing as a per-request
-    // 400 (AbAC Stage 4, #1372).
+    // in `MICROMEGAS_DEFAULT_AUDIENCE` fails fast rather than surfacing as a per-request 400.
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
         pool: analytics_keys_pool.clone(),
         default_audience: micromegas::auth::policy::default_audience_from_env("")?,
@@ -743,10 +740,10 @@ pub async fn run_web_server(
         max_keys_per_caller,
     };
 
-    // Same telemetry-DB pool as the two key-management states above (#1489, AbAC Stage 6a) --
+    // Same telemetry-DB pool as the two key-management states above --
     // `audience_grants` lives in the same database behind the same
-    // `MICROMEGAS_SQL_CONNECTION_STRING`. Carries its own copy of the knob above (AbAC Stage 6,
-    // #1374, Design §5) so `GET .../audience-grants/my-audiences` can gate itself the same way
+    // `MICROMEGAS_SQL_CONNECTION_STRING`. Carries its own copy of the knob above
+    // so `GET .../audience-grants/my-audiences` can gate itself the same way
     // `MintGate` gates `mint_key` -- the two states are layered independently, so this route has
     // no other access to `IngestionKeysState`'s copy.
     let audience_grants_state = audience_grants::AudienceGrantsState {

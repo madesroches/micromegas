@@ -86,8 +86,7 @@ async fn fetch_block_metadata(
     // `AudienceGuard::authorize` succeeds), not the caller's own scope: the query below is
     // server-constructed and confined to the single, already-authorized `block_id` -- if that
     // block's process is readable, everything this statement can reach is readable too. A
-    // deliberate deviation from naive scope inheritance; see
-    // `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
+    // deliberate deviation from naive scope inheritance.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,

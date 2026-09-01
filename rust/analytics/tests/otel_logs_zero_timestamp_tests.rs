@@ -1,8 +1,8 @@
-//! Regression test for the read-side half of #1465: after ingestion stopped backfilling
-//! `observed_time_unix_nano` (see `rust/otel-ingestion/src/block.rs`), an OTel log record
-//! with neither `time_unix_nano` nor `observed_time_unix_nano` set must still materialize a
-//! row — at the block's `begin_time` — instead of being dropped. See the `time_nanos`
-//! fallback in `OtelLogsBlockProcessor::process` (`logs_block_processor.rs`).
+//! Regression test: ingestion does not backfill `observed_time_unix_nano` (see
+//! `rust/otel-ingestion/src/block.rs`), so an OTel log record with neither `time_unix_nano` nor
+//! `observed_time_unix_nano` set must still materialize a row — at the block's `begin_time` —
+//! instead of being dropped. See the `time_nanos` fallback in `OtelLogsBlockProcessor::process`
+//! (`logs_block_processor.rs`).
 
 use datafusion::arrow::array::TimestampNanosecondArray;
 use micromegas_analytics::lakehouse::block_partition_spec::BlockProcessor;

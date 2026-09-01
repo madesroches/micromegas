@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI tool that mints a personal ingestion API key and prints the OTLP
 exporter env vars needed to point a user's own telemetry at a micromegas
-deployment (AbAC Stage 6, #1374).
+deployment.
 
 Named `micromegas-setup-telemetry`, not `micromegas-mint-key` or similar --
 from the user's point of view this script sets up telemetry transmission
@@ -121,11 +121,11 @@ def resolve_audience(args, parser, my_audiences):
     - Both omitted, admin: an error asking for one explicitly -- `audiences` is
       not a reliable "nothing mintable yet" signal for an admin.
 
-    Returns the resolved audience name. The admin branch no longer decides or
-    reports whether the name is brand-new (#1510): the mint route itself now runs
-    that same ownership check server-side and claims a brand-new audience for an
-    admin caller in the same request (`MintResponse`'s new `claimed` field says
-    so), so this helper no longer needs to page through
+    Returns the resolved audience name. The admin branch does not decide or
+    report whether the name is brand-new: the mint route runs that ownership
+    check server-side and claims a brand-new audience for an admin caller in
+    the same request (`MintResponse`'s `claimed` field says so), so this
+    helper never needs to page through
     `list_ingestion_api_keys`/`list_audience_grants` to decide it client-side.
     """
     if args.audience is not None and args.claim is not None:
@@ -312,8 +312,8 @@ def run(args, parser):
         f"audience={result.get('audience')}, name={result.get('name')})",
         file=sys.stderr,
     )
-    # The server now claims a brand-new audience for the caller (admin or non-admin
-    # alike) as part of the mint request itself (#1510, §4) -- `claimed` says so, rather
+    # The server claims a brand-new audience for the caller (admin or non-admin
+    # alike) as part of the mint request itself -- `claimed` says so, rather
     # than this script inferring it or writing the grant rows itself.
     if result.get("claimed"):
         print(f"claimed audience {result.get('audience')}", file=sys.stderr)

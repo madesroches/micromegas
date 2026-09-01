@@ -1,5 +1,5 @@
 //! Unit tests for `cast_to_file_schema`, the type alignment between a Postgres-inferred batch and
-//! the declared file schema (#1482 §1). `sql_arrow_bridge` maps a `TEXT` column to plain `Utf8`
+//! the declared file schema. `sql_arrow_bridge` maps a `TEXT` column to plain `Utf8`
 //! because its mapping is keyed on the Postgres type name alone, so `blocks.audience` -- declared
 //! `Dictionary(Int32, Utf8)` -- only reaches the parquet writer as its declared type through this
 //! function.

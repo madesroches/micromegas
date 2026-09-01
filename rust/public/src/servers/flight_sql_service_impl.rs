@@ -84,8 +84,8 @@ macro_rules! api_entry_not_implemented {
     }};
 }
 
-/// Design §6: for gRPC-metadata parses that are unambiguously caller-supplied
-/// input (range-header/limit-header values the caller set directly) with no
+/// For gRPC-metadata parses that are unambiguously caller-supplied input
+/// (range-header/limit-header values the caller set directly) with no
 /// `DataFusionError` involved -- `Status::invalid_argument` directly, no
 /// file:line/path suffix (nothing here ever went through `status!`'s own
 /// `file!()/line!()`).
@@ -97,9 +97,9 @@ macro_rules! client_input_error {
 
 /// Classifies the root cause of a `DataFusionError` into the gRPC status code
 /// that best distinguishes "the caller's SQL/input was bad" from "the server
-/// broke" -- see the FlightSQL error-classification plan (issue #1435) for the
-/// full rationale, including why `Execution`/`Configuration` land under
-/// `InvalidArgument` and why `ArrowError` stays `Internal`.
+/// broke": `Execution`/`Configuration` land under `InvalidArgument` since they
+/// signal bad input, while `ArrowError` stays `Internal` since it reflects a
+/// real server-side decode failure.
 pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
     use datafusion::error::DataFusionError as DFE;
     match err.find_root() {
@@ -116,12 +116,11 @@ pub fn classify_datafusion_error(err: &DataFusionError) -> tonic::Code {
 
 /// Maps a gRPC status code to the `QueryAuditRecord.error_class` bucket used
 /// both by the audit log and to gate the `query_failed`/
-/// `query_duration_with_error` metrics (see Design §4). This is the *derived* mapping used for
-/// every `DataFusionError`-rooted failure; the query-deny-list check (§5,
-/// `tasks/query_deny_list_plan.md`) stamps a fourth value, `"denied"`, directly via
-/// `QueryAuditState::fail_with_class` rather than through this function, since a denial's
-/// `ResourceExhausted` code would otherwise land in the `"resource"` bucket alongside a genuine
-/// resource-budget failure.
+/// `query_duration_with_error` metrics. This is the *derived* mapping used for
+/// every `DataFusionError`-rooted failure; the query-deny-list check stamps a fourth value,
+/// `"denied"`, directly via `QueryAuditState::fail_with_class` rather than through this
+/// function, since a denial's `ResourceExhausted` code would otherwise land in the
+/// `"resource"` bucket alongside a genuine resource-budget failure.
 pub fn error_class(code: tonic::Code) -> &'static str {
     match code {
         tonic::Code::InvalidArgument | tonic::Code::Unimplemented => "user",
@@ -130,8 +129,8 @@ pub fn error_class(code: tonic::Code) -> &'static str {
     }
 }
 
-/// Cap on the physical-plan text appended to the server-side log line (Design
-/// §2). The plan can render arbitrarily long `file_groups=` sections for wide
+/// Cap on the physical-plan text appended to the server-side log line. The
+/// plan can render arbitrarily long `file_groups=` sections for wide
 /// scans, and this text is server-log-only, never returned to the client.
 pub const MAX_PLAN_CHARS: usize = 2000;
 
@@ -151,8 +150,8 @@ fn truncate_plan_text(text: &str) -> String {
 /// `desc`, the error's own `Display` (its outer `Context` chain intact, with
 /// backtrace if enabled -- unlike `find_root()`, which is for classification
 /// only), the `query_id`, and -- when there's no diagnostic span to show the
-/// caller instead (Design §2) -- the truncated physical plan text. `pub` so
-/// step 9's tests can assert its content, including the truncation marker,
+/// caller instead -- the truncated physical plan text. `pub` so
+/// tests can assert its content, including the truncation marker,
 /// without capturing log output.
 pub fn build_log_line(
     desc: &str,
@@ -174,7 +173,7 @@ pub fn build_log_line(
     full
 }
 
-/// Builds the `warn!` line for a query-deny-list denial (Design §5/§6): the rule id, its
+/// Builds the `warn!` line for a query-deny-list denial: the rule id, its
 /// reason, the query's normalized fingerprint, the caller's identity/client attribution, and
 /// the `query_id`. `pub` so a test can assert its content directly, the same way
 /// `build_log_line`'s content is asserted, rather than by capturing log output.
@@ -216,7 +215,7 @@ fn error_or_warn_log(
 
 /// Classifies `err`, builds the client-facing `Status` -- `desc` + root-error
 /// text (backtrace stripped) + an optional diagnostic span/notes/helps +
-/// `query_id` -- and logs the full error server-side (Design §2). The physical
+/// `query_id` -- and logs the full error server-side. The physical
 /// plan, when present and there's no diagnostic span to show instead, only
 /// ever reaches the server log, never the returned `Status`: `displayable`
 /// can render object-store partition paths from Micromegas view scans, which
@@ -314,7 +313,7 @@ struct QueryAuditState {
     service_account: bool,
     service_account_name: Option<String>,
     sql: String,
-    /// Normalized SQL fingerprint (`tasks/query_deny_list_plan.md` §2), computed once per query
+    /// Normalized SQL fingerprint, computed once per query
     /// regardless of whether the deny list is in active use.
     sql_hash: String,
     range_begin: Option<String>,
@@ -399,7 +398,7 @@ impl QueryAuditState {
 
     /// Emits an "error" audit record for an already-built client-facing `status`, with an
     /// explicit `error_class` rather than one derived from the gRPC code -- used by the
-    /// query-deny-list check (Design §5), whose `error_class` is `"denied"`, a value
+    /// query-deny-list check, whose `error_class` is `"denied"`, a value
     /// `error_class(status.code())` (`ResourceExhausted` -> `"resource"`) would get wrong.
     /// Returns `status` unchanged.
     fn fail_with_class(&self, status: Status, class: &'static str) -> Status {
@@ -464,7 +463,7 @@ where
                 // Every `Status` reaching this stream was already logged once by
                 // `classify_flight_error` (the sole `map_err` feeding it) when it
                 // built that `Status` -- this arm only reads the code to derive
-                // the audit/metric class, it never logs again (Design §4).
+                // the audit/metric class, it never logs again.
                 if let Err(ref err) = result
                     && !self.completed
                 {
@@ -559,7 +558,7 @@ impl FlightSqlServiceImpl {
     }
 
     /// Resolves the [`CallerContext`] a request should plan under -- the seam's fail-closed
-    /// resolver (#1369, AbAC Stage 1 §2/§8).
+    /// resolver.
     ///
     /// **Absent-extension convention.** When no `AuthContext` extension is present at all (no
     /// auth provider configured, e.g. `--disable-auth`), the resolved scope is
@@ -571,10 +570,10 @@ impl FlightSqlServiceImpl {
     ///
     /// **Failure convention.** A [`ReadPolicy::resolve`] that returns `Err` is a hard failure and
     /// must never become a scope -- not `ReadScope::Audiences(Arc::from([]))` (which would read
-    /// as a legitimate, audited fail-closed decision to Stage 2/3) and not `ReadScope::All` (a
-    /// silent fail-open bypass). Mirrors `tower.rs`'s own discriminator: `Status::unavailable`
-    /// when the error downcasts to [`ProviderUnavailable`] (a store/provider outage),
-    /// `Status::permission_denied` otherwise.
+    /// as a legitimate, audited fail-closed decision by the isolation-config layer) and not
+    /// `ReadScope::All` (a silent fail-open bypass). Mirrors `tower.rs`'s own discriminator:
+    /// `Status::unavailable` when the error downcasts to [`ProviderUnavailable`] (a
+    /// store/provider outage), `Status::permission_denied` otherwise.
     ///
     /// `is_admin` is read from `md` unchanged (`is_admin(md)`), equivalent to reading
     /// `AuthContext.is_admin` off `ext` when the extension is present, since the header is
@@ -586,7 +585,7 @@ impl FlightSqlServiceImpl {
         ext: &http::Extensions,
         md: &MetadataMap,
     ) -> Result<CallerContext, Status> {
-        // `deny_queries` requires `Some` (query_deny_list_plan.md §7/§8) -- resolved from the
+        // `deny_queries` requires `Some` -- resolved from the
         // same attribution `execute_query` already validates, so a query already carries this by
         // the time it could call `deny_queries`. This is simply "the caller's resolved user id"
         // (`user_attribution::validate_and_resolve_user_attribution_grpc`).
@@ -594,7 +593,7 @@ impl FlightSqlServiceImpl {
             .ok()
             .map(|attr| attr.user_id);
         // Read once, up front, so both `read_scope`'s resolution below and `grant_selectors`
-        // (#1489, AbAC Stage 6b) can consult the same `AuthContext` -- the `Some(auth_ctx)` arm's
+        // can consult the same `AuthContext` -- the `Some(auth_ctx)` arm's
         // binding otherwise goes out of scope before the `CallerContext` literal is built.
         let auth_ctx = ext.get::<AuthContext>();
         let read_scope = match auth_ctx {
@@ -623,7 +622,7 @@ impl FlightSqlServiceImpl {
             identity,
             // Empty when there's no `AuthContext` extension at all (no auth provider configured,
             // e.g. `--disable-auth`) -- the same absent-extension convention `read_scope` follows
-            // above (#1489, AbAC Stage 6b).
+            // above.
             grant_selectors: auth_ctx.map(caller_selectors).unwrap_or_default().into(),
         })
     }
@@ -655,7 +654,7 @@ impl FlightSqlServiceImpl {
     ) -> Result<Response<FlightDataStream>, Status> {
         // Minted first, before any fallible step, so it's Always available --
         // for every client-facing `Status` built by `client_error`/
-        // `classify_flight_error` and for this query's audit record (Design §3).
+        // `classify_flight_error` and for this query's audit record.
         let query_id = Uuid::new_v4().to_string();
         let begin_request = now();
         let request_start = Instant::now();
@@ -750,7 +749,7 @@ impl FlightSqlServiceImpl {
         // only after the physical plan exists.
         // Computed once per query, regardless of whether the deny list is in active use --
         // it's what an operator pastes into `deny_queries` after finding an offender in the
-        // audit log (Design §2/§7).
+        // audit log.
         let sql_hash = fingerprint_of(sql);
 
         let mut audit_state = QueryAuditState {
@@ -781,7 +780,7 @@ impl FlightSqlServiceImpl {
             pool: scoped_pool.clone(),
         };
 
-        // Design §5: the deny-list check, in front of everything expensive -- before the scoped
+        // The deny-list check, in front of everything expensive -- before the scoped
         // runtime/session context/planning below. `check` returns `None` immediately on an
         // empty snapshot, so this costs nothing while the deny list stands empty.
         if let Some(rule) = self.lakehouse.query_denials().check(&QueryAttribution {
@@ -897,7 +896,7 @@ impl FlightSqlServiceImpl {
         // `query_id`'s sibling on the struct) into `CompletionTrackedStream::new`
         // further down. The per-batch closure below outlives this function call
         // (it's polled from the returned stream), so it needs its own owned
-        // clones rather than borrowing `plan`/`query_id` directly (Design §2).
+        // clones rather than borrowing `plan`/`query_id` directly.
         let plan_for_errors = plan.clone();
         let query_id_for_stream = query_id.clone();
         let stream = execute_stream(plan, task_ctx)
@@ -1346,8 +1345,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
-        // Closes hole #1 (#1369): prepared statements now resolve the same CallerContext as the
-        // do_get execute path, instead of reading only is_admin and no identity at all.
+        // Prepared statements resolve the same CallerContext as the do_get execute path.
         let caller = self
             .caller_context(request.extensions(), request.metadata())
             .await?;

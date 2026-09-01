@@ -1,5 +1,4 @@
-//! Tests for `analytics_keys.rs` — the analytics-key management routes
-//! (#1411).
+//! Tests for `analytics_keys.rs` — the analytics-key management routes.
 //!
 //! Modeled on `maps_tests.rs`'s `build_handler_router_with_user` +
 //! `.oneshot(...)` pattern: routes are wired the same way

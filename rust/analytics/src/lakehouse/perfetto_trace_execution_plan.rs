@@ -301,8 +301,7 @@ async fn generate_streaming_perfetto_trace(
     // caller's own scope: every SQL statement below is server-constructed and confined to the
     // process id the guard already authorized (`get_process_exe`, `get_process_thread_list`, the
     // `view_instance` calls further down) -- if that process is readable, everything these
-    // statements can reach is readable too. A deliberate deviation from naive scope inheritance;
-    // see `tasks/1371_udtf_udf_guards_plan.md` §6 for the full argument.
+    // statements can reach is readable too. A deliberate deviation from naive scope inheritance.
     let ctx = super::query::make_session_context(
         lakehouse,
         part_provider,
@@ -602,10 +601,8 @@ pub struct PerfettoTraceTableProvider {
 
 impl PerfettoTraceTableProvider {
     /// `pub(crate)`, not `pub`: only ever called from `perfetto_trace_table_function.rs`, same
-    /// crate. Narrowed alongside `PerfettoTraceExecutionPlan::new` (#1371) so an external test
-    /// crate can't build an un-authorized plan directly, matching `process_spans`' existing
-    /// module-private shape -- see `tasks/1371_udtf_udf_guards_plan.md`'s Testing Strategy for
-    /// why this closes a real gap for this function specifically.
+    /// crate. So an external test crate can't build an un-authorized plan directly, matching
+    /// `process_spans`' existing module-private shape.
     pub(crate) fn new(execution_plan: Arc<PerfettoTraceExecutionPlan>) -> Self {
         Self { execution_plan }
     }

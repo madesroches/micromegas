@@ -1,4 +1,4 @@
-//! Regression tests for the dictionary key overflow bug (issue #1341).
+//! Regression tests for dictionary key overflow.
 //!
 //! `StringDictionaryBuilder<Int16Type>` panics once a single `RecordBatch` accumulates
 //! more than 32,767 distinct values in one dictionary column (Arrow's
@@ -8,8 +8,8 @@
 //!
 //! Each test below drives one of the affected builders past the old 32,767-value Int16
 //! ceiling and asserts `finish()` succeeds instead of panicking — the exact scenario that
-//! used to crash the background query task (see `thread_block_processor::parse_thread_block`
-//! in production).
+//! would otherwise crash the background query task (see
+//! `thread_block_processor::parse_thread_block` in production).
 
 use micromegas_analytics::async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder};
 use micromegas_analytics::images_table::ImagesRecordBuilder;
@@ -353,7 +353,7 @@ async fn otel_metrics_block_processor_survives_target_dictionary_overflow() {
 }
 
 /// Same as `otel_metrics_block_processor_survives_target_dictionary_overflow`, but drives
-/// the fan-out `append_summary`/`append_row` path (issue #1359) past the old Int16 cap:
+/// the fan-out `append_summary`/`append_row` path past the old Int16 cap:
 /// one distinct scope (→ `target`) per Summary data point, each fanning out to 4 rows
 /// (count/sum/min/max) under 4 distinct `name`s.
 #[tokio::test]

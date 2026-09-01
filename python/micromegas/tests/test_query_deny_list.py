@@ -215,7 +215,7 @@ def test_last_hit_at_is_populated_after_a_refresh_tick(marker):
 def test_admin_recovery_escape_hatch_survives_a_rule_matching_everything():
     # The python test client always sends client='python' -- a rule keyed on it matches every
     # query this test issues, including the recovery statements below, except that the
-    # `admin_principal_possible` escape hatch (query_deny_list_plan.md §5) exempts any statement
+    # `admin_principal_possible` escape hatch exempts any statement
     # naming `remove_query_denial`/`deny_queries`/`list_query_denials` for an admin caller.
     rule_id = _deny("client = 'python'", "test: escape hatch")
     try:

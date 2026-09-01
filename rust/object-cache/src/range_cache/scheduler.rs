@@ -117,8 +117,8 @@ impl InFlight {
         // it when the channel currently has zero receivers, and joiners
         // subscribe lazily inside `join()`. A fetch task that completes
         // before any joiner's `subscribe()` would lose the result and hang
-        // every later joiner forever (issue #1259). `send_replace` stores
-        // the value unconditionally.
+        // every later joiner forever. `send_replace` stores the value
+        // unconditionally.
         self.result.send_replace(Some(result));
     }
 
@@ -147,8 +147,7 @@ pub(super) enum Ownership {
 }
 
 /// Owns the in-flight single-flight map and the priority-aware origin-fetch
-/// budget. Replaces the two moka caches that used to live directly on
-/// `RangeCache`.
+/// budget.
 pub(super) struct FetchScheduler {
     inflight: StdMutex<HashMap<String, Arc<InFlight>>>,
     /// Bounds total concurrent origin GETs (blocks + size heads don't count

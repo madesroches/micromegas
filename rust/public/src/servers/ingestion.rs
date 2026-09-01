@@ -24,8 +24,7 @@ pub enum IngestionError {
     #[error("Internal server error: {0}")]
     Internal(String),
 
-    /// A conflicting `insert_process` re-registration under a different audience (AbAC Stage 5,
-    /// #1373, §6). Maps to 403.
+    /// A conflicting `insert_process` re-registration under a different audience. Maps to 403.
     #[error("Forbidden: {0}")]
     Forbidden(String),
 }
@@ -62,8 +61,8 @@ impl From<IngestionServiceError> for IngestionError {
 
 /// Handles requests to insert process information.
 ///
-/// Returns 403 for a conflicting re-registration under a different audience (§6), 400 for
-/// malformed CBOR, 500 for database errors.
+/// Returns 403 for a conflicting re-registration under a different audience, 400 for malformed
+/// CBOR, 500 for database errors.
 pub async fn insert_process_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     ctx: Option<Extension<AuthContext>>,
@@ -134,12 +133,11 @@ pub fn register_routes(router: Router) -> Router {
 /// the supplied `auth_provider` (or runs open when `None`), and shuts down
 /// gracefully when `shutdown` resolves.
 ///
-/// Ingestion exposes no key-management HTTP surface of its own (#1458) — keys
-/// for both `ingestion_api_keys` and `analytics_api_keys` are administered
-/// exclusively through `analytics-web-srv`'s own routes. Ingestion still
-/// *validates* incoming API keys via whichever `auth_provider` it was built
-/// with (including a `DbApiKeyAuthProvider`, unaffected by this), it just no
-/// longer exposes a way to mint/list/revoke/import them.
+/// Ingestion exposes no key-management HTTP surface of its own — keys for both
+/// `ingestion_api_keys` and `analytics_api_keys` are administered exclusively through
+/// `analytics-web-srv`'s own routes. Ingestion still *validates* incoming API keys via
+/// whichever `auth_provider` it was built with (including a `DbApiKeyAuthProvider`), it just
+/// does not expose a way to mint/list/revoke/import them.
 pub async fn serve_ingestion(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,
@@ -156,7 +154,7 @@ pub async fn serve_ingestion(
     use super::axum_utils::observability_middleware;
     use super::shutdown::serve_axum_with_graceful_shutdown;
 
-    // The deployment's default audience (#1519), resolved once at startup so a typo fails
+    // The deployment's default audience, resolved once at startup so a typo fails
     // startup rather than surfacing per-request -- matching `LakehouseContext::new`'s handling
     // of the same variable. Unprefixed (`""`): the ingestion edge must read exactly the
     // unprefixed `MICROMEGAS_DEFAULT_AUDIENCE` name the lakehouse roles read, never a

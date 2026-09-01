@@ -1,5 +1,5 @@
 // Tests for DataLakeConnection::warm_object — the fire-and-forget cache warming
-// primitive (prefetch priority, #1201); the write-partition path is its first caller.
+// primitive (prefetch priority); the write-partition path is its first caller.
 use async_trait::async_trait;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_object_cache::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchResponse};

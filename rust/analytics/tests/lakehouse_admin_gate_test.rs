@@ -126,10 +126,9 @@ async fn admin_session_can_plan_all_mutating_functions() {
     }
 }
 
-/// #1371: the registration gate -- `caller.is_admin || !caller.admin_principal_possible` --
-/// lets a non-admin plan the mutating functions whenever the deployment can never produce an
-/// admin principal at all, the API-key-only deployment's way back after #1382 gated them on
-/// `is_admin` alone.
+/// The registration gate -- `caller.is_admin || !caller.admin_principal_possible` -- lets a
+/// non-admin plan the mutating functions whenever the deployment can never produce an admin
+/// principal at all (e.g. an API-key-only deployment), rather than locking everyone out.
 #[tokio::test]
 async fn non_admin_session_without_admin_principal_can_plan_all_mutating_functions() {
     let ctx = make_gated_session_context(false, false).await;

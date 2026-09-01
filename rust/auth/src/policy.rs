@@ -1,18 +1,16 @@
-//! Authorization seam (#1369, AbAC Stage 1; grant map rewrite #1372, Stage 4): `MintPolicy`,
-//! `ReadPolicy`, and the audience-based implementations that resolve them from a caller's
-//! `AuthContext` and a JSON grant map keyed by audience name.
+//! Authorization seam: `MintPolicy`, `ReadPolicy`, and the audience-based implementations that
+//! resolve them from a caller's `AuthContext` and a JSON grant map keyed by audience name.
 //!
 //! **No enforcement lands with this module itself.** This module fixes the *shape* of
 //! authorization -- every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
 //! express "grant everything" at all -- while the resolved `ReadableAudiences`/`ReadScope` is
-//! consumed downstream by `OwnershipRewrite` (#1370, AbAC Stage 2; Prong A) and, still pending
-//! (#1371, Stage 3), Prong B's UDTF/UDF guards. See `rust/analytics/src/lakehouse/read_scope.rs`
-//! and `tasks/1372_audience_on_keys_plan.md`.
+//! consumed downstream by `OwnershipRewrite` (the row-level filter) and the call-level guard's UDTF/UDF guards. See
+//! `rust/analytics/src/lakehouse/read_scope.rs`.
 //!
 //! **An audience is an opaque label, not a principal encoding.** `is_valid_audience` and
 //! `PUBLIC_AUDIENCE` define what a name is; `AudienceGrants` defines who may read or mint into
-//! it. No code here derives an audience from a caller's identity -- see `AudienceGrants` and
-//! `tasks/1372_audience_on_keys_plan.md` §1-§2 for the reasoning.
+//! it. No code here derives an audience from a caller's identity -- see `AudienceGrants` for the
+//! reasoning.
 
 use crate::db_audience_grants::DbAudienceGrantsSource;
 use crate::env::resolve_prefixed_var;
@@ -69,11 +67,9 @@ pub fn is_valid_audience(aud: &str) -> bool {
 /// code readers today (not deployment roles -- a role can build more than one of these):
 /// this function (key mint/import), `micromegas_analytics::audience::default_audience_from_env`
 /// (read once by `LakehouseContext::new` and handed to the three Postgres read sites), and the
-/// ingestion HTTP edge's own call in `serve_ingestion` (#1519), which resolves the default a
-/// credential with no bound audience is stamped with at write time. This is what
-/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes --
-/// the key-minting half used to be a separate `MICROMEGAS_DEFAULT_KEY_AUDIENCE`, a distinction
-/// that only ever made an operator configure the same value twice.
+/// ingestion HTTP edge's own call in `serve_ingestion`, which resolves the default a credential
+/// with no bound audience is stamped with at write time. This is what
+/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes.
 pub fn default_audience_from_env(prefix: &str) -> Result<String> {
     let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {
@@ -104,9 +100,8 @@ pub fn default_audience_from_env(prefix: &str) -> Result<String> {
 /// value in `AuthContext.groups`). Validated at parse time; `resolve`/`resolve_audience` never
 /// see an unrecognized shape.
 ///
-/// `pub` (#1489, AbAC Stage 6a) -- `analytics-web-srv`'s admin grant-write route (a separate
-/// crate) needs to run this exact same selector-shape check `parse`/`from_rows` run, not a
-/// re-implementation of it.
+/// `pub` -- `analytics-web-srv`'s admin grant-write route (a separate crate) needs to run this
+/// exact same selector-shape check `parse`/`from_rows` run, not a re-implementation of it.
 pub fn valid_selector(selector: &str) -> bool {
     selector == "*"
         || selector
@@ -119,11 +114,10 @@ pub fn valid_selector(selector: &str) -> bool {
 
 /// The grant selectors `caller` matches: a leading `"*"` (every caller matches it), then
 /// `"user:<email>"` when `caller.email` is `Some`, then one `"group:<g>"` per entry in
-/// `caller.groups`. `pub` (#1489, AbAC Stage 6a/6b) -- shared by three consumers:
-/// `flight_sql_service_impl.rs`'s `CallerContext::grant_selectors`, `analytics-web-srv`'s
-/// `my_audiences` handler (which used to build this list by hand), and the audience-grant
-/// write policy's per-pair hold check (which must strip the leading `"*"` before binding the
-/// result -- a `*` grant is not something a caller individually holds).
+/// `caller.groups`. `pub` -- shared by three consumers: `flight_sql_service_impl.rs`'s
+/// `CallerContext::grant_selectors`, `analytics-web-srv`'s `my_audiences` handler, and the
+/// audience-grant write policy's per-pair hold check (which must strip the leading `"*"` before
+/// binding the result -- a `*` grant is not something a caller individually holds).
 pub fn caller_selectors(caller: &AuthContext) -> Vec<String> {
     let mut selectors = vec!["*".to_string()];
     if let Some(email) = &caller.email {
@@ -155,7 +149,7 @@ struct GrantEntry {
     mint: Vec<String>,
 }
 
-/// The Rust side of `audience_grants.axis` (#1489, AbAC Stage 6a) -- which selector list a DB row
+/// The Rust side of `audience_grants.axis` -- which selector list a DB row
 /// contributes to, mirroring the JSON grant map's `"read"`/`"mint"` keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantAxis {
@@ -312,10 +306,10 @@ impl AudienceGrants {
     }
 
     /// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
-    /// analogue of [`Self::parse`] (#1489, AbAC Stage 6a). Runs the *same* [`is_valid_audience`]/
-    /// [`valid_selector`] checks `parse` runs, so a row that slipped past `audience_grants`'s own
-    /// `CHECK` constraints (e.g. via a direct `psql` session) still can't reach a policy decision:
-    /// this is the one place both the JSON path and the DB path fail closed on a malformed row.
+    /// analogue of [`Self::parse`]. Runs the *same* [`is_valid_audience`]/[`valid_selector`]
+    /// checks `parse` runs, so a row that slipped past `audience_grants`'s own `CHECK`
+    /// constraints (e.g. via a direct `psql` session) still can't reach a policy decision: this
+    /// is the one place both the JSON path and the DB path fail closed on a malformed row.
     pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Result<Self> {
         let mut entries: BTreeMap<String, GrantEntry> = BTreeMap::new();
         for (audience, axis, selector) in rows {
@@ -340,10 +334,10 @@ impl AudienceGrants {
         Ok(Self { entries })
     }
 
-    /// Unions each audience's `read`/`mint` selector lists across `self` and `other` (#1489, AbAC
-    /// Stage 6a): a selector present in either map grants exactly the same access as being
-    /// present in both. No dedup -- `selector_matches` is called with `.any()`, so a selector
-    /// present in both sources costs one redundant comparison, never a wrong answer.
+    /// Unions each audience's `read`/`mint` selector lists across `self` and `other`: a selector
+    /// present in either map grants exactly the same access as being present in both. No dedup
+    /// -- `selector_matches` is called with `.any()`, so a selector present in both sources costs
+    /// one redundant comparison, never a wrong answer.
     ///
     /// A public utility for combining two `AudienceGrants` maps, exercised by this crate's own
     /// integration tests (`rust/auth/tests/policy_tests.rs`); `resolve`/`resolve_audience` do
@@ -386,7 +380,7 @@ impl ReadableAudiences {
     }
 
     /// Unwraps the audience set. This is the one cross-crate conversion point: the
-    /// `rust/public` bridge (see `tasks/1369_policy_seam_plan.md` §1) calls this to build
+    /// `rust/public` bridge calls this to build
     /// `micromegas_analytics::lakehouse::read_scope::ReadScope::Audiences`.
     pub fn into_inner(self) -> Arc<[String]> {
         self.0
@@ -400,13 +394,12 @@ impl ReadableAudiences {
 /// themselves `All`?" a greppable question with a small, auditable answer set. A policy that
 /// wants to be maximally permissive still has to enumerate the audiences that make it so.
 ///
-/// `async` and fallible because the AbAC plan's recorded *Long-term model* resolves grants from a
-/// store -- nested groups, plus group→audience grants -- which cannot live behind a sync,
-/// infallible signature. This is no longer just future-proofing: `AudienceReadPolicy` is fallible
-/// today whenever a [`DbAudienceGrantsSource`] is attached via `with_store` -- a cold-start store
-/// outage with no prior successful load returns `Err`, which `caller_context`
-/// (`flight_sql_service_impl.rs`) maps to `Status::unavailable`. Without a store attached it still
-/// cannot fail.
+/// `async` and fallible because grants can be resolved from a store -- nested groups, plus
+/// group→audience grants -- which cannot live behind a sync, infallible signature.
+/// `AudienceReadPolicy` is fallible today whenever a [`DbAudienceGrantsSource`] is attached via
+/// `with_store` -- a cold-start store outage with no prior successful load returns `Err`, which
+/// `caller_context` (`flight_sql_service_impl.rs`) maps to `Status::unavailable`. Without a store
+/// attached it still cannot fail.
 ///
 /// **Every caller must deny on `Err`.** An `Err` here means "the policy could not be evaluated" --
 /// never soften it into `ReadableAudiences::new(Arc::from([]))` (that would read as a legitimate,
@@ -423,10 +416,9 @@ pub trait ReadPolicy: Send + Sync + Debug {
 /// `requested` is the caller-supplied audience (e.g. `"team-alpha"`); `None` means "no audience
 /// requested and none can be defaulted" -- under the opaque-label model there is no "myself"
 /// audience for a caller's identity to default to, so every implementation must return `Err` for
-/// `requested: None`, admin or not. Async and fallible for the same forward-looking reason as
-/// `ReadPolicy` -- wired by `mint_key` (`analytics-web-srv/src/ingestion_keys.rs`, AbAC Stage 6,
-/// #1374), its first production caller, gated by `MintGate`/`AuthenticatedUser` rather than
-/// `AdminUser`.
+/// `requested: None`, admin or not. Async and fallible for the same reason as `ReadPolicy` --
+/// wired by `mint_key` (`analytics-web-srv/src/ingestion_keys.rs`), gated by
+/// `MintGate`/`AuthenticatedUser` rather than `AdminUser`.
 #[async_trait]
 pub trait MintPolicy: Send + Sync + Debug {
     /// Resolves the audience to stamp on a newly minted key, or `Err` if `requested` is outside
@@ -447,13 +439,13 @@ pub trait MintPolicy: Send + Sync + Debug {
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
 ///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.groups }
 ///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
-///   ∪ caller.read_audiences                                    // Stage 4b per-key direct grant
+///   ∪ caller.read_audiences                                    // per-key direct grant
 /// ```
 ///
 /// There is **no self-audience rule** -- a caller is granted no audience merely for being named
-/// like one. See `tasks/1372_audience_on_keys_plan.md` §2 for why: the charset makes an email
-/// unrepresentable as an audience name, and keying on `subject` instead would let an admin mint
-/// themselves read access by naming a key after an audience.
+/// like one: the charset makes an email unrepresentable as an audience name, and keying on
+/// `subject` instead would let an admin mint themselves read access by naming a key after an
+/// audience.
 ///
 /// `read_audiences` is folded in here but deliberately **excluded** from
 /// `AudienceMintPolicy`'s mintable set -- a service-account key's ability to *see* an audience
@@ -462,10 +454,9 @@ pub trait MintPolicy: Send + Sync + Debug {
 #[derive(Debug, Clone, Default)]
 pub struct AudienceReadPolicy {
     grants: AudienceGrants,
-    /// The DB-backed grant store (#1489, AbAC Stage 6a), when this process has one configured --
-    /// checked alongside `grants` on every `resolve` call, as a separate source rather than
-    /// merged into it (see `resolve`). `None` for every disabled-auth/test caller that has no DB
-    /// pool to back one.
+    /// The DB-backed grant store, when this process has one configured -- checked alongside
+    /// `grants` on every `resolve` call, as a separate source rather than merged into it (see
+    /// `resolve`). `None` for every disabled-auth/test caller that has no DB pool to back one.
     store: Option<Arc<DbAudienceGrantsSource>>,
 }
 
@@ -482,8 +473,8 @@ impl AudienceReadPolicy {
     /// `MICROMEGAS_AUDIENCE_GRANTS`) via [`AudienceGrants::from_env`]. Unset ⇒ an empty grant map
     /// ⇒ the readable set degenerates to `read_audiences` alone (`public` included only if a DB
     /// store attached via `with_store` resolves the seeded row), which `OwnershipRewrite`
-    /// (#1370, AbAC Stage 2) enforces. A malformed grant map is `Err`, not a silently-emptied
-    /// one, so a startup `?` turns a typo into a fail-fast instead of a silently-inactive knob.
+    /// enforces. A malformed grant map is `Err`, not a silently-emptied one, so a startup `?`
+    /// turns a typo into a fail-fast instead of a silently-inactive knob.
     pub fn from_env(prefix: &str) -> Result<Self> {
         let grants = AudienceGrants::from_env(prefix)?;
         Ok(Self {
@@ -492,9 +483,9 @@ impl AudienceReadPolicy {
         })
     }
 
-    /// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). A
-    /// builder method, not a constructor argument, so `new`/`from_env` keep working unchanged for
-    /// every caller with no DB pool to back one (disabled-auth, tests).
+    /// Attaches (or clears, with `None`) the DB-backed grant store. A builder method, not a
+    /// constructor argument, so `new`/`from_env` keep working unchanged for every caller with no
+    /// DB pool to back one (disabled-auth, tests).
     pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
         self.store = store;
         self
@@ -513,7 +504,7 @@ impl ReadPolicy for AudienceReadPolicy {
         let mut set = BTreeSet::new();
         // The env map and the store snapshot are checked as two separate sources -- a selector
         // present in either grants access -- rather than merged into one map, so neither side is
-        // deep-cloned on every request (#1489, AbAC Stage 6a).
+        // deep-cloned on every request.
         for (audience, read) in self.grants.readers() {
             if read.iter().any(|s| selector_matches(s, caller)) {
                 set.insert(audience.clone());
@@ -546,15 +537,15 @@ impl ReadPolicy for AudienceReadPolicy {
 /// gate, `MintGate`, only enforces the self-service knob against non-admins); without this arm the
 /// only shipped `MintPolicy` could not express the admin mint flow that route depends on; the arm
 /// grants no power the route's gate does not already grant. This is deliberately **asymmetric** to
-/// the read path, where `is_admin` is never a bypass (AbAC plan §5): mint is an integrity decision
-/// (who may stamp a credential), reads are a confidentiality decision (who may see data), and the
-/// two axes are allowed to disagree.
+/// the read path, where `is_admin` is never a bypass: mint is an integrity decision (who may
+/// stamp a credential), reads are a confidentiality decision (who may see data), and the two axes
+/// are allowed to disagree.
 #[derive(Debug, Clone, Default)]
 pub struct AudienceMintPolicy {
     grants: AudienceGrants,
-    /// The DB-backed grant store (#1489, AbAC Stage 6a). Built for symmetry with
-    /// [`AudienceReadPolicy::with_store`] and unit-tested, but this stage wires nothing to it: no
-    /// production code constructs a `dyn MintPolicy` today -- see [`with_store`](Self::with_store).
+    /// The DB-backed grant store. Built for symmetry with [`AudienceReadPolicy::with_store`] and
+    /// unit-tested, but nothing wires it in production yet: no production code constructs a `dyn
+    /// MintPolicy` today -- see [`with_store`](Self::with_store).
     store: Option<Arc<DbAudienceGrantsSource>>,
 }
 
@@ -567,12 +558,11 @@ impl AudienceMintPolicy {
         }
     }
 
-    /// Attaches (or clears, with `None`) the DB-backed grant store (#1489, AbAC Stage 6a). Built
-    /// alongside [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, no
-    /// production call site attaches a store through this method: `mint_key` (AbAC Stage 6,
-    /// #1374) constructs its `AudienceMintPolicy` via `new`, so mint grants stay resolved by a
-    /// fresh, uncached point query against `audience_grants`, never a `DbAudienceGrantsSource`
-    /// snapshot, in this stage.
+    /// Attaches (or clears, with `None`) the DB-backed grant store. Built alongside
+    /// [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, no production
+    /// call site attaches a store through this method: `mint_key` constructs its
+    /// `AudienceMintPolicy` via `new`, so mint grants stay resolved by a fresh, uncached point
+    /// query against `audience_grants`, never a `DbAudienceGrantsSource` snapshot.
     pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
         self.store = store;
         self
@@ -600,7 +590,7 @@ impl MintPolicy for AudienceMintPolicy {
         }
         // The env map and the store snapshot are checked as two separate sources -- a selector
         // present in either grants access -- rather than merged into one map, so neither side is
-        // deep-cloned on every request (#1489, AbAC Stage 6a).
+        // deep-cloned on every request.
         let store_grants = match &self.store {
             Some(store) => Some(store.current().await?),
             None => None,

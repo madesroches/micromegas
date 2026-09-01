@@ -60,7 +60,7 @@ class TestUpdateScreenFolderPath:
 
 
 class TestImportIngestionApiKeyAudience:
-    """`audience` (#1372, AbAC Stage 4) follows the same omitted/set convention
+    """`audience` follows the same omitted/set convention
     as `folder_path` above -- but no empty-string case: unlike `folder_path`,
     an empty-string audience is never a meaningful value to transmit (the
     server's `resolve_audience` treats it as absent either way), so this
@@ -80,8 +80,8 @@ class TestImportIngestionApiKeyAudience:
 
 
 class TestAudienceGrants:
-    """#1489, AbAC Stage 6a (list removed by #1510): `create_audience_grant`/
-    `delete_audience_grant` payload/params construction."""
+    """`create_audience_grant`/`delete_audience_grant` payload/params
+    construction (there is no `list` route)."""
 
     def test_create_audience_grant_payload(self):
         client = _make_client()
@@ -107,7 +107,7 @@ class TestAudienceGrants:
 
 
 class TestMintIngestionApiKey:
-    """`mint_ingestion_api_key` (AbAC Stage 6, #1374): payload construction and the
+    """`mint_ingestion_api_key`: payload construction and the
     409 `CLAIM_CONTENDED` retry-once logic."""
 
     def test_omits_audience_when_none(self):
@@ -252,7 +252,7 @@ class TestListIngestionApiKeys:
 
 
 class TestMyAudiences:
-    """`my_audiences` (AbAC Stage 6, #1374): `GET .../audience-grants/my-audiences`."""
+    """`my_audiences`: `GET .../audience-grants/my-audiences`."""
 
     def test_calls_the_my_audiences_route(self):
         client = _make_client()

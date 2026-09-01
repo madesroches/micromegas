@@ -25,11 +25,11 @@ pub struct MaterializedView {
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
-    /// #1486: the `view_instance(...)` scan-time audience check, run before `jit_update`.
+    /// The `view_instance(...)` scan-time audience check, run before `jit_update`.
     /// `Some` only when this provider was built by `ViewInstanceTableFunction` -- a
     /// caller-named instance. `None` for every server-constructed `MaterializedView`: the
     /// implicitly-registered global tables (`query.rs::register_table`) and `OwnershipRewrite`'s
-    /// own `processes`/`streams` sources, which are Prong A's job to filter row-by-row and must
+    /// own `processes`/`streams` sources, which are the row-level filter's job to filter row-by-row and must
     /// never be denied wholesale.
     instance_guard: Option<Arc<AudienceGuard>>,
 }

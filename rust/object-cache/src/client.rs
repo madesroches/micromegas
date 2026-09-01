@@ -23,28 +23,25 @@ use crate::prefetch::{ObjectPrefetch, PrefetchItem, PrefetchResponse};
 /// direct store instead of stalling on a hung connection. Spans DNS
 /// resolution as well as the TCP/TLS handshake (reqwest wraps the whole
 /// connector service). Calibrated for the only deployment this client
-/// documents -- a private, intra-VPC `object-cache` -- see "Calibrating
-/// `abandon_timeout`" in the design doc for the reasoning; raise it via
+/// documents -- a private, intra-VPC `object-cache`; raise it via
 /// `MICROMEGAS_OBJECT_CACHE_CLIENT_CONNECT_TIMEOUT_MS` for TLS/cross-zone/
 /// clustered-DNS deployments.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(50);
 /// The direct-path race budget: every phase where the cache can lose (which,
-/// with the mid-stream resume fix in place, is all of them) is bounded by
-/// this. Calibrated at the production origin-fetch latency distribution from
-/// issue #1360 (p99 ~311ms, max ~575ms) -- see "Calibrating
-/// `abandon_timeout`".
+/// since mid-stream resume exists, is all of them) is bounded by this.
+/// Calibrated at the production origin-fetch latency distribution (p99
+/// ~311ms, max ~575ms).
 const DEFAULT_ABANDON_TIMEOUT: Duration = Duration::from_millis(500);
 /// Per-chunk bound on body reassembly (`get_ranges`' `pull_exact`, and --
 /// indirectly, via `read_timeout` -- the `GET /obj` response body). Looser
 /// than `abandon_timeout` because a mid-stream abandon re-reads the
 /// remainder not yet delivered: a throughput cost knob, not a correctness
 /// bound. Also reused, unmodified, as the breaker's `cooldown`. Not an env
-/// var -- see "The constants that are not env vars".
-const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(3);
-/// Overall per-request deadline (`ClientBuilder::timeout`), unchanged from
-/// before this plan. A rare backstop behind the tighter bounds above for a
-/// healthy cache; still reports `record_unresponsive` on expiry. Not an env
 /// var.
+const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(3);
+/// Overall per-request deadline (`ClientBuilder::timeout`). A rare backstop
+/// behind the tighter bounds above for a healthy cache; still reports
+/// `record_unresponsive` on expiry. Not an env var.
 const DEFAULT_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Consecutive unresponsive requests that trip the circuit breaker. Not an
 /// env var by default value, but overridable; `0` disables the breaker.
@@ -301,9 +298,9 @@ impl CacheClientStore {
     /// Issue a range GET and build a streaming `GetResult`, mirroring
     /// `get_full_stream` but for ranged reads: the body is streamed rather
     /// than buffered with `.bytes()`, which would otherwise materialize the
-    /// whole range (now unbounded, since the server no longer caps total
-    /// requested bytes) as one contiguous allocation before any of it is
-    /// used. The actual served byte range and the full object size both come
+    /// whole range (unbounded, since the server does not cap total requested
+    /// bytes) as one contiguous allocation before any of it is used. The
+    /// actual served byte range and the full object size both come
     /// from the 206's `Content-Range: bytes {start}-{end}/{size}` header
     /// rather than a buffered body length, avoiding a separate HEAD
     /// round-trip in the common case.
@@ -601,8 +598,8 @@ impl CacheClientStore {
         // `frame_ranges_stream`) and reassemble each range's `Bytes` as its
         // chunks arrive, instead of buffering the whole response with
         // `.bytes()` into one contiguous allocation before any of it is
-        // used — the response can now be arbitrarily large since the server
-        // no longer caps total requested bytes. `pull_exact`'s per-chunk
+        // used — the response can be arbitrarily large since the server does
+        // not cap total requested bytes. `pull_exact`'s per-chunk
         // read is wrapped in `stall_timeout`, deliberately tighter than the
         // client's `read_timeout` so this explicit wrap is the one that
         // fires on a real stall -- see "`ClientBuilder::read_timeout` on the
@@ -926,8 +923,7 @@ async fn read_framed_ranges(
 /// lookahead so a frame that straddles a network chunk boundary is
 /// reassembled correctly (mirrors `RangeCache::get_ranges`'s reassembly loop
 /// in `range_cache.rs`). Each `stream.next()` await is bounded by
-/// `stall_timeout` -- a per-chunk bound, since the whole body has no size cap
-/// (constraint (b) in the design doc).
+/// `stall_timeout` -- a per-chunk bound, since the whole body has no size cap.
 async fn pull_exact(
     stream: &mut BoxStream<'static, reqwest::Result<Bytes>>,
     pending: &mut Option<Bytes>,

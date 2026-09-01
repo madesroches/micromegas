@@ -1,5 +1,5 @@
-//! Unit tests for the authorization seam (#1369, AbAC Stage 1; grant-map rewrite #1372, Stage
-//! 4): `is_valid_audience`, `AudienceGrants`, `AudienceReadPolicy`, and `AudienceMintPolicy`.
+//! Unit tests for the authorization seam: `is_valid_audience`, `AudienceGrants`,
+//! `AudienceReadPolicy`, and `AudienceMintPolicy`.
 //!
 //! The `{prefix}_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS` fallback tests mutate
 //! process-wide env vars, so they are `#[serial]` with an `EnvGuard` that restores them on
@@ -392,7 +392,7 @@ fn grants_parse_rejects_a_duplicate_audience_key() {
 }
 
 // ---------------------------------------------------------------------------
-// valid_selector (#1489, AbAC Stage 6a: now `pub` for `analytics-web-srv`'s admin route)
+// valid_selector (`pub` for `analytics-web-srv`'s admin route)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -416,7 +416,7 @@ fn valid_selector_rejects_empty_or_unrecognized_prefixes() {
 }
 
 // ---------------------------------------------------------------------------
-// caller_selectors (#1489/#1510, AbAC Stage 6a/6b) -- the shared builder for
+// caller_selectors -- the shared builder for
 // `CallerContext::grant_selectors`, `my_audiences`, and the write policy's hold check.
 // ---------------------------------------------------------------------------
 
@@ -472,7 +472,7 @@ fn caller_selectors_with_both_email_and_groups() {
 }
 
 // ---------------------------------------------------------------------------
-// AudienceGrants::from_rows / merge (#1489, AbAC Stage 6a)
+// AudienceGrants::from_rows / merge
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -526,7 +526,7 @@ fn from_rows_rejects_an_invalid_selector() {
     assert!(err.to_string().contains("not-a-selector"));
 }
 
-/// `AudienceGrants::merge` as a standalone utility (#1489, AbAC Stage 6a) -- **not** a test of
+/// `AudienceGrants::merge` as a standalone utility -- **not** a test of
 /// `resolve`'s runtime union behavior, which checks the env map and the DB store snapshot as two
 /// separate sources and never calls `merge` (see the doc comment on `merge` itself). This test
 /// merges two maps directly, then wraps the *single* merged result in one `AudienceReadPolicy` to
@@ -571,7 +571,7 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
     assert!(resolved.contains(&"team-gamma".to_string()));
 }
 
-/// `AudienceGrants::merge` as a standalone utility (#1489, AbAC Stage 6a) -- again not a test of
+/// `AudienceGrants::merge` as a standalone utility -- again not a test of
 /// `resolve`'s two-source runtime check (see the previous test's doc comment). A selector present
 /// in *both* input maps for the same audience costs a redundant comparison when `merge`'s result
 /// is later resolved, never a wrong answer -- still resolves, no error, no duplicate entry visible
@@ -593,8 +593,8 @@ async fn merge_tolerates_an_identical_selector_in_both_sources() {
     assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
 }
 
-// `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store` (#1489, AbAC Stage 6a):
-// store-outage/merge behavior is exercised in `rust/auth/tests/db_audience_grants_tests.rs`,
+// `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store`: store-outage/merge
+// behavior is exercised in `rust/auth/tests/db_audience_grants_tests.rs`,
 // which owns `DbAudienceGrantsSource` construction.
 
 // ---------------------------------------------------------------------------
@@ -691,7 +691,7 @@ impl Drop for DefaultKeyAudienceEnvGuard {
 }
 
 /// Unset resolves to `public`, the deployment default -- there is no "no default configured"
-/// state left to represent (#1482): one knob, always a value. This is `default_audience_from_env`
+/// state left to represent: one knob, always a value. This is `default_audience_from_env`
 /// resolving its own default, independent of whether `public` is readable via a grant.
 #[test]
 #[serial]

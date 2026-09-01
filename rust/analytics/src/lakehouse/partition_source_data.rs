@@ -220,8 +220,8 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         parent_process_id,
                         properties: Arc::new(process_properties_jsonb),
                         // The source column is non-nullable, so no null check is needed here.
-                        // That rests entirely on `BlocksView`'s `COALESCE` (#1482): the accessor
-                        // does not null-check, and the dictionary accessor would return a wrong
+                        // That rests entirely on `BlocksView`'s `COALESCE`: the accessor does
+                        // not null-check, and the dictionary accessor would return a wrong
                         // non-null string on a null slot rather than failing.
                         audience: Arc::from(audience_column.value(ir)?),
                     };

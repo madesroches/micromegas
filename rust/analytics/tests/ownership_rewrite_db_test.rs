@@ -1,23 +1,22 @@
-//! DB-backed tests for `OwnershipRewrite` (#1370, AbAC Stage 2) -- the issue's own acceptance
-//! criteria: seed processes stamped with different `audience` columns (plus one never stamped at
-//! all, which the read-side `COALESCE` resolves to `MICROMEGAS_DEFAULT_AUDIENCE`) through the
-//! real ingestion pipeline, materialize the `blocks`/
+//! DB-backed tests for `OwnershipRewrite`: seed processes stamped with different `audience`
+//! columns (plus one never stamped at all, which the read-side `COALESCE` resolves to
+//! `MICROMEGAS_DEFAULT_AUDIENCE`) through the real ingestion pipeline, materialize the `blocks`/
 //! `processes`/`streams` batch views `OwnershipRewrite` reads its audience mapping from, then
 //! assert a session's visible rows differ by `CallerContext.read_scope` -- cross-audience denial,
 //! same-audience visibility, and `ReadScope::All` sees everything -- for `processes`/`streams`
-//! (named-table queries that reach Prong A's `EXISTS` predicate directly) and for
+//! (named-table queries that reach the row-level filter's `EXISTS` predicate directly) and for
 //! `log_entries`/`async_events`/`thread_spans` via `view_instance(...)`. For the three
-//! `view_instance(...)` cases, the cross-audience assertion is now satisfied by the #1486 Prong B
+//! `view_instance(...)` cases, the cross-audience assertion is satisfied by the call-level
 //! guard (`AudienceGuard::authorize_view_instance`, called from `MaterializedView::scan` before
 //! `jit_update`) denying a foreign-audience instance outright. For the two schema-less view sets
 //! `async_events`/`thread_spans`, that guard is the *only* enforcement: a guarded, non-`global`
-//! `view_instance(...)` scan of either now plans with no Prong A predicate injected at all
+//! `view_instance(...)` scan of either plans with no row-level predicate injected at all
 //! (`OwnershipRewrite`'s skip, keyed on `MaterializedView::instance_is_audience_guarded()`), so
-//! this file no longer exercises any Prong A row-filtering behavior for those two view sets.
-//! That coverage (the "process_id column or bust" concern, for an *unguarded* scan) now lives in
-//! the plan-shape tests of `ownership_rewrite_public_view_set_tests.rs`, which build logical
-//! plans but never `.collect()` them, so they aren't short-circuited by the #1486 guard. Also
-//! asserts the physical `audience` column itself (#1482) is present, non-`NULL`, and carries the
+//! this file doesn't exercise row-level filtering behavior for those two view sets. That
+//! coverage (the "process_id column or bust" concern, for an *unguarded* scan) lives in the
+//! plan-shape tests of `ownership_rewrite_public_view_set_tests.rs`, which build logical plans
+//! but never `.collect()` them, so they aren't short-circuited by the call-level guard. Also
+//! asserts the physical `audience` column itself is present, non-`NULL`, and carries the
 //! expected value on `processes`/`streams`/`blocks`/`log_entries`.
 //!
 //! Requires a live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (mirrors
@@ -81,11 +80,11 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, fabricated as a legacy-shaped,
-/// never-stamped row if `None` -- plus its cpu/log streams and one block each, through the real
-/// ingestion pipeline (`WebIngestionService`, the same entry point a real client hits).
-/// `insert_process` stamps unconditionally now (#1519), so there is no code path left that
-/// produces an unstamped row on its own: the `None` arm inserts under the deployment default
+/// &WriteAudience)` parameter if `Some`, fabricated as a legacy-shaped, never-stamped row if
+/// `None` -- plus its cpu/log streams and one block each, through the real ingestion pipeline
+/// (`WebIngestionService`, the same entry point a real client hits). `insert_process` stamps
+/// unconditionally, so there is no code path that produces an unstamped row on its own: the
+/// `None` arm inserts under the deployment default
 /// (`public`, matching this file's `MICROMEGAS_DEFAULT_AUDIENCE`) and then nulls the `audience`
 /// column back off the `processes` row with a post-insert `UPDATE` (`strip_process_audience`),
 /// reproducing a legacy pre-v8 row. The read-side `COALESCE` resolves a NULL column to
@@ -272,9 +271,8 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
 
     // Seed three processes *before* any block/view materialization: A and B are stamped with
     // different audiences, C is fabricated as a legacy-shaped, never-stamped row -- exercising
-    // #1482's read-side default, which resolves C's missing property to
-    // `MICROMEGAS_DEFAULT_AUDIENCE` (`public` here) at every site the audience is read out of
-    // Postgres.
+    // the read-side default, which resolves C's missing property to `MICROMEGAS_DEFAULT_AUDIENCE`
+    // (`public` here) at every site the audience is read out of Postgres.
     let process_a = seed_process(&ingestion, &lake.db_pool, Some("team-a")).await?;
     let process_b = seed_process(&ingestion, &lake.db_pool, Some("team-b")).await?;
     let process_c = seed_process(&ingestion, &lake.db_pool, None).await?;
@@ -408,12 +406,12 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     );
 
     // The next three sections (`log_entries`, `async_events`, `thread_spans`) all name their
-    // instance through `view_instance(...)`. `MaterializedView::scan` runs the #1486 Prong B
-    // guard (`AudienceGuard::authorize_view_instance`) before `jit_update`, so a scoped caller
-    // naming a foreign-audience instance this way is denied there, before Prong A's row filter
-    // ever runs -- and for the two schema-less view sets below, Prong A injects no predicate at
-    // all for this guarded scan (`OwnershipRewrite`'s skip). Each `expect_err` below is therefore
-    // coverage of the #1486 guard, not of Prong A's `EXISTS` predicate -- Prong A's own
+    // instance through `view_instance(...)`. `MaterializedView::scan` runs the call-level guard
+    // (`AudienceGuard::authorize_view_instance`) before `jit_update`, so a scoped caller naming a
+    // foreign-audience instance this way is denied there, before the row-level filter ever runs
+    // -- and for the two schema-less view sets below, the row-level filter injects no predicate
+    // at all for this guarded scan (`OwnershipRewrite`'s skip). Each `expect_err` below is
+    // therefore coverage of the call-level guard, not of the row-level `EXISTS` predicate -- the
     // row-filtering behavior for `async_events`/`thread_spans` (the "process_id column or bust"
     // concern, for an *unguarded* scan) is exercised separately, by the plan-shape tests in
     // `ownership_rewrite_public_view_set_tests.rs`.
@@ -445,13 +443,13 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     .await
     .expect_err(
         "a caller scoped to user:b naming process A's log_entries instance must be denied by \
-         the #1486 view_instance guard, not silently return zero rows",
+         the view_instance guard, not silently return zero rows",
     );
     assert!(
         log_entries_b_err
             .to_string()
             .contains("not found or not accessible"),
-        "expected the #1486 guard's uniform denial text, got: {log_entries_b_err}"
+        "expected the guard's uniform denial text, got: {log_entries_b_err}"
     );
     assert_eq!(
         row_count(
@@ -466,7 +464,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         "ReadScope::All must see process A's log_entries"
     );
 
-    // --- `async_events`, process-scoped with **no** process_id column (§5) ---------------
+    // --- `async_events`, process-scoped with **no** process_id column ---------------
     let async_events_a_sql = format!(
         "SELECT * FROM view_instance('async_events', '{}')",
         process_a.process_id
@@ -493,14 +491,14 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     .await
     .expect_err(
         "a caller scoped to user:b naming process A's async_events instance must be denied by \
-         the #1486 view_instance guard, before Prong A's row filter (or its absence) for this \
+         the view_instance guard, before the row-level filter (or its absence) for this \
          schema-less view set ever runs",
     );
     assert!(
         async_events_b_err
             .to_string()
             .contains("not found or not accessible"),
-        "expected the #1486 guard's uniform denial text, got: {async_events_b_err}"
+        "expected the guard's uniform denial text, got: {async_events_b_err}"
     );
     assert_eq!(
         row_count(
@@ -515,7 +513,7 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
         "ReadScope::All must see the same async_events rows as the owning audience"
     );
 
-    // --- `thread_spans`, stream-scoped with **no** process_id or stream_id column (§6) ---
+    // --- `thread_spans`, stream-scoped with **no** process_id or stream_id column ---
     let thread_spans_a_sql = format!(
         "SELECT * FROM view_instance('thread_spans', '{}')",
         process_a.cpu_stream_id
@@ -546,13 +544,13 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     .await
     .expect_err(
         "a caller scoped to user:b naming process A's thread_spans instance must be denied by \
-         the #1486 view_instance guard",
+         the view_instance guard",
     );
     assert!(
         thread_spans_b_err
             .to_string()
             .contains("not found or not accessible"),
-        "expected the #1486 guard's uniform denial text, got: {thread_spans_b_err}"
+        "expected the guard's uniform denial text, got: {thread_spans_b_err}"
     );
     assert_eq!(
         row_count(
@@ -568,8 +566,8 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
     );
 
     // --- Never-stamped process C: materialized as the default audience, so it is visible to a
-    // caller holding that default and invisible to one that does not (#1482's addendum -- the
-    // default is resolved by `COALESCE` where the audience is read, not stamped at write time).
+    // caller holding that default and invisible to one that does not -- the default is resolved
+    // by `COALESCE` where the audience is read, not stamped at write time.
     let processes_c_sql = format!(
         "SELECT * FROM processes WHERE process_id = '{}'",
         process_c.process_id
@@ -602,10 +600,10 @@ async fn ownership_rewrite_enforces_audience_visibility() -> Result<()> {
          which materializes under that default"
     );
 
-    // --- The `audience` column itself (#1482): present, non-NULL, and carrying the expected
-    // value on every view that now materializes it. `measures`/`log_stats` aren't exercised by
-    // this fixture (no metrics are ingested here) -- see `log_stats_view.rs`/`metrics_table.rs`
-    // for their own coverage of the column.
+    // --- The `audience` column itself: present, non-NULL, and carrying the expected value on
+    // every view that materializes it. `measures`/`log_stats` aren't exercised by this fixture
+    // (no metrics are ingested here) -- see `log_stats_view.rs`/`metrics_table.rs` for their own
+    // coverage of the column.
     for (view_sql, expected_count) in [
         (
             format!(

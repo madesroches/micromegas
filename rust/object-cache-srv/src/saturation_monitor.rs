@@ -1,17 +1,16 @@
 //! Periodic saturation gauges for the object cache: fetch-budget occupancy,
 //! in-flight entries, accounted RAM-tier usage, memory-budget occupancy,
 //! prefetch queue depth, host-level NIC throughput, and the foyer disk
-//! engine's own write-path throughput -- the signals #1206 calls out as
-//! missing for locating a bottleneck (a solid *counter* layer already
-//! exists, but no saturation/queue-depth signal). Modeled on
+//! engine's own write-path throughput -- these close the gap a plain
+//! request-counter layer can't cover: locating a bottleneck needs
+//! saturation/queue-depth signals, not just counts. Modeled on
 //! `telemetry-sink::system_monitor::send_system_metrics_forever`: a
 //! background task that wakes on an interval and emits `imetric!`/`fmetric!`.
 //!
-//! The disk gauges used to come from `sysinfo::Disks`, but that reads 0 in
-//! the deployed container (the cache device/mount isn't enumerated there);
-//! they are now sourced from the foyer engine's own `Statistics` via
+//! The disk gauges are sourced from the foyer engine's own `Statistics` via
 //! `RangeCache::backend_disk_stats`, which measures the cache's own device
-//! I/O directly instead of relying on host disk enumeration.
+//! I/O directly -- not from `sysinfo::Disks`, which reads 0 in the deployed
+//! container because the cache device/mount isn't enumerated there.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,7 +106,7 @@ pub fn sample_once(
         queue_depth as u64
     );
 
-    // NIC: the expected ceiling on the target im4gn.large (#1197) and
+    // NIC: the throughput ceiling on the target im4gn.large instance type is
     // currently unmeasured. `Networks::refresh` computes the byte delta
     // since the previous refresh internally, so dividing by the sampler's
     // fixed interval gives a rate.

@@ -8,9 +8,9 @@
 //! require real JWKS endpoints.
 //!
 //! `cookie_auth_middleware_inserts_auth_context_with_groups` below is the exception: it stands
-//! up a real mock JWKS/discovery server (#1369, AbAC Stage 1, hole #3) since that is exactly
+//! up a real mock JWKS/discovery server since that is exactly
 //! what it needs to verify -- that the `AuthContext` (with `groups`) the middleware builds after
-//! full signature verification lands in request extensions, not the pre-#1458 `ValidatedUser`
+//! full signature verification lands in request extensions, not `ValidatedUser`
 //! only.
 
 use analytics_web_srv::auth::{AuthState, OidcClientConfig, auth_logout};
@@ -244,9 +244,9 @@ async fn echo_auth_context(
     }))
 }
 
-/// Closes hole #3 (#1369): the cookie middleware must insert the full `AuthContext` -- not just
+/// The cookie middleware must insert the full `AuthContext` -- not just
 /// `ValidatedUser`, which has no `groups` field -- into request extensions, since
-/// `analytics-web-srv` is the mint path's identity source (#1458) and Stage 6's `mint_key` needs
+/// `analytics-web-srv` is the mint path's identity source and `mint_key` needs
 /// `AuthContext` to consult a `MintPolicy`.
 #[tokio::test]
 #[serial]

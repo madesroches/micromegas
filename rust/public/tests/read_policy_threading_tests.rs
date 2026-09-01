@@ -1,16 +1,16 @@
-//! Threading tests for the authorization seam (#1369, AbAC Stage 1): exercises
-//! `FlightSqlServiceImpl` through the real `AuthService`/tonic stack (a genuine TCP listener, a
-//! real `tonic::transport::Server`, and a real Flight SQL client), rather than calling its
-//! handler methods directly, so that a regression in tonic's request-extension propagation --
-//! the mechanism this whole seam rests on -- fails loudly instead of silently.
+//! Threading tests for the authorization seam: exercises `FlightSqlServiceImpl` through the real
+//! `AuthService`/tonic stack (a genuine TCP listener, a real `tonic::transport::Server`, and a
+//! real Flight SQL client), rather than calling its handler methods directly, so that a
+//! regression in tonic's request-extension propagation -- the mechanism this whole seam rests
+//! on -- fails loudly instead of silently.
 //!
-//! `OwnershipRewrite` (#1370, AbAC Stage 2) now consumes the resolved `ReadScope`, but every
+//! `OwnershipRewrite` consumes the resolved `ReadScope`, but every
 //! query here is a trivial `SELECT 1`/`SELECT 1 AS one` that never scans a `MaterializedView`, so
 //! none of these tests observe a filtered query result either way -- they inject a recording stub
-//! `ReadPolicy` -- the same seam a store-backed policy will occupy later -- and assert on what it
-//! was called with. `start_server`'s `ViewFactory` still registers `processes`/`streams`
-//! (Design §2 of `tasks/1370_ownership_rewrite_plan.md`), which `make_session_context` now
-//! requires for every resolved `ReadScope::Audiences` caller regardless of what the query touches.
+//! `ReadPolicy` -- the same seam a store-backed policy occupies elsewhere -- and assert on what
+//! it was called with. `start_server`'s `ViewFactory` still registers `processes`/`streams`,
+//! which `make_session_context` requires for every resolved `ReadScope::Audiences` caller
+//! regardless of what the query touches.
 
 use anyhow::{Result, anyhow};
 use arrow_flight::error::FlightError;
@@ -68,13 +68,12 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
 /// Builds a `ViewFactory` registering real `processes`/`streams` global views (mirroring
 /// `default_view_factory`'s construction of them, and the same pattern
 /// `analytics/tests/thread_spans_ordering_db_test.rs` uses), rather than
-/// `lakehouse_admin_gate_test.rs`'s `ViewFactory::new(vec![])`. `OwnershipRewrite` (#1370, AbAC
-/// Stage 2) requires `processes`/`streams` to be registered for every `ReadScope::Audiences`
-/// caller (Design §2 of `tasks/1370_ownership_rewrite_plan.md`) -- every test in this file
-/// resolves that scope via an auth provider, so without this fixture `make_session_context` would
-/// fail before any SQL is planned. `SqlBatchView::new` only *plans* its transform query
-/// (`ctx.sql(...)`, never executed), so the offline, `connect_lazy` lakehouse this file already
-/// uses is sufficient.
+/// `lakehouse_admin_gate_test.rs`'s `ViewFactory::new(vec![])`. `OwnershipRewrite` requires
+/// `processes`/`streams` to be registered for every `ReadScope::Audiences` caller -- every test
+/// in this file resolves that scope via an auth provider, so without this fixture
+/// `make_session_context` would fail before any SQL is planned. `SqlBatchView::new` only
+/// *plans* its transform query (`ctx.sql(...)`, never executed), so the offline, `connect_lazy`
+/// lakehouse this file already uses is sufficient.
 async fn make_view_factory_with_processes_and_streams(
     lakehouse: &LakehouseContext,
 ) -> Arc<ViewFactory> {
@@ -450,10 +449,10 @@ async fn auth_context_with_groups_survives_the_real_tonic_stack() {
 
 /// An unconfigured deployment (audience-grants env var unset) resolves a scope through the real
 /// `AudienceReadPolicy::from_env` -- not an error, not a crash -- and a query's results are
-/// unaffected: `SELECT 1 AS one` never scans a `MaterializedView`, so `OwnershipRewrite` (#1370,
-/// AbAC Stage 2) has nothing to filter here even though it is now registered and active for this
-/// resolved `ReadScope::Audiences` caller; `do_get` must still succeed and return the same row it
-/// would without this seam at all.
+/// unaffected: `SELECT 1 AS one` never scans a `MaterializedView`, so `OwnershipRewrite` has
+/// nothing to filter here even though it is registered and active for this resolved
+/// `ReadScope::Audiences` caller; `do_get` must still succeed and return the same row it would
+/// without this seam at all.
 #[tokio::test]
 async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
@@ -482,10 +481,10 @@ async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffect
 }
 
 // ---------------------------------------------------------------------------
-// bulk_ingest admin gate (AbAC Stage 5, #1373): non-admin callers must be rejected
+// bulk_ingest admin gate: non-admin callers must be rejected
 // ---------------------------------------------------------------------------
 
-/// `do_put_statement_ingest`'s `is_admin` check (AbAC Stage 5, #1373) rejects a non-admin
+/// `do_put_statement_ingest`'s `is_admin` check rejects a non-admin
 /// caller before it ever reaches `bulk_ingest`, so this needs no live Postgres or object
 /// store: an `ApiKeyAuthProvider` credential is always non-admin (see `api_key.rs`), and a
 /// single empty (zero-row, zero-column) record batch is enough to reach the check -- the

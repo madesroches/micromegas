@@ -1,6 +1,6 @@
 //! Tests for `OtelMetricsBlockProcessor` fanning OTLP `Summary` data points out into
-//! `measures` rows (issue #1359): count/sum/min/max under suffixed metric names, with
-//! any other `quantile_values` entry (configured percentiles) dropped.
+//! `measures` rows: count/sum/min/max under suffixed metric names, with any other
+//! `quantile_values` entry (configured percentiles) dropped.
 
 use datafusion::arrow::array::{Array, StringArray};
 use micromegas_analytics::lakehouse::block_partition_spec::BlockProcessor;

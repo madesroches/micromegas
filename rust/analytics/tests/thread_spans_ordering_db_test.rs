@@ -331,10 +331,9 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
 
     // The regression assertion this test exists to prove: every partition the query scanned
     // actually persisted a non-NULL `max_sort_key_time` -- the only thing that makes the
-    // block-boundary overlap harmless to the `Concatenated` non-overlap check without the
-    // sleep/spacer workaround this test used to need. This is what proves `update_partition`
-    // actually persists the new column and that the write path populated it, not just that the
-    // scan happened to succeed.
+    // block-boundary overlap harmless to the `Concatenated` non-overlap check without a
+    // sleep/spacer workaround. This is what proves `update_partition` actually persists the new
+    // column and that the write path populated it, not just that the scan happened to succeed.
     let null_sort_key_time_answer = query(
         lakehouse.clone(),
         part_provider.clone(),
@@ -675,8 +674,8 @@ fn slice_spec(blocks: &[Arc<PartitionSourceBlock>]) -> SourceDataBlocksInMemory 
     }
 }
 
-/// Degenerate-range retirement (Design §6, `write_partition.rs`'s `RetireMatch::Overlap`):
-/// a *new* partition whose insert range is degenerate (`begin_insert_time == end_insert_time`)
+/// Degenerate-range retirement (`write_partition.rs`'s `RetireMatch::Overlap`): a *new*
+/// partition whose insert range is degenerate (`begin_insert_time == end_insert_time`)
 /// must still retire a stale, wider partition from a prior run that overlaps it. The predicate's
 /// inclusive `'[]'` bounds make this work: with Postgres's default half-open bounds
 /// `tstzrange(t, t)` is empty, so a plain `&&` would match zero rows for every degenerate new
@@ -896,8 +895,8 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
     Ok(())
 }
 
-/// Same-run left-boundary exclusion (Design §6, "The containment half's left-boundary
-/// exclusion"): a legal cut can land a degenerate partition (here, a single block) immediately
+/// Same-run left-boundary exclusion (the containment half's left-boundary exclusion): a legal
+/// cut can land a degenerate partition (here, a single block) immediately
 /// before a following partition, written in the *same* run, that begins at that exact same
 /// insert-time point. Writing the second partition must not retire its own just-written,
 /// immediately-preceding sibling. Asserts both partitions survive.
@@ -1111,8 +1110,8 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
     Ok(())
 }
 
-/// Interrupted-run reconvergence (Design §6, "Why the `Overlap` waiver is tolerable"): a
-/// `jit_update` loop that errors out or is cancelled after writing only some of a multi-partition
+/// Interrupted-run reconvergence (why the `Overlap` waiver is tolerable): a `jit_update` loop
+/// that errors out or is cancelled after writing only some of a multi-partition
 /// regrouping spec must not leave a permanent gap. Writes only the first of a 2-partition spec
 /// (simulating the interrupted loop), then recomputes the same grouping from the unchanged blocks
 /// and writes every partition in it (simulating the next, successful `jit_update`): the first
@@ -1366,7 +1365,7 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
     Ok(())
 }
 
-/// Cross-run regrouping case (Design §6, "Cross-run stability"): a block that arrives between two
+/// Cross-run regrouping case (cross-run stability): a block that arrives between two
 /// `jit_update` runs can legally shift an *earlier* cut point, leaving an already-written partition
 /// that only *overlaps* (does not contain, and is not contained by) the newer, narrower range a
 /// later run would produce. The second run must replace that stale partition instead of leaving
@@ -1557,8 +1556,8 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     }
 
     // Push block 4 and give it an insert_time that sorts into the *middle* of the event-time
-    // order (between blocks 1 and 2), straddling run 1's cut point at index 2 -- the scenario
-    // Design §6 describes as legally shifting an earlier cut point.
+    // order (between blocks 1 and 2), straddling run 1's cut point at index 2 -- legally
+    // shifting an earlier cut point.
     push_and_insert_block(&ingestion, &mut stream, &process_info, "span_4", &audience).await?;
     sqlx::query(
         "UPDATE blocks SET begin_ticks = 1500, end_ticks = 1600, insert_time = $1 \
@@ -1651,14 +1650,14 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
     Ok(())
 }
 
-/// Cross-run degenerate-predecessor case (review round 3, issue 1): a stale *degenerate*
-/// partition from an earlier run must still be retired when a later run's regrouping produces a
-/// single, wider, non-degenerate partition that starts at the same insert time -- the ordinary
-/// "single-block partition grows as more blocks arrive" case. This is the scenario the
-/// containment arm's since-removed left-boundary exclusion used to break: the new range's
-/// `begin_insert_time` equals the stale degenerate partition's (only) insert time, which used to
-/// trip `NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)` and leave the
-/// stale partition in place, duplicating its one block's rows across two partitions. Writes run
+/// Cross-run degenerate-predecessor case: a stale *degenerate* partition from an earlier run
+/// must still be retired when a later run's regrouping produces a single, wider, non-degenerate
+/// partition that starts at the same insert time -- the ordinary "single-block partition grows
+/// as more blocks arrive" case. Guards against a left-boundary exclusion in the containment arm:
+/// the new range's `begin_insert_time` equals the stale degenerate partition's (only) insert
+/// time, which a naive `NOT (begin_insert_time = end_insert_time AND begin_insert_time = $3)`
+/// would trip, leaving the stale partition in place and duplicating its one block's rows across
+/// two partitions. Writes run
 /// 1 (a single block, alone -- a degenerate `[t0, t0]` partition) and, in a separate simulated
 /// run with its own fresh `same_run_ranges`, run 2 (the same block plus two more, regrouped into
 /// one non-degenerate `[t0, t0+2s]` partition) and asserts run 1's partition is gone.
@@ -1906,12 +1905,11 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
     Ok(())
 }
 
-/// Same-run consecutive-degenerate-siblings case (review round 3, issue 3): several partitions
-/// written in the *same* run can legally share an identical degenerate insert range (many blocks
-/// registered at the exact same insert timestamp, each becoming its own single-block partition --
-/// exercised at the grouping level by `jit_partition_grouping_tests.rs::degenerate_inputs`). Writing
-/// the second (or third) must not retire its identically-ranged, just-written same-run
-/// predecessor(s): unlike the shape-based exclusion this branch's predicate used to rely on, the
+/// Same-run consecutive-degenerate-siblings case: several partitions written in the *same* run
+/// can legally share an identical degenerate insert range (many blocks registered at the exact
+/// same insert timestamp, each becoming its own single-block partition -- exercised at the
+/// grouping level by `jit_partition_grouping_tests.rs::degenerate_inputs`). Writing the second
+/// (or third) must not retire its identically-ranged, just-written same-run predecessor(s): the
 /// same_run_ranges exclusion protects a row because *this run* wrote it, regardless of how many
 /// other rows share its exact range. Writes 3 single-block partitions, all with insert range
 /// `[t, t]` (all 3 blocks share the same insert_time), in one simulated run, and asserts all 3

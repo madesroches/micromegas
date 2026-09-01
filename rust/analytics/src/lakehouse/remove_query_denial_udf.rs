@@ -1,7 +1,6 @@
-//! `remove_query_denial(rule_id)` -- admin scalar UDF that deletes a query-deny-list rule
-//! (`tasks/query_deny_list_plan.md` §8). The audit log is the durable record of what was denied
-//! and what it rejected, so the row itself does not need to survive its removal (hard delete, no
-//! `removed_at`/`removed_by` trail).
+//! `remove_query_denial(rule_id)` -- admin scalar UDF that deletes a query-deny-list rule. The
+//! audit log is the durable record of what was denied and what it rejected, so the row itself
+//! does not need to survive its removal (hard delete, no `removed_at`/`removed_by` trail).
 
 use async_trait::async_trait;
 use datafusion::{

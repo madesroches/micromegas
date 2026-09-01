@@ -1,9 +1,8 @@
-//! Offline (no live DB) regression tests for the perfetto-export sort-elimination plan
-//! (tasks/1297_perfetto_redundant_sort_plan.md):
-//! - the §3 file-group sort + non-overlap loud-failure guard in `make_partitioned_execution_plan`
+//! Offline (no live DB) regression tests for perfetto-export sort elimination:
+//! - the file-group sort + non-overlap loud-failure guard in `make_partitioned_execution_plan`
 //! - the resulting plan shape: a declared ordering lets `EnforceSorting` elide a redundant `Sort`
 //!   for a multi-partition file group, while an undeclared ordering keeps it (negative control)
-//! - the §4 runtime `begin`-monotonicity guard in `write_thread_spans`
+//! - the runtime `begin`-monotonicity guard in `write_thread_spans`
 
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::array::{RecordBatch, StringArray, TimestampNanosecondArray, UInt32Array};

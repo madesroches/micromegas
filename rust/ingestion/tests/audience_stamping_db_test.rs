@@ -223,13 +223,13 @@ async fn legacy_unstamped_row_reregistered_under_the_default_is_ok_and_stays_uns
     Ok(())
 }
 
-/// Cross-path squatting guard (§6, AbAC Stage 5, #1373): a `process_id` registered via the
-/// native `insert_process` path under one audience must reject a later `register_otel_process`
-/// re-registration of that *same* `process_id` under a *different* audience. This is the
-/// headline confidentiality fix on this branch -- without it, a credential could pre-register
-/// (via `insert_process`) the exact `process_id` a victim audience's OTLP producer would later
-/// derive, and `register_otel_process`'s `ON CONFLICT DO NOTHING` would silently let the
-/// victim's stream/blocks land on the squatter's row.
+/// Cross-path squatting guard: a `process_id` registered via the native `insert_process` path
+/// under one audience must reject a later `register_otel_process` re-registration of that
+/// *same* `process_id` under a *different* audience. This is a confidentiality guard -- without
+/// it, a credential could pre-register (via `insert_process`) the exact `process_id` a victim
+/// audience's OTLP producer would later derive, and `register_otel_process`'s
+/// `ON CONFLICT DO NOTHING` would silently let the victim's stream/blocks land on the
+/// squatter's row.
 #[ignore]
 #[tokio::test]
 async fn otel_reregistration_conflicts_with_native_registration() -> Result<()> {

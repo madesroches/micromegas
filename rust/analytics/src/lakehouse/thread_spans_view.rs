@@ -124,7 +124,7 @@ async fn append_call_tree(
 /// line emitted immediately before it: nothing on `ensure_begin_non_decreasing`'s callers' error
 /// propagation path (`MaterializedView::scan` -> DataFusion planning -> the flight SQL service)
 /// logs a planning-time error at error level, so the check logs itself instead of relying on that
-/// propagation (see the plan's Design §5 for the full trace).
+/// propagation.
 ///
 /// `pub`, not inlined into `write_partition`, so `rust/analytics/tests/` (an external integration
 /// crate that can only reach `pub` items) can call it directly with a hand-built batch.

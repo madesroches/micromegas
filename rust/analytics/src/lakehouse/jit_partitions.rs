@@ -92,10 +92,9 @@ pub struct JitPartitionConfig {
     pub block_order: BlockOrder,
     /// Soft row-count target for a single batched block query (see `batch_windows`). Consecutive
     /// insert-time buckets are packed into one query up to this many blocks, derived from a
-    /// per-bucket `COUNT(*)` run before the batch queries themselves -- see
-    /// `tasks/completed/jit_batched_block_queries_plan.md` § Adaptive batch width. A config field rather
-    /// than a bare constant so DB-gated tests can
-    /// lower it to force a run to split into more than one batch.
+    /// per-bucket `COUNT(*)` run before the batch queries themselves. A config field rather
+    /// than a bare constant so DB-gated tests can lower it to force a run to split into more than
+    /// one batch.
     pub target_rows_per_query: i64,
 }
 
@@ -240,8 +239,7 @@ fn emit_partition(
 /// must have an `insert_time` no later than every remaining block's, computed via a suffix-minimum
 /// over the event-time-sorted list. When the natural `max_nb_objects` cut point isn't safe, the cut
 /// looks back to the most recent safe index; when no safe index exists in the window, the window
-/// grows past the soft limit and a `debug!` logs it. See
-/// `tasks/1429_jit_event_time_block_ordering_plan.md` §3 for the full derivation.
+/// grows past the soft limit and a `debug!` logs it.
 pub fn group_blocks_into_partitions(
     config: &JitPartitionConfig,
     mut blocks: Vec<Arc<PartitionSourceBlock>>,
@@ -374,9 +372,8 @@ pub fn group_blocks_into_partitions(
 ///
 /// `bucket_counts` holds one `(bucket_start, nb_blocks)` pair per *non-empty* bucket, ascending;
 /// any bucket missing from it is treated as holding zero blocks (and so never forces a close on
-/// its own). See `tasks/completed/jit_batched_block_queries_plan.md` § Adaptive batch width for the derivation and the
-/// single-oversized-bucket residual case (a bucket whose own count already exceeds
-/// `target_rows_per_query` still forms one batch on its own -- the loop never splits a bucket).
+/// its own). A bucket whose own count already exceeds `target_rows_per_query` still forms one
+/// batch on its own -- the loop never splits a bucket.
 ///
 /// Batch edges are always bucket-aligned and batches tile `insert_range` with no gaps or overlaps,
 /// so which width is picked cannot change the specs `group_blocks_into_partitions` later emits
@@ -420,7 +417,7 @@ pub fn batch_windows(
 
 /// Renders a `TimeDelta` as arrow-parsable interval text (e.g. `"3600 seconds"`) for use with
 /// DataFusion's `date_bin`. `TimeDelta`'s own `Display` yields ISO-8601 (`PT3600S`), which
-/// `date_bin` cannot parse -- see `tasks/completed/jit_batched_block_queries_plan.md` § Adaptive batch width.
+/// `date_bin` cannot parse.
 fn interval_literal(slice: TimeDelta) -> String {
     format!("{} seconds", slice.num_seconds())
 }
@@ -455,9 +452,8 @@ fn split_into_buckets(
 /// Runs the per-bucket `COUNT(*) ... GROUP BY date_bin(slice, insert_time)` query over
 /// `insert_range`, under `identity_predicate` (the batch queries' own identity filter -- process +
 /// stream-tag, or stream id) so the returned counts match what the batch queries themselves will
-/// return; see `tasks/completed/jit_batched_block_queries_plan.md` § Adaptive batch width for why the event-time predicate of
-/// the MIN/MAX pre-query would not do. Returns one `(bucket_start, nb_blocks)` pair per non-empty
-/// bucket, ascending.
+/// return -- the event-time predicate of the MIN/MAX pre-query would not do. Returns one
+/// `(bucket_start, nb_blocks)` pair per non-empty bucket, ascending.
 async fn fetch_bucket_counts(
     lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
@@ -511,9 +507,8 @@ async fn fetch_bucket_counts(
 /// column** (`streams.dependencies_metadata`/`objects_metadata`/`tags`/`properties`/`format`) may
 /// be added to the `SELECT` list. Re-adding one would reintroduce the per-row stream-blob-copy
 /// memory hazard the lean projection removes, with no test failing except the projection guard in
-/// `analytics/tests/jit_batch_windows_tests.rs` -- see `tasks/completed/jit_batched_block_queries_plan.md`
-/// § Why the lean projection is in scope. `array_has("streams.tags", ...)` stays in the `WHERE` clause: filtering
-/// needs no projection.
+/// `analytics/tests/jit_batch_windows_tests.rs`. `array_has("streams.tags", ...)` stays in the
+/// `WHERE` clause: filtering needs no projection.
 pub fn process_batch_sql(process_id: &Uuid, stream_tag: &str, range: &TimeRange) -> String {
     let begin_iso = range.begin.to_rfc3339();
     let end_iso = range.end.to_rfc3339();
@@ -531,8 +526,7 @@ pub fn process_batch_sql(process_id: &Uuid, stream_tag: &str, range: &TimeRange)
 /// Fetches and parses one batch window's worth of process-scoped blocks (`process_batch_sql`),
 /// looking up each block's stream metadata in `stream_metadata` (built once per call to
 /// `generate_process_jit_partitions` by `fetch_stream_metadata_map`) rather than rebuilding it per
-/// row -- this is the lean projection's fetch-and-parse half; see
-/// `tasks/completed/jit_batched_block_queries_plan.md` § Why the lean projection is in scope.
+/// row -- this is the lean projection's fetch-and-parse half.
 ///
 /// A `stream_id` missing from `stream_metadata` is a hard error: the metadata pre-query and this
 /// query share the same identity predicate and insert range, so it cannot happen unless something
@@ -759,13 +753,12 @@ pub async fn generate_stream_jit_partitions_segment(
 /// these partitions may not exist or they could be out of date
 /// Generates JIT partitions for a given time range.
 ///
-/// Batches its block queries (see `tasks/completed/jit_batched_block_queries_plan.md` § Design): `batch_windows`, derived from a
+/// Batches its block queries: `batch_windows`, derived from a
 /// per-bucket `COUNT(*)`, picks how many insert-time buckets one query covers, and each batch's
 /// rows are then split back into per-bucket runs (`split_into_buckets`) and grouped independently
 /// -- byte-identical to running `generate_stream_jit_partitions_segment` once per bucket, just
 /// fewer, wider queries to get there. `generate_stream_jit_partitions_segment` itself is kept, not
-/// called from here anymore -- see `tasks/completed/jit_batched_block_queries_plan.md` § Keeping (and
-/// dropping) the segment functions.
+/// called from here anymore.
 #[span_fn]
 pub async fn generate_stream_jit_partitions(
     config: &JitPartitionConfig,
@@ -899,14 +892,11 @@ pub async fn generate_stream_jit_partitions(
 /// Generates JIT partitions for a given time range filtered by process.
 ///
 /// Batches its block queries the same way `generate_stream_jit_partitions` does, and additionally
-/// applies the lean projection (see `tasks/completed/jit_batched_block_queries_plan.md` § Why the lean
-/// projection is in scope):
+/// applies the lean projection:
 /// `fetch_stream_metadata_map` fetches every stream's metadata once for the whole insert range,
 /// and each batch's `fetch_process_blocks` call looks it up per block instead of projecting stream
-/// blobs onto every row and rebuilding `StreamMetadata` per row.
-/// `generate_process_jit_partitions_segment` has been deleted -- its only caller was this function
-/// -- and its grouping call is now inlined into the batch loop below; see
-/// `tasks/completed/jit_batched_block_queries_plan.md` § Keeping (and dropping) the segment functions.
+/// blobs onto every row and rebuilding `StreamMetadata` per row. The grouping call is inlined
+/// into the batch loop below.
 #[span_fn]
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
@@ -1241,11 +1231,9 @@ pub async fn is_jit_partition_up_to_date(
 /// other specs whose verdict can possibly change as a result are `i`'s immediate neighbors in the
 /// sorted order (index `i - 1` and `i + 1`) -- no non-adjacent spec's verdict can ever be affected.
 /// A re-evaluated spec `j` is checked against a candidate set that drops any row entirely
-/// contained in the insert range of some *other*, currently-stale spec `i` (`i != j`) (see
-/// `tasks/completed/jit_batched_block_queries_plan.md` § Batched freshness checks (`InsertTime` callers),
-/// "Verdicts reflect pre-run state") -- such a row is a `RetireMatch::Containment` match for spec
-/// `i` and will be gone once `i`'s write runs this call, so it must not count towards `j`'s
-/// freshness. Spec `j`'s own range is always excluded from that drop: a row `j` itself would
+/// contained in the insert range of some *other*, currently-stale spec `i` (`i != j`) -- such a
+/// row is a `RetireMatch::Containment` match for spec `i` and will be gone once `i`'s write runs
+/// this call, so it must not count towards `j`'s freshness. Spec `j`'s own range is always excluded from that drop: a row `j` itself would
 /// retire is not evidence about whether `j`'s *own* data is current, so it must stay in the set
 /// used to (re-)evaluate `j`. A spec, once found stale, is never recomputed again (so verdicts are
 /// monotone -- up to date to stale only -- by construction, with no separate clamping step), and

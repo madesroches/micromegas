@@ -183,13 +183,13 @@ async fn write_rows_none_row_set_poisons_max_sort_key_time() {
     );
 }
 
-/// The nullability guard (#1482 §1) is what turns a `NULL` slipping under a declared
-/// non-nullable column into a loud write failure instead of a silently `""`-labelled row. The
-/// batch itself is built under a *nullable* schema (so `RecordBatch::try_new` doesn't reject the
-/// null first, per this file's `make_row_set_with_null` doc comment), while the `file_schema`
-/// handed to `write_rows_and_track_times` declares the same column NOT NULL -- exactly the
-/// mismatch a bug in an extraction site's `COALESCE` (#1482), or any future producer that
-/// bypasses it, would produce against a view's declared schema.
+/// The nullability guard turns a `NULL` slipping under a declared non-nullable column into a
+/// loud write failure instead of a silently `""`-labelled row. The batch itself is built under a
+/// *nullable* schema (so `RecordBatch::try_new` doesn't reject the null first, per this file's
+/// `make_row_set_with_null` doc comment), while the `file_schema` handed to
+/// `write_rows_and_track_times` declares the same column NOT NULL -- exactly the mismatch a bug
+/// in an extraction site's `COALESCE`, or any future producer that bypasses it, would produce
+/// against a view's declared schema.
 #[tokio::test]
 async fn write_rows_rejects_null_under_declared_non_nullable_column() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<PartitionRowSet, anyhow::Error>>(1);

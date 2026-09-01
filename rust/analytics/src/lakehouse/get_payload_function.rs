@@ -105,7 +105,7 @@ impl AsyncScalarUDFImpl for GetPayload {
             .ok_or_else(|| DataFusionError::Internal("downcasting block_ids in GetPayload".into()))?
             .clone();
 
-        // Query Enforcement Prong B (#1371): `get_payload` reads `blobs/{process_id}/{stream_id}
+        // The call-level guard: `get_payload` reads `blobs/{process_id}/{stream_id}
         // /{block_id}` directly out of object storage, bypassing the lakehouse entirely -- arg 1
         // (`process_id`) is therefore the whole check, and a complete one: a caller who names a
         // readable process cannot reach another process's blob, because the foreign block simply

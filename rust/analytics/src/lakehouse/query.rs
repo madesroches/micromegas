@@ -118,7 +118,7 @@ pub fn register_lakehouse_functions(
     view_factory: Arc<ViewFactory>,
     caller: &CallerContext,
 ) {
-    // Query Enforcement Prong B (#1371, AbAC Stage 3): one guard, shared (via `Arc`) across every
+    // The call-level guard: one guard, shared (via `Arc`) across every
     // arg-addressed UDTF/UDF this call registers below -- `view_instance`, `process_spans`,
     // `perfetto_trace_chunks`, `parse_block`, `get_payload`, and `list_partitions`' row filter.
     // `ReadScope::All` makes every one of its checks a no-op, so this costs nothing for
@@ -153,10 +153,9 @@ pub fn register_lakehouse_functions(
         "list_view_sets",
         Arc::new(ListViewSetsTableFunction::new(view_factory.clone())),
     );
-    // Caller-scoped, not admin-gated (#1489, AbAC Stage 6b, Design §2): registered for every
-    // caller, admin or not, with the visibility split decided here rather than inside the
-    // function -- an admin sees every row, a non-admin only the pairs their `grant_selectors`
-    // hold.
+    // Caller-scoped, not admin-gated: registered for every caller, admin or not, with the
+    // visibility split decided here rather than inside the function -- an admin sees every
+    // row, a non-admin only the pairs their `grant_selectors` hold.
     ctx.register_udtf(
         "list_audience_grants",
         Arc::new(ListAudienceGrantsTableFunction::new(
@@ -229,8 +228,7 @@ pub fn register_lakehouse_functions(
         ctx.register_udf(
             make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
         );
-        // Admin-managed query deny list (tasks/query_deny_list_plan.md §8): same admin gate as
-        // the five functions above.
+        // Admin-managed query deny list: same admin gate as the five functions above.
         ctx.register_udtf(
             "list_query_denials",
             Arc::new(ListQueryDenialsTableFunction::new(
@@ -295,7 +293,7 @@ pub async fn make_session_context(
         // Populate `Diagnostic`/`Span` on plan-time errors (unknown column, ambiguous
         // reference, type mismatch, ...) so a caller-facing message can point at a
         // line/column in their SQL text instead of just naming the problem. Off by
-        // default in DataFusion; see the FlightSQL error-classification plan.
+        // default in DataFusion.
         .set_bool("datafusion.sql_parser.collect_spans", true)
         .with_information_schema(true);
     let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
@@ -326,10 +324,9 @@ pub async fn make_session_context(
         .await?;
     }
     if caller.read_scope != ReadScope::All {
-        // ReadScope::All is the internal/maintenance marker (Current State §3 of
-        // tasks/1370_ownership_rewrite_plan.md) -- OwnershipRewrite would no-op for it anyway, so
-        // skip resolving `processes`/`streams` sources and registering the rule entirely rather
-        // than requiring every ReadScope::All caller's ViewFactory to carry them.
+        // ReadScope::All is the internal/maintenance marker -- OwnershipRewrite would no-op for
+        // it anyway, so skip resolving `processes`/`streams` sources and registering the rule
+        // entirely rather than requiring every ReadScope::All caller's ViewFactory to carry them.
         //
         // Must be registered *after* the TableScanRewrite registration above (`query_range.is_some()`
         // block): TableScanRewrite::analyze walks the whole plan with transform_up_with_subqueries

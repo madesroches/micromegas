@@ -1,5 +1,5 @@
-//! DB-backed tests for `list_audience_grants()` (#1489, AbAC Stage 6b) -- the visibility rule
-//! from the plan's Design §2: admin sees every row, a non-admin sees every grant on each
+//! DB-backed tests for `list_audience_grants()` -- the visibility rule: admin sees every row,
+//! a non-admin sees every grant on each
 //! `(audience, axis)` pair covered by one of their identity `grant_selectors` (including a
 //! `group:` hold and its sibling rows on the same pair, and never a different pair), and an
 //! empty selector list (internal/maintenance callers, or a `["*"]`-only list once the

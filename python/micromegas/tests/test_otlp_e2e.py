@@ -189,10 +189,10 @@ def test_otlp_logs_e2e():
 
 def test_otlp_logs_parse_block_e2e():
     """`parse_block` gives a SQL-reachable view into an OTLP block's raw payload,
-    bypassing view materialization entirely (issue #1467) — this is the only
+    bypassing view materialization entirely — this is the only
     place in the suite that walks `object_index`/limit bookkeeping end-to-end
     (`ParseBlockRowBuilder` itself stays private) and that exercises the
-    missing-block error path instead of the pre-existing empty-result one."""
+    missing-block error path rather than the empty-result one."""
     attrs, instance_id = _fresh_resource_attrs()
     base_ns = _now_ns()
     req = _build_logs_request(attrs, base_ns)
@@ -236,8 +236,8 @@ def test_otlp_logs_parse_block_e2e():
     assert all(t == "otlp.LogRecord" for t in rows["type_name"])
     assert list(rows["seq"]) == ["0", "1", "2", "3", "4"]
 
-    # A block genuinely absent from `blocks` for the queried range must error
-    # (issue #1467 §5), not silently return zero rows like before this change.
+    # A block genuinely absent from `blocks` for the queried range must error,
+    # not silently return zero rows.
     missing_block_id = str(uuid.uuid4())
     with pytest.raises(Exception):
         client.query(f"SELECT * FROM parse_block('{missing_block_id}')", begin, end)
@@ -871,7 +871,7 @@ def test_firehose_dev_mode_open_without_access_key():
 
 
 # ---------------------------------------------------------------------------
-# CloudWatch Metric Streams per-namespace process identity (issue #1387)
+# CloudWatch Metric Streams per-namespace process identity
 # ---------------------------------------------------------------------------
 
 
@@ -931,7 +931,7 @@ def test_firehose_cloudwatch_metric_streams_namespace_partition_e2e():
     """A CloudWatch Metric Stream delivery whose resource is fully degenerate (no
     service.*/host.*/process.* — only cloud.*/aws.exporter.arn) must be partitioned
     server-side into one process per CloudWatch namespace rather than collapsing every
-    namespace onto a single process_id (issue #1387). Tagged with a per-run-unique
+    namespace onto a single process_id. Tagged with a per-run-unique
     aws.exporter.arn (rather than service.instance.id, which this route overwrites with
     the ARN itself) so the run is isolated from other tests/runs without a DB wipe.
 

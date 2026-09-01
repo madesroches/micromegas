@@ -1,13 +1,12 @@
-//! Live-DB coverage for the data-lake schema migration's v6 step (#1372, AbAC Stage 4): the
+//! Live-DB coverage for the data-lake schema migration's v6 step: the
 //! `ingestion_api_keys.audience` column. This crate has no migration test today (v5, which
 //! created these very tables, shipped with none); this is the first, and it is deliberately
-//! narrow -- see `tasks/1372_audience_on_keys_plan.md`'s Testing Strategy for why a live test is
-//! the only tool available here (no `testcontainers`, no embedded Postgres, no migration harness
-//! anywhere in this workspace) and why it is worth adding anyway (the `ADD COLUMN` → `UPDATE` →
-//! `SET NOT NULL` ordering and the `CHECK` regex are pure Postgres behavior, with no Rust-side
-//! function to unit-test instead; and `micromegas-ingestion` cannot depend on `micromegas-auth`,
-//! so this live comparison is the only executable link between the `CHECK`'s regex and
-//! `micromegas_auth::policy::is_valid_audience`'s charset).
+//! narrow. A live test is the only tool available here (no `testcontainers`, no embedded
+//! Postgres, no migration harness anywhere in this workspace), and it is worth adding anyway:
+//! the `ADD COLUMN` → `UPDATE` → `SET NOT NULL` ordering and the `CHECK` regex are pure
+//! Postgres behavior, with no Rust-side function to unit-test instead; and `micromegas-ingestion`
+//! cannot depend on `micromegas-auth`, so this live comparison is the only executable link
+//! between the `CHECK`'s regex and `micromegas_auth::policy::is_valid_audience`'s charset.
 //!
 //! Runs against a throwaway, `search_path`-scoped schema (the same trick
 //! `rust/auth/tests/default_provider_tests.rs` uses) so this never touches the shared
@@ -28,8 +27,8 @@ use uuid::Uuid;
 
 const SCHEMA: &str = "mm_1372_sql_migration_test_schema";
 
-/// Builds a throwaway schema pinned to v5 (the pre-#1372 shape: `ingestion_api_keys` exists,
-/// with no `audience` column) by running each `upgrade_data_lake_schema_vN` directly rather than
+/// Builds a throwaway schema pinned to v5 (`ingestion_api_keys` exists, with no `audience`
+/// column) by running each `upgrade_data_lake_schema_vN` directly rather than
 /// through `execute_migration` -- which, now that `LATEST_DATA_LAKE_SCHEMA_VERSION` is 6, would
 /// carry a fresh schema all the way to v6 in one call and leave nothing to seed a v5-era row
 /// into. The v2→v3 step's `CREATE UNIQUE INDEX CONCURRENTLY` (which `execute_migration` runs
@@ -65,7 +64,7 @@ async fn build_v5_schema(pool: &sqlx::PgPool) {
     tr.commit().await.expect("commit v5");
 }
 
-/// Builds a throwaway schema pinned to v6 (the pre-#1489 shape: no `audience_grants` table yet)
+/// Builds a throwaway schema pinned to v6 (no `audience_grants` table yet)
 /// by chaining `build_v5_schema` with the v6 step directly, for the same reason
 /// `build_v5_schema` bypasses `execute_migration` -- which, now that
 /// `LATEST_DATA_LAKE_SCHEMA_VERSION` is 7, would carry a fresh schema all the way to v7 in one
@@ -143,7 +142,7 @@ async fn v6_backfills_existing_rows_and_rejects_invalid_audiences() {
             return Err("expected the throwaway schema to start at v5".to_string());
         }
 
-        // A v5-era row: minted before this stage existed, with no `audience` column to set.
+        // A v5-era row: minted before the `audience` column existed, with no value to set.
         let key_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by)
@@ -216,7 +215,7 @@ async fn v6_backfills_existing_rows_and_rejects_invalid_audiences() {
     test_result.expect("test assertions");
 }
 
-/// The v6 -> v7 step (#1489, AbAC Stage 6a): `execute_migration` against a v6 database creates
+/// The v6 -> v7 step: `execute_migration` against a v6 database creates
 /// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)` and its two `CHECK`
 /// constraints, both mirroring `AudienceGrants::from_rows`'s Rust-side validation
 /// (`rust/auth/src/policy.rs`) on the SQL side.

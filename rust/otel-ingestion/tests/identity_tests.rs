@@ -277,17 +277,16 @@ fn interned_key_is_ignored_in_identity() {
 }
 
 // ---------------------------------------------------------------------------
-// AbAC Stage 5 (#1373, §4): audience-scoped identity. Every case below is a pure function of
-// its arguments -- no database needed to exercise the collision story stamping introduces.
+// Audience-scoped identity. Every case below is a pure function of its arguments -- no
+// database needed to exercise the collision story stamping introduces.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn process_id_none_audience_matches_default_context() {
     // `IdentityContext { audience: None, .. }` must be byte-identical to `::default()` -- the
-    // no-churn guarantee for traffic resolved to the deployment default's namespace (formerly
-    // described as "unstamped deployments"; #1519 makes `None` mean "the deployment default's
-    // namespace" rather than "the credential carried no audience" -- see `identity.rs`'s doc
-    // comment on `process_id_from_resource`).
+    // no-churn guarantee for traffic resolved to the deployment default's namespace. `None`
+    // means "the deployment default's namespace", not "the credential carried no audience" --
+    // see `identity.rs`'s doc comment on `process_id_from_resource`.
     let r = resource_with(&[("host.name", "h"), ("service.name", "svc")]);
     let none_ctx = IdentityContext {
         audience: None,
@@ -313,10 +312,9 @@ fn two_audiences_over_the_same_resource_derive_distinct_process_ids() {
         audience: Some("team-b"),
         extra_hash_input: &[],
     };
-    // Not "the unstamped default" (#1519): `None` now means the resolved write audience *is*
-    // the deployment default, not that the credential carried no audience. `ctx_a`/`ctx_b` here
-    // are both non-default labels, so this still isolates the "distinct audience -> distinct
-    // namespace" property regardless of that reframing.
+    // `None` means the resolved write audience *is* the deployment default, not that the
+    // credential carried no audience. `ctx_a`/`ctx_b` here are both non-default labels, so this
+    // isolates the "distinct audience -> distinct namespace" property.
     let default_ctx = IdentityContext::default();
     let id_a = process_id_from_resource(Some(&r), ctx_a);
     let id_b = process_id_from_resource(Some(&r), ctx_b);

@@ -1,7 +1,5 @@
-//! Unit tests for `IsolationConfig::from_env` (#1370, AbAC Stage 2), the parser Stage 1's
-//! `AudienceReadPolicy::from_env` (`rust/auth/src/policy.rs`, covered by
-//! `rust/auth/tests/policy_tests.rs`) is explicitly modeled on -- unlike that policy, this parser
-//! shipped with no test coverage at all.
+//! Unit tests for `IsolationConfig::from_env`, modeled on `AudienceReadPolicy::from_env`
+//! (`rust/auth/src/policy.rs`, covered by `rust/auth/tests/policy_tests.rs`).
 //!
 //! Every test here mutates process-wide env vars, so all are `#[serial]` with an `EnvGuard` that
 //! restores them on drop, the same pattern as `rust/auth/tests/default_provider_tests.rs`. A
@@ -11,13 +9,12 @@
 //! any test in this repo (checked via grep), but are still cleared by `EnvGuard` since this
 //! file's tests are the only ones that set them.
 //!
-//! `unstamped_audience`/`MICROMEGAS_UNSTAMPED_AUDIENCE` are removed outright (#1482 §4): the
-//! audience column is now physical and non-nullable on every global view, and a never-stamped
-//! process resolves to the deployment default where the audience is read, so there is no more
-//! query-time "unstamped" fallback to configure. What used to be several parsing cases for that
-//! knob collapses to one: setting it at all (prefixed or unprefixed, including to an empty
-//! string) is now a startup error naming its replacement,
-//! `MICROMEGAS_DEFAULT_AUDIENCE` (the deployment default audience).
+//! The audience column is physical and non-nullable on every global view, and a never-stamped
+//! process resolves to the deployment default where the audience is read, so there is no
+//! query-time "unstamped" fallback to configure: setting `unstamped_audience` /
+//! `MICROMEGAS_UNSTAMPED_AUDIENCE` at all (prefixed or unprefixed, including to an empty string)
+//! is a startup error naming its replacement, `MICROMEGAS_DEFAULT_AUDIENCE` (the deployment
+//! default audience).
 
 #![cfg(test)]
 

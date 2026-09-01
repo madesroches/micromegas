@@ -160,8 +160,7 @@ async fn foyer_disk_gauges_emit_only_after_a_second_tick() {
 /// `object_cache_ram_tier_usage_bytes` must fire every tick (unlike the foyer
 /// disk rate gauges, it needs no prior sample), and after a demand `put` of
 /// one block, the sampled value must be at least that block's size --
-/// confirming the accounted RAM-tier usage gauge from the demand-fill-copy
-/// plan (#1276) makes the tier's residency observable.
+/// confirming the RAM-tier usage gauge makes the tier's residency observable.
 #[tokio::test]
 #[serial]
 async fn ram_tier_usage_gauge_reflects_demand_put() {

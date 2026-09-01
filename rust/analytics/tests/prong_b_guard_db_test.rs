@@ -1,14 +1,14 @@
-//! DB-backed tests for Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486):
-//! `AudienceGuard`'s arg-addressed guards on `process_spans`, `perfetto_trace_chunks`,
-//! `parse_block`, `get_payload`, and `view_instance`, plus the row filter on `list_partitions`.
-//! Mirrors `ownership_rewrite_db_test.rs`'s convention
-//! (seed through the real ingestion pipeline, `#[ignore]`, requires a live
-//! `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`) and reuses its
-//! `ProcessInfo.properties` stamping approach -- see that file's module doc comment for why
-//! stamping must happen before any block is materialized.
+//! DB-backed tests for the call-level query-enforcement guard: `AudienceGuard`'s arg-addressed
+//! guards on `process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload`, and
+//! `view_instance`, plus the row filter on `list_partitions`. Mirrors
+//! `ownership_rewrite_db_test.rs`'s convention (seed through the real ingestion pipeline,
+//! `#[ignore]`, requires a live `MICROMEGAS_SQL_CONNECTION_STRING`/`MICROMEGAS_OBJECT_STORE_URI`)
+//! and reuses its `ProcessInfo.properties` stamping approach -- see that file's module doc
+//! comment for why stamping must happen before any block is materialized.
 //!
-//! Unlike Prong A, Prong B resolves audiences straight from Postgres (`AudienceIndex`), so none
-//! of these tests need the `processes`/`streams` global views materialized for the *guard* to
+//! Unlike the row-level filter, this guard resolves audiences straight from Postgres
+//! (`AudienceIndex`), so none of these tests need the `processes`/`streams` global views
+//! materialized for the *guard* to
 //! work -- only `blocks` (for `parse_block`/`get_payload`, neither of which touches `processes`)
 //! and, for `process_spans`/`perfetto_trace_chunks`, whatever `get_process_thread_list`/
 //! `get_process_exe` need to run without error, which is `blocks` and `processes` respectively.
@@ -65,11 +65,11 @@ struct ProcessFixture {
 }
 
 /// Seeds one process -- stamped with `audience` via the real `insert_process(body,
-/// &WriteAudience)` parameter (AbAC Stage 5, #1373) if `Some`, fabricated as a legacy-shaped,
-/// never-stamped row if `None` (the read-side `COALESCE` resolves that to
-/// `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its cpu stream and one block, through the real
-/// ingestion pipeline. `insert_process` stamps unconditionally now (#1519), so the `None` arm
-/// inserts under the deployment default (`public`) and then nulls `audience` back out via
+/// &WriteAudience)` parameter if `Some`, fabricated as a legacy-shaped, never-stamped row if
+/// `None` (the read-side `COALESCE` resolves that to `MICROMEGAS_DEFAULT_AUDIENCE`) -- plus its
+/// cpu stream and one block, through the real ingestion pipeline. `insert_process` stamps
+/// unconditionally, so the `None` arm inserts under the deployment default (`public`) and then
+/// nulls `audience` back out via
 /// `strip_process_audience`. The cpu stream/block are always stamped with `write_audience`;
 /// only the `processes` row is fabricated as legacy-NULL.
 async fn seed_process(
@@ -172,8 +172,8 @@ fn caller(read_scope: ReadScope) -> CallerContext {
 }
 
 /// A caller that passes the lakehouse admin gate (`caller.is_admin ||
-/// !caller.admin_principal_possible`) -- the boolean `AudienceGuard::global_rows_visible` now
-/// consults instead of the removed `unstamped_audience` knob (#1482 §4).
+/// !caller.admin_principal_possible`) -- the boolean `AudienceGuard::global_rows_visible`
+/// consults.
 fn admin_caller(read_scope: ReadScope) -> CallerContext {
     CallerContext {
         is_admin: true,
@@ -228,10 +228,9 @@ async fn row_count(
 
 /// Shared fixture setup: three processes (A/B stamped with different audiences, C never stamped
 /// at all, which `owner_query_sql`'s `COALESCE` resolves to `MICROMEGAS_DEFAULT_AUDIENCE`,
-/// `public` here -- #1482), with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
+/// `public` here), with `blocks`/`processes`/`streams` materialized (needed for `process_spans`'
 /// `get_process_thread_list` and `perfetto_trace_chunks`' `get_process_exe`, which read those
-/// views under the witness's internal caller regardless of the outer caller's scope -- see
-/// `tasks/1371_udtf_udf_guards_plan.md` §6).
+/// views under the witness's internal caller regardless of the outer caller's scope).
 struct Fixtures {
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
@@ -488,7 +487,7 @@ async fn parse_block_guard_enforces_audience_and_skips_processes_dependency() ->
         "expected the uniform not-found-shaped denial, got: {err}"
     );
 
-    // §6 regression window: `parse_block` never touches `processes`, only `blocks` (already
+    // Regression window: `parse_block` never touches `processes`, only `blocks` (already
     // materialized by `setup()`) -- unlike `process_spans`/`perfetto_trace_chunks`, whose inner
     // `get_process_thread_list`/`get_process_exe` calls do, so those two are excluded from this
     // assertion (they already fail in this window under `ReadScope::All` today, guard or no
@@ -641,7 +640,7 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     assert!(
         !team_a_instance_ids.iter().any(|id| id == "global"),
         "'global' rows must stay hidden from a non-admin caller whose view sets aren't in \
-         MICROMEGAS_PUBLIC_VIEW_SETS (#1482 §4)"
+         MICROMEGAS_PUBLIC_VIEW_SETS"
     );
 
     let team_a_admin_batches = query(
@@ -658,8 +657,8 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     });
     assert!(
         has_global,
-        "'global' rows must become visible once the caller passes the lakehouse admin gate \
-         (#1482 §4) -- no query-time knob involved any more"
+        "'global' rows must become visible once the caller passes the lakehouse admin gate -- \
+         no query-time knob involved"
     );
 
     // `LIMIT n` over a filtered set must never return fewer than `min(n, matching)` rows because
@@ -682,7 +681,7 @@ async fn list_partitions_row_filter_enforces_audience() -> Result<()> {
     Ok(())
 }
 
-/// #1486: `view_instance(...)`'s own scan-time guard, run by `MaterializedView::scan` before
+/// `view_instance(...)`'s own scan-time guard, run by `MaterializedView::scan` before
 /// `jit_update`. Covers both resolution arms of `IdKind::ProcessOrStream` -- a stream-scoped view
 /// set (`thread_spans`) and a process-scoped one with no `process_id` column (`async_events`).
 #[ignore]
@@ -765,8 +764,8 @@ async fn view_instance_guard_enforces_audience() -> Result<()> {
     Ok(())
 }
 
-/// The test that actually proves the issue (#1486) is fixed: a denied `view_instance` call must
-/// never reach `jit_update`, so it must never materialize a partition for the instance it named.
+/// Proves a denied `view_instance` call never reaches `jit_update`, so it never materializes a
+/// partition for the instance it named.
 #[ignore]
 #[tokio::test]
 async fn view_instance_guard_prevents_jit_materialization() -> Result<()> {
@@ -806,8 +805,7 @@ async fn view_instance_guard_prevents_jit_materialization() -> Result<()> {
         .collect();
     assert!(
         !ids_after_denial.contains(&f.process_b.cpu_stream_id.to_string()),
-        "the denied query must not have materialized a partition for B's thread_spans instance \
-         -- without the #1486 fix this assertion fails, since jit_update ran anyway"
+        "the denied query must not have materialized a partition for B's thread_spans instance"
     );
 
     // Now run the same query as team-b, the owning audience: it must succeed and the partition
@@ -850,17 +848,17 @@ async fn view_instance_guard_prevents_jit_materialization() -> Result<()> {
     Ok(())
 }
 
-/// §2 of the #1486 plan: `'global'` is row-filtered, not call-guarded -- a scoped caller must
-/// keep being able to run `view_instance(<view set>, 'global')` with no denial, exactly as it can
-/// run the equivalent `SELECT * FROM <view set>` today.
+/// `'global'` is row-filtered, not call-guarded -- a scoped caller must keep being able to run
+/// `view_instance(<view set>, 'global')` with no denial, exactly as it can run the equivalent
+/// `SELECT * FROM <view set>`.
 #[ignore]
 #[tokio::test]
 async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> {
     let f = setup().await?;
     // The fixture seeds no log entries directly (only cpu-stream span/async events), so this
     // does not assert row-level equivalence with `SELECT * FROM log_entries` -- only that the
-    // call itself is not denied. That row-level equivalence is Prong A's existing behaviour,
-    // covered by `ownership_rewrite_db_test.rs`.
+    // call itself is not denied. That row-level equivalence is the row-level filter's existing
+    // behaviour, covered by `ownership_rewrite_db_test.rs`.
     row_count(
         f.lakehouse.clone(),
         f.view_factory.clone(),
@@ -869,7 +867,10 @@ async fn view_instance_global_stays_readable_for_scoped_callers() -> Result<()> 
         "SELECT * FROM view_instance('log_entries', 'global')",
     )
     .await
-    .expect("'global' must stay readable for a scoped caller -- no JIT to trigger, Prong A filters its rows");
+    .expect(
+        "'global' must stay readable for a scoped caller -- no JIT to trigger, the row-level \
+         filter handles its rows",
+    );
 
     Ok(())
 }

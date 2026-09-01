@@ -47,7 +47,7 @@ pub const DEFAULT_PROMOTE_WHOLE_BATCH: bool = false;
 /// Upper bound on a plausible cached object size. No micromegas lake object
 /// (parquet partition or blob) approaches this; a decoded size above it means a
 /// corrupt/misdecoded cache entry, which is treated as a miss and re-resolved
-/// from origin rather than driving a catastrophic allocation (#1287).
+/// from origin rather than driving a catastrophic allocation.
 pub const MAX_PLAUSIBLE_OBJECT_SIZE: u64 = 1 << 48; // 256 TiB
 
 /// Range-aware read cache over an origin object store.
@@ -272,7 +272,7 @@ impl RangeCache {
                                 // entry. Surface it instead of caching a value the
                                 // cached-read path would reject on every future
                                 // read, and keep both paths agreeing that a size
-                                // above the ceiling is never cached (#1287).
+                                // above the ceiling is never cached.
                                 imetric!(
                                     "range_cache_size_implausible",
                                     "count",
@@ -553,11 +553,10 @@ impl RangeCache {
     }
 
     /// Warm the cache for `ranges` at `Prefetch` priority without returning
-    /// any bytes. The HTTP surface for this (endpoint + client method) is
-    /// #1198; this is the priority-carrying core it builds on. Public (rather
-    /// than crate-private) so integration tests under `tests/` — which
-    /// compile as a separate crate — can exercise the promotion behavior
-    /// described in the fetch-rework plan.
+    /// any bytes -- the priority-carrying core that the HTTP prefetch
+    /// endpoint and client method build on. Public (rather than
+    /// crate-private) so integration tests under `tests/` — which compile as
+    /// a separate crate — can exercise the promotion behavior.
     pub async fn prefetch_ranges(&self, key: &str, ranges: &[Range<u64>]) -> Result<()> {
         if ranges.is_empty() {
             return Ok(());

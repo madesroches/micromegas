@@ -41,8 +41,7 @@ async fn firehose_handler(
 ) -> Response {
     let request_id_header = request_id_from(&headers);
 
-    // Resolved from the `AuthContext` `firehose_auth_middleware` inserts (AbAC Stage 5, #1373,
-    // §5: it used to discard it).
+    // Resolved from the `AuthContext` `firehose_auth_middleware` inserts.
     let audience = resolve_write_audience(ctx.as_ref(), service.default_audience());
 
     let mut request_id = request_id_header;

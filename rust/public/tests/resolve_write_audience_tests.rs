@@ -1,6 +1,5 @@
 //! Unit tests for `resolve_write_audience`, plus HTTP-level pass-through cases for the native and
-//! OTLP ingestion routes, and a pre-resolve rejection case for the webhook route (AbAC Stage 5,
-//! #1373, §5; #1519).
+//! OTLP ingestion routes, and a pre-resolve rejection case for the webhook route.
 //!
 //! HTTP cases use `tower::ServiceExt::oneshot` against a lazily-connected Postgres pool +
 //! in-memory object store (never actually touched), matching

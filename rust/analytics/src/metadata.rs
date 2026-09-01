@@ -188,17 +188,17 @@ pub async fn find_stream_from_view(
 ) -> Result<StreamMetadata> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
-    // `ReadScope::All` here is intentional (#1371 §7), not a latent bypass: this function is
+    // `ReadScope::All` here is intentional, not a latent bypass: this function is
     // only ever called from `thread_spans_view.rs`'s `jit_update` implementation, which
     // `MaterializedView::scan` runs *before* the caller's own scan, and it returns stream
     // *metadata* used to build a partition of the very view instance the caller named -- never
     // rows returned to the caller directly. `thread_spans` is registered only via
     // `add_view_set`, so this function is reachable only through a guarded, non-`'global'`
-    // `view_instance(...)` scan -- `OwnershipRewrite` (Prong A) injects no predicate there any
-    // more, and the caller's own read of that instance is authorized instead by
+    // `view_instance(...)` scan -- `OwnershipRewrite` (the row-level filter) injects no predicate there; the
+    // caller's own read of that instance is authorized instead by
     // `AudienceGuard::authorize_view_instance` one frame up, the sole enforcement for this view
-    // set now. `MaterializedView::scan` runs that check (#1486) before calling `jit_update` at
-    // all, so a denied caller never reaches this function.
+    // set. `MaterializedView::scan` runs that check before calling `jit_update` at all, so a
+    // denied caller never reaches this function.
     let ctx = make_session_context(
         lakehouse,
         partition_provider,

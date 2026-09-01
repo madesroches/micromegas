@@ -1,4 +1,4 @@
-// Regression test for #1393: a failing view must not prevent other views in
+// A failing view must not prevent other views in
 // the same update group from being materialized by
 // `micromegas::servers::maintenance::materialize_all_views`. Requires a live
 // Postgres + object store (`MICROMEGAS_SQL_CONNECTION_STRING` /

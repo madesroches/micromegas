@@ -59,14 +59,13 @@ fn count_integer_metric(
     count
 }
 
-/// Regression guard for the double-size-resolution bug (#1206 audit
-/// comment): `get_range_handler` resolves `size()` once for range
-/// validation, then (pre-fix) called plain `stream_ranges`, which resolved
-/// size *again* internally -- double-counting `range_cache_size_backend_hit`
-/// on every warm ranged GET. This mirrors the handler's pattern directly
-/// against `RangeCache`: one `size()` call (the handler's own lookup) plus
-/// `get_range_with_size` (which must do zero additional lookups) should
-/// total exactly one hit, not two.
+/// `get_range_handler` resolves `size()` once for range validation, then
+/// must use `get_range_with_size` rather than plain `stream_ranges`, which
+/// would resolve size *again* internally -- double-counting
+/// `range_cache_size_backend_hit` on every warm ranged GET. This mirrors the
+/// handler's pattern directly against `RangeCache`: one `size()` call (the
+/// handler's own lookup) plus `get_range_with_size` (which must do zero
+/// additional lookups) should total exactly one hit, not two.
 #[test]
 #[serial]
 fn get_range_with_size_resolves_size_once() {

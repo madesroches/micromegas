@@ -1,5 +1,4 @@
-//! Offline (no live DB) regression test for `log_stats`' adoption of order-preserving k-way
-//! merges (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Design §7, Testing Strategy item 6):
+//! Offline (no live DB) regression test for `log_stats`' order-preserving k-way merges:
 //! unlike `per_file_scan_ordering_tests.rs` and `sql_batch_view_merge_ordering_tests.rs`, which use
 //! fabricated views, this pins the *shipped* `log_stats` view definition, so a later edit to its
 //! `ORDER BY`/`GROUP BY` that silently breaks the streaming contract fails CI instead of quietly
@@ -163,8 +162,8 @@ async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
 }
 
 /// Pins the other half of the streaming contract: the *extract* query's declared top-level
-/// `ORDER BY` (Design §3 of `tasks/completed/1392_kway_merge_sorted_partitions_plan.md`). This is
-/// what `SqlPartitionSpec::execute_extract_query` (`sql_partition_spec.rs`) checks before recording
+/// `ORDER BY`. This is what `SqlPartitionSpec::execute_extract_query`
+/// (`sql_partition_spec.rs`) checks before recording
 /// a fresh partition's `sort_order`: a single-partition physical plan whose output ordering
 /// satisfies the declared `(time_bin, process_id, level, target)` columns. If line 43 of
 /// `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`) were dropped or reordered,

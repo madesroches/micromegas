@@ -349,7 +349,7 @@ fn query_audit_record_round_trips_sql_with_braces_and_quotes() {
 }
 
 // -------------------------------------------------------------------------------------------
-// query_deny_list_plan.md §2/§7: `sql_hash` and `error_class = "denied"`.
+// `sql_hash` and `error_class = "denied"`.
 // -------------------------------------------------------------------------------------------
 
 #[test]
@@ -363,7 +363,7 @@ fn query_audit_record_serializes_sql_hash() {
 #[test]
 fn query_audit_record_sql_hash_is_always_present_even_when_status_is_ok() {
     // Unlike `error_class` (present only on error), `sql_hash` is computed on every terminal
-    // path regardless of whether the deny list is in active use (Design §2).
+    // path regardless of whether the deny list is in active use.
     let record = full_record("SELECT 1");
     assert_eq!(record.status, "ok");
     let json = serde_json::to_string(&record).expect("serialization should succeed");

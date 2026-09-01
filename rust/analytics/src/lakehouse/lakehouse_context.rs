@@ -30,16 +30,16 @@ pub struct LakehouseContext {
     metadata_cache: Arc<MetadataCache>,
     runtime: Arc<RuntimeEnv>,
     reader_factory: Arc<ReaderFactory>,
-    /// Query Enforcement Prong B (#1371, AbAC Stage 3) -- resolves *any telemetry id -> its
+    /// The call-level guard -- resolves *any telemetry id -> its
     /// owning process's audience* from Postgres, size- and TTL-bounded. Fixed shape, no
     /// operational knob (see [`DEFAULT_AUDIENCE_CACHE_ENTRIES`]'s doc comment for why).
     audience_index: Arc<AudienceIndex>,
-    /// Admin-managed query deny list (`tasks/query_deny_list_plan.md`). The refresh task that
+    /// Admin-managed query deny list. The refresh task that
     /// keeps its snapshot warm is spawned only by the FlightSQL server builder -- every other
     /// holder of a `LakehouseContext` (maintenance daemon, tests) keeps an empty snapshot and
     /// `check` never denies anything.
     query_denials: Arc<QueryDenyList>,
-    /// The audience a never-stamped process is read as (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482).
+    /// The audience a never-stamped process is read as (`MICROMEGAS_DEFAULT_AUDIENCE`).
     /// Resolved once here and handed to all three sites that read an audience out of Postgres --
     /// `BlocksView`'s `data_sql`, `metadata::find_process`, and [`AudienceIndex`]'s
     /// `owner_query_sql` -- so one process can never resolve two different defaults depending on
@@ -152,7 +152,7 @@ impl LakehouseContext {
     }
 
     /// Returns the audience a never-stamped process is read as
-    /// (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482).
+    /// (`MICROMEGAS_DEFAULT_AUDIENCE`).
     pub fn default_audience(&self) -> Arc<str> {
         self.default_audience.clone()
     }
@@ -188,12 +188,12 @@ impl LakehouseContext {
         &self.reader_factory
     }
 
-    /// Returns the shared Prong B audience index (#1371, AbAC Stage 3).
+    /// Returns the shared call-level-guard audience index.
     pub fn audience_index(&self) -> &Arc<AudienceIndex> {
         &self.audience_index
     }
 
-    /// Returns the shared query deny list (`tasks/query_deny_list_plan.md`).
+    /// Returns the shared query deny list.
     pub fn query_denials(&self) -> &Arc<QueryDenyList> {
         &self.query_denials
     }

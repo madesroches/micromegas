@@ -1,22 +1,19 @@
-//! Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486) -- arg-addressed guards for
+//! The call-level guard -- arg-addressed guards for
 //! five entry points: the span/metadata UDTFs and the `get_payload` UDF that
-//! [`super::ownership_rewrite::OwnershipRewrite`] (Prong A) structurally cannot reach (they bake
+//! [`super::ownership_rewrite::OwnershipRewrite`] (the row-level filter) structurally cannot reach (they bake
 //! their target id into a provider at plan time, return schemas with no `process_id` column to
 //! filter on, and some build their own inner session under `ReadScope::All`), plus
-//! `view_instance(...)`. For the six view sets carrying a physical `audience` column, Prong A
+//! `view_instance(...)`. For the six view sets carrying a physical `audience` column, the row-level filter
 //! *can* and does reach a `view_instance` scan too -- it row-filters it the same as the
 //! named-table form -- so this guard's job there is only to stop a caller from triggering JIT
 //! materialization (real compute and object-storage writes) for an instance outside their
-//! audiences before Prong A's filter ever gets to run, a cost/availability concern rather than a
+//! audiences before the row-level filter ever gets to run, a cost/availability concern rather than a
 //! confidentiality one. For the other five view sets (`net_spans`, `otel_spans`, `images`,
 //! `async_events`, `thread_spans` -- reachable only through a guarded `view_instance(...)`, never
-//! as a named table), Prong A injects no per-row predicate at all once this guard is in place --
+//! as a named table), the row-level filter injects no per-row predicate at all once this guard is in place --
 //! see [`super::materialized_view::MaterializedView::instance_is_audience_guarded`] and
 //! `OwnershipRewrite`'s module doc for the other side of that coupling -- so this guard is their
-//! *sole* confidentiality enforcement, not a redundant belt-and-braces check. See
-//! `tasks/1371_udtf_udf_guards_plan.md` and `tasks/1486_view_instance_guard_plan.md` for the full
-//! design rationale; this comment records only what a future reader of this file needs close at
-//! hand.
+//! *sole* confidentiality enforcement, not a redundant belt-and-braces check.
 //!
 //! ## One cache, one question
 //!
@@ -25,8 +22,7 @@
 //! block's own for [`IdKind::Block`], a process's or a stream's own for
 //! [`IdKind::ProcessOrStream`]. It resolves from **Postgres**, by a single-table, primary-key
 //! point query per row kind -- fresher and independent of materialization, unlike
-//! [`super::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot
-//! (see the plan's §11 for the consequences of the two prongs reading different copies).
+//! [`super::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot.
 //!
 //! ## Fail-closed
 //!
@@ -67,9 +63,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// What a resolution attempt found. Every *existing* process resolves to an audience -- its own
-/// if it was stamped, `MICROMEGAS_DEFAULT_AUDIENCE` if it was not (#1482) -- so `Unknown` is the
+/// if it was stamped, `MICROMEGAS_DEFAULT_AUDIENCE` if it was not -- so `Unknown` is the
 /// only "not a real, readable audience" state left, and it means "no such row" (not yet
-/// ingested, or retention already deleted it, plan §11). Deny, fail-closed.
+/// ingested, or retention already deleted it). Deny, fail-closed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerAudience {
     Unknown,
@@ -96,8 +92,8 @@ pub enum IdKind {
     /// `list_partitions`' `view_instance_id`: either a `process_id` or a `stream_id`, resolved in
     /// one round trip. Cached under its own key rather than reusing `Process`/`Block` entries or a
     /// separate `streams` kind, so the `UNION ALL` result -- fail-closed on a collision between the
-    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached. A second consumer since
-    /// #1486: [`AudienceGuard::authorize_view_instance`]'s scan-time check on `view_instance(...)`
+    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached. A second consumer,
+    /// [`AudienceGuard::authorize_view_instance`]'s scan-time check on `view_instance(...)`,
     /// resolves its `view_instance_id` argument through the same kind, sharing cache entries with
     /// `list_partitions`' row filter over the same id.
     ProcessOrStream,
@@ -126,7 +122,7 @@ pub const DEFAULT_AUDIENCE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// one row per id, so this never triggers for them.
 ///
 /// A `None` audience maps to [`OwnerAudience::Unknown`], not a distinct state. With
-/// `owner_query_sql`'s `COALESCE` in place (#1482) a `None` is unreachable for a row that exists
+/// `owner_query_sql`'s `COALESCE` in place, a `None` is unreachable for a row that exists
 /// -- a missing property resolves to the default instead -- so this arm is a safety net against a
 /// bug in that expression, and it denies exactly like "no such row".
 fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAudience> {
@@ -173,7 +169,7 @@ fn merge_owner_rows(rows: Vec<(Uuid, Option<String>)>) -> HashMap<Uuid, OwnerAud
 /// `$1` is the batch of ids to resolve, bound as a `uuid[]` array so `resolve_many` is always one
 /// query; `$2` is the default audience.
 ///
-/// This site reads Postgres live, so it always resolves the *current* default -- unlike Prong A,
+/// This site reads Postgres live, so it always resolves the *current* default -- unlike the row-level filter,
 /// which reads whatever default was configured when the partition was materialized. The two
 /// agree except across a default change that has not been followed by a regeneration pass.
 fn owner_query_sql(kind: IdKind) -> &'static str {
@@ -231,7 +227,7 @@ async fn fetch_owner_rows(
 pub struct AudienceIndex {
     pool: sqlx::Pool<sqlx::Postgres>,
     cache: moka::future::Cache<(IdKind, Uuid), OwnerAudience>,
-    /// The audience a never-stamped process resolves to (`MICROMEGAS_DEFAULT_AUDIENCE`, #1482),
+    /// The audience a never-stamped process resolves to (`MICROMEGAS_DEFAULT_AUDIENCE`),
     /// bound into every `owner_query_sql` execution. Carried from `LakehouseContext` so this
     /// prong and the materialization path share one resolved value.
     default_audience: Arc<str>,
@@ -309,7 +305,7 @@ impl std::fmt::Debug for AudienceIndex {
     }
 }
 
-/// The uniform, existence-oracle-proof denial text every Prong B guard returns:
+/// The uniform, existence-oracle-proof denial text every call-level guard returns:
 /// `{fname}: '{id}' not found or not accessible`. Extracted so [`AudienceGuard::authorize`] and
 /// [`AudienceGuard::authorize_view_instance`]'s fail-closed fallthrough rule can't drift apart.
 fn not_found_err<T>(fname: &str, id: &str) -> datafusion::error::Result<T> {
@@ -347,9 +343,7 @@ impl Authorized {
     }
 
     /// The `CallerContext` an inner, post-authorization session may run under. Deliberately
-    /// `ReadScope::All` (not the caller's own scope) -- see
-    /// `tasks/1371_udtf_udf_guards_plan.md` §6 for why guard-then-internal is the chosen shape
-    /// here rather than scope inheritance: every inner statement these three call sites run is
+    /// `ReadScope::All` (not the caller's own scope): every inner statement these three call sites run is
     /// server-constructed and confined to `self.id`, so if `self.id`'s process is readable,
     /// everything those statements can reach is readable too.
     pub fn internal_caller(&self) -> CallerContext {
@@ -366,9 +360,8 @@ pub struct AudienceGuard {
     read_scope: ReadScope,
     /// Whether this deployment's caller passes the lakehouse admin gate --
     /// `caller.is_admin || !caller.admin_principal_possible` (`query.rs`), the same boolean that
-    /// already governs registration of the mutating lakehouse UDTFs/UDFs. Occupies the slot the
-    /// removed `unstamped_audience` field used to (#1482 §4): it is what
-    /// [`Self::global_rows_visible`] now consults instead.
+    /// already governs registration of the mutating lakehouse UDTFs/UDFs. Consulted by
+    /// [`Self::global_rows_visible`].
     lakehouse_admin: bool,
     public_view_sets: Vec<String>,
     index: Arc<AudienceIndex>,
@@ -462,13 +455,12 @@ impl AudienceGuard {
         self.public_view_sets.iter().any(|s| s == view_set_name)
     }
 
-    /// `list_partitions`' `'global'`-row rule (#1482 §4): a global partition is a multi-audience
+    /// `list_partitions`' `'global'`-row rule: a global partition is a multi-audience
     /// file -- it has no single owning audience to check against the caller's scope. Visible
     /// under `ReadScope::All`, when `view_set_name` is on the public allowlist, or when the
     /// caller passes the lakehouse admin gate (the same boolean that already governs the
     /// mutating UDTFs/UDFs: a caller who can `retire_partitions`/`regenerate_partitions` a global
-    /// file can see it -- no new authority, no new knob). Previously: visible whenever the
-    /// removed `unstamped_audience` knob was itself in the caller's scope.
+    /// file can see it -- no new authority, no new knob).
     pub fn global_rows_visible(&self, view_set_name: &str) -> bool {
         match &self.read_scope {
             ReadScope::All => true,
@@ -478,7 +470,7 @@ impl AudienceGuard {
         }
     }
 
-    /// The `view_instance(view_set_name, view_instance_id)` scan-time check (#1486), run by
+    /// The `view_instance(view_set_name, view_instance_id)` scan-time check, run by
     /// `MaterializedView::scan` before `jit_update` -- so a caller scoped to one audience cannot
     /// trigger JIT materialization of an instance it cannot read.
     ///
@@ -486,7 +478,7 @@ impl AudienceGuard {
     ///
     /// 1. `ReadScope::All` -> `Ok(())`, no I/O. Internal, maintenance, `--disable-auth`, and
     ///    every inner session built from an `Authorized::internal_caller()` take this arm.
-    /// 2. `view_set_name` on `public_view_sets` -> `Ok(())`. Matches Prong A: an operator who
+    /// 2. `view_set_name` on `public_view_sets` -> `Ok(())`. Matches the row-level filter: an operator who
     ///    declared a view set public has said every row of it is readable, so denying
     ///    materialization of one of its instances would be incoherent. Confidentiality-only:
     ///    this leaves the cost/availability residual this method exists to close fully open for
@@ -497,7 +489,7 @@ impl AudienceGuard {
     ///    (`LogView`/`MetricsView`, the only two view sets that accept `'global'`), so there is
     ///    no materialization to protect against, and denying the call would break the legal
     ///    `view_instance('log_entries', 'global')` spelling of `SELECT * FROM log_entries` for no
-    ///    security gain -- Prong A already filters its rows one at a time. This is a different
+    ///    security gain -- the row-level filter already filters its rows one at a time. This is a different
     ///    rule from `list_partitions`' `global_rows_visible`, which gates *visibility of
     ///    partition metadata* about a `'global'` file with no per-row filter available; reusing
     ///    it here would deny the `log_entries`/`measures` `'global'` instances to every

@@ -62,10 +62,9 @@ class FakeParser:
 
 
 def test_make_client_returns_web_client_for_ingestion_table(monkeypatch):
-    """Regression test for #1458: `--table ingestion` used to return an
-    `IngestionClient` (calling ingestion directly); it now always returns a
-    `WebClient` pointed at `analytics-web-srv`, since ingestion exposes no
-    key-management HTTP routes of its own."""
+    """`--table ingestion` always returns a `WebClient` pointed at
+    `analytics-web-srv`, never an `IngestionClient` calling ingestion
+    directly -- ingestion exposes no key-management HTTP routes of its own."""
     monkeypatch.setattr(import_keys, "build_auth_provider", lambda args, parser: None)
     args = make_args(table="ingestion", url="http://analytics:3000")
     client = import_keys.make_client(args, FakeParser())
@@ -213,7 +212,7 @@ def test_read_keyring_rejects_entry_missing_key(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# read_keyring: per-entry "audience" (#1372, AbAC Stage 4)
+# read_keyring: per-entry "audience"
 # ---------------------------------------------------------------------------
 
 
@@ -249,7 +248,7 @@ def test_read_keyring_rejects_a_non_string_audience(monkeypatch):
 def test_read_keyring_rejects_a_per_entry_audience_with_analytics_table(monkeypatch):
     """A keyring built for ingestion must not be silently reused against
     `--table analytics` with its audience dropped -- rejected up front,
-    before any HTTP request, per §7's design."""
+    before any HTTP request."""
     monkeypatch.setenv(
         "MICROMEGAS_API_KEYS",
         json.dumps([{"name": "a", "key": "secret-a", "audience": "team-alpha"}]),

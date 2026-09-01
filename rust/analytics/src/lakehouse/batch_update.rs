@@ -261,8 +261,7 @@ pub async fn materialize_partition_range(
 }
 
 /// Regenerates the partition(s) covering `insert_range` directly from source data, bypassing the
-/// "already up to date" freshness check `materialize_partition_range` would otherwise stop at. See
-/// `tasks/blocks_view_ordered_merges_plan.md`'s Design §3.
+/// "already up to date" freshness check `materialize_partition_range` would otherwise stop at.
 ///
 /// **Invariant callers must uphold**: `(begin, end, delta)` must exactly cover the boundaries of
 /// the partition(s) being regenerated -- a misaligned range/delta means the new partition's range

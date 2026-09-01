@@ -1,12 +1,11 @@
-//! Offline (no live DB) regression tests for `SqlBatchView::with_merge_sort_order`
-//! (`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` Design §3, Testing Strategy items 4-5):
+//! Offline (no live DB) regression tests for `SqlBatchView::with_merge_sort_order`:
 //! - the dual-merger selection and `get_merged_partition_sort_order` gate across the input matrix
 //!   (all certified / one uncertified / all empty / mixed)
 //! - `register_table` keeps registering `merge_partitions_query` verbatim: the user-facing view's
 //!   *logical* plan carries no `Sort` node above the merge query, even though the same view's
 //!   `merge_partitions` (through its `ordered_merger`) does apply one internally
-//! - the user-query-path plan shape (Design §3's memory reasoning and the "No ceiling on k"
-//!   trade-off both depend on it): no `SortExec`, `ordering_mode=Sorted`, and the order-preserving
+//! - the user-query-path plan shape (the memory reasoning and the "No ceiling on k" trade-off
+//!   both depend on it): no `SortExec`, `ordering_mode=Sorted`, and the order-preserving
 //!   `RepartitionExec(Hash(...), preserve_order=true)` splitting k declared per-file groups into
 //!   `target_partitions` byte-range groups once `target_partitions` is pinned above k
 
@@ -65,8 +64,8 @@ async fn make_test_view_with_merge_query(
 }
 
 /// Same as `make_test_view_with_merge_query`, but additionally accepts a `merger_maker` -- lets a
-/// test build the supported-but-previously-rejected combination of a custom `merger_maker` passed
-/// to `new` alongside a chained `.with_merge_sort_order` (plan Rollout steps 1 and 4).
+/// test build the supported combination of a custom `merger_maker` passed to `new` alongside a
+/// chained `.with_merge_sort_order`.
 async fn make_test_view_with_merge_query_and_merger(
     lakehouse: &LakehouseContext,
     merge_query: &str,
@@ -271,8 +270,8 @@ async fn one_uncertified_input_falls_back_to_the_plain_merger() {
 
 #[tokio::test]
 async fn custom_merger_maker_coexists_with_a_declared_merge_sort_order() {
-    // Plan Design §3 and Rollout steps 1 & 4: a custom merger_maker (e.g. BatchPartitionMerger)
-    // must remain usable as the fallback merger for not-yet-certified inputs even after
+    // A custom merger_maker (e.g. BatchPartitionMerger) must remain usable as the fallback
+    // merger for not-yet-certified inputs even after
     // with_merge_sort_order is chained on top -- it must not be rejected, and certified inputs
     // must still take the declared-order QueryMerger over it.
     let lakehouse = make_offline_lakehouse_context().await;
@@ -425,7 +424,7 @@ async fn user_query_path_stays_streaming_with_target_partitions_pinned_above_k()
     // get_scan_output_ordering() -> PerFile view would produce) directly in a default (user)
     // session -- not a merge-query session with QueryMerger's optimizer overrides -- pinning
     // target_partitions explicitly above k so the assertion doesn't silently no-op on a
-    // low-core-count CI runner (Design §3 / Testing Strategy item 5).
+    // low-core-count CI runner.
     let k: usize = 3;
     let columns = vec![
         ScanSortColumn {
@@ -509,14 +508,14 @@ async fn user_query_path_stays_streaming_with_target_partitions_pinned_above_k()
 
 #[tokio::test]
 async fn build_side_enrichment_join_reports_ordering_not_honored_without_erroring() {
-    // Plan Testing Strategy item 3 / Design §5 correction 3: a realistic authoring mistake is an
-    // enrichment join phrased with the ordered aggregate on the *build* side of a `LEFT JOIN`
+    // A realistic authoring mistake is an enrichment join phrased with the ordered aggregate on
+    // the *build* side of a `LEFT JOIN`
     // (`CollectLeft` buffers its left input and inherits ordering from the right/probe side, so
     // the naturally-phrased `(<ordered agg>) a LEFT JOIN dim d` reinstates a blocking SortExec --
     // see `ordered_aggregation_spike_tests.rs`'s
     // `enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort`). Even
     // under the `PerFile` merge branch's mandatory trailing `DataFrame::sort` (merge.rs:183-188),
-    // the plan still carries a `SortExec` -- this must warn (check 3), not fail the merge. A false
+    // the plan still carries a `SortExec` -- this must warn, not fail the merge. A false
     // `ordering_honored` is itself proof the ordered merger ran: the plain one always reports true.
     let lakehouse = make_offline_lakehouse_context().await;
     let view = make_test_view_with_merge_query(
@@ -549,8 +548,8 @@ async fn build_side_enrichment_join_reports_ordering_not_honored_without_errorin
 
 #[tokio::test]
 async fn declared_ascending_sort_order_overrides_a_contradictory_author_order_by_desc() {
-    // Testing Strategy item 3: the merge query's own (contradictory) `ORDER BY ... DESC` must not
-    // win -- `execute_sorted_merge`'s unconditional `DataFrame::sort` over the declared ascending
+    // The merge query's own (contradictory) `ORDER BY ... DESC` must not win --
+    // `execute_sorted_merge`'s unconditional `DataFrame::sort` over the declared ascending
     // columns (merge.rs:183-188) is applied on top of the author's query, so the declared order
     // always wins. Two out-of-order rows ('b' before 'a', matching the author's DESC clause) make
     // the override observable: an ascending result can only come from the declared sort order, not

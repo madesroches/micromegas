@@ -81,7 +81,7 @@ pub mod env;
 /// API key authentication
 pub mod api_key;
 
-/// DB-backed API key authentication (#1383)
+/// DB-backed API key authentication
 pub mod db_api_key;
 
 /// OIDC authentication with JWKS caching
@@ -112,8 +112,7 @@ pub mod oauth_state;
 pub mod user_attribution;
 
 /// Authorization seam: `MintPolicy`, `ReadPolicy`, and their audience-based implementations
-/// (#1369, AbAC Stage 1)
 pub mod policy;
 
-/// DB-backed audience grant store (#1489, AbAC Stage 6a)
+/// DB-backed audience grant store
 pub mod db_audience_grants;

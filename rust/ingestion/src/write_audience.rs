@@ -1,5 +1,4 @@
-//! The authenticated write audience a request ingests under (AbAC Stage 5, #1373; collapsed to
-//! a single state by #1519).
+//! The authenticated write audience a request ingests under.
 //!
 //! Always a real audience: a credential that carries none resolves to the deployment default at
 //! the HTTP edge (`micromegas::servers::write_audience::resolve_write_audience`), the same
@@ -8,7 +7,7 @@
 
 use std::sync::Arc;
 
-/// The authenticated write audience a request ingests under (AbAC Stage 5, #1373; #1519).
+/// The authenticated write audience a request ingests under.
 /// Always a real audience -- a credential that carries none resolves to the deployment default
 /// at the HTTP edge rather than staying a distinct, unstamped third state.
 ///
@@ -25,7 +24,7 @@ impl WriteAudience {
     /// Rejects a malformed label: `ingestion_api_keys.audience` is already `CHECK`-constrained
     /// to `[A-Za-z0-9_-]{1,255}`, so this is defence in depth against a future producer of
     /// `bound_audience` that doesn't go through that column. The HTTP-edge caller
-    /// (`micromegas::servers::write_audience::resolve_write_audience`) no longer treats this
+    /// (`micromegas::servers::write_audience::resolve_write_audience`) does not treat this
     /// `Err` as a rejection -- it warns and degrades to the deployment default instead, since
     /// that caller has no `Result` to propagate the failure through. This is also the validating
     /// constructor for the deployment default itself, called once at startup. The charset check
@@ -48,11 +47,10 @@ impl WriteAudience {
         &self.0
     }
 
-    /// The OTLP id-derivation namespace `self` occupies, relative to `default` (AbAC Stage 5,
-    /// #1373, §4; id-namespace rule added by #1519, §6). `default` is the deployment's resolved
-    /// default audience: it keeps the un-salted, pre-Stage-5 `NS_OTEL_PROCESS_V1` namespace, so a
-    /// resolved-to-default caller and one explicitly bound to a label equal to the default derive
-    /// the *same* ids. Every other audience gets its own salted namespace.
+    /// The OTLP id-derivation namespace `self` occupies, relative to `default`. `default` is the
+    /// deployment's resolved default audience: it keeps the un-salted `NS_OTEL_PROCESS_V1`
+    /// namespace, so a resolved-to-default caller and one explicitly bound to a label equal to
+    /// the default derive the *same* ids. Every other audience gets its own salted namespace.
     ///
     /// Returns `None` (the un-salted default namespace) when `self == default`, `Some(self)`
     /// (a per-audience salted namespace) otherwise. Named and pulled out here, rather than

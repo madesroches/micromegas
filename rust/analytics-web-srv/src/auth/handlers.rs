@@ -509,8 +509,7 @@ pub async fn cookie_auth_middleware(
     req.extensions_mut().insert(AuthToken(id_token));
     req.extensions_mut()
         .insert(ValidatedUser::from(&auth_context));
-    // Closes hole #3 (#1369): analytics-web-srv is the mint path's identity source since #1458
-    // moved key management onto this service, so Stage 6's `mint_key` needs `AuthContext`
+    // analytics-web-srv is the mint path's identity source, so `mint_key` needs `AuthContext`
     // (groups included) to consult a `MintPolicy` -- `ValidatedUser` deliberately stays a
     // browser-session view without groups.
     req.extensions_mut().insert(auth_context);
@@ -600,7 +599,7 @@ impl IntoResponse for Unauthenticated {
 
 /// Extractor that yields the caller's full `AuthContext` for any authenticated request, with no
 /// admin check -- the self-service mint route's authorization is `MintPolicy::resolve_audience`
-/// itself, not a gate in front of it (AbAC Stage 6, #1374).
+/// itself, not a gate in front of it.
 pub struct AuthenticatedUser(pub AuthContext);
 
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedUser {

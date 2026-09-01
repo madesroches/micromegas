@@ -5,5 +5,5 @@
 //! namespace before they send anything, and must not pull a database driver in to do it.
 
 /// Reserved, server-written property namespace. A client-supplied property whose key starts
-/// with this prefix is dropped at ingestion (AbAC Stage 5, #1373).
+/// with this prefix is dropped at ingestion.
 pub const RESERVED_PROPERTY_PREFIX: &str = "micromegas.";

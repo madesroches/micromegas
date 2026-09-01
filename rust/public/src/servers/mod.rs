@@ -25,7 +25,7 @@ pub mod firehose;
 /// shared auth/response/request-id plumbing for every Firehose-backed ingestion route
 pub mod firehose_common;
 
-/// resolving the authenticated write audience at the HTTP edge (AbAC Stage 5, #1373)
+/// resolving the authenticated write audience at the HTTP edge
 pub mod write_audience;
 
 /// Kinesis Data Firehose HTTP Endpoint Delivery route for CloudWatch Logs subscription

@@ -6,15 +6,15 @@ pub mod async_events_block_processor;
 pub mod async_events_view;
 /// Write parquet in object store
 pub mod async_parquet_writer;
-/// Query Enforcement Prong B (#1371, AbAC Stage 3; extended by #1486): per-id audience
+/// The call-level guard: per-id audience
 /// resolution (`AudienceIndex`) and the fail-closed guard (`AudienceGuard`) for the
-/// span/metadata UDTFs and `get_payload` UDF `OwnershipRewrite` (Prong A) structurally cannot
+/// span/metadata UDTFs and `get_payload` UDF `OwnershipRewrite` (the row-level filter) structurally cannot
 /// reach, plus a scan-time guard on `view_instance(...)`. For the six view sets carrying a
-/// physical `audience` column, Prong A *can* and does reach a `view_instance` scan too,
-/// row-filtering it the same as the named-table form -- there `view_instance` joined Prong B to
+/// physical `audience` column, the row-level filter *can* and does reach a `view_instance` scan too,
+/// row-filtering it the same as the named-table form -- there `view_instance` joined the call-level guard to
 /// close a cost/availability residual (stopping JIT materialization for a foreign-audience
-/// instance), not because Prong A can't filter it. For the other five view sets, reachable only
-/// through a guarded `view_instance(...)`, Prong A injects no predicate at all, so this guard is
+/// instance), not because the row-level filter can't filter it. For the other five view sets, reachable only
+/// through a guarded `view_instance(...)`, the row-level filter injects no predicate at all, so this guard is
 /// their sole enforcement.
 pub mod audience_guard;
 /// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
@@ -45,7 +45,7 @@ pub mod images_view;
 pub mod jit_partitions;
 /// Bundles runtime resources for lakehouse query execution
 pub mod lakehouse_context;
-/// Caller-scoped UDTF listing rows of the `audience_grants` table (#1489, AbAC Stage 6b)
+/// Caller-scoped UDTF listing rows of the `audience_grants` table
 pub mod list_audience_grants_table_function;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
@@ -79,7 +79,7 @@ pub mod migration;
 pub mod net_spans_view;
 /// OTLP reader path: attribute helpers, block processors, and the otel_spans view.
 pub mod otel;
-/// Query Enforcement Prong A (#1370, AbAC Stage 2): injects an audience predicate into every
+/// The row-level filter: injects an audience predicate into every
 /// `MaterializedView` scan based on the caller's `ReadScope`.
 pub mod ownership_rewrite;
 /// Table function to parse all transit objects in a block and return them as JSONB
@@ -109,14 +109,13 @@ pub mod processes_view;
 /// property_get function support from SQL
 /// Datafusion integration
 pub mod query;
-/// Admin-managed query deny list (`tasks/query_deny_list_plan.md`): fingerprinting, the match
+/// Admin-managed query deny list: fingerprinting, the match
 /// context, and the Postgres-backed, TTL-refreshed cache `execute_query` checks every query
 /// against.
 pub mod query_deny_list;
 /// Authorization seam input: `ReadScope` and the `CallerContext` bundle threaded into
-/// `make_session_context` (#1369, AbAC Stage 1). Consumed by Prong A
-/// (`ownership_rewrite::OwnershipRewrite`, #1370) and Prong B (`audience_guard::AudienceGuard`,
-/// #1371).
+/// `make_session_context`. Consumed by the row-level filter
+/// (`ownership_rewrite::OwnershipRewrite`) and the call-level guard (`audience_guard::AudienceGuard`).
 pub mod read_scope;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData, reading footers from the
 /// ObjectStore through a cache-backed reader

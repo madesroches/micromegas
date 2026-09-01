@@ -1,4 +1,4 @@
-//! DB-backed API key authentication (#1383).
+//! DB-backed API key authentication.
 //!
 //! Moves API keys out of `MICROMEGAS_API_KEYS` (plaintext JSON in an env var) into
 //! two Postgres tables — `ingestion_api_keys` and `analytics_api_keys` (migration
@@ -45,10 +45,9 @@ impl ApiKeyTable {
         }
     }
 
-    /// Whether this table carries Stage 4's (#1372) write-side `audience` column
-    /// (`ingestion_api_keys` only, migration v6). `analytics_api_keys`'s read-side mirror is
-    /// `read_audiences` (Stage 4b), a set-valued grant on the caller rather than a column on
-    /// the key row.
+    /// Whether this table carries a write-side `audience` column (`ingestion_api_keys` only,
+    /// migration v6). `analytics_api_keys`'s read-side mirror is `read_audiences`, a set-valued
+    /// grant on the caller rather than a column on the key row.
     pub fn has_audience(self) -> bool {
         matches!(self, ApiKeyTable::Ingestion)
     }
@@ -187,10 +186,10 @@ fn table_tags(table: &'static str) -> &'static micromegas_tracing::property_set:
 
 /// Rate-limits the outage `error!` log to at most once per `window_secs` (per
 /// table), checked-and-set via a single `AtomicI64` "last logged at" timestamp —
-/// not once per rejected request. §2's design notes: `DbApiKeyAuthProvider` sits
-/// last in the auth chain, so during an outage every non-env-key, non-JWT request
-/// reaches it; an unconditional `error!` would flood `log_entries` with the
-/// outage's own noise on the highest-volume service in the deployment.
+/// not once per rejected request. `DbApiKeyAuthProvider` sits last in the auth
+/// chain, so during an outage every non-env-key, non-JWT request reaches it; an
+/// unconditional `error!` would flood `log_entries` with the outage's own noise
+/// on the highest-volume service in the deployment.
 fn maybe_log_error(last_logged_at: &AtomicI64, window_secs: i64, table: &str, err: &anyhow::Error) {
     let now = Utc::now().timestamp();
     let prev = last_logged_at.load(Ordering::Relaxed);
@@ -257,7 +256,7 @@ impl AuthProvider for DbApiKeyAuthProvider {
 
         // A repeated probe of the same bogus token is free after the first
         // attempt; a flood of distinct bogus tokens still costs one DB round trip
-        // per request (see the plan's "A negative cache" trade-off).
+        // per request.
         if self.unknown.get(&hash).await.is_some() {
             anyhow::bail!("invalid API token");
         }
@@ -335,12 +334,11 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 );
                 Ok(AuthContext {
                     subject: row.name.clone(),
-                    // Deliberately left `None`, not `created_by` (AbAC plan §4): under the
-                    // grant-map model, `email` is what `user:` selectors match on, so
-                    // populating it from the minting admin would hand this key every
-                    // audience granted to *them*. `OidcAuthProvider::is_admin` is the only
-                    // other consumer of a principal's email, and it never sees an API-key
-                    // `AuthContext`.
+                    // Deliberately left `None`, not `created_by`: under the grant-map model,
+                    // `email` is what `user:` selectors match on, so populating it from the
+                    // minting admin would hand this key every audience granted to *them*.
+                    // `OidcAuthProvider::is_admin` is the only other consumer of a principal's
+                    // email, and it never sees an API-key `AuthContext`.
                     email: None,
                     issuer: "api_key".to_string(),
                     audience: None,
@@ -348,13 +346,13 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     auth_type: AuthType::ApiKey,
                     // SECURITY: API keys can NEVER be admins.
                     is_admin: false,
-                    // `false` for ingestion keys (Stage 4, #1372): an ingestion write
-                    // credential is not a delegating service account, and can never reach
-                    // the gRPC path `allow_delegation` governs anyway (it lives in the
-                    // other table). Unchanged (`true`) for analytics keys.
+                    // `false` for ingestion keys: an ingestion write credential is not a
+                    // delegating service account, and can never reach the gRPC path
+                    // `allow_delegation` governs anyway (it lives in the other table).
+                    // Unchanged (`true`) for analytics keys.
                     allow_delegation: self.table.allows_delegation(),
                     // `Some(..)` for every ingestion key (the column is `NOT NULL`), `None`
-                    // for analytics keys -- Stage 4b populates `read_audiences` for those.
+                    // for analytics keys -- `read_audiences` populates that side instead.
                     bound_audience: row.audience.clone(),
                     read_audiences: vec![],
                     groups: vec![],

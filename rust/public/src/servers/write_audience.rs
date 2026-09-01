@@ -1,12 +1,11 @@
-//! Resolving the authenticated write audience at the HTTP edge (AbAC Stage 5, #1373, §5; #1519).
+//! Resolving the authenticated write audience at the HTTP edge.
 //!
 //! `rust/public` is the only crate that sees both `AuthContext` (`micromegas-auth`) and the
 //! ingestion service (`micromegas-ingestion`), so this is where an `Option<&Extension<AuthContext>>`
-//! -- the request extension every ingestion route now carries -- turns into a
-//! [`micromegas_ingestion::write_audience::WriteAudience`]. `WriteAudience` is single-state
-//! (#1519): a credential carrying no bound audience, or one that fails `WriteAudience::new`
-//! validation, resolves to the deployment default here rather than to a distinct unstamped
-//! state.
+//! -- the request extension every ingestion route carries -- turns into a
+//! [`micromegas_ingestion::write_audience::WriteAudience`]. `WriteAudience` is single-state: a
+//! credential carrying no bound audience, or one that fails `WriteAudience::new` validation,
+//! resolves to the deployment default here rather than to a distinct unstamped state.
 
 use axum::Extension;
 use micromegas_auth::types::AuthContext;

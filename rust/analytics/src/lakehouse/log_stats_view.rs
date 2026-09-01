@@ -26,8 +26,7 @@ pub async fn make_log_stats_view(
     ));
 
     // Transform query to aggregate logs by time bin, process, level, and target. The top-level
-    // ORDER BY is the view-author contract's item 3 (tasks/completed/1392_kway_merge_sorted_partitions_plan.md
-    // Design §5/§7): it lets the fresh-write path record the (time_bin, process_id, level, target)
+    // ORDER BY lets the fresh-write path record the (time_bin, process_id, level, target)
     // sort_order guarantee with_merge_sort_order below declares.
     //
     // `audience` joins the GROUP BY: `log_entries.audience` is a per-row stamp, and a single
@@ -53,9 +52,9 @@ pub async fn make_log_stats_view(
     ));
 
     // Merge query to combine partitions. No ORDER BY is written here -- QueryMerger applies the
-    // sort as a DataFusion logical-plan node from the with_merge_sort_order columns below (Design
-    // §2/§3), never reaching this SQL text. `audience` joins this GROUP BY too, for the same
-    // reason as the transform query above.
+    // sort as a DataFusion logical-plan node from the with_merge_sort_order columns below, never
+    // reaching this SQL text. `audience` joins this GROUP BY too, for the same reason as the
+    // transform query above.
     let merge_query = Arc::new(String::from(
         r#"
         SELECT time_bin,
@@ -88,9 +87,9 @@ pub async fn make_log_stats_view(
         None,               // custom merger
     )
     .await?
-    // Time first (Design §7): keeps merged partitions time-local, preserving row-group pruning on
-    // time_bin for user queries. GROUP BY key order is irrelevant to streaming (Design §5), so any
-    // prefix of these four columns would stream too -- this is the full declared order.
+    // Time first: keeps merged partitions time-local, preserving row-group pruning on time_bin
+    // for user queries. GROUP BY key order is irrelevant to streaming, so any prefix of these
+    // four columns would stream too -- this is the full declared order.
     .with_merge_sort_order(vec![
         Arc::new("time_bin".to_owned()),
         Arc::new("process_id".to_owned()),

@@ -102,7 +102,7 @@ def test_main_create_subcommand_dispatches(monkeypatch):
 
 
 def test_main_rejects_list_subcommand(monkeypatch, capsys):
-    """The `list` subcommand is removed (#1510) -- listing now goes through
+    """There is no `list` subcommand -- listing goes through
     `micromegas-query --all "SELECT * FROM list_audience_grants()"` instead."""
     monkeypatch.setattr(
         "sys.argv",

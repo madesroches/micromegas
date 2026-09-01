@@ -1,7 +1,7 @@
-//! Tests for `ingestion_keys.rs` — the ingestion-key management routes
-//! (#1458), a straight structural copy of `analytics_keys_tests.rs` retargeted
-//! at `ingestion_api_keys`. Extended for the audience column (#1372, AbAC
-//! Stage 4): `resolve_audience`'s resolution matrix, and the route-level
+//! Tests for `ingestion_keys.rs` — the ingestion-key management routes,
+//! a straight structural copy of `analytics_keys_tests.rs` retargeted
+//! at `ingestion_api_keys`. Extended for the audience column:
+//! `resolve_audience`'s resolution matrix, and the route-level
 //! precedence/400 coverage only a route can add.
 //!
 //! Modeled on `maps_tests.rs`'s `build_handler_router_with_user` +
@@ -17,14 +17,14 @@
 //! per `firehose_tests.rs`'s precedent) and never actually reaches the
 //! database: most 403 cases are rejected by the `AdminUser` extractor before
 //! any handler runs, except mint's non-admin denials, which come from
-//! `MintGate` instead (AbAC Stage 6, #1374) -- still before any handler body
+//! `MintGate` instead -- still before any handler body
 //! runs. The 400 cases fail validation before touching the pool, and the
 //! `NotConfigured` cases use `IngestionKeysState { pool: None, .. }`,
 //! which never touches `state.pool` at all. Live-DB round trips for
 //! mint/list/revoke/import are `#[ignore]`d, run manually against a real
 //! Postgres per `folders_tests.rs`'s precedent.
 //!
-//! §5's resolution matrix (explicit / knob / `import`'s `PUBLIC_AUDIENCE`
+//! The resolution matrix (explicit / knob / `import`'s `PUBLIC_AUDIENCE`
 //! fallback / `mint`'s 400) is tested against `resolve_audience` directly,
 //! not through the routes: the helper is sync, takes no pool, and every
 //! route-level test in this file that reaches an `INSERT` is `#[ignore]`d, so
@@ -79,7 +79,7 @@ fn unique_non_admin_user() -> ValidatedUser {
 }
 
 /// Builds an `AuthContext` mirroring a `ValidatedUser` -- the same shape `cookie_auth_middleware`
-/// inserts alongside `ValidatedUser` in production (`auth/handlers.rs`), AbAC Stage 6, #1374.
+/// inserts alongside `ValidatedUser` in production (`auth/handlers.rs`).
 /// Mirrors `auth/tests/policy_tests.rs::caller`'s field defaults (it isn't exported); duplicated
 /// verbatim per this crate's existing convention of mirroring rather than sharing such helpers
 /// across `tests/*.rs` files, since each file in `tests/` is a separate crate.
@@ -103,8 +103,8 @@ fn auth_context_for(user: &ValidatedUser) -> AuthContext {
 /// (state layered as `Extension<IngestionKeysState>`), with auth bypassed by
 /// pre-inserting a synthetic `ValidatedUser` — the same shape `--disable-auth`
 /// uses — instead of standing up an OIDC mock and running
-/// `cookie_auth_middleware` for real. Also layers a matching `AuthContext` (AbAC Stage 6,
-/// #1374): `mint_key` now runs through `MintGate`/`AuthenticatedUser`, which reads `AuthContext`,
+/// `cookie_auth_middleware` for real. Also layers a matching `AuthContext`:
+/// `mint_key` runs through `MintGate`/`AuthenticatedUser`, which reads `AuthContext`,
 /// not `ValidatedUser` -- without this, every mint test would hit the `Unauthenticated`
 /// rejection instead of the denial/success path it actually means to exercise.
 fn build_handler_router_with_user(state: IngestionKeysState, user: ValidatedUser) -> Router {
@@ -154,7 +154,7 @@ fn delete_request(uri: &str) -> Request<Body> {
 }
 
 // ---------------------------------------------------------------------------
-// resolve_audience -- §5's resolution matrix, unit-tested with no pool
+// resolve_audience -- the resolution matrix, unit-tested with no pool
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -183,7 +183,7 @@ fn resolve_audience_falls_back_to_the_knob_when_no_explicit_value() {
     assert_eq!(resolved, "knob-audience");
 }
 
-/// The deployment default is `public` unless configured, on both routes (#1482): there is no
+/// The deployment default is `public` unless configured, on both routes: there is no
 /// "neither explicit nor knob" case left to fail, so the only 400 this function still raises is
 /// for a malformed *explicit* audience.
 #[test]
@@ -255,7 +255,7 @@ async fn mint_403_for_non_admin() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// The central ordering claim §4 makes: `MintGate` (a `FromRequestParts` extractor) runs, and
+/// The central ordering claim: `MintGate` (a `FromRequestParts` extractor) runs, and
 /// rejects a knob-off non-admin, *before* `Json<MintRequest>` ever parses the request body.
 /// Malformed JSON as a knob-off non-admin must still be a 403, never axum's 422 for unparseable
 /// JSON -- needs no DB, same as every other 400/403 case in this file.
@@ -278,8 +278,8 @@ async fn mint_403_for_non_admin_before_body_is_parsed_even_with_malformed_json()
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// A malformed `audience` from a non-admin caller is a plain 400 from `resolve_audience` (§4) --
-/// not the claim path (§4a), which is only reached once the format check passes.
+/// A malformed `audience` from a non-admin caller is a plain 400 from `resolve_audience` --
+/// not the claim path, which is only reached once the format check passes.
 /// `self_service_mint_enabled: true` here so `MintGate` lets the request past the knob check and
 /// actually reach `resolve_audience`; no DB access either way, since `resolve_audience` fails
 /// before any query runs.
@@ -761,10 +761,10 @@ async fn live_import_is_idempotent() {
 }
 
 // ---------------------------------------------------------------------------
-// #[ignore], live DB -- admin server-side claim (#1510, AbAC Stage 6c, Design §4)
+// #[ignore], live DB -- admin server-side claim
 // ---------------------------------------------------------------------------
 
-/// An admin minting into a brand-new, never-before-seen audience now claims it server-side:
+/// An admin minting into a brand-new, never-before-seen audience claims it server-side:
 /// both `mint` and `read` grant rows for `user:<admin email>` land in `audience_grants`,
 /// `claimed` comes back `true`, and the admin still gets a key.
 #[ignore]
@@ -900,7 +900,7 @@ async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
 }
 
 // ---------------------------------------------------------------------------
-// #[ignore], live DB -- self-service mint (AbAC Stage 6, #1374, Design §4/§4a)
+// #[ignore], live DB -- self-service mint
 // ---------------------------------------------------------------------------
 
 async fn insert_mint_grant(pool: &sqlx::PgPool, audience: &str, selector: &str) {
@@ -974,7 +974,7 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_default_audience() {
 }
 
 /// A non-admin caller with a real, already-committed `mint` grant for the requested audience
-/// mints successfully via `MintPolicy::resolve_audience`'s per-request point query (§4) -- no
+/// mints successfully via `MintPolicy::resolve_audience`'s per-request point query -- no
 /// lazy claim attempted, so no extra `read` grant row is written alongside the pre-existing
 /// `mint` one.
 #[ignore]
@@ -1022,8 +1022,8 @@ async fn live_mint_succeeds_for_non_admin_with_a_matching_grant_no_claim_attempt
     cleanup_audience(&pool, &audience).await;
 }
 
-/// A non-admin caller with no grant at all, naming a brand-new audience explicitly, claims it
-/// (§4a): both a `mint` and a `read` row for `user:<email>` land in `audience_grants`, and the
+/// A non-admin caller with no grant at all, naming a brand-new audience explicitly, claims it:
+/// both a `mint` and a `read` row for `user:<email>` land in `audience_grants`, and the
 /// mint itself succeeds. A second, different non-admin caller with no grant then requesting the
 /// same, now-claimed audience gets the ordinary "no grant" 403 -- ordinary denial, no second
 /// claim attempted.
@@ -1091,7 +1091,7 @@ async fn live_mint_claims_a_fresh_audience_then_denies_a_second_caller() {
 }
 
 /// Two non-admin claims for the *same* fresh audience name, issued concurrently: the per-audience
-/// advisory lock (§4a) lets exactly one proceed. The other gets either the retry-contention 409
+/// advisory lock lets exactly one proceed. The other gets either the retry-contention 409
 /// (`CLAIM_CONTENDED`, if it loses the lock race) or the ordinary "no grant" 403 (if it observes
 /// the winner's already-committed row) -- never a duplicate-owner outcome and never a 500.
 #[ignore]
@@ -1136,7 +1136,7 @@ async fn live_concurrent_claims_for_the_same_fresh_audience_never_double_claim()
     cleanup_audience(&pool, &audience).await;
 }
 
-/// `max_claims_per_caller` (§3, §4a): a caller who has already claimed the configured limit gets
+/// `max_claims_per_caller`: a caller who has already claimed the configured limit gets
 /// a `Forbidden` naming the limit on a claim of one more, distinct fresh audience; a caller one
 /// below the limit still succeeds. Best-effort under sequential use, per that knob's own doc
 /// comment.
@@ -1231,18 +1231,15 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
     cleanup_audience(&pool, &under_limit_audience).await;
 }
 
-/// Regression for the `max_claims_per_caller` backstop being resettable: a non-admin trying to
-/// delete their own `mint`/`user:<email>` `audience_grants` row -- the shape `delete_grant`'s
-/// non-admin own-row arm used to let through as "Remove my access" on the Audience Access page --
-/// must now be refused server-side (403) by `delete_grant` (`audience_grants.rs`), exercised
-/// directly here through `audience_grants_router` since the claim it's protecting lives in
-/// `try_claim_and_mint` (`ingestion_keys.rs`, this file's usual subject) -- both are part of the
-/// same `analytics_web_srv` lib crate, so pulling in the other module's router from this test
-/// binary is unremarkable. Before this round's fix the count was read from `ingestion_api_keys`
-/// instead, which over-counted a different way (see
-/// `claim_count_statement_counts_grants_not_keys`); this test checks the row-deletion half of the
-/// current fix, and that the claim count is consequently unaffected since the marker row
-/// survives.
+/// A non-admin deleting their own `mint`/`user:<email>` `audience_grants` row -- the exact shape
+/// "Remove my access" uses on the Audience Access page -- must be refused server-side (403) by
+/// `delete_grant` (`audience_grants.rs`) when that row is the claim marker
+/// `max_claims_per_caller` counts against: without the refusal, a caller could delete and
+/// re-claim to dodge the limit for free. Exercised directly here through
+/// `audience_grants_router` since the claim it's protecting lives in `try_claim_and_mint`
+/// (`ingestion_keys.rs`, this file's usual subject) -- both are part of the same
+/// `analytics_web_srv` lib crate, so pulling in the other module's router from this test binary
+/// is unremarkable. Checks that the claim count is unaffected since the marker row survives.
 #[ignore]
 #[tokio::test]
 async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
@@ -1271,9 +1268,8 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     let body = json_body(response).await;
     assert_eq!(body["claimed"], true);
 
-    // Attempt the same deletion `delete_grant`'s non-admin own-row arm used to allow -- "Remove
-    // my access" on the caller's own `mint`/`user:<email>` row on the audience they just claimed.
-    // It must now be refused (403), not silently succeed.
+    // "Remove my access" on the caller's own `mint`/`user:<email>` row on the audience they just
+    // claimed. Must be refused (403), not silently succeed.
     let grants_app = build_grants_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
@@ -1319,7 +1315,7 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     cleanup_audience(&pool, &second_audience).await;
 }
 
-/// `max_keys_per_caller` (§3, §4): a caller who already holds the configured limit of live keys
+/// `max_keys_per_caller`: a caller who already holds the configured limit of live keys
 /// gets a `Forbidden` naming the limit on the next mint; a caller one below the limit still
 /// succeeds. Both mints target an audience the caller already has a `mint` grant for, so the
 /// per-caller key bound is exercised in isolation from the claim path.

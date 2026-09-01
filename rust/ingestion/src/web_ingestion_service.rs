@@ -63,9 +63,9 @@ pub enum IngestionServiceError {
     StorageError(String),
 
     /// A re-registration of an existing `process_id` under a different audience than the one
-    /// it was originally stamped with (AbAC Stage 5, #1373, §6). Maps to 403 Forbidden -- the
-    /// one invariant that makes Stage 2's `MAX(audience)` per-process resolution
-    /// (`ownership_rewrite.rs`) sound rather than merely assumed.
+    /// it was originally stamped with. Maps to 403 Forbidden -- the one invariant that makes
+    /// `ownership_rewrite.rs`'s `MAX(audience)` per-process resolution sound rather than merely
+    /// assumed.
     #[error(
         "Audience conflict: process_id {process_id} was registered under audience {existing:?}, \
          this request carries {incoming:?}"
@@ -92,11 +92,10 @@ pub enum IngestionServiceError {
 
 /// Drops every client-supplied property whose key starts with the reserved `micromegas.`
 /// namespace ([`RESERVED_PROPERTY_PREFIX`]), so that namespace can never be asserted from the
-/// payload (AbAC Stage 5, #1373, §3). A dropped key is `warn!`-logged once per call, naming the
-/// key -- a native client setting e.g. `micromegas.audience` was either doing the pre-Stage-5
-/// self-stamp thing or probing, and both are worth seeing. Stripping rather than rejecting the
-/// request with 400 keeps a legacy self-stamping producer's telemetry flowing on upgrade, even
-/// though its self-stamp no longer takes effect.
+/// payload. A dropped key is `warn!`-logged once per call, naming the key -- a native client
+/// setting e.g. `micromegas.audience` is either attempting a client-side self-stamp or probing,
+/// and both are worth seeing. Stripping rather than rejecting the request with 400 keeps such a
+/// producer's telemetry flowing, even though the self-stamp attempt has no effect.
 ///
 /// `pub`, not private: `tests/write_audience_tests.rs` asserts this directly (see
 /// `handler::build_webhook_request`'s doc comment for the identical precedent in
@@ -166,7 +165,7 @@ pub struct WebIngestionService {
     /// capacity) since `delete_empty_streams` can delete a row that a later call re-registers
     /// under a different audience.
     stream_audience_cache: Cache<Uuid, WriteAudience>,
-    /// The deployment's resolved default audience (AbAC Stage 5, #1373; #1519), resolved once at
+    /// The deployment's resolved default audience, resolved once at
     /// startup by the caller (`serve_ingestion`, via `micromegas_auth::policy::default_audience_from_env`
     /// -- `micromegas-ingestion` depends on neither `micromegas-auth` nor `micromegas-analytics`,
     /// so it cannot resolve this itself) and passed to [`Self::new`]. [`Self::check_process_audience_conflict`]
@@ -269,7 +268,7 @@ impl WebIngestionService {
     /// connects to the data lake, runs ingestion migrations, and returns
     /// a ready-to-use service.
     ///
-    /// `default_audience` -- the deployment's resolved default audience (#1519) -- is threaded
+    /// `default_audience` -- the deployment's resolved default audience -- is threaded
     /// straight into [`Self::new`]. `micromegas-ingestion` depends on neither `micromegas-auth`
     /// nor `micromegas-analytics`, so it cannot resolve this itself; the caller resolves it
     /// (typically via `micromegas_auth::policy::default_audience_from_env`) and passes it in.
@@ -374,8 +373,7 @@ impl WebIngestionService {
 
         // The object write (create-only) and the row insert (ON CONFLICT DO NOTHING) each
         // independently succeed or find the target already present, so there are four
-        // (object, row) combinations. Each gets one log line and one counter — see
-        // tasks/1465_create_only_block_write_plan.md's classification table.
+        // (object, row) combinations, each handled below with its own log line and counter.
         let row_inserted = result.rows_affected() > 0;
         match (put_outcome, row_inserted) {
             (PutIfAbsent::Created, true) => {
@@ -620,21 +618,21 @@ impl WebIngestionService {
             .insert(stream_id, audience.clone());
     }
 
-    /// Registers a process from the native (CBOR) ingestion path, stamping it with `audience`
-    /// (AbAC Stage 5, #1373). `audience` is resolved by the caller from the authenticated
-    /// credential (`AuthContext.bound_audience`); this method never trusts a client-supplied
+    /// Registers a process from the native (CBOR) ingestion path, stamping it with `audience`.
+    /// `audience` is resolved by the caller from the authenticated credential
+    /// (`AuthContext.bound_audience`); this method never trusts a client-supplied
     /// `micromegas.*` property -- [`strip_reserved_properties`] drops it, and there is no
     /// property to re-append: the stamp lands on the `audience` column instead.
     ///
     /// A conflicting re-registration (an existing `process_id` under a *different* audience
-    /// than `audience`) is rejected with [`IngestionServiceError::AudienceConflict`] (§6) rather
+    /// than `audience`) is rejected with [`IngestionServiceError::AudienceConflict`] rather
     /// than silently no-op'd: `process_id` is client-chosen on this path, so a reused id under a
-    /// different credential is a real, reachable case, and it is what keeps Stage 2's
-    /// `MAX(audience)` per-process resolution (`ownership_rewrite.rs`) sound. An existing row
-    /// with a NULL `audience` column (legacy data registered before its ingestion binary reached
-    /// this stage; admin replication now hard-fails on a missing `audience` column) is resolved
-    /// to the deployment default the same way every reader does, then compared like any other
-    /// row; it is never retro-stamped, ever -- see the module-level design doc.
+    /// different credential is a real, reachable case, and it is what keeps
+    /// `ownership_rewrite.rs`'s `MAX(audience)` per-process resolution sound. An existing row
+    /// with a NULL `audience` column (legacy data with no stamp; admin replication hard-fails on
+    /// a missing `audience` column) is resolved to the deployment default the same way every
+    /// reader does, then compared like any other row; it is never retro-stamped, ever -- see the
+    /// module-level design doc.
     #[span_fn]
     pub async fn insert_process(
         &self,
@@ -760,7 +758,7 @@ impl WebIngestionService {
 
     /// Records `audience` as the confirmed-conflict-free audience for `process_id` in
     /// [`Self::process_audience_cache`], so a later call with the same `process_id`/`audience`
-    /// pair can skip [`Self::check_process_audience_conflict`]'s `SELECT`. Unconditional (#1519):
+    /// pair can skip [`Self::check_process_audience_conflict`]'s `SELECT`. Unconditional:
     /// `WriteAudience` is single-state, so a resolved-to-default caller is byte-for-byte
     /// indistinguishable from any other labelled caller, and there is nothing left to guard on.
     /// Only ever called with an audience already known to be conflict-free (a fresh `INSERT`, or
@@ -778,7 +776,7 @@ impl WebIngestionService {
     ///
     /// `audience` is stamped on the `audience` column, exactly like `insert_process`;
     /// client-supplied `micromegas.*` properties are stripped via [`strip_reserved_properties`]
-    /// the same way. **Same conflict guard as `insert_process`, §6, and for a confidentiality
+    /// the same way. **Same conflict guard as `insert_process`, and for a confidentiality
     /// reason, not just consistency**: `processes` is a single table shared with
     /// the native path, and `insert_process` accepts a client-chosen `process_id` stamped with
     /// the caller's own audience. Because `process_id_from_resource`'s derivation formula is

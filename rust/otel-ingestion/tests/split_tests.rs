@@ -230,7 +230,7 @@ fn logs_split_leaves_zero_timestamps_unmodified() {
     let sentinel_ns: i64 = 1_704_067_200_000_000_000;
     assert!(b.begin_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
     assert!(b.end_time.timestamp_nanos_opt().unwrap() > sentinel_ns);
-    // The stored proto is no longer mutated: observed_time_unix_nano stays 0 on every
+    // The stored proto is never mutated: observed_time_unix_nano stays 0 on every
     // record, so the stored bytes are a pure function of the input (and of block_id).
     let decoded = ResourceLogs::decode(&*b.block.payload.objects).unwrap();
     for scope in &decoded.scope_logs {
@@ -315,9 +315,9 @@ fn logs_split_block_id_matches_stored_payload_hash_for_zero_timestamp_request() 
 }
 
 // ---------------------------------------------------------------------------
-// AbAC Stage 5 (#1373, §4): audience-scoped process_id/block_id, exercised through the split
-// entry points so the actual hash-input assembly (`block::block_id_with_context`) is covered,
-// not just the identity formulas in isolation.
+// Audience-scoped process_id/block_id, exercised through the split entry points so the actual
+// hash-input assembly (`block::block_id_with_context`) is covered, not just the identity
+// formulas in isolation.
 // ---------------------------------------------------------------------------
 
 fn ctx_with_audience(audience: &str) -> IdentityContext<'_> {
@@ -411,12 +411,10 @@ fn two_audiences_posting_identical_traces_derive_distinct_process_and_block_ids(
 
 #[test]
 fn unstamped_audience_reproduces_pre_stage5_ids_byte_for_byte() {
-    // `IdentityContext::default()` (audience: None) must be byte-identical to the pre-Stage-5
-    // hash -- no churn for traffic resolved to the deployment default's namespace (#1519 makes
-    // `None` mean "the deployment default's namespace" rather than "the credential carried no
-    // audience"; the function name and this comment keep the pre-#1519 "unstamped" phrasing
-    // since that's still the reachable case that never churns -- see `identity.rs`'s doc comment
-    // on `process_id_from_resource`).
+    // `IdentityContext::default()` (audience: None) must be byte-identical to the un-salted
+    // hash -- no churn for traffic resolved to the deployment default's namespace. `None` means
+    // "the deployment default's namespace", not "the credential carried no audience" -- see
+    // `identity.rs`'s doc comment on `process_id_from_resource`.
     let req_default = make_logs_request(
         "svc",
         "h1",

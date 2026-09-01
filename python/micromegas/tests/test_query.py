@@ -2,10 +2,9 @@
 
 These tests exercise the real `read_sql_source()` extracted from
 `main()` under a forced non-UTF-8 locale (LC_ALL=C + PYTHONUTF8=0), the
-same technique used in test_screen_files.py, to guard against issue
-#1399: reading a SQL file (or stdin) with no explicit encoding falls
-back to the platform's locale-preferred encoding and can mis-decode
-non-ASCII content.
+same technique used in test_screen_files.py, to guard against reading a
+SQL file (or stdin) with no explicit encoding falling back to the
+platform's locale-preferred encoding and mis-decoding non-ASCII content.
 """
 
 import datetime
@@ -170,7 +169,7 @@ def test_main_overflowing_begin_reports_usage_error(monkeypatch, capsys):
 
 def test_main_unknown_profile_reports_usage_error(tmp_path, monkeypatch, capsys):
     """An unresolvable --profile must be a clean argparse usage error (via
-    ProfileError), not an uncaught traceback (issue #1403)."""
+    ProfileError), not an uncaught traceback."""
     # Hermetic regardless of the developer's shell: a stray MICROMEGAS_PROFILE
     # would change which profile name is resolved.
     monkeypatch.delenv("MICROMEGAS_PROFILE", raising=False)

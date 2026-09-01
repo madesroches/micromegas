@@ -1,5 +1,5 @@
-//! Tests for `micromegas_auth::default_provider::ProviderBuilder` and §3's
-//! startup-existence rules (#1383). All four bullets here need a live,
+//! Tests for `micromegas_auth::default_provider::ProviderBuilder` and its
+//! startup-existence rules. All four bullets here need a live,
 //! already-migrated-to-v5 Postgres (`MICROMEGAS_SQL_CONNECTION_STRING`) — this
 //! exercises `key_store_has_live_rows` directly, so an unmigrated or
 //! `connect_lazy` pool cannot stand in for the "genuinely missing relation" case.
@@ -84,9 +84,8 @@ fn bearer_parts(token: &str) -> HttpRequestParts {
 /// keyring (so `build()` returns `Some` regardless of the table's contents)
 /// still produces a chain containing the DB provider — asserted by inserting a
 /// row *after* `build()` returns and authenticating its key through the
-/// returned provider, with no restart. This is the regression §3 calls out:
-/// without it, a first-minted key would not authenticate until the process
-/// restarts.
+/// returned provider, with no restart: without this, a first-minted key would
+/// not authenticate until the process restarts.
 #[ignore]
 #[tokio::test]
 #[serial]

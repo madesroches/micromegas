@@ -55,29 +55,27 @@ pub struct AuthContext {
     /// Whether this authentication allows user delegation (acting on behalf of others)
     /// - OIDC user tokens: false (user cannot impersonate others)
     /// - Analytics API keys/service accounts: true (can act on behalf of users)
-    /// - Ingestion API keys: false (AbAC Stage 4, #1372) — a write credential is not a
-    ///   delegating service account, and it can never reach the gRPC path this flag governs
-    ///   anyway (`ingestion_api_keys` never crosses `flight_sql_service_impl.rs`)
+    /// - Ingestion API keys: false — a write credential is not a delegating service account, and
+    ///   it can never reach the gRPC path this flag governs anyway (`ingestion_api_keys` never
+    ///   crosses `flight_sql_service_impl.rs`)
     pub allow_delegation: bool,
-    /// The write audience an ingestion key is immutably bound to (AbAC Stage 4, #1372).
-    /// `Some(..)` for every ingestion API key (the `ingestion_api_keys.audience` column is
-    /// `NOT NULL` as of migration v6); `None` for every other principal kind. Write-side
-    /// only; never consulted by `ReadPolicy`.
+    /// The write audience an ingestion key is immutably bound to. `Some(..)` for every ingestion
+    /// API key (the `ingestion_api_keys.audience` column is `NOT NULL` as of migration v6);
+    /// `None` for every other principal kind. Write-side only; never consulted by `ReadPolicy`.
     pub bound_audience: Option<String>,
-    /// The set of audiences an analytics service-account key is granted read access to (AbAC
-    /// Stage 4b). Empty for every principal today — populated by the analytics key provider once
-    /// Stage 4b lands. Read-side only; folded into `AudienceReadPolicy::resolve`'s union but never
-    /// into `AudienceMintPolicy`'s mintable set (a read grant confers no mint authority).
+    /// The set of audiences an analytics service-account key is granted read access to. Empty for
+    /// every principal today — no analytics key provider populates it yet. Read-side only; folded
+    /// into `AudienceReadPolicy::resolve`'s union but never into `AudienceMintPolicy`'s mintable
+    /// set (a read grant confers no mint authority).
     pub read_audiences: Vec<String>,
     /// IdP-asserted **leaf** group membership — an input to policy resolution, possibly
-    /// incomplete. This is *not* the caller's effective groups: in the AbAC plan's recorded target
-    /// state the IdP supplies direct memberships only, while nesting (group-in-group) and
-    /// group→audience grants live in a micromegas-owned store, so the effective, transitive
-    /// closure is what the policy computes from this vector, not this vector itself. Raw claim
-    /// values, not yet namespaced — `AudienceReadPolicy`/`AudienceMintPolicy` match each entry
-    /// against `group:<id>` grant-map *selectors*, so this general-purpose auth type stays free
-    /// of the AbAC-specific convention. Empty for API keys (no groups claim) and for OIDC
-    /// callers whose token carries no `groups` claim.
+    /// incomplete. This is *not* the caller's effective groups: the IdP supplies direct
+    /// memberships only, while nesting (group-in-group) and group→audience grants live in a
+    /// micromegas-owned store, so the effective, transitive closure is what the policy computes
+    /// from this vector, not this vector itself. Raw claim values, not yet namespaced —
+    /// `AudienceReadPolicy`/`AudienceMintPolicy` match each entry against `group:<id>` grant-map
+    /// *selectors*, so this general-purpose auth type stays free of that convention. Empty for
+    /// API keys (no groups claim) and for OIDC callers whose token carries no `groups` claim.
     pub groups: Vec<String>,
 }
 

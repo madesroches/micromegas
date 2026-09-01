@@ -1,9 +1,7 @@
-//! Ingestion key management API for `analytics-web-srv` (#1458).
+//! Ingestion key management API for `analytics-web-srv`.
 //!
 //! Modeled directly on `analytics_keys.rs`, targeting `ingestion_api_keys`
-//! instead of `analytics_api_keys`. Replaces the proxy that used to forward
-//! mint/list/revoke calls to ingestion's own (now removed)
-//! `/auth/api_keys*` routes: ingestion should only do ingestion, so
+//! instead of `analytics_api_keys`. Ingestion should only do ingestion, so
 //! `analytics-web-srv` writes directly to `ingestion_api_keys` via the same
 //! telemetry-DB pool it already opens for `analytics_api_keys` — both tables
 //! live in the same database behind `MICROMEGAS_SQL_CONNECTION_STRING`.
@@ -11,12 +9,11 @@
 //! service's own `/auth/*` routes (login/callback/refresh/logout/me) — a
 //! completely different concern (browser session lifecycle).
 //!
-//! This is also the attribution fix: every mint/revoke/import records the
-//! acting caller's own OIDC identity, never a shared service credential the
-//! way the removed proxy did. `list_keys`/`revoke_key`/`import_key` still do
-//! so via the [`AdminUser`] extractor; `mint_key` (AbAC Stage 6, #1374) now
-//! runs through [`MintGate`]/[`AuthenticatedUser`] instead, since minting is
-//! no longer purely admin-gated -- see that extractor's own doc comment.
+//! Every mint/revoke/import records the acting caller's own OIDC identity,
+//! never a shared service credential. `list_keys`/`revoke_key`/`import_key`
+//! are gated via the [`AdminUser`] extractor; `mint_key` runs through
+//! [`MintGate`]/[`AuthenticatedUser`] instead, since minting is not purely
+//! admin-gated -- see that extractor's own doc comment.
 //!
 //! **Duplication, accepted.** This duplicates most of `analytics_keys.rs`'s
 //! validation/SQL/error shape — deliberately, per that module's own doc
@@ -64,11 +61,10 @@ pub struct IngestionKeysState {
     /// unset. Always present: both `mint` and `import` fall back to it when a request names no
     /// audience. See [`resolve_audience`].
     pub default_audience: String,
-    /// Off-by-default self-service mint gate (AbAC Stage 6, #1374). Resolved once at startup
+    /// Off-by-default self-service mint gate. Resolved once at startup
     /// from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`), default `false`. Checked by
     /// [`MintGate`] for every non-admin caller before `mint_key`'s body runs at all -- with the
-    /// knob off, a deployment that upgrades to this stage keeps today's admin-only mint
-    /// behavior unchanged.
+    /// knob off, mint stays admin-only.
     pub self_service_mint_enabled: bool,
     /// `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`, default 25 -- caps how many distinct
     /// audiences one non-admin caller may claim via the lazy claim path
@@ -102,13 +98,12 @@ impl ErrorResponse {
 
 /// Errors this API returns.
 ///
-/// `Forbidden`/`Unavailable`/`Unauthenticated`/`Conflict` all back the self-service mint path
-/// (AbAC Stage 6, #1374): `mint_key` is no longer purely [`AdminUser`]-gated, whose own rejection
-/// (`AdminRequired`) used to make a `Forbidden` variant here dead code -- it is now
-/// [`MintGate`]/[`AuthenticatedUser`]-gated, and its own denials (the off-by-default gate, a
-/// missing-grant/malformed-audience `MintPolicy` denial, a per-caller bound, and lock contention
-/// on a lazy claim) need their own status codes. `list_keys`/`revoke_key`/`import_key` stay
-/// `AdminUser`-gated and never construct any of the four.
+/// `Forbidden`/`Unavailable`/`Unauthenticated`/`Conflict` all back the self-service mint path:
+/// `mint_key` is [`MintGate`]/[`AuthenticatedUser`]-gated, not [`AdminUser`]-gated, and its own
+/// denials (the off-by-default gate, a missing-grant/malformed-audience `MintPolicy` denial, a
+/// per-caller bound, and lock contention on a lazy claim) need their own status codes.
+/// `list_keys`/`revoke_key`/`import_key` stay `AdminUser`-gated and never construct any of the
+/// four.
 #[derive(Debug)]
 pub enum IngestionKeyError {
     /// Request body/query failed validation.
@@ -229,9 +224,9 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
     Ok(())
 }
 
-/// Resolves the audience to stamp on a mint/import `INSERT`'s `NOT NULL` column
-/// (`tasks/1372_audience_on_keys_plan.md` §5-§6). `pub`, not module-private, and sync with no
-/// pool access, so the whole resolution matrix is unit-testable without a database.
+/// Resolves the audience to stamp on a mint/import `INSERT`'s `NOT NULL` column. `pub`, not
+/// module-private, and sync with no pool access, so the whole resolution matrix is
+/// unit-testable without a database.
 ///
 /// `requested`: a missing field or an empty string counts as absent (the empty string is not a
 /// name -- it fails [`is_valid_audience`] either way); anything else is taken **verbatim**, no
@@ -242,7 +237,7 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
 /// the only failure left is a malformed explicit request.
 ///
 /// This is format/defaulting validation only -- it runs before `mint_key`'s
-/// `MintPolicy::resolve_audience` authorization decision (AbAC Stage 6, #1374, Design §4), and is
+/// `MintPolicy::resolve_audience` authorization decision, and is
 /// unaware of grants or claims. Defaulting is not a grant: the policy call is still what decides
 /// whether this caller may mint for the audience that came out of here.
 pub fn resolve_audience(
@@ -279,14 +274,14 @@ struct MintResponse {
     key: String,
     /// `true` only when this call actually created `audience`'s first grant rows -- i.e. an
     /// admin caller minting into a brand-new audience, server-side-claiming it exactly as
-    /// `try_claim_and_mint` already does for a non-admin's lazy claim (#1510, AbAC Stage 6c,
-    /// Design §4). `false` on every other path. Appended last -- additive JSON, existing
+    /// `try_claim_and_mint` already does for a non-admin's lazy claim.
+    /// `false` on every other path. Appended last -- additive JSON, existing
     /// consumers unaffected.
     claimed: bool,
 }
 
 /// `FromRequestParts` extractor for `mint_key` specifically -- yields the caller's `AuthContext`
-/// after enforcing the off-by-default self-service gate (AbAC Stage 6, #1374, Design §3). Because
+/// after enforcing the off-by-default self-service gate. Because
 /// this is a `FromRequestParts` impl, axum runs it -- like `AuthenticatedUser` itself -- before
 /// `Json<MintRequest>` ever parses the request body: a knob-off non-admin caller is rejected
 /// before the body is ever touched, mirroring `AdminUser`'s own ordering guarantee.
@@ -320,11 +315,10 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
 
 /// `POST {base_path}/api/ingestion-api-keys` — mints a new `ingestion_api_keys` row.
 ///
-/// Authorization is `MintGate` (the off-by-default self-service gate, AbAC Stage 6, #1374) plus
-/// `MintPolicy::resolve_audience` (a per-request point query against `audience_grants`, Design
-/// §4) -- no longer a flat `AdminUser` gate. Format/defaulting validation still runs first,
-/// through the untouched free `resolve_audience` function below, which is what keeps this
-/// route's pre-stage 400s unchanged.
+/// Authorization is `MintGate` (the off-by-default self-service gate) plus
+/// `MintPolicy::resolve_audience` (a per-request point query against `audience_grants`)
+/// -- not a flat `AdminUser` gate. Format/defaulting validation still runs first,
+/// through the free `resolve_audience` function below, so existing 400s stay unchanged.
 async fn mint_key(
     Extension(state): Extension<IngestionKeysState>,
     MintGate(caller): MintGate,
@@ -347,7 +341,7 @@ async fn mint_key(
     let key_id = Uuid::new_v4();
     let created_at = Utc::now();
 
-    // Per-caller bound (Design §4a): caps how many *live* keys one non-admin may hold, regardless
+    // Per-caller bound: caps how many *live* keys one non-admin may hold, regardless
     // of which path below mints the next one. Admins are exempt -- this bounds self-service, not
     // administration. Best-effort, not a hard ceiling, under concurrency: this `SELECT COUNT(*)`
     // runs on `pool` outside any transaction, so N concurrent mint requests from the same caller
@@ -369,7 +363,7 @@ async fn mint_key(
         }
     }
 
-    // Mint authorization is a point query, not a cached snapshot (Design §3): no
+    // Mint authorization is a point query, not a cached snapshot: no
     // `DbAudienceGrantsSource` is attached for mint at all. `audience` is the leading column of
     // `audience_grants`'s `PRIMARY KEY (audience, axis, selector)`, so this is an index-only
     // scan.
@@ -401,20 +395,19 @@ async fn mint_key(
         IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
     })?;
 
-    // `store: None` (the `new` default) -- this stage never attaches a `DbAudienceGrantsSource`
-    // to a mint policy (Design §3).
+    // `store: None` (the `new` default) -- a mint policy here never attaches a
+    // `DbAudienceGrantsSource`.
     let policy = AudienceMintPolicy::new(grants);
 
     let audience = match policy.resolve_audience(&caller, Some(&candidate)).await {
         Ok(aud) => {
-            // Admin server-side claim (#1510, AbAC Stage 6c, Design §4): `AudienceMintPolicy`'s
+            // Admin server-side claim: `AudienceMintPolicy`'s
             // admin arm always resolves `Ok`, so this route never reaches the non-admin lazy
             // claim's `Err` arm below for an admin caller -- decided here, as a second, separate
             // query, whether `aud` looks unclaimed (no grant row, no key row on any axis) before
             // falling through to the ordinary insert. Skipped outright for a reserved name
             // (`public`, `state.default_audience` -- never claimable) or when the admin has no
-            // email (an admin with no email can't be granted a `user:` row; the pre-existing gap
-            // #1374's client-side `setup_telemetry.py` also had, now decided server-side).
+            // email (an admin with no email can't be granted a `user:` row).
             if caller.is_admin {
                 let reserved = aud == PUBLIC_AUDIENCE || aud.as_str() == state.default_audience;
                 if !reserved && caller.email.is_some() {
@@ -443,7 +436,7 @@ async fn mint_key(
         Err(e) if caller.is_admin => return Err(IngestionKeyError::Forbidden(e.to_string())),
         Err(_) => {
             // Non-admin, no matching `mint` grant for `candidate` among the rows the point query
-            // above just read -- try the lazy claim (Design §4a) only when the caller explicitly
+            // above just read -- try the lazy claim only when the caller explicitly
             // named this audience (not merely `state.default_audience`), and has an email to
             // claim with.
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
@@ -494,7 +487,7 @@ async fn mint_key(
 /// Plain, non-transactional `INSERT INTO ingestion_api_keys` -- what `mint_key`'s own ordinary
 /// (non-claim) path calls directly, and what every "the in-lock recheck disagreed with the
 /// pre-check" branch inside [`try_claim_and_mint`] falls through to for an admin caller instead
-/// of erroring (#1510, AbAC Stage 6c, Design §4: the claim is best-effort for an admin, never a
+/// of erroring (the claim is best-effort for an admin, never a
 /// mint failure). Table name is a literal, never derived from caller input: no route in this
 /// module ever writes to `analytics_api_keys`.
 #[allow(clippy::too_many_arguments)]
@@ -560,7 +553,7 @@ async fn insert_key(
 pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience_grants \
      WHERE axis = 'mint' AND selector = $1 AND created_by = $2";
 
-/// The lazy audience claim (AbAC Stage 6, #1374, Design §4a). Reached only from `mint_key`, only
+/// The lazy audience claim. Reached only from `mint_key`, only
 /// for a non-admin caller who explicitly named `audience`, has a known `caller.email`, and whose
 /// `MintPolicy::resolve_audience` call was just denied because `audience` carried no matching
 /// `mint` grant.
@@ -576,8 +569,8 @@ pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience
 /// back what their own new key uploads) plus the `ingestion_api_keys` row itself, all in the
 /// same transaction.
 ///
-/// **Admin mode never turns a claim attempt into a mint failure** (#1510, AbAC Stage 6c, Design
-/// §4). Called for an admin (`mint_key`'s own pre-check already found the audience looking
+/// **Admin mode never turns a claim attempt into a mint failure.**
+/// Called for an admin (`mint_key`'s own pre-check already found the audience looking
 /// unclaimed moments earlier, outside any lock), the in-lock recheck can still disagree -- lock
 /// contention, the row now existing, or the selector exceeding 255 bytes -- and for a non-admin
 /// each of those is a hard failure. For an admin, all three instead fall through to
@@ -884,8 +877,7 @@ struct RevokeResponse {
 /// `DELETE {base_path}/api/ingestion-api-keys/{key_id}` — idempotent in one
 /// statement, preserving the original revocation time on a repeat call.
 ///
-/// No `effective_within_seconds` field, unlike the removed ingestion-hosted
-/// `revoke_key`: that field threaded the *validating* provider's
+/// No `effective_within_seconds` field: that field threads the *validating* provider's
 /// `cache_ttl_secs`, but nothing in `analytics-web-srv` runs a
 /// `DbApiKeyAuthProvider` — there is no running cache TTL here to report. The
 /// revocation latency is still bounded by whichever ingestion/flight-sql
@@ -958,11 +950,9 @@ struct ImportedRow {
     audience: String,
 }
 
-/// `POST {base_path}/api/ingestion-api-keys/import` — a route the removed
-/// proxy never had (the CLI called ingestion's own import route directly
-/// instead); now required since the CLI's `--table ingestion` path always
-/// targets `analytics-web-srv` and ingestion no longer has an import route of
-/// its own to fall back on.
+/// `POST {base_path}/api/ingestion-api-keys/import` -- required because the CLI's
+/// `--table ingestion` path always targets `analytics-web-srv`, which is the only place
+/// that can mint or import ingestion keys.
 ///
 /// Hashes and stores a caller-supplied key string verbatim, rather than
 /// generating a fresh one. `created_by` is the importing caller's own OIDC
@@ -983,9 +973,8 @@ async fn import_key(
             "key must not be empty".to_string(),
         ));
     }
-    // No route-specific fallback any more: the deployment default is `public` unless configured
-    // otherwise, which is the same continuity with the v6 backfill this route used to spell out
-    // for itself (a legacy key's already-ingested history was stamped `public`).
+    // Falls back to the deployment default (`public` unless configured otherwise via
+    // `MICROMEGAS_DEFAULT_AUDIENCE`) -- matching how already-ingested legacy data is stamped.
     let audience = resolve_audience(&state, body.audience.as_deref())?;
 
     let hash = hash_key(&body.key);

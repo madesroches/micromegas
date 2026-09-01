@@ -39,8 +39,8 @@ pub struct SqlPartitionSpec {
     record_count: i64,
     /// The sort guarantee to record on the fresh partition this extract query writes, if any (see
     /// `SqlBatchView::with_merge_sort_order`). When set, `write` verifies the extract query's
-    /// physical plan actually satisfies it (Design §3) before recording it -- a config typo must
-    /// never record a false guarantee.
+    /// physical plan actually satisfies it before recording it -- a config typo must never
+    /// record a false guarantee.
     sort_order: Option<Vec<String>>,
 }
 
@@ -73,8 +73,8 @@ impl SqlPartitionSpec {
     /// Builds the extract query's physical plan once, verifies (only when `sort_order` is
     /// declared) that it is single-partition and that its output ordering satisfies the declared
     /// columns, and executes that exact plan -- the same discipline as
-    /// `QueryMerger::execute_merge_query`'s ordering-declared branches (Design §2/§3). The
-    /// undeclared path (`sort_order: None`) keeps today's plain `df.execute_stream()`.
+    /// `QueryMerger::execute_merge_query`'s ordering-declared branches. The undeclared path
+    /// (`sort_order: None`) keeps the plain `df.execute_stream()`.
     async fn execute_extract_query(&self, df: DataFrame) -> Result<SendableRecordBatchStream> {
         let Some(sort_order) = &self.sort_order else {
             return df.execute_stream().await.map_err(Into::into);

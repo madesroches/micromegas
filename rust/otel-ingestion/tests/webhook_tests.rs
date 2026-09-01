@@ -138,8 +138,8 @@ fn extra_hash_input_changes_block_id_but_empty_matches_plain_split_logs() {
 
 #[test]
 fn extra_hash_input_still_influences_block_id_alongside_an_audience() {
-    // AbAC Stage 5 (#1373, §4): the webhook path's extra_hash_input and the audience prefix
-    // are two independent inputs into the same hash -- both must keep mattering together.
+    // The webhook path's extra_hash_input and the audience prefix are two independent
+    // inputs into the same hash -- both must keep mattering together.
     let attrs = vec![s_kv("service.name", "gitlab")];
     let req_a = build_webhook_request(attrs.clone(), "push-events".to_string(), b"same body");
     let req_b = build_webhook_request(attrs, "push-events".to_string(), b"same body");

@@ -107,17 +107,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>()
         .into();
 
-    // The submit-queue overflow threshold is pinned to 2x the buffer pool
-    // (foyer's documented -- but no longer automatic, see `WriteTuning` --
-    // intended default); see `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB`.
+    // The submit-queue overflow threshold is pinned to 2x the buffer pool --
+    // foyer's documented intended default, set explicitly here via
+    // `WriteTuning` rather than relying on foyer's own default; see
+    // `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB`.
     let write_tuning = WriteTuning {
         flushers: args.flushers,
         buffer_pool_bytes: args.write_buffer_mb * 1024 * 1024,
         submit_queue_threshold_bytes: args.write_buffer_mb * 1024 * 1024 * 2,
     };
     // Bound to a local `Arc` (rather than built inline into `RangeCache::new`)
-    // so `main()` retains a handle to close after the shutdown drain (Design
-    // §4 of the 1291 shutdown plan).
+    // so `main()` retains a handle to close after the shutdown drain.
     let foyer = Arc::new(
         FoyerBackend::new_with_shards(
             &args.disk_path,

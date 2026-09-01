@@ -1,12 +1,11 @@
-//! DB-backed regression test for the create-only block write
-//! (tasks/1465_create_only_block_write_plan.md): the four (object, row) combinations
-//! `insert_block_typed` can land in against a real PG + object store. Requires a live
-//! `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (see
+//! DB-backed regression test for the create-only block write: the four (object, row)
+//! combinations `insert_block_typed` can land in against a real PG + object store. Requires a
+//! live `MICROMEGAS_SQL_CONNECTION_STRING` / `MICROMEGAS_OBJECT_STORE_URI` (see
 //! `rust/analytics/tests/thread_spans_ordering_db_test.rs` for the same harness pattern);
 //! does not run under a plain `cargo test`.
 //!
-//! Assertions are on observable state (object bytes, row presence, `payload_size`), not on
-//! the `imetric!` counters themselves — see the plan's "Testing Strategy" section for why.
+//! Assertions are on observable state (object bytes, row presence, `payload_size`), not on the
+//! `imetric!` counters themselves.
 
 use anyhow::{Context, Result};
 use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
@@ -78,8 +77,8 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
         .await
         .map_err(|e| anyhow::anyhow!("insert_block_typed (first arrival): {e}"))?;
 
-    // Same block_id, different bytes — same content is the common case, but different bytes
-    // is what #1462 mishandled; this exercises the create-only guard directly.
+    // Same block_id, different bytes — same content is the common case, but this exercises
+    // the create-only guard directly against a retry that arrives with different bytes.
     let block2 = make_block(
         block_id,
         stream_id,
