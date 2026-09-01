@@ -128,7 +128,13 @@ with `fetch_all` instead of `fetch_optional`, then:
 - **>1 rows** → bail naming the colliding hashes and pointing at the fix, e.g.
   `Ambiguous partition <view_set>/<instance> [<begin>, <end>): 2 partitions match, with
   file_schema_hash 04 and 05 — pass file_schema_hash as a fifth argument to pick one`.
-  Only reachable on the four-argument path.
+  This is not limited to the four-argument path: a zero-width range
+  (`begin_insert_time == end_insert_time`) never overlaps under the `lakehouse_partitions_no_overlap`
+  exclusion constraint (`migration.rs:461-462`), so two JIT partitions can legally share every
+  column, including `file_schema_hash` (`write_partition.rs:205-215` documents `begin_insert ==
+  end_insert` for JIT partitions). When the colliding rows share the hash the caller already
+  supplied, the message says so and points at `retire_partition_by_file` as the disambiguating
+  escape hatch instead of suggesting a fifth argument that would not help.
 - **1 row** → `add_file_for_cleanup` for its `file_path` (unchanged), then `DELETE` keyed on all
   five columns using the hash **read from that row**, regardless of which arity the caller used.
 
@@ -138,16 +144,15 @@ concurrent writer commits a new-schema partition on the same range between the t
 `rows_affected() != 1`, so any surviving surprise aborts the batch and rolls back rather than
 reporting `SUCCESS:`.
 
-Since exactly one row is ever deleted, "register every returned `file_path` for cleanup" collapses
-into the existing single-file call — the leak the issue describes is fixed by never deleting the
-second row in the first place.
-
 ### 3. Success message carries the hash
 
 `SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>` — so a
 four-argument caller can see after the fact which of several coexisting schema versions it hit.
 `retire_incompatible_partitions` only tests `message.startswith("SUCCESS:")`, so the prefix
-contract is preserved.
+contract is preserved. `retire_partition_in_transaction` returns the resolved hash it deleted by
+(e.g. `Result<Vec<u8>>` instead of `Result<()>`), and `invoke_async_with_args` hex-formats that
+returned hash into the `schema_hash=<hex>` suffix — the hash is not otherwise available on the
+four-argument path.
 
 ### 4. Python passes the hash through
 
@@ -178,9 +183,12 @@ surface beyond the f-string SQL this function already builds.
      predicate; switch to `fetch_all`.
    - Add the empty / ambiguous / single-row branches described above.
    - Key the `DELETE` on the resolved row's hash; assert `rows_affected() == 1`.
-   - Refresh the doc comments on the struct (:22–30) and on
-     `make_retire_partition_by_metadata_udf` (:305–325), including the SQL usage example and the
-     documented return strings.
+   - Change `retire_partition_in_transaction`'s return type from `Result<()>` to `Result<Vec<u8>>`,
+     returning the resolved row's `file_schema_hash`; have `invoke_async_with_args` hex-format that
+     value into the `SUCCESS: ... schema_hash=<hex>` message it builds (:270-272).
+   - Refresh the doc comments on the struct (:22–30), on `retire_partition_in_transaction`'s own
+     `# Arguments`/`# Returns` block (:67–78), and on `make_retire_partition_by_metadata_udf`
+     (:305–325), including the SQL usage example and the documented return strings.
 
 3. **Python** (`python/micromegas/micromegas/admin.py`)
    - Pass `decode('<hex>', 'hex')` as the fifth argument in `retire_incompatible_partitions`.
