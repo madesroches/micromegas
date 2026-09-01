@@ -66,21 +66,8 @@ impl ProviderBuilder {
     }
 
     /// Composes the chain and reports whether env keys or OIDC counted as
-    /// "configured".
-    ///
-    /// Shared by `build()` and `build_chain()` so the provider order and the
-    /// "DB provider always pushed" rule are stated once. Composes, in this
-    /// order: env `ApiKeyAuthProvider` (in-memory, cheapest, preserves today's
-    /// precedence) → `OidcAuthProvider` → `DbApiKeyAuthProvider`.
-    /// `MultiAuthProvider` tries providers in order, so putting the DB provider
-    /// last means only tokens that are neither an env key nor a valid JWT ever
-    /// reach it.
-    ///
-    /// **The DB provider is always pushed onto the chain whenever a key store is
-    /// attached** — registration never depends on any existence query, so a
-    /// deployment that mints its first key through `analytics-web-srv`'s
-    /// `POST {base_path}/api/ingestion-api-keys` into a previously empty table
-    /// authenticates it on the very next request, with no restart.
+    /// "configured". Shared by `build()` and `build_chain()`, which each
+    /// document the provider order and the DB-provider guarantee.
     ///
     /// Takes `&self` rather than `self` so `build()` can still reach the
     /// attached key store's pool for its existence query afterwards.
@@ -124,6 +111,14 @@ impl ProviderBuilder {
 
     /// Builds the composed provider.
     ///
+    /// Composes, in order: env `ApiKeyAuthProvider` → `OidcAuthProvider` →
+    /// `DbApiKeyAuthProvider`; `MultiAuthProvider` tries providers in order, so
+    /// putting the DB provider last means only tokens that are neither an env
+    /// key nor a valid JWT ever reach it. The DB provider is always pushed onto
+    /// the chain whenever a key store is attached, so a key minted into a
+    /// previously empty table authenticates on the very next request, with no
+    /// restart.
+    ///
     /// **A DB key store with at least one live key counts as "auth configured";
     /// an empty one does not.** When a key store is attached, this runs one cheap
     /// startup existence query (`key_store_has_live_rows`) and treats a non-empty
@@ -134,14 +129,8 @@ impl ProviderBuilder {
     /// and `has_live_rows` is treated as `false`, since the query's result would
     /// be unused either way.
     ///
-    /// The DB provider is pushed onto the chain (see `compose()`) whenever a key
-    /// store is attached, but the whole chain — DB provider included — is
-    /// discarded via `Ok(None)` when nothing counted as configured, preserving
-    /// the "genuinely empty deployment" startup guard every caller relies on. So
-    /// the no-restart property described on `compose()` holds only for a chain
-    /// that survived this guard — which is every process that successfully
-    /// started, since each in-repo caller aborts on `None`. A caller that does
-    /// not want this guard should use [`Self::build_chain`] instead.
+    /// The chain is discarded when nothing counted as configured; use
+    /// `build_chain()` to skip the guard.
     pub async fn build(self) -> Result<Option<Arc<dyn AuthProvider>>> {
         let (multi, mut configured) = self.compose().await?;
 
@@ -183,14 +172,18 @@ impl ProviderBuilder {
 
     /// Composes the provider chain with **no** "is anything configured?" guard.
     ///
+    /// Composes, in order: env `ApiKeyAuthProvider` → `OidcAuthProvider` →
+    /// `DbApiKeyAuthProvider`. The DB provider is always pushed onto the chain
+    /// whenever a key store is attached, so a key minted into a previously
+    /// empty table authenticates on the very next request, with no restart.
+    ///
     /// Always returns the chain — never `None`, because there is no `Option` —
     /// and never runs `key_store_has_live_rows`, so unlike `build()` it cannot
-    /// fail on a schema short of migration v5. When a key store is attached, the
-    /// DB provider is unconditionally on the chain (see `compose()`), so this is
-    /// the entry point for a caller that wants that no-restart property without
-    /// inheriting `build()`'s startup guard or its existence-query failure mode
-    /// — e.g. an embedder folding this chain into a larger `MultiAuthProvider`
-    /// via `FlightSqlServer::with_auth_provider`.
+    /// fail on a schema short of migration v5. This is the entry point for a
+    /// caller that wants the no-restart property above without inheriting
+    /// `build()`'s startup guard or its existence-query failure mode — e.g. an
+    /// embedder folding this chain into a larger `MultiAuthProvider` via
+    /// `FlightSqlServer::with_auth_provider`.
     ///
     /// When nothing at all is configured (no env keys, no OIDC, no key store)
     /// the returned chain is an empty `MultiAuthProvider`, which rejects every

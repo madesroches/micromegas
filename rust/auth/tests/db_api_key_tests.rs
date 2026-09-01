@@ -6,6 +6,8 @@
 //! here make two DB attempts). The `#[ignore]`d section needs a live Postgres
 //! already migrated to schema v5 (`MICROMEGAS_SQL_CONNECTION_STRING`).
 
+mod test_utils;
+
 use base64::Engine;
 use micromegas_auth::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, dedicated_key_store_pool, generate_key,
@@ -20,16 +22,8 @@ use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::HeterogeneousQueue;
 use serial_test::serial;
 use sqlx::Row;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use std::time::Duration;
-
-fn unreachable_pool() -> sqlx::PgPool {
-    PgPoolOptions::new()
-        .acquire_timeout(Duration::from_millis(50))
-        .connect_lazy("postgres://localhost/unused")
-        .expect("lazy pool creation is infallible")
-}
+use test_utils::unreachable_pool;
 
 fn test_config() -> DbApiKeyConfig {
     DbApiKeyConfig {

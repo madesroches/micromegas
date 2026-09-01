@@ -15,28 +15,18 @@
 
 #![cfg(test)]
 
+mod test_utils;
+
 use micromegas_auth::db_api_key::{ApiKeyTable, hash_key, key_store_has_live_rows};
 use micromegas_auth::default_provider::ProviderBuilder;
 use micromegas_auth::policy::PUBLIC_AUDIENCE;
 use micromegas_auth::types::{HttpRequestParts, RequestParts};
 use serial_test::serial;
-use sqlx::postgres::PgPoolOptions;
 use std::str::FromStr;
-use std::time::Duration;
+use test_utils::unreachable_pool;
 
 const API_KEYS_VAR: &str = "MICROMEGAS_API_KEYS";
 const OIDC_CONFIG_VAR: &str = "MICROMEGAS_OIDC_CONFIG";
-
-/// A pool that is never actually reachable — same trick as
-/// `db_api_key_tests.rs`'s `unreachable_pool()` (also duplicated in
-/// `db_audience_grants_tests.rs`), with an explicit short `acquire_timeout`
-/// since sqlx's default is 30s.
-fn unreachable_pool() -> sqlx::PgPool {
-    PgPoolOptions::new()
-        .acquire_timeout(Duration::from_millis(50))
-        .connect_lazy("postgres://localhost/unused")
-        .expect("lazy pool creation is infallible")
-}
 
 /// Clears both env vars on drop so a failing assertion in one test can't leak
 /// state into the next.
@@ -319,8 +309,7 @@ async fn missing_relation_is_err_not_none() {
 /// it**: an empty key store with nothing else configured makes `build()` return
 /// `None` (pinned above by `empty_table_and_nothing_else_yields_none`), but
 /// `build_chain()` still returns a chain, and a key minted into that
-/// previously-empty table authenticates through it with no restart — the
-/// issue's exact scenario.
+/// previously-empty table authenticates through it with no restart.
 ///
 /// Uses its own throwaway schema (same trick as
 /// `empty_table_and_nothing_else_yields_none`) rather than the shared
