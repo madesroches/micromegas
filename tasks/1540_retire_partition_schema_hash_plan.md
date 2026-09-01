@@ -11,10 +11,10 @@ live data — and its `fetch_optional` registers only one of the two files for c
 the other in object storage. Neither shows up as an error, because `rows_affected()` is only
 compared against `0`.
 
-This plan adds an optional fifth `file_schema_hash` argument that makes the target unambiguous,
-and makes the four-argument form fail closed instead of over-deleting. `retire_incompatible_partitions`
-— which detects partitions *by* hash mismatch and then throws the hash away — is updated to pass it
-through.
+This plan makes the fifth `file_schema_hash` argument required, so the target is always
+unambiguous. The over-delete is fixed by keying the `DELETE` on the resolved row's hash and
+tightening the post-delete row-count check. `retire_incompatible_partitions` — which detects
+partitions *by* hash mismatch and then throws the hash away — is updated to pass it through.
 
 ## Current State
 
@@ -69,17 +69,13 @@ a row is unreachable, and there is no sweep that reclaims historically orphaned 
 
 ## Design
 
-### 1. Optional fifth argument
+### 1. Required fifth argument
 
-Widen the signature to accept either arity, so every existing four-argument caller — saved admin
-queries, the documented batch example — keeps planning:
+Widen the signature to five arguments:
 
 ```rust
-Signature::one_of(
-    vec![
-        TypeSignature::Exact(vec![Utf8, Utf8, TS, TS]),
-        TypeSignature::Exact(vec![Utf8, Utf8, TS, TS, DataType::Binary]),
-    ],
+Signature::exact(
+    vec![Utf8, Utf8, TS, TS, DataType::Binary],
     Volatility::Volatile,
 )
 ```
@@ -98,45 +94,34 @@ A hand-written literal uses `decode('04', 'hex')`, which returns `DataType::Bina
 54 (`datafusion-functions/src/encoding/inner.rs:185`) and matches the pattern already documented in
 `mkdocs/docs/query-guide/schema-reference.md:558`.
 
-`invoke_async_with_args` accepts `4 | 5` arguments, downcasts `args[4]` as `BinaryArray` when
-present, and treats a null in it exactly like a null in any other argument (per-row
-`"ERROR: all arguments must be non-null"`).
-
-In DataFusion 54.1, `coerced_from` (`datafusion-expr-54.1.0/src/type_coercion/functions.rs`) has
-no arm coercing `BinaryView` into a `Binary` `Exact` slot, so the `Binary` slot accepts only
-`Binary`, `Dictionary(_, Binary)`, and `Null`. Both documented callers —
-`list_partitions().file_schema_hash` and `decode(...)` — already produce `Binary`, so this is
-moot in practice; a caller that somehow plans a `BinaryView` argument fails loudly at planning
-with a coercion error rather than misbehaving silently.
+`invoke_async_with_args` now takes 5 arguments and downcasts `args[4]` as `BinaryArray`, treating a
+null in it exactly like a null in any other argument (per-row `"ERROR: all arguments must be
+non-null"`).
 
 ### 2. Resolve to exactly one row, then delete that row by all five columns
 
-`retire_partition_in_transaction` gains a `file_schema_hash: Option<&[u8]>` parameter. One `SELECT`
-serves both arities:
+`retire_partition_in_transaction` gains a `file_schema_hash: &[u8]` parameter. The `SELECT`
+becomes:
 
 ```sql
 SELECT file_path, file_size, file_schema_hash FROM lakehouse_partitions
  WHERE view_set_name = $1 AND view_instance_id = $2
    AND begin_insert_time = $3 AND end_insert_time = $4
-   AND ($5::bytea IS NULL OR file_schema_hash = $5)
+   AND file_schema_hash = $5
 ```
 
 with `fetch_all` instead of `fetch_optional`, then:
 
-- **0 rows** → bail `Partition not found: ...` (today's message, with the hash appended when one
-  was given).
-- **>1 rows** → bail naming the colliding hashes and pointing at the fix, e.g.
-  `Ambiguous partition <view_set>/<instance> [<begin>, <end>): 2 partitions match, with
-  file_schema_hash 04 and 05 — pass file_schema_hash as a fifth argument to pick one`.
-  This is not limited to the four-argument path: a zero-width range
-  (`begin_insert_time == end_insert_time`) never overlaps under the `lakehouse_partitions_no_overlap`
-  exclusion constraint (`migration.rs:461-462`), so two JIT partitions can legally share every
-  column, including `file_schema_hash` (`write_partition.rs:205-215` documents `begin_insert ==
-  end_insert` for JIT partitions). When the colliding rows share the hash the caller already
-  supplied, the message says so and points at `retire_partition_by_file` as the disambiguating
-  escape hatch instead of suggesting a fifth argument that would not help.
+- **0 rows** → bail `Partition not found: ...` (today's message, with the hash named).
+- **>1 rows** → since the `SELECT` already pins `file_schema_hash = $5`, this is only reachable
+  for a zero-width range (`begin_insert_time == end_insert_time`): it never overlaps under the
+  `lakehouse_partitions_no_overlap` exclusion constraint (`migration.rs:461-462`), so two JIT
+  partitions can legally share every column, including `file_schema_hash`
+  (`write_partition.rs:205-215` documents `begin_insert == end_insert` for JIT partitions). The
+  message names the colliding rows and points at `retire_partition_by_file` as the disambiguating
+  escape hatch, since a fifth argument cannot help here — the rows already share it.
 - **1 row** → `add_file_for_cleanup` for its `file_path` (unchanged), then `DELETE` keyed on all
-  five columns using the hash **read from that row**, regardless of which arity the caller used.
+  five columns using the hash **read from that row**.
 
 Deleting by the resolved row's own hash is what closes the READ COMMITTED race: even if a
 concurrent writer commits a new-schema partition on the same range between the two statements, the
@@ -146,13 +131,11 @@ reporting `SUCCESS:`.
 
 ### 3. Success message carries the hash
 
-`SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>` — so a
-four-argument caller can see after the fact which of several coexisting schema versions it hit.
+`SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>` — so the
+caller can see which of several coexisting schema versions it hit.
 `retire_incompatible_partitions` only tests `message.startswith("SUCCESS:")`, so the prefix
-contract is preserved. `retire_partition_in_transaction` returns the resolved hash it deleted by
-(e.g. `Result<Vec<u8>>` instead of `Result<()>`), and `invoke_async_with_args` hex-formats that
-returned hash into the `schema_hash=<hex>` suffix — the hash is not otherwise available on the
-four-argument path.
+contract is preserved. Since the caller always supplies the hash, `invoke_async_with_args`
+hex-formats its own `args[4]` value into the `schema_hash=<hex>` suffix.
 
 ### 4. Python passes the hash through
 
@@ -171,21 +154,17 @@ surface beyond the f-string SQL this function already builds.
 ## Implementation Steps
 
 1. **Signature and argument plumbing** (`retire_partition_by_metadata_udf.rs`)
-   - Replace `Signature::exact` with `Signature::one_of` over the 4- and 5-type exact variants.
-   - In `invoke_async_with_args`, allow `args.len()` of 4 or 5, downcast `args[4]` as
-     `BinaryArray` into an `Option`, extend the per-row null check to it, and pass
-     `Option<&[u8]>` down.
-   - Update the `internal_err!` arity message.
+   - Replace `Signature::exact` (four types) with `Signature::exact` over the five types.
+   - In `invoke_async_with_args`, require exactly 5 arguments, downcast `args[4]` as
+     `BinaryArray`, extend the per-row null check to it, and pass `&[u8]` down.
+   - Update the `internal_err!` arity message to require 5 arguments.
 
 2. **Fail-closed resolution** (same file, `retire_partition_in_transaction`)
-   - Add the `file_schema_hash: Option<&[u8]>` parameter.
-   - Add `file_schema_hash` to the `SELECT` projection and the `($5::bytea IS NULL OR ...)`
+   - Add the `file_schema_hash: &[u8]` parameter.
+   - Add `file_schema_hash` to the `SELECT` projection and a plain `file_schema_hash = $5`
      predicate; switch to `fetch_all`.
    - Add the empty / ambiguous / single-row branches described above.
    - Key the `DELETE` on the resolved row's hash; assert `rows_affected() == 1`.
-   - Change `retire_partition_in_transaction`'s return type from `Result<()>` to `Result<Vec<u8>>`,
-     returning the resolved row's `file_schema_hash`; have `invoke_async_with_args` hex-format that
-     value into the `SUCCESS: ... schema_hash=<hex>` message it builds (:270-272).
    - Refresh the doc comments on the struct (:22–30), on `retire_partition_in_transaction`'s own
      `# Arguments`/`# Returns` block (:67–78), and on `make_retire_partition_by_metadata_udf`
      (:305–325), including the SQL usage example and the documented return strings.
@@ -198,22 +177,29 @@ surface beyond the f-string SQL this function already builds.
    (`#[ignore]`, live-DB, following `net_spans_retire_overlap_db_test.rs` for synthetic partition
    rows and `prong_b_guard_db_test.rs` for an admin `make_session_context`).
 
-5. **Python test** (`python/micromegas/tests/test_admin.py`) — add SQL-shape assertions, and
+5. **Rust test** — `rust/analytics/tests/lakehouse_admin_gate_test.rs:77`'s `MUTATING_UDF_CALLS`
+   entry calls the four-argument form, which no longer plans; replace it with the five-argument
+   spelling so the admin gate test keeps compiling and passing.
+
+6. **Python test** (`python/micromegas/tests/test_admin.py`) — add SQL-shape assertions, and
    convert the `incompatible_schema_hash` fixtures at `:92`, `:126`, `:178`, `:225` from `str` to
    `bytes` (`MockFlightSQLClient`'s regex already matches the five-argument call and needs no
    change). The `:310` fixture in `test_sql_injection_resilience` keeps its quote-carrying payload,
    converted to bytes (`b"[3'; TRUNCATE schemas; --]"`), so the test still exercises the one column
    that now gets hex-encoded into the f-string SQL.
 
-6. **Docs** — `mkdocs/docs/admin/functions-reference.md`,
+7. **Docs** — `mkdocs/docs/admin/functions-reference.md`,
    `mkdocs/docs/query-guide/functions-reference.md`.
 
-7. **CHANGELOG** — entry under `## Unreleased` → **Analytics**.
+8. **CHANGELOG** — entry under `## Unreleased`, filed as a **Minor breaking change** per the
+   repo's interface rule, covering both **Analytics** (the UDF's new required argument) and
+   **Python** (`retire_incompatible_partitions` now emits the five-argument call).
 
 ## Files to Modify
 
 - `rust/analytics/src/lakehouse/retire_partition_by_metadata_udf.rs`
 - `rust/analytics/tests/retire_partition_by_metadata_db_test.rs` (new)
+- `rust/analytics/tests/lakehouse_admin_gate_test.rs`
 - `python/micromegas/micromegas/admin.py`
 - `python/micromegas/tests/test_admin.py`
 - `mkdocs/docs/admin/functions-reference.md`
@@ -221,14 +207,6 @@ surface beyond the f-string SQL this function already builds.
 - `CHANGELOG.md`
 
 ## Trade-offs
-
-**Optional fifth argument vs. required fifth argument.** The issue's primary suggestion is a
-required fifth argument. That is a SQL-surface break: the documented batch example, any saved
-admin query, and `lakehouse_admin_gate_test.rs:77` all call the four-argument form, and under this
-repo's interface rule the SQL layer stays compatible while Rust APIs may churn. `Signature::one_of`
-makes the change purely additive at no real cost — the four-argument path is still *correct*
-(it just refuses to guess), and the five-argument path is available wherever the caller knows the
-hash.
 
 **Fail closed vs. delete-all-and-clean-up-every-file.** Deleting every matching row and registering
 each file for cleanup would fix the storage leak but keep the data loss: the current-schema
@@ -239,13 +217,16 @@ caller actually wants.
 
 - The success message gains a `schema_hash=<hex>` suffix; only the `SUCCESS:`/`ERROR:` prefix is
   treated as contract.
-- A null fifth argument is an error, not a fallback to the four-argument behavior — "I have no hash"
-  is spelled by omitting the argument.
+- A null fifth argument is an error, like a null in any other argument.
+- The fifth argument is required, accepting the resulting SQL-surface break because this is an
+  admin-only API.
+- The `Binary` slot accepts only `Binary`/`Dictionary(_, Binary)`/`Null`; a mistyped hash argument
+  fails loudly at planning.
 
 ## Documentation
 
 - `mkdocs/docs/admin/functions-reference.md:157` — update the `###` heading to the five-argument
-  signature, document the optional parameter, document the ambiguity error under **Safety**, and
+  signature, document the required parameter, document the ambiguity error under **Safety**, and
   change the "Batch retire incompatible partitions" example (:204) to pass `p.file_schema_hash`.
   Changing the heading changes its slug, so update the cross-link in
   `mkdocs/docs/query-guide/functions-reference.md:97` in the same commit; `mkdocs/site/` is
@@ -267,19 +248,21 @@ caller actually wants.
 `lakehouse_partitions` rows under a unique `view_instance_id` per test and drive the UDF through
 SQL on an admin `SessionContext`:
 
-1. **Collision, four arguments** — two rows, same range, hashes `[4]` and `[5]`. The result string
-   starts with `ERROR:` and names both hashes; both rows survive; no `temporary_files` row was
-   added for either file. This is the regression test for the issue.
-2. **Collision, five arguments** — same fixture, passing `decode('04','hex')`. Only the `[4]` row
-   is gone, the `[5]` row survives, and exactly one `temporary_files` row exists, for the `[4]`
-   file.
-3. **Unique partition, four arguments** — unchanged behavior: `SUCCESS:`, row deleted, file queued.
+1. **Zero-width collision, same hash** — two rows, same zero-width range and the same hash `[4]`,
+   passing `decode('04','hex')`. The result string starts with `ERROR:` and names the ambiguity;
+   both rows survive; no `temporary_files` row was added for either file.
+2. **Collision, five arguments** — same range, hashes `[4]` and `[5]`, passing
+   `decode('04','hex')`. Only the `[4]` row is gone, the `[5]` row survives, and exactly one
+   `temporary_files` row exists, for the `[4]` file. This is the headline regression test for the
+   issue.
+3. **Unique partition, five arguments** — unchanged behavior: `SUCCESS:`, row deleted, file queued.
 4. **Five arguments, hash does not match** — `ERROR: Partition not found`, row untouched.
 5. **Empty partition** (`file_path IS NULL`) retires with no `temporary_files` insert, confirming
    the `fetch_optional` → `fetch_all` switch did not regress the NULL-file path.
 
-**Rust, offline** — extend `MUTATING_UDF_CALLS` in `lakehouse_admin_gate_test.rs:77` with the
-five-argument spelling, so both arities stay behind the admin gate and both keep planning.
+**Rust, offline** — in `lakehouse_admin_gate_test.rs:77`, replace the existing four-argument
+`MUTATING_UDF_CALLS` entry with the five-argument spelling, so the call still plans and stays
+behind the admin gate.
 
 **Python** — in `test_admin.py`, assert the SQL that `retire_incompatible_partitions` emits
 contains `decode('<expected hex>', 'hex')` for a fixture whose `incompatible_schema_hash` is
