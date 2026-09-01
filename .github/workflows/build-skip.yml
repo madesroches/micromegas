@@ -7,7 +7,6 @@ on:
       - 'rust/**'
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
-      - 'build/check_jemalloc_conf.py'
       - '.github/workflows/rust.yml'
 
 jobs:

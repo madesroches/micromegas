@@ -13,7 +13,6 @@ def run_native():
         ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
         ("Unused Dependencies Check", "cargo machete", None),
         ("Advisory Audit", "cargo audit", None),
-        ("jemalloc Conf Guard", "python3 build/check_jemalloc_conf.py", repo_root),
         ("License & Supply-Chain (deny)", "cargo deny check licenses bans sources", None),
         ("Advisory Audit (datafusion-wasm)", "cargo audit", wasm_crate),
         (

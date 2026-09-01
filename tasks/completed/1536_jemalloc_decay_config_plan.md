@@ -153,17 +153,16 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 micromegas::declare_jemalloc_conf!();
 ```
 
-### Drift guard
+### Drift
 
-New `build/check_jemalloc_conf.py`, added as a step in `build/rust_ci.py`'s `run_native()` list:
-`("jemalloc Conf Guard", "python3 build/check_jemalloc_conf.py", repo_root)`. Every step in
-`run_native()` otherwise passes `None` for cwd, which `rust_command.run_command` defaults to the
-`rust/` tree — but this script's path is repo-root-relative, so it needs `repo_root` explicitly,
-the same way `run_wasm()`'s `check_wasm_deps.py` step does. The script checks: every
-`rust/*/src/**/*.rs` file (recursive, so it also covers `src/bin/*.rs`) containing
-`tikv_jemallocator::Jemalloc` under a `#[global_allocator]` must also contain
-`declare_jemalloc_conf!`. This is what keeps a ninth binary added later from silently shipping
-unconfigured — the concern the issue raises directly.
+A ninth binary added later could declare jemalloc without invoking the macro, and would then run
+with jemalloc's stock config. The shared macro is the drift control — the issue's own suggestion —
+and no CI guard is layered on top. The failure is soft (one new binary keeps today's stock
+behavior, no crash and no correctness bug) and self-detecting, since every binary already emits
+`jemalloc_allocated_bytes`/`jemalloc_resident_bytes` — the gauges this issue was found with. A
+regex-over-Rust-source checker would also cover the surface only partially: `[[bin]]` targets
+whose path sits outside `src/` (this workspace already has one, `telemetry-ingestion-srv`'s
+`test/generator.rs`) would escape it while the green check implied full coverage.
 
 ## Implementation Steps
 
@@ -186,13 +185,10 @@ unconfigured — the concern the issue raises directly.
 4. **`rust/telemetry-sink/tests/jemalloc_conf_tests.rs`** — new test binary (see Testing Strategy);
    add its `[[test]]` entry with `required-features = ["jemalloc"]` to
    `rust/telemetry-sink/Cargo.toml`, matching the `jemalloc_stats_tests` entry.
-5. **`build/check_jemalloc_conf.py`** + add
-   `("jemalloc Conf Guard", "python3 build/check_jemalloc_conf.py", repo_root)` to
-   `build/rust_ci.py`'s `run_native()` list.
-6. **Docs** — new `mkdocs/docs/admin/memory-allocator.md`, nav entry, and the `admin/object-cache.md`
+5. **Docs** — new `mkdocs/docs/admin/memory-allocator.md`, nav entry, and the `admin/object-cache.md`
    pointer (see Documentation).
-7. **`CHANGELOG.md`** — entry under `## Unreleased`.
-8. `cargo fmt` + `cargo clippy --workspace -- -D warnings` from `rust/`.
+6. **`CHANGELOG.md`** — entry under `## Unreleased`.
+7. `cargo fmt` + `cargo clippy --workspace -- -D warnings` from `rust/`.
 
 ## Files to Modify
 
@@ -211,8 +207,6 @@ unconfigured — the concern the issue raises directly.
 | `rust/telemetry-maintenance-srv/src/main.rs` | Invoke the macro |
 | `rust/telemetry-ingestion-srv/src/main.rs` | Invoke the macro |
 | `rust/redis-exporter/src/main.rs` | Invoke the macro |
-| `build/check_jemalloc_conf.py` | **New** — drift guard |
-| `build/rust_ci.py` | Add the guard to `run_native()` |
 | `mkdocs/docs/admin/memory-allocator.md` | **New** |
 | `mkdocs/mkdocs.yml` | Nav entry |
 | `mkdocs/docs/admin/object-cache.md` | Replace the bare "tune `MALLOC_CONF`" advice |
@@ -316,9 +310,6 @@ dropped static, a typo in the conf string, or an upstream default shift. `#![cfg
 "windows"))]` and `required-features = ["jemalloc"]` gate it the same way
 `jemalloc_stats_tests.rs` is gated. The test must skip (not fail) when `_RJEM_MALLOC_CONF` is set
 in the environment, since that source legitimately outranks the symbol under test.
-
-**`build/check_jemalloc_conf.py`** — asserts the macro is invoked in every binary that declares
-jemalloc as its global allocator. Run in CI via `python3 build/rust_ci.py native`.
 
 **Manual verification** — start `object-cache-srv` locally, drive eviction churn, and compare
 `jemalloc_resident_bytes - jemalloc_allocated_bytes` against a build without the change:
