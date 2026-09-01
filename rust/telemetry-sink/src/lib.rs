@@ -34,6 +34,13 @@ pub mod system_monitor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tracing_interop;
 
+// ---- Feature-gated, both targets ----
+// tikv-jemalloc-ctl is only a dependency for `cfg(all(not(wasm32), not(windows)))`
+// (see Cargo.toml), but the module itself needs no wasm32 gate: it declares no
+// dependency of its own, so it compiles to a no-op on wasm32 too.
+#[cfg(feature = "jemalloc")]
+pub mod jemalloc_conf;
+
 // ---- Wasm-only modules ----
 #[cfg(target_arch = "wasm32")]
 mod console_event_sink;

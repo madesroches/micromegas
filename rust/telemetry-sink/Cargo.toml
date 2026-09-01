@@ -59,3 +59,8 @@ serial_test = "3.2"
 name = "jemalloc_stats_tests"
 path = "tests/jemalloc_stats_tests.rs"
 required-features = ["jemalloc"]
+
+[[test]]
+name = "jemalloc_conf_tests"
+path = "tests/jemalloc_conf_tests.rs"
+required-features = ["jemalloc"]
