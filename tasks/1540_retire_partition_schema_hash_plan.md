@@ -62,6 +62,11 @@ two-row delete even when the caller's snapshot saw a unique match.
 transaction as the replacement insert and is meant to sweep old-schema partitions.
 `retire_partition_by_file` keys on a unique file path and is unaffected.
 
+Partition files already orphaned in object storage by past over-deletes are not reclaimed by this
+change. Cleanup is driven entirely by `temporary_files` rows written through `add_file_for_cleanup`
+(`write_partition.rs:30`); a file whose `lakehouse_partitions` row was already deleted without such
+a row is unreachable, and there is no sweep that reclaims historically orphaned partition files.
+
 ## Design
 
 ### 1. Optional fifth argument
@@ -186,9 +191,11 @@ surface beyond the f-string SQL this function already builds.
    rows and `prong_b_guard_db_test.rs` for an admin `make_session_context`).
 
 5. **Python test** (`python/micromegas/tests/test_admin.py`) — add SQL-shape assertions, and
-   convert the `incompatible_schema_hash` fixtures at `:92`, `:126`, `:178`, `:225`, `:310` from
-   `str` to `bytes` (`MockFlightSQLClient`'s regex already matches the five-argument call and
-   needs no change).
+   convert the `incompatible_schema_hash` fixtures at `:92`, `:126`, `:178`, `:225` from `str` to
+   `bytes` (`MockFlightSQLClient`'s regex already matches the five-argument call and needs no
+   change). The `:310` fixture in `test_sql_injection_resilience` keeps its quote-carrying payload,
+   converted to bytes (`b"[3'; TRUNCATE schemas; --]"`), so the test still exercises the one column
+   that now gets hex-encoded into the f-string SQL.
 
 6. **Docs** — `mkdocs/docs/admin/functions-reference.md`,
    `mkdocs/docs/query-guide/functions-reference.md`.
@@ -271,9 +278,12 @@ contains `decode('<expected hex>', 'hex')` for a fixture whose `incompatible_sch
 `b"\x04"`, and that the retirement still succeeds end-to-end through the mock.
 `MockFlightSQLClient`'s regex already matches a five-argument call and needs no change; what
 must change is the `incompatible_schema_hash` fixture values at `test_admin.py:92`, `:126`,
-`:178`, `:225`, and `:310`, which are currently Python `str` (e.g. `"[3]"`) and must become
-`bytes` (e.g. `b"\x03"`) so `bytes(partition["incompatible_schema_hash"])` in
-`retire_incompatible_partitions` does not raise `TypeError`.
+`:178`, and `:225`, which are currently Python `str` (e.g. `"[3]"`) and must become `bytes`
+(e.g. `b"\x03"`) to match the `Binary`-typed column the fixture stands in for. The `:310`
+fixture in `test_sql_injection_resilience` keeps its quote-carrying payload as bytes
+(`b"[3'; TRUNCATE schemas; --]"`); the test then asserts the emitted SQL contains only
+`decode('<hex>', 'hex')` for that column, with no quote from the payload surviving into the
+SQL — this is what exercises the claim that hex-encoding the hash closes the injection surface.
 
 **Manual** — against the local test env, bump a view's `SCHEMA_VERSION`, materialize over a range
 already covered by an old-schema partition to create a real collision, then confirm
