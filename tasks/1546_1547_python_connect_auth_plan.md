@@ -147,10 +147,11 @@ Three branches, in order:
 
 ```
 cfg = resolve_connection(profile=profile)          # raises ProfileError on a two-mechanism profile
-if cfg.api_key_file:      -> FlightSQLClient(cfg.uri, auth_provider=StaticTokenAuthProvider.from_file(...))
+if cfg.api_key_file:      -> FlightSQLClient(cfg.uri, auth_provider=StaticTokenAuthProvider.from_file(...),
+                                              client_entrypoint=..., preserve_dictionary=...)
 elif cfg.oidc_issuer and cfg.oidc_client_id:
-                          -> oidc_connection.connect(...)
-else:                     -> FlightSQLClient(cfg.uri)
+                          -> oidc_connection.connect(..., client_entrypoint=..., preserve_dictionary=...)
+else:                     -> FlightSQLClient(cfg.uri, client_entrypoint=..., preserve_dictionary=...)
 ```
 
 Static key first, so a profile that names one never triggers a browser flow. The
@@ -168,6 +169,9 @@ Two details to preserve:
   cannot request dictionary preservation at all — a real gap for notebook users, five of whom
   reach for `micromegas.connect(preserve_dictionary=True)` precisely because the profile path
   doesn't offer it.
+- **`client_entrypoint` also reaches all three branches, including the new static-key one.**
+  `cli/query.py` passes `client_entrypoint="cli-query"` through this function; dropping it on the
+  static-key branch would silently lose attribution for that auth mode.
 
 `micromegas/cli/connection.py` collapses to a re-export:
 
@@ -221,8 +225,9 @@ Issue #1546's minimum bar, and cheap:
    and adding the static-key branch plus `preserve_dictionary`.
 9. Reduce `micromegas/cli/connection.py` to the aliasing re-export.
 10. Export `connect_with_profile` and `ProfileError` from `micromegas/__init__.py`.
-11. Extend `tests/cli/test_connection.py`, including giving `FakeFlightSQLClient.__init__` a
-    `preserve_dictionary=False` parameter so it keeps accepting the call.
+11. Extend `tests/cli/test_connection.py`, including giving `FakeFlightSQLClient.__init__`
+    `preserve_dictionary=False` and `auth_provider=None` parameters, capturing both, so it keeps
+    accepting the call and the static-key test can assert on them.
 
 **Phase 4 — docstrings and docs**
 12. Docstring edits per §5, including `flightsql/attribution.py`.
@@ -362,7 +367,7 @@ var per test):
 `tests/cli/test_connection.py` (extend; reuse the existing monkeypatched `config.CONFIG_PATH` and
 fake-client pattern):
 - A static-key profile builds a client whose captured `auth_provider.get_token()` returns the key
-  file's contents.
+  file's contents, and whose captured `client_entrypoint` is forwarded too.
 - `preserve_dictionary=True` is forwarded on each of the three branches.
 - `micromegas.connect_with_profile is micromegas.cli.connection.connect` — the alias holds.
 - An `api_key_file` pointing at a missing or empty file raises `ProfileError`.
