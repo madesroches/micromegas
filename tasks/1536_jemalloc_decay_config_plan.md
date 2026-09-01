@@ -85,7 +85,9 @@ background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0
   wrong way: `0` means muzzy pages are `MADV_DONTNEED`'d immediately, so `5000` would *add* five
   seconds of retention rather than removing any.
 
-`max_background_threads` is left at its default of one per CPU (2 on the measured box).
+`max_background_threads` is left at its default. That default is a fixed `DEFAULT_NUM_BACKGROUND_THREAD`
+(4), not one per CPU — `background_thread_boot1` resets any unset/over-limit value to 4 regardless
+of `ncpus` — so on the measured 2-vCPU box up to 4 purge threads can be created.
 
 `narenas` is deliberately not set — see Trade-offs.
 
@@ -110,6 +112,12 @@ pulls in no dependency — it expands to a byte string and two attributes — so
 unconditionally, outside the `jemalloc` feature and outside the `wasm32` gating that wraps the
 other native modules.
 
+`jemalloc_conf.rs` defines the conf string once, module-level:
+
+```rust
+pub const CONF: &[u8] = b"background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0\0";
+```
+
 Expansion shape (`c_char` is `i8` on x86-64 and `u8` on aarch64, so the static is typed as a
 pointer-sized `Option<&'static u8>` — layout-identical to the `const char *` jemalloc reads, and
 the same trick `tikv-jemalloc-sys`' own `tests/malloc_conf_set.rs` uses via a union):
@@ -118,8 +126,15 @@ the same trick `tikv-jemalloc-sys`' own `tests/malloc_conf_set.rs` uses via a un
 #[cfg(not(target_os = "windows"))]
 #[used]
 #[unsafe(export_name = "_rjem_malloc_conf")]
-pub static MICROMEGAS_MALLOC_CONF: Option<&'static u8> = Some(&CONF[0]);
+pub static MICROMEGAS_MALLOC_CONF: Option<&'static u8> = Some(&$crate::jemalloc_conf::CONF[0]);
 ```
+
+`CONF` is NUL-terminated: jemalloc reads source 1 as a `const char *` (`jemalloc/src/conf.c`,
+`jemalloc/src/jemalloc.c`), and an unterminated byte string is exactly the silent-garbage failure
+the assertion test below exists to catch. The expansion references `$crate::jemalloc_conf::CONF`
+rather than a bare `CONF`, since the macro expands inside each binary crate, not inside
+`telemetry-sink` — `$crate` resolves through the re-export chain even though the binaries depend on
+`micromegas`, not `micromegas-telemetry-sink`, directly.
 
 `#[unsafe(export_name = ...)]` is the edition-2024 spelling (the workspace is on edition 2024,
 Rust 1.97.1). The `not(target_os = "windows")` gate lives inside the macro so each call site is one
@@ -144,8 +159,11 @@ unconfigured — the concern the issue raises directly.
 
 ## Implementation Steps
 
-1. **`rust/telemetry-sink/src/jemalloc_conf.rs`** — new module with the conf byte string and
-   `#[macro_export] macro_rules! declare_jemalloc_conf`. Register `pub mod jemalloc_conf;` in
+1. **`rust/telemetry-sink/src/jemalloc_conf.rs`** — new module with
+   `pub const CONF: &[u8] = b"background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0\0";`
+   (NUL-terminated, since jemalloc reads it as a `const char *`) and
+   `#[macro_export] macro_rules! declare_jemalloc_conf`, whose expansion references
+   `$crate::jemalloc_conf::CONF`. Register `pub mod jemalloc_conf;` in
    `rust/telemetry-sink/src/lib.rs`, ungated (the surrounding native modules are
    `cfg(not(target_arch = "wasm32"))`; this one needs no gate because it expands to nothing on
    Windows and is inert unless invoked).
@@ -229,9 +247,10 @@ is otherwise strictly a reduction in idle memory.
 
 ## Performance
 
-`background_thread:true` costs one purge thread per CPU, waking on the decay timer. On the
-measured 2-vCPU box that is two mostly-idle threads against a ~950 MB reduction in idle resident
-memory. The purge work itself is not new — it is the same `madvise` traffic the allocating thread
+`background_thread:true` costs up to `max_background_threads` purge threads, waking on the decay
+timer. That default is a fixed 4 (`DEFAULT_NUM_BACKGROUND_THREAD`), not one per CPU, so on the
+measured 2-vCPU box that is up to four mostly-idle threads against a ~950 MB reduction in idle
+resident memory. The purge work itself is not new — it is the same `madvise` traffic the allocating thread
 would otherwise do inline, moved off the hot path.
 
 `dirty_decay_ms:5000` returns pages sooner, which means re-faulting them if the workload's churn
