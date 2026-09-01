@@ -669,9 +669,14 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
   `CLAIM_CONTENDED`) raises `RuntimeError` the same way every other `WebClient` method does.
   Returns the mint response dict, including the one-time cleartext `key`.
 - **`my_audiences()`** — `GET {base_path}/api/audience-grants/my-audiences`. Caller-scoped, no
-  admin access required. Returns `{"is_admin", "audiences", "mint_prefix", "email"}` — the
-  audiences whose `mint` selector matches the caller today, the caller's own admin flag, the
-  caller-derived namespace prefix a fresh claim mints under, and the caller's own email.
+  admin access required. Returns
+  `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs"}` — the audiences whose `mint`
+  selector matches the caller today, the caller's own admin flag, a caller-derived namespace
+  prefix used only to *suggest* a fresh audience name (not something a claim is minted under —
+  `--claim` claims the name it is given verbatim), the caller's own email, and `held_pairs`: the
+  `"{audience}:{axis}"` pairs the caller holds via an identity selector (`"*"` excluded), used to
+  tell an audience the caller personally holds a grant on from one they can merely see via a
+  wildcard grant.
 
 ```python
 from micromegas.web_client import WebClient
@@ -932,33 +937,50 @@ it does from the user's point of view ("set up telemetry"), not the server-side 
 unless the caller is an admin.
 
 ```bash
-# Resolve the audience automatically via GET .../audience-grants/my-audiences
-# (exactly one match is used silently; more than one asks you to pick with --audience).
+# Resolve the audience automatically via GET .../audience-grants/my-audiences, from the
+# caller's personally held mint grants only (exactly one match is used silently; more
+# than one asks you to pick with --audience).
 eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
 
-# Name an audience explicitly -- a fresh name to claim, or one you already have a grant for.
+# An audience you already have a grant for -- e.g. the deployment's shared `public`
+# audience, mintable by every authenticated caller once the operator has granted it:
+micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
+    --audience public
+
+# A fresh claim of your own: --claim claims the name verbatim, with no prefix applied --
+# the namespacing convention lives in the name you pass, not in a client-side rewrite.
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
-    --audience ci-runner --env-file ~/.micromegas/telemetry.env
+    --claim "$USER-ci-runner" --env-file ~/.micromegas/telemetry.env
 ```
 
 `--url` (required) is `analytics-web-srv`'s base URL. `--name` (required) names the minted key
-(e.g. a hostname). `--audience` is optional:
+(e.g. a hostname). `--audience` and `--claim` are mutually exclusive, and mean two different
+things:
 
-- An audience already in `GET .../audience-grants/my-audiences`'s `audiences` list (the caller has
-  a real grant for it, e.g. a shared team audience) is used verbatim.
-- A name *not* in that list, from a **non-admin** caller, is a fresh claim (§4a): minted as
-  `f"{mint_prefix}{audience}"` — a namespace derived from the caller's own email, never the bare
-  name typed — with the resolved full name printed to stderr. There is no flag to bypass this
-  prefixing; it is what keeps operationally meaningful bare names (`prod`, `ci`, `staging`) out of
-  self-service reach for the caller using this script.
-- A name from an **admin** caller is never prefixed — deliberate operational naming. If the named
-  audience is brand-new, the mint route itself now claims it server-side (#1510) — writing that
-  admin's own `read`/`mint` grant in the same request — and the printed mint line adds `claimed
-  audience <name>` when it did. The script no longer pages through
-  `list_ingestion_api_keys`/`list_audience_grants` or calls the grants API itself to make this
-  decision.
-- Omitted entirely: resolved via `GET .../audience-grants/my-audiences` — exactly one match is used
-  silently; more than one prints the choices and asks for `--audience`; none prints a hint to claim
+- **`--audience NAME`**: an audience already in `GET .../audience-grants/my-audiences`'s
+  `audiences` list (the caller has a real grant for it — a shared team audience, or the
+  deployment's `public` audience once an operator has granted it) is used verbatim, admin or not.
+  A name *not* in that list, from a **non-admin** caller, is a hard error naming the caller's
+  mintable audiences and every way forward: a `--claim` suggestion for a fresh audience of the
+  caller's own, and the exact `micromegas-grants` commands an admin would run to grant this one
+  (concretely, with the audience and the caller's email already substituted). A name from an
+  **admin** caller is always used verbatim, even when not already in `audiences` — deliberate
+  operational naming; if the named audience is brand-new, the mint route itself claims it
+  server-side (#1510), writing that admin's own `read`/`mint` grant in the same request, and the
+  printed mint line adds `claimed audience <name>` when it did.
+- **`--claim NAME`**: claims `NAME` as a fresh audience, verbatim — the name passed is the name
+  claimed, with no prefix ever applied. Requires a non-admin caller with an email (the lazy claim
+  writes a `user:<email>` grant row, so there must be an identity to write it under); an admin's
+  brand-new audience is claimed server-side via `--audience` instead, so `--claim` errors for an
+  admin caller. Fails with the route's ordinary 403 if `NAME` already exists and this caller holds
+  no grant for it — a bare `--claim prod` is passed straight through, so it succeeds only if `prod`
+  is genuinely unclaimed.
+- **Omitted entirely**: resolved via `GET .../audience-grants/my-audiences`, filtered to audiences
+  the caller *personally holds* a mint grant on (the response's `held_pairs`) — a deployment-wide
+  wildcard grant that puts an audience in every caller's `audiences` list (e.g. a seeded `public`
+  mint row) is not enough on its own to be silently auto-selected here. Exactly one personally-held
+  match is used silently; more than one prints the choices and asks for `--audience`; none prints
+  the audiences the caller can see but does not personally hold (if any), plus a hint to `--claim`
   a fresh name or ask an admin. An admin caller must always pass `--audience` explicitly (an empty
   `audiences` list means nothing for an admin, whose mint authority never depends on a grant row).
 

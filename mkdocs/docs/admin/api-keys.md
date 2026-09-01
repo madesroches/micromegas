@@ -252,8 +252,11 @@ per-request point query, never a cached env-map union, so an env-only
 `"mint"` selector is inert — see
 [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374).
 See [Audiences and Grants](authentication.md#audiences-and-grants) for the
-full model. `public` is the one built-in: every authenticated principal can
-read it, with no grant entry needed in either source.
+full model. `public` has no built-in read grant of its own — a fresh deployment ships with the
+schema-v9 seeded `('public', 'read', '*')` DB row already inserted, which is what makes every
+authenticated principal able to read it with no further grant needed; delete that row (or the
+equivalent env-map entry) and `public` stops being universally readable, the same as removing any
+other audience's grant.
 
 **The binding is immutable by design.** Once a key is minted or imported with
 an audience, that audience never changes for that key — not through a later
@@ -282,14 +285,17 @@ decides *which* audience is asked about, never whether the caller may have it.
 (AbAC Stage 6, #1374), once `MICROMEGAS_SELF_SERVICE_MINT` is on — a
 genuinely fresh, never-before-granted name is minted *and*
 granted in the same request rather than rejected for lack of a pre-existing
-grant. `micromegas-setup-telemetry` (the setup script) applies its own
-client-side naming convention on top of this: a non-admin's fresh claim is
-minted under a namespace derived from the caller's own email (e.g.
-`alice-ci-runner` for `alice@example.com` naming `ci-runner`), never the bare
-name the caller typed, so operationally meaningful bare names stay reserved
-for admin use. This is a script convention only — the mint route itself
-accepts any valid, unclaimed name from any authorized non-admin caller,
-prefixed or not. See
+grant. `micromegas-setup-telemetry` (the setup script) exposes this through a
+dedicated `--claim NAME` flag, distinct from `--audience`: `--claim` claims
+`NAME` verbatim, with no prefix applied — the name passed is the name
+claimed. The script suggests (but does not enforce) a namespace derived from
+the caller's own email in its own error text and docs (e.g.
+`--claim alice-ci-runner` for `alice@example.com`), so operationally
+meaningful bare names stay out of casual, unintentional reach — but the
+convention lives in the invocation the caller copies, not in a rewrite the
+tool applies behind their back. The mint route itself has no notion of this
+convention either way: it accepts any valid, unclaimed name from any
+authorized non-admin caller, prefixed or not. See
 [Self-service mint](authentication.md#self-service-ingestion-key-mint-abac-stage-6-1374)
 for the full mechanism.
 

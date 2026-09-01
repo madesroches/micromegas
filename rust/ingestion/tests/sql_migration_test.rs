@@ -19,6 +19,7 @@ use micromegas_ingestion::sql_migration::{
     LATEST_DATA_LAKE_SCHEMA_VERSION, execute_migration, read_data_lake_schema_version,
     upgrade_data_lake_schema_v2, upgrade_data_lake_schema_v3, upgrade_data_lake_schema_v4,
     upgrade_data_lake_schema_v5, upgrade_data_lake_schema_v6, upgrade_data_lake_schema_v7,
+    upgrade_data_lake_schema_v8,
 };
 use micromegas_ingestion::sql_telemetry_db::create_tables;
 use sqlx::Row;
@@ -88,6 +89,18 @@ async fn build_v7_schema(pool: &sqlx::PgPool) {
         .await
         .expect("v6 -> v7");
     tr.commit().await.expect("commit v7");
+}
+
+/// Builds a throwaway schema pinned to v8 (no seeded `public` read/mint rows in `audience_grants`
+/// yet) by chaining `build_v7_schema` with the v8 step directly, bypassing `execute_migration` so
+/// it doesn't carry the fresh schema straight to v9, leaving nothing at v8 to migrate from.
+async fn build_v8_schema(pool: &sqlx::PgPool) {
+    build_v7_schema(pool).await;
+    let mut tr = pool.begin().await.expect("begin v8");
+    upgrade_data_lake_schema_v8(&mut tr)
+        .await
+        .expect("v7 -> v8");
+    tr.commit().await.expect("commit v8");
 }
 
 async fn schema_version(pool: &sqlx::PgPool) -> i32 {
@@ -525,6 +538,133 @@ async fn v8_adds_nullable_unbackfilled_audience_columns_with_not_valid_checks() 
 
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V8} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping throwaway schema");
+
+    test_result.expect("test assertions");
+}
+
+/// The v8 -> v9 step: seeding `('public', 'read', '*')` and `('public', 'mint', '*')` into
+/// `audience_grants`. `execute_migration` against a v8 database ends with exactly those two rows
+/// and `LATEST_DATA_LAKE_SCHEMA_VERSION`; running it again is a no-op (`ON CONFLICT DO NOTHING`);
+/// and an operator who already created either row by hand before upgrading keeps their own
+/// `created_by`, rather than the migration overwriting or duplicating it.
+const SCHEMA_V9: &str = "mm_1535_sql_migration_test_schema";
+
+#[ignore]
+#[tokio::test]
+async fn v9_seeds_public_read_and_mint_grants() {
+    let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live Postgres");
+
+    let setup_pool = sqlx::PgPool::connect(&base_conn_str)
+        .await
+        .expect("connecting to metadata Postgres");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V9} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping any stale throwaway schema from a previous failed run");
+    sqlx::query(&format!("CREATE SCHEMA {SCHEMA_V9}"))
+        .execute(&setup_pool)
+        .await
+        .expect("creating throwaway schema");
+
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)
+        .expect("valid connection string")
+        .options([("search_path", SCHEMA_V9)]);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .expect("connecting with a throwaway search_path");
+
+    let test_result: Result<(), String> = async {
+        build_v8_schema(&pool).await;
+        if schema_version(&pool).await != 8 {
+            return Err("expected the throwaway schema to start at v8".to_string());
+        }
+
+        // An operator who already created the read row by hand, under their own identity --
+        // the migration must not duplicate or overwrite this.
+        sqlx::query(
+            "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+             VALUES ('public', 'read', '*', now(), 'an-operator')",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("seeding a pre-existing public/read/* row: {e:#}"))?;
+
+        execute_migration(pool.clone())
+            .await
+            .map_err(|e| format!("migrating v8 -> v9: {e:#}"))?;
+
+        let version = schema_version(&pool).await;
+        if version != LATEST_DATA_LAKE_SCHEMA_VERSION {
+            return Err(format!(
+                "expected schema version {LATEST_DATA_LAKE_SCHEMA_VERSION} after migrating, got {version} \
+                 (a forgotten `UPDATE migration SET version=9;` would surface as a startup panic \
+                 in production, not a graceful error -- this is what catches it here instead)"
+            ));
+        }
+
+        let rows = sqlx::query(
+            "SELECT audience, axis, selector, created_by FROM audience_grants ORDER BY axis",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("reading back audience_grants: {e:#}"))?;
+        if rows.len() != 2 {
+            return Err(format!(
+                "expected exactly the two seeded rows, got {} rows",
+                rows.len()
+            ));
+        }
+
+        let mint_row = &rows[0];
+        if mint_row.get::<String, _>("axis") != "mint"
+            || mint_row.get::<String, _>("audience") != "public"
+            || mint_row.get::<String, _>("selector") != "*"
+            || mint_row.get::<String, _>("created_by") != "default"
+        {
+            return Err("expected the mint row to be ('public', 'mint', '*', 'default')".to_string());
+        }
+
+        let read_row = &rows[1];
+        if read_row.get::<String, _>("axis") != "read"
+            || read_row.get::<String, _>("audience") != "public"
+            || read_row.get::<String, _>("selector") != "*"
+            || read_row.get::<String, _>("created_by") != "an-operator"
+        {
+            return Err(
+                "expected the pre-existing read row's created_by ('an-operator') to survive \
+                 the migration untouched, via ON CONFLICT DO NOTHING"
+                    .to_string(),
+            );
+        }
+
+        // Running the migration again is a no-op: still exactly two rows, unchanged.
+        execute_migration(pool.clone())
+            .await
+            .map_err(|e| format!("re-running execute_migration: {e:#}"))?;
+        let count: i64 = sqlx::query("SELECT count(*) AS c FROM audience_grants")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| format!("counting audience_grants after a second migration run: {e:#}"))?
+            .try_get("c")
+            .map_err(|e| format!("reading count: {e:#}"))?;
+        if count != 2 {
+            return Err(format!(
+                "expected re-running the migration to be a no-op, got {count} rows"
+            ));
+        }
+
+        Ok(())
+    }
+    .await;
+
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {SCHEMA_V9} CASCADE"))
         .execute(&setup_pool)
         .await
         .expect("dropping throwaway schema");

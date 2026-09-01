@@ -12,6 +12,7 @@ use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -141,9 +142,10 @@ impl FlightSqlServerBuilder {
     /// Set an explicit `ReadPolicy`, resolved once per request against the caller's
     /// `AuthContext` (#1369, AbAC Stage 1). This policy wins on every `build_and_serve` branch,
     /// overriding that branch's own default. When never called, the default depends on how auth
-    /// is configured: with `with_default_auth()`, `AudienceReadPolicy::from_env("")`; with
-    /// `with_auth_provider(..)` or with auth left disabled, `AudienceReadPolicy` with an empty
-    /// grant map (readable set degenerates to `{public}`). **Not** `ReadScope::All`: the
+    /// is configured: with `with_default_auth()` or `with_auth_provider(..)`,
+    /// `AudienceReadPolicy::from_env("")` backed by the DB grant store (so the seeded `public`
+    /// read row still resolves); with auth left disabled, `AudienceReadPolicy` with an empty
+    /// grant map, though that branch never actually resolves it. **Not** `ReadScope::All`: the
     /// absent-`AuthContext`-extension convention already supplies `All` when no provider is
     /// configured, so this default must not duplicate
     /// that decision -- it only ever resolves a scope when an `AuthContext` is present to resolve
@@ -280,17 +282,39 @@ impl FlightSqlServerBuilder {
         // override inside the `auth_provider` arm only and silently dropped it on the other two.
         let (auth_provider, default_policy, default_isolation_config): AuthAndDefaults =
             if let Some(provider) = self.auth_provider {
-                // Injected-provider path (the monolith's `with_auth_provider` call): resolves no
-                // policy from env on its own -- the caller is expected to pair
-                // `with_auth_provider` with its own `with_read_policy` call. Falls back to the
-                // same empty-grant-map default as the other branches when it didn't.
-                (
-                    Some(provider),
-                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
-                    Arc::new(IsolationConfig::default()),
-                )
+                // Injected-provider path (the monolith's `with_auth_provider` call): the caller is
+                // expected to pair `with_auth_provider` with its own `with_read_policy` call, but
+                // when it didn't, this default must still resolve the seeded `public` read grant
+                // rather than the empty set -- an empty-grant-map default was only ever safe
+                // while `resolve` had a built-in `PUBLIC_AUDIENCE` arm; with that arm removed it
+                // would silently deny every query for an embedder that forgot `with_read_policy`.
+                // So this builds the same env+store-backed policy the `use_default_auth` branch
+                // below does.
+                //
+                // Built only when `self.read_policy` is unset -- `with_read_policy` always wins
+                // below, and the only in-repo `with_auth_provider` caller (the monolith) always
+                // pairs the two, so skipping this avoids a DB round trip -- and a needless
+                // `from_env("")` failure mode on a malformed *unprefixed* env var a caller may
+                // have deliberately overridden via `with_read_policy` -- whenever it would be
+                // discarded anyway.
+                let policy: Arc<dyn ReadPolicy> = if self.read_policy.is_none() {
+                    let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                    warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
+                    let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
+                    let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
+                        key_store_pool,
+                        audience_grants_config,
+                    ));
+                    Arc::new(
+                        AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
+                    )
+                } else {
+                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()))
+                };
+                (Some(provider), policy, Arc::new(IsolationConfig::default()))
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
                 let provider = match ProviderBuilder::new("")
                     .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
                     .build()
@@ -327,7 +351,10 @@ impl FlightSqlServerBuilder {
                 // provider configured), so the absent-extension convention already supplies
                 // `ReadScope::All` -- this default policy is never actually resolved against a
                 // real caller, but must still exist since `FlightSqlServiceImpl::new` requires
-                // one.
+                // one. This never-resolved property is now load-bearing: with the built-in
+                // `PUBLIC_AUDIENCE` read arm removed, an empty grant map resolves to the empty
+                // set, not `{public}` -- fine here only because `resolve` is never actually
+                // called on this branch.
                 (
                     None,
                     Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),

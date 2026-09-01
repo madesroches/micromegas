@@ -204,13 +204,17 @@ telemetry-ingestion-srv --disable-auth
     that already governs the eight admin-gated functions below) — not a query-time
     audience-in-scope check.
 
-    **API keys and no-`email`-claim OIDC tokens are covered by `public` alone, with no second
-    knob.** Under the grant-map model (see [Audiences and Grants](#audiences-and-grants) below),
-    every authenticated caller's readable set always includes `public`, regardless of identity —
-    there is no caller kind whose resolved set is otherwise empty the way an API key's was under
-    the identity-derived model this replaced. `MICROMEGAS_DEFAULT_AUDIENCE`'s default of
-    `public` (see [Ingestion](ingestion.md#environment-variables)) restores
-    visibility for every caller kind that never binds an audience of its own.
+    **API keys and no-`email`-claim OIDC tokens are covered by `public`, via a grant like any
+    other, with no second knob.** Under the grant-map model (see
+    [Audiences and Grants](#audiences-and-grants) below), `public` has no built-in read grant — a
+    fresh deployment ships with the seeded `('public', 'read', '*')` DB row, which is what makes
+    every authenticated caller's readable set include `public`, regardless of identity. There is
+    no caller kind whose resolved set is otherwise empty the way an API key's was under the
+    identity-derived model this replaced, as long as that row (or an equivalent grant) exists;
+    delete it and `public` stops being universally readable for every caller kind alike.
+    `MICROMEGAS_DEFAULT_AUDIENCE`'s default of `public` (see
+    [Ingestion](ingestion.md#environment-variables)) restores visibility for every caller kind
+    that never binds an audience of its own.
 
     **The two prongs read different copies of the `audience` column, with different freshness.**
     Prong A reads a daemon-materialized parquet snapshot (unchanged from Stage 2 — a process the
@@ -421,23 +425,28 @@ mint authority. Selectors:
 | `user:<email>` | the caller's `email` claim |
 | `group:<g>` | any value in the caller's `groups` claim |
 
-**Two built-in rules, and nothing else:**
+**One built-in rule, and nothing else:**
 
-- **`public` is always readable**, by every authenticated principal, whether
-  or not it appears in the map at all — writing `{"public": ["*"]}` changes
-  nothing. Note this covers data that arrives without a bound audience only
-  while `MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is now
-  stamped with the knob's value at write time (see
-  [Audience stamping and the default](#audience-stamping-and-the-default)),
-  with only a pre-existing unstamped row — one registered before its ingestion
-  binary reached schema v8 — still resolved to it at query time. Pointing the
-  knob at another label puts all of that under that label's grants instead.
 - **There is no self-audience rule.** A caller is never granted an audience
   merely for being named like one — an API key named `team-alpha` does not
   thereby read the `team-alpha` audience. A personal audience is an ordinary
   audience with an ordinary grant entry (e.g. `"alice-laptop":
   ["user:alice@example.com"]`); provisioning one per user by hand this way is
   what self-service mint (#1374, below) removes the need for.
+
+**`public` has no built-in read grant of its own — it is a seeded row, not a special case.** A
+fresh deployment's DB-backed grant store (below) ships with `('public', 'read', '*')` already
+inserted (schema v9), so `public` reads exactly as if you had written `{"public": ["*"]}`
+yourself. Writing that entry in the env-map grants above changes nothing on top of the seeded
+row, but the seeded row is what does the work — remove it (`micromegas-grants delete public read
+'*'`, or the Audience Access page) and `public` stops being universally readable, the same as
+removing any other grant. Note this covers data that arrives without a bound audience only while
+`MICROMEGAS_DEFAULT_AUDIENCE` is left at `public`: such traffic is now stamped with the knob's
+value at write time (see
+[Audience stamping and the default](#audience-stamping-and-the-default)), with only a
+pre-existing unstamped row — one registered before its ingestion binary reached schema v8 —
+still resolved to it at query time. Pointing the knob at another label puts all of that under
+that label's grants instead.
 
 **Re-sharing already-ingested data is a grants edit, never a restamp.** Since
 the audience *value* stamped on data never changes, widening who can see
@@ -526,6 +535,22 @@ behind one off-by-default deployment knob:
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Caps how many *live* keys one non-admin caller may hold at once. `list_keys`/`revoke_key` stay `AdminUser`-gated, so a non-admin has no self-service way to free a slot once this is reached — reducing the count always requires an admin. |
 | `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Caps how many rows one non-admin caller may have created in `audience_grants` (counted across every audience/axis/selector, not just the pair being shared into), excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares). A backstop against a runaway/abusive caller, not a routine-use quota. Best-effort under concurrency. |
 
+**`public` ships mintable, by a seeded grant.** Schema v9 seeds `('public', 'mint', '*')` into
+`audience_grants` (alongside the read-side default described in
+[Audiences and Grants](#audiences-and-grants) above) — once `MICROMEGAS_SELF_SERVICE_MINT` is on,
+any authenticated non-admin can mint an ingestion key bound to `public` with no further admin
+step, since the row already exists. The knob still gates this like everything else in this
+section — the row confers nothing while it is off. Remove the row to require an explicit
+per-caller grant for `public` instead:
+
+```bash
+micromegas-grants --url https://analytics.example.com delete public mint '*'
+```
+
+or the Audience Access page's `public` → Mint → Remove. A deployment running a custom
+`MICROMEGAS_DEFAULT_AUDIENCE` gets the same literal `public` row, since the seed means one thing
+everywhere rather than depending on the deployment's default; it can delete it the same way.
+
 **Audiences are created lazily, not pre-provisioned.** A non-admin caller who
 names a brand-new, never-before-granted audience *and supplies the name
 explicitly* claims it atomically, as part of the same mint request, once
@@ -536,20 +561,23 @@ transaction that mints the key. Naming an audience that already has *any*
 grant row — admin-created, self-claimed earlier, or someone else's
 in-flight claim — still requires a matching grant exactly as above; only a
 genuinely fresh, unowned name is claimable this way. `public` and the
-deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be claimed.
+deployment's own `MICROMEGAS_DEFAULT_AUDIENCE` can never be *claimed* — a distinct property from
+being *mintable*: `public` ships mintable, via its own seeded grant (above), precisely because it
+already has grant rows and so never reaches the lazy-claim path at all.
 
 **Before turning on `MICROMEGAS_SELF_SERVICE_MINT`, pre-create a placeholder
 grant row — any selector, on either axis — for every audience name that
 exists only outside the DB:** a custom `MICROMEGAS_DEFAULT_AUDIENCE`
-(irrelevant if left at its `public` default, since
-`public` can never be claimed), and *every* key of `{prefix}_AUDIENCE_GRANTS`
+(the seeded `public` row already covers the case of leaving it at its
+`public` default — see above), and *every* key of `{prefix}_AUDIENCE_GRANTS`
 (mint-relevant or read-only alike; see the note above). Via the admin grants
-API:
+API, prefer an identity selector over a blanket `'*'` — a custom default should not become a
+second `public` merely to satisfy this check:
 
 ```bash
-micromegas-grants --url https://analytics.example.com create legacy-default read '*'
+micromegas-grants --url https://analytics.example.com create legacy-default read 'group:eng'
 # ...and one such row per audience named in {prefix}_AUDIENCE_GRANTS, e.g.:
-micromegas-grants --url https://analytics.example.com create team-alpha read '*'
+micromegas-grants --url https://analytics.example.com create team-alpha read 'group:eng'
 ```
 
 Without those placeholder rows, the lazy claim's existence check (which reads
@@ -567,11 +595,16 @@ needed to point their own telemetry at the deployment:
 micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
     --audience alice-laptop
 
-# A fresh claim: a non-admin caller's bare name is minted under a namespace
-# derived from their own email (e.g. "alice-" + "ci-runner"), never the bare
-# name itself -- printed to stderr so the caller sees the resolved name.
+# The seeded public mint grant (above) makes this work for any authenticated
+# non-admin caller, with no admin action needed:
+micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
+    --audience public
+
+# A fresh claim: --claim claims the name verbatim, with no prefix applied --
+# namespacing is a convention you carry in the name you pass, not something
+# the tool does for you:
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
-    --audience ci-runner
+    --claim "$USER-ci-runner"
 
 eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
 ```
@@ -652,7 +685,7 @@ them):
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403 |
 | `GET {base_path}/api/audience-grants/visible` | 200 `[{"audience","axis","selector","created_at","created_by"}]` — the caller-scoped read backing the Audience Access page's own list (below) |
-| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix a fresh claim mints under, the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix used only to *suggest* a fresh audience name (the web app's Mint dialog composes it live before commit; the CLI renders a `--claim` suggestion from it, but never mints under it itself), the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
 
 There is no more paginated `GET` over the whole collection — that route is
 deleted outright. Listing arbitrary rows from SQL now goes through the
@@ -777,6 +810,15 @@ does not exist" (throttled to one DB attempt per cache-TTL window), failing
 every authenticated query with `unavailable` -- `public`-only queries
 included -- until the migration lands (see the matching CHANGELOG entry for
 this change).
+
+**The same skew window applies to migration v9's seeded `public` rows.** `public` has no
+built-in read grant any more (see [Audiences and Grants](#audiences-and-grants) above) — it reads
+only through the seeded `('public', 'read', '*')` row. A standalone `flight-sql-srv` (or
+`analytics-web-srv`) that upgrades to code built against v9 *before* `telemetry-ingestion-srv` or
+the monolith has applied the v9 migration sees a database with no seeded row and no built-in arm:
+every query returns nothing (fail-closed, not an error) until the migration lands. Roll v9 (by
+upgrading ingestion or the monolith) before or in the same deploy as upgrading
+`flight-sql-srv`/`analytics-web-srv` — see the matching CHANGELOG entry for this change.
 
 ## Client Configuration
 

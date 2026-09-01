@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 8;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 9;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -24,6 +24,30 @@ pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::
             );
             0
         }
+    }
+}
+
+/// Warns when the connected database is behind [`LATEST_DATA_LAKE_SCHEMA_VERSION`].
+///
+/// `execute_migration` only runs from `telemetry-ingestion-srv`/`micromegas-monolith`; a
+/// `flight-sql-srv`/`analytics-web-srv` process reads the same database without ever migrating
+/// it. On a schema that already has the `audience_grants` table (v7+) but predates the v9 seed
+/// rows, `AudienceReadPolicy` resolves every audience to an empty grant set rather than erroring,
+/// so queries silently return zero rows -- this is the only signal an operator gets otherwise.
+pub async fn warn_if_data_lake_schema_stale(pool: &sqlx::Pool<sqlx::Postgres>) {
+    let version = match pool.begin().await {
+        Ok(mut tr) => read_data_lake_schema_version(&mut tr).await,
+        Err(e) => {
+            warn!("could not check data lake schema version: {e}");
+            return;
+        }
+    };
+    if version < LATEST_DATA_LAKE_SCHEMA_VERSION {
+        warn!(
+            "data lake schema is v{version}, behind the latest v{LATEST_DATA_LAKE_SCHEMA_VERSION}; \
+             the seeded 'public' audience_grants rows have not migrated in yet, so every query \
+             will resolve to an empty read scope and return zero rows until the schema is upgraded"
+        );
     }
 }
 
@@ -260,6 +284,30 @@ pub async fn upgrade_data_lake_schema_v8(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 9.
+///
+/// Seeds `('public', 'read', '*')` and `('public', 'mint', '*')` into `audience_grants`. The
+/// read row replaces the built-in `PUBLIC_AUDIENCE` arm removed from `AudienceReadPolicy::resolve`;
+/// the mint row is what lets a non-admin mint a key bound to `public` without an operator having
+/// to discover and create the row by hand. `ON CONFLICT DO NOTHING` because an operator may
+/// already have created either row before upgrading -- this must not fail the migration.
+pub async fn upgrade_data_lake_schema_v9(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
+         VALUES ('public', 'read', '*', now(), 'default'),
+                ('public', 'mint', '*', now(), 'default')
+         ON CONFLICT DO NOTHING;",
+    )
+    .await
+    .with_context(|| "seeding public read/mint grants")?;
+    tr.execute("UPDATE migration SET version=9;")
+        .await
+        .with_context(|| "updating data lake schema version to 9")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -391,6 +439,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v8");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v8(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 8 == current_version {
+        info!("upgrading data_lake_schema to v9");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v9(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }
