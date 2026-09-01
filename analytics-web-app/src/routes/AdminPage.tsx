@@ -4,117 +4,138 @@ import { Database, Download, Upload, Map, KeyRound, ShieldCheck, ShieldBan, User
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
+import { useAuth } from '@/lib/auth'
+
+interface AdminCard {
+  href: string
+  icon: React.ReactNode
+  iconBg: string
+  iconColor: string
+  title: string
+  description: string
+  /** `true` for a card with no non-admin capability at all -- hidden from a non-admin. */
+  adminOnly: boolean
+}
+
+function cards(isAdmin: boolean): AdminCard[] {
+  return [
+    {
+      href: '/admin/data-sources',
+      icon: <Database className="w-6 h-6" />,
+      iconBg: 'bg-green-500/15',
+      iconColor: 'text-green-500',
+      title: 'Data Sources',
+      description: 'Manage FlightSQL server connections used for queries and analytics.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/export-screens',
+      icon: <Download className="w-6 h-6" />,
+      iconBg: 'bg-accent-link/15',
+      iconColor: 'text-accent-link',
+      title: 'Export Screens',
+      description:
+        'Download screen configurations as a JSON file for backup or transfer to another environment.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/import-screens',
+      icon: <Upload className="w-6 h-6" />,
+      iconBg: 'bg-yellow-500/15',
+      iconColor: 'text-yellow-500',
+      title: 'Import Screens',
+      description:
+        'Upload a screens export file to restore or migrate screen configurations into this environment.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/maps',
+      icon: <Map className="w-6 h-6" />,
+      iconBg: 'bg-rust-500/15',
+      iconColor: 'text-accent-link',
+      title: 'Maps',
+      description: 'Upload and remove GLB map assets served to map cells.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/ingestion-keys',
+      icon: <KeyRound className="w-6 h-6" />,
+      iconBg: 'bg-orange-500/15',
+      iconColor: 'text-orange-500',
+      title: 'Ingestion API Keys',
+      description: isAdmin
+        ? 'Mint, list, and revoke write credentials for telemetry ingestion clients.'
+        : 'Mint your own write credentials for telemetry ingestion clients.',
+      adminOnly: false,
+    },
+    {
+      href: '/admin/analytics-keys',
+      icon: <ShieldCheck className="w-6 h-6" />,
+      iconBg: 'bg-purple-500/15',
+      iconColor: 'text-purple-500',
+      title: 'Analytics API Keys',
+      description: 'Mint, list, and revoke read credentials for FlightSQL/analytics access.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/query-deny-list',
+      icon: <ShieldBan className="w-6 h-6" />,
+      iconBg: 'bg-red-500/15',
+      iconColor: 'text-red-500',
+      title: 'Query Deny List',
+      description: 'Reject a misbehaving query at the FlightSQL service, without a deploy.',
+      adminOnly: true,
+    },
+    {
+      href: '/audiences',
+      icon: <Users className="w-6 h-6" />,
+      iconBg: 'bg-blue-500/15',
+      iconColor: 'text-blue-500',
+      title: 'Audience Access',
+      description: 'See who can read from and mint into each audience, and grant access.',
+      adminOnly: false,
+    },
+  ]
+}
 
 function AdminPageContent() {
   usePageTitle('Admin')
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin ?? false
+
+  const visibleCards = cards(isAdmin).filter((card) => isAdmin || !card.adminOnly)
 
   return (
-    <AuthGuard requireAdmin>
+    <AuthGuard>
       <PageLayout>
         <div className="p-6 flex flex-col h-full">
           <div className="mb-6">
             <h1 className="text-2xl font-semibold text-theme-text-primary">Admin</h1>
             <p className="mt-1 text-theme-text-secondary">
-              System administration and data management tools.
+              {isAdmin
+                ? 'System administration and data management tools.'
+                : 'Tools you have access to.'}
             </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <AppLink href="/admin/data-sources" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-green-500/15 text-green-500">
-                  <Database className="w-6 h-6" />
+            {visibleCards.map((card) => (
+              <AppLink key={card.href} href={card.href} className="block">
+                <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
+                  <div
+                    className={`w-11 h-11 rounded-lg flex items-center justify-center mb-4 ${card.iconBg} ${card.iconColor}`}
+                  >
+                    {card.icon}
+                  </div>
+                  <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">
+                    {card.title}
+                  </h3>
+                  <p className="text-sm text-theme-text-muted leading-relaxed">
+                    {card.description}
+                  </p>
                 </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Data Sources</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Manage FlightSQL server connections used for queries and analytics.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/export-screens" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-accent-link/15 text-accent-link">
-                  <Download className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Export Screens</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Download screen configurations as a JSON file for backup or transfer to another environment.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/import-screens" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-yellow-500/15 text-yellow-500">
-                  <Upload className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Import Screens</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Upload a screens export file to restore or migrate screen configurations into this environment.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/maps" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-rust-500/15 text-accent-link">
-                  <Map className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Maps</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Upload and remove GLB map assets served to map cells.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/ingestion-keys" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-orange-500/15 text-orange-500">
-                  <KeyRound className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Ingestion API Keys</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Mint, list, and revoke write credentials for telemetry ingestion clients.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/analytics-keys" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-purple-500/15 text-purple-500">
-                  <ShieldCheck className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Analytics API Keys</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Mint, list, and revoke read credentials for FlightSQL/analytics access.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/admin/query-deny-list" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-red-500/15 text-red-500">
-                  <ShieldBan className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Query Deny List</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  Reject a misbehaving query at the FlightSQL service, without a deploy.
-                </p>
-              </div>
-            </AppLink>
-
-            <AppLink href="/audiences" className="block">
-              <div className="p-6 rounded-xl border border-theme-border bg-app-panel hover:border-accent-link hover:bg-app-card transition-colors">
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-4 bg-blue-500/15 text-blue-500">
-                  <Users className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-semibold text-theme-text-primary mb-1.5">Audience Access</h3>
-                <p className="text-sm text-theme-text-muted leading-relaxed">
-                  See who can read from and mint into each audience, and grant access.
-                </p>
-              </div>
-            </AppLink>
+              </AppLink>
+            ))}
           </div>
         </div>
       </PageLayout>
@@ -126,7 +147,7 @@ export default function AdminPage() {
   return (
     <Suspense
       fallback={
-        <AuthGuard requireAdmin>
+        <AuthGuard>
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">

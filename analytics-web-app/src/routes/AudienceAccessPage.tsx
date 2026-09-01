@@ -1,5 +1,6 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useMyAudiences } from '@/hooks/useMyAudiences'
 import { Users, Plus, Share2, X, KeyRound } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -7,21 +8,18 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
-import { MintedKeyBanner } from '@/components/MintedKeyBanner'
+import { MintIngestionKeyDialog } from '@/components/MintIngestionKeyDialog'
 import { useAuth } from '@/lib/auth'
 import {
   AUDIENCE_PATTERN,
   AudienceGrantError,
   createAudienceGrant,
   deleteAudienceGrant,
-  fetchMyAudiences,
   fetchVisibleGrants,
   validateSelector,
   type AudienceGrant,
   type GrantAxis,
-  type MyAudiences,
 } from '@/lib/audience-grants-api'
-import { mintIngestionApiKey } from '@/lib/ingestion-api-keys-api'
 import type { MintApiKeyResponse } from '@/lib/api-keys-shared'
 
 // ---------------------------------------------------------------------------
@@ -318,213 +316,6 @@ function GrantDialog({
 }
 
 // ---------------------------------------------------------------------------
-// MintKeyDialog
-// ---------------------------------------------------------------------------
-
-function MintKeyDialog({
-  open,
-  prefillAudience,
-  me,
-  onClose,
-  onMinted,
-}: {
-  open: boolean
-  prefillAudience: string | null
-  me: MyAudiences | null
-  onClose: () => void
-  onMinted: (response: MintApiKeyResponse) => void
-}) {
-  const [name, setName] = useState('')
-  const [audienceChoice, setAudienceChoice] = useState<string>('__new__')
-  const [newAudience, setNewAudience] = useState('')
-  const [isMinting, setIsMinting] = useState(false)
-  const [mintError, setMintError] = useState<string | null>(null)
-  const [mintedKey, setMintedKey] = useState<MintApiKeyResponse | null>(null)
-  const wasOpenRef = useRef(false)
-
-  useEffect(() => {
-    // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
-    void (() => {
-      // Reset only on the false->true transition of `open`, not on every render while the
-      // dialog stays open -- `me` can get a fresh identity from a `loadMyAudiences()` refetch
-      // (e.g. after a claimed mint) while this dialog is still showing the one-time key banner,
-      // and that must not wipe `mintedKey`.
-      const justOpened = open && !wasOpenRef.current
-      wasOpenRef.current = open
-      if (justOpened) {
-        setName('')
-        setMintError(null)
-        setMintedKey(null)
-        if (prefillAudience) {
-          setAudienceChoice(prefillAudience)
-          setNewAudience('')
-        } else if (me?.audiences.length) {
-          // Prefer an audience the caller personally holds a mint grant on over
-          // `audiences[0]`: the seeded `('public','mint','*')` row puts `public` in
-          // every non-admin's `audiences` list, so a plain lexicographic pick can
-          // default to the wildcard-only shared pool instead of the caller's own
-          // audience -- mirrors the CLI's `resolve_audience` `held_pairs` filter.
-          const personal = me.audiences.find((a) => (me.held_pairs ?? []).includes(`${a}:mint`))
-          setAudienceChoice(personal ?? me.audiences[0])
-          setNewAudience('')
-        } else {
-          setAudienceChoice('__new__')
-          setNewAudience('')
-        }
-      }
-    })()
-  }, [open, prefillAudience, me])
-
-  if (!open) return null
-
-  const isAdmin = me?.is_admin ?? false
-  const prefix = !isAdmin ? me?.mint_prefix ?? null : null
-  const composedNew = prefix ? `${prefix}${newAudience}` : newAudience
-  const resolvedAudience = audienceChoice === '__new__' ? composedNew : audienceChoice
-  const newAudienceValid = AUDIENCE_PATTERN.test(newAudience)
-  const newAudienceInvalid = audienceChoice === '__new__' && !newAudienceValid
-
-  const handleClose = () => {
-    if (isMinting) return
-    onClose()
-  }
-
-  const handleMint = async () => {
-    setIsMinting(true)
-    setMintError(null)
-    try {
-      const result = await mintIngestionApiKey(name.trim(), resolvedAudience || undefined)
-      setMintedKey(result)
-      onMinted(result)
-    } catch (err) {
-      setMintError(
-        err instanceof Error ? err.message : 'Failed to mint ingestion key'
-      )
-    } finally {
-      setIsMinting(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
-      <div className="relative w-full max-w-md bg-app-panel border border-theme-border rounded-lg shadow-xl">
-        <div className="px-4 py-3 border-b border-theme-border flex items-center justify-between">
-          <h2 className="text-lg font-medium text-theme-text-primary">Mint ingestion key</h2>
-          <button
-            onClick={handleClose}
-            className="p-1 text-theme-text-muted hover:text-theme-text-primary rounded-sm transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="p-4 space-y-4">
-          {mintError && (
-            <div className="p-3 bg-accent-error/10 border border-accent-error/30 rounded-lg text-sm text-accent-error">
-              {mintError}
-            </div>
-          )}
-
-          {mintedKey ? (
-            <MintedKeyBanner keyValue={mintedKey.key} onDismiss={handleClose}>
-              {mintedKey.claimed && resolvedAudience && (
-                <p className="mt-2 text-sm text-theme-text-secondary">
-                  You claimed <code className="font-mono">{resolvedAudience}</code>; you now hold
-                  read and mint on it.
-                </p>
-              )}
-            </MintedKeyBanner>
-          ) : (
-            <>
-              <div>
-                <label className="block text-sm font-medium text-theme-text-secondary mb-1">
-                  Name
-                </label>
-                <input
-                  type="text"
-                  className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
-                  placeholder="my-laptop"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-theme-text-secondary mb-1">
-                  Audience
-                </label>
-                <select
-                  className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text-primary outline-hidden focus:border-accent-link"
-                  value={audienceChoice}
-                  onChange={(e) => setAudienceChoice(e.target.value)}
-                >
-                  {(me?.audiences ?? []).map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                  <option value="__new__">New audience…</option>
-                </select>
-                {!isAdmin && (
-                  <p className="mt-1 text-xs text-theme-text-muted">
-                    <code className="font-mono">public</code> is readable by every authenticated
-                    user. Pick <em>New audience…</em> to give this key&apos;s data its own
-                    audience, with read access managed separately.
-                  </p>
-                )}
-                {audienceChoice === '__new__' && (
-                  <div className="mt-2">
-                    <input
-                      type="text"
-                      className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm font-mono text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
-                      placeholder="myproj"
-                      value={newAudience}
-                      onChange={(e) => setNewAudience(e.target.value)}
-                    />
-                    {newAudience && !newAudienceValid && (
-                      <p className="mt-1 text-xs text-accent-error">
-                        Must match <code>[A-Za-z0-9_-]</code>, up to 255 characters.
-                      </p>
-                    )}
-                    {!isAdmin && (
-                      <p className="mt-1 text-xs font-mono text-theme-text-muted">
-                        {newAudienceValid
-                          ? `Will claim \`${composedNew}\` and grant you read + mint on it.`
-                          : ''}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-theme-border">
-          <Button variant="outline" onClick={handleClose} disabled={isMinting}>
-            {mintedKey ? 'Close' : 'Cancel'}
-          </Button>
-          {!mintedKey && (
-            <Button
-              onClick={handleMint}
-              disabled={isMinting || !name.trim() || !resolvedAudience.trim() || newAudienceInvalid}
-            >
-              {isMinting ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Minting...
-                </span>
-              ) : (
-                'Mint'
-              )}
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // AudienceAccessPage
 // ---------------------------------------------------------------------------
 
@@ -535,15 +326,15 @@ function AudienceAccessPageContent() {
   const listQuery = useVisibleGrants()
   const [grants, setGrants] = useState<AudienceGrant[]>([])
   const [listError, setListError] = useState<string | null>(null)
-  const [me, setMe] = useState<MyAudiences | null>(null)
-  const [selfServiceOff, setSelfServiceOff] = useState(false)
-  const [myAudiencesError, setMyAudiencesError] = useState<string | null>(null)
-  // Set from either `/visible` or `/my-audiences` when the server reports `AUTH_DISABLED`
+  const { me, selfServiceOff, authDisabled, error: myAudiencesError, reload: loadMyAudiences } =
+    useMyAudiences()
+  // `authDisabled` comes from the hook, set when `/my-audiences` reports `AUTH_DISABLED`
   // (`--disable-auth`'s `key_management_disabled_router` answers every `/api/audience-grants*`
   // route with a fixed 503, but `/auth/me` still reports `is_admin: true` in that mode, so
   // without this the page would otherwise render its normal admin/non-admin body against writes
-  // that all 503). Once set, the whole page body is replaced by a single explanatory panel.
-  const [authDisabled, setAuthDisabled] = useState(false)
+  // that all 503). `/visible` and `/my-audiences` share the same gate, so they always fail
+  // together -- no separate tracking is needed for `/visible`'s own `AUTH_DISABLED` response.
+  // Once set, the whole page body is replaced by a single explanatory panel.
 
   const [axisFilter, setAxisFilter] = useState<GrantAxis | null>(null)
   const [findText, setFindText] = useState('')
@@ -570,30 +361,6 @@ function AudienceAccessPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const loadMyAudiences = useCallback(async () => {
-    try {
-      const result = await fetchMyAudiences()
-      setMe(result)
-      setSelfServiceOff(false)
-      setMyAudiencesError(null)
-    } catch (err) {
-      if (err instanceof AudienceGrantError && err.code === 'AUTH_DISABLED') {
-        setAuthDisabled(true)
-      } else if (err instanceof AudienceGrantError && err.status === 403) {
-        setMe(null)
-        setSelfServiceOff(true)
-        setMyAudiencesError(null)
-      } else {
-        // Genuine failure (500, network, parse) -- keep `me` at whatever it was (most likely
-        // still null) and surface a retryable error instead of silently leaving the Mint
-        // affordances gated open on a null identity.
-        setMyAudiencesError(
-          err instanceof AudienceGrantError ? err.message : 'Failed to load your audiences'
-        )
-      }
-    }
-  }, [])
-
   useEffect(() => {
     // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
     void (() => {
@@ -608,9 +375,6 @@ function AudienceAccessPageContent() {
     void (() => {
       if (listQuery.isComplete) {
         if (listQuery.error) {
-          if (listQuery.error.code === 'AUTH_DISABLED') {
-            setAuthDisabled(true)
-          }
           setListError(listQuery.error.message)
         } else {
           setListError(null)
@@ -779,14 +543,10 @@ function AudienceAccessPageContent() {
       <PageLayout onRefresh={loadGrants}>
         <div className="p-6 flex flex-col h-full">
           <div className="flex items-center gap-1.5 text-sm text-theme-text-muted mb-4">
-            {isAdmin && (
-              <>
-                <AppLink href="/admin" className="text-accent-link hover:underline">
-                  Admin
-                </AppLink>
-                <span>/</span>
-              </>
-            )}
+            <AppLink href="/admin" className="text-accent-link hover:underline">
+              Admin
+            </AppLink>
+            <span>/</span>
             <span>Audience Access</span>
           </div>
 
@@ -922,7 +682,7 @@ function AudienceAccessPageContent() {
             error={deleteError}
           />
 
-          <MintKeyDialog
+          <MintIngestionKeyDialog
             open={mintOpen && me !== null}
             prefillAudience={mintPrefillAudience}
             me={me}

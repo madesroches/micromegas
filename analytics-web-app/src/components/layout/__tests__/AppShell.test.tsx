@@ -72,6 +72,13 @@ vi.mock('@/routes/ExportScreensPage', () => ({ default: () => <div>export-screen
 vi.mock('@/routes/ImportScreensPage', () => ({ default: () => <div>import-screens-page</div> }))
 vi.mock('@/routes/MapsPage', () => ({ default: () => <div>maps-page</div> }))
 vi.mock('@/routes/NotFoundPage', () => ({ default: () => <div>not-found-page</div> }))
+// `/admin/ingestion-keys` is no longer fully admin-gated (#1544): its real component mounts a
+// self-service panel whose effect calls `fetchMyAudiences`/`listIngestionApiKeys` against
+// `fetch`, which this file never stubs. Stubbed here so the sidebar-gate cases below exercise
+// only `AppShell`'s own gate.
+vi.mock('@/routes/IngestionApiKeysPage', () => ({
+  default: () => <div>ingestion-api-keys-page</div>,
+}))
 
 function renderAt(path: string) {
   return render(
@@ -127,5 +134,25 @@ describe('AppShell (via router.tsx)', () => {
 
     await screen.findByText('maps-page')
     expect(sidebarMounts.count).toBe(0)
+  })
+
+  it('mounts Sidebar on /admin for a non-admin user (viewable by everyone, role-filtered content)', async () => {
+    authState.status = 'authenticated'
+    authState.user = { sub: 'u1', is_admin: false }
+
+    renderAt('/admin')
+
+    await screen.findByText('admin-page')
+    expect(sidebarMounts.count).toBe(1)
+  })
+
+  it('mounts Sidebar on /admin/ingestion-keys for a non-admin user (mint-only content)', async () => {
+    authState.status = 'authenticated'
+    authState.user = { sub: 'u1', is_admin: false }
+
+    renderAt('/admin/ingestion-keys')
+
+    await screen.findByText('ingestion-api-keys-page')
+    expect(sidebarMounts.count).toBe(1)
   })
 })

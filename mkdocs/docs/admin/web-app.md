@@ -96,6 +96,21 @@ export MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER="100"
 analytics-web-srv --disable-auth
 ```
 
+## Admin hub
+
+**Admin** (`/admin`) is open to **every authenticated user**, not just admins — `AuthGuard` on
+this route carries no `requireAdmin`. It renders a role-filtered card grid: an admin sees all
+eight cards; a non-admin sees only the two that have a real non-admin capability —
+**Ingestion API Keys** (mint only — see [Web app admin pages](api-keys.md#web-app-admin-pages))
+and **Audience Access** (see [Audience Access](#audience-access)). The other six — Data Sources,
+Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List — have no non-admin
+capability at all and stay hidden from a non-admin, same as their pages stay gated by
+`<AuthGuard requireAdmin>`.
+
+The sidebar's bottom-left "Admin" icon is shown to every authenticated user for the same reason;
+following it to `/admin` never dead-ends a non-admin who has a legitimate reason to be there (an
+old bookmark, a link an admin pasted, or the natural place to look for "Ingestion API Keys").
+
 ## Maps
 
 Map cells render GLB assets fetched from a server-side object store. Set `MICROMEGAS_MAPS_OBJECT_STORE_URI` to a prefix the web-app process can read **and write** — admins upload and delete GLBs through **Admin → Maps**, which calls `PUT`/`DELETE` on `/api/maps/blob/{filename}`. If the variable is unset, the maps endpoints return 503 and the dropdown is empty.
