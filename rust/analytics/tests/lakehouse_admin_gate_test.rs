@@ -74,7 +74,7 @@ const MUTATING_UDTF_CALLS: &[&str] = &[
 
 const MUTATING_UDF_CALLS: &[&str] = &[
     "SELECT retire_partition_by_file('s3://bucket/x/file.parquet')",
-    "SELECT retire_partition_by_metadata('log_entries', 'global', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z')",
+    "SELECT retire_partition_by_metadata('log_entries', 'global', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', decode('04', 'hex'))",
     "SELECT remove_query_denial('9f2c41ab-73de-4015-9d2e-000000000000')",
 ];
 

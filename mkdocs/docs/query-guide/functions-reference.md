@@ -90,11 +90,11 @@ notebook.
 
 See [Admin Functions Reference](../admin/functions-reference.md#list_audience_grants) for details.
 
-#### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
+#### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time, file_schema_hash)` 🔧🔒
 
 **Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
 
-**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time) for details.
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time-file_schema_hash) for details.
 
 #### `retire_partition_by_file(file_path)` 🔧🔒
 

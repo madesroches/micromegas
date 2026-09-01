@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{
-        array::{Array, StringArray, StringBuilder, TimestampNanosecondArray},
+        array::{Array, BinaryArray, StringArray, StringBuilder, TimestampNanosecondArray},
         datatypes::{DataType, TimeUnit},
     },
     common::internal_err,
@@ -23,8 +23,8 @@ use super::write_partition::add_file_for_cleanup;
 /// A scalar UDF that retires a single partition by its metadata.
 ///
 /// This function retires partitions by their metadata identifiers (view_set_name,
-/// view_instance_id, begin_insert_time, end_insert_time). This works for both empty
-/// partitions (file_path=NULL) and non-empty partitions.
+/// view_instance_id, begin_insert_time, end_insert_time, file_schema_hash). This works for both
+/// empty partitions (file_path=NULL) and non-empty partitions.
 ///
 /// This is the preferred method for retiring partitions as it uses the partition's
 /// natural identifiers rather than relying on file paths.
@@ -57,6 +57,7 @@ impl RetirePartitionByMetadata {
                     DataType::Utf8,
                     DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                     DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+                    DataType::Binary,
                 ],
                 Volatility::Volatile,
             ),
@@ -72,6 +73,10 @@ impl RetirePartitionByMetadata {
     /// * `view_instance_id` - The instance ID (e.g., process_id or 'global')
     /// * `begin_insert_time` - Begin insert time timestamp
     /// * `end_insert_time` - End insert time timestamp
+    /// * `file_schema_hash` - The `file_schema_hash` of the partition to retire, disambiguating
+    ///   the target when an old-schema and a new-schema partition legally coexist over the same
+    ///   metadata range (see `migration.rs`'s `lakehouse_partitions_no_overlap` exclusion
+    ///   constraint, which is scoped by `file_schema_hash`)
     ///
     /// # Returns
     /// * `Ok(())` on successful retirement
@@ -83,35 +88,55 @@ impl RetirePartitionByMetadata {
         view_instance_id: &str,
         begin_insert_time: DateTime<Utc>,
         end_insert_time: DateTime<Utc>,
+        file_schema_hash: &[u8],
     ) -> Result<()> {
+        let schema_hash_hex = hex::encode(file_schema_hash);
+
         // First, check if the partition exists and get its details
-        let partition_query = instrument_named!(
+        let partition_rows = instrument_named!(
             sqlx::query(
                 "SELECT file_path, file_size FROM lakehouse_partitions
              WHERE view_set_name = $1
                AND view_instance_id = $2
                AND begin_insert_time = $3
-               AND end_insert_time = $4",
+               AND end_insert_time = $4
+               AND file_schema_hash = $5",
             )
             .bind(view_set_name)
             .bind(view_instance_id)
             .bind(begin_insert_time)
             .bind(end_insert_time)
-            .fetch_optional(&mut **transaction),
+            .bind(file_schema_hash)
+            .fetch_all(&mut **transaction),
             "sql_select_partition_by_metadata"
         )
         .await
         .with_context(|| {
             format!(
-                "querying partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time})"
+                "querying partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}"
             )
         })?;
 
-        let Some(partition_row) = partition_query else {
+        if partition_rows.is_empty() {
             anyhow::bail!(
-                "Partition not found: {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time})"
+                "Partition not found: {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}"
             );
-        };
+        }
+
+        if partition_rows.len() > 1 {
+            let mut file_paths = Vec::with_capacity(partition_rows.len());
+            for row in &partition_rows {
+                let file_path: Option<String> = row.try_get("file_path")?;
+                file_paths.push(file_path.unwrap_or_else(|| "NULL".to_string()));
+            }
+            anyhow::bail!(
+                "Ambiguous match: {} rows for {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}, file_paths=[{}]; use retire_partition_by_file when file_paths are distinct and non-NULL",
+                partition_rows.len(),
+                file_paths.join(", ")
+            );
+        }
+
+        let partition_row = &partition_rows[0];
 
         // Handle file cleanup if file_path is not NULL
         let file_path_opt: Option<String> = partition_row.try_get("file_path")?;
@@ -128,32 +153,35 @@ impl RetirePartitionByMetadata {
              WHERE view_set_name = $1
                AND view_instance_id = $2
                AND begin_insert_time = $3
-               AND end_insert_time = $4",
+               AND end_insert_time = $4
+               AND file_schema_hash = $5",
             )
             .bind(view_set_name)
             .bind(view_instance_id)
             .bind(begin_insert_time)
             .bind(end_insert_time)
+            .bind(file_schema_hash)
             .execute(&mut **transaction),
             "sql_delete_partition_by_metadata"
         )
         .await
         .with_context(|| {
             format!(
-                "deleting partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time})"
+                "deleting partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}"
             )
         })?;
 
-        if delete_result.rows_affected() == 0 {
-            // This shouldn't happen since we checked existence above, but handle it gracefully
+        if delete_result.rows_affected() != 1 {
+            // A concurrent writer raced the SELECT above: fail closed instead of reporting
+            // SUCCESS on a delete that didn't remove exactly the row we resolved.
             anyhow::bail!(
-                "Partition not found during deletion: {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time})"
+                "Partition not found during deletion: {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}"
             );
         }
 
         info!(
-            "Successfully retired partition: {}/{} [{}, {})",
-            view_set_name, view_instance_id, begin_insert_time, end_insert_time
+            "Successfully retired partition: {}/{} [{}, {}) schema_hash={}",
+            view_set_name, view_instance_id, begin_insert_time, end_insert_time, schema_hash_hex
         );
         Ok(())
     }
@@ -189,9 +217,9 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
         args: ScalarFunctionArgs,
     ) -> datafusion::error::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
-        if args.len() != 4 {
+        if args.len() != 5 {
             return internal_err!(
-                "retire_partition_by_metadata expects exactly 4 arguments: view_set_name, view_instance_id, begin_insert_time, end_insert_time"
+                "retire_partition_by_metadata expects exactly 5 arguments: view_set_name, view_instance_id, begin_insert_time, end_insert_time, file_schema_hash"
             );
         }
 
@@ -223,6 +251,13 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
                 )
             })?;
 
+        let file_schema_hashes: &BinaryArray =
+            args[4].as_any().downcast_ref::<_>().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "error casting file_schema_hash argument as BinaryArray".into(),
+                )
+            })?;
+
         let mut builder = StringBuilder::with_capacity(view_set_names.len(), 64);
 
         // Use a single transaction for the entire batch
@@ -240,6 +275,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
                 || view_instance_ids.is_null(index)
                 || begin_insert_times.is_null(index)
                 || end_insert_times.is_null(index)
+                || file_schema_hashes.is_null(index)
             {
                 builder.append_value("ERROR: all arguments must be non-null");
                 has_errors = true;
@@ -250,6 +286,8 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
             let view_instance_id = view_instance_ids.value(index);
             let begin_insert_time_nanos = begin_insert_times.value(index);
             let end_insert_time_nanos = end_insert_times.value(index);
+            let file_schema_hash = file_schema_hashes.value(index);
+            let schema_hash_hex = hex::encode(file_schema_hash);
 
             // Convert nanoseconds to DateTime<Utc> for proper sqlx binding
             let begin_insert_time = DateTime::from_timestamp_nanos(begin_insert_time_nanos);
@@ -262,19 +300,25 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
                     view_instance_id,
                     begin_insert_time,
                     end_insert_time,
+                    file_schema_hash,
                 )
                 .await
             {
                 Ok(()) => {
                     success_count += 1;
                     builder.append_value(format!(
-                        "SUCCESS: Retired partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time})"
+                        "SUCCESS: Retired partition {view_set_name}/{view_instance_id} [{begin_insert_time}, {end_insert_time}) schema_hash={schema_hash_hex}"
                     ));
                 }
                 Err(e) => {
                     error!(
-                        "Failed to retire partition {}/{} [{}, {}): {:?}",
-                        view_set_name, view_instance_id, begin_insert_time, end_insert_time, e
+                        "Failed to retire partition {}/{} [{}, {}) schema_hash={}: {:?}",
+                        view_set_name,
+                        view_instance_id,
+                        begin_insert_time,
+                        end_insert_time,
+                        schema_hash_hex,
+                        e
                     );
                     builder.append_value(format!("ERROR: {e:?}"));
                     has_errors = true;
@@ -314,14 +358,16 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
 ///     'log_entries',
 ///     'process_123',
 ///     TIMESTAMP '2024-01-01 00:00:00',
-///     TIMESTAMP '2024-01-01 01:00:00'
+///     TIMESTAMP '2024-01-01 01:00:00',
+///     decode('04', 'hex')
 /// ) as result;
 /// ```
 ///
 /// # Returns
 /// A string message indicating success or failure:
-/// - "SUCCESS: Retired partition \<view_set\>/\<instance\> [\<begin\>, \<end\>)" on successful retirement
-/// - "ERROR: Partition not found: \<view_set\>/\<instance\> [\<begin\>, \<end\>)" if the partition doesn't exist
+/// - "SUCCESS: Retired partition \<view_set\>/\<instance\> [\<begin\>, \<end\>) schema_hash=\<hex\>" on successful retirement
+/// - "ERROR: Partition not found: \<view_set\>/\<instance\> [\<begin\>, \<end\>) schema_hash=\<hex\>" if the partition doesn't exist
+/// - "ERROR: Ambiguous match: \<n\> rows for \<view_set\>/\<instance\> [\<begin\>, \<end\>) schema_hash=\<hex\>, file_paths=[...]" if more than one row matches
 /// - "ERROR: Database error: \<details\>" for any database-related failures
 pub fn make_retire_partition_by_metadata_udf(
     lake: Arc<DataLakeConnection>,
