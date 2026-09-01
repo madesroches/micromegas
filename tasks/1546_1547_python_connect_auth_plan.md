@@ -120,6 +120,10 @@ and OIDC (issuer from MICROMEGAS_OIDC_ISSUER, client_id from profile key 'client
 A profile must use exactly one -- remove 'api_key_file', or unset the OIDC settings.
 ```
 
+`resolve_active_profile` returns a `None` name for a flat config (no `profiles` map), so the
+message leads with "config file" instead of `profile '<name>'` when the name is `None`, e.g.
+`config file resolves two auth mechanisms: ...`.
+
 Provenance is recomputed inside the error path (re-checking whether each `MICROMEGAS_OIDC_*` var is
 set) rather than threaded through `_pick`'s return type — it is needed for the message and nowhere
 else.
@@ -171,8 +175,7 @@ Two details to preserve:
 from micromegas.connection import connect_with_profile as connect
 ```
 
-`cli/query.py:142` (`connection.connect(...)`) and `tests/cli/test_connection.py` keep working
-untouched.
+`cli/query.py:142` (`connection.connect(...)`) keeps working untouched.
 
 `micromegas/__init__.py` adds `connect_with_profile` and re-exports `ProfileError`, so a caller can
 catch the error without importing from a `cli` submodule — the same discoverability complaint the
@@ -199,27 +202,6 @@ Issue #1546's minimum bar, and cheap:
   `connect_with_profile(client_entrypoint=...)` to the list and make the parenthetical contrast
   the two top-level functions instead of implying there is one.
 
-### 6. dotenv interoperability
-
-`python-dotenv` is not and does not become a dependency, and no bundled CLI auto-loads a `.env`
-file. Loading one is the caller's call, and it already works for everything except the static key:
-
-- `resolve_connection` reads `os.environ` at **call** time, not import time, so `load_dotenv()`
-  followed by `connect_with_profile()` feeds `MICROMEGAS_ANALYTICS_URI`, every `MICROMEGAS_OIDC_*`
-  var, and `MICROMEGAS_PROFILE` exactly as an exported shell variable would. This is existing
-  behavior; the plan's job is to state it in the docs and pin it with a test, so a later refactor
-  to import-time resolution cannot silently break it.
-- A static key has no environment variable to set (see Decisions), so its dotenv story is explicit
-  sourcing: `load_dotenv()`, then `StaticTokenAuthProvider(os.environ["MY_KEY"])` handed to
-  `FlightSQLClient(uri, auth_provider=...)`. That is the same one-line shape as any other secret
-  store, which is exactly why the provider takes a token rather than a source.
-- For `micromegas-query` and the other CLIs, a `.env` is loaded the shell's way — prefixing the
-  command or sourcing the file — since the CLIs read only the process environment.
-
-Not depending on a library is not the same as not supporting it. `python-dotenv` is common enough
-that silence reads as "doesn't work here", so this gets its own documentation section with working
-examples for all three shapes above rather than a parenthetical (see Documentation).
-
 ## Implementation Steps
 
 **Phase 1 — provider**
@@ -239,7 +221,8 @@ examples for all three shapes above rather than a parenthetical (see Documentati
    and adding the static-key branch plus `preserve_dictionary`.
 9. Reduce `micromegas/cli/connection.py` to the aliasing re-export.
 10. Export `connect_with_profile` and `ProfileError` from `micromegas/__init__.py`.
-11. Extend `tests/cli/test_connection.py`.
+11. Extend `tests/cli/test_connection.py`, including giving `FakeFlightSQLClient.__init__` a
+    `preserve_dictionary=False` parameter so it keeps accepting the call.
 
 **Phase 4 — docstrings and docs**
 12. Docstring edits per §5, including `flightsql/attribution.py`.
@@ -275,23 +258,6 @@ Modify:
 
 ## Trade-offs
 
-**A separate top-level function, not `connect(profile=...)`.** Teaching `connect()` to read the
-config file would silently retarget every existing bare `micromegas.connect()` call — including
-`tests/test_utils.py:5` and five notebooks under `python/notebooks/` — to whatever
-`default_profile` names. A `profile=`-only trigger avoids that but then ignores
-`MICROMEGAS_PROFILE`/`default_profile`, which is a third precedence rule nobody asked for. A
-distinct name keeps `connect()`'s contract frozen and gives the profile path the same
-`--profile` > `MICROMEGAS_PROFILE` > `default_profile` semantics the CLI already documents.
-
-**`ConnectionConfig` stores the path, not the key.** Storing the resolved secret would make
-`resolve_connection` do file I/O for three callers that don't want it, and would put a live
-credential in a dataclass whose generated `repr` prints every field. Storing the path costs one
-extra hop at connect time.
-
-**The two-mechanism guard lives in `resolve_connection`, not the connect branch.** In the connect
-branch it would only cover FlightSQL, leaving `grants`/`import_keys`/`setup_telemetry` to resolve
-the same ambiguous profile and quietly pick OIDC.
-
 **`cli/config.py` stays where it is; only `ProfileError` is re-exported.** Moving it to
 `micromegas/config.py` would be defensible now that it backs a non-CLI entry point, but it touches
 eight import sites for no behavior change. A single alias solves the discoverability half.
@@ -325,6 +291,10 @@ regression coverage of the moved code.
   callers.
 - File permissions on `api_key_file` are documented (`0600` expected) but not enforced: a mode
   check has no portable meaning across platforms, and a warning users cannot act on is noise.
+- The top-level function is named `connect_with_profile`, per the issue's own suggestion.
+- The admin HTTP tools (`micromegas-grants`, `micromegas-import-keys`, `micromegas-setup-telemetry`)
+  ignore `api_key_file`; a key-only profile yields an unauthenticated `WebClient`, unchanged from
+  today's non-OIDC profile.
 
 ## Documentation
 
@@ -338,33 +308,12 @@ regression coverage of the moved code.
   key comes from (mint via `POST /api/analytics-api-keys` or the Admin page), that it is sent
   verbatim as a bearer token, and the `0600` file expectation.
 - Environment-variable table (line ~753) — **no new row** for the static key. Deliberate; the
-  Decisions entry above is the record of why. Add a one-line pointer under the table to the new
-  `.env` section, since a reader scanning for "how do I set these" stops here.
+  Decisions entry above is the record of why.
 - Config-file key table (line ~780) — add `api_key_file`.
 - **Named profiles** (line ~792) — document `api_key_file` with a JSON example, the one-mechanism
   rule, and the error text.
 - `### micromegas-logout` (line 846) — a static-key profile caches no token, so logout is a no-op
   for it; revoking such a key is server-side (`DELETE /api/analytics-api-keys/{key_id}`).
-- **New `### Using a .env file`** under `## Connection Configuration`, after the static-key
-  subsection. `python-dotenv` is idiomatic enough that its absence from our dependency list should
-  not read as "unsupported" — so this section says plainly that it works, that installing it is
-  the reader's step (`pip install python-dotenv`, not a micromegas extra), and that nothing in the
-  client loads a `.env` implicitly. Content, all copy-pasteable:
-    - A sample `.env` covering the profile path (`MICROMEGAS_PROFILE`, `MICROMEGAS_ANALYTICS_URI`,
-      the `MICROMEGAS_OIDC_*` vars) alongside a caller-named key var, to make the split obvious:
-      the first group the client reads by name, the last one only the caller reads.
-    - Script/notebook example: `load_dotenv()` then `micromegas.connect_with_profile()` — with the
-      one sentence that makes it trustworthy, that the client reads the environment when the
-      connection is opened, so `load_dotenv()` merely has to run first.
-    - Static-key example: `load_dotenv()`, then
-      `FlightSQLClient(uri, auth_provider=StaticTokenAuthProvider(os.environ["MY_KEY"]))`, naming
-      the variable something unmistakably caller-chosen so no reader mistakes it for a
-      `MICROMEGAS_*` var the client knows about.
-    - CLI subsection: the CLIs read only the process environment, so `.env` is the shell's job
-      — `set -a; . ./.env; set +a` or a per-invocation prefix. State it rather than leaving a
-      reader to discover `--profile` silently ignoring their `.env`.
-    - Closing note: add `.env` to `.gitignore`, and point at `api_key_file` as the option that
-      keeps a key out of the process environment altogether.
 
 `mkdocs/docs/admin/api-keys.md` — from "Minting an analytics key over HTTP" (line ~249), point at
 the Python static-key path so a freshly minted key has an obvious Python consumer.
@@ -393,16 +342,16 @@ and that `micromegas.connect()` is unchanged.
 
 `tests/cli/test_config.py` (extend; `tests/cli/conftest.py` already scrubs every `MICROMEGAS_*`
 var per test):
-- `api_key_file` from a profile lands in `ConnectionConfig.api_key_file`, with `~` expanded.
+- `api_key_file` from a profile lands in `ConnectionConfig.api_key_file` verbatim, unexpanded (`~`
+  expansion is `from_file`'s job, covered by the `tests/auth/test_static_token.py` bullets).
 - A profile with both `api_key_file` and `issuers` + `client_id` raises `ProfileError`; the message
   names both sources.
 - `api_key_file` in the profile plus `MICROMEGAS_OIDC_ISSUER`/`_CLIENT_ID` in the environment
   raises `ProfileError` naming the environment variables.
 - `api_key_file` alone resolves cleanly, leaving every `oidc_*` field `None`.
 - A flat config (no `profiles` map) with `api_key_file` behaves identically.
-- Env vars are read at call time, not import time: set `MICROMEGAS_ANALYTICS_URI` *after* importing
-  the module and confirm `resolve_connection()` picks it up. This is what makes a caller's
-  `load_dotenv()` effective, and nothing else in the suite pins it.
+- A flat config with both `api_key_file` and `issuers` + `client_id` raises `ProfileError` with a
+  message leading `config file resolves two auth mechanisms: ...`, not `profile 'None'`.
 
 `tests/cli/test_connection.py` (extend; reuse the existing monkeypatched `config.CONFIG_PATH` and
 fake-client pattern):
@@ -423,13 +372,5 @@ naming that file, and run
 
 ## Open Questions
 
-- Name: `connect_with_profile` reads clearly next to `connect` but is long. `connect_profile` or
-  `open_profile` are alternatives; the issue itself suggests "`connect_with_profile` (or similar)".
-- Should `micromegas-grants` / `micromegas-import-keys` / `micromegas-setup-telemetry` honor
-  `api_key_file` for their `WebClient`? Treated as out of scope here: those call admin HTTP routes
-  that want an OIDC identity, whereas an analytics API key is a FlightSQL read credential. Their
-  `build_auth_provider` returns `None` for a key-only profile, which is the same unauthenticated
-  behavior a non-OIDC profile already gets today — worth confirming that is acceptable rather than
-  a `ProfileError`.
 - `micromegas-screens` is documented as not profile-aware and stays out of scope; nothing in this
   plan forces it to change.
