@@ -40,8 +40,8 @@ shared `system_monitor` sampler:
 | Metric | Meaning |
 |---|---|
 | `jemalloc_allocated_bytes` | Bytes actually in use by the application. |
-| `jemalloc_resident_bytes` | Bytes physically resident (allocated + retained-but-dirty). |
-| `jemalloc_mapped_bytes` | Bytes mapped from the OS, including retained pages not yet purged. |
+| `jemalloc_resident_bytes` | Allocator metadata plus pages backing live allocations plus unused dirty pages; excludes retained pages, which have no physical backing. |
+| `jemalloc_mapped_bytes` | Bytes in active extents mapped by the allocator; excludes retained pages. |
 | `jemalloc_retained_bytes` | Bytes jemalloc has unmapped but kept reserved in its own address space. |
 
 `jemalloc_resident_bytes - jemalloc_allocated_bytes` is the gap this configuration targets: it
