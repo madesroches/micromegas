@@ -1,8 +1,12 @@
 //! Tests for `micromegas_auth::default_provider::ProviderBuilder` and its
-//! startup-existence rules. All four bullets here need a live,
-//! already-migrated-to-v5 Postgres (`MICROMEGAS_SQL_CONNECTION_STRING`) — this
-//! exercises `key_store_has_live_rows` directly, so an unmigrated or
-//! `connect_lazy` pool cannot stand in for the "genuinely missing relation" case.
+//! startup-existence rules.
+//!
+//! Most tests here need a live, already-migrated-to-v5 Postgres
+//! (`MICROMEGAS_SQL_CONNECTION_STRING`) and are `#[ignore]`d — they exercise
+//! `key_store_has_live_rows` directly, so an unmigrated or `connect_lazy` pool
+//! cannot stand in for the "genuinely missing relation" case. A few
+//! `build_chain()` tests do not need a DB at all (it issues no existence
+//! query) and run in ordinary CI.
 //!
 //! Every test here mutates process-wide env vars (`MICROMEGAS_API_KEYS`,
 //! `MICROMEGAS_OIDC_CONFIG`), so all are `#[serial]` with an `EnvGuard` that
@@ -11,12 +15,15 @@
 
 #![cfg(test)]
 
+mod test_utils;
+
 use micromegas_auth::db_api_key::{ApiKeyTable, hash_key, key_store_has_live_rows};
 use micromegas_auth::default_provider::ProviderBuilder;
 use micromegas_auth::policy::PUBLIC_AUDIENCE;
 use micromegas_auth::types::{HttpRequestParts, RequestParts};
 use serial_test::serial;
 use std::str::FromStr;
+use test_utils::unreachable_pool;
 
 const API_KEYS_VAR: &str = "MICROMEGAS_API_KEYS";
 const OIDC_CONFIG_VAR: &str = "MICROMEGAS_OIDC_CONFIG";
@@ -295,5 +302,180 @@ async fn missing_relation_is_err_not_none() {
     assert!(
         build_result.is_err(),
         "build() must propagate a missing-relation error, never Ok(None)"
+    );
+}
+
+/// **`build_chain()` keeps the DB provider even where `build()` would discard
+/// it**: an empty key store with nothing else configured makes `build()` return
+/// `None` (pinned above by `empty_table_and_nothing_else_yields_none`), but
+/// `build_chain()` still returns a chain, and a key minted into that
+/// previously-empty table authenticates through it with no restart.
+///
+/// Uses its own throwaway schema (same trick as
+/// `empty_table_and_nothing_else_yields_none`) rather than the shared
+/// `ingestion_api_keys` table, and the throwaway table carries the full v5
+/// shape (`key_id`, `key_hash`, `name`, `created_at`, `created_by`,
+/// `last_used_at`, `revoked_at`) plus the later-added `audience` column, since
+/// `insert_live_key` and the provider's lookup query need all of them, not
+/// just `key_id`/`revoked_at`.
+#[ignore]
+#[tokio::test]
+#[serial]
+async fn build_chain_authenticates_key_minted_into_empty_table() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(API_KEYS_VAR);
+        std::env::remove_var(OIDC_CONFIG_VAR);
+    }
+
+    let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .expect("MICROMEGAS_SQL_CONNECTION_STRING must point at a live, migrated Postgres");
+    let schema = "mm_1550_test_build_chain_schema";
+
+    let setup_pool = sqlx::PgPool::connect(&base_conn_str)
+        .await
+        .expect("connecting to metadata Postgres");
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping any stale throwaway schema from a previous failed run");
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&setup_pool)
+        .await
+        .expect("creating throwaway schema");
+    sqlx::query(&format!(
+        "CREATE TABLE {schema}.ingestion_api_keys (
+           key_id       UUID PRIMARY KEY,
+           key_hash     BYTEA NOT NULL,
+           name         VARCHAR(255) NOT NULL,
+           created_at   TIMESTAMPTZ NOT NULL,
+           created_by   VARCHAR(255) NOT NULL,
+           last_used_at TIMESTAMPTZ,
+           revoked_at   TIMESTAMPTZ,
+           audience     VARCHAR(255) NOT NULL
+         )"
+    ))
+    .execute(&setup_pool)
+    .await
+    .expect("creating throwaway v5-shaped ingestion_api_keys table");
+
+    let opts = sqlx::postgres::PgConnectOptions::from_str(&base_conn_str)
+        .expect("valid connection string")
+        .options([("search_path", schema)]);
+    let throwaway_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("connecting with a throwaway search_path");
+
+    let test_result: Result<(), String> = async {
+        let build_result = ProviderBuilder::new("")
+            .with_db_key_store(throwaway_pool.clone(), ApiKeyTable::Ingestion)
+            .build()
+            .await
+            .map_err(|e| format!("build should succeed: {e:#}"))?;
+        if build_result.is_some() {
+            return Err(
+                "an empty key store with nothing else configured must still yield None from build()"
+                    .to_string(),
+            );
+        }
+
+        let chain = ProviderBuilder::new("")
+            .with_db_key_store(throwaway_pool.clone(), ApiKeyTable::Ingestion)
+            .build_chain()
+            .await
+            .map_err(|e| format!("build_chain should succeed: {e:#}"))?;
+
+        // Minted *after* build_chain() returned.
+        let key = format!("mmk_test_build_chain_{}", uuid::Uuid::new_v4());
+        insert_live_key(
+            &throwaway_pool,
+            "build-chain-empty-table-test",
+            &key,
+            PUBLIC_AUDIENCE,
+        )
+        .await;
+
+        let parts = bearer_parts(&key);
+        let result = chain.validate_request(&parts as &dyn RequestParts).await;
+        if result.is_err() {
+            return Err(format!(
+                "a key minted after build_chain() returned must authenticate with no restart: {:?}",
+                result.err()
+            ));
+        }
+        Ok(())
+    }
+    .await;
+
+    throwaway_pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&setup_pool)
+        .await
+        .expect("dropping throwaway schema");
+
+    test_result.expect("test assertions");
+}
+
+/// **No key store, no existence query**: `build_chain()` never calls
+/// `key_store_has_live_rows`, so composing it against an unreachable pool still
+/// returns `Ok` promptly — unlike `build()`, whose existence query fails to
+/// connect and surfaces as `Err`.
+#[tokio::test]
+#[serial]
+async fn build_chain_issues_no_startup_query() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(API_KEYS_VAR);
+        std::env::remove_var(OIDC_CONFIG_VAR);
+    }
+
+    let build_err = ProviderBuilder::new("")
+        .with_db_key_store(unreachable_pool(), ApiKeyTable::Ingestion)
+        .build()
+        .await;
+    assert!(
+        build_err.is_err(),
+        "build() must fail when its existence query can't reach the pool"
+    );
+
+    let chain_result = ProviderBuilder::new("")
+        .with_db_key_store(unreachable_pool(), ApiKeyTable::Ingestion)
+        .build_chain()
+        .await;
+    assert!(
+        chain_result.is_ok(),
+        "build_chain() must not issue any startup query against the key store"
+    );
+}
+
+/// **Env keys alone, no key store**: `build_chain()` composes and authenticates
+/// through env keys just like `build()` does.
+#[tokio::test]
+#[serial]
+async fn build_chain_with_env_keys_only_authenticates() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(
+            API_KEYS_VAR,
+            r#"[{"name": "env", "key": "chain-env-secret"}]"#,
+        );
+        std::env::remove_var(OIDC_CONFIG_VAR);
+    }
+
+    let chain = ProviderBuilder::new("")
+        .build_chain()
+        .await
+        .expect("build_chain should succeed with only env keys configured");
+
+    let parts = bearer_parts("chain-env-secret");
+    let result = chain.validate_request(&parts as &dyn RequestParts).await;
+    assert!(
+        result.is_ok(),
+        "an env-configured key must authenticate through the build_chain() chain"
     );
 }

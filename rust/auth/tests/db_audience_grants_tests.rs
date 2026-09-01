@@ -1,11 +1,13 @@
 //! Tests for `micromegas_auth::db_audience_grants`.
 //!
 //! The "no DB" section builds a `DbAudienceGrantsSource` against a pool that is never actually
-//! reachable (`connect_lazy` with a short `acquire_timeout` — the `db_api_key_tests.rs` trick),
+//! reachable (`connect_lazy` with a short `acquire_timeout` — see `test_utils::unreachable_pool`),
 //! exercising the cold-start-failure path with no live Postgres. The `#[ignore]`d section needs a
 //! live Postgres and creates a throwaway `audience_grants` table in its own schema (the
 //! `default_provider_tests.rs` trick) rather than depending on `micromegas-ingestion`'s full
 //! migration for one small table.
+
+mod test_utils;
 
 use micromegas_auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas_auth::policy::{
@@ -17,13 +19,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-
-fn unreachable_pool() -> sqlx::PgPool {
-    PgPoolOptions::new()
-        .acquire_timeout(Duration::from_millis(50))
-        .connect_lazy("postgres://localhost/unused")
-        .expect("lazy pool creation is infallible")
-}
+use test_utils::unreachable_pool;
 
 fn test_config(ttl_secs: u64) -> DbAudienceGrantsConfig {
     DbAudienceGrantsConfig {

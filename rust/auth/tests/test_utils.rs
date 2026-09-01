@@ -9,6 +9,16 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
+
+/// A pool that is never actually reachable, with an explicit short
+/// `acquire_timeout` since sqlx's default is 30s.
+pub fn unreachable_pool() -> sqlx::PgPool {
+    PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
 
 /// Test OIDC claims
 #[derive(Debug, Serialize, Deserialize)]
