@@ -212,7 +212,8 @@ Issue #1546's minimum bar, and cheap:
 **Phase 1 — provider**
 1. Add `micromegas/auth/static_token.py` per §1.
 2. Export `StaticTokenAuthProvider` from `micromegas/auth/__init__.py` (import + `__all__`).
-3. Add `tests/auth/test_static_token.py`.
+3. Add `tests/auth/test_static_token.py`; append `"tests/auth/test_static_token.py"` to
+   `HERMETIC_TEST_ARGS` in `build/python_ci.py` so CI collects it.
 
 **Phase 2 — config**
 4. Add `api_key_file` to `ConnectionConfig` and resolve it in `resolve_connection`
@@ -240,7 +241,8 @@ Issue #1546's minimum bar, and cheap:
 15. `CHANGELOG.md` `## Unreleased` entry citing #1546 and #1547.
 
 **Phase 5 — verify**
-16. `poetry run black python/micromegas`, then `poetry run pytest tests/auth tests/cli -q`.
+16. `poetry run black python/micromegas`, then `python3 ../../build/python_ci.py` (from
+    `python/micromegas/`) to run the hermetic suite the same way CI does.
 17. Optional manual pass (see Testing Strategy).
 
 ## Files to Modify
@@ -259,6 +261,7 @@ Modify:
 - `python/micromegas/micromegas/flightsql/attribution.py` (docstring only)
 - `python/micromegas/tests/cli/test_config.py`
 - `python/micromegas/tests/cli/test_connection.py`
+- `build/python_ci.py` (add `"tests/auth/test_static_token.py"` to `HERMETIC_TEST_ARGS`)
 - `python/micromegas/README.md`
 - `mkdocs/docs/query-guide/python-api.md`
 - `mkdocs/docs/query-guide/python-api-advanced.md`
