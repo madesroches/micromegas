@@ -254,20 +254,13 @@ Modify:
 - `python/micromegas/README.md`
 - `mkdocs/docs/query-guide/python-api.md`
 - `mkdocs/docs/admin/api-keys.md`
+- `mkdocs/docs/admin/authentication.md`
 - `CHANGELOG.md`
-
-## Trade-offs
-
-**`cli/config.py` stays where it is; only `ProfileError` is re-exported.** Moving it to
-`micromegas/config.py` would be defensible now that it backs a non-CLI entry point, but it touches
-eight import sites for no behavior change. A single alias solves the discoverability half.
-
-**`cli.connection.connect` survives as an alias** rather than updating its two call sites, because
-the alias is one line and keeps `tests/cli/test_connection.py`'s existing cases meaningful as
-regression coverage of the moved code.
 
 ## Decisions
 
+- `cli/config.py` stays put; only `ProfileError` is re-exported.
+- `cli.connection.connect` stays as an alias rather than updating its call sites.
 - Static keys reach a profile through `api_key_file` **only**. No new environment variable, under
   any name. The obvious spelling, `MICROMEGAS_ANALYTICS_API_KEY`, is one character from the
   deprecated server-side keyring `MICROMEGAS_ANALYTICS_API_KEYS` (`cli/import_keys.py:30`) and a
@@ -295,6 +288,7 @@ regression coverage of the moved code.
 - The admin HTTP tools (`micromegas-grants`, `micromegas-import-keys`, `micromegas-setup-telemetry`)
   ignore `api_key_file`; a key-only profile yields an unauthenticated `WebClient`, unchanged from
   today's non-OIDC profile.
+- `micromegas-screens` is documented as not profile-aware and stays out of scope for this plan.
 
 ## Documentation
 
@@ -318,6 +312,10 @@ regression coverage of the moved code.
 `mkdocs/docs/admin/api-keys.md` — from "Minting an analytics key over HTTP" (line ~249), point at
 the Python static-key path so a freshly minted key has an obvious Python consumer.
 `mkdocs/docs/grafana/authentication.md` already covers the Grafana consumer and needs no change.
+
+`mkdocs/docs/admin/authentication.md` — rewrite "Python Client with API Keys" (line ~891) to build
+a `StaticTokenAuthProvider` instead of passing a raw `headers=` dict, and retarget the deprecation
+warning to name `StaticTokenAuthProvider`.
 
 `python/micromegas/README.md` — its two `micromegas.connect()` examples stay correct (they target a
 local server); add one line pointing at `connect_with_profile` for a remote or authenticated
@@ -369,8 +367,3 @@ key through the Admin page, write it to `~/.micromegas/local.key` with mode `060
 naming that file, and run
 `micromegas-query --profile local-key "SELECT 1" --all`. Requires a deployment with a populated
 `analytics_api_keys` table — a `--disable-auth` local monolith accepts anything and proves nothing.
-
-## Open Questions
-
-- `micromegas-screens` is documented as not profile-aware and stays out of scope; nothing in this
-  plan forces it to change.
