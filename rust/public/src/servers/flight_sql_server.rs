@@ -12,6 +12,7 @@ use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -289,18 +290,31 @@ impl FlightSqlServerBuilder {
                 // would silently deny every query for an embedder that forgot `with_read_policy`.
                 // So this builds the same env+store-backed policy the `use_default_auth` branch
                 // below does.
-                let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
-                let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
-                let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
-                    key_store_pool,
-                    audience_grants_config,
-                ));
-                let policy: Arc<dyn ReadPolicy> = Arc::new(
-                    AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
-                );
+                //
+                // Built only when `self.read_policy` is unset -- `with_read_policy` always wins
+                // below, and the only in-repo `with_auth_provider` caller (the monolith) always
+                // pairs the two, so skipping this avoids a DB round trip -- and a needless
+                // `from_env("")` failure mode on a malformed *unprefixed* env var a caller may
+                // have deliberately overridden via `with_read_policy` -- whenever it would be
+                // discarded anyway.
+                let policy: Arc<dyn ReadPolicy> = if self.read_policy.is_none() {
+                    let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                    warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
+                    let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
+                    let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
+                        key_store_pool,
+                        audience_grants_config,
+                    ));
+                    Arc::new(
+                        AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
+                    )
+                } else {
+                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()))
+                };
                 (Some(provider), policy, Arc::new(IsolationConfig::default()))
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
                 let provider = match ProviderBuilder::new("")
                     .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
                     .build()

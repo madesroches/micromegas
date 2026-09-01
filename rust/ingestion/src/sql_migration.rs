@@ -27,6 +27,30 @@ pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::
     }
 }
 
+/// Warns when the connected database is behind [`LATEST_DATA_LAKE_SCHEMA_VERSION`].
+///
+/// `execute_migration` only runs from `telemetry-ingestion-srv`/`micromegas-monolith`; a
+/// `flight-sql-srv`/`analytics-web-srv` process reads the same database without ever migrating
+/// it. On a schema that already has the `audience_grants` table (v7+) but predates the v9 seed
+/// rows, `AudienceReadPolicy` resolves every audience to an empty grant set rather than erroring,
+/// so queries silently return zero rows -- this is the only signal an operator gets otherwise.
+pub async fn warn_if_data_lake_schema_stale(pool: &sqlx::Pool<sqlx::Postgres>) {
+    let version = match pool.begin().await {
+        Ok(mut tr) => read_data_lake_schema_version(&mut tr).await,
+        Err(e) => {
+            warn!("could not check data lake schema version: {e}");
+            return;
+        }
+    };
+    if version < LATEST_DATA_LAKE_SCHEMA_VERSION {
+        warn!(
+            "data lake schema is v{version}, behind the latest v{LATEST_DATA_LAKE_SCHEMA_VERSION}; \
+             the seeded 'public' audience_grants rows have not migrated in yet, so every query \
+             will resolve to an empty read scope and return zero rows until the schema is upgraded"
+        );
+    }
+}
+
 /// Upgrades the data lake schema to version 2.
 pub async fn upgrade_data_lake_schema_v2(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,

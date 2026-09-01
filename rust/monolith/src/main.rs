@@ -30,6 +30,7 @@ use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
+use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion;
@@ -267,6 +268,12 @@ async fn main() -> Result<()> {
         let pool = lake_pool
             .clone()
             .expect("lakehouse must be Some when flightsql role is enabled");
+        // `connect_to_remote_data_lake` above already migrated this same pool to
+        // `LATEST_DATA_LAKE_SCHEMA_VERSION` before this point is ever reached, so this never
+        // actually fires here -- kept for parity with the other site that builds this same
+        // store (`FlightSqlServer`'s `use_default_auth`/injected-provider branches), which does
+        // not get that guarantee.
+        warn_if_data_lake_schema_stale(&pool).await;
         let audience_grants_pool = dedicated_key_store_pool(&pool);
         let audience_grants_config =
             DbAudienceGrantsConfig::from_env_with_prefix("MICROMEGAS_ANALYTICS");

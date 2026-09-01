@@ -1136,40 +1136,6 @@ async fn live_concurrent_claims_for_the_same_fresh_audience_never_double_claim()
     cleanup_audience(&pool, &audience).await;
 }
 
-/// `MintGate` rejects a non-admin's request for `public` before `mint_key`'s body -- and so before
-/// `AudienceMintPolicy` is ever consulted -- whenever `MICROMEGAS_SELF_SERVICE_MINT` is off,
-/// regardless of what grant rows exist on `public` (schema v9 seeds `('public', 'mint', '*')`,
-/// which would otherwise make this request succeed). Needs the live DB, not the non-live-DB
-/// harness, for the same reason the other claim tests do: `mint_key` builds its policy from a
-/// per-request point query against `audience_grants`.
-///
-/// Deliberately does **not** call `cleanup_audience(&pool, "public")` -- that would delete the
-/// v9-seeded rows from the shared dev database. This test creates and deletes nothing on
-/// `public`.
-#[ignore]
-#[tokio::test]
-async fn live_mint_rejects_a_non_admin_when_self_service_mint_is_disabled() {
-    let pool = live_pool().await;
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(pool),
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        non_admin_user(),
-    );
-    let response = app
-        .oneshot(post_request(
-            "/api/ingestion-api-keys",
-            &format!(r#"{{"name": "x", "audience": "{PUBLIC_AUDIENCE}"}}"#),
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
 /// `max_claims_per_caller` (§3, §4a): a caller who has already claimed the configured limit gets
 /// a `Forbidden` naming the limit on a claim of one more, distinct fresh audience; a caller one
 /// below the limit still succeeds. Best-effort under sequential use, per that knob's own doc

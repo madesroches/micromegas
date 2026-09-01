@@ -329,7 +329,7 @@ def test_audience_and_claim_together_is_an_error():
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
 
 
-def test_claim_is_used_verbatim_and_announced_to_stderr(capsys):
+def test_claim_is_used_verbatim(capsys):
     my_audiences = {
         "is_admin": False,
         "audiences": [],
@@ -340,8 +340,7 @@ def test_claim_is_used_verbatim_and_announced_to_stderr(capsys):
     args = make_args(claim="alice-ci-runner")
     audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
     assert audience == "alice-ci-runner"
-    err = capsys.readouterr().err
-    assert "alice-ci-runner" in err
+    assert capsys.readouterr().err == ""
 
 
 def test_claim_is_never_prefixed_even_when_a_mint_prefix_is_available():

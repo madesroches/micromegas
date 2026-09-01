@@ -147,7 +147,6 @@ def resolve_audience(args, parser, my_audiences):
             parser.error(
                 f"cannot claim {args.claim!r}: this caller has no email to claim with"
             )
-        print(f"claiming audience: {args.claim}", file=sys.stderr)
         return args.claim
 
     if args.audience is not None:
