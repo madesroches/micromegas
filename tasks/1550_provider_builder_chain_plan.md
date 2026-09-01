@@ -186,12 +186,14 @@ New tests in `rust/auth/tests/default_provider_tests.rs`:
    existing deferred-`Result` pattern so the schema is dropped even when an assertion fails; the
    throwaway table needs the full column set `DbApiKeyAuthProvider` reads, not just
    `key_id`/`revoked_at`.
-2. `build_chain_ignores_missing_relation` (no DB, not `#[ignore]`) — `build_chain()` never calls
-   `key_store_has_live_rows`, so composing it issues no query. Reuse `db_api_key_tests.rs`'s
-   `unreachable_pool()` (`PgPoolOptions::new().acquire_timeout(50ms).connect_lazy(..)`), same
-   precedent as `dedicated_key_store_pool_is_small_and_lazy`: assert `build_chain()` returns `Ok`
-   promptly against that pool, where `build()` returns `Err` (its existence query fails on
-   connect).
+2. `build_chain_ignores_missing_relation` (`#[serial]`, no DB, not `#[ignore]`) — `build_chain()`
+   never calls `key_store_has_live_rows`, so composing it issues no query. Reuse
+   `db_api_key_tests.rs`'s `unreachable_pool()` (`PgPoolOptions::new().acquire_timeout(50ms).connect_lazy(..)`),
+   same precedent as `dedicated_key_store_pool_is_small_and_lazy`: assert `build_chain()` returns
+   `Ok` promptly against that pool, where `build()` returns `Err` (its existence query fails on
+   connect). Use the file's `EnvGuard` and `remove_var` both `MICROMEGAS_API_KEYS` and
+   `MICROMEGAS_OIDC_CONFIG` at the top, like every other test in this file — otherwise it races
+   with test 3's process-wide `MICROMEGAS_API_KEYS` and the `build()` assertion flips to `Ok`.
 3. `build_chain_with_env_keys_only_authenticates` (`#[serial]`, no DB, not `#[ignore]`) — no key
    store attached, `MICROMEGAS_API_KEYS` set; assert the returned chain authenticates the env key.
    Cheap, and one of the two new tests that runs in ordinary CI.
