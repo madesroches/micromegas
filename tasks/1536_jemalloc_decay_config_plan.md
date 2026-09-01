@@ -152,8 +152,8 @@ micromegas::declare_jemalloc_conf!();
 ### Drift guard
 
 New `build/check_jemalloc_conf.py`, wired into `build/rust_ci.py`'s native step list next to the
-existing `check_wasm_deps.py` precedent: every `rust/**/src/*.rs` file containing
-`tikv_jemallocator::Jemalloc` under a `#[global_allocator]` must also contain
+existing `check_wasm_deps.py` precedent: every `rust/*/src/**/*.rs` file (recursive, so it also
+covers `src/bin/*.rs`) containing `tikv_jemallocator::Jemalloc` under a `#[global_allocator]` must also contain
 `declare_jemalloc_conf!`. This is what keeps a ninth binary added later from silently shipping
 unconfigured — the concern the issue raises directly.
 
