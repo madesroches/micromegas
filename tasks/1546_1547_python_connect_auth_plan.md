@@ -96,21 +96,22 @@ api_key_file: Optional[str] = None
 
 It holds the **path**, not the secret. Two consequences, both wanted: the frozen dataclass's
 auto-generated `repr` can never leak a key (a `print(cfg)` while debugging is a realistic leak
-path), and `resolve_connection` performs no file I/O, so it stays pure config resolution and the
+path), and `resolve_connection` reads no key file, so it stays pure config resolution and the
 three other callers (`grants`, `import_keys`, `setup_telemetry`) are unaffected by the file I/O
 (they can still hit §3's new two-mechanism `ProfileError`, which each already catches). The file
 is read exactly once, at connect time, by `StaticTokenAuthProvider.from_file()` — the
 read/strip/validate logic lives in one place.
 
 Resolution: from the active profile's (or flat config's) `api_key_file` key only. No environment
-variable is introduced — see Decisions.
+variable is introduced — see Decisions. `resolve_connection` raises `ProfileError` when
+`api_key_file` is present but not a string, mirroring the existing `default_profile must be a
+profile name (string)` check.
 
 ### 3. One profile, one auth mechanism
 
 `resolve_connection` raises `ProfileError` when it resolves both a static key and a complete OIDC
 pair (`oidc_issuer` **and** `oidc_client_id`). This is the single choke point that sees both, so
-every consumer — the FlightSQL connect and all three `WebClient` tools — fails the same way,
-instead of one tool silently preferring OIDC while another prefers the key.
+the check runs for every caller that reaches `resolve_connection`.
 
 Because OIDC values can arrive from `MICROMEGAS_OIDC_ISSUER` / `MICROMEGAS_OIDC_CLIENT_ID`, the
 conflict is reachable without the profile itself naming an issuer. The message must therefore name
@@ -121,6 +122,9 @@ profile 'prod' resolves two auth mechanisms: a static API key (profile key 'api_
 and OIDC (issuer from MICROMEGAS_OIDC_ISSUER, client_id from profile key 'client_id').
 A profile must use exactly one -- remove 'api_key_file', or unset the OIDC settings.
 ```
+
+When the issuer instead comes from the profile itself, it is labeled `profile key
+'issuers[0].issuer'`.
 
 `resolve_active_profile` returns a `None` name for a flat config (no `profiles` map), so the
 message leads with "config file" instead of `profile '<name>'` when the name is `None`, e.g.
@@ -180,7 +184,7 @@ Two details to preserve:
 from micromegas.connection import connect_with_profile as connect
 ```
 
-`cli/query.py:141` (`connection.connect(...)`) keeps working untouched.
+`cli/query.py:142` (`connection.connect(...)`) keeps working untouched.
 
 `micromegas/__init__.py` adds `connect_with_profile` and re-exports `ProfileError`, so a caller can
 catch the error without importing from a `cli` submodule — the same discoverability complaint the
@@ -316,8 +320,13 @@ Modify:
 - Environment-variable table (line ~753) — **no new row** for the static key. Deliberate; the
   Decisions entry above is the record of why.
 - Config-file key table (line ~780) — add `api_key_file`.
+- The sentence "OIDC authentication is activated when both an issuer and a client ID are resolved
+  … Otherwise the CLI connects without auth" (line ~790) — update to name the static-key path as
+  the second auth mechanism, alongside OIDC and no-auth.
 - **Named profiles** (line ~792) — document `api_key_file` with a JSON example, the one-mechanism
-  rule, and the error text.
+  rule, and the error text; update "Each entry under `profiles` has exactly the shape of the flat
+  config above (`uri`, `client_id`, `issuers`)" (line ~816) and the "Don't mix flat keys with a
+  `profiles` map" admonition's key list (line ~827) to include `api_key_file`.
 - `### micromegas-logout` (line 846) — a static-key profile caches no token, so logout is a no-op
   for it; revoking such a key is server-side (`DELETE /api/analytics-api-keys/{key_id}`).
 - Line ~343 ("The top-level `micromegas.connect()` helper does not expose a `client_entrypoint`
@@ -368,6 +377,7 @@ var per test):
 - `api_key_file` in the profile plus `MICROMEGAS_OIDC_ISSUER`/`_CLIENT_ID` in the environment
   raises `ProfileError` naming the environment variables.
 - `api_key_file` alone resolves cleanly, leaving every `oidc_*` field `None`.
+- A profile with a non-string `api_key_file` (e.g. a number) raises `ProfileError`, not `TypeError`.
 - A flat config (no `profiles` map) with `api_key_file` behaves identically.
 - A flat config with both `api_key_file` and `issuers` + `client_id` raises `ProfileError` with a
   message leading `config file resolves two auth mechanisms: ...`, not `profile 'None'`.
