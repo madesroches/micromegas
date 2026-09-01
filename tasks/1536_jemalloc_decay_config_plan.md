@@ -85,9 +85,7 @@ background_thread:true,dirty_decay_ms:5000,muzzy_decay_ms:0
   wrong way: `0` means muzzy pages are `MADV_DONTNEED`'d immediately, so `5000` would *add* five
   seconds of retention rather than removing any.
 
-`max_background_threads` is left at its default. That default is a fixed `DEFAULT_NUM_BACKGROUND_THREAD`
-(4), not one per CPU — `background_thread_boot1` resets any unset/over-limit value to 4 regardless
-of `ncpus` — so on the measured 2-vCPU box up to 4 purge threads can be created.
+`max_background_threads` is left at its default.
 
 `narenas` is deliberately not set — see Trade-offs.
 
@@ -130,8 +128,7 @@ pub static MICROMEGAS_MALLOC_CONF: Option<&'static u8> = Some(&$crate::jemalloc_
 ```
 
 `CONF` is NUL-terminated: jemalloc reads source 1 as a `const char *` (`jemalloc/src/conf.c`,
-`jemalloc/src/jemalloc.c`), and an unterminated byte string is exactly the silent-garbage failure
-the assertion test below exists to catch. The expansion references `$crate::jemalloc_conf::CONF`
+`jemalloc/src/jemalloc.c`). The expansion references `$crate::jemalloc_conf::CONF`
 rather than a bare `CONF`, since the macro expands inside each binary crate, not inside
 `telemetry-sink` — `$crate` resolves through the re-export chain even though the binaries depend on
 `micromegas`, not `micromegas-telemetry-sink`, directly.
@@ -151,9 +148,13 @@ micromegas::declare_jemalloc_conf!();
 
 ### Drift guard
 
-New `build/check_jemalloc_conf.py`, wired into `build/rust_ci.py`'s native step list next to the
-existing `check_wasm_deps.py` precedent: every `rust/*/src/**/*.rs` file (recursive, so it also
-covers `src/bin/*.rs`) containing `tikv_jemallocator::Jemalloc` under a `#[global_allocator]` must also contain
+New `build/check_jemalloc_conf.py`, added as a step in `build/rust_ci.py`'s `run_native()` list:
+`("jemalloc Conf Guard", "python3 build/check_jemalloc_conf.py", repo_root)`. Every step in
+`run_native()` otherwise passes `None` for cwd, which `rust_command.run_command` defaults to the
+`rust/` tree — but this script's path is repo-root-relative, so it needs `repo_root` explicitly,
+the same way `run_wasm()`'s `check_wasm_deps.py` step does. The script checks: every
+`rust/*/src/**/*.rs` file (recursive, so it also covers `src/bin/*.rs`) containing
+`tikv_jemallocator::Jemalloc` under a `#[global_allocator]` must also contain
 `declare_jemalloc_conf!`. This is what keeps a ninth binary added later from silently shipping
 unconfigured — the concern the issue raises directly.
 
@@ -175,7 +176,9 @@ unconfigured — the concern the issue raises directly.
 4. **`rust/telemetry-sink/tests/jemalloc_conf_tests.rs`** — new test binary (see Testing Strategy);
    add its `[[test]]` entry with `required-features = ["jemalloc"]` to
    `rust/telemetry-sink/Cargo.toml`, matching the `jemalloc_stats_tests` entry.
-5. **`build/check_jemalloc_conf.py`** + a step in `build/rust_ci.py`'s `run_native()` list.
+5. **`build/check_jemalloc_conf.py`** + add
+   `("jemalloc Conf Guard", "python3 build/check_jemalloc_conf.py", repo_root)` to
+   `build/rust_ci.py`'s `run_native()` list.
 6. **Docs** — new `mkdocs/docs/admin/memory-allocator.md`, nav entry, and the `admin/object-cache.md`
    pointer (see Documentation).
 7. **`CHANGELOG.md`** — entry under `## Unreleased`.
@@ -223,7 +226,7 @@ decay — and it forces a jemalloc C rebuild on change, same as the env-var opti
 **Exported symbol vs. runtime `mallctl`.** `background_thread` alone is writable at runtime
 (`tikv_jemalloc_ctl::background_thread::write(true)`), but decay is not: `arenas.dirty_decay_ms`
 only affects arenas created *after* the write, so already-live arenas would need a per-arena walk
-or the undocumented `MALLCTL_ARENAS_ALL` index. Configuring at initialization covers every arena
+or the `MALLCTL_ARENAS_ALL` index. Configuring at initialization covers every arena
 with no special cases.
 
 **One shared macro vs. one macro that also declares the allocator.** Folding the
@@ -266,12 +269,20 @@ steady-state working set is not what is being purged.
 
 ## Platform notes
 
-`background_thread` is unsupported on musl (`tikv-jemalloc-sys`' `NO_BG_THREAD_TARGETS`), where
-the sys crate compiles in `background_thread:false` at precedence 0. All release images build
-`*-unknown-linux-gnu` (`docker/*.Dockerfile`), so this does not apply today; if a musl target is
-ever added, jemalloc would reject the option on stderr rather than fail — `opt.abort_conf` defaults
-to false, so an invalid or misspelled conf pair is a startup warning, not a crash. That silence is
-precisely why the assertion test below matters.
+`background_thread` is unsupported on musl (`tikv-jemalloc-sys`' `NO_BG_THREAD_TARGETS`), but the
+sys crate only emits a build-time `warning!()` for it — with the default
+`background_threads_runtime_support` feature (on by default for both `tikv-jemalloc-sys` and
+`tikv-jemallocator`), `BackgroundThreadSupport::new` still returns `Some`, and
+`background_thread:false` is never appended to `--with-malloc-conf`. So on a musl target this
+plan's `background_thread:true` (precedence 1) would be accepted and live, not neutralized at
+compile time. All release images build `*-unknown-linux-gnu` (`docker/*.Dockerfile`), so this does
+not apply today; a future musl target would need to handle the option explicitly (e.g. via
+`_RJEM_MALLOC_CONF` or a feature-gated conf string), since nothing today overrides it for musl. If
+background-thread support were genuinely compiled out, jemalloc does not degrade gracefully:
+`background_thread_boot0` prints "option background_thread currently supports pthread only" and
+fails jemalloc initialization outright, rather than falling back with a startup warning.
+`opt.abort_conf` defaults to false outside debug builds, so an invalid or misspelled conf pair
+(not this particular case) is the scenario that produces a startup warning rather than a crash.
 
 ## Testing Strategy
 
@@ -280,8 +291,11 @@ jemalloc global allocator and `declare_jemalloc_conf!()`, then asserting through
 configuration actually reached jemalloc:
 
 - `tikv_jemalloc_ctl::opt::background_thread::read()? == true`
-- `raw::read::<isize>(b"opt.dirty_decay_ms\0")? == 5000`
-- `raw::read::<isize>(b"opt.muzzy_decay_ms\0")? == 0`
+- `unsafe { raw::read::<isize>(b"opt.dirty_decay_ms\0") }? == 5000`
+- `unsafe { raw::read::<isize>(b"opt.muzzy_decay_ms\0") }? == 0`
+
+(`raw::read` is `pub unsafe fn` in `tikv-jemalloc-ctl` 0.7.0; `opt::background_thread::read()` is
+safe and needs no wrapper.)
 
 This is the guard against every silent-failure mode in this change: a wrong symbol prefix, a
 dropped static, a typo in the conf string, or an upstream default shift. `#![cfg(not(target_os =
@@ -311,4 +325,6 @@ its peak.
   `jemalloc_*` gauges to watch. Short — one screen.
 - **`mkdocs/docs/admin/object-cache.md:317`** currently ends its memory-diagnosis paragraph with
   "tune `MALLOC_CONF`", which names a variable that does nothing on these binaries. Replace with a
-  link to the new page.
+  link to the new page. In the same edit, correct the `jemalloc_*` gauge row two lines above
+  (`object-cache.md:315`), which still says "all 7 production services" — eight crates now enable
+  `micromegas/jemalloc-metrics`, the same eight enumerated under Current State.
