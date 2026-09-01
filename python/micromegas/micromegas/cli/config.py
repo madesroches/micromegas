@@ -12,12 +12,17 @@ _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class ProfileError(ValueError):
-    """Raised by `resolve_active_profile` for profile-selection problems only
-    (unknown profile, none selected, or --profile/MICROMEGAS_PROFILE with no
-    `profiles` map) — never for downstream connection failures. Subclassing
-    `ValueError` keeps it compatible with any existing `except ValueError`
-    handling of `load_config`'s JSON-decode error, while letting callers that
-    only want profile-selection errors catch `ProfileError` specifically.
+    """Raised by `resolve_active_profile`/`resolve_connection` for
+    profile-selection and profile-content problems (unknown profile, none
+    selected, --profile/MICROMEGAS_PROFILE with no `profiles` map, a
+    malformed `profiles`/entry shape, a profile resolving both a static API
+    key and a complete OIDC pair, or an unreadable/empty `api_key_file` —
+    the latter raised by `connect_with_profile`, which wraps
+    `StaticTokenAuthProvider.from_file`'s `OSError`/`ValueError`) — never for
+    downstream transport/auth failures from the resulting connection.
+    Subclassing `ValueError` keeps it compatible with any existing `except
+    ValueError` handling of `load_config`'s JSON-decode error, while letting
+    callers that only want these errors catch `ProfileError` specifically.
     """
 
 
@@ -53,6 +58,7 @@ class ConnectionConfig:
     oidc_audience: Optional[str] = None
     oidc_scope: Optional[str] = None
     token_file: Optional[str] = None
+    api_key_file: Optional[str] = None
 
 
 def load_config(config_path=None):
@@ -128,8 +134,39 @@ def resolve_active_profile(config, profile=None):
     return name, active
 
 
+def _two_mechanism_message(name) -> str:
+    """Build the ProfileError message for a profile/config that resolves both
+    a static API key and a complete OIDC pair, naming the real source
+    (env var or profile key) of the issuer and client_id, since either can
+    arrive via MICROMEGAS_OIDC_ISSUER/MICROMEGAS_OIDC_CLIENT_ID without the
+    profile itself naming an issuer."""
+    issuer_source = (
+        "MICROMEGAS_OIDC_ISSUER"
+        if os.environ.get("MICROMEGAS_OIDC_ISSUER")
+        else "profile key 'issuers[0].issuer'"
+    )
+    client_id_source = (
+        "MICROMEGAS_OIDC_CLIENT_ID"
+        if os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
+        else "profile key 'client_id'"
+    )
+    subject = f"profile '{name}'" if name is not None else "config file"
+    return (
+        f"{subject} resolves two auth mechanisms: a static API key (profile key "
+        f"'api_key_file') and OIDC (issuer from {issuer_source}, client_id from "
+        f"{client_id_source}). A profile must use exactly one -- remove "
+        "'api_key_file', or unset the OIDC settings."
+    )
+
+
 def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
-    """Build ConnectionConfig with priority: env vars > active profile > defaults."""
+    """Build ConnectionConfig with priority: env vars > active profile > defaults.
+
+    Raises `ProfileError` if `api_key_file` is present but not a string, or
+    if the resolved config names both a static API key (`api_key_file`) and
+    a complete OIDC pair (issuer and client_id) — a profile must use exactly
+    one auth mechanism.
+    """
     config = load_config(config_path)
     name, active = resolve_active_profile(config, profile)
 
@@ -137,12 +174,23 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
     issuer = issuers[0].get("issuer") if issuers else None
     audience = issuers[0].get("audience") if issuers else None
 
+    api_key_file = active.get("api_key_file")
+    if api_key_file is not None and not isinstance(api_key_file, str):
+        raise ProfileError("api_key_file must be a path (string)")
+
+    oidc_issuer = _pick("MICROMEGAS_OIDC_ISSUER", issuer)
+    oidc_client_id = _pick("MICROMEGAS_OIDC_CLIENT_ID", active.get("client_id"))
+
+    if api_key_file and oidc_issuer and oidc_client_id:
+        raise ProfileError(_two_mechanism_message(name))
+
     return ConnectionConfig(
         uri=_pick("MICROMEGAS_ANALYTICS_URI", active.get("uri"), DEFAULT_URI),
-        oidc_issuer=_pick("MICROMEGAS_OIDC_ISSUER", issuer),
-        oidc_client_id=_pick("MICROMEGAS_OIDC_CLIENT_ID", active.get("client_id")),
+        oidc_issuer=oidc_issuer,
+        oidc_client_id=oidc_client_id,
         oidc_client_secret=_pick("MICROMEGAS_OIDC_CLIENT_SECRET"),
         oidc_audience=_pick("MICROMEGAS_OIDC_AUDIENCE", audience),
         oidc_scope=_pick("MICROMEGAS_OIDC_SCOPE"),
         token_file=default_token_file(name),
+        api_key_file=api_key_file,
     )

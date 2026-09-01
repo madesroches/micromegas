@@ -69,8 +69,10 @@ def resolve_client_entrypoint(explicit=None):
     """How this client was invoked. `explicit` (set by our own CLI main()s,
     but also reachable by any library caller via the public
     `FlightSQLClient(client_entrypoint=...)`/`oidc_connection.connect(client_entrypoint=...)`/
-    `cli/connection.connect(client_entrypoint=...)` parameters -- the top-level
-    `micromegas.connect()` does not take this parameter) always wins, but -- unlike the
+    `connect_with_profile(client_entrypoint=...)` (aliased as
+    `cli/connection.connect(client_entrypoint=...)`) parameters -- of the two
+    top-level connect functions, `connect_with_profile()` takes this
+    parameter and plain `micromegas.connect()` does not) always wins, but -- unlike the
     env-var override below -- an
     invalid `explicit` value raises `ValueError` instead of silently falling
     through: a caller-supplied argument deserves a catchable error at the

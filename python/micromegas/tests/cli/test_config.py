@@ -420,3 +420,141 @@ def test_token_file_env_var_has_no_effect(tmp_path, monkeypatch):
     cfg = resolve_connection(config_path=missing)
     assert cfg.token_file == default_token_file(None)
     assert cfg.token_file != "/tmp/should-be-ignored.json"
+
+
+# --- Static API key (api_key_file) ---
+
+
+def test_api_key_file_from_profile_lands_verbatim_unexpanded(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {
+                "uri": "grpc+tls://prod-host:50051",
+                "api_key_file": "~/.micromegas/prod.key",
+            },
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    cfg = resolve_connection(config_path=cfg_file)
+    assert cfg.api_key_file == "~/.micromegas/prod.key"
+
+
+def test_profile_with_api_key_file_and_oidc_raises_profile_error_naming_both(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {
+                "uri": "grpc+tls://prod-host:50051",
+                "api_key_file": "~/.micromegas/prod.key",
+                "client_id": "prod-client",
+                "issuers": [{"issuer": "https://prod-issuer.com"}],
+            },
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError) as e:
+        resolve_connection(config_path=cfg_file)
+    message = str(e.value)
+    assert "prod" in message
+    assert "api_key_file" in message
+    assert "issuers[0].issuer" in message
+    assert "client_id" in message
+
+
+def test_api_key_file_plus_env_oidc_raises_profile_error_naming_env_vars(
+    tmp_path, monkeypatch
+):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {
+                "uri": "grpc+tls://prod-host:50051",
+                "api_key_file": "~/.micromegas/prod.key",
+            },
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    monkeypatch.setenv("MICROMEGAS_OIDC_ISSUER", "https://env-issuer.com")
+    monkeypatch.setenv("MICROMEGAS_OIDC_CLIENT_ID", "env-client")
+
+    with pytest.raises(ProfileError) as e:
+        resolve_connection(config_path=cfg_file)
+    message = str(e.value)
+    assert "MICROMEGAS_OIDC_ISSUER" in message
+    assert "MICROMEGAS_OIDC_CLIENT_ID" in message
+
+
+def test_api_key_file_alone_resolves_cleanly(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {
+                "uri": "grpc+tls://prod-host:50051",
+                "api_key_file": "~/.micromegas/prod.key",
+            },
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    cfg = resolve_connection(config_path=cfg_file)
+    assert cfg.api_key_file == "~/.micromegas/prod.key"
+    assert cfg.oidc_issuer is None
+    assert cfg.oidc_client_id is None
+    assert cfg.oidc_client_secret is None
+    assert cfg.oidc_audience is None
+    assert cfg.oidc_scope is None
+
+
+def test_non_string_api_key_file_raises_profile_error_not_type_error(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "default_profile": "prod",
+        "profiles": {
+            "prod": {"uri": "grpc+tls://prod-host:50051", "api_key_file": 12345},
+        },
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError):
+        resolve_connection(config_path=cfg_file)
+
+
+def test_flat_config_with_api_key_file_behaves_identically(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "uri": "grpc+tls://flat-host:50051",
+        "api_key_file": "~/.micromegas/flat.key",
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    cfg = resolve_connection(config_path=cfg_file)
+    assert cfg.api_key_file == "~/.micromegas/flat.key"
+    assert cfg.oidc_issuer is None
+    assert cfg.oidc_client_id is None
+
+
+def test_flat_config_with_api_key_file_and_oidc_message_leads_with_config_file(
+    tmp_path,
+):
+    cfg_file = tmp_path / "config.json"
+    data = {
+        "uri": "grpc+tls://flat-host:50051",
+        "api_key_file": "~/.micromegas/flat.key",
+        "client_id": "flat-client",
+        "issuers": [{"issuer": "https://flat-issuer.com"}],
+    }
+    cfg_file.write_text(json.dumps(data))
+
+    with pytest.raises(ProfileError) as e:
+        resolve_connection(config_path=cfg_file)
+    message = str(e.value)
+    assert message.startswith("config file resolves two auth mechanisms:")
+    assert "profile 'None'" not in message

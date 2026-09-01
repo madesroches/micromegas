@@ -258,6 +258,14 @@ minted key exactly once in a dismissable banner with a copy-to-clipboard
 button — the browser never receives it a second time, and it's never
 persisted client-side.
 
+A freshly minted analytics key is consumed from Python via
+`StaticTokenAuthProvider` — see [Static Analytics API
+Keys](../query-guide/python-api.md#static-analytics-api-keys) and the
+`api_key_file` profile setting in the [Python API
+Reference](../query-guide/python-api.md#connection-configuration). The
+Grafana plugin consumes the same key the same way — see [Grafana
+Authentication](../grafana/authentication.md).
+
 Minting an ingestion key uses the same shape against
 `/api/ingestion-api-keys` (or the Admin → Ingestion API Keys page), but the
 body must supply an `audience`:

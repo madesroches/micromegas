@@ -46,10 +46,30 @@ client = FlightSQLClient(
 )
 ```
 
+### Authentication with a Static API Key
+
+For a pre-minted analytics API key (via `POST /api/analytics-api-keys` or the Admin page), use
+`StaticTokenAuthProvider` — it sends the key verbatim as a bearer token on every request, with no
+refresh and no OIDC flow:
+
+```python
+from micromegas.flightsql.client import FlightSQLClient
+from micromegas.auth import StaticTokenAuthProvider
+
+auth = StaticTokenAuthProvider.from_file("~/.micromegas/local.key")  # expects mode 0600
+
+client = FlightSQLClient(
+    "grpc+tls://analytics.company.com:50051",
+    auth_provider=auth
+)
+```
+
 ### Static Headers (Deprecated)
 
 !!! warning "Deprecated"
-    The `headers` parameter is deprecated and will be removed in a future version. Use `auth_provider` instead for automatic token refresh support.
+    The `headers` parameter is deprecated and will be removed in a future version. Use
+    `StaticTokenAuthProvider` (for a static API key) or another `auth_provider` instead — both
+    give automatic token refresh support where applicable.
 
 For legacy integrations, you can still use static headers:
 
