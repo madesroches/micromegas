@@ -1,6 +1,7 @@
 #[cfg(not(target_os = "windows"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+micromegas::declare_jemalloc_conf!();
 
 use analytics_web_srv::web_server::{WebCliArgs, WebServerConfig, run_web_server};
 use anyhow::Result;

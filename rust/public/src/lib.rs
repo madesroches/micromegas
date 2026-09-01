@@ -135,6 +135,13 @@ pub mod tracing {
 // Re-export proc macros at the top level for easy access
 pub use micromegas_proc_macros::*;
 
+/// re-export of `declare_jemalloc_conf!`, kept behind `jemalloc-metrics`
+/// (rather than always available) so an app depending on `micromegas` only
+/// for `TelemetryGuardBuilder` doesn't find a server-tuned allocator conf in
+/// its API surface. See `mkdocs/docs/admin/memory-allocator.md`.
+#[cfg(feature = "jemalloc-metrics")]
+pub use micromegas_telemetry_sink::declare_jemalloc_conf;
+
 /// authentication providers
 #[cfg(feature = "server")]
 pub mod auth {

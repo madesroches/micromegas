@@ -142,6 +142,7 @@ nav:
         - Redis Exporter: admin/redis-exporter.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md
         - Telemetry Sink Configuration: admin/telemetry-sink-tuning.md
+        - Memory Allocator Configuration: admin/memory-allocator.md
         - Admin SQL Functions: admin/functions-reference.md
     - Development:
         - Contributing: contributing.md
