@@ -228,7 +228,9 @@ Issue #1546's minimum bar, and cheap:
 12. Docstring edits per §5, including `flightsql/attribution.py`.
 13. `mkdocs/docs/query-guide/python-api.md` edits per Documentation.
 14. Cross-reference from `mkdocs/docs/admin/api-keys.md`; one-line pointer in
-    `python/micromegas/README.md`.
+    `python/micromegas/README.md`; rewrite `mkdocs/docs/admin/authentication.md`'s "Python Client
+    with API Keys" and `mkdocs/docs/query-guide/python-api-advanced.md`'s "Static Headers
+    (Deprecated)" per Documentation.
 15. `CHANGELOG.md` `## Unreleased` entry citing #1546 and #1547.
 
 **Phase 5 — verify**
@@ -253,6 +255,7 @@ Modify:
 - `python/micromegas/tests/cli/test_connection.py`
 - `python/micromegas/README.md`
 - `mkdocs/docs/query-guide/python-api.md`
+- `mkdocs/docs/query-guide/python-api-advanced.md`
 - `mkdocs/docs/admin/api-keys.md`
 - `mkdocs/docs/admin/authentication.md`
 - `CHANGELOG.md`
@@ -316,6 +319,11 @@ the Python static-key path so a freshly minted key has an obvious Python consume
 `mkdocs/docs/admin/authentication.md` — rewrite "Python Client with API Keys" (line ~891) to build
 a `StaticTokenAuthProvider` instead of passing a raw `headers=` dict, and retarget the deprecation
 warning to name `StaticTokenAuthProvider`.
+
+`mkdocs/docs/query-guide/python-api-advanced.md` — add a `StaticTokenAuthProvider` example to
+"Advanced Connection Patterns" (line ~16) beside `OidcAuthProvider` and
+`OidcClientCredentialsProvider`; retarget "Static Headers (Deprecated)" (line ~49) to name
+`StaticTokenAuthProvider` instead of just saying "Use `auth_provider` instead".
 
 `python/micromegas/README.md` — its two `micromegas.connect()` examples stay correct (they target a
 local server); add one line pointing at `connect_with_profile` for a remote or authenticated
