@@ -154,7 +154,7 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 
 ## Scalar Functions (UDFs)
 
-### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
+### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time, file_schema_hash)`
 
 !!! note "Requires admin"
     Only callable by an authenticated admin, or by any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Otherwise callers, including API keys, get an "Invalid function" error.
@@ -166,6 +166,7 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 - `view_instance_id` (String): Instance ID (e.g., process_id or 'global')
 - `begin_insert_time` (Timestamp): Begin insert time of the partition
 - `end_insert_time` (Timestamp): End insert time of the partition
+- `file_schema_hash` (Binary): The partition's `file_schema_hash`, as returned by `list_partitions()`. Required, and disambiguates the target when an old-schema and a new-schema partition legally coexist over the same insert-time range.
 
 **Usage**:
 ```sql
@@ -173,19 +174,22 @@ SELECT retire_partition_by_metadata(
     'log_entries',
     'process-123',
     TIMESTAMP '2024-01-01 00:00:00',
-    TIMESTAMP '2024-01-01 01:00:00'
+    TIMESTAMP '2024-01-01 01:00:00',
+    decode('04', 'hex')
 ) as result;
 ```
 
 **Returns**: String message indicating success or failure:
-- Success: `"SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>)"`
-- Failure: `"ERROR: Partition not found: <view_set>/<instance> [<begin>, <end>)"`
+- Success: `"SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>"`
+- Failure: `"ERROR: Partition not found: <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>"`
+- Failure: `"ERROR: Ambiguous match: <n> rows for <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>, file_paths=[...]"` (see **Safety** below)
 
 **Safety**:
-- Surgical precision - only targets the exact specified partition by its natural identifiers
+- Surgical precision - only targets the exact specified partition by its natural identifiers, including `file_schema_hash`
 - Works for both empty partitions (file_path=NULL) and non-empty partitions
 - Uses database transactions with automatic rollback on batch errors
 - Files are scheduled for cleanup rather than immediately deleted
+- If more than one row matches the four metadata columns and the given `file_schema_hash` -- only possible for a zero-width range (`begin_insert_time == end_insert_time`), since a non-zero-width overlap on the same hash is rejected by the database's exclusion constraint -- the call errors out instead of deleting every matching row: `"ERROR: Ambiguous match: <n> rows for <view_set>/<instance> [<begin>, <end>) schema_hash=<hex>, file_paths=[<path1>, <path2>, ...]; use retire_partition_by_file when file_paths are distinct and non-NULL"`. Two colliding rows that are both empty partitions (`file_path IS NULL`) have no file path to key on either, and remain unretirable through any UDF.
 
 **Example**:
 ```sql
@@ -194,18 +198,20 @@ SELECT retire_partition_by_metadata(
     'log_entries',
     'process-123',
     TIMESTAMP '2024-01-01 00:00:00',
-    TIMESTAMP '2024-01-01 01:00:00'
+    TIMESTAMP '2024-01-01 01:00:00',
+    decode('04', 'hex')
 );
 
 -- Batch retire incompatible partitions
 SELECT
-    view_set_name,
-    view_instance_id,
+    p.view_set_name,
+    p.view_instance_id,
     retire_partition_by_metadata(
-        view_set_name,
-        view_instance_id,
-        begin_insert_time,
-        end_insert_time
+        p.view_set_name,
+        p.view_instance_id,
+        p.begin_insert_time,
+        p.end_insert_time,
+        p.file_schema_hash
     ) as result
 FROM list_partitions() p
 JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
@@ -511,8 +517,8 @@ same as any other row on a pair they hold.
 | `view_instance_id` | str | Instance ID |
 | `begin_insert_time` | timestamp | Begin insert time of the partition |
 | `end_insert_time` | timestamp | End insert time of the partition |
-| `incompatible_schema_hash` | str | Old schema version in partition |
-| `current_schema_hash` | str | Current schema version |
+| `incompatible_schema_hash` | Binary | Old schema version in partition |
+| `current_schema_hash` | Binary | Current schema version |
 | `file_path` | str | File path for the partition (NULL for empty partitions) |
 | `file_size` | int | Size in bytes of the partition file (0 for empty partitions) |
 
@@ -596,7 +602,7 @@ for _, row in result.iterrows():
 **Implementation**:
 1. Calls `list_incompatible_partitions()` to identify targets (one row per partition)
 2. Groups partitions by view_set_name and view_instance_id
-3. For each partition, calls `retire_partition_by_metadata()` with the partition's natural identifiers
+3. For each partition, calls `retire_partition_by_metadata()` with the partition's natural identifiers and its `file_schema_hash`
 4. Aggregates results and provides summary statistics per group
 5. Includes detailed operation logs for auditing
 

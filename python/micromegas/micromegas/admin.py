@@ -140,7 +140,9 @@ def retire_incompatible_partitions(
     Note:
         This function uses the retire_partition_by_metadata() UDF to retire each
         partition individually by its metadata identifiers (view_set_name, view_instance_id,
-        begin_insert_time, end_insert_time). This works for both empty partitions
+        begin_insert_time, end_insert_time, incompatible_schema_hash). Passing the schema
+        hash disambiguates the target when an old-schema and a new-schema partition legally
+        coexist over the same insert-time range. This works for both empty partitions
         (file_path=NULL) and non-empty partitions, ensuring complete cleanup.
     """
     # First identify incompatible partitions
@@ -175,12 +177,14 @@ def retire_incompatible_partitions(
                 # Use retire_partition_by_metadata UDF
                 begin_time = format_datetime(partition["begin_insert_time"])
                 end_time = format_datetime(partition["end_insert_time"])
+                schema_hash_hex = bytes(partition["incompatible_schema_hash"]).hex()
                 retirement_sql = f"""
                 SELECT retire_partition_by_metadata(
                     '{partition['view_set_name']}',
                     '{partition['view_instance_id']}',
                     CAST('{begin_time}' AS TIMESTAMP),
-                    CAST('{end_time}' AS TIMESTAMP)
+                    CAST('{end_time}' AS TIMESTAMP),
+                    decode('{schema_hash_hex}', 'hex')
                 ) as message
                 """
                 retirement_result = client.query(retirement_sql)

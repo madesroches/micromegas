@@ -89,7 +89,7 @@ def test_list_incompatible_partitions_with_data():
                 "view_instance_id": ["process-123", "process-123", "process-456"],
                 "begin_insert_time": [1000000, 2000000, 3000000],
                 "end_insert_time": [1100000, 2100000, 3100000],
-                "incompatible_schema_hash": ["[3]", "[3]", "[2]"],
+                "incompatible_schema_hash": [b"\x03", b"\x03", b"\x02"],
                 "current_schema_hash": ["[4]", "[4]", "[4]"],
                 "file_path": [
                     "/path/to/partition1.parquet",
@@ -123,7 +123,7 @@ def test_list_incompatible_partitions_with_view_filter():
                 "view_instance_id": ["process-123", "process-123"],
                 "begin_insert_time": [1000000, 2000000],
                 "end_insert_time": [1100000, 2100000],
-                "incompatible_schema_hash": ["[3]", "[3]"],
+                "incompatible_schema_hash": [b"\x03", b"\x03"],
                 "current_schema_hash": ["[4]", "[4]"],
                 "file_path": [
                     "/path/to/partition1.parquet",
@@ -175,7 +175,7 @@ def test_retire_incompatible_partitions_with_data():
                     pd.Timestamp("2024-01-01 10:30:00", tz="UTC"),
                     pd.Timestamp("2024-01-01 11:30:00", tz="UTC"),
                 ],
-                "incompatible_schema_hash": ["[3]", "[3]"],
+                "incompatible_schema_hash": [b"\x03", b"\x03"],
                 "current_schema_hash": ["[4]", "[4]"],
                 "file_path": [
                     "/path/to/partition1.parquet",
@@ -187,6 +187,14 @@ def test_retire_incompatible_partitions_with_data():
     }
 
     client = MockFlightSQLClient(mock_data)
+    captured_sql = []
+    original_query = client.query
+
+    def capturing_query(sql):
+        captured_sql.append(sql)
+        return original_query(sql)
+
+    client.query = capturing_query
     result = micromegas.admin.retire_incompatible_partitions(client)
 
     assert isinstance(result, pd.DataFrame)
@@ -203,6 +211,14 @@ def test_retire_incompatible_partitions_with_data():
     messages = result["retirement_messages"].iloc[0]
     assert len(messages) == 2  # Two retirement attempts
     assert all(msg.startswith("SUCCESS:") for msg in messages)
+
+    # Both partitions share schema hash b"\x03" -> hex "03"; the emitted SQL must
+    # pass it through as the fifth, disambiguating argument.
+    retirement_sql = [
+        sql for sql in captured_sql if "retire_partition_by_metadata(" in sql
+    ]
+    assert len(retirement_sql) == 2
+    assert all("decode('03', 'hex')" in sql for sql in retirement_sql)
 
 
 def test_retire_incompatible_partitions_with_failures():
@@ -222,7 +238,7 @@ def test_retire_incompatible_partitions_with_failures():
                     pd.Timestamp("2024-01-01 11:30:00", tz="UTC"),
                     pd.Timestamp("2024-01-01 12:30:00", tz="UTC"),
                 ],
-                "incompatible_schema_hash": ["[2]", "[2]", "[2]"],
+                "incompatible_schema_hash": [b"\x02", b"\x02", b"\x02"],
                 "current_schema_hash": ["[4]", "[4]", "[4]"],
                 "file_path": [
                     "/path/to/good1.parquet",
@@ -299,7 +315,10 @@ def test_sql_injection_resilience():
     result = micromegas.admin.list_incompatible_partitions(client, malicious_name)
     assert isinstance(result, pd.DataFrame)
 
-    # Test retirement function with malicious data
+    # Test retirement function with malicious data. incompatible_schema_hash is a
+    # Binary column, so a quote-carrying payload here can only arrive as bytes -- it
+    # is never itself a SQL literal.
+    malicious_schema_hash = b"[3'; TRUNCATE schemas; --]"
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
@@ -307,7 +326,7 @@ def test_sql_injection_resilience():
                 "view_instance_id": ["proc'; DELETE FROM procs; --"],
                 "begin_insert_time": [pd.Timestamp("2024-01-01 10:00:00", tz="UTC")],
                 "end_insert_time": [pd.Timestamp("2024-01-01 10:30:00", tz="UTC")],
-                "incompatible_schema_hash": ["[3'; TRUNCATE schemas; --]"],
+                "incompatible_schema_hash": [malicious_schema_hash],
                 "current_schema_hash": ["[4]"],
                 "file_path": ["/path/to/malicious'; DROP TABLE files; --.parquet"],
                 "file_size": [1000],
@@ -316,10 +335,29 @@ def test_sql_injection_resilience():
     }
 
     client_with_malicious = MockFlightSQLClient(mock_data)
+    captured_sql = []
+    original_query = client_with_malicious.query
+
+    def capturing_query(sql):
+        captured_sql.append(sql)
+        return original_query(sql)
+
+    client_with_malicious.query = capturing_query
     result = micromegas.admin.retire_incompatible_partitions(client_with_malicious)
 
     # Should handle the malicious input gracefully (DataFusion protects against injection)
     assert isinstance(result, pd.DataFrame)
+
+    # Hex-encoding the hash closes the injection surface: the emitted SQL carries only
+    # decode('<hex>', 'hex') for that column, and none of the payload's quotes survive
+    # into the SQL text.
+    retirement_sql = [
+        sql for sql in captured_sql if "retire_partition_by_metadata(" in sql
+    ]
+    assert len(retirement_sql) == 1
+    expected_hex = malicious_schema_hash.hex()
+    assert f"decode('{expected_hex}', 'hex')" in retirement_sql[0]
+    assert "TRUNCATE" not in retirement_sql[0]
 
 
 # Integration tests using real FlightSQL client
