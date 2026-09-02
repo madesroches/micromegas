@@ -14,8 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use micromegas::auth::db_snapshot::SnapshotLoader;
-use micromegas::auth::groups::{ADMINS_GROUP, GroupGraph, GroupsLoader, is_valid_group_name};
+use micromegas::auth::groups::{ADMINS_GROUP, GroupGraph, is_valid_group_name};
 use micromegas::auth::policy::valid_selector;
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -62,7 +61,8 @@ pub enum GroupsError {
     Conflict(String),
     Database(sqlx::Error),
     NotConfigured,
-    /// A non-DB internal error -- e.g. `GroupsLoader::fetch`'s snapshot query failing.
+    /// A non-DB internal error -- e.g. `GroupGraph::from_rows` rejecting a snapshot read
+    /// in-transaction.
     Internal(String),
 }
 
@@ -394,11 +394,21 @@ async fn add_member(
         if !nested_exists {
             return Err(GroupsError::NotFound);
         }
-        // Queried fresh (never the TTL snapshot): a stale snapshot could accept a cycle another
-        // replica just refused; the read-time visited set in `GroupGraph::closure` covers the
-        // race that remains.
-        let graph = GroupsLoader::fetch(&pool)
-            .await
+        // Queried fresh (never the TTL snapshot) and read through this same transaction's
+        // connection -- not a second `pool.begin()` via `GroupsLoader::fetch`, which would need a
+        // second connection from this same (2-connection) pool while this one is still held,
+        // deadlocking two concurrent nested-group adds against each other. Mirrors
+        // `remove_member`'s own in-transaction graph read below. No need for `remove_member`'s
+        // `admins`-lockout advisory lock here: this only ever adds a member, which can only add
+        // reachability to a target, never remove it, so it cannot defeat that guard.
+        let group_names: Vec<String> = sqlx::query_scalar("SELECT name FROM groups")
+            .fetch_all(&mut *tx)
+            .await?;
+        let member_rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT group_name, member FROM group_members")
+                .fetch_all(&mut *tx)
+                .await?;
+        let graph = GroupGraph::from_rows(group_names, member_rows)
             .map_err(|e| GroupsError::Internal(format!("querying the group graph: {e:#}")))?;
         if graph.nesting_would_cycle(&name, nested) {
             return Err(GroupsError::Conflict(format!(
@@ -489,16 +499,29 @@ async fn remove_member(
 ) -> Result<StatusCode, GroupsError> {
     let pool = require_pool(&state)?;
 
-    // The lockout guard and the delete run in one transaction, with every `group_members` row for
-    // `name` locked first: two concurrent removals from the same group would otherwise both read
-    // the same pre-removal graph before either deletes, and both could pass the guard, defeating
-    // the one lockout protection this feature has. Locking here serializes the second caller
-    // behind the first's commit, so it re-observes the post-delete graph.
+    // The lockout guard and the delete run in one transaction. The guard is a whole-graph
+    // reachability question (`any_principal_reaches(ADMINS_GROUP)`), so a lock on just `name`'s
+    // rows isn't enough to serialize it: two concurrent removals from *different* groups that
+    // both feed into `admins` (e.g. `admins = [group:eng, group:ops]`) would take disjoint
+    // per-group locks, each build its post-removal graph from the other's uncommitted state,
+    // both see `admins` still reachable, and both commit -- leaving `admins` reachable by
+    // nobody. A transaction-scoped advisory lock on a fixed key, taken before the graph read,
+    // closes that: every removal that could affect the guard serializes on this one lock,
+    // regardless of which group it targets. `pg_advisory_xact_lock` auto-releases at
+    // commit/rollback.
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| GroupsError::Internal(format!("starting remove-member transaction: {e:#}")))?;
 
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('micromegas_groups_admins_lockout'))")
+        .execute(&mut *tx)
+        .await?;
+
+    // Also lock `name`'s own rows: unrelated to the cross-group race above (the advisory lock
+    // already covers that), but still serializes this removal against `add_member`'s nested-group
+    // insert into the same group name, matching `add_member`/`delete_group`'s own row-locking
+    // pattern.
     sqlx::query("SELECT 1 FROM group_members WHERE group_name = $1 FOR UPDATE")
         .bind(&name)
         .fetch_all(&mut *tx)

@@ -361,8 +361,9 @@ class WebClient:
         `DELETE /api/groups/{name}/members`, with `member` passed as a query
         parameter -- a `group:<id>` member isn't restricted enough in charset
         to be a safe raw path segment. Raises `RuntimeError` on an unknown
-        member (404) or if removing it would leave `admins` with no members
-        at all (409, the only lockout protection).
+        member (404) or if removing it would leave no principal -- no `*`
+        and no `user:<id>`, directly or via group nesting -- still able to
+        reach `admins` (409, the only lockout protection).
         """
         resp = self.session.delete(
             self._api_url(f"groups/{requests.utils.quote(name, safe='')}/members"),

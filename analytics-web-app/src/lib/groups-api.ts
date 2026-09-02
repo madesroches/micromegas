@@ -105,8 +105,9 @@ export async function addGroupMember(
   return { member: row, created }
 }
 
-/** `DELETE {base}/api/groups/{name}/members?member=`. `204`; `404` unknown; `409` when it would
- *  remove the last row of `admins`. */
+/** `DELETE {base}/api/groups/{name}/members?member=`. `204`; `404` unknown; `409` when no
+ *  principal -- no `*` and no `user:<id>`, directly or via group nesting -- would still reach
+ *  `admins` afterward. */
 export async function removeGroupMember(name: string, member: string): Promise<void> {
   const response = await authenticatedFetch(
     `${getApiBase()}/groups/${encodeURIComponent(name)}/members?member=${encodeURIComponent(member)}`,

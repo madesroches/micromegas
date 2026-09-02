@@ -72,12 +72,17 @@ iff their resolved membership closure contains `admins` — this is exactly
 what replaced `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`/
 `MICROMEGAS_INGESTION_ADMINS` and the IdP `groups` claim.
 
-**Last-row lockout guard.** `DELETE .../admins/members?member=` refuses
-(409) when it would remove the last remaining row of `admins` — the only
-lockout protection this feature has. Removing it would leave admin
-reachable only through direct database access. A caller removing their own
-`user:` row while `*` or another user remains is allowed; only the *last*
-row is protected.
+**Admins-lockout guard.** `DELETE .../{name}/members?member=` refuses (409)
+whenever removing that member would leave `admins` unreachable by every
+principal — no `*` and no `user:<id>`, directly or through group nesting.
+This is a whole-graph reachability check, not just a check on `admins`
+itself: removing the last member of a group nested into `admins` (e.g.
+`admins`'s only member is `group:eng-leads`) strands `admins` exactly as
+surely as emptying `admins` directly, so it's refused too — the guard
+applies to any group whose membership feeds into `admins`'s reachability,
+not only to `DELETE .../admins/members`. Removing a member is allowed as
+long as some principal would still reach `admins` afterward; only a removal
+that would leave nobody reaching it is refused.
 
 **Two-sided authorization.** Editing group membership requires admin
 authority over the group itself. Granting an audience to `group:X` still
@@ -108,7 +113,7 @@ All routes are admin-gated (`AdminUser`) and live on `analytics-web-srv`.
 | `DELETE` | `{base_path}/api/groups/{name}` | 204; 409 for `admins`; 409 while referenced by a `group_members.member = 'group:<name>'` or `audience_grants.selector = 'group:<name>'` row (the response names the referrers) |
 | `GET` | `{base_path}/api/groups/{name}/members` | `[{"group_name","member","created_at","created_by"}]` |
 | `POST` | `{base_path}/api/groups/{name}/members` | `{"member"}` → 201 (created) / 200 (already existed); 400 on a malformed selector or over the 255-byte bound; for `group:X`, 404 if `X` doesn't exist, 409 if it would create a cycle |
-| `DELETE` | `{base_path}/api/groups/{name}/members?member=` | 204; 404 unknown; 409 when it would remove the last row of `admins` |
+| `DELETE` | `{base_path}/api/groups/{name}/members?member=` | 204; 404 unknown; 409 when no principal would still reach `admins` afterward, directly or via nesting |
 
 `member` is passed as a query parameter on `DELETE`, not a path segment — a
 `group:<id>` value isn't restricted enough in charset to be a safe raw path
