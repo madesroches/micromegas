@@ -425,7 +425,7 @@ members.
 
 ## Mockups
 
-- `tasks/1549_local_groups_mockups/groups-admin-page.html` — Admin hub with the wildcard-admin
+- `tasks/completed/1549_local_groups_mockups/groups-admin-page.html` — Admin hub with the wildcard-admin
   banner, the Groups page (list + selected group's members), and the Add member dialog showing a
   cycle rejection. One option; the page is a sibling of the Audience Access page and inherits its
   conventions rather than choosing between layouts.
