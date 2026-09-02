@@ -157,10 +157,13 @@ entries the analytics var lacks, `warn!` naming the dropped entries. Entries are
 `user:<entry>`; an entry that does not contain `@` is warned about, because `user:` matches
 `AuthContext.email` only and a subject-shaped entry will never match anyone.
 
-`admin_seed_from_env` returns `Err` — failing the migration before v10 commits — when a set var's
-value is not valid JSON or is not a JSON array, rather than following `load_admin_users`'s
-`unwrap_or_default()` pattern; that pattern would turn a JSON typo into an empty list and,
-under `AdminSeed::Everyone`, silently seed the wildcard instead of the operator's intended admins.
+Mirrors `AudienceGrants::parse`/`from_env` (`policy.rs:263`, `:292`): `AdminSeed::parse(raw: &str) ->
+Result<AdminSeed>` holds the JSON decoding and validation, with no env access, so it can be unit
+tested directly; `admin_seed_from_env` is the thin wrapper that reads the env var and calls `parse`.
+`parse` returns `Err` — failing the migration before v10 commits — when `raw` is not valid JSON or
+is not a JSON array, rather than following `load_admin_users`'s `unwrap_or_default()` pattern; that
+pattern would turn a JSON typo into an empty list and, under `AdminSeed::Everyone`, silently seed
+the wildcard instead of the operator's intended admins.
 
 `warn_if_data_lake_schema_stale`'s message gains the v10 consequence: on a v9 schema every request
 fails with a retryable 503 until the migration runs, because the group store cannot load.
@@ -434,10 +437,10 @@ migration says it loudly rather than letting access disappear quietly.
 
 ### Phase 2 — schema (`rust/ingestion`)
 
-8. `sql_migration.rs`: `AdminSeed`, `admin_seed_from_env` (`Err` on malformed JSON or a non-array
-   value, not a fallback to `Everyone`), `upgrade_data_lake_schema_v10`, chain it in
-   `execute_migration`, bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 10, extend
-   `warn_if_data_lake_schema_stale`'s message.
+8. `sql_migration.rs`: `AdminSeed`, `AdminSeed::parse` (`Err` on malformed JSON or a non-array
+   value, not a fallback to `Everyone`), `admin_seed_from_env` as its env wrapper,
+   `upgrade_data_lake_schema_v10`, chain it in `execute_migration`, bump
+   `LATEST_DATA_LAKE_SCHEMA_VERSION` to 10, extend `warn_if_data_lake_schema_stale`'s message.
 9. `tests/sql_migration_test.rs`: `build_v9_schema`, plus the v10 tests listed under Testing.
 
 ### Phase 3 — analytics gate collapse
@@ -617,8 +620,8 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - `sql_migration_test.rs` (`#[ignore]`, live DB): v9 → v10 with `AdminSeed::Everyone` yields
   `('admins','*')`; with `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing
   `group:eng` grant yields an empty `eng` group; a `group:Eng Team` selector yields no group and the
-  grant row survives; the `CHECK` constraints reject a bad name and a bad member; malformed JSON in
-  the admin var makes `admin_seed_from_env` return `Err` and the migration does not commit.
+  grant row survives; the `CHECK` constraints reject a bad name and a bad member. No-DB unit tests
+  on `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty array.
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
