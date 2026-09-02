@@ -54,6 +54,13 @@ For an architecture overview (core crates, services, data flow), see `.github/co
   Reference docs and comments should describe current behavior, not the history of how it got
   there.
 
+## Testing
+- **Only add a live-DB test (`#[ignore]`, requiring `MICROMEGAS_SQL_CONNECTION_STRING` or a real
+  service) to cover the resolution of a bug witnessed in the wild.** Never add one for new-feature
+  acceptance criteria or a hypothetical edge case — cover those with no-DB unit tests (a
+  lazily-connected pool that never issues a query, or a store seam returning canned data) and
+  manual verification instead. See `CONTRIBUTING.md`.
+
 ## Essential Commands
 
 ### Service Management (for testing and development)
