@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup: Groups admin page + wildcard-admin banner</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f; --panel-bg: #12121a; --card-bg: #1a1a2e;
+    --border-color: #2a2a3e; --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea; --text-secondary: #9ca3af; --text-muted: #6b7280;
+    --accent-link: #1565c0; --accent-warning: #ffb300; --accent-error: #f87171;
+    --brand-rust: #bf360c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--app-bg); color: var(--text-primary);
+         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--panel-bg); border-right: 1px solid var(--border-color); padding: 16px 12px; }
+  .sidebar .brand { font-weight: 600; font-size: 15px; margin-bottom: 20px; color: var(--text-primary); }
+  .sidebar .brand span { color: var(--brand-rust); }
+  .sidebar a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--text-secondary); text-decoration: none; margin-bottom: 2px; }
+  .sidebar a.active { background: var(--card-bg); color: var(--text-primary); }
+  main { padding: 24px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0 0 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .sub { color: var(--text-secondary); margin: 0 0 24px; }
+  .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 40px 0 12px; }
+  .banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 8px;
+            background: rgba(255,179,0,.08); border: 1px solid rgba(255,179,0,.35); margin-bottom: 20px; }
+  .banner .icon { color: var(--accent-warning); font-size: 18px; line-height: 1; margin-top: 2px; }
+  .banner .title { font-weight: 600; color: var(--accent-warning); margin-bottom: 2px; }
+  .banner .msg { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+  .banner .msg code { background: var(--card-bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .banner .actions { margin-left: auto; white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { padding: 24px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--panel-bg); }
+  .card .ic { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 20px; }
+  .card h3 { font-size: 15px; margin: 0 0 6px; }
+  .card p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border-color);
+         background: var(--card-bg); color: var(--text-primary); font-size: 13px; cursor: pointer; }
+  .btn.primary { background: var(--accent-link); border-color: var(--accent-link); color: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--accent-error); }
+  .btn.sm { padding: 4px 8px; font-size: 12px; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+  th { font-size: 12px; color: var(--text-muted); font-weight: 500; background: var(--card-bg); }
+  tr:last-child td { border-bottom: none; }
+  tr.selected td { background: rgba(21,101,192,.12); }
+  .muted { color: var(--text-muted); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; font-size: 12px;
+          border: 1px solid var(--border-color); background: var(--card-bg); }
+  .chip.star { border-color: rgba(255,179,0,.5); color: var(--accent-warning); }
+  .chip.group { border-color: rgba(21,101,192,.5); color: #7fb2f0; }
+  .chip .x { color: var(--text-muted); cursor: pointer; }
+  .reserved { font-size: 11px; color: var(--accent-warning); border: 1px solid rgba(255,179,0,.35); border-radius: 4px; padding: 1px 6px; margin-left: 8px; }
+  .two-col { display: grid; grid-template-columns: 1.1fr 1.4fr; gap: 20px; align-items: start; }
+  .detail { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; }
+  .detail header { padding: 14px 16px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; }
+  .detail .body { padding: 16px; }
+  .detail .meta { color: var(--text-muted); font-size: 12px; margin-bottom: 14px; }
+  .members { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .note { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-top: 14px; }
+  .dialog { max-width: 520px; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  .dialog header { padding: 12px 16px; border-bottom: 1px solid var(--border-color); font-weight: 500; }
+  .dialog .body { padding: 16px; display: grid; gap: 14px; }
+  label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+  .input, select { width: 100%; padding: 8px 10px; background: var(--app-bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--border-color); border-radius: 6px; overflow: hidden; }
+  .seg span { padding: 6px 12px; font-size: 13px; color: var(--text-secondary); }
+  .seg span.on { background: var(--card-bg); color: var(--text-primary); }
+  .err { padding: 10px 12px; background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.3); border-radius: 6px; color: var(--accent-error); font-size: 13px; }
+  .dialog footer { padding: 12px 16px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">micro<span>megas</span></div>
+    <a>Processes</a><a>Screens</a><a>Performance</a><a class="active">Admin</a>
+  </nav>
+  <main>
+
+    <div class="section-label">1. Admin hub with the wildcard-admin banner (shown while `admins` contains `*`)</div>
+    <h1>Admin</h1>
+    <p class="sub">System administration and data management tools.</p>
+
+    <div class="banner">
+      <div class="icon">&#9888;</div>
+      <div>
+        <div class="title">Every authenticated caller is an admin</div>
+        <div class="msg">
+          The <code>admins</code> group still contains the <code>*</code> member seeded at install time,
+          so every user and every analytics API key can retire partitions, edit grants, and manage groups.
+          Add yourself, then remove <code>*</code>.
+        </div>
+      </div>
+      <div class="actions"><span class="btn sm">Open Groups &rarr;</span></div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="ic" style="background:rgba(34,197,94,.15);color:#22c55e">&#9636;</div><h3>Data Sources</h3><p>Manage FlightSQL server connections used for queries and analytics.</p></div>
+      <div class="card"><div class="ic" style="background:rgba(249,115,22,.15);color:#f97316">&#128273;</div><h3>Ingestion API Keys</h3><p>Mint, list, and revoke write credentials for telemetry ingestion clients.</p></div>
+      <div class="card" style="border-color:var(--accent-link)"><div class="ic" style="background:rgba(21,101,192,.15);color:#7fb2f0">&#9776;</div><h3>Groups</h3><p>Create groups, nest them, and manage who is a member. Membership in <span class="mono">admins</span> grants administrative access.</p></div>
+      <div class="card"><div class="ic" style="background:rgba(59,130,246,.15);color:#3b82f6">&#128101;</div><h3>Audience Access</h3><p>See who can read from and mint into each audience, and grant access.</p></div>
+    </div>
+
+    <div class="section-label">2. Groups page (/admin/groups): list on the left, selected group's members on the right</div>
+    <div class="toolbar">
+      <div>
+        <h1 style="font-size:20px">Groups</h1>
+        <p class="sub" style="margin:0">Membership is resolved through nested groups; a change takes effect within the group cache TTL (60s).</p>
+      </div>
+      <span class="btn primary">+ New group</span>
+    </div>
+
+    <div class="two-col">
+      <table>
+        <thead><tr><th>Name</th><th>Members</th><th>Created by</th><th></th></tr></thead>
+        <tbody>
+          <tr class="selected"><td class="mono">admins <span class="reserved">reserved</span></td><td>2</td><td class="muted">default</td><td></td></tr>
+          <tr><td class="mono">eng-tools</td><td>3</td><td class="muted">alice@example.com</td><td><span class="btn ghost sm danger">Delete</span></td></tr>
+          <tr><td class="mono">build-farm-ops</td><td>1</td><td class="muted">alice@example.com</td><td><span class="btn ghost sm danger">Delete</span></td></tr>
+          <tr><td class="mono">legacy-idp-group-0a3f8c21</td><td class="muted">0 &nbsp;&middot;&nbsp; created by migration, no members yet</td><td class="muted">migration</td><td><span class="btn ghost sm danger">Delete</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="detail">
+        <header>
+          <div><h2 class="mono">admins</h2></div>
+          <span class="btn sm">+ Add member</span>
+        </header>
+        <div class="body">
+          <div class="meta">Deployment administrators. Members may use the mutating lakehouse functions, manage API keys, grants, and groups.</div>
+          <div class="members">
+            <span class="chip star mono">* <span class="x">&times;</span></span>
+            <span class="chip mono">user:alice@example.com <span class="x">&times;</span></span>
+          </div>
+          <div class="note">
+            <b>Selector vocabulary is the same as audience grants.</b>
+            <span class="mono">user:&lt;email&gt;</span> is one person, <span class="mono">group:&lt;name&gt;</span> nests another group into this one,
+            <span class="mono">*</span> is every authenticated caller.
+            The last member of <span class="mono">admins</span> cannot be removed, and <span class="mono">admins</span> cannot be deleted.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">3. Add-member dialog, showing the cycle rejection (409) when nesting would loop</div>
+    <div class="dialog">
+      <header>Add member to <span class="mono">eng-tools</span></header>
+      <div class="body">
+        <div class="err">Adding <span class="mono">group:build-farm-ops</span> would create a cycle: <span class="mono">build-farm-ops</span> already contains <span class="mono">group:eng-tools</span>.</div>
+        <div>
+          <label>Member kind</label>
+          <div class="seg"><span>Everyone (*)</span><span>User</span><span class="on">Group</span></div>
+        </div>
+        <div>
+          <label>Group name</label>
+          <select><option>build-farm-ops</option><option>admins</option><option>legacy-idp-group-0a3f8c21</option></select>
+        </div>
+        <div class="note" style="margin-top:0">Members of the selected group become members of <span class="mono">eng-tools</span>. Grants flow down to them; the group itself is not granted anything by this.</div>
+      </div>
+      <footer><span class="btn ghost">Cancel</span><span class="btn primary">Add member</span></footer>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
