@@ -133,21 +133,26 @@ distinct kind of thing from an email. Hard `DELETE`, no `revoked_*` columns, sam
 `upgrade_data_lake_schema_v10(tr, seed: &AdminSeed)`:
 
 1. Create both tables.
-2. Insert `('admins', 'Deployment administrators', now(), 'default')`.
+2. Insert `('admins', 'Deployment administrators', now(), 'default')`, `ON CONFLICT (name) DO
+   NOTHING`.
 3. Seed `admins` members from `seed`:
    - `AdminSeed::Users(list)` when the env var is set and non-empty: one `user:<entry>` row per
      entry, no wildcard. Who is an admin does not change.
    - `AdminSeed::Everyone` otherwise (fresh install, or an upgrade that never set the var): one
      `('admins', '*')` row. On an upgrade this preserves only the three `admin_principal_possible`
      SQL gates, which were already open to every caller; it additionally *opens* the web admin
-     routes (`AdminUser`/`require_admin`, `GrantGate`, `MintGate`) and the mint-any-audience arm of
-     `AudienceMintPolicy` to every authenticated caller, none of which the old fallback ever
-     touched. That widening is also what makes the first admin reachable on a fresh install, where
-     the installer cannot know the operator's email.
+     routes (`AdminUser`/`require_admin`, `GrantGate`, `MintGate`), the mint-any-audience arm of
+     `AudienceMintPolicy`, the FlightSQL `bulk_ingest` gate (`do_put_statement_ingest`'s plain
+     `is_admin(request.metadata())` check, now satisfiable by an API-key caller, not just OIDC),
+     and `list_audience_grants()`'s all-rows (`GrantVisibility::All`) branch to every authenticated
+     caller, none of which the old fallback ever touched. That widening is also what makes the
+     first admin reachable on a fresh install, where the installer cannot know the operator's
+     email.
 4. For every distinct `X` in `audience_grants.selector = 'group:X'`, insert an empty group `X`
-   (`created_by = 'migration'`) when `X` passes the name charset; log each. A value that fails the
-   charset (a display name with spaces) cannot become a group — log it at `warn!` and leave the
-   grant row in place, inert.
+   (`created_by = 'migration'`, `ON CONFLICT (name) DO NOTHING` — a pre-existing `group:admins`
+   selector would otherwise collide with step 2's row and fail the whole v10 transaction) when `X`
+   passes the name charset; log each. A value that fails the charset (a display name with spaces)
+   cannot become a group — log it at `warn!` and leave the grant row in place, inert.
 
 `AdminSeed` is resolved by `execute_migration` (not inside the v10 function, so the test can pass
 either variant without touching the process environment) from `MICROMEGAS_ANALYTICS_ADMINS`, falling
@@ -296,11 +301,17 @@ need no group store of their own.
   on the write path reads `is_admin()` or `memberships`, and the write path should not take a
   Postgres dependency for a value it never consults.
 - `analytics-web-srv`: `AuthState.auth_provider` becomes `OnceCell<Arc<dyn AuthProvider>>` holding
-  `MembershipProvider { inner: OidcAuthProvider, groups }` over the telemetry-DB pool that already
-  backs the key and grant routes. With auth enabled, `MICROMEGAS_SQL_CONNECTION_STRING` becomes
-  **required** (startup error naming it): without it no session can resolve admin-ness or group
-  grants. `WebServerConfig.admin_var_name`, `WebCliArgs.admin_var_name`, and
-  `AuthState.admin_var_name` are deleted.
+  `MembershipProvider { inner: OidcAuthProvider, groups }`. `AuthState` gains a
+  `groups: Arc<DbGroupsSource>` field (mirroring `MembershipProvider.groups`); `build_auth_state`
+  takes the analytics-keys pool that already backs `AudienceGrantsState`/`GroupsState` as a new
+  parameter and uses it to fill that field, and `get_auth_provider`'s lazy init wraps
+  `OidcAuthProvider` in `MembershipProvider` over it. With auth enabled,
+  `MICROMEGAS_SQL_CONNECTION_STRING` becomes **required** (startup error naming it): without it no
+  session can resolve admin-ness or group grants. `WebServerConfig.admin_var_name`,
+  `WebCliArgs.admin_var_name`, and `AuthState.admin_var_name` are deleted. The three test files that
+  build `AuthState` literals directly (`tests/auth_unit_tests.rs`, `tests/auth_integration.rs`,
+  `tests/maps_tests.rs`) need an `unreachable_pool`-style lazy `DbGroupsSource` (never awaited) to
+  fill the new field.
 - `OidcAuthProvider::new(config)` loses `admin_var`; `load_admin_users`, `admin_users`, and
   `OidcAuthProvider::is_admin` are deleted.
 - **Removed-var refusal.** A new `micromegas_auth::env::reject_removed_var(prefix, "ADMINS")`
@@ -323,7 +334,9 @@ With `admins` always populated (`*` or explicit users), an admin principal alway
   is_admin)` loses its third parameter. `AudienceGuard` is unchanged (it already takes the boolean).
 - On a fresh install, `*` makes `is_admin()` true for everyone — wider than the old fallback, which
   opened only the three `admin_principal_possible` gates and left `AdminUser`/`GrantGate`/
-  `MintGate` closed. That wider default is what lets the first admin reach the Groups page at all;
+  `MintGate` closed, and never touched `bulk_ingest` (`do_put_statement_ingest`) or
+  `list_audience_grants()`'s all-rows branch. That wider default is what lets the first admin reach
+  the Groups page at all;
   it is now visible as a row and removable, and once `*` is removed, an API key is admin only if
   `admins` says so.
 
@@ -463,16 +476,23 @@ migration says it loudly rather than letting access disappear quietly.
 
 ### Phase 5 — web server
 
-14. `auth/state.rs`, `auth/handlers.rs` (`MembershipProvider` wrapping, `ProviderUnavailable` →
-    503 in `cookie_auth_middleware` and `auth_me`), `auth/claims.rs` (`is_admin()`),
+14. `auth/state.rs` (add `AuthState.groups: Arc<DbGroupsSource>`, `get_auth_provider` wraps
+    `OidcAuthProvider` in `MembershipProvider` over it), `auth/handlers.rs` (`ProviderUnavailable`
+    → 503 in `cookie_auth_middleware` and `auth_me`), `auth/claims.rs` (`is_admin()`),
     `web_server.rs` (delete `admin_var_name`, require `MICROMEGAS_SQL_CONNECTION_STRING` under
-    auth, `--disable-auth` contexts use `memberships: [admins]`, `GroupsState`, router merge,
-    disabled-router prefixes), `main.rs`.
+    auth, thread the analytics-keys pool into `build_auth_state` to fill `AuthState.groups`,
+    `--disable-auth` contexts use `memberships: [admins]`, `GroupsState`, router merge, disabled-
+    router prefixes), `main.rs`.
 15. `groups.rs` routes; `audience_grants.rs`: `groups` field on `MyAudiencesResponse`, group
     existence check on `create_grant`; `ingestion_keys.rs`/`analytics_keys.rs`: `is_admin()`.
 16. `tests/groups_tests.rs` (modeled on `audience_grants_tests.rs`), `routing_tests.rs` 503
-    assertions for the new prefixes, `auth_unit_tests.rs`/`auth_integration.rs`/
-    `web_server_config_tests.rs` updates for the removed var.
+    assertions for the new prefixes, `auth_unit_tests.rs`/`auth_integration.rs`/`maps_tests.rs`
+    (add the `groups` field, `unreachable_pool`-style, to each `create_test_auth_state()` literal),
+    `web_server_config_tests.rs` updates for the removed var. Delete
+    `cookie_auth_middleware_inserts_auth_context_with_groups` (`auth_integration.rs`), which
+    asserts membership from the removed `groups` claim; replace it with the planned
+    `ProviderUnavailable` → 503 assertion from Testing Strategy, and add a separate positive-
+    membership middleware test under `#[ignore]` (needs a live DB for `DbGroupsSource`).
 
 ### Phase 6 — clients
 
@@ -582,8 +602,10 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   Authentication: the model, the selector table, nesting and cycles, the `admins` group, the
   wildcard warning and first-login step, the routes table, `micromegas-groups`, the TTL knob and
   latency, outage behavior, the v10 upgrade path — including that seeding `('admins','*')` on an
-  upgrade does more than preserve the old three-gate fallback: it opens the web admin routes and
-  the mint-any-audience arm to every authenticated caller until `*` is removed.
+  upgrade does more than preserve the old three-gate fallback: it opens the web admin routes, the
+  mint-any-audience arm, the FlightSQL `bulk_ingest` gate (including to API-key callers), and
+  `list_audience_grants()`'s all-rows visibility to every authenticated caller until `*` is
+  removed.
 - `mkdocs/docs/admin/authentication.md`: selector table at `:415-421` (`group:<g>` → "members of
   local group `g`, transitively"), the `MICROMEGAS_ADMINS` lines at `:90`, `:104`, `### Admin
   Privileges` at `:1196-1211`, and the `GrantGate` create/delete wording at `:673-693`.
@@ -599,8 +621,11 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - `CHANGELOG.md` (`## Unreleased`, **Auth**): operator-facing break (`MICROMEGAS_ADMINS` family
   removed and refused; `groups` claim no longer read; existing `group:` grants now mean local
   groups), the v10 migration and seeding rules — noting that seeding `('admins','*')` on an
-  upgrade opens the web admin routes and the mint-any-audience arm to every authenticated caller,
-  not just the three previously-open SQL gates — and a **Minor breaking change** clause listing
+  upgrade opens the web admin routes, the mint-any-audience arm, the FlightSQL `bulk_ingest` gate,
+  and `list_audience_grants()`'s all-rows visibility to every authenticated caller, not just the
+  three previously-open SQL gates; call out that this reopens `bulk_ingest` to analytics API-key
+  callers specifically, contradicting this changelog's earlier entry that API keys can never
+  satisfy that gate, until `*` is removed — and a **Minor breaking change** clause listing
   `AuthContext.groups` → `memberships`, `is_admin` field → method, `AuthProvider::can_grant_admin`
   removed, `OidcAuthProvider::new` signature, `CallerContext.admin_principal_possible` removed,
   `FlightSqlServiceImpl::new` and `skip_for_admin_recovery` parameters, `DbAudienceGrantsSource`
@@ -624,8 +649,10 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - `sql_migration_test.rs` (`#[ignore]`, live DB): v9 → v10 with `AdminSeed::Everyone` yields
   `('admins','*')`; with `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing
   `group:eng` grant yields an empty `eng` group; a `group:Eng Team` selector yields no group and the
-  grant row survives; the `CHECK` constraints reject a bad name and a bad member. No-DB unit tests
-  on `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty array.
+  grant row survives; a pre-existing `group:admins` grant does not fail the migration (step 4's
+  insert no-ops against step 2's row); the `CHECK` constraints reject a bad name and a bad member.
+  No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty
+  array.
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
