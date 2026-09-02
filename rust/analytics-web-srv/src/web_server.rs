@@ -73,6 +73,7 @@ impl WebServerConfig {
     /// Read + validate the five web env vars and combine with CLI-derived
     /// inputs. Single source of the base-path `must start with '/'` rule.
     pub fn from_cli_and_env(cli: WebCliArgs) -> Result<Self> {
+        micromegas::auth::env::reject_removed_admin_vars()?;
         let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
             .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
         let base_path = read_base_path()?;
@@ -148,7 +149,7 @@ fn read_base_path() -> Result<String> {
 /// `analytics_keys_pool` is the same telemetry-DB pool backing `AudienceGrantsState`/
 /// `GroupsState` -- required (not `Option`) because auth being enabled at all means
 /// `MICROMEGAS_SQL_CONNECTION_STRING` was required upstream in `run_web_server`.
-fn build_auth_state(
+async fn build_auth_state(
     config: &WebServerConfig,
     analytics_keys_pool: PgPool,
 ) -> Result<Option<AuthState>> {
@@ -167,6 +168,24 @@ fn build_auth_state(
         analytics_keys_pool,
         Duration::from_secs(group_config.cache_ttl_secs),
     ));
+
+    // Mirrors `default_provider.rs::wrap_with_membership`'s eager `current()` at startup: warn
+    // once while `has_wildcard_admin()` is true, and warn-and-continue (don't fail startup) on
+    // `Err` -- the first request will 503, and a split deployment may legitimately start
+    // analytics-web-srv before the migration runner is up.
+    match groups.current().await {
+        Ok(graph) => {
+            if graph.has_wildcard_admin() {
+                warn!(
+                    "every authenticated caller is an admin; add a `user:` member to \
+                     `admins` and remove `*`"
+                );
+            }
+        }
+        Err(e) => {
+            warn!("group store not yet reachable at startup, continuing: {e:#}");
+        }
+    }
 
     Ok(Some(AuthState {
         oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
@@ -798,7 +817,7 @@ pub async fn run_web_server(
         let pool = analytics_keys_pool
             .clone()
             .expect("MICROMEGAS_SQL_CONNECTION_STRING required-when-auth-enabled check above");
-        build_auth_state(&config, pool)?
+        build_auth_state(&config, pool).await?
     };
 
     let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));

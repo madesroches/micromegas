@@ -96,6 +96,10 @@ pub enum AudienceGrantError {
     BadRequest(String),
     /// Unknown `(audience, axis, selector)` on `DELETE`.
     NotFound,
+    /// `create_grant`'s `group:<name>` selector names a group that does not exist. Checked only
+    /// after authorization succeeds (see `create_grant`'s own doc comment), so this is never a
+    /// group-name existence oracle for a caller with no authority on the pair.
+    GroupNotFound(String),
     /// A DB error.
     Database(sqlx::Error),
     /// `state.pool == None` -- the telemetry-DB pool was never configured
@@ -125,6 +129,11 @@ impl IntoResponse for AudienceGrantError {
             AudienceGrantError::NotFound => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new("NOT_FOUND", "grant not found")),
+            )
+                .into_response(),
+            AudienceGrantError::GroupNotFound(msg) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("NOT_FOUND", msg)),
             )
                 .into_response(),
             AudienceGrantError::Database(err) => {
@@ -402,16 +411,6 @@ async fn create_grant(
     validate_audience(&body.audience)?;
     validate_axis(&body.axis)?;
     validate_selector(&body.selector)?;
-    if let Some(group_name) = body.selector.strip_prefix("group:") {
-        let group_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
-                .bind(group_name)
-                .fetch_one(&pool)
-                .await?;
-        if !group_exists {
-            return Err(AudienceGrantError::NotFound);
-        }
-    }
     let created_by = caller_identity(&caller);
 
     if !caller.is_admin() {
@@ -472,6 +471,23 @@ async fn create_grant(
             return Err(AudienceGrantError::Forbidden(format!(
                 "you have created the maximum number of grants ({})",
                 state.max_grants_per_caller
+            )));
+        }
+    }
+
+    // Checked only now, after authorization succeeds (admin unconditionally, non-admin via the
+    // `caller_holds_pair` check above) -- an existence check run before authorization would let
+    // any authenticated non-admin caller probe for group names by selector alone, even on a pair
+    // they hold no grant on (`GET /api/groups` is `AdminUser`-only).
+    if let Some(group_name) = body.selector.strip_prefix("group:") {
+        let group_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
+                .bind(group_name)
+                .fetch_one(&pool)
+                .await?;
+        if !group_exists {
+            return Err(AudienceGrantError::GroupNotFound(format!(
+                "group '{group_name}' not found"
             )));
         }
     }

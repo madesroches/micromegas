@@ -246,18 +246,33 @@ async fn delete_group(
         ));
     }
 
+    // The referrer checks and the delete run in one transaction, with the `groups` row for
+    // `name` locked first: `add_member`'s nested-group check takes the same `FOR UPDATE` lock on
+    // that row before inserting a `group:<name>` member row (see its own comment), so a
+    // concurrent nest-in and this delete serialize on this row instead of racing -- without that,
+    // a `group:<name>` reference inserted between the plain check and the delete would survive,
+    // and silently re-activate if the name is later recreated.
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| GroupsError::Internal(format!("starting delete transaction: {e:#}")))?;
+    sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
+        .bind(&name)
+        .fetch_optional(&mut *tx)
+        .await?;
+
     let nesting_selector = format!("group:{name}");
     let nested_into: Vec<String> = sqlx::query_scalar(
         "SELECT group_name FROM group_members WHERE member = $1 ORDER BY group_name",
     )
     .bind(&nesting_selector)
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await?;
     let granted_to: Vec<String> = sqlx::query_scalar(
         "SELECT audience FROM audience_grants WHERE selector = $1 ORDER BY audience",
     )
     .bind(&nesting_selector)
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await?;
     if !nested_into.is_empty() || !granted_to.is_empty() {
         let mut referrers = Vec::new();
@@ -275,12 +290,15 @@ async fn delete_group(
 
     let rows_affected = sqlx::query("DELETE FROM groups WHERE name = $1")
         .bind(&name)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if rows_affected == 0 {
         return Err(GroupsError::NotFound);
     }
+    tx.commit()
+        .await
+        .map_err(|e| GroupsError::Internal(format!("committing delete transaction: {e:#}")))?;
     info!("deleted group name={name}");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -453,18 +471,32 @@ async fn remove_member(
 ) -> Result<StatusCode, GroupsError> {
     let pool = require_pool(&state)?;
 
+    // The last-`admins`-row guard and the delete run in one transaction, with every
+    // `group_members` row for `admins` locked first: two concurrent removals would otherwise
+    // both read `remaining == 2` / `this_row_exists` before either deletes, and both proceed,
+    // defeating the one lockout protection this feature has. Locking here serializes the second
+    // caller behind the first's commit, so it re-observes the post-delete count.
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| GroupsError::Internal(format!("starting remove-member transaction: {e:#}")))?;
+
     if name == ADMINS_GROUP {
+        sqlx::query("SELECT 1 FROM group_members WHERE group_name = $1 FOR UPDATE")
+            .bind(&name)
+            .fetch_all(&mut *tx)
+            .await?;
         let remaining: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM group_members WHERE group_name = $1")
                 .bind(&name)
-                .fetch_one(&pool)
+                .fetch_one(&mut *tx)
                 .await?;
         let this_row_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_name = $1 AND member = $2)",
         )
         .bind(&name)
         .bind(&query.member)
-        .fetch_one(&pool)
+        .fetch_one(&mut *tx)
         .await?;
         if this_row_exists && remaining <= 1 {
             return Err(GroupsError::Conflict(
@@ -479,12 +511,15 @@ async fn remove_member(
         sqlx::query("DELETE FROM group_members WHERE group_name = $1 AND member = $2")
             .bind(&name)
             .bind(&query.member)
-            .execute(&pool)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
     if rows_affected == 0 {
         return Err(GroupsError::NotFound);
     }
+    tx.commit().await.map_err(|e| {
+        GroupsError::Internal(format!("committing remove-member transaction: {e:#}"))
+    })?;
     info!("group member removed group={name} member={}", query.member);
     Ok(StatusCode::NO_CONTENT)
 }
