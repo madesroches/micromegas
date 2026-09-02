@@ -100,7 +100,8 @@ async fn removed_api_key_cache_ttl_var_set_is_rejected_with_no_db_needed() {
         std::env::remove_var("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS");
     }
     assert!(
-        err.to_string().contains("MICROMEGAS_AUTH_CACHE_TTL_SECONDS"),
+        err.to_string()
+            .contains("MICROMEGAS_AUTH_CACHE_TTL_SECONDS"),
         "expected the error to name the replacement knob, got: {err}"
     );
 }
