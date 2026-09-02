@@ -19,6 +19,47 @@ deletion of the `groups` claim, `can_grant_admin`, and `admin_principal_possible
 (`*`, `user:<email>`, `group:<name>`), so nesting is the `group:` arm of the same predicate rather
 than a special case.
 
+## Status
+
+**Implemented and committed** on the `group` branch (`5be2d3539` implementation, plus eight
+follow-up commits from a multi-round review pass and two deliberate design changes made after
+implementation). The workspace builds clean, `cargo clippy -D warnings` and `cargo fmt --check`
+pass, and the full Rust/web-app/Python test suites pass. All Implementation Steps below, every
+entry in Files to Modify, and the Documentation/CHANGELOG items have landed.
+
+Two design changes were made after the initial implementation and are already folded into the
+sections below, so they read as what was actually built rather than as deltas:
+
+- **One shared cache-TTL knob.** The plan originally specified per-role `{prefix}_` TTL knobs —
+  `{prefix}_AUDIENCE_GRANT_CACHE_TTL_SECONDS` for the grant store and
+  `{prefix}_GROUP_CACHE_TTL_SECONDS` for the group store — mirroring the existing
+  `{prefix}_API_KEY_CACHE_TTL_SECONDS` shape. All three were consolidated into one flat,
+  unprefixed `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` (default 60s) shared by the API-key, audience-grant,
+  and group caches. The three old names are refused at startup (`reject_removed_cache_ttl_vars`,
+  alongside the admin-var refusal below) rather than silently ignored.
+- **Always-wildcard admin seeding.** The plan originally had the v10 migration read
+  `MICROMEGAS_ANALYTICS_ADMINS`/`MICROMEGAS_ADMINS` and seed `admins` from that list when set
+  (`AdminSeed::Users`), falling back to wildcard only when unset (`AdminSeed::Everyone`) — so an
+  upgrade preserved who was admin. This was simplified: the migration now **always** seeds
+  `admins = ['*']` unconditionally, on every fresh install and every upgrade alike, with no env-var
+  read at all. `AdminSeed`, `AdminSeed::parse`, and `admin_seed_from_env` don't exist. Every upgrade
+  now needs the same manual "add `user:<you>`, then remove `*`" fixup that was previously only
+  needed on fresh installs. `reject_removed_admin_vars` is unrelated to this and is unchanged: the
+  three admin-list env vars are still refused at startup on every boot after migration, regardless
+  of value.
+
+A multi-round review pass (five rounds of substantive fixes, a sixth round with only trivial
+findings, a finalize pass, and a seventh round after the always-wildcard-seeding change) hardened
+several concurrency and consistency gaps beyond the original design: transactional locking (with
+deterministic lock ordering to avoid deadlocks) around `groups`/`group_members` writes that could
+otherwise race `delete_group`, `add_member`, `remove_member`, and `create_grant`'s
+`group:<name>` existence check; a graph-wide (not just direct-row-count) reachability check for the
+`admins` lockout guard, serialized with a `pg_advisory_xact_lock` so it holds under concurrent
+removals from different nested groups; startup refusal of the old per-role cache-TTL var names
+alongside the admin-var refusal; and a migration-time refusal (later superseded by the
+always-wildcard change above) for non-email-shaped admin entries. None of this changed the shape of
+the design below — the schema, `GroupGraph`, the route table, and the CLI are all as specified.
+
 ## Current State
 
 ### Membership comes from the IdP claim
