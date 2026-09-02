@@ -329,7 +329,7 @@ const UPSERT_GRANT_SQL: &str = "
       AND NOT EXISTS (SELECT 1 FROM ins)";
 
 async fn insert_or_get(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     audience: &str,
     axis: &str,
     selector: &str,
@@ -341,7 +341,7 @@ async fn insert_or_get(
             .bind(axis)
             .bind(selector)
             .bind(created_by)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await?;
         if let Some(row) = row {
             return Ok(row);
@@ -479,12 +479,23 @@ async fn create_grant(
     // `caller_holds_pair` check above) -- an existence check run before authorization would let
     // any authenticated non-admin caller probe for group names by selector alone, even on a pair
     // they hold no grant on (`GET /api/groups` is `AdminUser`-only).
+    //
+    // The existence check and the insert run in one transaction, with the group's `groups` row
+    // locked first: `delete_group` (`groups.rs`) takes this same `FOR UPDATE` lock on its own row
+    // before scanning for `group:<name>` referrers (see its own comment), so a concurrent delete
+    // of the group and this insert serialize on that row instead of racing -- without that, a
+    // `group:<name>` grant inserted between the plain check and the delete would survive, leaving
+    // a dangling `audience_grants` row that silently re-activates if the name is later recreated.
+    let mut tx = pool.begin().await.map_err(|e| {
+        AudienceGrantError::Internal(format!("starting create-grant transaction: {e:#}"))
+    })?;
+
     if let Some(group_name) = body.selector.strip_prefix("group:") {
-        let group_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
-                .bind(group_name)
-                .fetch_one(&pool)
-                .await?;
+        let group_exists = sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
+            .bind(group_name)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
         if !group_exists {
             return Err(AudienceGrantError::GroupNotFound(format!(
                 "group '{group_name}' not found"
@@ -493,13 +504,17 @@ async fn create_grant(
     }
 
     let row = insert_or_get(
-        &pool,
+        &mut tx,
         &body.audience,
         &body.axis,
         &body.selector,
         &created_by,
     )
     .await?;
+
+    tx.commit().await.map_err(|e| {
+        AudienceGrantError::Internal(format!("committing create-grant transaction: {e:#}"))
+    })?;
 
     let status = if row.created {
         StatusCode::CREATED
