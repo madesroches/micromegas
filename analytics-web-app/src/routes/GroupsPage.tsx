@@ -178,7 +178,7 @@ function AddMemberDialog({ open, groupName, otherGroups, onClose, onAdded }: Add
       onClose()
     } catch (err) {
       if (err instanceof GroupsError && err.status === 404) {
-        setError(`Group "${idInput}" does not exist.`)
+        setError(err.message)
       } else if (err instanceof GroupsError && err.status === 409) {
         setError('Adding this member would create a cycle.')
       } else {

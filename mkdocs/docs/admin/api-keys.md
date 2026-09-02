@@ -174,7 +174,7 @@ writes `audience` in the same deploy that runs the v6 migration.
 
 | Variable | Description |
 |---|---|
-| `MICROMEGAS_SQL_CONNECTION_STRING` | Telemetry-DB connection string `analytics-web-srv` opens its own small (`max_connections(2)`) pool from, backing both route groups. Unset means both return **503**. |
+| `MICROMEGAS_SQL_CONNECTION_STRING` | Telemetry-DB connection string `analytics-web-srv` opens its own small (`max_connections(2)`) pool from, backing both route groups. Required whenever auth is enabled — `analytics-web-srv` bails at startup if it's unset. Under `--disable-auth`, both route groups instead return a fixed **503** (`AUTH_DISABLED`). |
 
 ## What audience does a key carry
 

@@ -293,8 +293,9 @@ async fn main() -> Result<()> {
 
     // Resolved alongside `analytics_read_policy`: `OwnershipRewrite`'s two data-isolation
     // deployment knobs, parsed in `micromegas-analytics` (the crate that consumes them) rather
-    // than `micromegas-auth`. The mutating-function registration gate is derived from the auth
-    // provider at server startup instead, not a knob here.
+    // than `micromegas-auth`. The mutating-function registration gate is per-request
+    // `admins`-group membership (`caller.is_admin`), resolved from the group store, not a knob
+    // here.
     let analytics_isolation_config = if roles.flightsql && !args.disable_auth {
         Some(Arc::new(IsolationConfig::from_env("MICROMEGAS_ANALYTICS")?))
     } else {

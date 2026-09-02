@@ -3,9 +3,8 @@
 //! Mirrors `analytics_keys.rs`/`audience_grants.rs`'s shape (`GroupsState { pool: Option<PgPool> }`,
 //! an `IntoResponse` error enum, `AdminUser`-gated) over the `groups`/`group_members` tables
 //! (migration v10, `rust/ingestion/src/sql_migration.rs`). Every write goes through the
-//! [`AdminUser`] extractor's gate -- documented as [`can_manage_group`] -- which is
-//! `caller.is_admin` today; delegating group ownership later means widening that one function,
-//! not this module's routing or handler shapes.
+//! [`AdminUser`] extractor's gate, which is `caller.is_admin` today; delegating group ownership
+//! later means widening that one gate, not this module's routing or handler shapes.
 
 use crate::auth::{AdminUser, ValidatedUser};
 use axum::extract::{Extension, Path, Query};
@@ -55,6 +54,11 @@ impl ErrorResponse {
 pub enum GroupsError {
     BadRequest(String),
     NotFound,
+    /// `add_member`'s `group:<name>` member names a nested group that does not exist. Distinct
+    /// from `NotFound` (the *target* group missing) so the client can tell the two apart instead
+    /// of both rendering as the same generic "group not found". The message names the missing
+    /// nested group.
+    NestedGroupNotFound(String),
     /// `409` -- the group already exists, is `admins` (undeletable), is still referenced, would
     /// create a cycle, or would leave `admins` unreachable by any principal. The message names
     /// which.
@@ -77,6 +81,11 @@ impl IntoResponse for GroupsError {
             GroupsError::NotFound => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new("NOT_FOUND", "group not found")),
+            )
+                .into_response(),
+            GroupsError::NestedGroupNotFound(msg) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("NOT_FOUND", msg)),
             )
                 .into_response(),
             GroupsError::Conflict(msg) => (
@@ -123,18 +132,6 @@ impl From<sqlx::Error> for GroupsError {
 
 fn require_pool(state: &GroupsState) -> Result<PgPool, GroupsError> {
     state.pool.clone().ok_or(GroupsError::NotConfigured)
-}
-
-/// The one write predicate every handler here is gated on: `caller.is_admin` today, enforced
-/// structurally by the [`AdminUser`] extractor before any handler body runs (so this function is
-/// currently a no-op restatement of that gate, kept as the documented seam). Two-sided
-/// authorization from the start -- editing membership requires authority over the *group* (this
-/// predicate); granting an audience to `group:X` still requires authority over the *audience*
-/// (`audience_grants.rs`'s `caller_holds_pair`). Delegating group ownership later means widening
-/// this one function.
-#[allow(dead_code)]
-fn can_manage_group(caller: &ValidatedUser, _group: &str) -> bool {
-    caller.is_admin
 }
 
 fn validate_group_name(name: &str) -> Result<(), GroupsError> {
@@ -200,33 +197,18 @@ async fn create_group(
     validate_group_name(&body.name)?;
     let created_by = caller_identity(&user);
 
-    let existing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
-        .bind(&body.name)
-        .fetch_one(&pool)
-        .await?;
-    if existing {
-        return Err(GroupsError::Conflict(format!(
-            "group {:?} already exists",
-            body.name
-        )));
-    }
-
-    sqlx::query(
-        "INSERT INTO groups (name, description, created_at, created_by) VALUES ($1, $2, now(), $3)",
+    let row = sqlx::query_as::<_, GroupSummary>(
+        "INSERT INTO groups (name, description, created_at, created_by)
+         VALUES ($1, $2, now(), $3)
+         ON CONFLICT (name) DO NOTHING
+         RETURNING name, description, 0::bigint AS member_count, created_at, created_by",
     )
     .bind(&body.name)
     .bind(&body.description)
     .bind(&created_by)
-    .execute(&pool)
-    .await?;
-
-    let row = sqlx::query_as::<_, GroupSummary>(
-        "SELECT name, description, 0::bigint AS member_count, created_at, created_by
-         FROM groups WHERE name = $1",
-    )
-    .bind(&body.name)
-    .fetch_one(&pool)
-    .await?;
+    .fetch_optional(&pool)
+    .await?
+    .ok_or_else(|| GroupsError::Conflict(format!("group {:?} already exists", body.name)))?;
 
     info!("created group name={} created_by={created_by}", row.name);
     Ok((StatusCode::CREATED, Json(row)))
@@ -392,7 +374,9 @@ async fn add_member(
             .await?
             .is_some();
         if !nested_exists {
-            return Err(GroupsError::NotFound);
+            return Err(GroupsError::NestedGroupNotFound(format!(
+                "group {nested:?} not found"
+            )));
         }
         // Queried fresh (never the TTL snapshot) and read through this same transaction's
         // connection -- not a second `pool.begin()` via `GroupsLoader::fetch`, which would need a

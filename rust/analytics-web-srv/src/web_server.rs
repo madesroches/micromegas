@@ -53,8 +53,11 @@ pub struct WebServerConfig {
     /// `MICROMEGAS_SQL_CONNECTION_STRING`, read but not connected by
     /// `from_cli_and_env` — the telemetry-DB connection string backing the
     /// analytics-key routes' small pool (`run_web_server` connects it
-    /// lazily). `None` when unset; the routes stay registered either way and
-    /// return 503 per-request.
+    /// lazily). Required whenever auth is enabled: `run_web_server` bails at
+    /// startup if it's unset and `disable_auth` is false, since no session
+    /// can then resolve admin-ness or group grants. `None` is only reachable
+    /// under `--disable-auth`, where those routes return the `AUTH_DISABLED`
+    /// body instead of consulting this pool.
     pub analytics_keys_db_string: Option<String>,
     /// Disable OIDC/cookie auth (anonymous access, development only).
     pub disable_auth: bool,
@@ -723,10 +726,13 @@ pub async fn run_web_server(
     let maps_state = maps::MapsState::with_max_upload_bytes(maps_store, max_upload_bytes);
 
     // `max_connections(2)`, a bounded `acquire_timeout`, and `connect_lazy`
-    // (not an eager `PgPool::connect`) — this is an admin-console path, not
-    // the hot per-request validation path `dedicated_key_store_pool` tunes
-    // for, and a briefly-unreachable telemetry DB must not stop
-    // `analytics-web-srv` from starting.
+    // (not an eager `PgPool::connect`) — a briefly-unreachable telemetry DB
+    // must not stop `analytics-web-srv` from starting. This pool now also
+    // backs `AuthState.groups` (`DbGroupsSource`), consulted by
+    // `cookie_auth_middleware`/`auth_me` on every authenticated request, not
+    // just the admin-console routes it originally served; if `max_connections`
+    // ever needs raising to keep up with that per-request load, that's a
+    // separate sizing decision from this comment.
     // With auth enabled, this pool is required: no session can resolve admin-ness or group
     // grants without it (`AuthState.groups`, filled from this same pool below).
     if !config.disable_auth && config.analytics_keys_db_string.is_none() {
