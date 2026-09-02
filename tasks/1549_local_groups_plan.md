@@ -445,7 +445,7 @@ migration says it loudly rather than letting access disappear quietly.
    JSON decoding.
 9. `tests/sql_migration_test.rs`: no-DB `AdminSeed::parse` unit tests (malformed JSON, a non-array
    value, and `[]` asserting `AdminSeed::Everyone`) — plain `#[test]` fns alongside the existing
-   `#[ignore]`d live-DB tests, per Testing Strategy.
+   `#[ignore]`d live-DB tests.
 
 ### Phase 3 — analytics gate collapse
 
@@ -455,11 +455,14 @@ migration says it loudly rather than letting access disappear quietly.
     "MICROMEGAS_ADMINS-style JSON array" to match the reworded text.
 11. `query.rs:128`, `query_deny_list.rs:291`, `audience_guard.rs` doc comments;
     `flight_sql_service_impl.rs` (`new`, field, `caller_context`, `:799`); `flight_sql_server.rs`
-    (`:371`, `with_group_store` on the `use_default_auth` branch).
+    (`:371`, `with_group_store` on the `use_default_auth` branch);
+    `tonic_auth_interceptor.rs:35`, whose log statement reads `auth_ctx.is_admin` and becomes a
+    call to `is_admin()`.
 12. Rewrite `lakehouse_admin_gate_test.rs` to the one-armed gate (drop the two
     `admin_principal_possible` tests, keep the other four); update `query_deny_list_tests.rs:492`,
-    `read_policy_threading_tests.rs:131-139`, and every `CallerContext` literal in
-    `analytics/tests/`.
+    `read_policy_threading_tests.rs:131-139`, `firehose_tests.rs`, and
+    `resolve_write_audience_tests.rs` (both construct `AuthContext` literals with the removed
+    `is_admin`/`groups` fields), and every `CallerContext` literal in `analytics/tests/`.
 
 ### Phase 4 — monolith and services
 
@@ -482,12 +485,12 @@ migration says it loudly rather than letting access disappear quietly.
 16. `tests/groups_tests.rs` (modeled on `audience_grants_tests.rs`), `routing_tests.rs` 503
     assertions for the new prefixes, `auth_unit_tests.rs`/`auth_integration.rs`/`maps_tests.rs`
     (add the `groups` field, `unreachable_pool`-style, to each `create_test_auth_state()` literal),
-    `web_server_config_tests.rs` updates for the removed var. Delete
+    `web_server_config_tests.rs` updates for the removed var; `ingestion_keys_tests.rs`, which
+    constructs `AuthContext` literals with the removed `is_admin`/`groups` fields. Delete
     `cookie_auth_middleware_inserts_auth_context_with_groups` (`auth_integration.rs`), which
     asserts membership from the removed `groups` claim; replace it with the planned
     `ProviderUnavailable` → 503 assertion from Testing Strategy (no live DB needed; the store uses
-    an `unreachable_pool`-style seam). No live-DB positive-membership middleware test is added —
-    that path is covered by the manual walkthrough in Testing Strategy.
+    an `unreachable_pool`-style seam).
 
 ### Phase 6 — clients
 
@@ -522,13 +525,14 @@ Rust, elsewhere: `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/Cargo.to
 prong_b_guard_db_test,ownership_rewrite_db_test,ownership_rewrite_public_view_set_tests,
 ownership_rewrite_config_tests,retire_partition_by_metadata_db_test,
 list_audience_grants_db_test}.rs`;
-`rust/public/src/servers/{flight_sql_server,flight_sql_service_impl}.rs`,
-`rust/public/tests/read_policy_threading_tests.rs`; `rust/monolith/src/main.rs`;
+`rust/public/src/servers/{flight_sql_server,flight_sql_service_impl,tonic_auth_interceptor}.rs`,
+`rust/public/tests/{read_policy_threading_tests,firehose_tests,
+resolve_write_audience_tests}.rs`; `rust/monolith/src/main.rs`;
 `rust/telemetry-ingestion-srv/src/main.rs`; `rust/analytics-web-srv/src/{lib,main,web_server,
 audience_grants,ingestion_keys,analytics_keys}.rs`, `rust/analytics-web-srv/src/auth/{state,
 handlers,claims}.rs`, new `rust/analytics-web-srv/src/groups.rs`,
 `rust/analytics-web-srv/tests/{audience_grants_tests,routing_tests,auth_unit_tests,
-auth_integration,web_server_config_tests,maps_tests}.rs`, new `groups_tests.rs`.
+auth_integration,web_server_config_tests,maps_tests,ingestion_keys_tests}.rs`, new `groups_tests.rs`.
 
 Web app: `src/routes/AdminPage.tsx`, `src/routes/AudienceAccessPage.tsx`, new
 `src/routes/GroupsPage.tsx`, new `src/lib/groups-api.ts`, `src/components/layout/AppShell.tsx`,
@@ -591,12 +595,9 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   needed for this case.
 - `member` is a selector string, not a `(member_kind, member_id)` pair — per the issue.
 - No directory sync — per the issue.
-- No live-DB (`#[ignore]`) tests are added for this feature's new functionality (the v10 migration,
-  groups CRUD, positive membership resolution): per the project-wide live-DB test policy
-  (`CONTRIBUTING.md`), such a test is added only to cover the resolution of a bug witnessed in the
-  wild. Coverage instead comes from the no-DB unit tests listed in Testing Strategy plus manual
-  verification — starting the local stack against a v9 database and reading the migration logs,
-  and exercising groups CRUD through the Groups page and `micromegas-groups`.
+- No live-DB tests for this feature; coverage is the no-DB unit tests in Testing Strategy plus
+  manual verification — starting the local stack against a v9 database and reading the migration
+  logs, and exercising groups CRUD through the Groups page and `micromegas-groups`.
 
 ## Documentation
 
@@ -643,19 +644,16 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
   error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
-- `sql_migration_test.rs`: no live-DB test added, per the live-DB test policy (`CONTRIBUTING.md`)
-  — v10's seeding, backfill, and `CHECK`-constraint behavior is new functionality, not the
-  resolution of a witnessed bug, so it is verified manually (see the Manual bullet below) rather
-  than with an `#[ignore]`d test. No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
-  non-array value, and an empty array asserting `AdminSeed::Everyone`.
+- `sql_migration_test.rs`: no-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
+  non-array value, and an empty array asserting `AdminSeed::Everyone`. v10's seeding, backfill,
+  and `CHECK`-constraint behavior is verified manually (see the Manual bullet below).
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
 - `analytics-web-srv/tests/groups_tests.rs`: 403 for non-admin on every route; 400 bad name/
-  selector; 409 deleting `admins`. No live-DB tests added, per the live-DB test policy — the CRUD
-  round trip, the cycle/delete-while-referenced/last-admins-row conflict responses, and the
-  missing-group 404 are new functionality, not a witnessed bug, so they are verified manually (see
-  the Manual bullet below). `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
+  selector; 409 deleting `admins`. The CRUD round trip, the cycle/delete-while-referenced/
+  last-admins-row conflict responses, and the missing-group 404 are verified manually (see the
+  Manual bullet below). `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
   reachable unconfigured-pool case, since auth-enabled deployments always have the pool set).
   `auth_integration.rs`: `ProviderUnavailable` from the group store → 503 (no live DB needed; the
   store uses an `unreachable_pool`-style seam).
@@ -665,9 +663,9 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   `test_web_client.py` payload/query-param shapes.
 - Manual: the v10 migration is verified by starting the local stack against a v9 database and
   reading the startup logs — schema version bump, the seeding mode chosen (`Everyone`/`Users`),
-  and any `group:X` backfill/warning lines — rather than an automated live-DB test.
-  `start_services_with_oidc.py` against that same fresh DB shows the wildcard warning at boot and
-  the hub banner; `micromegas-groups add admins user:<me>` then `remove admins '*'` clears both
-  within the TTL; a non-admin then loses `retire_partitions` and the Groups page. The groups CRUD
-  round trip, cycle/conflict responses, and the missing-group 404 are exercised the same way,
-  through the Groups page and `micromegas-groups`, rather than with automated live-DB tests.
+  and any `group:X` backfill/warning lines. `start_services_with_oidc.py` against that same fresh
+  DB shows the wildcard warning at boot and the hub banner; `micromegas-groups add admins
+  user:<me>` then `remove admins '*'` clears both within the TTL; a non-admin then loses
+  `retire_partitions` and the Groups page. The groups CRUD round trip, cycle/conflict responses,
+  and the missing-group 404 are exercised the same way, through the Groups page and
+  `micromegas-groups`.
