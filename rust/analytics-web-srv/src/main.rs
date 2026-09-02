@@ -35,7 +35,6 @@ async fn main() -> Result<()> {
         port: args.port,
         frontend_dir: args.frontend_dir,
         disable_auth: args.disable_auth,
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
     })?;
 
     run_web_server(config, wait_for_sigterm(), args.common.grace()).await

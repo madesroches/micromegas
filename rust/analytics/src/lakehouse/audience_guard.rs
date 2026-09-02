@@ -358,10 +358,9 @@ impl Authorized {
 #[derive(Debug)]
 pub struct AudienceGuard {
     read_scope: ReadScope,
-    /// Whether this deployment's caller passes the lakehouse admin gate --
-    /// `caller.is_admin || !caller.admin_principal_possible` (`query.rs`), the same boolean that
-    /// already governs registration of the mutating lakehouse UDTFs/UDFs. Consulted by
-    /// [`Self::global_rows_visible`].
+    /// Whether this deployment's caller passes the lakehouse admin gate -- `caller.is_admin`
+    /// (`query.rs`), the same boolean that already governs registration of the mutating
+    /// lakehouse UDTFs/UDFs. Consulted by [`Self::global_rows_visible`].
     lakehouse_admin: bool,
     public_view_sets: Vec<String>,
     index: Arc<AudienceIndex>,

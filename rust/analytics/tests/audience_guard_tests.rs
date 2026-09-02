@@ -2,9 +2,8 @@
 //! `is_readable`'s truth table and `AudienceGuard`'s no-I/O short-circuit under `ReadScope::All`.
 //!
 //! `IsolationConfig::from_env`'s knob is covered by `ownership_rewrite_config_tests.rs`;
-//! the mutating-function registration gate's states (driven by
-//! `CallerContext::admin_principal_possible`) are covered by `lakehouse_admin_gate_test.rs`, so
-//! this file doesn't retest either.
+//! the mutating-function registration gate's states (driven by `CallerContext::is_admin`) are
+//! covered by `lakehouse_admin_gate_test.rs`, so this file doesn't retest either.
 //!
 //! `OwnerAudience::Unstamped` doesn't exist: a row with a NULL `audience` column resolves to
 //! `MICROMEGAS_DEFAULT_AUDIENCE` in `owner_query_sql`'s `COALESCE`, so it is an ordinary

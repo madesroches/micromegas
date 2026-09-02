@@ -108,9 +108,11 @@ export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/auth/callback"
 micromegas-monolith --disable-ingestion-auth
 ```
 
-Admin users are controlled by `MICROMEGAS_ANALYTICS_ADMINS` (falls back to `MICROMEGAS_ADMINS`).
-The ingestion role has no admin-gated route of its own — `MICROMEGAS_INGESTION_ADMINS`
-gates nothing on this role (see [API Keys](api-keys.md)).
+Admin status comes from membership in the reserved `admins` local group (see
+[Groups](groups.md)), resolved by the analytics role's own group store — the
+`web` and `flightsql` roles each attach one over the shared lake connection.
+The ingestion role has no admin-gated route of its own and attaches no group
+store (see [API Keys](api-keys.md)).
 
 ### Key management
 

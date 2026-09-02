@@ -1,5 +1,7 @@
+use crate::groups::ADMINS_GROUP;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 
 /// A DB-backed auth provider (e.g. `DbApiKeyAuthProvider`) could not reach its
 /// key store — distinguishes a store *outage* from a rejected credential all
@@ -50,8 +52,6 @@ pub struct AuthContext {
     pub expires_at: Option<DateTime<Utc>>,
     /// Authentication type
     pub auth_type: AuthType,
-    /// Whether this user has admin privileges
-    pub is_admin: bool,
     /// Whether this authentication allows user delegation (acting on behalf of others)
     /// - OIDC user tokens: false (user cannot impersonate others)
     /// - Analytics API keys/service accounts: true (can act on behalf of users)
@@ -68,15 +68,22 @@ pub struct AuthContext {
     /// into `AudienceReadPolicy::resolve`'s union but never into `AudienceMintPolicy`'s mintable
     /// set (a read grant confers no mint authority).
     pub read_audiences: Vec<String>,
-    /// IdP-asserted **leaf** group membership — an input to policy resolution, possibly
-    /// incomplete. This is *not* the caller's effective groups: the IdP supplies direct
-    /// memberships only, while nesting (group-in-group) and group→audience grants live in a
-    /// micromegas-owned store, so the effective, transitive closure is what the policy computes
-    /// from this vector, not this vector itself. Raw claim values, not yet namespaced —
-    /// `AudienceReadPolicy`/`AudienceMintPolicy` match each entry against `group:<id>` grant-map
-    /// *selectors*, so this general-purpose auth type stays free of that convention. Empty for
-    /// API keys (no groups claim) and for OIDC callers whose token carries no `groups` claim.
-    pub groups: Vec<String>,
+    /// The caller's resolved, transitive local-group membership -- filled by
+    /// [`crate::membership::MembershipProvider`] from a [`crate::groups::GroupGraph`] snapshot,
+    /// **after** the inner provider authenticates the request. Empty until a
+    /// `MembershipProvider` fills it (disabled-auth and maintenance contexts set this to
+    /// `Arc::from([ADMINS_GROUP.to_string()])` directly instead). `AudienceReadPolicy`/
+    /// `AudienceMintPolicy` match each entry against `group:<name>` grant-map *selectors* via
+    /// [`crate::policy::caller_selectors`]/`selector_matches`.
+    pub memberships: Arc<[String]>,
+}
+
+impl AuthContext {
+    /// `true` iff `memberships` contains [`ADMINS_GROUP`] -- a method, not a field, so no
+    /// construction site can set it inconsistently with `memberships`.
+    pub fn is_admin(&self) -> bool {
+        self.memberships.iter().any(|g| g == ADMINS_GROUP)
+    }
 }
 
 /// Trait for extracting authentication-relevant data from requests
@@ -161,16 +168,4 @@ impl RequestParts for GrpcRequestParts {
 pub trait AuthProvider: Send + Sync {
     /// Validate a request and return authentication context
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext>;
-
-    /// Whether this provider can ever produce an `AuthContext { is_admin: true, .. }`.
-    ///
-    /// **Invariant**: must stay `true` for any provider that can ever return an admin
-    /// `AuthContext` -- a wrong `false` here silently widens who may call destructive
-    /// maintenance functions (the mutating lakehouse UDTFs/UDFs get registered for *any*
-    /// authenticated caller when no provider in the deployment can grant admin). Defaults to
-    /// `false`, matching the two API-key providers, which hardcode `is_admin: false` and can
-    /// never produce an admin principal.
-    fn can_grant_admin(&self) -> bool {
-        false
-    }
 }

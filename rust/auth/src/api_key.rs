@@ -120,14 +120,15 @@ impl AuthProvider for ApiKeyAuthProvider {
                     audience: None,
                     expires_at: None,
                     auth_type: AuthType::ApiKey,
-                    // SECURITY: API keys can NEVER be admins - only OIDC users can have admin privileges
-                    is_admin: false,
                     // SECURITY: API keys CAN delegate (act on behalf of users)
                     allow_delegation: true,
                     // Env-configured keys carry no Stage 4/4b grant.
                     bound_audience: None,
                     read_audiences: vec![],
-                    groups: vec![],
+                    // API keys carry no email for a `user:` member to match, so only a
+                    // `MembershipProvider` wrapping this provider over a wildcard-admin group
+                    // could ever make one admin -- see the migration v10 module doc comment.
+                    memberships: std::sync::Arc::from([]),
                 });
             }
             // Note: We do NOT break or return early - we continue checking all keys

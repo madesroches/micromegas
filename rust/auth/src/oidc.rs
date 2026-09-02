@@ -224,13 +224,6 @@ struct Claims {
     #[serde(rename = "https://micromegas.io/name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     namespaced_name: Option<String>,
-    /// Flat, top-level group-membership claim (Auth0 / Azure AD / Google shape). IdP-asserted
-    /// **leaf** membership only — see `AuthContext.groups`'s doc comment. Keycloak's nested
-    /// `realm_access.roles` shape is deliberately out of scope for this issue, not an oversight.
-    /// Absent on any token that predates this claim; deserializes to `None` (no
-    /// `#[serde(deny_unknown_fields)]` on this struct, so this addition is backward-compatible).
-    #[serde(default)]
-    groups: Option<Vec<String>>,
 }
 
 impl Claims {
@@ -264,14 +257,6 @@ impl OidcIssuerClient {
             audience,
             jwks_cache: JwksCache::new(issuer_url, jwks_ttl),
         })
-    }
-}
-
-/// Load admin users from the named environment variable
-fn load_admin_users(admin_var: &str) -> Vec<String> {
-    match std::env::var(admin_var) {
-        Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
-        Err(_) => vec![],
     }
 }
 
@@ -327,25 +312,21 @@ pub struct OidcAuthProvider {
     clients: HashMap<String, Vec<Arc<OidcIssuerClient>>>,
     /// Cache for validated tokens
     token_cache: Cache<String, Arc<AuthContext>>,
-    /// Admin users (by email or subject)
-    admin_users: Vec<String>,
 }
 
 impl std::fmt::Debug for OidcAuthProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OidcAuthProvider")
             .field("num_clients", &self.clients.len())
-            .field("admin_users", &"(not printed)")
             .finish()
     }
 }
 
 impl OidcAuthProvider {
-    /// Create a new OIDC authentication provider.
-    ///
-    /// `admin_var` is the environment-variable name from which the admin user list
-    /// is loaded (e.g. `"MICROMEGAS_ADMINS"` or `"MICROMEGAS_ANALYTICS_ADMINS"`).
-    pub async fn new(config: OidcConfig, admin_var: &str) -> Result<Self> {
+    /// Create a new OIDC authentication provider. Admin-ness is no longer resolved here --
+    /// it lives in the `admins` group, resolved by `MembershipProvider` after this provider
+    /// authenticates the request.
+    pub async fn new(config: OidcConfig) -> Result<Self> {
         if config.issuers.is_empty() {
             return Err(anyhow!("At least one OIDC issuer must be configured"));
         }
@@ -384,20 +365,10 @@ impl OidcAuthProvider {
             .time_to_live(Duration::from_secs(config.token_cache_ttl_secs))
             .build();
 
-        // Load admin users from environment
-        let admin_users = load_admin_users(admin_var);
-
         Ok(Self {
             clients,
             token_cache,
-            admin_users,
         })
-    }
-
-    fn is_admin(&self, subject: &str, email: Option<&str>) -> bool {
-        self.admin_users
-            .iter()
-            .any(|admin| admin == subject || email.map(|e| admin == e).unwrap_or(false))
     }
 
     /// Decode JWT payload without validation to extract issuer
@@ -538,8 +509,6 @@ impl OidcAuthProvider {
                 }
 
                 let email = claims.get_email();
-                let is_admin = self.is_admin(&claims.sub, email.as_deref());
-                let groups = claims.groups.unwrap_or_default();
 
                 return Ok(AuthContext {
                     subject: claims.sub,
@@ -548,13 +517,14 @@ impl OidcAuthProvider {
                     audience: Some(client.audience.clone()),
                     expires_at: Some(expires_at),
                     auth_type: AuthType::Oidc,
-                    is_admin,
                     allow_delegation: false,
                     // OIDC tokens never carry Stage 4's write-side bound_audience or Stage 4b's
                     // read_audiences grant -- those are key-provider fields.
                     bound_audience: None,
                     read_audiences: vec![],
-                    groups,
+                    // Filled by `MembershipProvider`, not here -- see `AuthContext.memberships`'s
+                    // doc comment.
+                    memberships: Arc::from([]),
                 });
             } else {
                 // Provide detailed error with configured vs actual audiences
@@ -577,12 +547,6 @@ impl OidcAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for OidcAuthProvider {
-    /// `true` only when `admin_users` is non-empty -- an OIDC deployment configured with no
-    /// admins has no admin principal at all, same as the two API-key providers.
-    fn can_grant_admin(&self) -> bool {
-        !self.admin_users.is_empty()
-    }
-
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,

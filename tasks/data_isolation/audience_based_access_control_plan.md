@@ -738,6 +738,14 @@ section documents, which no comma-separated encoding could express.
 Recorded 2026-08-12. **Not** Stage 1–7 work; this section exists so the stages do not foreclose it,
 and so the four Stage 1 properties it depends on are deliberate rather than lucky.
 
+> **Status (2026-09-02): implemented.** See `tasks/1549_local_groups_plan.md` and
+> `mkdocs/docs/admin/groups.md` for what actually shipped — two Postgres tables (`groups`,
+> `group_members`, schema v10), a `member` *selector* column (`*`/`user:<email>`/`group:<name>`)
+> rather than the `(member_kind, member_id)` pair this section sketches, and a reserved `admins`
+> group replacing the flat `groups` IdP claim and `MICROMEGAS_ADMINS` env var entirely. The rest
+> of this section is design history, kept for context on the model that motivated the shipped
+> shape.
+
 Everything above resolves a readable set from **flat, IdP-asserted membership**: the `groups` claim
 *is* the grant, because `AudienceReadPolicy` maps group `G` straight to audience `group:G`. The target
 model separates the two relations that identity collapses:

@@ -20,6 +20,7 @@ const IngestionApiKeysPage = lazy(() => import('@/routes/IngestionApiKeysPage'))
 const AnalyticsApiKeysPage = lazy(() => import('@/routes/AnalyticsApiKeysPage'))
 const QueryDenyListPage = lazy(() => import('@/routes/QueryDenyListPage'))
 const AudienceAccessPage = lazy(() => import('@/routes/AudienceAccessPage'))
+const GroupsPage = lazy(() => import('@/routes/GroupsPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
 export function PageLoader() {
@@ -57,6 +58,7 @@ export function AppRouter() {
           <Route path="/admin/ingestion-keys" element={<IngestionApiKeysPage />} />
           <Route path="/admin/analytics-keys" element={<AnalyticsApiKeysPage />} />
           <Route path="/admin/query-deny-list" element={<QueryDenyListPage />} />
+          <Route path="/admin/groups" element={<GroupsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

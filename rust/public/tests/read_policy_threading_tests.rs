@@ -128,7 +128,6 @@ async fn start_server(
     let part_provider = Arc::new(NullPartitionProvider {});
     let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
     let session_configurator = Arc::new(NoOpSessionConfigurator);
-    let admin_principal_possible = auth_provider.as_ref().is_none_or(|p| p.can_grant_admin());
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
         part_provider,
@@ -136,7 +135,6 @@ async fn start_server(
         session_configurator,
         read_policy,
         Arc::new(IsolationConfig::default()),
-        admin_principal_possible,
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -246,12 +244,12 @@ impl ReadPolicy for RecordingReadPolicy {
     }
 }
 
-/// An `AuthProvider` stub returning a fixed `AuthContext` carrying `groups` -- neither
-/// `ApiKeyAuthProvider` (no groups claim at all) nor a real `OidcAuthProvider` (needs a live
-/// JWKS) can exercise a groups-bearing caller without much heavier test infrastructure.
+/// An `AuthProvider` stub returning a fixed `AuthContext` carrying `memberships` -- neither
+/// `ApiKeyAuthProvider` (no memberships at all) nor a real `OidcAuthProvider` (needs a live
+/// JWKS) can exercise a membership-bearing caller without much heavier test infrastructure.
 #[derive(Debug)]
 struct GroupsAuthProvider {
-    groups: Vec<String>,
+    memberships: Vec<String>,
 }
 
 #[async_trait]
@@ -264,11 +262,10 @@ impl AuthProvider for GroupsAuthProvider {
             audience: None,
             expires_at: None,
             auth_type: AuthType::Oidc,
-            is_admin: false,
             allow_delegation: false,
             bound_audience: None,
             read_audiences: vec![],
-            groups: self.groups.clone(),
+            memberships: self.memberships.clone().into(),
         })
     }
 }
@@ -413,9 +410,9 @@ async fn prepared_statement_resolves_the_same_scope_as_do_get() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn auth_context_with_groups_survives_the_real_tonic_stack() {
+async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
     let auth_provider: Arc<dyn AuthProvider> = Arc::new(GroupsAuthProvider {
-        groups: vec!["team-a".to_string(), "team-b".to_string()],
+        memberships: vec!["team-a".to_string(), "team-b".to_string()],
     });
     let policy = Arc::new(RecordingReadPolicy::default());
     let addr = start_server(Some(auth_provider), policy.clone()).await;
@@ -435,10 +432,10 @@ async fn auth_context_with_groups_survives_the_real_tonic_stack() {
     assert_eq!(calls.len(), 1);
     let (auth_ctx, _) = &calls[0];
     assert_eq!(
-        auth_ctx.groups,
-        vec!["team-a".to_string(), "team-b".to_string()],
+        auth_ctx.memberships.as_ref(),
+        ["team-a".to_string(), "team-b".to_string()],
         "the AuthContext observed by the handler, via request.extensions(), must be the one \
-         AuthService inserted -- including the groups field -- proving tonic propagated the \
+         AuthService inserted -- including the memberships field -- proving tonic propagated the \
          extension all the way from the tower layer to the FlightSqlServiceImpl handler"
     );
 }

@@ -232,10 +232,14 @@ pub type DbGroupsSource = SnapshotSource<GroupsLoader>;
 `ProviderUnavailable` wrapping). `GroupsLoader::fetch` runs both `SELECT`s (`groups`,
 `group_members`) in one read transaction and builds a `GroupGraph`, so a concurrent `DELETE ...
 CASCADE` cannot yield a snapshot with members of a group the `groups` query missed. Config:
-`DbGroupsConfig::from_env_with_prefix` reads
-`{prefix}_GROUP_CACHE_TTL_SECONDS` → `MICROMEGAS_GROUP_CACHE_TTL_SECONDS`, default 60, via
-`resolve_u64` — the same knob shape as the grant store. **Membership and admin changes take effect
-within this TTL per process**; that is the documented latency.
+`DbGroupsConfig::from_env_with_prefix` reads the same **shared, flat** cache-TTL knob the grant
+store and the API-key store already read — `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60, via
+`resolve_u64("", "AUTH_CACHE_TTL_SECONDS", 60)` — a single unprefixed value process-wide, with no
+role-scoped variant, rather than a `GROUP`-specific or `{prefix}_`-fallback name (`DbApiKeyConfig`/
+`DbAudienceGrantsConfig` are renamed onto this same shared, flat knob as part of this plan; the
+`prefix` argument each still accepts, for call-site symmetry, is not consulted for this one
+field). **Membership and admin changes take effect within
+this TTL per process**; that is the documented latency.
 
 ### Where the closure is resolved: `MembershipProvider`
 
@@ -604,9 +608,12 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   Privileges` at `:1196-1211`, and the `GrantGate` create/delete wording at `:673-693`.
 - `mkdocs/docs/admin/{flight-sql,ingestion,monolith,api-keys}.md`: remove the `MICROMEGAS_ADMINS`
   / `_ANALYTICS_ADMINS` / `_INGESTION_ADMINS` rows and prose (`flight-sql.md:30,58,73`,
-  `ingestion.md:31`, `monolith.md:111-113`, `api-keys.md:93-95,338-341,362-365`); add
-  `MICROMEGAS_GROUP_CACHE_TTL_SECONDS` beside the grant TTL knob; add `groups`/`group_members` to
-  the grant recipe in `api-keys.md`.
+  `ingestion.md:31`, `monolith.md:111-113`, `api-keys.md:93-95,338-341,362-365`); document the
+  group store's cache-TTL knob as the same shared, flat `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` the
+  API-key and grant stores already read (`DbApiKeyConfig`/`DbAudienceGrantsConfig` rename onto
+  this shared, flat knob too — a minor breaking env-var rename, not additive; unlike every other
+  knob in this crate it has no `{prefix}_`-scoped variant, since one value governs all three
+  caches process-wide); add `groups`/`group_members` to the grant recipe in `api-keys.md`.
 - `mkdocs/docs/admin/web-app.md`: Groups page, hub banner, `MICROMEGAS_SQL_CONNECTION_STRING` now
   required under auth. `mkdocs/docs/admin/functions-reference.md:452-462`: "no email, no groups" →
   "no email, no memberships". `mkdocs/docs/query-guide/python-api.md`: `micromegas-groups` section

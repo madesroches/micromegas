@@ -71,11 +71,10 @@ impl AuthProvider for BoundAudienceProvider {
             audience: None,
             expires_at: None,
             auth_type: AuthType::ApiKey,
-            is_admin: false,
             allow_delegation: false,
             bound_audience: Some(self.audience.to_string()),
             read_audiences: vec![],
-            groups: vec![],
+            memberships: Arc::from([]),
         })
     }
 }

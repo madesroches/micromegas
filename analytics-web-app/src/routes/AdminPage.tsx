@@ -1,10 +1,22 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Database, Download, Upload, Map, KeyRound, ShieldCheck, ShieldBan, Users } from 'lucide-react'
+import {
+  Database,
+  Download,
+  Upload,
+  Map,
+  KeyRound,
+  ShieldCheck,
+  ShieldBan,
+  Users,
+  UsersRound,
+} from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
+import { ErrorBanner } from '@/components/ErrorBanner'
 import { useAuth } from '@/lib/auth'
+import { fetchGroupMembers } from '@/lib/groups-api'
 
 interface AdminCard {
   href: string
@@ -95,6 +107,15 @@ function cards(isAdmin: boolean): AdminCard[] {
       description: 'See who can read from and mint into each audience, and grant access.',
       adminOnly: false,
     },
+    {
+      href: '/admin/groups',
+      icon: <UsersRound className="w-6 h-6" />,
+      iconBg: 'bg-teal-500/15',
+      iconColor: 'text-teal-500',
+      title: 'Groups',
+      description: 'Manage local group membership, including the reserved admins group.',
+      adminOnly: true,
+    },
   ]
 }
 
@@ -104,6 +125,22 @@ function AdminPageContent() {
   const isAdmin = user?.is_admin ?? false
 
   const visibleCards = cards(isAdmin).filter((card) => isAdmin || !card.adminOnly)
+
+  // Fetched only when `user.is_admin`, which under the wildcard is everyone -- the warning is
+  // therefore unmissable to whoever it applies to.
+  const [wildcardAdmin, setWildcardAdmin] = useState(false)
+  useEffect(() => {
+    // IIFE keeps the setState out of the effect's top level -- see react-hooks/set-state-in-effect
+    void (async () => {
+      if (!isAdmin) return
+      try {
+        const rows = await fetchGroupMembers('admins')
+        setWildcardAdmin(rows.some((r) => r.member === '*'))
+      } catch {
+        // Best-effort: a fetch failure here just means no banner, not a page error.
+      }
+    })()
+  }, [isAdmin])
 
   return (
     <AuthGuard>
@@ -117,6 +154,17 @@ function AdminPageContent() {
                 : 'Tools you have access to.'}
             </p>
           </div>
+
+          {wildcardAdmin && (
+            <ErrorBanner
+              variant="warning"
+              title="Every authenticated caller is an admin"
+              message={
+                'The `admins` group currently includes `*` (everyone). Add a `user:` member for ' +
+                'yourself in Groups, then remove `*`, to restrict admin access.'
+              }
+            />
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {visibleCards.map((card) => (

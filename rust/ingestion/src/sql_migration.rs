@@ -1,11 +1,11 @@
 use crate::sql_telemetry_db::create_tables;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 9;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 10;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -46,7 +46,10 @@ pub async fn warn_if_data_lake_schema_stale(pool: &sqlx::Pool<sqlx::Postgres>) {
         warn!(
             "data lake schema is v{version}, behind the latest v{LATEST_DATA_LAKE_SCHEMA_VERSION}; \
              the seeded 'public' audience_grants rows have not migrated in yet, so every query \
-             will resolve to an empty read scope and return zero rows until the schema is upgraded"
+             will resolve to an empty read scope and return zero rows until the schema is upgraded; \
+             on a schema older than v10 the `groups`/`group_members` tables do not exist yet, so \
+             every request fails with a retryable 503 until the migration runs, because the group \
+             store cannot load"
         );
     }
 }
@@ -308,6 +311,204 @@ pub async fn upgrade_data_lake_schema_v9(
     Ok(())
 }
 
+/// The resolved seeding mode for the `admins` group's members on a v10 upgrade, decoded from the
+/// analytics admin var by [`AdminSeed::parse`]/[`admin_seed_from_env`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminSeed {
+    /// The admin var was set and held a non-empty JSON array: one `user:<entry>` row per entry,
+    /// no wildcard. Who is an admin does not change from today.
+    Users(Vec<String>),
+    /// The admin var was unset, or held an empty JSON array (`[]`): one `('admins', '*')` row --
+    /// a fresh install, or an upgrade that never set the var.
+    Everyone,
+}
+
+impl AdminSeed {
+    /// Decodes a raw env-var value into an `AdminSeed`. `Err` on malformed JSON or a JSON value
+    /// that is not an array -- deliberately not `load_admin_users`'s old `unwrap_or_default()`
+    /// pattern, which would let a JSON typo silently seed the wildcard instead of the operator's
+    /// intended admins. A valid empty array (`[]`) parses to `Everyone`, preserving today's
+    /// effective state (an unset or empty admin list already means every caller can be admin).
+    pub fn parse(raw: &str) -> Result<Self> {
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| anyhow!("invalid admin seed JSON: {e}"))?;
+        let arr = value
+            .as_array()
+            .ok_or_else(|| anyhow!("admin seed value must be a JSON array"))?;
+        if arr.is_empty() {
+            return Ok(AdminSeed::Everyone);
+        }
+        let mut users = Vec::with_capacity(arr.len());
+        for entry in arr {
+            let s = entry
+                .as_str()
+                .ok_or_else(|| anyhow!("admin seed array must contain only strings"))?;
+            users.push(s.to_string());
+        }
+        Ok(AdminSeed::Users(users))
+    }
+}
+
+/// Resolves the v10 seeding mode from `MICROMEGAS_ANALYTICS_ADMINS`, falling back to
+/// `MICROMEGAS_ADMINS` -- the **analytics** var only, since a principal listed only in
+/// `MICROMEGAS_INGESTION_ADMINS` has no admin capability today. If `MICROMEGAS_INGESTION_ADMINS`
+/// holds entries the analytics var lacks, `warn!` naming the dropped entries. Called from
+/// `execute_migration`, not from [`upgrade_data_lake_schema_v10`] itself, which keeps that
+/// function free of env access.
+pub fn admin_seed_from_env() -> Result<AdminSeed> {
+    let raw = std::env::var("MICROMEGAS_ANALYTICS_ADMINS")
+        .or_else(|_| std::env::var("MICROMEGAS_ADMINS"));
+    let seed = match raw {
+        Ok(raw) => AdminSeed::parse(&raw)?,
+        Err(_) => AdminSeed::Everyone,
+    };
+
+    if let Ok(ingestion_raw) = std::env::var("MICROMEGAS_INGESTION_ADMINS")
+        && let Ok(AdminSeed::Users(ingestion_users)) = AdminSeed::parse(&ingestion_raw)
+    {
+        let analytics_users: &[String] = match &seed {
+            AdminSeed::Users(users) => users,
+            AdminSeed::Everyone => &[],
+        };
+        let dropped: Vec<&String> = ingestion_users
+            .iter()
+            .filter(|u| !analytics_users.contains(u))
+            .collect();
+        if !dropped.is_empty() {
+            warn!(
+                "MICROMEGAS_INGESTION_ADMINS holds entries not present in the analytics admin \
+                 var; dropped (no admin capability today, so not seeded): {dropped:?}"
+            );
+        }
+    }
+
+    Ok(seed)
+}
+
+/// `true` if `name` matches the `groups.name`/`group_members.group_name` charset:
+/// `[A-Za-z0-9_-]{1,255}`. A local copy rather than a dependency on `micromegas-auth` (which this
+/// crate does not otherwise depend on).
+fn is_valid_group_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Upgrades the data lake schema to version 10.
+///
+/// Adds `groups` and `group_members`, the local-group-membership store: a `group_members.member`
+/// row is a selector in exactly the vocabulary `audience_grants.selector` uses (`*`,
+/// `user:<email>`, `group:<name>`), so nesting is the `group:` arm of the same predicate rather
+/// than a special case. Seeds the reserved `admins` group from `seed` (resolved by
+/// `admin_seed_from_env`, outside this function, so this step stays free of env access), and
+/// backfills an empty group for every distinct `group:X` selector already present in
+/// `audience_grants` so a legacy claim-derived grant is not left dangling at an unknown name.
+pub async fn upgrade_data_lake_schema_v10(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    seed: &AdminSeed,
+) -> Result<()> {
+    tr.execute(
+        "CREATE TABLE groups (
+           name        VARCHAR(255) PRIMARY KEY,
+           description TEXT,
+           created_at  TIMESTAMPTZ NOT NULL,
+           created_by  VARCHAR(255) NOT NULL,
+           CONSTRAINT groups_name CHECK (name ~ '^[A-Za-z0-9_-]+$')
+         );",
+    )
+    .await
+    .with_context(|| "creating table groups")?;
+    tr.execute(
+        "CREATE TABLE group_members (
+           group_name  VARCHAR(255) NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+           member      VARCHAR(255) NOT NULL,
+           created_at  TIMESTAMPTZ NOT NULL,
+           created_by  VARCHAR(255) NOT NULL,
+           PRIMARY KEY (group_name, member),
+           CONSTRAINT group_members_selector_shape CHECK (member = '*' OR member ~ '^(user|group):.+$')
+         );",
+    )
+    .await
+    .with_context(|| "creating table group_members")?;
+
+    tr.execute(
+        "INSERT INTO groups (name, description, created_at, created_by)
+         VALUES ('admins', 'Deployment administrators', now(), 'default')
+         ON CONFLICT (name) DO NOTHING;",
+    )
+    .await
+    .with_context(|| "seeding the admins group")?;
+
+    match seed {
+        AdminSeed::Users(users) => {
+            for user in users {
+                if !user.contains('@') {
+                    warn!(
+                        "admin seed entry {user:?} does not look like an email; seeded verbatim \
+                         as a `user:` member, which matches AuthContext.email only -- it will \
+                         never match a subject-shaped identity"
+                    );
+                }
+                sqlx::query(
+                    "INSERT INTO group_members (group_name, member, created_at, created_by)
+                     VALUES ('admins', $1, now(), 'default')
+                     ON CONFLICT (group_name, member) DO NOTHING;",
+                )
+                .bind(format!("user:{user}"))
+                .execute(&mut **tr)
+                .await
+                .with_context(|| format!("seeding admins member user:{user}"))?;
+            }
+        }
+        AdminSeed::Everyone => {
+            tr.execute(
+                "INSERT INTO group_members (group_name, member, created_at, created_by)
+                 VALUES ('admins', '*', now(), 'default')
+                 ON CONFLICT (group_name, member) DO NOTHING;",
+            )
+            .await
+            .with_context(|| "seeding the admins group with the wildcard member")?;
+        }
+    }
+
+    let rows =
+        sqlx::query("SELECT DISTINCT selector FROM audience_grants WHERE selector LIKE 'group:%';")
+            .fetch_all(&mut **tr)
+            .await
+            .with_context(|| "querying distinct group: selectors from audience_grants")?;
+    for row in rows {
+        let selector: String = row.try_get("selector").context("reading selector")?;
+        let name = selector
+            .strip_prefix("group:")
+            .expect("selector matched the LIKE 'group:%' filter");
+        if !is_valid_group_name(name) {
+            warn!(
+                "legacy audience_grants selector group:{name:?} does not match the group name \
+                 charset [A-Za-z0-9_-]{{1,255}}; left as an inert grant row, not backfilled into \
+                 a group"
+            );
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO groups (name, description, created_at, created_by)
+             VALUES ($1, NULL, now(), 'migration')
+             ON CONFLICT (name) DO NOTHING;",
+        )
+        .bind(name)
+        .execute(&mut **tr)
+        .await
+        .with_context(|| format!("backfilling empty group {name:?} from a legacy grant"))?;
+        info!("backfilled empty group {name:?} from a legacy audience_grants selector");
+    }
+
+    tr.execute("UPDATE migration SET version=10;")
+        .await
+        .with_context(|| "updating data lake schema version to 10")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -446,6 +647,21 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v9");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v9(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 9 == current_version {
+        info!("upgrading data_lake_schema to v10");
+        let seed = admin_seed_from_env()?;
+        info!(
+            "v10 admins seeding mode: {}",
+            match &seed {
+                AdminSeed::Users(users) => format!("Users({} entries)", users.len()),
+                AdminSeed::Everyone => "Everyone".to_string(),
+            }
+        );
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v10(&mut tr, &seed).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

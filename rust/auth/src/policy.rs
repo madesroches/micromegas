@@ -96,9 +96,9 @@ pub fn default_audience_from_env(prefix: &str) -> Result<String> {
 }
 
 /// A principal selector on either axis of an [`AudienceGrants`] entry: `*` (any authenticated
-/// principal), `user:<email>` (matches `AuthContext.email`), or `group:<g>` (matches any raw
-/// value in `AuthContext.groups`). Validated at parse time; `resolve`/`resolve_audience` never
-/// see an unrecognized shape.
+/// principal), `user:<email>` (matches `AuthContext.email`), or `group:<g>` (matches any entry in
+/// `AuthContext.memberships` -- the caller's resolved, transitive local-group closure). Validated
+/// at parse time; `resolve`/`resolve_audience` never see an unrecognized shape.
 ///
 /// `pub` -- `analytics-web-srv`'s admin grant-write route (a separate crate) needs to run this
 /// exact same selector-shape check `parse`/`from_rows` run, not a re-implementation of it.
@@ -114,7 +114,7 @@ pub fn valid_selector(selector: &str) -> bool {
 
 /// The grant selectors `caller` matches: a leading `"*"` (every caller matches it), then
 /// `"user:<email>"` when `caller.email` is `Some`, then one `"group:<g>"` per entry in
-/// `caller.groups`. `pub` -- shared by three consumers: `flight_sql_service_impl.rs`'s
+/// `caller.memberships`. `pub` -- shared by three consumers: `flight_sql_service_impl.rs`'s
 /// `CallerContext::grant_selectors`, `analytics-web-srv`'s `my_audiences` handler, and the
 /// audience-grant write policy's per-pair hold check (which must strip the leading `"*"` before
 /// binding the result -- a `*` grant is not something a caller individually holds).
@@ -123,7 +123,7 @@ pub fn caller_selectors(caller: &AuthContext) -> Vec<String> {
     if let Some(email) = &caller.email {
         selectors.push(format!("user:{email}"));
     }
-    selectors.extend(caller.groups.iter().map(|g| format!("group:{g}")));
+    selectors.extend(caller.memberships.iter().map(|g| format!("group:{g}")));
     selectors
 }
 
@@ -135,7 +135,7 @@ fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
         return caller.email.as_deref() == Some(email);
     }
     if let Some(group) = selector.strip_prefix("group:") {
-        return caller.groups.iter().any(|g| g == group);
+        return caller.memberships.iter().any(|g| g == group);
     }
     // Unreachable given `valid_selector` gates every selector at parse time; false rather than
     // panicking keeps this fail-closed if that invariant is ever violated.
@@ -437,7 +437,7 @@ pub trait MintPolicy: Send + Sync + Debug {
 /// ```text
 /// { a : "*"            ∈ grants[a].read }
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
-///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.groups }
+///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.memberships }
 ///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
 ///   ∪ caller.read_audiences                                    // per-key direct grant
 /// ```
@@ -579,7 +579,7 @@ impl MintPolicy for AudienceMintPolicy {
         let Some(aud) = requested else {
             return Err(anyhow!("no audience requested and none can be defaulted"));
         };
-        if caller.is_admin {
+        if caller.is_admin() {
             return if is_valid_audience(aud) {
                 Ok(aud.to_string())
             } else {

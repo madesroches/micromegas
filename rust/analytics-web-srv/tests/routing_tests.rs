@@ -12,6 +12,7 @@
 use analytics_web_srv::analytics_keys::AnalyticsKeysState;
 use analytics_web_srv::audience_grants::AudienceGrantsState;
 use analytics_web_srv::data_source_cache::DataSourceCache;
+use analytics_web_srv::groups::GroupsState;
 use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
 use analytics_web_srv::web_server::{AdminRoutesState, build_auth_routes, build_protected_routes};
@@ -415,6 +416,7 @@ fn disabled_auth_app() -> Router {
         self_service_mint_enabled: false,
         max_grants_per_caller: 50,
     };
+    let groups_state = GroupsState { pool: None };
     build_protected_routes(
         "",
         &None,
@@ -425,6 +427,7 @@ fn disabled_auth_app() -> Router {
             analytics_keys: analytics_keys_state,
             ingestion_keys: ingestion_keys_state,
             audience_grants: audience_grants_state,
+            groups: groups_state,
         },
     )
 }
@@ -479,6 +482,16 @@ async fn disable_auth_audience_grants_base_route_returns_503() {
 #[tokio::test]
 async fn disable_auth_audience_grants_sub_path_returns_503() {
     assert_key_management_disabled_503(disabled_auth_app(), "/api/audience-grants/anything").await;
+}
+
+#[tokio::test]
+async fn disable_auth_groups_base_route_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/groups").await;
+}
+
+#[tokio::test]
+async fn disable_auth_groups_sub_path_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/groups/admins/members").await;
 }
 
 // ---------------------------------------------------------------------------

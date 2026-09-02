@@ -28,7 +28,6 @@ binary as its entrypoint.
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads (`file:///path`, `s3://…`, `gs://…`) |
 | `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
-| `MICROMEGAS_ADMINS` | No | JSON array of admin user emails/subjects — used for FlightSQL's admin-gated SQL functions and `analytics-web-srv`'s admin gate; ingestion itself has no admin-gated route of its own (see [API Keys](api-keys.md)) |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). The ingestion role now reads it too: a process whose credential carries no audience is stamped with this value explicitly at write time, the same audience the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)) apply where a legacy or replicated row's audience is read. One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
@@ -59,6 +58,13 @@ ingestion endpoint. For configuration details and provider precedence, see
 export MICROMEGAS_API_KEYS='[{"name":"game-client","key":"…"}]'
 telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
 ```
+
+### Schema migration and admin seeding
+
+This is the process (alongside the monolith) that runs the data-lake schema
+migration, including v10, which adds the `groups`/`group_members` tables and
+seeds the reserved `admins` group — see [Groups](groups.md) for the seeding
+rules and the upgrade path.
 
 ### Key management
 

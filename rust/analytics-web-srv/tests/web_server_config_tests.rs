@@ -44,7 +44,6 @@ fn cli_args() -> WebCliArgs {
         port: 3000,
         frontend_dir: "dist".to_string(),
         disable_auth: true,
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
     }
 }
 

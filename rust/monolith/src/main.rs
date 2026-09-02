@@ -42,6 +42,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::task::JoinSet;
 
 // ---------------------------------------------------------------------------
@@ -229,8 +230,10 @@ async fn main() -> Result<()> {
             .clone()
             .expect("lakehouse must be Some when flightsql role is enabled");
         let key_store_pool = dedicated_key_store_pool(&pool);
+        let group_store_pool = dedicated_key_store_pool(&pool);
         match ProviderBuilder::new("MICROMEGAS_ANALYTICS")
             .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
+            .with_group_store(group_store_pool)
             .build()
             .await?
         {
@@ -278,7 +281,7 @@ async fn main() -> Result<()> {
             DbAudienceGrantsConfig::from_env_with_prefix("MICROMEGAS_ANALYTICS");
         let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
             audience_grants_pool,
-            audience_grants_config,
+            Duration::from_secs(audience_grants_config.cache_ttl_secs),
         ));
         Some(Arc::new(
             AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?
@@ -296,13 +299,6 @@ async fn main() -> Result<()> {
         Some(Arc::new(IsolationConfig::from_env("MICROMEGAS_ANALYTICS")?))
     } else {
         None
-    };
-
-    // Resolve the analytics admin var once (web and FlightSQL share the same source)
-    let analytics_admin_var = if std::env::var("MICROMEGAS_ANALYTICS_ADMINS").is_ok() {
-        "MICROMEGAS_ANALYTICS_ADMINS".to_string()
-    } else {
-        "MICROMEGAS_ADMINS".to_string()
     };
 
     // One SIGTERM drives all roles
@@ -383,7 +379,6 @@ async fn main() -> Result<()> {
             port: args.port,
             frontend_dir: args.frontend_dir.clone(),
             disable_auth: args.disable_auth,
-            admin_var_name: analytics_admin_var,
         })?;
 
         // Auto-seed the local FlightSQL data source when web + flightsql are both enabled

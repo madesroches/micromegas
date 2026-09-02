@@ -32,7 +32,10 @@ pub async fn check_auth(
 
     info!(
         "authenticated: subject={} email={:?} issuer={} admin={}",
-        auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
+        auth_ctx.subject,
+        auth_ctx.email,
+        auth_ctx.issuer,
+        auth_ctx.is_admin()
     );
 
     let mut req = req;

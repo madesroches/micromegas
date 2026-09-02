@@ -146,7 +146,7 @@ fn public_view_sets_rejects_json_array_shaped_entries() {
     }
     let err = IsolationConfig::from_env(PREFIX).expect_err(
         "a JSON-array-shaped value must be rejected -- this var is comma-separated, not a \
-         MICROMEGAS_ADMINS-style JSON array",
+         MICROMEGAS_API_KEYS-style JSON array",
     );
     let msg = err.to_string();
     assert!(

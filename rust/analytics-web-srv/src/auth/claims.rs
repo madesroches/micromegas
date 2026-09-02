@@ -43,7 +43,7 @@ impl From<&AuthContext> for ValidatedUser {
             subject: ctx.subject.clone(),
             email: ctx.email.clone(),
             issuer: ctx.issuer.clone(),
-            is_admin: ctx.is_admin,
+            is_admin: ctx.is_admin(),
         }
     }
 }

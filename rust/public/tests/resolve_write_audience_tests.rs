@@ -48,11 +48,10 @@ fn ctx_with_bound_audience(audience: &str) -> AuthContext {
         audience: None,
         expires_at: None,
         auth_type: AuthType::ApiKey,
-        is_admin: false,
         allow_delegation: false,
         bound_audience: Some(audience.to_string()),
         read_audiences: vec![],
-        groups: vec![],
+        memberships: Arc::from([]),
     }
 }
 
@@ -64,11 +63,10 @@ fn ctx_without_bound_audience() -> AuthContext {
         audience: None,
         expires_at: None,
         auth_type: AuthType::ApiKey,
-        is_admin: false,
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
-        groups: vec![],
+        memberships: Arc::from([]),
     }
 }
 

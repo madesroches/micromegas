@@ -597,11 +597,20 @@ class FlightSQLClient:
     def bulk_ingest(self, table_name, table):
         """Bulk ingest a pyarrow.Table into a Micromegas metadata table.
 
-        Requires admin: only callable by an OIDC-authenticated identity listed in
-        MICROMEGAS_ADMINS (or a --disable-auth deployment). API-key credentials
-        (both ingestion_api_keys and analytics_api_keys) are never admin and can
-        never satisfy this check, so automation calling bulk_ingest with an API
-        key must switch to an OIDC-based admin identity.
+        Requires admin: only callable by a caller whose resolved local-group
+        membership includes the reserved `admins` group (or a --disable-auth
+        deployment) -- see the Groups admin page / `micromegas-groups`, which
+        replaced the removed MICROMEGAS_ADMINS env var. Normally an API-key
+        credential (both ingestion_api_keys and analytics_api_keys) carries no
+        email and so can never match a `user:`/`group:` member and can never be
+        admin. The one exception: while `admins` still has a wildcard (`*`)
+        member -- the state a fresh install or an unmigrated upgrade seeds --
+        every authenticated caller is admin, API keys included; this exception
+        goes away as soon as an operator adds a `user:` member and removes `*`.
+
+        Historical note: prior to the local-groups migration, admin-ness came
+        from an OIDC identity listed in the now-removed MICROMEGAS_ADMINS env
+        var, and API-key credentials could never satisfy this check at all.
 
         This method efficiently loads metadata or replication data into Micromegas
         tables using Arrow's columnar format. Primarily used for ingesting:
@@ -624,9 +633,9 @@ class FlightSQLClient:
         Raises:
             Exception: If ingestion fails due to schema mismatch, unsupported table,
                 or invalid data.
-            PERMISSION_DENIED: If the caller is not an OIDC-authenticated admin
-                identity (listed in MICROMEGAS_ADMINS) or a --disable-auth
-                deployment. API-key credentials always fail this check.
+            PERMISSION_DENIED: If the caller's resolved local-group membership
+                does not include `admins`, and this is not a --disable-auth
+                deployment.
 
         Example:
             >>> import pyarrow as pa

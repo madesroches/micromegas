@@ -638,6 +638,13 @@ function AudienceAccessPageContent() {
                 admin to change them.
               </p>
             )}
+            {me && me.groups && me.groups.length > 0 && (
+              <p>
+                <strong className="text-theme-text-secondary">Your groups:</strong>{' '}
+                <code>{me.groups.join(', ')}</code> — explains any <code>group:</code> grant you
+                hold below.
+              </p>
+            )}
           </div>
 
           {listError && <ErrorBanner title="Failed to load grants" message={listError} onRetry={loadGrants} />}

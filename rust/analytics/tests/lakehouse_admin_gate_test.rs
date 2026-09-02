@@ -1,14 +1,13 @@
 //! Offline (no live DB) regression tests for `tasks/admin_gate_mutating_lakehouse_functions_plan.md`:
-//! `make_session_context`'s `CallerContext::is_admin`/`admin_principal_possible` gate
-//! registration of the eight admin-gated lakehouse UDTFs/UDFs (`retire_partitions`,
-//! `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`,
-//! `retire_partition_by_metadata`, and the query deny list's `list_query_denials`,
-//! `deny_queries`, `remove_query_denial`). These tests only assert on DataFusion *planning*,
-//! never execution: the gated functions' own `call_with_args` implementations only parse
-//! arguments and return a lazy provider (or, for `deny_queries`, additionally compile the match
-//! expression and read `rule_count()` from the in-memory, empty deny-list snapshot), so
-//! planning-only assertions never touch the lazy Postgres pool or the in-memory object store
-//! below.
+//! `make_session_context`'s `CallerContext::is_admin` gate registration of the eight
+//! admin-gated lakehouse UDTFs/UDFs (`retire_partitions`, `materialize_partitions`,
+//! `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, and the
+//! query deny list's `list_query_denials`, `deny_queries`, `remove_query_denial`). These tests
+//! only assert on DataFusion *planning*, never execution: the gated functions' own
+//! `call_with_args` implementations only parse arguments and return a lazy provider (or, for
+//! `deny_queries`, additionally compile the match expression and read `rule_count()` from the
+//! in-memory, empty deny-list snapshot), so planning-only assertions never touch the lazy
+//! Postgres pool or the in-memory object store below.
 
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
@@ -37,14 +36,12 @@ async fn make_offline_lakehouse_context() -> Arc<LakehouseContext> {
 
 async fn make_gated_session_context(
     is_admin: bool,
-    admin_principal_possible: bool,
 ) -> datafusion::execution::context::SessionContext {
     let lakehouse = make_offline_lakehouse_context().await;
     let caller = CallerContext {
         read_scope: micromegas_analytics::lakehouse::read_scope::ReadScope::All,
         is_admin,
         isolation_config: Arc::new(IsolationConfig::default()),
-        admin_principal_possible,
         // `deny_queries`'s own plan-time identity check (`CallerContext::identity` must be
         // `Some`) is not what this test suite is about -- give every fixture an identity so a
         // gated `deny_queries` call fails (or succeeds) on the *registration gate* under test,
@@ -86,7 +83,7 @@ const NON_MUTATING_CALLS: &[&str] = &[
 
 #[tokio::test]
 async fn non_admin_session_cannot_plan_mutating_udtfs() {
-    let ctx = make_gated_session_context(false, true).await;
+    let ctx = make_gated_session_context(false).await;
     for sql in MUTATING_UDTF_CALLS {
         let err = ctx
             .sql(sql)
@@ -102,7 +99,7 @@ async fn non_admin_session_cannot_plan_mutating_udtfs() {
 
 #[tokio::test]
 async fn non_admin_session_cannot_plan_mutating_udfs() {
-    let ctx = make_gated_session_context(false, true).await;
+    let ctx = make_gated_session_context(false).await;
     for sql in MUTATING_UDF_CALLS {
         let err = ctx
             .sql(sql)
@@ -118,7 +115,7 @@ async fn non_admin_session_cannot_plan_mutating_udfs() {
 
 #[tokio::test]
 async fn admin_session_can_plan_all_mutating_functions() {
-    let ctx = make_gated_session_context(true, true).await;
+    let ctx = make_gated_session_context(true).await;
     for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
         ctx.sql(sql)
             .await
@@ -126,39 +123,10 @@ async fn admin_session_can_plan_all_mutating_functions() {
     }
 }
 
-/// The registration gate -- `caller.is_admin || !caller.admin_principal_possible` -- lets a
-/// non-admin plan the mutating functions whenever the deployment can never produce an admin
-/// principal at all (e.g. an API-key-only deployment), rather than locking everyone out.
-#[tokio::test]
-async fn non_admin_session_without_admin_principal_can_plan_all_mutating_functions() {
-    let ctx = make_gated_session_context(false, false).await;
-    for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
-        ctx.sql(sql).await.unwrap_or_else(|e| {
-            panic!("expected non-admin session to plan {sql} when no admin principal is possible, got: {e}")
-        });
-    }
-}
-
-/// An admin session is unaffected by `admin_principal_possible` either way -- `is_admin` alone
-/// is already sufficient, and the fallback is additive, never a restriction.
-#[tokio::test]
-async fn admin_session_can_plan_all_mutating_functions_regardless_of_admin_principal_possible() {
-    for admin_principal_possible in [false, true] {
-        let ctx = make_gated_session_context(true, admin_principal_possible).await;
-        for sql in MUTATING_UDTF_CALLS.iter().chain(MUTATING_UDF_CALLS.iter()) {
-            ctx.sql(sql).await.unwrap_or_else(|e| {
-                panic!(
-                    "expected admin session to plan {sql} with admin_principal_possible={admin_principal_possible}, got: {e}"
-                )
-            });
-        }
-    }
-}
-
 #[tokio::test]
 async fn non_mutating_functions_plan_identically_for_admin_and_non_admin() {
     for is_admin in [false, true] {
-        let ctx = make_gated_session_context(is_admin, true).await;
+        let ctx = make_gated_session_context(is_admin).await;
         for sql in NON_MUTATING_CALLS {
             ctx.sql(sql).await.unwrap_or_else(|e| {
                 panic!("expected {sql} to plan with is_admin={is_admin}, got: {e}")

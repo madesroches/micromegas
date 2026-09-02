@@ -18,7 +18,7 @@ use axum::{
 use axum_extra::extract::cookie::CookieJar;
 use micromegas::auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
 use micromegas::auth::oidc::create_http_client;
-use micromegas::auth::types::{AuthContext, AuthProvider};
+use micromegas::auth::types::{AuthContext, ProviderUnavailable};
 use micromegas::auth::url_validation::validate_return_url;
 use micromegas::tracing::prelude::*;
 use openidconnect::{
@@ -390,19 +390,25 @@ pub async fn auth_me(
     };
 
     let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
-        warn!("[auth_failure] {e}");
-        AuthApiError::InvalidToken
+        if e.downcast_ref::<ProviderUnavailable>().is_some() {
+            warn!("[auth_failure] auth provider unavailable: {e}");
+            AuthApiError::Unavailable
+        } else {
+            warn!("[auth_failure] {e}");
+            AuthApiError::InvalidToken
+        }
     })?;
 
     // Extract name from JWT payload (not in AuthContext)
     // This is safe since we just validated the token
     let name = extract_name_from_token(&id_token);
+    let is_admin = auth_context.is_admin();
 
     Ok(Json(UserInfo {
         sub: auth_context.subject,
         email: auth_context.email,
         name,
-        is_admin: auth_context.is_admin,
+        is_admin,
     }))
 }
 
@@ -415,6 +421,10 @@ pub enum AuthApiError {
     Unauthorized,
     InvalidToken,
     Internal(String),
+    /// A `ProviderUnavailable` from `validate_request` -- the group store (or the OIDC
+    /// provider's own backing store) is unreachable, distinct from a rejected credential so the
+    /// client retries instead of treating the session as permanently invalid.
+    Unavailable,
 }
 
 impl IntoResponse for AuthApiError {
@@ -430,6 +440,9 @@ impl IntoResponse for AuthApiError {
             AuthApiError::Internal(msg) => {
                 error!("Auth internal error: {msg}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
+            AuthApiError::Unavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "Auth provider unavailable")
             }
         };
 
@@ -494,14 +507,22 @@ pub async fn cookie_auth_middleware(
 
     // Validate the token with full signature verification
     let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
-        warn!("[auth_failure] {e}");
-        AuthApiError::InvalidToken
+        if e.downcast_ref::<ProviderUnavailable>().is_some() {
+            warn!("[auth_failure] auth provider unavailable: {e}");
+            AuthApiError::Unavailable
+        } else {
+            warn!("[auth_failure] {e}");
+            AuthApiError::InvalidToken
+        }
     })?;
 
     // Log successful authentication (trace level to avoid noise on every request)
     trace!(
         "[auth_success] subject={} email={:?} issuer={} admin={}",
-        auth_context.subject, auth_context.email, auth_context.issuer, auth_context.is_admin
+        auth_context.subject,
+        auth_context.email,
+        auth_context.issuer,
+        auth_context.is_admin()
     );
 
     // Store token and validated user info in request extensions

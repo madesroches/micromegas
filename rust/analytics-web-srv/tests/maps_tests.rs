@@ -23,12 +23,23 @@ use axum::{
     routing::{get, put},
 };
 use flate2::read::GzDecoder;
+use micromegas::auth::groups::DbGroupsSource;
 use object_store::{
     ObjectStore, ObjectStoreExt, local::LocalFileSystem, memory::InMemory, path::Path,
 };
 use std::io::Read;
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
+
+/// A pool that is never actually reachable, matching `rust/auth/tests/test_utils.rs`'s
+/// `unreachable_pool` -- fine here, since none of these tests call `get_auth_provider`.
+fn unreachable_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
 
 fn anon_user() -> ValidatedUser {
     ValidatedUser {
@@ -61,7 +72,10 @@ fn create_test_auth_state() -> AuthState {
         secure_cookies: false,
         state_signing_secret: b"test-secret-key-32-bytes-long!!!".to_vec(),
         base_path: String::new(),
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
+        groups: Arc::new(DbGroupsSource::new(
+            unreachable_pool(),
+            Duration::from_secs(60),
+        )),
     }
 }
 

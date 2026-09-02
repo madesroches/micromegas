@@ -279,7 +279,6 @@ async fn optimized_plan_with_factory(
         read_scope,
         is_admin: false,
         isolation_config: Arc::new(isolation_config),
-        admin_principal_possible: true,
         identity: None,
         grant_selectors: Arc::from([]),
     };

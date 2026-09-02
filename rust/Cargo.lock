@@ -3828,6 +3828,7 @@ dependencies = [
  "micromegas-tracing",
  "moka",
  "object_store",
+ "serde_json",
  "serial_test",
  "sqlx",
  "thiserror 2.0.18",
