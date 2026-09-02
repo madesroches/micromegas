@@ -486,8 +486,9 @@ migration says it loudly rather than letting access disappear quietly.
     `web_server_config_tests.rs` updates for the removed var. Delete
     `cookie_auth_middleware_inserts_auth_context_with_groups` (`auth_integration.rs`), which
     asserts membership from the removed `groups` claim; replace it with the planned
-    `ProviderUnavailable` → 503 assertion from Testing Strategy, and add a separate positive-
-    membership middleware test under `#[ignore]` (needs a live DB for `DbGroupsSource`).
+    `ProviderUnavailable` → 503 assertion from Testing Strategy (no live DB needed; the store uses
+    an `unreachable_pool`-style seam). No live-DB positive-membership middleware test is added —
+    that path is covered by the manual walkthrough in Testing Strategy.
 
 ### Phase 6 — clients
 
@@ -591,6 +592,12 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   needed for this case.
 - `member` is a selector string, not a `(member_kind, member_id)` pair — per the issue.
 - No directory sync — per the issue.
+- No live-DB (`#[ignore]`) tests are added for this feature's new functionality (the v10 migration,
+  groups CRUD, positive membership resolution): per the project-wide live-DB test policy
+  (`CONTRIBUTING.md`), such a test is added only to cover the resolution of a bug witnessed in the
+  wild. Coverage instead comes from the no-DB unit tests listed in Testing Strategy plus manual
+  verification — starting the local stack against a v9 database and reading the migration logs,
+  and exercising groups CRUD through the Groups page and `micromegas-groups`.
 
 ## Documentation
 
@@ -637,31 +644,31 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
   error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
-- `sql_migration_test.rs`: one `#[ignore]`d live-DB test, matching the single-test-per-version
-  pattern used for v6–v9 (`v6_backfills_existing_rows_and_rejects_invalid_audiences`, etc.), not a
-  separate test per case. It calls `upgrade_data_lake_schema_v10` directly with an explicit
-  `AdminSeed`, inside a transaction over a `build_v9_schema` pool, not via `execute_migration`, and
-  asserts: `AdminSeed::Everyone` yields `('admins','*')`; `AdminSeed::Users` yields the `user:` rows
-  and no `*`; a pre-existing `group:eng` grant yields an empty `eng` group; a `group:Eng Team`
-  selector yields no group and the grant row survives; a pre-existing `group:admins` grant does not
-  fail the migration (step 4's insert no-ops against step 2's row); the `CHECK` constraints reject a
-  bad name and a bad member. No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
+- `sql_migration_test.rs`: no live-DB test added, per the live-DB test policy (`CONTRIBUTING.md`)
+  — v10's seeding, backfill, and `CHECK`-constraint behavior is new functionality, not the
+  resolution of a witnessed bug, so it is verified manually (see the Manual bullet below) rather
+  than with an `#[ignore]`d test. No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
   non-array value, and an empty array asserting `AdminSeed::Everyone`.
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
 - `analytics-web-srv/tests/groups_tests.rs`: 403 for non-admin on every route; 400 bad name/
-  selector; 409 deleting `admins`; three `#[ignore]`d live-DB tests instead of one per case:
-  `live_crud_round_trip` (create/read/remove plus the 201-then-200 idempotent add), a conflict test
-  covering all three 409s (cycle, delete while referenced, removing the last `admins` row), and a
-  404 test for a `group:` member naming a missing group. `routing_tests.rs`: `--disable-auth` 503
-  for `/api/groups*` (the only reachable unconfigured-pool case, since auth-enabled deployments
-  always have the pool set). `auth_integration.rs`: `ProviderUnavailable` from the group store →
-  503.
+  selector; 409 deleting `admins`. No live-DB tests added, per the live-DB test policy — the CRUD
+  round trip, the cycle/delete-while-referenced/last-admins-row conflict responses, and the
+  missing-group 404 are new functionality, not a witnessed bug, so they are verified manually (see
+  the Manual bullet below). `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
+  reachable unconfigured-pool case, since auth-enabled deployments always have the pool set).
+  `auth_integration.rs`: `ProviderUnavailable` from the group store → 503 (no live DB needed; the
+  store uses an `unreachable_pool`-style seam).
 - Web app: `GroupsPage.test.tsx` (list, add member, cycle error surfaced, remove), `AdminPage.test.tsx`
   (banner shown iff `*` present and admin), `groups-api.test.ts`.
 - Python: `tests/cli/test_groups.py` dispatch tests mirroring `test_grants.py`;
   `test_web_client.py` payload/query-param shapes.
-- Manual: `start_services_with_oidc.py` against a fresh DB shows the wildcard warning at boot and
+- Manual: the v10 migration is verified by starting the local stack against a v9 database and
+  reading the startup logs — schema version bump, the seeding mode chosen (`Everyone`/`Users`),
+  and any `group:X` backfill/warning lines — rather than an automated live-DB test.
+  `start_services_with_oidc.py` against that same fresh DB shows the wildcard warning at boot and
   the hub banner; `micromegas-groups add admins user:<me>` then `remove admins '*'` clears both
-  within the TTL; a non-admin then loses `retire_partitions` and the Groups page.
+  within the TTL; a non-admin then loses `retire_partitions` and the Groups page. The groups CRUD
+  round trip, cycle/conflict responses, and the missing-group 404 are exercised the same way,
+  through the Groups page and `micromegas-groups`, rather than with automated live-DB tests.
