@@ -443,10 +443,9 @@ migration says it loudly rather than letting access disappear quietly.
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to 10, extend `warn_if_data_lake_schema_stale`'s message.
    `Cargo.toml`: add `serde_json.workspace = true` under `[dependencies]` for `AdminSeed::parse`'s
    JSON decoding.
-9. `tests/sql_migration_test.rs`: `build_v9_schema`, plus the v10 tests listed under Testing —
-   each calling `upgrade_data_lake_schema_v10` directly with an explicit `AdminSeed` value inside a
-   transaction over a `build_v9_schema` pool, not via `execute_migration` (unlike the v7–v9 tests,
-   which drive the whole `execute_migration(pool)` function).
+9. `tests/sql_migration_test.rs`: no-DB `AdminSeed::parse` unit tests (malformed JSON, a non-array
+   value, and `[]` asserting `AdminSeed::Everyone`) — plain `#[test]` fns alongside the existing
+   `#[ignore]`d live-DB tests, per Testing Strategy.
 
 ### Phase 3 — analytics gate collapse
 
