@@ -168,51 +168,36 @@ stores use.
 
 ## Upgrade path (schema v10)
 
-1. **Deploy the new binaries.** Leave `MICROMEGAS_ADMINS` (or
-   `MICROMEGAS_ANALYTICS_ADMINS`) set **only on the process that runs the
-   migration** (`telemetry-ingestion-srv` or the monolith), and unset
-   everywhere else.
-2. **Start that process once.** The v10 migration seeds `admins` from the
-   variable:
-     - If the var is set and holds a non-empty JSON array, `admins` gets one
-       `user:<entry>` row per entry — who is an admin does not change,
-       provided every entry is email-shaped. A `user:` member only ever
-       matches the caller's OIDC `email` claim, so an entry that isn't
-       email-shaped (e.g. an OIDC subject) can never match anyone once
-       seeded; the migration refuses to run rather than silently seed such
-       a dead row. Fix the entry to the user's email and re-run, or drop it
-       from the var and add it after the upgrade with `micromegas-groups`
-       or the Groups page.
-     - Otherwise (fresh install, an upgrade that never set the var, or a var
-       set to an empty JSON array `[]`), `admins` gets a single
-       `('admins', '*')` row. This is what makes the first admin reachable
-       on a fresh install, where the installer cannot know the operator's
-       email — but on an upgrade it also *widens* who can reach several
-       gates that were previously narrower, all the way down to the same
-       "every authenticated caller" state the SQL admin-function gate
-       already had:
-         - The web admin routes (`AdminUser`/`require_admin`, the
-           audience-grant write gate, the ingestion-key mint gate).
-         - The mint-any-audience arm of the mint policy.
-         - The FlightSQL `bulk_ingest` gate — now satisfiable by an
-           API-key caller, not just OIDC (see
-           [`bulk_ingest`](../query-guide/python-api.md#bulk_ingesttable_name-table)).
-         - `list_audience_grants()`'s all-rows branch, to every
-           authenticated caller.
-
-   The process then refuses to start on the removed-var check, naming this
-   step — a single, explicit restart, rather than making the refusal
-   conditional on whether this same process just ran the migration.
-3. **Remove the variable there too and start everything.** `flight-sql-srv`
-   and `analytics-web-srv` processes started before the migration ran
-   answer 503 until it has (the schema-stale startup warning says so).
-4. **Take over from the wildcard**, on a fresh install or wherever it was
-   seeded:
+1. **Deploy the new binaries and run the migration once** — start
+   `telemetry-ingestion-srv` or the monolith. None of
+   `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`/
+   `MICROMEGAS_INGESTION_ADMINS` should be set anywhere in the deployment:
+   the migration does not read them, and every process refuses to start
+   (the removed-var check) if any is still set, regardless of value.
+2. **The v10 migration always seeds `admins` with a single `('admins', '*')`
+   row** — fresh install or upgrade, every time, no exception. This means
+   *every authenticated caller* can reach several gates that were
+   previously narrower, matching the state the SQL admin-function gate
+   already had:
+     - The web admin routes (`AdminUser`/`require_admin`, the
+       audience-grant write gate, the ingestion-key mint gate).
+     - The mint-any-audience arm of the mint policy.
+     - The FlightSQL `bulk_ingest` gate — now satisfiable by an
+       API-key caller, not just OIDC (see
+       [`bulk_ingest`](../query-guide/python-api.md#bulk_ingesttable_name-table)).
+     - `list_audience_grants()`'s all-rows branch, to every
+       authenticated caller.
+3. **Start everything else.** `flight-sql-srv` and `analytics-web-srv`
+   processes started before the migration ran answer 503 until it has (the
+   schema-stale startup warning says so).
+4. **Take over from the wildcard**, on every upgrade and every fresh
+   install alike:
    ```
    micromegas-groups --url <analytics-web-srv URL> add admins user:<you>
    micromegas-groups --url <analytics-web-srv URL> remove admins '*'
    ```
-   Do this as the first post-install step.
+   Do this as the first post-migration step, every time — there is no
+   longer a way to preserve a prior admin list across the migration.
 
 Anyone who relied on IdP claim-derived `group:` grants must re-add
 membership by hand: the v10 migration creates each such group empty (from

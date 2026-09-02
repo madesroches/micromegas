@@ -15,7 +15,7 @@
 //! `cargo test --test sql_migration_test -- --ignored`.
 
 use micromegas_ingestion::sql_migration::{
-    AdminSeed, LATEST_DATA_LAKE_SCHEMA_VERSION, execute_migration, read_data_lake_schema_version,
+    LATEST_DATA_LAKE_SCHEMA_VERSION, execute_migration, read_data_lake_schema_version,
     upgrade_data_lake_schema_v2, upgrade_data_lake_schema_v3, upgrade_data_lake_schema_v4,
     upgrade_data_lake_schema_v5, upgrade_data_lake_schema_v6, upgrade_data_lake_schema_v7,
     upgrade_data_lake_schema_v8,
@@ -669,45 +669,4 @@ async fn v9_seeds_public_read_and_mint_grants() {
         .expect("dropping throwaway schema");
 
     test_result.expect("test assertions");
-}
-
-// ---------------------------------------------------------------------------
-// AdminSeed::parse -- no DB needed. v10's seeding, backfill, and CHECK-constraint behavior is
-// verified manually (see the plan's Testing Strategy); these pin `parse`'s decoding rules alone.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn admin_seed_parse_rejects_malformed_json() {
-    assert!(AdminSeed::parse("not json").is_err());
-    assert!(AdminSeed::parse("").is_err());
-    assert!(AdminSeed::parse("[\"unterminated").is_err());
-}
-
-#[test]
-fn admin_seed_parse_rejects_a_non_array_value() {
-    assert!(AdminSeed::parse(r#"{"admin": "alice@example.com"}"#).is_err());
-    assert!(AdminSeed::parse(r#""alice@example.com""#).is_err());
-    assert!(AdminSeed::parse("42").is_err());
-    assert!(AdminSeed::parse("null").is_err());
-}
-
-#[test]
-fn admin_seed_parse_empty_array_is_everyone() {
-    assert_eq!(AdminSeed::parse("[]").expect("valid"), AdminSeed::Everyone);
-}
-
-#[test]
-fn admin_seed_parse_non_empty_array_is_users() {
-    assert_eq!(
-        AdminSeed::parse(r#"["alice@example.com", "bob@example.com"]"#).expect("valid"),
-        AdminSeed::Users(vec![
-            "alice@example.com".to_string(),
-            "bob@example.com".to_string()
-        ])
-    );
-}
-
-#[test]
-fn admin_seed_parse_rejects_a_non_string_array_element() {
-    assert!(AdminSeed::parse(r#"["alice@example.com", 42]"#).is_err());
 }

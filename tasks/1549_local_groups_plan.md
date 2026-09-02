@@ -127,46 +127,26 @@ distinct kind of thing from an email. Hard `DELETE`, no `revoked_*` columns, sam
 
 ### Migration v10
 
-`upgrade_data_lake_schema_v10(tr, seed: &AdminSeed)`:
+`upgrade_data_lake_schema_v10(tr)`:
 
 1. Create both tables.
 2. Insert `('admins', 'Deployment administrators', now(), 'default')`, `ON CONFLICT (name) DO
    NOTHING`.
-3. Seed `admins` members from `seed`:
-   - `AdminSeed::Users(list)` when the env var is set and non-empty: one `user:<entry>` row per
-     entry, no wildcard. Who is an admin does not change.
-   - `AdminSeed::Everyone` otherwise (fresh install, an upgrade that never set the var, or a var set
-     to an empty JSON array `[]`): one `('admins', '*')` row. On an upgrade this preserves only the
-     three `admin_principal_possible` SQL gates, which were already open to every caller; it
-     additionally *opens* the web admin routes (`AdminUser`/`require_admin`, `GrantGate`,
-     `MintGate`), the mint-any-audience arm of
-     `AudienceMintPolicy`, the FlightSQL `bulk_ingest` gate (`do_put_statement_ingest`'s plain
-     `is_admin(request.metadata())` check, now satisfiable by an API-key caller, not just OIDC),
-     and `list_audience_grants()`'s all-rows (`GrantVisibility::All`) branch to every authenticated
-     caller, none of which the old fallback ever touched. That widening is also what makes the
-     first admin reachable on a fresh install, where the installer cannot know the operator's
-     email.
+3. Seed `admins` with a single `('admins', '*', now(), 'default')` row, unconditionally — every
+   migration, upgrade or fresh install alike, ends up with `admins = ['*']`. No env var is read to
+   decide this; there is no "preserve who was admin" mode. On an upgrade this widens who can reach
+   the web admin routes (`AdminUser`/`require_admin`, `GrantGate`, `MintGate`), the mint-any-audience
+   arm of `AudienceMintPolicy`, the FlightSQL `bulk_ingest` gate (`do_put_statement_ingest`'s plain
+   `is_admin(request.metadata())` check, now satisfiable by an API-key caller, not just OIDC), and
+   `list_audience_grants()`'s all-rows (`GrantVisibility::All`) branch, all the way down to "every
+   authenticated caller" — the same state the SQL admin-function gate already had. The operator is
+   expected to run the standard two-step fixup (`micromegas-groups add admins user:<you>` then
+   `remove admins '*'`) immediately after every migration, not just on a fresh install.
 4. For every distinct `X` in `audience_grants.selector = 'group:X'`, insert an empty group `X`
    (`created_by = 'migration'`, `ON CONFLICT (name) DO NOTHING` — a pre-existing `group:admins`
    selector would otherwise collide with step 2's row and fail the whole v10 transaction) when `X`
    passes the name charset; log each. A value that fails the charset (a display name with spaces)
    cannot become a group — log it at `warn!` and leave the grant row in place, inert.
-
-`AdminSeed` is resolved by `execute_migration` (not inside the v10 function, which keeps the v10
-step free of env access) from `MICROMEGAS_ANALYTICS_ADMINS`, falling
-back to `MICROMEGAS_ADMINS` — the **analytics** var only, since a principal listed only in
-`MICROMEGAS_INGESTION_ADMINS` has no admin capability today. If `MICROMEGAS_INGESTION_ADMINS` holds
-entries the analytics var lacks, `warn!` naming the dropped entries. Entries are seeded verbatim as
-`user:<entry>`; an entry that does not contain `@` is warned about, because `user:` matches
-`AuthContext.email` only and a subject-shaped entry will never match anyone.
-
-Mirrors `AudienceGrants::parse`/`from_env` (`policy.rs:263`, `:292`): `AdminSeed::parse(raw: &str) ->
-Result<AdminSeed>` holds the JSON decoding and validation, with no env access, so it can be unit
-tested directly; `admin_seed_from_env` is the thin wrapper that reads the env var and calls `parse`.
-`parse` returns `Err` — failing the migration before v10 commits — when `raw` is not valid JSON or
-is not a JSON array. A valid but empty array (`[]`) parses to `AdminSeed::Everyone`, preserving
-today's effective state (an unset or empty admin list already means `can_grant_admin() == false`,
-i.e. open to everyone).
 
 `warn_if_data_lake_schema_stale`'s message gains the v10 consequence: on a v9 schema every request
 fails with a retryable 503 until the migration runs, because the group store cannot load.
@@ -386,15 +366,17 @@ micromegas-groups --url URL remove <name> <member>
 
 ### Upgrade path
 
-1. Deploy the new binaries. Leave `MICROMEGAS_ADMINS` (or `MICROMEGAS_ANALYTICS_ADMINS`) set **only
-   on the process that runs the migration** (`telemetry-ingestion-srv` or the monolith), and unset
-   everywhere else.
-2. Start that process once. The v10 migration seeds `admins` from the variable. The process then
-   refuses to start on the removed-var check, naming this step.
-3. Remove the variable there too and start everything. Flight-sql and web processes started before
-   the migration ran answer 503 until it has (the schema-stale warning says so).
-4. On a fresh install, or wherever the wildcard was seeded: add `user:<you>` to `admins`, then
-   remove `*`. The install guide makes this the first post-install step.
+1. Deploy the new binaries and run the migration once, by starting
+   `telemetry-ingestion-srv` or the monolith. None of `MICROMEGAS_ADMINS`,
+   `MICROMEGAS_ANALYTICS_ADMINS`, or `MICROMEGAS_INGESTION_ADMINS` should be set anywhere in the
+   deployment — the migration does not read them, and every process refuses to start (the
+   removed-var check) if any is still set, regardless of value.
+2. The v10 migration always seeds `admins` with a single `('admins', '*')` row, upgrade or fresh
+   install alike — no exception.
+3. Start everything else. Flight-sql and web processes started before the migration ran answer 503
+   until it has (the schema-stale warning says so).
+4. Every time, on every upgrade and every fresh install: add `user:<you>` to `admins`, then remove
+   `*`. The install guide makes this the first post-migration step, always.
 
 Anyone who relied on claim-derived `group:` grants must re-add membership by hand: the v10
 migration creates each such group empty and logs it, and the Groups page lists it with zero
@@ -434,14 +416,11 @@ members.
 
 ### Phase 2 — schema (`rust/ingestion`)
 
-8. `sql_migration.rs`: `AdminSeed`, `AdminSeed::parse`, `admin_seed_from_env` as its env wrapper,
-   `upgrade_data_lake_schema_v10`, chain it in `execute_migration`, bump
+8. `sql_migration.rs`: `upgrade_data_lake_schema_v10`, which always seeds `admins` with a single
+   `('admins', '*')` row (no env access, no seed parameter); chain it in `execute_migration`, bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to 10, extend `warn_if_data_lake_schema_stale`'s message.
-   `Cargo.toml`: add `serde_json.workspace = true` under `[dependencies]` for `AdminSeed::parse`'s
-   JSON decoding.
-9. `tests/sql_migration_test.rs`: no-DB `AdminSeed::parse` unit tests (malformed JSON, a non-array
-   value, and `[]` asserting `AdminSeed::Everyone`) — plain `#[test]` fns alongside the existing
-   `#[ignore]`d live-DB tests.
+9. No dedicated unit test for the seeding itself — it is a single hardcoded `INSERT`, covered by
+   manual verification alongside the rest of this migration's behavior (see Testing Strategy).
 
 ### Phase 3 — analytics gate collapse
 
@@ -570,26 +549,21 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 
 ## Decisions
 
-- The seeding boot deliberately ends in the removed-var refusal (upgrade path step 2): a single,
-  explicit restart beats making the refusal conditional on whether this same process just ran the
-  v10 step, which would couple `micromegas-auth` to migration state.
+- Migration-time seeding reads no env var at all: `admins` always gets a single `('admins', '*')`
+  row, on every v10 migration, upgrade or fresh install alike. There is no "preserve who was admin"
+  mode — simpler to reason about and to document than a conditional seed, at the cost of requiring
+  the operator to run the add-user/remove-wildcard fixup after every upgrade, not just a fresh
+  install. The removed-var refusal (`reject_removed_admin_vars`) is unrelated to seeding and still
+  refuses startup, on every boot, whenever any of the three vars is set to any value.
 - A `group:` selector counts as an identity selector in `caller_holds_pair` even when the group's
   membership is `*`. An operator who grants an audience to a wildcard-membered group has chosen
   to make that audience shareable by everyone; the check is not second-guessing that.
-- `user:` selectors keep matching `AuthContext.email` only. A `MICROMEGAS_ADMINS` entry that was a
-  subject is seeded verbatim and warned about, not silently widened into a subject match.
+- `user:` selectors keep matching `AuthContext.email` only.
 - Legacy `group:X` selectors whose `X` fails the name charset are left as inert grant rows with a
   migration warning, not deleted and not force-renamed.
 - `MICROMEGAS_SQL_CONNECTION_STRING` is required by `analytics-web-srv` whenever auth is enabled.
 - `micromegas-groups` does not get a `bootstrap` convenience command; the two-command sequence
   (`add admins user:<me>` then `remove admins '*'`) stays documented as-is.
-- Split-deployment seeding (a migration runner missing the analytics admin var carried by other
-  processes) is not a real risk: deployments sync config across processes, so the migration runner
-  always sees the same admin var as the rest of the deployment. No heuristic or extra refusal is
-  needed for this case.
-- `AdminSeed::parse` errors on malformed/non-array JSON rather than following
-  `load_admin_users`'s `unwrap_or_default()`, because that pattern would let a JSON typo silently
-  seed the wildcard instead of the operator's intended admins.
 - `member` is a selector string, not a `(member_kind, member_id)` pair — per the issue.
 - No directory sync — per the issue.
 - No live-DB tests for this feature; coverage is the no-DB unit tests in Testing Strategy plus
@@ -602,7 +576,7 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   Authentication: the model, the selector table, nesting and cycles, the `admins` group, the
   wildcard warning and first-login step, the routes table, `micromegas-groups`, the TTL knob and
   latency, outage behavior, the v10 upgrade path — including the wildcard widening enumerated in
-  Migration v10 step 3.
+  Migration v10 step 3, which now applies on every upgrade, not just a fresh install.
 - `mkdocs/docs/admin/authentication.md`: selector table at `:415-421` (`group:<g>` → "members of
   local group `g`, transitively"), the `MICROMEGAS_ADMINS` lines at `:90`, `:104`, `### Admin
   Privileges` at `:1196-1211`, and the `GrantGate` create/delete wording at `:673-693`.
@@ -647,9 +621,9 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
   error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
-- `sql_migration_test.rs`: no-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
-  non-array value, and an empty array asserting `AdminSeed::Everyone`. v10's seeding, backfill,
-  and `CHECK`-constraint behavior is verified manually (see the Manual bullet below).
+- `sql_migration_test.rs`: no dedicated unit test for the wildcard seed itself — it is a single
+  hardcoded `INSERT`, not conditional logic. v10's seeding, backfill, and `CHECK`-constraint
+  behavior is verified manually (see the Manual bullet below).
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
@@ -666,8 +640,8 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - Python: `tests/cli/test_groups.py` dispatch tests mirroring `test_grants.py`;
   `test_web_client.py` payload/query-param shapes.
 - Manual: the v10 migration is verified by starting the local stack against a v9 database and
-  reading the startup logs — schema version bump, the seeding mode chosen (`Everyone`/`Users`),
-  and any `group:X` backfill/warning lines. `start_services_with_oidc.py` against that same fresh
+  reading the startup logs — schema version bump, the wildcard admin seed, and any `group:X`
+  backfill/warning lines. `start_services_with_oidc.py` against that same fresh
   DB shows the wildcard warning at boot and the hub banner; `micromegas-groups add admins
   user:<me>` then `remove admins '*'` clears both within the TTL; a non-admin then loses
   `retire_partitions` and the Groups page. The groups CRUD round trip, cycle/conflict responses,

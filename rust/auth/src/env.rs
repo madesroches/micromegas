@@ -29,11 +29,10 @@ pub fn resolve_prefixed_var(prefix: &str, suffix: &str) -> String {
 /// Refuses startup when any of the three env-var-based admin lists this plan removes --
 /// `MICROMEGAS_ADMINS`, `MICROMEGAS_ANALYTICS_ADMINS`, `MICROMEGAS_INGESTION_ADMINS` -- is set to
 /// any value (including an empty string), naming the replacement. Admin membership lives in the
-/// `admins` group (schema v10) from here on; the v10 migration seeds it once from whichever of
-/// these vars was set at the time it ran (see `sql_migration.rs::AdminSeed`), and every var must
-/// be unset on every later boot. Called from `ProviderBuilder::compose` and
-/// `analytics-web-srv`'s `WebServerConfig`, the same posture `IsolationConfig::from_env` takes for
-/// `UNSTAMPED_AUDIENCE`.
+/// `admins` group (schema v10) from here on; the v10 migration always seeds it with a single
+/// wildcard row (`('admins', '*')`), regardless of these vars, and every var must be unset on
+/// every later boot. Called from `ProviderBuilder::compose` and `analytics-web-srv`'s
+/// `WebServerConfig`, the same posture `IsolationConfig::from_env` takes for `UNSTAMPED_AUDIENCE`.
 pub fn reject_removed_admin_vars() -> anyhow::Result<()> {
     const REMOVED: [&str; 3] = [
         "MICROMEGAS_ADMINS",
