@@ -15,7 +15,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::db_snapshot::SnapshotLoader;
-use micromegas::auth::groups::{ADMINS_GROUP, GroupsLoader, is_valid_group_name};
+use micromegas::auth::groups::{ADMINS_GROUP, GroupGraph, GroupsLoader, is_valid_group_name};
 use micromegas::auth::policy::valid_selector;
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,8 @@ pub enum GroupsError {
     BadRequest(String),
     NotFound,
     /// `409` -- the group already exists, is `admins` (undeletable), is still referenced, would
-    /// create a cycle, or would remove the last row of `admins`. The message names which.
+    /// create a cycle, or would leave `admins` unreachable by any principal. The message names
+    /// which.
     Conflict(String),
     Database(sqlx::Error),
     NotConfigured,
@@ -362,21 +363,34 @@ async fn add_member(
             "member must be at most {MAX_MEMBER_BYTES} bytes"
         )));
     }
+
+    // The nested-group existence check and the insert run in one transaction, with the nested
+    // group's `groups` row locked first: `delete_group` takes this same `FOR UPDATE` lock on its
+    // own row before scanning for `group:<name>` referrers (see its own comment), so a concurrent
+    // delete of the nested group and this insert serialize on that row instead of racing --
+    // without that, a `group:<nested>` member row could commit after `delete_group`'s referrer
+    // scan already found none, leaving `group_members` pointing at a group name that no longer
+    // exists (its FK is on `group_name`, not `member`, so nothing else rejects the orphan).
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| GroupsError::Internal(format!("starting add-member transaction: {e:#}")))?;
+
     let group_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
             .bind(&name)
-            .fetch_one(&pool)
+            .fetch_one(&mut *tx)
             .await?;
     if !group_exists {
         return Err(GroupsError::NotFound);
     }
 
     if let Some(nested) = body.member.strip_prefix("group:") {
-        let nested_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
-                .bind(nested)
-                .fetch_one(&pool)
-                .await?;
+        let nested_exists = sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
+            .bind(nested)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
         if !nested_exists {
             return Err(GroupsError::NotFound);
         }
@@ -413,9 +427,12 @@ async fn add_member(
         .bind(&name)
         .bind(&body.member)
         .bind(&created_by)
-        .fetch_optional(&pool)
+        .fetch_optional(&mut *tx)
         .await?;
         if let Some(row) = row {
+            tx.commit().await.map_err(|e| {
+                GroupsError::Internal(format!("committing add-member transaction: {e:#}"))
+            })?;
             info!(
                 "group member added group={} member={} created={} created_by={created_by}",
                 row.group_name, row.member, row.created
@@ -460,9 +477,10 @@ struct RemoveMemberQuery {
     member: String,
 }
 
-/// `DELETE {base_path}/api/groups/{name}/members?member=` -- `204`; `404` unknown; `409` when it
-/// would remove the last row of `admins` (the only lockout protection: removing it would leave
-/// admin reachable only through `psql`).
+/// `DELETE {base_path}/api/groups/{name}/members?member=` -- `204`; `404` unknown; `409` when
+/// removing this member would leave [`ADMINS_GROUP`] unreachable by any principal, direct or
+/// nested (the only lockout protection: losing that reachability would leave admin reachable only
+/// through `psql`).
 async fn remove_member(
     Extension(state): Extension<GroupsState>,
     AdminUser(_user): AdminUser,
@@ -471,40 +489,48 @@ async fn remove_member(
 ) -> Result<StatusCode, GroupsError> {
     let pool = require_pool(&state)?;
 
-    // The last-`admins`-row guard and the delete run in one transaction, with every
-    // `group_members` row for `admins` locked first: two concurrent removals would otherwise
-    // both read `remaining == 2` / `this_row_exists` before either deletes, and both proceed,
-    // defeating the one lockout protection this feature has. Locking here serializes the second
-    // caller behind the first's commit, so it re-observes the post-delete count.
+    // The lockout guard and the delete run in one transaction, with every `group_members` row for
+    // `name` locked first: two concurrent removals from the same group would otherwise both read
+    // the same pre-removal graph before either deletes, and both could pass the guard, defeating
+    // the one lockout protection this feature has. Locking here serializes the second caller
+    // behind the first's commit, so it re-observes the post-delete graph.
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| GroupsError::Internal(format!("starting remove-member transaction: {e:#}")))?;
 
-    if name == ADMINS_GROUP {
-        sqlx::query("SELECT 1 FROM group_members WHERE group_name = $1 FOR UPDATE")
-            .bind(&name)
+    sqlx::query("SELECT 1 FROM group_members WHERE group_name = $1 FOR UPDATE")
+        .bind(&name)
+        .fetch_all(&mut *tx)
+        .await?;
+
+    // Resolve the group graph as it would look immediately after this removal, read fresh inside
+    // this transaction (never the TTL-cached `DbGroupsSource` snapshot `AuthContext` uses for
+    // request-time admin checks) -- the same freshly-queried-graph approach `add_member`'s cycle
+    // check uses. Refuse the removal if no principal -- no `*` and no `user:` entry, direct or via
+    // nesting -- would still reach `admins` afterward. This subsumes the old
+    // `name == ADMINS_GROUP`-only special case: emptying a group nested into `admins` (not
+    // `admins` itself, e.g. `admins`'s only member is `group:eng-leads`) strands `admins` just as
+    // surely as emptying `admins` directly.
+    let group_names: Vec<String> = sqlx::query_scalar("SELECT name FROM groups")
+        .fetch_all(&mut *tx)
+        .await?;
+    let member_rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT group_name, member FROM group_members")
             .fetch_all(&mut *tx)
             .await?;
-        let remaining: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM group_members WHERE group_name = $1")
-                .bind(&name)
-                .fetch_one(&mut *tx)
-                .await?;
-        let this_row_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_name = $1 AND member = $2)",
-        )
-        .bind(&name)
-        .bind(&query.member)
-        .fetch_one(&mut *tx)
-        .await?;
-        if this_row_exists && remaining <= 1 {
-            return Err(GroupsError::Conflict(
-                "removing the last member of admins would leave admin reachable only through \
-                 direct database access"
-                    .to_string(),
-            ));
-        }
+    let post_removal_members = member_rows
+        .into_iter()
+        .filter(|(group_name, member)| !(*group_name == name && *member == query.member));
+    let graph = GroupGraph::from_rows(group_names, post_removal_members).map_err(|e| {
+        GroupsError::Internal(format!("building the post-removal group graph: {e:#}"))
+    })?;
+    if !graph.any_principal_reaches(ADMINS_GROUP) {
+        return Err(GroupsError::Conflict(
+            "removing this member would leave admins reachable only through direct database \
+             access"
+                .to_string(),
+        ));
     }
 
     let rows_affected =

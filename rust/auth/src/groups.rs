@@ -136,6 +136,22 @@ impl GroupGraph {
         self.closure(None).iter().any(|g| g == ADMINS_GROUP)
     }
 
+    /// `true` when `target` is reachable from *some* principal -- the wildcard `*` selector or
+    /// any `user:<email>` selector present in the snapshot -- directly or through nesting.
+    /// Generalizes [`Self::has_wildcard_admin`] (which seeds the walk from `*` alone) to seed
+    /// from every base selector on record, so a caller can check "would `target` still be
+    /// reachable by anyone" rather than "by `*` specifically" -- e.g. before removing a
+    /// membership that would strand `ADMINS_GROUP` behind a user-only or nested-only path.
+    pub fn any_principal_reaches(&self, target: &str) -> bool {
+        let mut initial = BTreeSet::new();
+        for (selector, groups) in &self.members_of {
+            if selector == "*" || selector.starts_with("user:") {
+                initial.extend(groups.iter().cloned());
+            }
+        }
+        self.walk_upward(initial).iter().any(|g| g == target)
+    }
+
     /// Whether adding `group:nested` as a member of `group` would create a cycle: `nested ==
     /// group`, or `nested` is already reachable upward from `group` (a walk seeded at `group`
     /// reaches it -- i.e. `group` is already, directly or transitively, nested into `nested`).
