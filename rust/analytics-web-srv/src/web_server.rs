@@ -77,6 +77,7 @@ impl WebServerConfig {
     /// inputs. Single source of the base-path `must start with '/'` rule.
     pub fn from_cli_and_env(cli: WebCliArgs) -> Result<Self> {
         micromegas::auth::env::reject_removed_admin_vars()?;
+        micromegas::auth::env::reject_removed_cache_ttl_vars()?;
         let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
             .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
         let base_path = read_base_path()?;

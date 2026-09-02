@@ -346,17 +346,40 @@ async fn add_member(
         )));
     }
 
-    // The nested-group existence check and the insert run in one transaction, with the nested
-    // group's `groups` row locked first: `delete_group` takes this same `FOR UPDATE` lock on its
-    // own row before scanning for `group:<name>` referrers (see its own comment), so a concurrent
+    // The nested-group existence check and the insert run in one transaction, with the `groups`
+    // row(s) involved locked first: `delete_group` takes this same `FOR UPDATE` lock on its own
+    // row before scanning for `group:<name>` referrers (see its own comment), so a concurrent
     // delete of the nested group and this insert serialize on that row instead of racing --
     // without that, a `group:<nested>` member row could commit after `delete_group`'s referrer
     // scan already found none, leaving `group_members` pointing at a group name that no longer
     // exists (its FK is on `group_name`, not `member`, so nothing else rejects the orphan).
+    //
+    // For a `group:<nested>` member, *both* the target's and the nested group's rows are locked
+    // `FOR UPDATE` up front, in a fixed (lexicographic) order -- not just the nested row. The
+    // insert's FK on `group_name` takes an implicit `FOR KEY SHARE` lock on the target's row,
+    // which conflicts with `FOR UPDATE`; locking only the nested row here left
+    // `add_member(A, "group:B")` (holds `FOR UPDATE` on B, wants `KEY SHARE` on A) able to
+    // deadlock against a concurrent `add_member(B, "group:A")` (holds `FOR UPDATE` on A, wants
+    // `KEY SHARE` on B). Every caller taking these two locks in the same order removes that
+    // cycle.
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| GroupsError::Internal(format!("starting add-member transaction: {e:#}")))?;
+
+    let nested = body.member.strip_prefix("group:");
+    let mut lock_names: Vec<&str> = vec![&name];
+    if let Some(nested) = nested {
+        lock_names.push(nested);
+    }
+    lock_names.sort_unstable();
+    lock_names.dedup();
+    for lock_name in &lock_names {
+        sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
+            .bind(lock_name)
+            .fetch_optional(&mut *tx)
+            .await?;
+    }
 
     let group_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
@@ -367,12 +390,12 @@ async fn add_member(
         return Err(GroupsError::NotFound);
     }
 
-    if let Some(nested) = body.member.strip_prefix("group:") {
-        let nested_exists = sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
-            .bind(nested)
-            .fetch_optional(&mut *tx)
-            .await?
-            .is_some();
+    if let Some(nested) = nested {
+        let nested_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM groups WHERE name = $1)")
+                .bind(nested)
+                .fetch_one(&mut *tx)
+                .await?;
         if !nested_exists {
             return Err(GroupsError::NestedGroupNotFound(format!(
                 "group {nested:?} not found"

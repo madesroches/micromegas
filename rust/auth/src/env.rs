@@ -55,3 +55,41 @@ pub fn reject_removed_admin_vars() -> anyhow::Result<()> {
         ))
     }
 }
+
+/// Refuses startup when any of the renamed per-role cache-TTL vars this plan removes --
+/// `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`, `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`, or
+/// their `{prefix}_` forms (`MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS`,
+/// `MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS`,
+/// `MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`,
+/// `MICROMEGAS_INGESTION_AUDIENCE_GRANT_CACHE_TTL_SECONDS`) -- is set to any value (including an
+/// empty string), naming the replacement. `db_api_key::DbApiKeyConfig` and
+/// `db_audience_grants::DbAudienceGrantsConfig` now read the single flat, unprefixed
+/// `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` knob instead; an operator who tuned one of the removed
+/// vars would otherwise silently fall back to the 60s default with no log line and no startup
+/// error. Called from the same sites as [`reject_removed_admin_vars`]:
+/// `ProviderBuilder::compose` and `analytics-web-srv`'s `WebServerConfig::from_cli_and_env`.
+pub fn reject_removed_cache_ttl_vars() -> anyhow::Result<()> {
+    const REMOVED: [&str; 6] = [
+        "MICROMEGAS_API_KEY_CACHE_TTL_SECONDS",
+        "MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS",
+        "MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS",
+        "MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS",
+        "MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS",
+        "MICROMEGAS_INGESTION_AUDIENCE_GRANT_CACHE_TTL_SECONDS",
+    ];
+    let set: Vec<&str> = REMOVED
+        .iter()
+        .copied()
+        .filter(|var| std::env::var(var).is_ok())
+        .collect();
+    if set.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{} {} no longer read -- use MICROMEGAS_AUTH_CACHE_TTL_SECONDS instead, the single \
+             flat, unprefixed cache-TTL knob shared by the API-key, audience-grant, and group caches",
+            set.join(", "),
+            if set.len() == 1 { "is" } else { "are" }
+        ))
+    }
+}

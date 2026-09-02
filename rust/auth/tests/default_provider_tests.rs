@@ -28,9 +28,13 @@ use test_utils::unreachable_pool;
 const API_KEYS_VAR: &str = "MICROMEGAS_API_KEYS";
 const OIDC_CONFIG_VAR: &str = "MICROMEGAS_OIDC_CONFIG";
 const ADMINS_VAR: &str = "MICROMEGAS_ADMINS";
+const ANALYTICS_ADMINS_VAR: &str = "MICROMEGAS_ANALYTICS_ADMINS";
+const INGESTION_ADMINS_VAR: &str = "MICROMEGAS_INGESTION_ADMINS";
 
-/// Clears both env vars on drop so a failing assertion in one test can't leak
-/// state into the next.
+/// Clears every env var on drop so a failing assertion in one test can't leak
+/// state into the next. Covers all three removed admin-list vars, not just
+/// the unprefixed one, so a stray `_ANALYTICS_`/`_INGESTION_` variant set in
+/// the shell can't leak between tests either.
 struct EnvGuard;
 
 impl Drop for EnvGuard {
@@ -40,6 +44,8 @@ impl Drop for EnvGuard {
             std::env::remove_var(API_KEYS_VAR);
             std::env::remove_var(OIDC_CONFIG_VAR);
             std::env::remove_var(ADMINS_VAR);
+            std::env::remove_var(ANALYTICS_ADMINS_VAR);
+            std::env::remove_var(INGESTION_ADMINS_VAR);
         }
     }
 }
@@ -66,6 +72,36 @@ async fn removed_admins_var_set_is_rejected_with_no_db_needed() {
     assert!(
         err.to_string().contains("admins"),
         "expected the error to name the `admins` group replacement, got: {err}"
+    );
+}
+
+/// **`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` set ⇒ `Err` naming the replacement**: the same
+/// removed-var refusal shape as `removed_admins_var_set_is_rejected_with_no_db_needed`, for the
+/// renamed cache-TTL knob -- fires before anything else in `compose()`, so no DB is needed.
+#[tokio::test]
+#[serial]
+async fn removed_api_key_cache_ttl_var_set_is_rejected_with_no_db_needed() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var(API_KEYS_VAR);
+        std::env::remove_var(OIDC_CONFIG_VAR);
+        std::env::remove_var(ADMINS_VAR);
+        std::env::set_var("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS", "30");
+    }
+
+    let result = ProviderBuilder::new("").build_chain().await;
+    let err = match result {
+        Ok(_) => panic!("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS must be refused"),
+        Err(e) => e,
+    };
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::remove_var("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS");
+    }
+    assert!(
+        err.to_string().contains("MICROMEGAS_AUTH_CACHE_TTL_SECONDS"),
+        "expected the error to name the replacement knob, got: {err}"
     );
 }
 
