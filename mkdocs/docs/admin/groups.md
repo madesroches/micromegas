@@ -175,7 +175,14 @@ stores use.
 2. **Start that process once.** The v10 migration seeds `admins` from the
    variable:
      - If the var is set and holds a non-empty JSON array, `admins` gets one
-       `user:<entry>` row per entry — who is an admin does not change.
+       `user:<entry>` row per entry — who is an admin does not change,
+       provided every entry is email-shaped. A `user:` member only ever
+       matches the caller's OIDC `email` claim, so an entry that isn't
+       email-shaped (e.g. an OIDC subject) can never match anyone once
+       seeded; the migration refuses to run rather than silently seed such
+       a dead row. Fix the entry to the user's email and re-run, or drop it
+       from the var and add it after the upgrade with `micromegas-groups`
+       or the Groups page.
      - Otherwise (fresh install, an upgrade that never set the var, or a var
        set to an empty JSON array `[]`), `admins` gets a single
        `('admins', '*')` row. This is what makes the first admin reachable

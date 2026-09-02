@@ -1,5 +1,5 @@
 use crate::sql_telemetry_db::create_tables;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
@@ -316,7 +316,10 @@ pub async fn upgrade_data_lake_schema_v9(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdminSeed {
     /// The admin var was set and held a non-empty JSON array: one `user:<entry>` row per entry,
-    /// no wildcard. Who is an admin does not change from today.
+    /// no wildcard. Each entry must be email-shaped (contain `@`) -- `group_members`'s `user:`
+    /// selector only ever matches `AuthContext.email`, so a subject-shaped entry can never match
+    /// anyone once seeded. The v10 migration fails rather than seed such an entry; see the
+    /// seeding loop in [`upgrade_data_lake_schema_v10`].
     Users(Vec<String>),
     /// The admin var was unset, or held an empty JSON array (`[]`): one `('admins', '*')` row --
     /// a fresh install, or an upgrade that never set the var.
@@ -405,6 +408,11 @@ fn is_valid_group_name(name: &str) -> bool {
 /// `admin_seed_from_env`, outside this function, so this step stays free of env access), and
 /// backfills an empty group for every distinct `group:X` selector already present in
 /// `audience_grants` so a legacy claim-derived grant is not left dangling at an unknown name.
+///
+/// Fails (aborting the migration before commit) if `seed` is [`AdminSeed::Users`] and any entry
+/// is not email-shaped: a `user:` member only ever matches `AuthContext.email`, so seeding a
+/// subject-shaped entry would silently leave that admin unreachable, and if every entry was
+/// subject-shaped the deployment would end up with no reachable admin at all.
 pub async fn upgrade_data_lake_schema_v10(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     seed: &AdminSeed,
@@ -445,10 +453,12 @@ pub async fn upgrade_data_lake_schema_v10(
         AdminSeed::Users(users) => {
             for user in users {
                 if !user.contains('@') {
-                    warn!(
-                        "admin seed entry {user:?} does not look like an email; seeded verbatim \
-                         as a `user:` member, which matches AuthContext.email only -- it will \
-                         never match a subject-shaped identity"
+                    bail!(
+                        "admin seed entry {user:?} does not look like an email; a `user:` \
+                         member matches AuthContext.email only, so it can never match a \
+                         subject-shaped identity -- fix this entry to be the user's email, or \
+                         drop it from the admin var and seed it manually after the migration \
+                         via `micromegas-groups` or the Groups page"
                     );
                 }
                 sqlx::query(
