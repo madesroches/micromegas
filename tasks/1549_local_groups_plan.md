@@ -637,24 +637,27 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
   error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
-- `sql_migration_test.rs` (`#[ignore]`, live DB): each case calls `upgrade_data_lake_schema_v10`
-  directly with an explicit `AdminSeed`, inside a transaction over a `build_v9_schema` pool, not
-  via `execute_migration`. v9 → v10 with `AdminSeed::Everyone` yields `('admins','*')`; with
-  `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing `group:eng` grant yields an
-  empty `eng` group; a `group:Eng Team` selector yields no group and the grant row survives; a
-  pre-existing `group:admins` grant does not fail the migration (step 4's insert no-ops against
-  step 2's row); the `CHECK` constraints reject a bad name and a bad member. No-DB unit tests on
-  `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty array asserting
-  `AdminSeed::Everyone`.
+- `sql_migration_test.rs`: one `#[ignore]`d live-DB test, matching the single-test-per-version
+  pattern used for v6–v9 (`v6_backfills_existing_rows_and_rejects_invalid_audiences`, etc.), not a
+  separate test per case. It calls `upgrade_data_lake_schema_v10` directly with an explicit
+  `AdminSeed`, inside a transaction over a `build_v9_schema` pool, not via `execute_migration`, and
+  asserts: `AdminSeed::Everyone` yields `('admins','*')`; `AdminSeed::Users` yields the `user:` rows
+  and no `*`; a pre-existing `group:eng` grant yields an empty `eng` group; a `group:Eng Team`
+  selector yields no group and the grant row survives; a pre-existing `group:admins` grant does not
+  fail the migration (step 4's insert no-ops against step 2's row); the `CHECK` constraints reject a
+  bad name and a bad member. No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a
+  non-array value, and an empty array asserting `AdminSeed::Everyone`.
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
 - `analytics-web-srv/tests/groups_tests.rs`: 403 for non-admin on every route; 400 bad name/
-  selector; 409 deleting `admins`; live (`#[ignore]`): CRUD round trip, 409 cycle, 409 delete while
-  referenced, 201/200 idempotent add, 409 removing the last `admins` row, 404 `group:` member
-  naming a missing group. `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
-  reachable unconfigured-pool case, since auth-enabled deployments always have the pool set).
-  `auth_integration.rs`: `ProviderUnavailable` from the group store → 503.
+  selector; 409 deleting `admins`; three `#[ignore]`d live-DB tests instead of one per case:
+  `live_crud_round_trip` (create/read/remove plus the 201-then-200 idempotent add), a conflict test
+  covering all three 409s (cycle, delete while referenced, removing the last `admins` row), and a
+  404 test for a `group:` member naming a missing group. `routing_tests.rs`: `--disable-auth` 503
+  for `/api/groups*` (the only reachable unconfigured-pool case, since auth-enabled deployments
+  always have the pool set). `auth_integration.rs`: `ProviderUnavailable` from the group store →
+  503.
 - Web app: `GroupsPage.test.tsx` (list, add member, cycle error surfaced, remove), `AdminPage.test.tsx`
   (banner shown iff `*` present and admin), `groups-api.test.ts`.
 - Python: `tests/cli/test_groups.py` dispatch tests mirroring `test_grants.py`;
