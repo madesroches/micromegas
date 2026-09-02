@@ -8,6 +8,7 @@
 //! env.
 
 use micromegas_auth::env::resolve_prefixed_var;
+use micromegas_auth::groups::ADMINS_GROUP;
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE,
     ReadPolicy, caller_selectors, default_audience_from_env, is_valid_audience, valid_selector,
@@ -16,12 +17,18 @@ use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
 
 /// Builds an `AuthContext` with sane defaults, overridden by the fields tests care about.
+/// `groups` becomes `memberships`; `is_admin` additionally appends `ADMINS_GROUP` to it, so
+/// `AuthContext::is_admin()` matches the caller's intent.
 fn caller(
     email: Option<&str>,
     groups: Vec<String>,
     read_audiences: Vec<String>,
     is_admin: bool,
 ) -> AuthContext {
+    let mut memberships = groups;
+    if is_admin {
+        memberships.push(ADMINS_GROUP.to_string());
+    }
     AuthContext {
         subject: "test-subject".to_string(),
         email: email.map(String::from),
@@ -29,11 +36,10 @@ fn caller(
         audience: None,
         expires_at: None,
         auth_type: AuthType::Oidc,
-        is_admin,
         allow_delegation: false,
         bound_audience: None,
         read_audiences,
-        groups,
+        memberships: memberships.into(),
     }
 }
 
@@ -103,6 +109,17 @@ async fn read_policy_group_selector_matches_a_claim_value() {
     let ctx = caller(None, vec!["eng".to_string()], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
     assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+}
+
+/// A `group:` selector matches a membership, and is not confused with a `user:` selector of the
+/// same string -- `group:eng` and `user:eng` are different predicates even when the caller's
+/// email happens to be `eng`.
+#[tokio::test]
+async fn read_policy_group_selector_does_not_match_a_same_named_email() {
+    let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
+    let ctx = caller(Some("eng"), vec![], vec![], false);
+    let resolved = policy.resolve(&ctx).await.expect("resolve");
+    assert!(!sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
 }
 
 #[tokio::test]

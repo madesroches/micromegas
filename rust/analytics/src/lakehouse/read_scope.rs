@@ -11,7 +11,7 @@
 //! `ReadScope` out of [`CallerContext`] inside `query.rs::make_session_context` and injects an
 //! audience predicate into every `MaterializedView`-backed scan. The call-level guard is the UDTF/UDF guards
 //! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions the row-level filter structurally
-//! cannot reach, plus [`CallerContext::admin_principal_possible`]'s mutating-function registration
+//! cannot reach, plus `CallerContext.is_admin`'s mutating-function registration
 //! gate. `view_instance(...)` is also guarded by the call-level guard, closing a cost/availability residual for
 //! the six view sets carrying a physical `audience` column, where the row-level filter already filters
 //! `view_instance` scans row-by-row, same as the named-table form; for the other five view sets,
@@ -38,9 +38,8 @@ pub enum ReadScope {
 }
 
 /// Bundles the orthogonal authorization inputs `make_session_context` and friends need --
-/// audience scope (`read_scope`) and the `is_admin`/`admin_principal_possible`
-/// mutating-function-registration capability -- into one struct instead of adjacent,
-/// transposable positional parameters.
+/// audience scope (`read_scope`) and the `is_admin` mutating-function-registration capability --
+/// into one struct instead of adjacent, transposable positional parameters.
 ///
 /// Required (not `Option`/defaulted) at every call site by design: a defaulting parameter would
 /// let a future call site inherit `ReadScope::All` by omission, which is exactly the failure this
@@ -59,17 +58,6 @@ pub struct CallerContext {
     /// per-service objects live on the service, and this rides along with `read_scope` at every
     /// real call site anyway.
     pub isolation_config: Arc<IsolationConfig>,
-    /// Whether this *deployment* -- not this caller -- can ever produce an admin principal at
-    /// all, derived once at startup from `AuthProvider::can_grant_admin`
-    /// (`rust/public/src/servers/flight_sql_server.rs`) and copied onto every `CallerContext`
-    /// unchanged, the same treatment `isolation_config` gets. Consumed by the call-level guard's mutating
-    /// UDTF/UDF registration gate in `query.rs`: `caller.is_admin ||
-    /// !caller.admin_principal_possible`. Named for the fact it represents (can this deployment
-    /// ever produce an admin?), not its effect -- when `false` (an API-key-only deployment,
-    /// which can never mint an admin), the mutating functions are registered for any
-    /// authenticated caller rather than staying admin-only, since otherwise they would be
-    /// unreachable by anyone.
-    pub admin_principal_possible: bool,
     /// The caller's identity, as recorded in `deny_queries`'s `created_by` column. `None` on
     /// internal/maintenance paths -- such a caller cannot call `deny_queries`, which requires
     /// `Some`. One string, not a struct: `created_by` is the only consumer, so a richer identity
@@ -88,30 +76,24 @@ impl CallerContext {
     /// For background/materialization callers that are not serving a user request at all
     /// (`is_admin: false`, `ReadScope::All`). Distinct from [`Self::maintenance`] only in
     /// `is_admin` -- use this for internal call sites that must not register the mutating
-    /// UDTFs/UDFs. `admin_principal_possible: true` so the gate's fallback (any-caller
-    /// registration when a deployment has no admin principal) never fires for this
-    /// non-user-request caller -- it is `is_admin` alone that must decide, same as today.
+    /// UDTFs/UDFs.
     pub fn internal() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: false,
             isolation_config: Arc::new(IsolationConfig::default()),
-            admin_principal_possible: true,
             identity: None,
             grant_selectors: Arc::from([]),
         }
     }
 
     /// For background/materialization callers performing maintenance work (`is_admin: true`,
-    /// `ReadScope::All`) -- never a user session. `admin_principal_possible`'s value is moot here
-    /// (the gate's `caller.is_admin` arm already passes), kept `true` for consistency with
-    /// [`Self::internal`].
+    /// `ReadScope::All`) -- never a user session.
     pub fn maintenance() -> Self {
         Self {
             read_scope: ReadScope::All,
             is_admin: true,
             isolation_config: Arc::new(IsolationConfig::default()),
-            admin_principal_possible: true,
             identity: None,
             grant_selectors: Arc::from([]),
         }
@@ -136,7 +118,7 @@ pub struct IsolationConfig {
 /// Comma-separated list parser for `{prefix}_PUBLIC_VIEW_SETS` / `MICROMEGAS_PUBLIC_VIEW_SETS`.
 ///
 /// Deliberately a comma-separated list (rejecting `[`, `]`, `"`) rather than the
-/// `MICROMEGAS_ADMINS` JSON-array shape -- duplicated here rather than depending on
+/// `MICROMEGAS_API_KEYS` JSON-array shape -- duplicated here rather than depending on
 /// `micromegas-auth` for it, since `micromegas-analytics` does not depend on that crate (the same
 /// crate-boundary reasoning `read_scope.rs`'s own module doc comment gives for keeping
 /// `ReadScope` here).
@@ -157,7 +139,7 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
         if trimmed.contains(['[', ']', '"']) {
             anyhow::bail!(
                 "{var}: entry {trimmed:?} contains '[', ']', or '\"' -- this variable is \
-                 comma-separated, not a JSON array like MICROMEGAS_ADMINS"
+                 comma-separated, not a JSON array like MICROMEGAS_API_KEYS"
             );
         }
         values.push(trimmed.to_string());

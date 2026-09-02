@@ -35,6 +35,7 @@ black = "^26.3.1"
 
 [tool.poetry.scripts]
 micromegas-grants = "micromegas.cli.grants:main"
+micromegas-groups = "micromegas.cli.groups:main"
 micromegas-import-keys = "micromegas.cli.import_keys:main"
 micromegas-logout = "micromegas.cli.logout:main"
 micromegas-query = "micromegas.cli.query:main"

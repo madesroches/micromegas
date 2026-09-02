@@ -91,8 +91,8 @@ that wasn't actually random.
 All key-management routes for **both** tables live on `analytics-web-srv`.
 Every route except ingestion's own mint is gated by the same admin check
 every other `analytics-web-srv` admin route uses (`ValidatedUser.is_admin`,
-resolved from `MICROMEGAS_ADMINS` / `MICROMEGAS_ANALYTICS_ADMINS`; see
-[Authentication](authentication.md)). `POST {base_path}/api/ingestion-api-keys`
+resolved from membership in the reserved `admins` local group; see
+[Groups](groups.md)). `POST {base_path}/api/ingestion-api-keys`
 (mint) runs through a `MintGate`/`AuthenticatedUser` extractor instead, so a
 non-admin caller with a matching grant (or a lazy claim) can reach it once
 `MICROMEGAS_SELF_SERVICE_MINT` is on. Ingestion itself exposes no
@@ -174,7 +174,7 @@ writes `audience` in the same deploy that runs the v6 migration.
 
 | Variable | Description |
 |---|---|
-| `MICROMEGAS_SQL_CONNECTION_STRING` | Telemetry-DB connection string `analytics-web-srv` opens its own small (`max_connections(2)`) pool from, backing both route groups. Unset means both return **503**. |
+| `MICROMEGAS_SQL_CONNECTION_STRING` | Telemetry-DB connection string `analytics-web-srv` opens its own small (`max_connections(2)`) pool from, backing both route groups. Required whenever auth is enabled — `analytics-web-srv` bails at startup if it's unset. Under `--disable-auth`, both route groups instead return a fixed **503** (`AUTH_DISABLED`). |
 
 ## What audience does a key carry
 
@@ -241,7 +241,7 @@ processes are stamped with the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
 the default](authentication.md#audience-stamping-and-the-default).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly**
-(`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
+(`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
 env vars](#cache-and-audit-env-vars)) — since the audience is immutable, that
 caching is free.
 
@@ -334,12 +334,12 @@ the caller's identity (`user.email` or `user.subject`) and writes that
 directly — there is no service-credential hop, so no attribution gap to
 document.
 
-**Single admin list, for administration.** List/revoke/import for both
+**Single admin group, for administration.** List/revoke/import for both
 tables, plus ingestion's own mint when the caller is an admin, gate on the
-same `analytics-web-srv` admin check (`MICROMEGAS_ADMINS` /
-`MICROMEGAS_ANALYTICS_ADMINS`). Ingestion's mint route additionally accepts a
-non-admin caller once `MICROMEGAS_SELF_SERVICE_MINT` is on, authorized by a
-`mint` grant instead of admin-list membership.
+same `analytics-web-srv` admin check (membership in the reserved `admins`
+local group — see [Groups](groups.md)). Ingestion's mint route additionally
+accepts a non-admin caller once `MICROMEGAS_SELF_SERVICE_MINT` is on,
+authorized by a `mint` grant instead of `admins` membership.
 
 **Under `--disable-auth` on `analytics-web-srv`, all three key/grant
 route groups are unavailable — not just gated.** With auth disabled, every
@@ -354,15 +354,17 @@ including any sub-path.
 | Variable | Default | Description |
 |---|---|---|
 | `MICROMEGAS_API_KEY_CACHE_SIZE` | `10000` | Max distinct live keys cached per process |
-| `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` | `60` | Positive-cache TTL — also the revocation-latency bound |
+| `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | `60` | **Shared, flat** positive-cache TTL for the API-key, audience-grant, and group stores — also the API-key revocation-latency bound (see [Groups](groups.md) for the group-store latency this same knob governs) |
 | `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS` | `10` | Negative-cache TTL (shorter, so a freshly minted key isn't masked by an earlier probe) |
 | `MICROMEGAS_API_KEY_UNKNOWN_CACHE_SIZE` | `10000` | Max distinct unknown tokens cached per process |
 
-Each accepts a role prefix on the monolith —
-`MICROMEGAS_INGESTION_API_KEY_CACHE_TTL_SECONDS` /
-`MICROMEGAS_ANALYTICS_API_KEY_CACHE_TTL_SECONDS` — falling back to the
-unprefixed name, the same convention `MICROMEGAS_API_KEYS` /
-`MICROMEGAS_OIDC_CONFIG` / `MICROMEGAS_ADMINS` use.
+`MICROMEGAS_API_KEY_CACHE_SIZE`/`_UNKNOWN_CACHE_TTL_SECONDS`/`_UNKNOWN_CACHE_SIZE` each accept a
+role prefix on the monolith — `MICROMEGAS_INGESTION_API_KEY_CACHE_SIZE` /
+`MICROMEGAS_ANALYTICS_API_KEY_CACHE_SIZE`, and so on — falling back to the unprefixed name, the
+same convention `MICROMEGAS_API_KEYS` / `MICROMEGAS_OIDC_CONFIG` use.
+`MICROMEGAS_AUTH_CACHE_TTL_SECONDS` is the one exception: it is a single flat, unprefixed knob
+with no role-scoped variant, since it governs the API-key, audience-grant, and group stores
+together as one process-wide value.
 
 Revocation takes effect within `cache_ttl_secs` (default 60s), not instantly
 — raising the TTL trades revocation latency for DB load.
@@ -412,18 +414,27 @@ GRANT SELECT ON audience_grants TO micromegas_analytics;
 
 -- analytics-web-srv's own role: the sole admin surface for audience_grants too
 GRANT SELECT, INSERT, DELETE ON audience_grants TO micromegas_web;
+
+-- analytics role: read-only on the group store -- DbGroupsSource re-queries
+-- groups/group_members on every snapshot refresh
+GRANT SELECT ON groups TO micromegas_analytics;
+GRANT SELECT ON group_members TO micromegas_analytics;
+
+-- analytics-web-srv's own role: the sole admin surface for groups too
+GRANT SELECT, INSERT, DELETE ON groups TO micromegas_web;
+GRANT SELECT, INSERT, DELETE ON group_members TO micromegas_web;
 ```
 
-The last grant is `DELETE`, not `UPDATE`: `audience_grants` rows are
-hard-deleted on revocation. `micromegas_web` (`analytics-web-srv`'s role) is
-the only role granted `INSERT` on any of these tables in a fully
-separated-role deployment; `micromegas_ingestion` is read + `last_used_at`
-touch only on its own table; `micromegas_analytics` is read + `last_used_at`
-touch on `analytics_api_keys`, plus read-only on `audience_grants`. Neither
-service role has any grant on the other service's table.
-`analytics-web-srv`'s role does gain write access to `ingestion_api_keys`
-under this design, since every ingestion-key mint/revoke/import goes through
-it.
+The last grant is `DELETE`, not `UPDATE`: `audience_grants`/`group_members`
+rows are hard-deleted on revocation (`groups` rows too, on delete).
+`micromegas_web` (`analytics-web-srv`'s role) is the only role granted
+`INSERT` on any of these tables in a fully separated-role deployment;
+`micromegas_ingestion` is read + `last_used_at` touch only on its own table;
+`micromegas_analytics` is read + `last_used_at` touch on `analytics_api_keys`,
+plus read-only on `audience_grants`/`groups`/`group_members`. Neither service
+role has any grant on the other service's table. `analytics-web-srv`'s role
+does gain write access to `ingestion_api_keys` under this design, since every
+ingestion-key mint/revoke/import goes through it.
 
 ## Migrating from the env keyring
 

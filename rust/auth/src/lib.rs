@@ -52,7 +52,7 @@
 //!     token_cache_ttl_secs: 300,
 //! };
 //!
-//! let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await?;
+//! let provider = OidcAuthProvider::new(config).await?;
 //!
 //! // Create request parts with ID token
 //! let mut headers = http::HeaderMap::new();
@@ -114,5 +114,14 @@ pub mod user_attribution;
 /// Authorization seam: `MintPolicy`, `ReadPolicy`, and their audience-based implementations
 pub mod policy;
 
+/// Generic whole-table snapshot cache shared by the audience-grant and group stores
+pub mod db_snapshot;
+
 /// DB-backed audience grant store
 pub mod db_audience_grants;
+
+/// Local group membership: `GroupGraph`, the DB-backed store, and closure resolution
+pub mod groups;
+
+/// Wraps an `AuthProvider` to resolve transitive local-group membership per request
+pub mod membership;

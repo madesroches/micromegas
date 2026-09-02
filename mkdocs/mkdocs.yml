@@ -132,6 +132,7 @@ nav:
         - Caching: architecture/caching.md
     - Administration:
         - Authentication: admin/authentication.md
+        - Groups: admin/groups.md
         - API Keys: admin/api-keys.md
         - Telemetry Ingestion Server: admin/ingestion.md
         - FlightSQL Server: admin/flight-sql.md

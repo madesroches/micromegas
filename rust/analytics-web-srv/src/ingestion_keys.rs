@@ -304,7 +304,7 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
         // misconfigured; the 503 body's wording (about `MICROMEGAS_SQL_CONNECTION_STRING`)
         // doesn't literally describe this cause, but a 503 fail-closed beats a panic for a
         // case that should never happen in a correctly wired router.
-        if !caller.is_admin && !ingestion_state.self_service_mint_enabled {
+        if !caller.is_admin() && !ingestion_state.self_service_mint_enabled {
             return Err(IngestionKeyError::Forbidden(
                 "self-service minting is disabled".to_string(),
             ));
@@ -347,7 +347,7 @@ async fn mint_key(
     // runs on `pool` outside any transaction, so N concurrent mint requests from the same caller
     // all read the same pre-insert count and can all pass -- the cap is exact only for
     // sequential use from one caller.
-    if !caller.is_admin {
+    if !caller.is_admin() {
         let caller_id = caller.email.as_deref().unwrap_or(&caller.subject);
         let key_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM ingestion_api_keys WHERE created_by = $1 AND revoked_at IS NULL",
@@ -408,7 +408,7 @@ async fn mint_key(
             // falling through to the ordinary insert. Skipped outright for a reserved name
             // (`public`, `state.default_audience` -- never claimable) or when the admin has no
             // email (an admin with no email can't be granted a `user:` row).
-            if caller.is_admin {
+            if caller.is_admin() {
                 let reserved = aud == PUBLIC_AUDIENCE || aud.as_str() == state.default_audience;
                 if !reserved && caller.email.is_some() {
                     let already_owned: bool = sqlx::query_scalar(
@@ -433,7 +433,7 @@ async fn mint_key(
         }
         // Malformed-audience arm; `candidate` is already valid-format (via `resolve_audience`
         // above), so unreachable in practice.
-        Err(e) if caller.is_admin => return Err(IngestionKeyError::Forbidden(e.to_string())),
+        Err(e) if caller.is_admin() => return Err(IngestionKeyError::Forbidden(e.to_string())),
         Err(_) => {
             // Non-admin, no matching `mint` grant for `candidate` among the rows the point query
             // above just read -- try the lazy claim only when the caller explicitly
@@ -611,7 +611,7 @@ async fn try_claim_and_mint(
             .await?;
     if !locked {
         tx.rollback().await?;
-        if caller.is_admin {
+        if caller.is_admin() {
             return insert_key(
                 pool,
                 audience,
@@ -640,7 +640,7 @@ async fn try_claim_and_mint(
     // failing cleanly.
     if selector.len() > 255 {
         tx.rollback().await?;
-        if caller.is_admin {
+        if caller.is_admin() {
             return insert_key(
                 pool,
                 audience,
@@ -680,7 +680,7 @@ async fn try_claim_and_mint(
         // have landed in between, which is exactly the race this in-lock recheck exists to
         // catch.
         tx.rollback().await?;
-        if caller.is_admin {
+        if caller.is_admin() {
             return insert_key(
                 pool,
                 audience,
@@ -704,10 +704,10 @@ async fn try_claim_and_mint(
         // this branch at all -- `resolve_audience`'s point query would already have found that
         // grant and approved the mint directly. (`mint_key`'s own admin pre-check already skips
         // calling this function at all for a reserved name, so this arm is unreachable for an
-        // admin in practice; the `caller.is_admin` fallback stays for defense in depth.)
+        // admin in practice; the `caller.is_admin()` fallback stays for defense in depth.)
         if audience == PUBLIC_AUDIENCE || audience == state.default_audience {
             tx.rollback().await?;
-            if caller.is_admin {
+            if caller.is_admin() {
                 return insert_key(
                     pool,
                     audience,
@@ -730,7 +730,7 @@ async fn try_claim_and_mint(
         // Best-effort under concurrency: exact against another claim for *this same* audience
         // (serialized by the lock above), but not against concurrent claims by the same caller
         // for other, distinct fresh audience names, which take different locks.
-        if !caller.is_admin {
+        if !caller.is_admin() {
             let claim_count: i64 = sqlx::query_scalar(CLAIM_COUNT_SQL)
                 .bind(&selector)
                 .bind(caller_email)

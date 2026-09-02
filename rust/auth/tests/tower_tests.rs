@@ -74,6 +74,11 @@ struct MockAdminAuthProvider {
 #[async_trait::async_trait]
 impl AuthProvider for MockAdminAuthProvider {
     async fn validate_request(&self, _parts: &dyn RequestParts) -> anyhow::Result<AuthContext> {
+        let memberships: Arc<[String]> = if self.is_admin {
+            Arc::from([micromegas_auth::groups::ADMINS_GROUP.to_string()])
+        } else {
+            Arc::from([])
+        };
         Ok(AuthContext {
             subject: "mock-subject".to_string(),
             email: Some("mock@example.com".to_string()),
@@ -81,11 +86,10 @@ impl AuthProvider for MockAdminAuthProvider {
             audience: None,
             expires_at: None,
             auth_type: AuthType::Oidc,
-            is_admin: self.is_admin,
             allow_delegation: false,
             bound_audience: None,
             read_audiences: vec![],
-            groups: vec![],
+            memberships,
         })
     }
 }

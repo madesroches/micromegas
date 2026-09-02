@@ -38,7 +38,7 @@ use std::sync::Arc;
 ///     token_cache_size: 1000,
 ///     token_cache_ttl_secs: 300,
 /// };
-/// let oidc_provider = Arc::new(OidcAuthProvider::new(oidc_config, "MICROMEGAS_ADMINS").await?);
+/// let oidc_provider = Arc::new(OidcAuthProvider::new(oidc_config).await?);
 ///
 /// // Create multi-provider with builder pattern
 /// let multi = MultiAuthProvider::new()
@@ -77,12 +77,6 @@ impl MultiAuthProvider {
 
 #[async_trait]
 impl AuthProvider for MultiAuthProvider {
-    /// `true` if any provider in the chain can grant admin -- the chain as a whole can produce
-    /// an admin `AuthContext` whenever one of its links can.
-    fn can_grant_admin(&self) -> bool {
-        self.providers.iter().any(|p| p.can_grant_admin())
-    }
-
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,

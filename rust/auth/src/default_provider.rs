@@ -8,7 +8,9 @@ use crate::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use crate::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, key_store_has_live_rows,
 };
-use crate::env::resolve_prefixed_var;
+use crate::env::{reject_removed_admin_vars, reject_removed_cache_ttl_vars, resolve_prefixed_var};
+use crate::groups::{DbGroupsConfig, DbGroupsSource};
+use crate::membership::MembershipProvider;
 use crate::multi::MultiAuthProvider;
 use crate::oidc::{OidcAuthProvider, OidcConfig};
 use crate::types::AuthProvider;
@@ -16,9 +18,10 @@ use anyhow::Result;
 use micromegas_tracing::{info, warn};
 use sqlx::PgPool;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Builder for the default (env-driven) authentication provider stack, plus an
-/// optional DB-backed API key store.
+/// optional DB-backed API key store and an optional local-group store.
 ///
 /// The env factory (`provider()` / `provider_with_prefix()` below) is a builder
 /// so that adding the DB store — and later a policy — does not re-break the
@@ -26,6 +29,7 @@ use std::sync::Arc;
 pub struct ProviderBuilder {
     prefix: String,
     key_store: Option<(PgPool, ApiKeyTable)>,
+    group_store: Option<PgPool>,
 }
 
 impl ProviderBuilder {
@@ -36,6 +40,7 @@ impl ProviderBuilder {
         Self {
             prefix: prefix.to_string(),
             key_store: None,
+            group_store: None,
         }
     }
 
@@ -44,6 +49,14 @@ impl ProviderBuilder {
     /// clone of the caller's lake pool).
     pub fn with_db_key_store(mut self, pool: PgPool, table: ApiKeyTable) -> Self {
         self.key_store = Some((pool, table));
+        self
+    }
+
+    /// Attaches a local-group store, looked up through `pool` (same dedicated-pool
+    /// expectation as [`Self::with_db_key_store`]). `compose()` wraps the finished chain in a
+    /// [`MembershipProvider`] when this is attached.
+    pub fn with_group_store(mut self, pool: PgPool) -> Self {
+        self.group_store = Some(pool);
         self
     }
 
@@ -59,20 +72,21 @@ impl ProviderBuilder {
         resolve_prefixed_var(&self.prefix, "OIDC_CONFIG")
     }
 
-    /// Resolves the admin-users env var name for this builder's prefix, with
-    /// fallback to the unprefixed name.
-    fn admin_var(&self) -> String {
-        resolve_prefixed_var(&self.prefix, "ADMINS")
-    }
-
     /// Composes the chain and reports whether env keys or OIDC counted as
     /// "configured". Shared by `build()` and `build_chain()`, which each
     /// document the provider order and the DB-provider guarantee.
     ///
     /// Takes `&self` rather than `self` so `build()` can still reach the
     /// attached key store's pool for its existence query afterwards.
+    ///
+    /// Refuses via [`reject_removed_admin_vars`] and [`reject_removed_cache_ttl_vars`] before
+    /// composing anything: admin membership lives in the `admins` group from schema v10 on, and
+    /// the env-var admin lists and per-role cache-TTL vars this plan removes must never silently
+    /// be ignored.
     async fn compose(&self) -> Result<(MultiAuthProvider, bool)> {
-        let admin_var = self.admin_var();
+        reject_removed_admin_vars()?;
+        reject_removed_cache_ttl_vars()?;
+
         let oidc_config_var = self.oidc_config_var();
         let api_keys_json = self.api_keys_json();
 
@@ -91,7 +105,7 @@ impl ProviderBuilder {
         match OidcConfig::from_env_var(&oidc_config_var) {
             Ok(config) => {
                 info!("Initializing OIDC authentication");
-                let oidc_provider = OidcAuthProvider::new(config, &admin_var).await?;
+                let oidc_provider = OidcAuthProvider::new(config).await?;
                 multi = multi.with_provider(Arc::new(oidc_provider));
                 configured = true;
             }
@@ -107,6 +121,40 @@ impl ProviderBuilder {
         }
 
         Ok((multi, configured))
+    }
+
+    /// Wraps `multi` in a [`MembershipProvider`] when a group store is attached, and runs one
+    /// eager `current()` at startup: on `Ok`, `warn!`s while `has_wildcard_admin()` is true
+    /// ("every authenticated caller is an admin; add a `user:` member to `admins` and remove
+    /// `*`"); on `Err`, `warn!`s and continues -- the first request will 503, and a split
+    /// deployment may legitimately start flight-sql before the migration runner is up, as with
+    /// the v5 key store.
+    async fn wrap_with_membership(&self, multi: MultiAuthProvider) -> Arc<dyn AuthProvider> {
+        let Some(pool) = &self.group_store else {
+            return Arc::new(multi) as Arc<dyn AuthProvider>;
+        };
+        let group_config = DbGroupsConfig::from_env_with_prefix(&self.prefix);
+        let groups = Arc::new(DbGroupsSource::new(
+            pool.clone(),
+            Duration::from_secs(group_config.cache_ttl_secs),
+        ));
+        match groups.current().await {
+            Ok(graph) => {
+                if graph.has_wildcard_admin() {
+                    warn!(
+                        "every authenticated caller is an admin; add a `user:` member to \
+                         `admins` and remove `*`"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("group store not yet reachable at startup, continuing: {e:#}");
+            }
+        }
+        Arc::new(MembershipProvider::new(
+            Arc::new(multi) as Arc<dyn AuthProvider>,
+            groups,
+        )) as Arc<dyn AuthProvider>
     }
 
     /// Builds the composed provider.
@@ -167,7 +215,7 @@ impl ProviderBuilder {
             return Ok(None);
         }
 
-        Ok(Some(Arc::new(multi) as Arc<dyn AuthProvider>))
+        Ok(Some(self.wrap_with_membership(multi).await))
     }
 
     /// Composes the provider chain with **no** "is anything configured?" guard.
@@ -194,7 +242,7 @@ impl ProviderBuilder {
         if multi.is_empty() {
             warn!("no auth provider configured: env keys, OIDC, and DB key store are all absent");
         }
-        Ok(Arc::new(multi) as Arc<dyn AuthProvider>)
+        Ok(self.wrap_with_membership(multi).await)
     }
 }
 
@@ -203,7 +251,10 @@ impl ProviderBuilder {
 /// Reads configuration from:
 /// - `MICROMEGAS_API_KEYS`: JSON array of API keys
 /// - `MICROMEGAS_OIDC_CONFIG`: OIDC configuration JSON
-/// - `MICROMEGAS_ADMINS`: JSON array of admin user emails/subjects
+///
+/// Admin-ness is no longer an env-driven list here: it lives in the `admins` group (schema v10),
+/// resolved by a [`crate::membership::MembershipProvider`] when a group store is attached via
+/// [`ProviderBuilder::with_group_store`].
 ///
 /// Returns `Ok(Some(...))` if at least one provider is configured.
 /// Returns `Ok(None)` if no providers are configured (auth disabled).
@@ -237,7 +288,6 @@ pub async fn provider() -> Result<Option<Arc<dyn AuthProvider>>> {
 /// For prefix `"MICROMEGAS_INGESTION"`:
 /// - API keys: tries `MICROMEGAS_INGESTION_API_KEYS`, falls back to `MICROMEGAS_API_KEYS`
 /// - OIDC:     tries `MICROMEGAS_INGESTION_OIDC_CONFIG`, falls back to `MICROMEGAS_OIDC_CONFIG`
-/// - Admins:   tries `MICROMEGAS_INGESTION_ADMINS`, falls back to `MICROMEGAS_ADMINS`
 ///
 /// With an empty prefix the behaviour is identical to [`provider`]. Kept as a
 /// thin env-only wrapper around [`ProviderBuilder`] — no DB key store is attached.

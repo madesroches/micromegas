@@ -33,7 +33,6 @@ fn caller(is_admin: bool, grant_selectors: &[&str]) -> CallerContext {
         read_scope: ReadScope::All,
         is_admin,
         isolation_config: Arc::new(IsolationConfig::default()),
-        admin_principal_possible: true,
         identity: None,
         grant_selectors: grant_selectors
             .iter()

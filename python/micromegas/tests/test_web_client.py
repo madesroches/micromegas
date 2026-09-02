@@ -106,6 +106,59 @@ class TestAudienceGrants:
         }
 
 
+class TestGroups:
+    """`list_groups`/`create_group`/`delete_group`/`list_group_members`/
+    `add_group_member`/`remove_group_member` URL/payload/params construction,
+    mirroring `TestAudienceGrants` above."""
+
+    def test_list_groups_url(self):
+        client = _make_client()
+        client.session.get.return_value.json.return_value = []
+        client.list_groups()
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups"
+
+    def test_create_group_omits_description_when_none(self):
+        client = _make_client()
+        client.create_group("eng")
+        call = client.session.post.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups"
+        assert call.kwargs["json"] == {"name": "eng"}
+
+    def test_create_group_includes_description_when_set(self):
+        client = _make_client()
+        client.create_group("eng", description="Engineering")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload == {"name": "eng", "description": "Engineering"}
+
+    def test_delete_group_url_encodes_the_name(self):
+        client = _make_client()
+        client.delete_group("eng team")
+        call = client.session.delete.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups/eng%20team"
+
+    def test_list_group_members_url(self):
+        client = _make_client()
+        client.session.get.return_value.json.return_value = []
+        client.list_group_members("admins")
+        call = client.session.get.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups/admins/members"
+
+    def test_add_group_member_payload(self):
+        client = _make_client()
+        client.add_group_member("admins", "user:alice@example.com")
+        call = client.session.post.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups/admins/members"
+        assert call.kwargs["json"] == {"member": "user:alice@example.com"}
+
+    def test_remove_group_member_passes_member_as_query_param(self):
+        client = _make_client()
+        client.remove_group_member("admins", "*")
+        call = client.session.delete.call_args
+        assert call.args[0] == "http://localhost:9999/api/groups/admins/members"
+        assert call.kwargs["params"] == {"member": "*"}
+
+
 class TestMintIngestionApiKey:
     """`mint_ingestion_api_key`: payload construction and the
     409 `CLAIM_CONTENDED` retry-once logic."""

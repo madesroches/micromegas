@@ -136,6 +136,9 @@ export interface MyAudiences {
    *  see" via `/visible` (which is wider -- includes pairs visible only through a `*` row or a
    *  `group:` row the caller isn't actually a member of). */
   held_pairs: string[]
+  /** The caller's resolved, transitive local-group membership -- lets the page explain why a
+   *  `group:` grant applies to this caller. */
+  groups: string[]
 }
 
 /** `GET {base}/api/audience-grants/my-audiences`. A 403 (self-service knob off for a

@@ -318,7 +318,7 @@ async fn live_row_authenticates_with_expected_context() {
         ctx.auth_type,
         micromegas_auth::types::AuthType::ApiKey
     ));
-    assert!(!ctx.is_admin);
+    assert!(!ctx.is_admin());
     // An ingestion write credential is never a delegating service account; the compiler
     // cannot catch a regression here, hence this assertion.
     assert!(!ctx.allow_delegation);

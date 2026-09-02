@@ -8,8 +8,19 @@ use axum::response::IntoResponse;
 use axum_extra::extract::cookie::SameSite;
 use base64::Engine;
 use http::StatusCode;
+use micromegas::auth::groups::DbGroupsSource;
 use micromegas::auth::oauth_state::generate_nonce;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// A pool that is never actually reachable, matching `rust/auth/tests/test_utils.rs`'s
+/// `unreachable_pool` -- fine here, since none of these tests call `get_auth_provider`.
+fn unreachable_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
 
 fn create_test_auth_state() -> AuthState {
     AuthState {
@@ -24,7 +35,10 @@ fn create_test_auth_state() -> AuthState {
         secure_cookies: false,
         state_signing_secret: b"test-secret-32-bytes-for-testing".to_vec(),
         base_path: String::new(),
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
+        groups: Arc::new(DbGroupsSource::new(
+            unreachable_pool(),
+            Duration::from_secs(60),
+        )),
     }
 }
 
@@ -50,8 +64,12 @@ fn test_generate_nonce_valid_base64() {
     assert_eq!(decoded.expect("should decode").len(), 32);
 }
 
-#[test]
-fn test_create_cookie_basic_properties() {
+// The next four tests are `#[tokio::test]`, not plain `#[test]`: `create_test_auth_state`
+// builds a `DbGroupsSource` over a `connect_lazy` pool, and `connect_lazy` needs a Tokio runtime
+// context to construct even though it never actually connects.
+
+#[tokio::test]
+async fn test_create_cookie_basic_properties() {
     let state = create_test_auth_state();
 
     let cookie = create_cookie("test_cookie", "test_value".to_string(), 3600, &state);
@@ -62,8 +80,8 @@ fn test_create_cookie_basic_properties() {
     assert_eq!(cookie.same_site(), Some(SameSite::Lax));
 }
 
-#[test]
-fn test_create_cookie_secure_flag() {
+#[tokio::test]
+async fn test_create_cookie_secure_flag() {
     let mut state = create_test_auth_state();
     state.secure_cookies = true;
 
@@ -71,8 +89,8 @@ fn test_create_cookie_secure_flag() {
     assert!(cookie.secure().unwrap_or(false));
 }
 
-#[test]
-fn test_create_cookie_with_domain() {
+#[tokio::test]
+async fn test_create_cookie_with_domain() {
     let mut state = create_test_auth_state();
     state.cookie_domain = Some(".example.com".to_string());
 
@@ -81,8 +99,8 @@ fn test_create_cookie_with_domain() {
     assert_eq!(cookie.domain(), Some("example.com"));
 }
 
-#[test]
-fn test_clear_cookie_expires_immediately() {
+#[tokio::test]
+async fn test_clear_cookie_expires_immediately() {
     let state = create_test_auth_state();
 
     let cookie = clear_cookie("expired_cookie", &state);

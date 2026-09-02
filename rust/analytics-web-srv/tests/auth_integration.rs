@@ -7,15 +7,15 @@
 //! The signature validation tests are skipped in unit tests since they
 //! require real JWKS endpoints.
 //!
-//! `cookie_auth_middleware_inserts_auth_context_with_groups` below is the exception: it stands
-//! up a real mock JWKS/discovery server since that is exactly
-//! what it needs to verify -- that the `AuthContext` (with `groups`) the middleware builds after
-//! full signature verification lands in request extensions, not `ValidatedUser`
-//! only.
+//! `cookie_auth_middleware_maps_group_store_outage_to_503` below is the exception: it stands up
+//! a real mock JWKS/discovery server (so the inner `OidcAuthProvider` validates the token) paired
+//! with an `unreachable_pool`-style lazy `DbGroupsSource` (never actually reachable), to verify
+//! that a `ProviderUnavailable` from the group store -- not just a rejected credential -- maps to
+//! a 503, no live DB needed.
 
 use analytics_web_srv::auth::{AuthState, OidcClientConfig, auth_logout};
 use axum::{
-    Extension, Router,
+    Router,
     body::Body,
     http::{Request, StatusCode},
     middleware,
@@ -23,15 +23,26 @@ use axum::{
 };
 use base64::Engine;
 use http::header::COOKIE;
-use micromegas::auth::types::AuthContext;
+use micromegas::auth::groups::DbGroupsSource;
 use rsa::pkcs1::{DecodeRsaPublicKey, EncodeRsaPrivateKey, EncodeRsaPublicKey};
 use rsa::traits::PublicKeyParts;
 use serde::Serialize;
 use serial_test::serial;
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// A pool that is never actually reachable -- mirrors `rust/auth/tests/test_utils.rs`'s
+/// `unreachable_pool`, reimplemented here since that helper is private to the `micromegas-auth`
+/// crate's own test binaries.
+fn unreachable_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible")
+}
 
 fn create_test_auth_state() -> AuthState {
     // Use a fixed secret for testing
@@ -49,7 +60,10 @@ fn create_test_auth_state() -> AuthState {
         secure_cookies: false,
         state_signing_secret,
         base_path: String::new(),
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
+        groups: Arc::new(DbGroupsSource::new(
+            unreachable_pool(),
+            Duration::from_secs(60),
+        )),
     }
 }
 
@@ -154,12 +168,11 @@ struct TestClaims {
     aud: String,
     exp: i64,
     email: Option<String>,
-    groups: Option<Vec<String>>,
 }
 
 /// Starts a mock OIDC issuer serving discovery + a JWKS containing `public_key`, and signs a
-/// token with `private_key` carrying a flat `groups` claim.
-async fn start_mock_issuer_and_sign_token(groups: Vec<String>) -> (MockServer, String, String) {
+/// token with `private_key`.
+async fn start_mock_issuer_and_sign_token() -> (MockServer, String, String) {
     let mut rng = rsa::rand_core::OsRng;
     let private_key =
         rsa::RsaPrivateKey::new(&mut rng, 2048).expect("generating test RSA private key");
@@ -217,11 +230,6 @@ async fn start_mock_issuer_and_sign_token(groups: Vec<String>) -> (MockServer, S
         aud: "test-client".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
         email: Some("user123@example.com".to_string()),
-        groups: if groups.is_empty() {
-            None
-        } else {
-            Some(groups)
-        },
     };
     let token = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
@@ -233,28 +241,23 @@ async fn start_mock_issuer_and_sign_token(groups: Vec<String>) -> (MockServer, S
     (server, issuer, token)
 }
 
-/// Echoes the `AuthContext` the middleware inserted into request extensions, as JSON, so the
-/// test can assert on it from the response body.
-async fn echo_auth_context(
-    Extension(ctx): Extension<AuthContext>,
-) -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({
-        "subject": ctx.subject,
-        "groups": ctx.groups,
-    }))
+/// A handler this test's group-store-outage path never actually reaches -- the middleware
+/// rejects the request with 503 before `next.run` is ever called.
+async fn unreachable_handler() -> StatusCode {
+    StatusCode::OK
 }
 
-/// The cookie middleware must insert the full `AuthContext` -- not just
-/// `ValidatedUser`, which has no `groups` field -- into request extensions, since
-/// `analytics-web-srv` is the mint path's identity source and `mint_key` needs
-/// `AuthContext` to consult a `MintPolicy`.
+/// A `ProviderUnavailable` from the group store (not a rejected credential) must map to 503, the
+/// same distinction `axum.rs::auth_middleware`/`tower.rs::AuthService` make for their own DB-backed
+/// providers -- so a client retries instead of treating the session as permanently invalid. The
+/// token itself validates fine (real mock JWKS, real signature verification); only the group
+/// store -- an `unreachable_pool`-style lazy pool that never actually connects -- is unavailable.
 #[tokio::test]
 #[serial]
-async fn cookie_auth_middleware_inserts_auth_context_with_groups() {
+async fn cookie_auth_middleware_maps_group_store_outage_to_503() {
     let _guard = EnvGuard;
 
-    let (_server, issuer, token) =
-        start_mock_issuer_and_sign_token(vec!["team-a".to_string(), "team-b".to_string()]).await;
+    let (_server, issuer, token) = start_mock_issuer_and_sign_token().await;
 
     let oidc_config = serde_json::json!({
         "issuers": [{ "issuer": issuer, "audience": "test-client" }]
@@ -266,7 +269,7 @@ async fn cookie_auth_middleware_inserts_auth_context_with_groups() {
 
     let state = create_test_auth_state();
     let app = Router::new()
-        .route("/protected", get(echo_auth_context))
+        .route("/protected", get(unreachable_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             analytics_web_srv::auth::cookie_auth_middleware,
@@ -280,14 +283,11 @@ async fn cookie_auth_middleware_inserts_auth_context_with_groups() {
         .expect("request should build");
 
     let response = app.oneshot(request).await.expect("request should succeed");
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("reading response body");
-    let body: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parsing JSON body");
-    assert_eq!(body["subject"], "user123");
-    assert_eq!(body["groups"], serde_json::json!(["team-a", "team-b"]));
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a group-store outage must map to 503, not 401"
+    );
 }
 
 // Note: The following tests are commented out because they require either:

@@ -84,6 +84,11 @@ fn unique_non_admin_user() -> ValidatedUser {
 /// verbatim per this crate's existing convention of mirroring rather than sharing such helpers
 /// across `tests/*.rs` files, since each file in `tests/` is a separate crate.
 fn auth_context_for(user: &ValidatedUser) -> AuthContext {
+    let memberships: Vec<String> = if user.is_admin {
+        vec![micromegas::auth::groups::ADMINS_GROUP.to_string()]
+    } else {
+        vec![]
+    };
     AuthContext {
         subject: user.subject.clone(),
         email: user.email.clone(),
@@ -91,11 +96,10 @@ fn auth_context_for(user: &ValidatedUser) -> AuthContext {
         audience: None,
         expires_at: None,
         auth_type: AuthType::Oidc,
-        is_admin: user.is_admin,
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
-        groups: vec![],
+        memberships: memberships.into(),
     }
 }
 

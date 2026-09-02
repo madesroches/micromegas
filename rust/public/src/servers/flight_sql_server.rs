@@ -301,7 +301,7 @@ impl FlightSqlServerBuilder {
                     let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
                     let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
                         key_store_pool,
-                        audience_grants_config,
+                        Duration::from_secs(audience_grants_config.cache_ttl_secs),
                     ));
                     Arc::new(
                         AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
@@ -312,9 +312,11 @@ impl FlightSqlServerBuilder {
                 (Some(provider), policy, Arc::new(IsolationConfig::default()))
             } else if self.use_default_auth {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+                let group_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
                 warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
                 let provider = match ProviderBuilder::new("")
                     .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
+                    .with_group_store(group_store_pool)
                     .build()
                     .await?
                 {
@@ -336,7 +338,7 @@ impl FlightSqlServerBuilder {
                 let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
                 let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
                     audience_grants_pool,
-                    audience_grants_config,
+                    Duration::from_secs(audience_grants_config.cache_ttl_secs),
                 ));
                 let policy: Arc<dyn ReadPolicy> = Arc::new(
                     AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
@@ -362,14 +364,6 @@ impl FlightSqlServerBuilder {
         let read_policy = self.read_policy.unwrap_or(default_policy);
         let isolation_config = self.isolation_config.unwrap_or(default_isolation_config);
 
-        // Whether this deployment can ever produce an admin principal at all -- computed once
-        // here, ahead of every request, so it covers all three branches above (including the
-        // injected-provider branch the monolith takes via `with_auth_provider`), not just
-        // `use_default_auth`. A `None` provider means auth is disabled, where every caller is
-        // already treated as admin by the absent-header convention (`user_attribution.rs`), so
-        // `true` is both correct and the conservative choice there.
-        let admin_principal_possible = auth_provider.as_ref().is_none_or(|p| p.can_grant_admin());
-
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
             partition_provider,
@@ -377,7 +371,6 @@ impl FlightSqlServerBuilder {
             session_configurator,
             read_policy,
             isolation_config,
-            admin_principal_possible,
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 

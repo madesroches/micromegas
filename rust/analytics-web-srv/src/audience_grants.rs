@@ -96,6 +96,10 @@ pub enum AudienceGrantError {
     BadRequest(String),
     /// Unknown `(audience, axis, selector)` on `DELETE`.
     NotFound,
+    /// `create_grant`'s `group:<name>` selector names a group that does not exist. Checked only
+    /// after authorization succeeds (see `create_grant`'s own doc comment), so this is never a
+    /// group-name existence oracle for a caller with no authority on the pair.
+    GroupNotFound(String),
     /// A DB error.
     Database(sqlx::Error),
     /// `state.pool == None` -- the telemetry-DB pool was never configured
@@ -125,6 +129,11 @@ impl IntoResponse for AudienceGrantError {
             AudienceGrantError::NotFound => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new("NOT_FOUND", "grant not found")),
+            )
+                .into_response(),
+            AudienceGrantError::GroupNotFound(msg) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("NOT_FOUND", msg)),
             )
                 .into_response(),
             AudienceGrantError::Database(err) => {
@@ -255,7 +264,7 @@ impl<S: Send + Sync> FromRequestParts<S> for GrantGate {
             // should never happen in a correctly wired router -- mirrors `MintGate`'s identical
             // `.ok_or(...)`.
             .ok_or(AudienceGrantError::NotConfigured)?;
-        if !caller.is_admin && !grants_state.self_service_mint_enabled {
+        if !caller.is_admin() && !grants_state.self_service_mint_enabled {
             return Err(AudienceGrantError::Forbidden(
                 "self-service grant management is disabled".to_string(),
             ));
@@ -320,7 +329,7 @@ const UPSERT_GRANT_SQL: &str = "
       AND NOT EXISTS (SELECT 1 FROM ins)";
 
 async fn insert_or_get(
-    pool: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     audience: &str,
     axis: &str,
     selector: &str,
@@ -332,7 +341,7 @@ async fn insert_or_get(
             .bind(axis)
             .bind(selector)
             .bind(created_by)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await?;
         if let Some(row) = row {
             return Ok(row);
@@ -404,7 +413,7 @@ async fn create_grant(
     validate_selector(&body.selector)?;
     let created_by = caller_identity(&caller);
 
-    if !caller.is_admin {
+    if !caller.is_admin() {
         if body.selector == "*" {
             return Err(AudienceGrantError::Forbidden(
                 "non-admin callers may not grant '*' (every authenticated principal) access"
@@ -466,14 +475,46 @@ async fn create_grant(
         }
     }
 
+    // Checked only now, after authorization succeeds (admin unconditionally, non-admin via the
+    // `caller_holds_pair` check above) -- an existence check run before authorization would let
+    // any authenticated non-admin caller probe for group names by selector alone, even on a pair
+    // they hold no grant on (`GET /api/groups` is `AdminUser`-only).
+    //
+    // The existence check and the insert run in one transaction, with the group's `groups` row
+    // locked first: `delete_group` (`groups.rs`) takes this same `FOR UPDATE` lock on its own row
+    // before scanning for `group:<name>` referrers (see its own comment), so a concurrent delete
+    // of the group and this insert serialize on that row instead of racing -- without that, a
+    // `group:<name>` grant inserted between the plain check and the delete would survive, leaving
+    // a dangling `audience_grants` row that silently re-activates if the name is later recreated.
+    let mut tx = pool.begin().await.map_err(|e| {
+        AudienceGrantError::Internal(format!("starting create-grant transaction: {e:#}"))
+    })?;
+
+    if let Some(group_name) = body.selector.strip_prefix("group:") {
+        let group_exists = sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE")
+            .bind(group_name)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
+        if !group_exists {
+            return Err(AudienceGrantError::GroupNotFound(format!(
+                "group '{group_name}' not found"
+            )));
+        }
+    }
+
     let row = insert_or_get(
-        &pool,
+        &mut tx,
         &body.audience,
         &body.axis,
         &body.selector,
         &created_by,
     )
     .await?;
+
+    tx.commit().await.map_err(|e| {
+        AudienceGrantError::Internal(format!("committing create-grant transaction: {e:#}"))
+    })?;
 
     let status = if row.created {
         StatusCode::CREATED
@@ -545,7 +586,7 @@ async fn delete_grant(
     validate_axis(&query.axis)?;
 
     let deleted_by = caller_identity(&caller);
-    let rows_affected = if caller.is_admin {
+    let rows_affected = if caller.is_admin() {
         sqlx::query(
             "DELETE FROM audience_grants WHERE audience = $1 AND axis = $2 AND selector = $3",
         )
@@ -594,7 +635,7 @@ async fn delete_grant(
     };
 
     if rows_affected == 0 {
-        if caller.is_admin {
+        if caller.is_admin() {
             return Err(AudienceGrantError::NotFound);
         }
         // Distinguish "no such row" (404) from "exists, but not yours" (403) with a follow-up
@@ -671,7 +712,7 @@ async fn visible_grants(
     AuthenticatedUser(caller): AuthenticatedUser,
 ) -> Result<Json<Vec<VisibleGrantRow>>, AudienceGrantError> {
     let pool = require_pool(&state)?;
-    let rows = if caller.is_admin {
+    let rows = if caller.is_admin() {
         sqlx::query_as::<_, VisibleGrantRow>(
             "SELECT audience, axis, selector, created_at, created_by
              FROM audience_grants
@@ -782,6 +823,10 @@ struct MyAudiencesResponse {
     /// an admin: `isAdmin` already grants Share everywhere on the client, and every pair is a
     /// held pair for an admin's own writes anyway.
     held_pairs: Vec<String>,
+    /// The caller's resolved, transitive local-group membership -- straight off
+    /// `AuthContext.memberships`, no query. Lets the CLI and the Audience Access page show why a
+    /// caller holds a `group:` grant.
+    groups: Vec<String>,
 }
 
 /// `GET {base_path}/api/audience-grants/my-audiences` -- audiences `caller` may mint into today,
@@ -798,12 +843,12 @@ struct MyAudiencesResponse {
 /// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate`/`GrantGate`
 /// enforce, for the same reason: this is new non-admin surface too, and must not widen on
 /// upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
-/// `!caller.is_admin` condition.
+/// `!caller.is_admin()` condition.
 async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,
 ) -> Result<Json<MyAudiencesResponse>, AudienceGrantError> {
-    if !caller.is_admin && !state.self_service_mint_enabled {
+    if !caller.is_admin() && !state.self_service_mint_enabled {
         return Err(AudienceGrantError::Forbidden(
             "self-service minting is disabled".to_string(),
         ));
@@ -831,7 +876,7 @@ async fn my_audiences(
     // same rule `caller_holds_pair` checks -- `*` filtered out of `caller_selectors`, matching
     // that write-hold-check convention (a `*` row must not let a non-admin claim they "hold"
     // every pair). An admin needs none of this on the client, so skip the query entirely.
-    let held_pairs = if caller.is_admin {
+    let held_pairs = if caller.is_admin() {
         Vec::new()
     } else {
         let identity_selectors: Vec<String> = caller_selectors(&caller)
@@ -849,12 +894,15 @@ async fn my_audiences(
             .collect()
     };
 
+    let groups = caller.memberships.to_vec();
+
     Ok(Json(MyAudiencesResponse {
-        is_admin: caller.is_admin,
+        is_admin: caller.is_admin(),
         audiences,
         mint_prefix,
         email,
         held_pairs,
+        groups,
     }))
 }
 

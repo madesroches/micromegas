@@ -475,7 +475,6 @@ fn admin_statement_calling_remove_query_denial_is_exempt() {
     assert!(skip_for_admin_recovery(
         "SELECT remove_query_denial('00000000-0000-0000-0000-000000000000')",
         true,
-        true,
     ));
 }
 
@@ -484,39 +483,22 @@ fn same_statement_from_non_admin_is_not_exempt() {
     assert!(!skip_for_admin_recovery(
         "SELECT remove_query_denial('00000000-0000-0000-0000-000000000000')",
         false,
-        true,
-    ));
-}
-
-#[test]
-fn non_admin_recovery_statement_exempt_when_no_admin_principal_possible() {
-    // Matches register_lakehouse_functions' own gate: `is_admin || !admin_principal_possible`.
-    assert!(skip_for_admin_recovery(
-        "SELECT remove_query_denial('00000000-0000-0000-0000-000000000000')",
-        false,
-        false,
     ));
 }
 
 #[test]
 fn statement_not_mentioning_any_recovery_function_is_never_exempt() {
-    assert!(!skip_for_admin_recovery(
-        "SELECT * FROM log_entries",
-        true,
-        true
-    ));
+    assert!(!skip_for_admin_recovery("SELECT * FROM log_entries", true));
 }
 
 #[test]
 fn deny_queries_and_list_query_denials_are_also_recognized() {
     assert!(skip_for_admin_recovery(
         "SELECT * FROM deny_queries('client = ''x''', 'r')",
-        true,
         true
     ));
     assert!(skip_for_admin_recovery(
         "SELECT * FROM list_query_denials()",
-        true,
         true
     ));
 }

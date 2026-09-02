@@ -21,10 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use test_utils::unreachable_pool;
 
-fn test_config(ttl_secs: u64) -> DbAudienceGrantsConfig {
-    DbAudienceGrantsConfig {
-        cache_ttl_secs: ttl_secs,
-    }
+fn ttl(secs: u64) -> Duration {
+    Duration::from_secs(secs)
 }
 
 fn caller(email: Option<&str>, groups: Vec<String>) -> AuthContext {
@@ -35,11 +33,10 @@ fn caller(email: Option<&str>, groups: Vec<String>) -> AuthContext {
         audience: None,
         expires_at: None,
         auth_type: AuthType::Oidc,
-        is_admin: false,
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
-        groups,
+        memberships: groups.into(),
     }
 }
 
@@ -49,7 +46,7 @@ fn caller(email: Option<&str>, groups: Vec<String>) -> AuthContext {
 
 #[tokio::test]
 async fn cold_start_against_unreachable_db_is_err() {
-    let source = DbAudienceGrantsSource::new(unreachable_pool(), test_config(60));
+    let source = DbAudienceGrantsSource::new(unreachable_pool(), ttl(60));
     let result = source.current().await;
     assert!(
         result.is_err(),
@@ -62,7 +59,7 @@ async fn cold_start_against_unreachable_db_is_err() {
 /// rather than surfacing as a second identical connection failure.
 #[tokio::test]
 async fn cold_start_failure_is_throttled_within_the_ttl_window() {
-    let source = DbAudienceGrantsSource::new(unreachable_pool(), test_config(60));
+    let source = DbAudienceGrantsSource::new(unreachable_pool(), ttl(60));
     let _first = source.current().await.expect_err("first attempt fails");
     let second = source
         .current()
@@ -80,10 +77,7 @@ async fn cold_start_failure_is_throttled_within_the_ttl_window() {
 #[tokio::test]
 async fn read_policy_with_unreachable_store_fails_closed_even_with_permissive_env_grants() {
     let grants = AudienceGrants::parse(r#"{"team-alpha": ["*"]}"#).expect("valid grants");
-    let store = Arc::new(DbAudienceGrantsSource::new(
-        unreachable_pool(),
-        test_config(60),
-    ));
+    let store = Arc::new(DbAudienceGrantsSource::new(unreachable_pool(), ttl(60)));
     let policy = AudienceReadPolicy::new(grants).with_store(Some(store));
     let ctx = caller(None, vec![]);
     let result = policy.resolve(&ctx).await;
@@ -101,10 +95,7 @@ async fn mint_policy_with_unreachable_store_fails_closed() {
         r#"{"alice-laptop": {"read": [], "mint": ["user:alice@example.com"]}}"#,
     )
     .expect("valid grants");
-    let store = Arc::new(DbAudienceGrantsSource::new(
-        unreachable_pool(),
-        test_config(60),
-    ));
+    let store = Arc::new(DbAudienceGrantsSource::new(unreachable_pool(), ttl(60)));
     let policy = AudienceMintPolicy::new(grants).with_store(Some(store));
     let ctx = caller(Some("alice@example.com"), vec![]);
     let result = policy.resolve_audience(&ctx, Some("alice-laptop")).await;
@@ -114,13 +105,28 @@ async fn mint_policy_with_unreachable_store_fails_closed() {
     );
 }
 
+/// Smoke test for `DbGroupsSource`, which shares `SnapshotSource`'s cache mechanics with
+/// `DbAudienceGrantsSource` -- exercises the same cold-start-failure path against an
+/// unreachable pool, pinning that the generic extraction still works for the second instantiation.
+#[tokio::test]
+async fn group_store_cold_start_against_unreachable_db_is_err() {
+    use micromegas_auth::groups::DbGroupsSource;
+    let source = DbGroupsSource::new(unreachable_pool(), ttl(60));
+    let result = source.current().await;
+    assert!(
+        result.is_err(),
+        "a fresh group store with no prior snapshot must fail closed"
+    );
+}
+
 // ---------------------------------------------------------------------------
-// DbAudienceGrantsConfig::from_env_with_prefix -- {prefix}_ fallback
+// DbAudienceGrantsConfig::from_env_with_prefix -- the flat, unprefixed `MICROMEGAS_AUTH_
+// CACHE_TTL_SECONDS` knob `DbApiKeyConfig`/`DbGroupsConfig` also read, ignoring `prefix`.
 // ---------------------------------------------------------------------------
 
-const PREFIX: &str = "MICROMEGAS_1489_GRANTS_TESTS";
-const PREFIXED_VAR: &str = "MICROMEGAS_1489_GRANTS_TESTS_AUDIENCE_GRANT_CACHE_TTL_SECONDS";
-const UNPREFIXED_VAR: &str = "MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS";
+const UNPREFIXED_VAR: &str = "MICROMEGAS_AUTH_CACHE_TTL_SECONDS";
+/// A role prefix that must have no effect on this knob -- passed to every call below to pin that.
+const SOME_PREFIX: &str = "MICROMEGAS_1489_GRANTS_TESTS";
 
 struct EnvGuard;
 
@@ -128,7 +134,6 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         // SAFETY: tests are serialized with `#[serial]`.
         unsafe {
-            std::env::remove_var(PREFIXED_VAR);
             std::env::remove_var(UNPREFIXED_VAR);
         }
     }
@@ -140,42 +145,31 @@ fn config_from_env_defaults_to_60_when_unset() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::remove_var(PREFIXED_VAR);
         std::env::remove_var(UNPREFIXED_VAR);
     }
     assert_eq!(
-        DbAudienceGrantsConfig::from_env_with_prefix(PREFIX).cache_ttl_secs,
+        DbAudienceGrantsConfig::from_env_with_prefix(SOME_PREFIX).cache_ttl_secs,
         60
     );
 }
 
 #[test]
 #[serial]
-fn config_from_env_falls_back_to_unprefixed_when_prefixed_unset() {
+fn config_from_env_reads_the_flat_unprefixed_var_regardless_of_prefix() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::remove_var(PREFIXED_VAR);
         std::env::set_var(UNPREFIXED_VAR, "120");
     }
     assert_eq!(
-        DbAudienceGrantsConfig::from_env_with_prefix(PREFIX).cache_ttl_secs,
+        DbAudienceGrantsConfig::from_env_with_prefix(SOME_PREFIX).cache_ttl_secs,
         120
     );
-}
-
-#[test]
-#[serial]
-fn config_from_env_prefixed_wins_over_unprefixed() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::set_var(PREFIXED_VAR, "5");
-        std::env::set_var(UNPREFIXED_VAR, "120");
-    }
+    // A role-prefixed variant of this knob does not exist -- setting one would have no effect,
+    // but there is nothing to set, since `from_env_with_prefix` never even builds that name.
     assert_eq!(
-        DbAudienceGrantsConfig::from_env_with_prefix(PREFIX).cache_ttl_secs,
-        5
+        DbAudienceGrantsConfig::from_env_with_prefix("").cache_ttl_secs,
+        120
     );
 }
 
@@ -248,7 +242,7 @@ async fn live_first_load_reflects_seeded_rows() {
         .await
         .map_err(|e| format!("seeding a row: {e:#}"))?;
 
-        let source = DbAudienceGrantsSource::new(pool.clone(), test_config(60));
+        let source = DbAudienceGrantsSource::new(pool.clone(), ttl(60));
         let grants = source
             .current()
             .await
@@ -295,7 +289,7 @@ async fn live_refresh_failure_after_success_serves_stale_snapshot() {
 
         // A 1-second TTL so the second `current()` call, after a short sleep, is forced past the
         // post-success `fetched_at` gate and attempts a real refresh.
-        let source = DbAudienceGrantsSource::new(pool.clone(), test_config(1));
+        let source = DbAudienceGrantsSource::new(pool.clone(), ttl(1));
         source
             .current()
             .await
@@ -363,7 +357,7 @@ async fn live_cold_start_failure_against_missing_table_is_err() {
         .await
         .expect("connecting with a throwaway search_path");
 
-    let source = DbAudienceGrantsSource::new(pool.clone(), test_config(60));
+    let source = DbAudienceGrantsSource::new(pool.clone(), ttl(60));
     let result = source.current().await;
 
     pool.close().await;
@@ -393,7 +387,7 @@ async fn live_malformed_row_fails_the_whole_snapshot_load() {
         .await
         .map_err(|e| format!("seeding a malformed row: {e:#}"))?;
 
-        let source = DbAudienceGrantsSource::new(pool.clone(), test_config(60));
+        let source = DbAudienceGrantsSource::new(pool.clone(), ttl(60));
         let result = source.current().await;
         if result.is_ok() {
             return Err("expected a malformed row to fail the whole load".to_string());
@@ -425,7 +419,7 @@ async fn live_mint_policy_with_store_merges_a_store_granted_selector() {
         .await
         .map_err(|e| format!("seeding a row: {e:#}"))?;
 
-        let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), test_config(60)));
+        let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), ttl(60)));
         let policy = AudienceMintPolicy::new(AudienceGrants::empty()).with_store(Some(store));
         let ctx = caller(Some("alice@example.com"), vec![]);
         let resolved = policy
@@ -465,7 +459,7 @@ async fn live_read_policy_with_store_grants_a_store_granted_selector() {
         .await
         .map_err(|e| format!("seeding a row: {e:#}"))?;
 
-        let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), test_config(60)));
+        let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), ttl(60)));
         let policy = AudienceReadPolicy::new(AudienceGrants::empty()).with_store(Some(store));
         let ctx = caller(None, vec!["eng".to_string()]);
         let resolved = policy

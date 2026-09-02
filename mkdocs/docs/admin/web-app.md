@@ -39,6 +39,26 @@ export MICROMEGAS_BASE_PATH="/"
 
 # PostgreSQL database for the web app (screens, data sources, maps catalog)
 export MICROMEGAS_APP_SQL_CONNECTION_STRING="postgres://user:pass@localhost/analytics_web"
+
+# Key management (Admin -> Analytics API Keys / Ingestion API Keys / Groups);
+# audience grants are managed from the Audience Access page (/audiences,
+# open to every authenticated user -- see "Audience Access" below), the
+# micromegas-grants CLI, or list_audience_grants() from any SQL client.
+# REQUIRED whenever auth is enabled -- `analytics-web-srv` bails at startup
+# naming this var if it's unset, since without it no session can resolve
+# admin-ness or group grants at all: admin-ness itself now comes from the
+# `admins` local group (see mkdocs/docs/admin/groups.md), resolved from this
+# same connection. Only reachable as unset under `--disable-auth`, where
+# these routes return a fixed 503 (`AUTH_DISABLED`) regardless. Backs ALL
+# FOUR route groups -- analytics-web-srv is the sole admin HTTP surface for
+# ingestion_api_keys, analytics_api_keys, audience_grants, and
+# groups/group_members, writing directly to Postgres for each (see
+# mkdocs/docs/admin/api-keys.md). Must point at a telemetry DB where the v10
+# migration has already run (via ingestion or a lakehouse-role monolith) --
+# v10 is required, not just v7, since the group store needs the
+# groups/group_members tables added at v10 -- or every session fails with a
+# retryable 503 until the migration runs.
+export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 ```
 
 ### Optional
@@ -51,22 +71,6 @@ export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
 # Map assets (object store URI; see "Maps" below)
 export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
-
-# Key management (Admin -> Analytics API Keys / Ingestion API Keys);
-# audience grants are managed from the Audience Access page (/audiences,
-# open to every authenticated user -- see "Audience Access" below), the
-# micromegas-grants CLI, or list_audience_grants() from any SQL client.
-# 503 if unset. Backs ALL THREE route groups -- analytics-web-srv is the
-# sole admin HTTP surface for
-# ingestion_api_keys, analytics_api_keys, and audience_grants, writing
-# directly to Postgres for each (see mkdocs/docs/admin/api-keys.md). Must
-# point at a telemetry DB where the v7 migration has already run (via
-# ingestion or a lakehouse-role monolith) -- v7 is required, not just v5 or
-# v6, since the ingestion-key mint/import routes write a NOT NULL `audience`
-# column added at v6 and the audience-grants routes need the
-# `audience_grants` table added at v7 -- or the routes fail at request time
-# with an opaque 500.
-export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 
 # The deployment's default audience: what a mint/import request that supplies
 # no `audience` gets, and what the ingestion HTTP edge now stamps explicitly
@@ -99,16 +103,30 @@ analytics-web-srv --disable-auth
 
 **Admin** (`/admin`) is open to **every authenticated user**, not just admins — `AuthGuard` on
 this route carries no `requireAdmin`. It renders a role-filtered card grid: an admin sees all
-eight cards; a non-admin sees only the two that have a real non-admin capability —
+nine cards; a non-admin sees only the two that have a real non-admin capability —
 **Ingestion API Keys** (mint only — see [Web app admin pages](api-keys.md#web-app-admin-pages))
-and **Audience Access** (see [Audience Access](#audience-access)). The other six — Data Sources,
-Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List — have no non-admin
-capability at all and stay hidden from a non-admin, same as their pages stay gated by
+and **Audience Access** (see [Audience Access](#audience-access)). The other seven — Data Sources,
+Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List, Groups — have no
+non-admin capability at all and stay hidden from a non-admin, same as their pages stay gated by
 `<AuthGuard requireAdmin>`.
+
+While the `admins` local group still holds a wildcard (`*`) member (see
+[Groups](groups.md)), the hub renders an unmissable warning banner — fetched only when
+`user.is_admin`, which under the wildcard is everyone, so the warning reaches whoever it applies
+to.
 
 The sidebar's bottom-left "Admin" icon is shown to every authenticated user for the same reason;
 following it to `/admin` never dead-ends a non-admin who has a legitimate reason to be there (an
 old bookmark, a link an admin pasted, or the natural place to look for "Ingestion API Keys").
+
+## Groups
+
+**Admin → Groups** (`/admin/groups`) manages local group membership, including the reserved
+`admins` group — see [Groups](groups.md) for the full model, the routes, and the CLI. The page
+shows every group with its member count; selecting one shows its members as chips (`*`
+highlighted, `group:` chips linking to the nested group) with a remove control and an **Add
+member** dialog whose kind toggle (everyone / user / group) mirrors the Audience Access page's
+own grant dialog.
 
 ## Maps
 
@@ -274,8 +292,10 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET /api/data-sources/{name}`, `PUT`, `DELETE` — Get / update / delete data source
 - `GET /api/maps/catalog` — List map assets
 - `GET /api/maps/blob/{filename}`, `PUT`, `DELETE` — Fetch / upload / delete map GLB
-- `GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/import/revoke analytics API keys (503 if `MICROMEGAS_SQL_CONNECTION_STRING` unset — see [API Keys](api-keys.md))
-- `GET`/`POST /api/ingestion-api-keys`, `POST /api/ingestion-api-keys/import`, `DELETE /api/ingestion-api-keys/{key_id}` — List/mint/import/revoke ingestion API keys, written directly to Postgres (503 if `MICROMEGAS_SQL_CONNECTION_STRING` unset — see [API Keys](api-keys.md))
+- `GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/import/revoke analytics API keys (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
+- `GET`/`POST /api/ingestion-api-keys`, `POST /api/ingestion-api-keys/import`, `DELETE /api/ingestion-api-keys/{key_id}` — List/mint/import/revoke ingestion API keys, written directly to Postgres (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
+- `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authentication](authentication.md#audiences-and-grants))
+- `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback
 - `POST /auth/refresh` — Refresh tokens

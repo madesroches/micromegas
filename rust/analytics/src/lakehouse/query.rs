@@ -123,9 +123,7 @@ pub fn register_lakehouse_functions(
     // `perfetto_trace_chunks`, `parse_block`, `get_payload`, and `list_partitions`' row filter.
     // `ReadScope::All` makes every one of its checks a no-op, so this costs nothing for
     // internal/maintenance callers or an auth-unset deployment.
-    // An admin, or a deployment that can never produce one at all (`CallerContext::
-    // admin_principal_possible`'s doc comment).
-    let lakehouse_admin = caller.is_admin || !caller.admin_principal_possible;
+    let lakehouse_admin = caller.is_admin;
     let audience_guard = Arc::new(AudienceGuard::new(
         caller.read_scope.clone(),
         lakehouse_admin,

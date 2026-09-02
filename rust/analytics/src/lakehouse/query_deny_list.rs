@@ -288,8 +288,8 @@ pub fn compile_match_expr(
 /// the lowercased SQL text, nothing more. No call-position or token analysis: this only ever
 /// runs for a query that is *already* being denied, and the gate it sits behind means any caller
 /// it opens for could call those three functions directly anyway.
-pub fn skip_for_admin_recovery(sql: &str, is_admin: bool, admin_principal_possible: bool) -> bool {
-    if !(is_admin || !admin_principal_possible) {
+pub fn skip_for_admin_recovery(sql: &str, is_admin: bool) -> bool {
+    if !is_admin {
         return false;
     }
     let lowered = sql.to_lowercase();

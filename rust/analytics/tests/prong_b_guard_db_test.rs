@@ -165,15 +165,13 @@ fn caller(read_scope: ReadScope) -> CallerContext {
         read_scope,
         is_admin: false,
         isolation_config: Arc::new(IsolationConfig::default()),
-        admin_principal_possible: true,
         identity: None,
         grant_selectors: Arc::from([]),
     }
 }
 
-/// A caller that passes the lakehouse admin gate (`caller.is_admin ||
-/// !caller.admin_principal_possible`) -- the boolean `AudienceGuard::global_rows_visible`
-/// consults.
+/// A caller that passes the lakehouse admin gate (`caller.is_admin`) -- the boolean
+/// `AudienceGuard::global_rows_visible` consults.
 fn admin_caller(read_scope: ReadScope) -> CallerContext {
     CallerContext {
         is_admin: true,

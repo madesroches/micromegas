@@ -4,6 +4,7 @@ use crate::app_db;
 use crate::audience_grants;
 use crate::auth::{AuthState, AuthToken, OidcClientConfig, ValidatedUser};
 use crate::data_source_cache::DataSourceCache;
+use crate::groups;
 use crate::ingestion_keys;
 use crate::maps;
 use crate::stream_query;
@@ -19,7 +20,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
+use micromegas::auth::groups::{ADMINS_GROUP, DbGroupsConfig, DbGroupsSource};
 use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::tracing::prelude::*;
@@ -50,16 +53,14 @@ pub struct WebServerConfig {
     /// `MICROMEGAS_SQL_CONNECTION_STRING`, read but not connected by
     /// `from_cli_and_env` — the telemetry-DB connection string backing the
     /// analytics-key routes' small pool (`run_web_server` connects it
-    /// lazily). `None` when unset; the routes stay registered either way and
-    /// return 503 per-request.
+    /// lazily). Required whenever auth is enabled: `run_web_server` bails at
+    /// startup if it's unset and `disable_auth` is false, since no session
+    /// can then resolve admin-ness or group grants. `None` is only reachable
+    /// under `--disable-auth`, where those routes return the `AUTH_DISABLED`
+    /// body instead of consulting this pool.
     pub analytics_keys_db_string: Option<String>,
     /// Disable OIDC/cookie auth (anonymous access, development only).
     pub disable_auth: bool,
-    /// Environment variable name used to load the OIDC admin list.
-    ///
-    /// Standalone binary sets this to `"MICROMEGAS_ADMINS"`.
-    /// The monolith sets it to the analytics-scoped var (with fallback already resolved).
-    pub admin_var_name: String,
 }
 
 /// CLI-derived inputs the web server needs; the env-derived fields are read
@@ -69,13 +70,14 @@ pub struct WebCliArgs {
     pub port: u16,
     pub frontend_dir: String,
     pub disable_auth: bool,
-    pub admin_var_name: String,
 }
 
 impl WebServerConfig {
     /// Read + validate the five web env vars and combine with CLI-derived
     /// inputs. Single source of the base-path `must start with '/'` rule.
     pub fn from_cli_and_env(cli: WebCliArgs) -> Result<Self> {
+        micromegas::auth::env::reject_removed_admin_vars()?;
+        micromegas::auth::env::reject_removed_cache_ttl_vars()?;
         let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
             .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
         let base_path = read_base_path()?;
@@ -96,7 +98,6 @@ impl WebServerConfig {
             max_upload_bytes,
             analytics_keys_db_string,
             disable_auth: cli.disable_auth,
-            admin_var_name: cli.admin_var_name,
         })
     }
 }
@@ -149,7 +150,13 @@ fn read_base_path() -> Result<String> {
 // Auth setup
 // ---------------------------------------------------------------------------
 
-fn build_auth_state(config: &WebServerConfig) -> Result<Option<AuthState>> {
+/// `analytics_keys_pool` is the same telemetry-DB pool backing `AudienceGrantsState`/
+/// `GroupsState` -- required (not `Option`) because auth being enabled at all means
+/// `MICROMEGAS_SQL_CONNECTION_STRING` was required upstream in `run_web_server`.
+async fn build_auth_state(
+    config: &WebServerConfig,
+    analytics_keys_pool: PgPool,
+) -> Result<Option<AuthState>> {
     let oidc_config = OidcClientConfig::from_env()
         .map_err(|e| anyhow::anyhow!("Failed to load OIDC client config: {e}"))?;
 
@@ -160,6 +167,30 @@ fn build_auth_state(config: &WebServerConfig) -> Result<Option<AuthState>> {
         .context("MICROMEGAS_STATE_SECRET environment variable not set. Generate a secure random secret (e.g., openssl rand -base64 32)")?
         .into_bytes();
 
+    let group_config = DbGroupsConfig::from_env_with_prefix("");
+    let groups = Arc::new(DbGroupsSource::new(
+        analytics_keys_pool,
+        Duration::from_secs(group_config.cache_ttl_secs),
+    ));
+
+    // Mirrors `default_provider.rs::wrap_with_membership`'s eager `current()` at startup: warn
+    // once while `has_wildcard_admin()` is true, and warn-and-continue (don't fail startup) on
+    // `Err` -- the first request will 503, and a split deployment may legitimately start
+    // analytics-web-srv before the migration runner is up.
+    match groups.current().await {
+        Ok(graph) => {
+            if graph.has_wildcard_admin() {
+                warn!(
+                    "every authenticated caller is an admin; add a `user:` member to \
+                     `admins` and remove `*`"
+                );
+            }
+        }
+        Err(e) => {
+            warn!("group store not yet reachable at startup, continuing: {e:#}");
+        }
+    }
+
     Ok(Some(AuthState {
         oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
         auth_provider: Arc::new(tokio::sync::OnceCell::new()),
@@ -168,7 +199,7 @@ fn build_auth_state(config: &WebServerConfig) -> Result<Option<AuthState>> {
         secure_cookies,
         state_signing_secret,
         base_path: config.base_path.clone(),
-        admin_var_name: config.admin_var_name.clone(),
+        groups,
     }))
 }
 
@@ -330,6 +361,14 @@ fn key_management_disabled_router(base_path: &str) -> Router {
             &format!("{base_path}/api/audience-grants/{{*rest}}"),
             any(key_management_disabled),
         )
+        .route(
+            &format!("{base_path}/api/groups"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/groups/{{*rest}}"),
+            any(key_management_disabled),
+        )
 }
 
 /// The three admin `Extension` states `build_protected_routes` layers onto the
@@ -339,6 +378,7 @@ pub struct AdminRoutesState {
     pub analytics_keys: analytics_keys::AnalyticsKeysState,
     pub ingestion_keys: ingestion_keys::IngestionKeysState,
     pub audience_grants: audience_grants::AudienceGrantsState,
+    pub groups: groups::GroupsState,
 }
 
 /// `pub` (unlike the other `build_*` helpers here) so integration tests
@@ -421,9 +461,11 @@ pub fn build_protected_routes(
             .merge(analytics_keys::analytics_keys_router(base_path))
             .merge(ingestion_keys::ingestion_keys_router(base_path))
             .merge(audience_grants::audience_grants_router(base_path))
+            .merge(groups::groups_router(base_path))
             .layer(Extension(admin_state.analytics_keys))
             .layer(Extension(admin_state.ingestion_keys))
             .layer(Extension(admin_state.audience_grants))
+            .layer(Extension(admin_state.groups))
     } else {
         routes.merge(key_management_disabled_router(base_path))
     };
@@ -454,7 +496,8 @@ pub fn build_protected_routes(
             // layer exists so `AuthenticatedUser` is never the one extractor in this crate that
             // silently 500s (an unhandled `Extension<AuthContext>` miss) if a future refactor ever
             // merges the real routers here. Mirrors the hardcoded admin `ValidatedUser` above
-            // exactly -- `is_admin: true`, no groups, no bound/read audiences.
+            // exactly -- `memberships: [admins]` (so `is_admin()` is `true`), no bound/read
+            // audiences.
             .layer(Extension(AuthContext {
                 subject: "anonymous".to_string(),
                 email: None,
@@ -462,11 +505,10 @@ pub fn build_protected_routes(
                 audience: None,
                 expires_at: None,
                 auth_type: AuthType::Oidc,
-                is_admin: true,
                 allow_delegation: false,
                 bound_audience: None,
                 read_audiences: vec![],
-                groups: vec![],
+                memberships: Arc::from([ADMINS_GROUP.to_string()]),
             }))
     }
 }
@@ -685,10 +727,21 @@ pub async fn run_web_server(
     let maps_state = maps::MapsState::with_max_upload_bytes(maps_store, max_upload_bytes);
 
     // `max_connections(2)`, a bounded `acquire_timeout`, and `connect_lazy`
-    // (not an eager `PgPool::connect`) — this is an admin-console path, not
-    // the hot per-request validation path `dedicated_key_store_pool` tunes
-    // for, and a briefly-unreachable telemetry DB must not stop
-    // `analytics-web-srv` from starting.
+    // (not an eager `PgPool::connect`) — a briefly-unreachable telemetry DB
+    // must not stop `analytics-web-srv` from starting. This pool now also
+    // backs `AuthState.groups` (`DbGroupsSource`), consulted by
+    // `cookie_auth_middleware`/`auth_me` on every authenticated request, not
+    // just the admin-console routes it originally served; if `max_connections`
+    // ever needs raising to keep up with that per-request load, that's a
+    // separate sizing decision from this comment.
+    // With auth enabled, this pool is required: no session can resolve admin-ness or group
+    // grants without it (`AuthState.groups`, filled from this same pool below).
+    if !config.disable_auth && config.analytics_keys_db_string.is_none() {
+        anyhow::bail!(
+            "MICROMEGAS_SQL_CONNECTION_STRING is required when authentication is enabled -- \
+             without it no session can resolve admin-ness or group grants"
+        );
+    }
     let analytics_keys_pool = match &config.analytics_keys_db_string {
         Some(conn_str) => Some(
             PgPoolOptions::new()
@@ -699,8 +752,14 @@ pub async fn run_web_server(
         ),
         None => None,
     };
-    if analytics_keys_pool.is_some() {
-        info!("Telemetry-DB pool configured (analytics-api-keys, ingestion-api-keys)");
+    if let Some(pool) = &analytics_keys_pool {
+        info!("Telemetry-DB pool configured (analytics-api-keys, ingestion-api-keys, groups)");
+        if !config.disable_auth {
+            // Mirrors the same call site in `flight_sql_server.rs`/`monolith/src/main.rs`: on a
+            // schema behind v10, the `groups`/`group_members` tables don't exist yet, so every
+            // session fails with a retryable 503 until the migration runs.
+            warn_if_data_lake_schema_stale(pool).await;
+        }
     } else {
         warn!(
             "MICROMEGAS_SQL_CONNECTION_STRING not set — /api/analytics-api-keys/* and /api/ingestion-api-keys/* will return 503"
@@ -747,16 +806,25 @@ pub async fn run_web_server(
     // `MintGate` gates `mint_key` -- the two states are layered independently, so this route has
     // no other access to `IngestionKeysState`'s copy.
     let audience_grants_state = audience_grants::AudienceGrantsState {
-        pool: analytics_keys_pool,
+        pool: analytics_keys_pool.clone(),
         self_service_mint_enabled,
         max_grants_per_caller,
+    };
+
+    // Same telemetry-DB pool as the states above -- the group-admin routes' own reads/writes.
+    let groups_state = groups::GroupsState {
+        pool: analytics_keys_pool.clone(),
     };
 
     let auth_state = if config.disable_auth {
         println!("WARNING: Authentication is disabled (--disable-auth)");
         None
     } else {
-        build_auth_state(&config)?
+        // Guaranteed `Some` here: the required-pool check above already bailed out otherwise.
+        let pool = analytics_keys_pool
+            .clone()
+            .expect("MICROMEGAS_SQL_CONNECTION_STRING required-when-auth-enabled check above");
+        build_auth_state(&config, pool).await?
     };
 
     let readiness_state = Arc::new(ReadinessState::new(app_db_pool.clone()));
@@ -773,6 +841,7 @@ pub async fn run_web_server(
                 analytics_keys: analytics_keys_state,
                 ingestion_keys: ingestion_keys_state,
                 audience_grants: audience_grants_state,
+                groups: groups_state,
             },
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));

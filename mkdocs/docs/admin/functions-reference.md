@@ -413,12 +413,12 @@ SELECT remove_query_denial('9f2c41ab-73de-4015-9d2e-000000000000') as result;
 - Success: `"SUCCESS: removed rule <rule_id>"`
 - Failure: `"ERROR: no such rule: <rule_id>"`
 
-**Escape hatch, no expiry to wait out**: since rules stand until removed, an admin (or, in a
-deployment with no admin principal at all, any authenticated caller — the same
-`admin_principal_possible` fallback `retire_partitions()` uses) can always call
-`remove_query_denial`/`deny_queries`/`list_query_denials`, even from behind a rule that would
-otherwise match every query they send — the check is skipped for a statement naming one of these
-three functions, from a caller who could reach them anyway.
+**Escape hatch, no expiry to wait out**: since rules stand until removed, an admin — membership
+in the reserved `admins` local group (see [Groups](groups.md)), the same gate
+`retire_partitions()` uses — can always call `remove_query_denial`/`deny_queries`/
+`list_query_denials`, even from behind a rule that would otherwise match every query they send —
+the check is skipped for a statement naming one of these three functions, from a caller who could
+reach them anyway.
 
 ### `list_audience_grants()`
 
@@ -455,7 +455,7 @@ deliberately wider than "rows whose selector matches me": if a caller may read `
 they may see who else may, which is exactly the "who can see this audience" question this
 function (and the web app's Audience Access page) exists to answer — and it is the same set that
 caller may modify via the `POST`/`DELETE /api/audience-grants` routes. Only a non-admin caller
-with an empty selector set (no email, no groups — e.g. a real API-key-shaped caller with
+with an empty selector set (no email, no memberships — e.g. a real API-key-shaped caller with
 neither, or `CallerContext::internal()`) sees zero rows; a maintenance caller and a
 `--disable-auth` request's absent-`AuthContext` convention both treat the caller as admin
 instead, so neither one bites.

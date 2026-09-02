@@ -530,10 +530,6 @@ pub struct FlightSqlServiceImpl {
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
     isolation_config: Arc<IsolationConfig>,
-    /// Whether this deployment can ever produce an admin principal at all -- derived once at
-    /// startup from `AuthProvider::can_grant_admin` (`flight_sql_server.rs`), not per request.
-    /// Copied onto every `CallerContext` this service builds; see `caller_context` below.
-    admin_principal_possible: bool,
 }
 
 impl FlightSqlServiceImpl {
@@ -544,7 +540,6 @@ impl FlightSqlServiceImpl {
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
         isolation_config: Arc<IsolationConfig>,
-        admin_principal_possible: bool,
     ) -> Self {
         Self {
             lakehouse,
@@ -553,7 +548,6 @@ impl FlightSqlServiceImpl {
             session_configurator,
             read_policy,
             isolation_config,
-            admin_principal_possible,
         }
     }
 
@@ -616,9 +610,6 @@ impl FlightSqlServiceImpl {
             // derived from the caller's identity), so it is copied verbatim on both branches
             // above rather than participating in the absent-extension/`Err` distinction.
             isolation_config: self.isolation_config.clone(),
-            // Deployment-wide, derived once at startup (`flight_sql_server.rs`) -- same
-            // treatment as `isolation_config` above.
-            admin_principal_possible: self.admin_principal_possible,
             identity,
             // Empty when there's no `AuthContext` extension at all (no auth provider configured,
             // e.g. `--disable-auth`) -- the same absent-extension convention `read_scope` follows
@@ -796,7 +787,7 @@ impl FlightSqlServiceImpl {
             client_ip,
             sql,
             sql_hash: &sql_hash,
-        }) && !skip_for_admin_recovery(sql, is_admin(metadata), self.admin_principal_possible)
+        }) && !skip_for_admin_recovery(sql, is_admin(metadata))
         {
             let status = Status::resource_exhausted(format!(
                 "query denied by rule {} (reason: {}); ask an admin to lift it with \

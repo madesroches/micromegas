@@ -576,6 +576,14 @@ cd grafana && mage -v build
 
 ## Testing Requirements
 
+### Live-DB (`#[ignore]`) tests
+
+Add a live-DB test — one gated `#[ignore]` and requiring `MICROMEGAS_SQL_CONNECTION_STRING` or a
+real service — only to cover the resolution of a bug witnessed in the wild. Don't add one to
+validate new-feature acceptance criteria or a hypothetical edge case; cover those with no-DB unit
+tests (a lazily-connected pool that never issues a query, or a store seam that returns canned
+data) and manual verification instead.
+
 Before submitting a PR, test all affected components:
 
 - [ ] **Rust** (primary): Run `python3 build/rust_ci.py` from repo root (format, clippy, tests)

@@ -85,9 +85,6 @@ export MICROMEGAS_OIDC_CONFIG='{
   "token_cache_size": 1000,
   "token_cache_ttl_secs": 300
 }'
-
-# Optional: Configure admin users
-export MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com"]'
 ```
 
 **Configuration Fields:**
@@ -101,9 +98,11 @@ export MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com"]'
 | `token_cache_size` | Maximum validated tokens to cache | 1000 |
 | `token_cache_ttl_secs` | Token cache TTL in seconds | 300 |
 
-`MICROMEGAS_ADMINS` is a JSON array of user identifiers (email or subject)
-with administrative privileges — partition management and other admin SQL
-functions.
+Admin-ness — partition management and other admin SQL functions — is no
+longer an env var. It comes from membership in the reserved `admins` local
+group, managed with `micromegas-groups` or the Groups admin page. See
+[Groups](groups.md) for the model, the v10 upgrade path, and the
+`MICROMEGAS_ADMINS`-family removal.
 
 ### API Key Configuration
 
@@ -418,7 +417,7 @@ list is always empty, never derived from `"read"`. Selectors:
 |---|---|
 | `*` | any authenticated principal |
 | `user:<email>` | the caller's `email` claim |
-| `group:<g>` | any value in the caller's `groups` claim |
+| `group:<g>` | members of local group `g`, transitively (see [Groups](groups.md)) |
 
 **There is no self-audience rule.** A caller is never granted an audience
 merely for being named like one — an API key named `team-alpha` does not
@@ -664,7 +663,7 @@ per-request authorization check.
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 (created) or 200 (already existed) `{"audience","axis","selector","created_at","created_by"}` |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403 |
 | `GET {base_path}/api/audience-grants/visible` | 200 `[{"audience","axis","selector","created_at","created_by"}]` — the caller-scoped read backing the Audience Access page's own list (below) |
-| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix used only to *suggest* a fresh audience name (the web app's Mint dialog composes it live before commit; the CLI renders a `--claim` suggestion from it, but never mints under it itself), the caller's own email, and `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin). |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. 200 `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}`: the audiences whose `mint` selector matches *this caller's own* identity today, plus the caller's own `is_admin` flag, the caller-derived namespace prefix used only to *suggest* a fresh audience name (the web app's Mint dialog composes it live before commit; the CLI renders a `--claim` suggestion from it, but never mints under it itself), the caller's own email, `held_pairs` -- the `"{audience}:{axis}"` pairs the caller holds via an identity selector (drives the page's Share control; always empty for an admin) -- and `groups`, the caller's resolved, transitive local-group membership (explains a `group:` grant the caller holds; see [Groups](groups.md)). |
 
 There is no paginated `GET` over the whole collection. Listing arbitrary rows
 from SQL goes through the caller-scoped `list_audience_grants()` table
@@ -679,7 +678,9 @@ then further constrained per call:
   authenticated principal), and the caller must **hold** `(audience, axis)`
   via an identity selector (`user:`/`group:`, not a `*` row). Delegation is
   per axis: a `read` grant lets you share `read`, a `mint` grant lets you
-  share `mint`, and neither confers the other.
+  share `mint`, and neither confers the other. A `group:X` selector naming a
+  group that doesn't exist is refused with 404 (the grant would be inert;
+  see [Groups](groups.md)).
 - **Delete**: the row must be the caller's own direct `user:<email>` row
   ("remove my access" — never offered for `group:`/`*` rows), or a row the
   caller themselves created — except their own `mint`/`user:<email>` row,
@@ -736,7 +737,7 @@ micromegas-query --all "SELECT * FROM list_audience_grants() WHERE audience = 't
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS` | `60` | How long a process serves its in-memory snapshot before re-querying `audience_grants`. Accepts a role prefix on the monolith (`MICROMEGAS_ANALYTICS_AUDIENCE_GRANT_CACHE_TTL_SECONDS`), falling back to the unprefixed name. |
+| `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | `60` | **Shared**, flat (no role-prefixed variant) with the API-key and group stores (see [Groups](groups.md)): how long a process serves its in-memory snapshot before re-querying `audience_grants`. One value process-wide, including on the monolith — unlike most other knobs in this crate, there is no `MICROMEGAS_ANALYTICS_AUTH_CACHE_TTL_SECONDS`/`MICROMEGAS_INGESTION_AUTH_CACHE_TTL_SECONDS` role-scoped form. |
 
 Revocation takes effect within the cache TTL (default 60s), not instantly: a
 `DELETE` above removes the row immediately, but every flight-sql process
@@ -1195,7 +1196,9 @@ For faster revocation, use shorter token cache TTL or restart the analytics serv
 
 ### Admin Privileges
 
-Admin users (configured via `MICROMEGAS_ADMINS`) have elevated privileges for administrative operations. Only grant admin access to trusted users.
+Admin status comes from membership in the reserved `admins` local group (see
+[Groups](groups.md)), managed with `micromegas-groups` or the Groups admin
+page. Only add trusted principals to it.
 
 **Admin Capabilities:**
 
@@ -1203,12 +1206,13 @@ Admin users (configured via `MICROMEGAS_ADMINS`) have elevated privileges for ad
 - Schema migration operations
 - Administrative SQL functions
 
-Admin status is reachable only through an OIDC identity matched against
-`MICROMEGAS_ADMINS` (or the role-scoped `MICROMEGAS_ANALYTICS_ADMINS` in the
-monolith) — never through `MICROMEGAS_API_KEYS`. API keys always resolve to
-`is_admin: false`, so an API-key-only deployment has no admin principal and cannot
-call the eight gated admin SQL functions (see
-[Admin SQL Functions](functions-reference.md)).
+An API-key caller normally carries no email, so it can never match a
+`user:`/`group:` member of `admins` and is never admin — except while
+`admins` still holds its seeded wildcard (`*`) member, in which case every
+authenticated caller, API keys included, is admin until an operator adds a
+`user:` member and removes `*` (see [Groups](groups.md)'s upgrade path). See
+[Admin SQL Functions](functions-reference.md) for the eight gated admin SQL
+functions this governs.
 
 ### HTTPS/TLS
 

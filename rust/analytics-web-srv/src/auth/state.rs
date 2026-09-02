@@ -2,8 +2,11 @@
 
 use super::config::OidcClientConfig;
 use anyhow::Result;
+use micromegas::auth::groups::DbGroupsSource;
+use micromegas::auth::membership::MembershipProvider;
 use micromegas::auth::oidc::{OidcAuthProvider, OidcConfig};
 use micromegas::auth::oidc_client::DiscoveredProvider;
+use micromegas::auth::types::AuthProvider;
 use std::sync::Arc;
 
 /// State for auth endpoints
@@ -11,8 +14,10 @@ use std::sync::Arc;
 pub struct AuthState {
     /// OIDC provider info (lazy initialized) - for OAuth flow
     pub oidc_provider: Arc<tokio::sync::OnceCell<DiscoveredProvider>>,
-    /// OIDC auth provider (lazy initialized) - for JWT validation
-    pub auth_provider: Arc<tokio::sync::OnceCell<Arc<OidcAuthProvider>>>,
+    /// Auth provider (lazy initialized) - for JWT validation, wrapped in a
+    /// [`MembershipProvider`] over `groups` so admin-ness and group grants resolve from the
+    /// `admins` group rather than an env var.
+    pub auth_provider: Arc<tokio::sync::OnceCell<Arc<dyn AuthProvider>>>,
     /// OIDC client configuration
     pub config: OidcClientConfig,
     /// Cookie domain (optional)
@@ -23,12 +28,11 @@ pub struct AuthState {
     pub state_signing_secret: Vec<u8>,
     /// Base path for cookies (e.g., "/micromegas"), defaults to "/"
     pub base_path: String,
-    /// Environment variable name used to load the OIDC admin list.
-    ///
-    /// Defaults to `"MICROMEGAS_ADMINS"` for standalone deployments.
-    /// The monolith sets this to `"MICROMEGAS_ANALYTICS_ADMINS"` (with fallback
-    /// already resolved) so the web role's admin list matches the FlightSQL role.
-    pub admin_var_name: String,
+    /// The local-group snapshot store `get_auth_provider`'s lazy init wraps `OidcAuthProvider`
+    /// in a `MembershipProvider` over. Mirrors `MembershipProvider.groups` -- `AuthState` needs
+    /// its own copy since the provider itself is built lazily, on first use, not at
+    /// `AuthState` construction time.
+    pub groups: Arc<DbGroupsSource>,
 }
 
 impl AuthState {
@@ -58,18 +62,21 @@ impl AuthState {
             .await
     }
 
-    /// Get or initialize the OIDC auth provider for JWT validation.
+    /// Get or initialize the auth provider for JWT validation, wrapped in a
+    /// [`MembershipProvider`] so `AuthContext.memberships`/`is_admin()` resolve from the
+    /// `admins` group rather than an env var.
     ///
     /// The auth provider is lazy-initialized on first use and cached.
-    /// The admin list is loaded from the var named by `self.admin_var_name`
-    /// (defaults to `MICROMEGAS_ADMINS`; the monolith may set a role-scoped name).
-    pub async fn get_auth_provider(&self) -> Result<&Arc<OidcAuthProvider>> {
-        let admin_var = self.admin_var_name.clone();
+    pub async fn get_auth_provider(&self) -> Result<&Arc<dyn AuthProvider>> {
+        let groups = self.groups.clone();
         self.auth_provider
             .get_or_try_init(|| async move {
                 let config = OidcConfig::from_env()?;
-                let provider = OidcAuthProvider::new(config, &admin_var).await?;
-                Ok(Arc::new(provider))
+                let provider = OidcAuthProvider::new(config).await?;
+                Ok(Arc::new(MembershipProvider::new(
+                    Arc::new(provider) as Arc<dyn AuthProvider>,
+                    groups,
+                )) as Arc<dyn AuthProvider>)
             })
             .await
     }

@@ -242,14 +242,19 @@ def main():
         "MICROMEGAS_APP_SQL_CONNECTION_STRING": app_db_conn_string,
     }
 
-    # Pass admin list if set
-    if "MICROMEGAS_ADMINS" in os.environ:
-        env_vars["MICROMEGAS_ADMINS"] = os.environ["MICROMEGAS_ADMINS"]
-
     # Add OIDC config if available
     if "MICROMEGAS_OIDC_CONFIG" in os.environ:
         env_vars["MICROMEGAS_OIDC_CONFIG"] = os.environ["MICROMEGAS_OIDC_CONFIG"]
         print_status("OIDC authentication enabled", "success")
+
+        # analytics-web-srv now requires MICROMEGAS_SQL_CONNECTION_STRING (the telemetry lake DB)
+        # whenever auth is enabled -- it's where admin-ness (the `admins` local group) and group
+        # grants resolve from (see mkdocs/docs/admin/groups.md). Built the same host.docker.internal
+        # way as app_db_conn_string above, so the container can reach the host DB.
+        env_vars["MICROMEGAS_SQL_CONNECTION_STRING"] = os.environ.get(
+            "MICROMEGAS_SQL_CONNECTION_STRING",
+            f"postgres://{db_username}:{db_passwd}@host.docker.internal:{db_port}/telemetry"
+        )
 
     # Add state secret for OAuth
     if "MICROMEGAS_STATE_SECRET" in os.environ:

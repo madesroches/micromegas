@@ -11,6 +11,11 @@ const APP_DB_VAR: &str = "MICROMEGAS_APP_SQL_CONNECTION_STRING";
 const MAPS_URI_VAR: &str = "MICROMEGAS_MAPS_OBJECT_STORE_URI";
 const MAPS_MAX_UPLOAD_VAR: &str = "MICROMEGAS_MAPS_MAX_UPLOAD_BYTES";
 const ANALYTICS_KEYS_DB_VAR: &str = "MICROMEGAS_SQL_CONNECTION_STRING";
+const ADMINS_VAR: &str = "MICROMEGAS_ADMINS";
+const ANALYTICS_ADMINS_VAR: &str = "MICROMEGAS_ANALYTICS_ADMINS";
+const INGESTION_ADMINS_VAR: &str = "MICROMEGAS_INGESTION_ADMINS";
+const API_KEY_CACHE_TTL_VAR: &str = "MICROMEGAS_API_KEY_CACHE_TTL_SECONDS";
+const AUDIENCE_GRANT_CACHE_TTL_VAR: &str = "MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS";
 
 /// Clears every var this config touches on drop, so a failing assertion in
 /// one test can't leak state into the next.
@@ -26,6 +31,11 @@ impl Drop for EnvGuard {
             std::env::remove_var(MAPS_URI_VAR);
             std::env::remove_var(MAPS_MAX_UPLOAD_VAR);
             std::env::remove_var(ANALYTICS_KEYS_DB_VAR);
+            std::env::remove_var(ADMINS_VAR);
+            std::env::remove_var(ANALYTICS_ADMINS_VAR);
+            std::env::remove_var(INGESTION_ADMINS_VAR);
+            std::env::remove_var(API_KEY_CACHE_TTL_VAR);
+            std::env::remove_var(AUDIENCE_GRANT_CACHE_TTL_VAR);
         }
     }
 }
@@ -36,6 +46,11 @@ fn set_required_vars(base_path: &str) {
         std::env::set_var(CORS_VAR, "http://localhost:3000");
         std::env::set_var(BASE_PATH_VAR, base_path);
         std::env::set_var(APP_DB_VAR, "postgres://localhost/app");
+        std::env::remove_var(ADMINS_VAR);
+        std::env::remove_var(ANALYTICS_ADMINS_VAR);
+        std::env::remove_var(INGESTION_ADMINS_VAR);
+        std::env::remove_var(API_KEY_CACHE_TTL_VAR);
+        std::env::remove_var(AUDIENCE_GRANT_CACHE_TTL_VAR);
     }
 }
 
@@ -44,7 +59,6 @@ fn cli_args() -> WebCliArgs {
         port: 3000,
         frontend_dir: "dist".to_string(),
         disable_auth: true,
-        admin_var_name: "MICROMEGAS_ADMINS".to_string(),
     }
 }
 

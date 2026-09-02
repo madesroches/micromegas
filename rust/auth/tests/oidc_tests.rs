@@ -5,7 +5,7 @@ use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
 use micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::traits::PublicKeyParts;
-use test_utils::{TestKeyPair, create_token_with_groups, create_valid_token};
+use test_utils::{TestKeyPair, create_valid_token};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -61,7 +61,7 @@ async fn test_oidc_provider_creation() {
         token_cache_ttl_secs: 300,
     };
 
-    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await;
+    let provider = OidcAuthProvider::new(config).await;
     assert!(provider.is_ok());
 }
 
@@ -124,9 +124,10 @@ fn bearer_request_parts(token: &str) -> HttpRequestParts {
     }
 }
 
-/// A token with a flat `groups` array populates `AuthContext.groups`.
+/// A token validates with `AuthContext.memberships` empty -- `OidcAuthProvider` no longer reads
+/// a claim to fill it; that is `MembershipProvider`'s job, layered on top.
 #[tokio::test]
-async fn test_groups_claim_populates_auth_context() {
+async fn test_validated_context_has_no_memberships() {
     let keypair = TestKeyPair::generate();
     let (_server, issuer) = start_mock_issuer(&keypair).await;
     let config = OidcConfig {
@@ -138,47 +139,7 @@ async fn test_groups_claim_populates_auth_context() {
         token_cache_size: 1000,
         token_cache_ttl_secs: 300,
     };
-    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS")
-        .await
-        .expect("provider creation");
-
-    let token = create_token_with_groups(
-        &keypair,
-        &issuer,
-        "test-audience",
-        "user123",
-        Some("user@example.com"),
-        vec!["team-a".to_string(), "team-b".to_string()],
-    );
-    let parts = bearer_request_parts(&token);
-    let auth_ctx = provider
-        .validate_request(&parts as &dyn RequestParts)
-        .await
-        .expect("validate_request");
-
-    assert_eq!(
-        auth_ctx.groups,
-        vec!["team-a".to_string(), "team-b".to_string()]
-    );
-}
-
-/// A token **without** the `groups` claim still deserializes and yields `vec![]` -- the
-/// backward-compatibility guarantee: `Claims` has no `#[serde(deny_unknown_fields)]`, and
-/// `groups` has no unconditional counterpart in older tokens.
-#[tokio::test]
-async fn test_missing_groups_claim_yields_empty_vec() {
-    let keypair = TestKeyPair::generate();
-    let (_server, issuer) = start_mock_issuer(&keypair).await;
-    let config = OidcConfig {
-        issuers: vec![OidcIssuer {
-            issuer: issuer.clone(),
-            audience: "test-audience".to_string(),
-        }],
-        jwks_refresh_interval_secs: 3600,
-        token_cache_size: 1000,
-        token_cache_ttl_secs: 300,
-    };
-    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS")
+    let provider = OidcAuthProvider::new(config)
         .await
         .expect("provider creation");
 
@@ -195,7 +156,8 @@ async fn test_missing_groups_claim_yields_empty_vec() {
         .await
         .expect("validate_request");
 
-    assert_eq!(auth_ctx.groups, Vec::<String>::new());
+    assert!(auth_ctx.memberships.is_empty());
+    assert!(!auth_ctx.is_admin());
 }
 
 #[tokio::test]
@@ -207,7 +169,7 @@ async fn test_oidc_provider_empty_issuers() {
         token_cache_ttl_secs: 300,
     };
 
-    let provider = OidcAuthProvider::new(config, "MICROMEGAS_ADMINS").await;
+    let provider = OidcAuthProvider::new(config).await;
     assert!(provider.is_err());
     assert!(
         provider

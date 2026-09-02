@@ -64,10 +64,13 @@ impl ApiKeyTable {
 pub struct DbApiKeyConfig {
     /// `MICROMEGAS_API_KEY_CACHE_SIZE`, default 10_000.
     pub cache_size: u64,
-    /// `MICROMEGAS_API_KEY_CACHE_TTL_SECONDS`, default 60. Also the bound on
-    /// revocation latency: a `DELETE` writes `revoked_at` but cannot invalidate a
-    /// remote process's cache, so a revoked key keeps authenticating until this
-    /// TTL elapses.
+    /// `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60 -- a single flat,
+    /// unprefixed knob (no `{prefix}_` role variant) shared with
+    /// `DbAudienceGrantsConfig`/`DbGroupsConfig`'s own positive-cache TTL: one
+    /// value governs the API-key, audience-grant, and group snapshot caches
+    /// process-wide, across every role. Also the bound on revocation latency: a
+    /// `DELETE` writes `revoked_at` but cannot invalidate a remote process's
+    /// cache, so a revoked key keeps authenticating until this TTL elapses.
     pub cache_ttl_secs: u64,
     /// `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`, default 10. Shorter than
     /// `cache_ttl_secs` so a freshly minted key is not masked by an earlier probe
@@ -90,15 +93,19 @@ pub(crate) fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
 }
 
 impl DbApiKeyConfig {
-    /// Resolves each of the four knobs as `{prefix}_API_KEY_CACHE_*` first, falling
-    /// back to the unprefixed name — the same fallback `provider_with_prefix`
-    /// already uses for `{prefix}_API_KEYS` / `{prefix}_OIDC_CONFIG` /
-    /// `{prefix}_ADMINS`. With an empty prefix this is identical to the unprefixed
-    /// vars, so an unprefixed caller just passes `""`.
+    /// Resolves each `API_KEY_`-specific knob as `{prefix}_*` first, falling back to the
+    /// unprefixed name — the same fallback `provider_with_prefix` already uses for
+    /// `{prefix}_API_KEYS` / `{prefix}_OIDC_CONFIG`. With an empty prefix this is
+    /// identical to the unprefixed vars, so an unprefixed caller just passes `""`.
+    ///
+    /// `cache_ttl_secs` is the exception: it reads the **flat, unprefixed**
+    /// `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` knob directly (`prefix` is ignored for this one
+    /// field), the same single process-wide value `DbAudienceGrantsConfig`/`DbGroupsConfig`
+    /// read -- there is exactly one value for this knob, no per-role distinction.
     pub fn from_env_with_prefix(prefix: &str) -> Self {
         Self {
             cache_size: resolve_u64(prefix, "API_KEY_CACHE_SIZE", 10_000),
-            cache_ttl_secs: resolve_u64(prefix, "API_KEY_CACHE_TTL_SECONDS", 60),
+            cache_ttl_secs: resolve_u64("", "AUTH_CACHE_TTL_SECONDS", 60),
             unknown_cache_ttl_secs: resolve_u64(prefix, "API_KEY_UNKNOWN_CACHE_TTL_SECONDS", 10),
             unknown_cache_size: resolve_u64(prefix, "API_KEY_UNKNOWN_CACHE_SIZE", 10_000),
         }
@@ -337,15 +344,11 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     // Deliberately left `None`, not `created_by`: under the grant-map model,
                     // `email` is what `user:` selectors match on, so populating it from the
                     // minting admin would hand this key every audience granted to *them*.
-                    // `OidcAuthProvider::is_admin` is the only other consumer of a principal's
-                    // email, and it never sees an API-key `AuthContext`.
                     email: None,
                     issuer: "api_key".to_string(),
                     audience: None,
                     expires_at: None,
                     auth_type: AuthType::ApiKey,
-                    // SECURITY: API keys can NEVER be admins.
-                    is_admin: false,
                     // `false` for ingestion keys: an ingestion write credential is not a
                     // delegating service account, and can never reach the gRPC path
                     // `allow_delegation` governs anyway (it lives in the other table).
@@ -355,7 +358,9 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     // for analytics keys -- `read_audiences` populates that side instead.
                     bound_audience: row.audience.clone(),
                     read_audiences: vec![],
-                    groups: vec![],
+                    // API keys carry no email for a `user:` member to match, so only a
+                    // wildcard-admin group could ever make one admin.
+                    memberships: Arc::from([]),
                 })
             }
             // A DB *error* is propagated and cached in neither map: caching an

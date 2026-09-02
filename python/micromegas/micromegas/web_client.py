@@ -183,7 +183,8 @@ class WebClient:
         Caller-scoped, so no admin access is required -- this reveals only
         whether *this* caller's own email/groups match a mint selector,
         plus facts about the caller's own identity. Returns
-        `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs"}`:
+        `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs",
+        "groups"}`:
 
         - `is_admin`: whether the caller is an admin (no other route
           reachable with a Bearer token exposes this).
@@ -201,6 +202,8 @@ class WebClient:
           holds via an identity selector (`"*"` excluded) -- distinguishes
           an audience the caller personally holds a grant on from one they
           can merely see via a wildcard grant.
+        - `groups`: the caller's resolved, transitive local-group
+          membership -- explains any `group:<id>` grant the caller holds.
         """
         resp = self.session.get(
             self._api_url("audience-grants/my-audiences"),
@@ -270,6 +273,102 @@ class WebClient:
             self._api_url("audience-grants"),
             headers=self._headers(),
             params={"audience": audience, "axis": axis, "selector": selector},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+
+    def list_groups(self):
+        """List every group and its member count via `GET /api/groups`
+        (admin-only). Returns a list of
+        `{"name", "description", "member_count", "created_at", "created_by"}`.
+        """
+        resp = self.session.get(
+            self._api_url("groups"), headers=self._headers(), timeout=self.timeout
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def create_group(self, name, description=None):
+        """Create a new, empty group via `POST /api/groups` (admin-only).
+
+        `description` is omitted from the request body when `None`. Raises
+        `RuntimeError` (via `_check_response`) on a malformed name (400) or
+        if the group already exists (409). Returns
+        `{"name", "description", "member_count", "created_at", "created_by"}`.
+        """
+        payload = {"name": name}
+        if description is not None:
+            payload["description"] = description
+        resp = self.session.post(
+            self._api_url("groups"),
+            headers=self._headers(),
+            json=payload,
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def delete_group(self, name):
+        """Delete a group via `DELETE /api/groups/{name}` (admin-only).
+
+        Raises `RuntimeError` on `admins` (409, undeletable) or while the
+        group is still referenced by a nested membership or an audience
+        grant (409, the response names the referrers).
+        """
+        resp = self.session.delete(
+            self._api_url(f"groups/{requests.utils.quote(name, safe='')}"),
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+
+    def list_group_members(self, name):
+        """List a group's direct members via `GET /api/groups/{name}/members`
+        (admin-only). Returns a list of
+        `{"group_name", "member", "created_at", "created_by"}`.
+        """
+        resp = self.session.get(
+            self._api_url(f"groups/{requests.utils.quote(name, safe='')}/members"),
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def add_group_member(self, name, member):
+        """Add `member` (`"*"`, `"user:<id>"`, or `"group:<id>"`) to a group
+        via `POST /api/groups/{name}/members` (admin-only).
+
+        Raises `RuntimeError` if `member` is malformed (400), if a
+        `group:<id>` member names a group that doesn't exist (404), or if
+        adding it would create a cycle (409). Returns the created (or
+        pre-existing) `{"group_name", "member", "created_at", "created_by"}`
+        row -- the server answers `200` when the row already existed, `201`
+        for a fresh create; `WebClient` doesn't surface the status code
+        itself, only the body.
+        """
+        resp = self.session.post(
+            self._api_url(f"groups/{requests.utils.quote(name, safe='')}/members"),
+            headers=self._headers(),
+            json={"member": member},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def remove_group_member(self, name, member):
+        """Remove `member` from a group via
+        `DELETE /api/groups/{name}/members`, with `member` passed as a query
+        parameter -- a `group:<id>` member isn't restricted enough in charset
+        to be a safe raw path segment. Raises `RuntimeError` on an unknown
+        member (404) or if removing it would leave no principal -- no `*`
+        and no `user:<id>`, directly or via group nesting -- still able to
+        reach `admins` (409, the only lockout protection).
+        """
+        resp = self.session.delete(
+            self._api_url(f"groups/{requests.utils.quote(name, safe='')}/members"),
+            headers=self._headers(),
+            params={"member": member},
             timeout=self.timeout,
         )
         self._check_response(resp)

@@ -607,7 +607,7 @@ function AudienceAccessPageContent() {
           <div className="mb-4 space-y-1.5 text-xs text-theme-text-muted">
             <p>
               <strong className="text-theme-text-secondary">Propagation:</strong> read grants
-              take effect within <code>MICROMEGAS_AUDIENCE_GRANT_CACHE_TTL_SECONDS</code>{' '}
+              take effect within <code>MICROMEGAS_AUTH_CACHE_TTL_SECONDS</code>{' '}
               (default 60 s) because reads are served from a whole-table snapshot; mint grants
               and the rows on this page are live.
             </p>
@@ -636,6 +636,13 @@ function AudienceAccessPageContent() {
               <p>
                 Self-service is disabled on this deployment. You can see your grants here; ask an
                 admin to change them.
+              </p>
+            )}
+            {me && me.groups && me.groups.length > 0 && (
+              <p>
+                <strong className="text-theme-text-secondary">Your groups:</strong>{' '}
+                <code>{me.groups.join(', ')}</code> — explains any <code>group:</code> grant you
+                hold below.
               </p>
             )}
           </div>

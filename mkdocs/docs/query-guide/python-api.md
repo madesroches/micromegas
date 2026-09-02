@@ -516,11 +516,14 @@ print(f"Found {len(root_spans)} root operations")
 ### `bulk_ingest(table_name, table)`
 
 !!! note "Requires admin"
-    Only callable by an OIDC-authenticated identity listed in `MICROMEGAS_ADMINS` (or a
-    `--disable-auth` deployment) — see [Admin SQL Functions](../admin/functions-reference.md).
-    API-key credentials (both `ingestion_api_keys` and `analytics_api_keys`) are never
-    admin and can never satisfy this check, so automation currently calling `bulk_ingest`
-    with an API key must switch to an OIDC-based admin identity.
+    Only callable by a caller whose resolved local-group membership includes the reserved
+    `admins` group (or a `--disable-auth` deployment) — see
+    [Groups](../admin/groups.md) and [Admin SQL Functions](../admin/functions-reference.md).
+    An API-key credential (both `ingestion_api_keys` and `analytics_api_keys`) normally
+    carries no email and so can never match a `user:`/`group:` member of `admins` — except
+    while `admins` still holds its seeded wildcard (`*`) member, in which case every
+    authenticated caller, API keys included, is admin until an operator adds a `user:`
+    member and removes `*` (see [Groups](../admin/groups.md)'s upgrade path).
 
 Bulk ingest metadata for replication or administrative tasks. `table` is a
 `pyarrow.Table` whose schema matches the target table exactly; complex
@@ -993,6 +996,45 @@ micromegas-query --all "SELECT * FROM list_audience_grants()" --profile analytic
 ```
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`
+(`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
+
+Pass `--version` to print the installed package and interpreter version and exit.
+
+### micromegas-groups
+
+Manages local group membership (`groups`/`group_members` tables) via `analytics-web-srv`'s
+`/api/groups` routes — never direct Postgres access. Every subcommand is admin-only — see
+[Groups](../admin/groups.md) for the full model, including the reserved `admins` group.
+
+```bash
+micromegas-groups --url https://analytics.example.com list
+micromegas-groups --url https://analytics.example.com create eng --description "Engineering"
+micromegas-groups --url https://analytics.example.com members admins
+micromegas-groups --url https://analytics.example.com add admins user:alice@example.com
+micromegas-groups --url https://analytics.example.com remove admins '*'
+micromegas-groups --url https://analytics.example.com delete eng
+```
+
+`--url` always points at `analytics-web-srv`'s base URL. Six subcommands:
+
+- `list` — every group with its member count.
+- `create <name> [--description TEXT]` — creates a new, empty group.
+- `delete <name>` — deletes a group (fails, 409, on `admins` or while still referenced by a
+  nested membership or an audience grant).
+- `members <name>` — a group's direct members.
+- `add <name> <member>` — adds `*`, `user:<id>`, or `group:<id>` to a group.
+- `remove <name> <member>` — removes a member from a group.
+
+There is no `bootstrap` convenience command. Taking over admin access from a wildcard-seeded
+`admins` group (the state a fresh install or an unmigrated upgrade seeds — see
+[Groups → Upgrade path](../admin/groups.md#upgrade-path-schema-v10)) is the two-command sequence:
+
+```bash
+micromegas-groups --url https://analytics.example.com add admins user:<you>
+micromegas-groups --url https://analytics.example.com remove admins '*'
+```
+
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`
 (`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
 
 Pass `--version` to print the installed package and interpreter version and exit.

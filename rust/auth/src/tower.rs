@@ -99,7 +99,7 @@ where
                             auth_ctx.email,
                             auth_ctx.issuer,
                             auth_ctx.audience,
-                            auth_ctx.is_admin
+                            auth_ctx.is_admin()
                         );
 
                         // SECURITY: Remove any client-provided auth headers to prevent spoofing
@@ -134,7 +134,7 @@ where
                         );
                         parts.headers.insert(
                             "x-auth-is-admin",
-                            http::HeaderValue::from_str(&auth_ctx.is_admin.to_string())
+                            http::HeaderValue::from_str(&auth_ctx.is_admin().to_string())
                                 .expect("valid is_admin header"),
                         );
 
