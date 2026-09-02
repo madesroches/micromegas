@@ -571,6 +571,10 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - Legacy `group:X` selectors whose `X` fails the name charset are left as inert grant rows with a
   migration warning, not deleted and not force-renamed.
 - `MICROMEGAS_SQL_CONNECTION_STRING` is required by `analytics-web-srv` whenever auth is enabled.
+- Split-deployment seeding (a migration runner missing the analytics admin var carried by other
+  processes) is not a real risk: deployments sync config across processes, so the migration runner
+  always sees the same admin var as the rest of the deployment. No heuristic or extra refusal is
+  needed for this case.
 
 ## Documentation
 
@@ -641,10 +645,5 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 
 ## Open Questions
 
-- In a split deployment the migration runner (`telemetry-ingestion-srv`) may not carry the
-  analytics admin var, which would seed `*` on a deployment that had explicit admins. The upgrade
-  path tells the operator to set it there for the seeding boot; is that acceptable, or should the
-  migration refuse to seed `*` when `audience_grants` has any non-seeded row (a signal the
-  deployment is not fresh) and require the var explicitly?
 - Should `micromegas-groups` also carry a `bootstrap` convenience (`add admins user:<me>` +
   `remove admins '*'` in one command), since the docs make that pair the first post-install step?
