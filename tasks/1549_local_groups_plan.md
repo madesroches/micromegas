@@ -46,8 +46,9 @@ than a special case.
   `:72`, `:99`; `rust/analytics-web-srv/src/auth/state.rs:26-31`, `:64-75`;
   `rust/analytics-web-srv/src/main.rs:38`; `rust/auth/src/env.rs:2`; `rust/auth/src/lib.rs:55`;
   `rust/auth/src/multi.rs:41`.
-- `MICROMEGAS_INGESTION_ADMINS` resolves on the ingestion chain but nothing under
-  `rust/ingestion/`, `rust/telemetry-ingestion-srv/`, or `rust/object-cache-srv/` reads `is_admin`.
+- `MICROMEGAS_INGESTION_ADMINS` is read by the monolith's ingestion chain only; the standalone
+  `rust/telemetry-ingestion-srv/` never reads it, and nothing under `rust/ingestion/` or
+  `rust/object-cache-srv/` reads `is_admin`.
 - `is_admin` travels: `AuthContext.is_admin` → `x-auth-is-admin` gRPC header
   (`rust/auth/src/tower.rs:102-138`) → `user_attribution::is_admin(md)` (absent header ⇒ `true`,
   the `--disable-auth` convention) → `CallerContext.is_admin`. On the web side:
@@ -182,10 +183,14 @@ impl GroupGraph {
   the selectors `*` and `user:<email>`; each newly reached group `g` contributes
   `members_of["group:g"]`. The visited set is what tolerates a cycle at read time. Returned sorted,
   deduplicated. Sync and infallible: the graph is an already-loaded snapshot.
+- `has_wildcard_admin()` is `self.closure(None)` (seeded at `*` alone) containing `ADMINS_GROUP`,
+  reusing the same upward walk as `closure` so a wildcard reached through nesting — not just a
+  direct `('admins', '*')` row — trips the check.
 - `nesting_would_cycle(G, X)` — adding `group:X` to `G` (X nests into G) is a cycle when `X == G`
-  or when `G` is already reachable upward from `X`. Used by the write route against a freshly
-  queried graph, never the TTL snapshot (a stale snapshot could accept a cycle another replica just
-  refused; the read-time visited set covers the race that remains).
+  or when `X` is already reachable upward from `G` (a `closure`-style walk seeded at `G` reaches
+  `X`). Used by the write route against a freshly queried graph, never the TTL snapshot (a stale
+  snapshot could accept a cycle another replica just refused; the read-time visited set covers the
+  race that remains).
 
 ### `DbGroupsSource` and the shared snapshot cache
 
@@ -196,13 +201,13 @@ impl GroupGraph {
 pub trait SnapshotLoader: Send + Sync + 'static {
     type Snapshot: Send + Sync;
     const NAME: &'static str;         // "audience grant store", "group store" -- error/log text
-    const METRIC: &'static str;       // "audience_grant_refresh_error_count", "group_refresh_error_count"
     async fn fetch(pool: &PgPool) -> Result<Self::Snapshot>;
+    fn count_refresh_error();         // each impl calls imetric!() with its own literal metric name
 }
 pub struct SnapshotSource<L: SnapshotLoader> { /* today's fields */ }
 impl<L: SnapshotLoader> SnapshotSource<L> {
     pub fn new(pool: PgPool, ttl: Duration) -> Self;
-    pub async fn current(&self) -> Result<Arc<L::Snapshot>>;
+    pub async fn current(&self) -> Result<Arc<L::Snapshot>>; // calls L::count_refresh_error() at the two failure sites
 }
 pub type DbAudienceGrantsSource = SnapshotSource<AudienceGrantsLoader>;
 pub type DbGroupsSource = SnapshotSource<GroupsLoader>;
@@ -288,7 +293,8 @@ need no group store of their own.
 - `OidcAuthProvider::new(config)` loses `admin_var`; `load_admin_users`, `admin_users`, and
   `OidcAuthProvider::is_admin` are deleted.
 - **Removed-var refusal.** A new `micromegas_auth::env::reject_removed_var(prefix, "ADMINS")`
-  returns `Err` when `{prefix}_ADMINS` or `MICROMEGAS_ADMINS` is set to any value, naming the
+  returns `Err` when any of `{prefix}_ADMINS`, `MICROMEGAS_ADMINS`, `MICROMEGAS_ANALYTICS_ADMINS`,
+  or `MICROMEGAS_INGESTION_ADMINS` is set to any value, regardless of `prefix`, naming the
   replacement ("admin membership lives in the `admins` group; manage it with `micromegas-groups`
   or the Groups admin page"). Called from `ProviderBuilder::compose` and `WebServerConfig`. Same
   posture `IsolationConfig::from_env` takes for `UNSTAMPED_AUDIENCE` and #1502 takes for its
@@ -398,7 +404,9 @@ migration says it loudly rather than letting access disappear quietly.
 
 1. Extract `db_audience_grants.rs`'s cache into `db_snapshot.rs` (`SnapshotLoader`,
    `SnapshotSource`); make `DbAudienceGrantsSource` a type alias over `AudienceGrantsLoader`.
-   Existing `tests/db_audience_grants_tests.rs` must pass unchanged.
+   `tests/db_audience_grants_tests.rs`'s constructor calls change to
+   `DbAudienceGrantsSource::new(pool, Duration::from_secs(cfg.cache_ttl_secs))`;
+   `DbAudienceGrantsConfig` stays as the env-knob type. No other test behavior changes.
 2. Add `groups.rs`: `ADMINS_GROUP`, `GroupGraph` (`from_rows`, `closure`, `has_wildcard_admin`,
    `nesting_would_cycle`), `GroupsLoader`, `DbGroupsConfig`, `DbGroupsSource`.
 3. Add `membership.rs`: `MembershipProvider`.
@@ -582,8 +590,10 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - `membership_tests.rs`: wrapper fills `memberships` and `is_admin()`; inner `Err` passes through
   unchanged; store `ProviderUnavailable` propagates as `ProviderUnavailable`.
 - `policy_tests.rs`: `group:` selector matches a membership and not a same-named email.
-- `db_audience_grants_tests.rs` passes unchanged after the generic extraction; one smoke test for
-  `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start error path.
+- `db_audience_grants_tests.rs`: constructor calls updated to
+  `DbAudienceGrantsSource::new(pool, Duration::from_secs(cfg.cache_ttl_secs))`, behavior otherwise
+  unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
+  error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
 - `sql_migration_test.rs` (`#[ignore]`, live DB): v9 → v10 with `AdminSeed::Everyone` yields
   `('admins','*')`; with `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing
