@@ -138,10 +138,11 @@ distinct kind of thing from an email. Hard `DELETE`, no `revoked_*` columns, sam
 3. Seed `admins` members from `seed`:
    - `AdminSeed::Users(list)` when the env var is set and non-empty: one `user:<entry>` row per
      entry, no wildcard. Who is an admin does not change.
-   - `AdminSeed::Everyone` otherwise (fresh install, or an upgrade that never set the var): one
-     `('admins', '*')` row. On an upgrade this preserves only the three `admin_principal_possible`
-     SQL gates, which were already open to every caller; it additionally *opens* the web admin
-     routes (`AdminUser`/`require_admin`, `GrantGate`, `MintGate`), the mint-any-audience arm of
+   - `AdminSeed::Everyone` otherwise (fresh install, an upgrade that never set the var, or a var set
+     to an empty JSON array `[]`): one `('admins', '*')` row. On an upgrade this preserves only the
+     three `admin_principal_possible` SQL gates, which were already open to every caller; it
+     additionally *opens* the web admin routes (`AdminUser`/`require_admin`, `GrantGate`,
+     `MintGate`), the mint-any-audience arm of
      `AudienceMintPolicy`, the FlightSQL `bulk_ingest` gate (`do_put_statement_ingest`'s plain
      `is_admin(request.metadata())` check, now satisfiable by an API-key caller, not just OIDC),
      and `list_audience_grants()`'s all-rows (`GrantVisibility::All`) branch to every authenticated
@@ -168,7 +169,10 @@ tested directly; `admin_seed_from_env` is the thin wrapper that reads the env va
 `parse` returns `Err` — failing the migration before v10 commits — when `raw` is not valid JSON or
 is not a JSON array, rather than following `load_admin_users`'s `unwrap_or_default()` pattern; that
 pattern would turn a JSON typo into an empty list and, under `AdminSeed::Everyone`, silently seed
-the wildcard instead of the operator's intended admins.
+the wildcard instead of the operator's intended admins. A valid but empty array (`[]`) parses to
+`AdminSeed::Everyone`: today an unset or empty admin list already means `can_grant_admin() ==
+false`, i.e. open to everyone, so this preserves that effective state rather than erroring or
+seeding an admin-less `admins` group.
 
 `warn_if_data_lake_schema_stale`'s message gains the v10 consequence: on a v9 schema every request
 fails with a retryable 503 until the migration runs, because the group store cannot load.
@@ -254,21 +258,7 @@ impl AuthProvider for MembershipProvider {
 }
 ```
 
-One resolution site, upstream of every consumer. Reasons this lives in a provider wrapper rather
-than in `AudienceReadPolicy`/`AudienceMintPolicy` as the issue's Scope section sketches:
-
-- Four consumers need the same closure — the two policies, `caller_selectors`' three call sites,
-  and admin-ness. Resolving it once here keeps `selector_matches`, `caller_selectors`,
-  `CallerContext::grant_selectors`, `my_audiences`, `caller_holds_pair`, and
-  `list_audience_grants()` sync and unchanged in shape, exactly as the issue's own
-  "resolve once per request, then matching stays sync and infallible" paragraph asks.
-- It sits **outside** `OidcAuthProvider`'s `token_cache`, so revocation latency is the group TTL
-  alone, not `max(token TTL, group TTL)`. The cached `AuthContext` carries empty `memberships`;
-  the wrapper fills them on every request.
-- A store outage fails closed everywhere at once: gRPC (`tower.rs` already maps
-  `ProviderUnavailable` to `Status::unavailable`), ingestion HTTP (`axum.rs` already downcasts),
-  and the web session, where `cookie_auth_middleware`/`auth_me` gain the same downcast → 503
-  instead of today's blanket 401.
+One resolution site, upstream of every consumer.
 
 `AuthContext` changes (`types.rs`):
 
@@ -276,11 +266,8 @@ than in `AudienceReadPolicy`/`AudienceMintPolicy` as the issue's Scope section s
 - `memberships: Arc<[String]>` is added: the caller's resolved transitive local-group membership.
   Empty until a `MembershipProvider` fills it.
 - `is_admin: bool` field is **replaced by a method** `fn is_admin(&self) -> bool
-  { self.memberships.iter().any(|g| g == ADMINS_GROUP) }`. A field beside `memberships` would be a
-  second copy of the same fact that a construction site could set inconsistently; the method
-  cannot disagree with the closure, and turning the field into a method makes the compiler
-  enumerate every reader. `--disable-auth` and maintenance contexts set
-  `memberships: Arc::from([ADMINS_GROUP.to_string()])`.
+  { self.memberships.iter().any(|g| g == ADMINS_GROUP) }`. `--disable-auth` and maintenance
+  contexts set `memberships: Arc::from([ADMINS_GROUP.to_string()])`.
 
 `selector_matches`' `group:` arm becomes `caller.memberships.iter().any(|g| g == group)`;
 `caller_selectors` emits one `group:<g>` per membership. `AudienceReadPolicy`/`AudienceMintPolicy`
@@ -332,13 +319,11 @@ With `admins` always populated (`*` or explicit users), an admin principal alway
   `new` parameter, and the derivation at `flight_sql_server.rs:371`.
 - `query.rs:128` → `let lakehouse_admin = caller.is_admin;`. `skip_for_admin_recovery(sql,
   is_admin)` loses its third parameter. `AudienceGuard` is unchanged (it already takes the boolean).
-- On a fresh install, `*` makes `is_admin()` true for everyone — wider than the old fallback, which
-  opened only the three `admin_principal_possible` gates and left `AdminUser`/`GrantGate`/
-  `MintGate` closed, and never touched `bulk_ingest` (`do_put_statement_ingest`) or
-  `list_audience_grants()`'s all-rows branch. That wider default is what lets the first admin reach
-  the Groups page at all;
-  it is now visible as a row and removable, and once `*` is removed, an API key is admin only if
-  `admins` says so.
+- On a fresh install, `*` makes `is_admin()` true for everyone — wider than the old fallback, see
+  Migration v10 step 3. That wider default is what lets the first admin reach the Groups page at
+  all; it is now visible as a row and removable, and once `*` is removed, no API key is admin —
+  API-key contexts carry no email for a `user:` member to match, so only a wildcard can make one
+  admin.
 
 ### Admin surface (`rust/analytics-web-srv/src/groups.rs`)
 
@@ -433,7 +418,9 @@ migration says it loudly rather than letting access disappear quietly.
    `SnapshotSource`); make `DbAudienceGrantsSource` a type alias over `AudienceGrantsLoader`.
    `tests/db_audience_grants_tests.rs`'s constructor calls change to
    `DbAudienceGrantsSource::new(pool, Duration::from_secs(cfg.cache_ttl_secs))`;
-   `DbAudienceGrantsConfig` stays as the env-knob type. No other test behavior changes.
+   `DbAudienceGrantsConfig` stays as the env-knob type. No other test behavior changes. The same
+   constructor-signature change applies to the three production call sites in
+   `flight_sql_server.rs` and `monolith/src/main.rs` (already listed under Files to Modify).
 2. Add `groups.rs`: `ADMINS_GROUP`, `GroupGraph` (`from_rows`, `closure`, `has_wildcard_admin`,
    `nesting_would_cycle`), `GroupsLoader`, `DbGroupsConfig`, `DbGroupsSource`.
 3. Add `membership.rs`: `MembershipProvider`.
@@ -454,12 +441,19 @@ migration says it loudly rather than letting access disappear quietly.
    value, not a fallback to `Everyone`), `admin_seed_from_env` as its env wrapper,
    `upgrade_data_lake_schema_v10`, chain it in `execute_migration`, bump
    `LATEST_DATA_LAKE_SCHEMA_VERSION` to 10, extend `warn_if_data_lake_schema_stale`'s message.
-9. `tests/sql_migration_test.rs`: `build_v9_schema`, plus the v10 tests listed under Testing.
+   `Cargo.toml`: add `serde_json.workspace = true` under `[dependencies]` for `AdminSeed::parse`'s
+   JSON decoding.
+9. `tests/sql_migration_test.rs`: `build_v9_schema`, plus the v10 tests listed under Testing —
+   each calling `upgrade_data_lake_schema_v10` directly with an explicit `AdminSeed` value inside a
+   transaction over a `build_v9_schema` pool, not via `execute_migration` (unlike the v7–v9 tests,
+   which drive the whole `execute_migration(pool)` function).
 
 ### Phase 3 — analytics gate collapse
 
 10. `read_scope.rs`: delete `admin_principal_possible`; reword the `MICROMEGAS_ADMINS` references at
     `:139`/`:160` (the comma-separated-vs-JSON contrast can cite `MICROMEGAS_API_KEYS` instead).
+    `tests/ownership_rewrite_config_tests.rs`: update the error-text assertion that names
+    "MICROMEGAS_ADMINS-style JSON array" to match the reworded text.
 11. `query.rs:128`, `query_deny_list.rs:291`, `audience_guard.rs` doc comments;
     `flight_sql_service_impl.rs` (`new`, field, `caller_context`, `:799`); `flight_sql_server.rs`
     (`:371`, `with_group_store` on the `use_default_auth` branch).
@@ -482,7 +476,8 @@ migration says it loudly rather than letting access disappear quietly.
     `web_server.rs` (delete `admin_var_name`, require `MICROMEGAS_SQL_CONNECTION_STRING` under
     auth, thread the analytics-keys pool into `build_auth_state` to fill `AuthState.groups`,
     `--disable-auth` contexts use `memberships: [admins]`, `GroupsState`, router merge, disabled-
-    router prefixes), `main.rs`.
+    router prefixes, call `warn_if_data_lake_schema_stale(&analytics_keys_pool)` when auth is
+    enabled, mirroring the flight-sql call site), `main.rs`.
 15. `groups.rs` routes; `audience_grants.rs`: `groups` field on `MyAudiencesResponse`, group
     existence check on `create_grant`; `ingestion_keys.rs`/`analytics_keys.rs`: `is_admin()`.
 16. `tests/groups_tests.rs` (modeled on `audience_grants_tests.rs`), `routing_tests.rs` 503
@@ -514,17 +509,19 @@ migration says it loudly rather than letting access disappear quietly.
 
 ## Files to Modify
 
-Rust, `rust/auth/src/`: `types.rs`, `policy.rs`, `oidc.rs`, `multi.rs`, `tower.rs`, `api_key.rs`,
-`db_api_key.rs`, `db_audience_grants.rs`, `default_provider.rs`, `env.rs`, `lib.rs`; new
-`db_snapshot.rs`, `groups.rs`, `membership.rs`; tests `oidc_tests.rs`, `policy_tests.rs`,
+Rust, `rust/auth/src/`: `types.rs`, `policy.rs`, `oidc.rs`, `multi.rs`, `tower.rs`, `axum.rs`,
+`api_key.rs`, `db_api_key.rs`, `db_audience_grants.rs`, `default_provider.rs`, `env.rs`, `lib.rs`;
+new `db_snapshot.rs`, `groups.rs`, `membership.rs`; tests `oidc_tests.rs`, `policy_tests.rs`,
 `multi_tests.rs`, `default_provider_tests.rs`, `db_audience_grants_tests.rs`, `tower_tests.rs`,
-`test_utils.rs`; new `groups_tests.rs`, `membership_tests.rs`.
+`db_api_key_tests.rs`, `test_utils.rs`; new `groups_tests.rs`, `membership_tests.rs`.
 
-Rust, elsewhere: `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/tests/sql_migration_test.rs`;
+Rust, elsewhere: `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/Cargo.toml`,
+`rust/ingestion/tests/sql_migration_test.rs`;
 `rust/analytics/src/lakehouse/{read_scope,query,query_deny_list,audience_guard}.rs`,
 `rust/analytics/tests/{lakehouse_admin_gate_test,query_deny_list_tests,audience_guard_tests,
 prong_b_guard_db_test,ownership_rewrite_db_test,ownership_rewrite_public_view_set_tests,
-retire_partition_by_metadata_db_test,list_audience_grants_db_test}.rs`;
+ownership_rewrite_config_tests,retire_partition_by_metadata_db_test,
+list_audience_grants_db_test}.rs`;
 `rust/public/src/servers/{flight_sql_server,flight_sql_service_impl}.rs`,
 `rust/public/tests/read_policy_threading_tests.rs`; `rust/monolith/src/main.rs`;
 `rust/telemetry-ingestion-srv/src/main.rs`; `rust/analytics-web-srv/src/{lib,main,web_server,
@@ -561,13 +558,8 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   small, and BFS over an in-memory graph per request is cheaper than a cache lookup plus its
   eviction machinery. Invalidation semantics are also simpler to document: one TTL.
 - **Generic `SnapshotSource` vs. a copied `DbGroupsSource`.** Copying ~200 lines of throttling
-  logic would leave two implementations to keep in step. The generic costs one trait with two
-  associated consts.
-- **`member` selector vs. `(member_kind, member_id)`.** Reuses `valid_selector`/`selector_matches`
-  and removes the edge-direction ambiguity of a triple, per the issue.
-- **No directory sync.** Rejected per the issue: it needs tenant-wide Graph consent and makes
-  micromegas own a replica of a system it does not control. The property given up is that team
-  moves do not propagate; departures are inert because a departed user cannot obtain a token.
+  logic would leave two implementations to keep in step. The generic costs one trait with one
+  associated const and two fns.
 - **Ingestion chain without a group store.** Nothing on the write path consults `is_admin()` or
   `memberships`, so attaching the store would add a Postgres dependency for an unread value. A
   future ingestion route reading `is_admin()` gets `false`, which is fail-closed.
@@ -591,21 +583,22 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - Legacy `group:X` selectors whose `X` fails the name charset are left as inert grant rows with a
   migration warning, not deleted and not force-renamed.
 - `MICROMEGAS_SQL_CONNECTION_STRING` is required by `analytics-web-srv` whenever auth is enabled.
+- `micromegas-groups` does not get a `bootstrap` convenience command; the two-command sequence
+  (`add admins user:<me>` then `remove admins '*'`) stays documented as-is.
 - Split-deployment seeding (a migration runner missing the analytics admin var carried by other
   processes) is not a real risk: deployments sync config across processes, so the migration runner
   always sees the same admin var as the rest of the deployment. No heuristic or extra refusal is
   needed for this case.
+- `member` is a selector string, not a `(member_kind, member_id)` pair — per the issue.
+- No directory sync — per the issue.
 
 ## Documentation
 
 - New `mkdocs/docs/admin/groups.md`, in `mkdocs.yml` nav under Administration after
   Authentication: the model, the selector table, nesting and cycles, the `admins` group, the
   wildcard warning and first-login step, the routes table, `micromegas-groups`, the TTL knob and
-  latency, outage behavior, the v10 upgrade path — including that seeding `('admins','*')` on an
-  upgrade does more than preserve the old three-gate fallback: it opens the web admin routes, the
-  mint-any-audience arm, the FlightSQL `bulk_ingest` gate (including to API-key callers), and
-  `list_audience_grants()`'s all-rows visibility to every authenticated caller until `*` is
-  removed.
+  latency, outage behavior, the v10 upgrade path — including the wildcard widening enumerated in
+  Migration v10 step 3.
 - `mkdocs/docs/admin/authentication.md`: selector table at `:415-421` (`group:<g>` → "members of
   local group `g`, transitively"), the `MICROMEGAS_ADMINS` lines at `:90`, `:104`, `### Admin
   Privileges` at `:1196-1211`, and the `GrantGate` create/delete wording at `:673-693`.
@@ -620,12 +613,10 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   beside `micromegas-grants`, `bulk_ingest` admonition at `:519`.
 - `CHANGELOG.md` (`## Unreleased`, **Auth**): operator-facing break (`MICROMEGAS_ADMINS` family
   removed and refused; `groups` claim no longer read; existing `group:` grants now mean local
-  groups), the v10 migration and seeding rules — noting that seeding `('admins','*')` on an
-  upgrade opens the web admin routes, the mint-any-audience arm, the FlightSQL `bulk_ingest` gate,
-  and `list_audience_grants()`'s all-rows visibility to every authenticated caller, not just the
-  three previously-open SQL gates; call out that this reopens `bulk_ingest` to analytics API-key
-  callers specifically, contradicting this changelog's earlier entry that API keys can never
-  satisfy that gate, until `*` is removed — and a **Minor breaking change** clause listing
+  groups), the v10 migration and seeding rules — document the wildcard widening enumerated in
+  Migration v10 step 3; call out that this reopens `bulk_ingest` to analytics API-key callers
+  specifically, contradicting this changelog's earlier entry that API keys can never satisfy that
+  gate, until `*` is removed — and a **Minor breaking change** clause listing
   `AuthContext.groups` → `memberships`, `is_admin` field → method, `AuthProvider::can_grant_admin`
   removed, `OidcAuthProvider::new` signature, `CallerContext.admin_principal_possible` removed,
   `FlightSqlServiceImpl::new` and `skip_for_admin_recovery` parameters, `DbAudienceGrantsSource`
@@ -646,20 +637,22 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
   unchanged; one smoke test for `DbGroupsSource` over a `connect_lazy` pool hitting the cold-start
   error path.
 - `default_provider_tests.rs`: `MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement.
-- `sql_migration_test.rs` (`#[ignore]`, live DB): v9 → v10 with `AdminSeed::Everyone` yields
-  `('admins','*')`; with `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing
-  `group:eng` grant yields an empty `eng` group; a `group:Eng Team` selector yields no group and the
-  grant row survives; a pre-existing `group:admins` grant does not fail the migration (step 4's
-  insert no-ops against step 2's row); the `CHECK` constraints reject a bad name and a bad member.
-  No-DB unit tests on `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty
-  array.
+- `sql_migration_test.rs` (`#[ignore]`, live DB): each case calls `upgrade_data_lake_schema_v10`
+  directly with an explicit `AdminSeed`, inside a transaction over a `build_v9_schema` pool, not
+  via `execute_migration`. v9 → v10 with `AdminSeed::Everyone` yields `('admins','*')`; with
+  `AdminSeed::Users` yields the `user:` rows and no `*`; a pre-existing `group:eng` grant yields an
+  empty `eng` group; a `group:Eng Team` selector yields no group and the grant row survives; a
+  pre-existing `group:admins` grant does not fail the migration (step 4's insert no-ops against
+  step 2's row); the `CHECK` constraints reject a bad name and a bad member. No-DB unit tests on
+  `AdminSeed::parse` cover malformed JSON, a non-array value, and an empty array asserting
+  `AdminSeed::Everyone`.
 - Analytics: `lakehouse_admin_gate_test.rs` asserts non-admin cannot plan the mutating functions
   and admin can, with no second arm; `query_deny_list_tests.rs` and the `prong_b_guard_db_test.rs`
   `'global'`-row test updated to the one-armed gate.
 - `analytics-web-srv/tests/groups_tests.rs`: 403 for non-admin on every route; 400 bad name/
-  selector; 409 deleting `admins`; 409 removing the last `admins` row; 404 `group:` member naming a
-  missing group; live (`#[ignore]`): CRUD round trip, 409 cycle, 409 delete while referenced,
-  201/200 idempotent add. `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
+  selector; 409 deleting `admins`; live (`#[ignore]`): CRUD round trip, 409 cycle, 409 delete while
+  referenced, 201/200 idempotent add, 409 removing the last `admins` row, 404 `group:` member
+  naming a missing group. `routing_tests.rs`: `--disable-auth` 503 for `/api/groups*` (the only
   reachable unconfigured-pool case, since auth-enabled deployments always have the pool set).
   `auth_integration.rs`: `ProviderUnavailable` from the group store → 503.
 - Web app: `GroupsPage.test.tsx` (list, add member, cycle error surfaced, remove), `AdminPage.test.tsx`
@@ -669,8 +662,3 @@ start_services_with_oidc.py`; `analytics-web-app/start_analytics_web_docker.py`;
 - Manual: `start_services_with_oidc.py` against a fresh DB shows the wildcard warning at boot and
   the hub banner; `micromegas-groups add admins user:<me>` then `remove admins '*'` clears both
   within the TTL; a non-admin then loses `retire_partitions` and the Groups page.
-
-## Open Questions
-
-- Should `micromegas-groups` also carry a `bootstrap` convenience (`add admins user:<me>` +
-  `remove admins '*'` in one command), since the docs make that pair the first post-install step?
