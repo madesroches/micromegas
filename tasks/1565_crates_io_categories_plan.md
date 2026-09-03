@@ -129,7 +129,9 @@ existing literal `keywords` — `wasm` first because in-browser SQL is the disti
    `micromegas-proc-macros`, `auth`, `object-cache`.
 4. Add the literal `categories` line to `rust/datafusion-wasm/Cargo.toml`, below its literal
    `keywords`.
-5. Run the verification below.
+5. `CHANGELOG.md`: a bullet under `## Unreleased` recording the new shared `categories` metadata
+   and the five per-crate overrides.
+6. Run the verification below.
 
 ## Files to Modify
 
@@ -137,6 +139,7 @@ existing literal `keywords` — `wasm` first because in-browser SQL is the disti
 - `rust/{analytics,analytics-web-srv,auth,datafusion-extensions,datafusion-wasm,flight-sql-srv,http-gateway,ingestion,micromegas-proc-macros,monolith,object-cache,object-cache-srv,otel-ingestion,perfetto,public,redis-exporter,telemetry,telemetry-ingestion-srv,telemetry-maintenance-srv,telemetry-sink,tracing,transit}/Cargo.toml`
 - `rust/tracing/proc-macros/Cargo.toml`
 - `rust/transit/derive/Cargo.toml`
+- `CHANGELOG.md`
 
 ## Trade-offs
 
@@ -180,12 +183,15 @@ Cargo's own manifest resolution can answer.
 2. From `rust/datafusion-wasm/`, run the same command — it is a separate workspace, so step 1 does
    not cover it. Expect `["wasm", "database-implementations", "development-tools::profiling"]`.
 
-3. Confirm the packaged manifest flattens the inherited value (no `.workspace = true` reaches the
-   registry, and the slugs pass Cargo's own manifest validation):
+3. From `rust/`, confirm the packaged manifest flattens the inherited value (no `.workspace = true`
+   reaches the registry, and the slugs pass Cargo's own manifest validation). `cargo package`
+   unpacks the tarball only during its verify step, so read the manifest out of the `.crate` file
+   directly instead of skipping verification:
 
    ```
-   cargo package -p micromegas-perfetto --no-verify --allow-dirty
-   grep -A5 '^categories' target/package/micromegas-perfetto-0.31.0/Cargo.toml
+   cargo package -p micromegas-perfetto --allow-dirty
+   tar -xzOf target/package/micromegas-perfetto-0.31.0.crate micromegas-perfetto-0.31.0/Cargo.toml \
+     | grep -A5 '^categories'
    ```
 
 4. `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` from `rust/` — a malformed
