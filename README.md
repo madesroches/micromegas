@@ -38,6 +38,7 @@ Micromegas is an observability system designed to provide unified insights into 
 *   **🔍 Powerful SQL Interface:** Query your data using a powerful and familiar SQL interface, powered by [Apache DataFusion](https://datafusion.apache.org/) and accessible via [Apache Arrow FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/).
 *   **📓 Interactive Notebooks:** A built-in web app for exploring data through composable notebook cells — queries, charts, flame graphs, maps, and logs — over the same SQL engine.
 *   **🔐 Enterprise Authentication:** Secure your data with OIDC authentication supporting both human users (browser-based login) and service accounts (OAuth 2.0 client credentials).
+*   **🛡️ Audience-Based Access Control:** Host private data on a shared deployment. Incoming telemetry is tagged server-side with the audience of the credential that sent it, and queries only return the data the user has been granted access to.
 
 ## How It Works
 
@@ -78,50 +79,36 @@ Building from source or contributing code? See the [Build Guide](https://microme
 ## Recent Releases
 
 ### v0.30.0 (September 2026)
-* Audience-Based Access Control end to end: `OwnershipRewrite` injects an audience predicate into every materialized-view query plan, `AudienceGuard` covers the arg-addressed surfaces it cannot reach (`process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload`, `list_partitions`), and `view_instance(...)` is audience-checked before any JIT materialization work
-* Server-side audience stamping: ingestion stamps `micromegas.audience` from the authenticated credential instead of trusting the client, reserved `micromegas.*` payload properties are dropped, OTLP-derived `process_id`/`block_id` are audience-scoped, and `processes`/`streams`/`blocks` each carry their own per-row `audience` column
-* DB-backed grant store (`audience_grants`) with `list_audience_grants()`, `/api/audience-grants` routes, and non-admin self-service ingestion-key minting gated on a `mint` grant
-* Local groups in Postgres: `groups`/`group_members` tables, transitive membership resolution, a reserved `admins` group replacing the `MICROMEGAS_ADMINS` env-var family, a Groups admin page, and a `micromegas-groups` CLI
-* **Operator action required**: `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`/`MICROMEGAS_INGESTION_ADMINS` are refused at startup; the IdP `groups` claim is no longer read; the three auth cache TTL knobs collapse onto `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`; the six global-instance views bump their file-schema hash and need partition regeneration
-* Merge-path rework: every non-ordering-declaring view now merges through one reader per source file group, making merged row order deterministic and restoring row-group pruning for time-filtered queries
-* Admin-managed query deny list: Postgres-backed, replica-cached rules evaluated as DataFusion boolean expressions (including a normalized `sql_hash`) before planning
-* New `micromegas-redis-exporter` service and Docker image; tuned jemalloc `malloc_conf` with background purging on all eight service binaries; `MICROMEGAS_PROCESS_PROPERTIES` deployment tags on every micromegas process
-* JSONB completion: `jsonb_entries`/`jsonb_elements`/`jsonb_path_elements` scalar UDFs; `jsonb_object_keys` returns a plain `List<Utf8>`
-* `thread_spans` cross-segment `declared scan ordering violated` fix; density-batched JIT partition generation; `retire_partition_by_metadata()` now requires a `file_schema_hash` argument
-* Web app: automatic per-row bar charts for `Histogram` columns, a markdown-cell Run control, and role-filtered `/admin` pages for every authenticated user
-* Unreal external-profiler bridge and runtime global-context console commands
-* `postcss-selector-parser`, `qs`, `@humanfs/node`, `browserslist`, `thrift`, `grpc` security bumps
+* **Audience-based access control, end to end** — every materialized-view query plan carries an audience predicate, every id-addressed function is guarded, and ingestion stamps the audience from the authenticated credential instead of trusting the client
+* **Grants and groups now live in Postgres** — a database-backed grant store, local groups with a reserved `admins` group, a Groups admin page, and a `micromegas-groups` CLI
+* **Deterministic merged order** — every non-ordering-declaring view merges through one reader per source file group, restoring row-group pruning on time-filtered queries
+* **Admin-managed query deny list** — replica-cached rules evaluated as DataFusion expressions before a query is planned
+* **Ops and ergonomics** — a new `micromegas-redis-exporter` service, jemalloc tuning across all eight binaries, complete JSONB UDF coverage, and per-row bar charts for `Histogram` columns in the web app
+* **Operator action required** — the `MICROMEGAS_ADMINS*` environment variables are now refused at startup, the IdP `groups` claim is no longer read, and the six global-instance views need partition regeneration
 
 ### v0.29.0 (August 2026)
-* DB-backed API key store: `ingestion_api_keys`/`analytics_api_keys` tables holding only a SHA-256 hash plus a full mint/revoke audit trail, with mint/list/revoke/import HTTP routes hosted entirely on `analytics-web-srv`
-* FlightSQL query audit hardening: failures now classify into distinct gRPC status codes instead of always `Internal`, and the audit log gains per-query peak memory/spill attribution, client attribution headers, and originating notebook/cell
-* `parse_block(block_id)` now decodes OTLP blocks (logs/metrics/traces), not just `micromegas-transit` ones
-* `thread_spans`/`net_spans` JIT partitions now cut in event-time order instead of registration order, fixing fragmented call trees for out-of-order block arrival
-* Ingestion: block payload object writes are now create-only, closing an OTLP-redelivery regression; `BlockPayload` dependencies/objects encode as CBOR byte strings, cutting stored payload size ~40-45% for new blocks
-* Python client: removed the deprecated `MICROMEGAS_PYTHON_MODULE_WRAPPER` escape hatch; AWS-CLI-style named connection profiles; `--version` on all console scripts
-* Web app: Pie Chart notebook cell; Arrow `Utf8View`/`BinaryView` decode fix; chart axis fixes; tab favicon execution-state indicator
-* `undici`, `cryptography`, `event-listener`, `js-yaml`, `nanoid` security bumps; `analytics-web-app` migrated ESLint 8→10 and Tailwind 3→4
+* **API keys moved into the database** — only a SHA-256 hash is stored, with a full mint/revoke audit trail and HTTP routes hosted on `analytics-web-srv`
+* **Query failures are diagnosable** — distinct gRPC status codes instead of a blanket `Internal`, plus peak memory, spill, client attribution, and originating notebook cell in the audit log
+* **Smaller, more correct blocks** — CBOR payload encoding cuts stored size 40-45%, `parse_block` decodes OTLP as well as native blocks, and JIT span partitions cut in event-time order, fixing call trees fragmented by late arrivals
+* **Python client** — AWS-CLI-style named connection profiles, `--version` on every console script, and the deprecated module-wrapper escape hatch removed
+* **Web app** — Pie Chart cell, `Utf8View`/`BinaryView` decode fix, and an execution-state favicon
 
 ### v0.28.0 (August 2026)
-* Audience-based Access Control: the five mutating lakehouse SQL functions (`retire_partitions`, `materialize_partitions`, `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`) are now gated on the caller's admin status via a new gRPC header, matched against `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`
-* CloudWatch Firehose ingestion: new endpoints let CloudWatch Metric Streams and CloudWatch Logs reach micromegas via Kinesis Data Firehose HTTP Endpoint Delivery with no Lambda or collector in between, partitioned per CloudWatch namespace
-* Order-preserving k-way merge for `SqlBatchView`s and `blocks_view` via a new per-file scan mode, collapsing sorted partitions in one pass instead of buffering a full sort
-* Python client: raised the minimum supported Python version to 3.11, enabling native RFC 3339 `Z`-suffixed timestamp parsing across the FlightSQL client and `micromegas-query` CLI
-* Screens folders: folder organization for saved screens (list/create/rename/move/delete), sidebar tree, and a Save-dialog folder picker
-* Observability: per-query FlightSQL audit log, a `pg_stat_*` self-observability collector on the maintenance daemon, process RSS/jemalloc gauges on every service, and per-view failure isolation in the materialization pass
-* Object-cache hardening: client-side circuit breaker, a two-step read replacing a foyer race, disk→RAM promotion metrics, and graceful-shutdown drain fixes
-* DataFusion 54.1; Rust toolchain 1.97.1; Grafana plugin SDK 12.4.6; `analytics-web-app` migrated from Jest to Vitest; assorted Dependabot fixes
+* **Mutating lakehouse functions are admin-gated** — all five now check the caller's admin status before touching partitions
+* **CloudWatch straight into the lakehouse** — Metric Streams and Logs arrive through Kinesis Firehose with no Lambda or collector in between
+* **One-pass ordered merges** for `SqlBatchView`s and `blocks_view`, collapsing sorted partitions instead of buffering a full sort
+* **Screens folders** — organize saved screens in a sidebar tree, with a folder picker in the Save dialog
+* **More self-observability** — per-query FlightSQL audit log, a `pg_stat_*` collector, RSS/jemalloc gauges on every service, and per-view failure isolation during materialization
+* Object-cache hardening (circuit breaker, race fix, shutdown drain); Python 3.11 minimum; DataFusion 54.1; Rust 1.97.1
 
 ### v0.27.0 (July 2026)
-* Tiered object read cache: new `micromegas-object-cache` engine powering a standalone range-aware S3 read cache service (`micromegas-object-cache-srv`, Foyer RAM+disk) and an in-process L1 cache; single-flight coalescing, priority budgeting, memory-bounded prefetch, NDJSON-streamed `/prefetch`, streamed range responses, write-time cache warming, and extensive performance telemetry
-* Removed the Postgres `partition_metadata` table (schema v6): partition Parquet metadata is now read solely from the Parquet footer via the object-cache-backed reader, eliminating TOAST and write-path overhead
-* Blender observability add-on: new `micromegas-capi` C-ABI crate (`cdylib`/`staticlib`) and a Blender 4.2+ Python extension (action capture, performance metrics, crash harvester, exception capture), with `capi-release` and `blender-extension` CI workflows
-* Hardening: resilient Rust telemetry sink transport (priority queues, retry tuning, in-flight gating) and transit block parsing hardened against malformed payloads
-* Supply-chain CI gates: `cargo audit` and `cargo deny` run on every Rust CI build
-* `telemetry-admin` maintenance daemon renamed to `telemetry-maintenance-srv`
-* DataFusion 54.0; internal proc-macros migrated `syn` 1→2; `opentelemetry-proto` 0.32 (GHSA-w9wp-h8wv-79jx); Dependabot fixes
+* **Tiered object read cache** — a range-aware S3 read cache service (`micromegas-object-cache-srv`, RAM + disk) and an in-process L1, with single-flight coalescing, bounded prefetch, streamed range responses, and write-time warming
+* **The `partition_metadata` table is gone** — Parquet metadata is read straight from the footer through the cache, removing TOAST and write-path overhead
+* **Blender add-on** — built on a new `micromegas-capi` C-ABI crate, capturing actions, performance metrics, crashes, and exceptions
+* **Tougher clients** — resilient sink transport (priority queues, retry tuning, in-flight gating) and block parsing hardened against malformed payloads
+* Supply-chain gates (`cargo audit`, `cargo deny`) on every CI build; `telemetry-admin` renamed to `telemetry-maintenance-srv`; DataFusion 54.0
 
-For the full history, see [CHANGELOG.md](./CHANGELOG.md).
+Every item of every release, including breaking-change notes and dependency bumps, is in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Contributing
 
