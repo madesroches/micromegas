@@ -64,7 +64,7 @@ without standing up `build_and_serve`'s lakehouse:
 /// The builder's single `IsolationConfig` resolution. Independent of which auth provider is
 /// configured -- unlike the `ReadPolicy` default beside it, this is per-service deployment
 /// config with no store to build, so resolving it per auth branch could only produce three
-/// copies of one value and, historically, two wrong ones (#1561).
+/// copies of one value.
 ///
 /// The env is not read at all when the caller supplied a config: `with_isolation_config` wins
 /// regardless, and reading anyway would invent a startup failure mode on a malformed
@@ -151,7 +151,7 @@ practice; the auth-disabled path changes only in (2).
 6. `rust/monolith/src/main.rs`: gate `analytics_isolation_config` on `roles.flightsql` alone.
 7. `CHANGELOG.md`: an **Analytics** (or **Auth**) bullet under `## Unreleased` covering the fix
    and both behaviour changes from the Design section.
-8. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas`.
+8. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas --features server`.
 
 ## Files to Modify
 
@@ -172,13 +172,6 @@ explicit-wins) is not reachable from an integration test — `build_and_serve` n
 and is not worth a live-DB test under the project's testing rule. A private function makes all
 four cases a plain unit test.
 
-**Skipping the env read when `with_isolation_config` was called** rather than always reading and
-then discarding. Always reading would give one uniform code path and catch a malformed unprefixed
-variable even for a caller that overrode it — but that is a startup failure invented for a
-variable the deployment deliberately isn't using, and it would newly break the monolith (which
-sets the prefixed form) on an unrelated stale unprefixed value. Same reasoning the
-injected-provider `ReadPolicy` default already applies at `:293`.
-
 ## Decisions
 
 - Resolve at the top of `build_and_serve` rather than just before the auth branch: fail-fast on a
@@ -188,6 +181,8 @@ injected-provider `ReadPolicy` default already applies at `:293`.
   config does not.
 - Accept the visibility widening in change (1) as the price of fixing the bug, documented in
   `CHANGELOG.md` so an operator can audit the value pre-upgrade.
+- Skip the env read when `with_isolation_config` was set — same reasoning as the injected-provider
+  `ReadPolicy` default at `:293`.
 
 ## Documentation
 
@@ -202,7 +197,9 @@ implementation that no other page has since acquired a branch-conditional claim
 `#[cfg(test)] mod tests` in `rust/public/src/servers/flight_sql_server.rs` over
 `resolve_isolation_config` — the function is private to the builder, so no integration test can
 reach it. This will be the first unit-test module in `rust/public/src`; `serial_test` is already
-a dev-dependency (`rust/public/Cargo.toml:92`).
+a dev-dependency (`rust/public/Cargo.toml:92`). The `servers` module, and this test module with
+it, only compiles under the non-default `server` feature, so `cargo test -p micromegas` alone
+builds zero of these tests silently — use `cargo test -p micromegas --features server`.
 
 Every test mutates process-wide env, so each is `#[serial]` with an `EnvGuard` that clears both
 `MICROMEGAS_PUBLIC_VIEW_SETS` and `MICROMEGAS_UNSTAMPED_AUDIENCE` on drop — the same pattern as
@@ -241,11 +238,17 @@ would be immediately obvious on the next run rather than silent.
      --roles all --listen-endpoint-http 127.0.0.1:9000 --disable-auth
    ```
    Expected: startup fails with the "comma-separated, not a JSON array like MICROMEGAS_API_KEYS"
-   error, before any lake connection is attempted (no Postgres/object-store log lines first).
-2. Same check on the split binary, which takes the builder's own auth-disabled branch:
+   error.
+2. Same check on the split binary, which takes the builder's own auth-disabled branch and does go
+   through `build_and_serve`:
    `MICROMEGAS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin flight-sql-srv -- --disable-auth`.
-   Expected: the same early failure.
-3. Smoke test the normal paths — `python3 local_test_env/ai_scripts/start_services.py` (the
-   `with_default_auth` branch) and `--monolith` (the injected-provider branch), each with a valid
+   Expected: the same failure, before any lake connection is attempted (no Postgres/object-store
+   log lines first).
+3. Smoke test both binaries with auth disabled — `python3 local_test_env/ai_scripts/start_services.py`
+   and `--monolith` (both default to `--disable-auth`) — with a valid
    `MICROMEGAS_PUBLIC_VIEW_SETS=log_entries`. Expected: both come up, and
-   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` returns rows.
+   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` returns rows. This does not
+   reach `with_default_auth` or the injected-provider branch; reaching those needs extra setup:
+   `flight-sql-srv` without `--disable-auth` plus `MICROMEGAS_API_KEYS` set (for
+   `with_default_auth`), or `--monolith` with `MICROMEGAS_OIDC_CONFIG` /
+   `MICROMEGAS_ANALYTICS_OIDC_CONFIG` set (for the injected-provider branch).
