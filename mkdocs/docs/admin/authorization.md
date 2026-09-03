@@ -123,8 +123,7 @@ client payload.
 - **Client self-stamping has no effect.** To get its own label a producer needs
   a DB ingestion key bound to that audience.
 - `log_entries`, `measures`, and `log_stats` inherit the owning block's stamp.
-- A stamped audience is immutable: there is no `UPDATE processes` path, and
-  changing `MICROMEGAS_DEFAULT_AUDIENCE` affects only rows written afterwards.
+- A stamped audience is immutable: there is no `UPDATE processes` path.
 
 **OTLP `process_id` is audience-scoped**, so two audiences posting identical
 resource attributes never collapse onto one process. Each audience gets its own
