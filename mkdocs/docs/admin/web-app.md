@@ -213,7 +213,7 @@ authenticated caller, never admin-gated, and applies the same held-pair visibili
 `analytics-web-srv`'s self-service knob the way `/visible` does, and so is always as wide open
 for a non-admin as the knob-on case. See
 [Self-service ingestion key mint](authorization.md#self-service-ingestion-key-mint)
-for the knob and [DB-backed audience grants](authorization.md#db-backed-audience-grants)
+for the knob and [the grant store](authorization.md#the-grant-store)
 for the write policy the page's Share/Remove/Revoke controls drive.
 
 **Unavailable under `--disable-auth`.** The page's `/visible` and `/my-audiences` reads (and

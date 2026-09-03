@@ -973,7 +973,7 @@ Creates and deletes DB-backed audience grants (`audience_grants` table) via
 `analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. These two write
 routes are not admin-only: a non-admin caller with a matching hold on the pair can share it too,
 once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
-[Authorization → DB-backed audience grants](../admin/authorization.md#db-backed-audience-grants)).
+[Authorization → the grant store](../admin/authorization.md#the-grant-store)).
 
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng

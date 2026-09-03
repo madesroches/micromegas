@@ -17,7 +17,7 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_AUDIENCE_GRANTS` | unset | JSON grant map, read once at startup by FlightSQL. Read axis only — mint grants must be in the DB. The monolith prefers `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` when set, falling back to this. |
+| `MICROMEGAS_AUDIENCE_GRANTS` | unset | **Deprecated** — JSON grant map read once at startup, superseded by the `audience_grants` table. See [Deprecated: the env grant map](#deprecated-the-env-grant-map). |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | `public` | Label stamped on rows whose credential carries no bound audience. Set it identically on **every** role that builds a lakehouse — FlightSQL, maintenance, monolith, **and ingestion**. |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | unset | Comma-separated view sets exempt from filtering entirely; an operator-responsibility allowlist. |
 | `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Lets a non-admin mint their own ingestion key and manage grants. See [Self-service mint](#self-service-ingestion-key-mint). |
@@ -29,24 +29,18 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 ## Audiences and Grants
 
 An audience is an opaque label on data — `public`, `team-alpha`,
-`payments-svc` — not an encoding of any principal's identity. Who may use it is
-separate configuration:
+`payments-svc` — not an encoding of any principal's identity. Who may use it
+is separate configuration: rows in the [`audience_grants`](#the-grant-store)
+table, each an `(audience, axis, selector)` triple.
 
-```json
-{
-  "public":       ["*"],
-  "team-alpha":   ["group:eng", "user:alice@example.com"],
-  "alice-laptop": {
-    "read": ["user:alice@example.com", "group:leads"],
-    "mint": ["user:alice@example.com"]
-  }
-}
+```bash
+micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
 ```
 
-Keys are audience names: `[A-Za-z0-9_-]{1,255}`, case-sensitive, no
-normalization. A value is either a bare array (read-only shorthand) or an
-object with separate `"read"`/`"mint"` lists. An omitted `"mint"` list is
-empty, never derived from `"read"`.
+Audience names are `[A-Za-z0-9_-]{1,255}`, case-sensitive, with no
+normalization. The two axes are independent: `read` grants visibility, `mint`
+grants authority to issue an ingestion key bound to the audience. Neither
+implies the other.
 
 | Selector | Matches |
 |---|---|
@@ -58,10 +52,8 @@ empty, never derived from `"read"`.
   named like one — an API key named `team-alpha` does not read `team-alpha`. A
   personal audience is an ordinary audience with an ordinary grant.
 - **Re-sharing is a grants edit, never a restamp.** A stamped audience value
-  never changes; widening `team-alpha`'s `"read"` list applies to
+  never changes; adding a `read` selector for `team-alpha` applies to
   already-ingested data immediately, bounded by the cache TTL.
-- **A malformed map fails startup**: unknown-shaped key, unrecognized selector
-  prefix, or a duplicate JSON key for one audience.
 - Users see their own grants, and share/mint, from the Audience Access page
   (`/audiences`, open to every authenticated user — see
   [`web-app.md`](web-app.md#audience-access)) or via
@@ -71,8 +63,7 @@ empty, never derived from `"read"`.
 
 `public` has no built-in read grant. A fresh deployment's DB grant store ships
 with `('public', 'read', '*')` inserted, which is the whole of why it is
-universally readable; delete the row and it stops being. Writing `{"public":
-["*"]}` in the env map adds nothing on top.
+universally readable; delete the row and it stops being.
 
 A caller with no identity of its own — an API key, or an OIDC token with no
 `email` claim — matches that `*` selector like any other principal.
@@ -81,32 +72,59 @@ is what puts such a caller's data under that same label.
 
 ### Worked profiles
 
+**Open** — everyone reads everything. Nothing to configure: the default
+audience is `public` and its seeded `('public', 'read', '*')` row covers it.
+
+**Privacy** — a team's data stays inside the team. Point the default at a label
+nobody is granted, so anything that omits an audience is invisible rather than
+published, and name the audience explicitly on every key you mint:
+
 ```bash
-# Open: everyone reads everything. No grant map needed; the default is public.
-
-# Privacy: point the default at a label nobody is granted, so anything that
-# omits an audience is invisible rather than published, and name the audience
-# explicitly on every key you mint.
-export MICROMEGAS_AUDIENCE_GRANTS='{"team-alpha": ["group:eng"]}'
 export MICROMEGAS_DEFAULT_AUDIENCE=unassigned
+micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
+```
 
-# Personal audience with mint authority (read is a separate grant):
+**Personal audience** with mint authority (`read` is a separate grant):
+
+```bash
 micromegas-grants --url https://analytics.example.com create alice-laptop mint user:alice@example.com
 micromegas-grants --url https://analytics.example.com create alice-laptop read user:alice@example.com
 ```
 
-!!! warning "Env-map audiences are invisible to the lazy claim"
-    The self-service claim's existence check reads only the DB
-    (`audience_grants`, `ingestion_api_keys`), never the env map. Before
-    enabling `MICROMEGAS_SELF_SERVICE_MINT`, create a placeholder DB row for
-    every audience that exists only in `MICROMEGAS_AUDIENCE_GRANTS`, plus a
-    custom `MICROMEGAS_DEFAULT_AUDIENCE` — nothing seeds these, and a
-    non-admin could otherwise claim exclusive rights over the name. Any axis,
-    any selector; prefer an identity selector over `'*'`.
+Set a custom `MICROMEGAS_DEFAULT_AUDIENCE` and it needs a grant row of its own
+before `MICROMEGAS_SELF_SERVICE_MINT` goes on — nothing seeds one, and a
+non-admin could otherwise claim the name (see
+[self-service mint](#self-service-ingestion-key-mint)).
 
-    ```bash
-    micromegas-grants --url https://analytics.example.com create team-alpha read 'group:eng'
-    ```
+### Deprecated: the env grant map {#deprecated-the-env-grant-map}
+
+`MICROMEGAS_AUDIENCE_GRANTS` holds the same model as a JSON object keyed by
+audience name — a bare array as read-only shorthand, or `"read"`/`"mint"` lists:
+
+```json
+{
+  "team-alpha":   ["group:eng"],
+  "alice-laptop": { "read": ["user:alice@example.com"], "mint": ["user:alice@example.com"] }
+}
+```
+
+It is still read, and its `read` selectors are still unioned with the store, so
+an existing deployment keeps working. Don't add to it — migrate each entry to a
+grant row (`micromegas-grants create <audience> <axis> <selector>`) and unset
+the variable. It has three sharp edges the store does not:
+
+- **`mint` selectors are inert.** Mint authorization is a point query against
+  `audience_grants`; the env map is never consulted for it.
+- **Its audiences are invisible to the lazy claim.** The claim's existence
+  check reads only `audience_grants` and `ingestion_api_keys`, so a name that
+  exists only in the env map is claimable out from under you once
+  `MICROMEGAS_SELF_SERVICE_MINT` is on.
+- **A malformed map fails startup**: an unknown-shaped key, an unrecognized
+  selector prefix, or a duplicate JSON key for one audience.
+
+Resolution is per role, read once at startup: FlightSQL reads
+`MICROMEGAS_AUDIENCE_GRANTS`; the monolith prefers
+`MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` and falls back to it.
 
 ## Audience stamping {#audience-stamping}
 
@@ -252,11 +270,10 @@ for the CLI reference and [`api-keys.md`](api-keys.md) for the mint route's
 error shapes (`FORBIDDEN`, `UNAVAILABLE`, `UNAUTHENTICATED`,
 `CLAIM_CONTENDED`).
 
-## DB-backed audience grants
+## The grant store {#the-grant-store}
 
-The env map resolves once at startup, so a new per-user grant would mean an env
-edit and a restart. The `audience_grants` table is the same model over HTTP,
-without a redeploy:
+Grants live in the `audience_grants` Postgres table, managed over HTTP with no
+redeploy:
 
 ```sql
 CREATE TABLE audience_grants (
@@ -272,10 +289,10 @@ CREATE TABLE audience_grants (
 );
 ```
 
-**Additive, never a replacement.** Each flight-sql process — standalone, or the
-monolith's role — holds a whole-table snapshot unioned with the env map. On the
-**read** axis, env map, store, or both grant identical access: no precedence,
-and no forced migration off the env map. The **mint** axis is DB-only.
+Each flight-sql process — standalone, or the monolith's role — holds one
+whole-table snapshot, unioned on the `read` axis with the [deprecated env
+map](#deprecated-the-env-grant-map) when that is still set; a selector present
+in either source grants the same access, with no precedence to reason about.
 `analytics-web-srv` is the write surface only; it caches nothing.
 
 The table's `CHECK` constraints are re-validated in Rust on every load, so a row

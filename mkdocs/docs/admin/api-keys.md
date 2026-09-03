@@ -186,22 +186,19 @@ equivalent is a per-key `read_audiences` grant, in the opposite direction
 
 An audience is an opaque label, not a principal encoding — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. Who may read or mint into it is
-separate, editable configuration: the `{prefix}_AUDIENCE_GRANTS` env map,
-unioned with the DB-backed `audience_grants` table
+separate, editable configuration: rows in the `audience_grants` table
 (`POST`/`GET`/`DELETE {base_path}/api/audience-grants`, or the
-`micromegas-grants` CLI) on the read axis; `audience_grants` alone on the
-mint axis, since self-service mint reads mint grants with a per-request point
-query, never a cached env-map union. See [Audiences and
-Grants](authorization.md#audiences-and-grants) for the full model. A fresh
-deployment ships with a seeded `('public', 'read', '*')` DB row, which makes
-every authenticated principal able to read `public` with no further grant;
-delete that row (or the equivalent env-map entry) to change that.
+`micromegas-grants` CLI). The deprecated `MICROMEGAS_AUDIENCE_GRANTS` env map
+is still unioned in on the read axis where it is set, but never on the mint
+axis. See [Audiences and Grants](authorization.md#audiences-and-grants) for the
+full model. A fresh deployment ships with a seeded `('public', 'read', '*')`
+row, which makes every authenticated principal able to read `public` with no
+further grant; delete that row to change it.
 
 **The binding is immutable by design.** Once a key is minted or imported with
 an audience, that audience never changes for that key. Re-sharing
-already-ingested data with a wider audience is a *grants* edit (add a
-selector to the audience's `{prefix}_AUDIENCE_GRANTS` entry), never a
-restamp.
+already-ingested data with a wider audience is a *grants* edit (add a `read`
+selector for that audience), never a restamp.
 
 **A request that names no audience gets the deployment default**
 (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value a
@@ -323,8 +320,7 @@ a browser" exposure mint already avoids.
 **Audience Access** (`/audiences`) is the self-service counterpart of the
 ingestion-key mint flow — it drives the mint route's non-admin path
 (claim-and-mint) from a browser dialog, plus the audience-grant read/write
-routes covered in [Authorization → DB-backed audience
-grants](authorization.md#db-backed-audience-grants). See
+routes covered in [Authorization → the grant store](authorization.md#the-grant-store). See
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
 **`created_by`/`revoked_by` always reflect the acting admin's own OIDC
