@@ -2,9 +2,12 @@
 //! (`rust/auth/src/policy.rs`, covered by `rust/auth/tests/policy_tests.rs`).
 //!
 //! Every test here mutates process-wide env vars, so all are `#[serial]` with an `EnvGuard` that
-//! restores them on drop, the same pattern as `rust/auth/tests/default_provider_tests.rs`. This
-//! file's tests are the only ones in the repo that touch `MICROMEGAS_PUBLIC_VIEW_SETS` and
-//! `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` (checked via grep), so `EnvGuard` clears both.
+//! restores them on drop, the same pattern as `rust/auth/tests/default_provider_tests.rs`. Within
+//! this crate, this file's tests are the only ones that touch `MICROMEGAS_PUBLIC_VIEW_SETS` and
+//! `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` (checked via grep), so `EnvGuard` clears both. The
+//! `rust/public` crate has its own tests that touch these vars too
+//! (`flight_sql_server.rs::mod tests`, `tests/isolation_config_fail_fast_tests.rs`), but those run
+//! in their own processes, so they can't interleave with this crate's `#[serial]` tests.
 
 #![cfg(test)]
 

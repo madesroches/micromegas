@@ -101,7 +101,7 @@ impl CallerContext {
 }
 
 /// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
-/// (the row-level filter). Per-service, resolved once at server startup from environment variables -- see
+/// (the row-level filter). Resolved once at server startup from environment variables -- see
 /// [`IsolationConfig::from_env`].
 ///
 /// `#[derive(Default)]`: `public_view_sets` is the only field, and its empty-by-default matches

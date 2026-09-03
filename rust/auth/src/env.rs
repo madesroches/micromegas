@@ -1,6 +1,8 @@
 //! Shared prefixed-env-var resolution, used by every `{prefix}_*`-with-fallback knob in this
 //! crate (`{prefix}_API_KEYS`, `{prefix}_OIDC_CONFIG`, `{prefix}_AUDIENCE_GRANTS`,
-//! `{prefix}_DEFAULT_AUDIENCE`).
+//! `{prefix}_DEFAULT_AUDIENCE`), and the three surviving `{prefix}_API_KEY_*CACHE*` knobs
+//! (`{prefix}_API_KEY_CACHE_SIZE`, `{prefix}_API_KEY_UNKNOWN_CACHE_TTL_SECONDS`,
+//! `{prefix}_API_KEY_UNKNOWN_CACHE_SIZE`).
 
 /// Resolves `{prefix}_{suffix}`, falling back to unprefixed `MICROMEGAS_{suffix}` when the
 /// prefixed name is unset, or always when `prefix` is empty.

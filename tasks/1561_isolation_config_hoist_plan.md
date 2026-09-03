@@ -197,8 +197,11 @@ reducing it to a duplicate of the unit case. Clearing them is what makes reachin
 
 `python3 local_test_env/ai_scripts/start_services.py`, then again with `--monolith`, with
 `MICROMEGAS_PUBLIC_VIEW_SETS=log_entries` exported. Both should come up and
-`micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` should return rows — the one
-check that the monolith still reaches `from_env` after step 5 deletes its own resolution. Both
-default to `--disable-auth`; reaching `with_default_auth` or the injected-provider branch needs
-`flight-sql-srv` without `--disable-auth` plus `MICROMEGAS_API_KEYS`, or `--monolith` with an OIDC
-config set.
+`micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` should return rows — a smoke
+check that the monolith still boots after step 5 deletes its own resolution. Both default to
+`--disable-auth`, under which `ReadScope::All` makes the allowlist inert everywhere it's consumed,
+so this doesn't distinguish whether `from_env` was actually reached; that path is covered instead
+by the automated `rust/public/tests/isolation_config_fail_fast_tests.rs` and
+`flight_sql_server.rs::tests::env_set_is_parsed`. Reaching `with_default_auth` or the
+injected-provider branch manually needs `flight-sql-srv` without `--disable-auth` plus
+`MICROMEGAS_API_KEYS`, or `--monolith` with an OIDC config set.
