@@ -7,8 +7,8 @@
 Three removals. `MICROMEGAS_PUBLIC_VIEW_SETS` is read on only one of `FlightSqlServerBuilder`'s
 three auth branches, so an embedder that injects its own auth provider gets no allowlist and no
 startup error — resolve it once, unconditionally. The knob also has a per-service
-`MICROMEGAS_ANALYTICS_` form that nothing needs — drop it. And the `MICROMEGAS_ADMINS`-family
-startup refusal has served its purpose — delete it.
+`MICROMEGAS_ANALYTICS_` form that nothing needs — drop it. And every removed-env-var startup
+refusal in the tree is a v0.30.0 upgrade shim one release old — delete them all.
 
 ## Current State
 
@@ -37,28 +37,32 @@ The inert-knob bug is reachable only by an out-of-repo embedder: the monolith co
 value with auth on, and with `--disable-auth` the allowlist is a no-op anyway (`ReadScope::All`
 makes `OwnershipRewrite` a no-op).
 
-`reject_removed_admin_vars` (`rust/auth/src/env.rs:36`) refuses startup when any of
-`MICROMEGAS_ADMINS`, `MICROMEGAS_ANALYTICS_ADMINS`, `MICROMEGAS_INGESTION_ADMINS` is set. Called
-from `ProviderBuilder::compose` (`rust/auth/src/default_provider.rs:87`) and `WebServerConfig`
-(`rust/analytics-web-srv/src/web_server.rs:79`).
+Three sites refuse startup on a removed variable, 11 variables between them, all removed in
+v0.30.0:
+
+| Site | Variables | Replacement |
+|---|---|---|
+| `reject_removed_admin_vars`, `rust/auth/src/env.rs:36` | `MICROMEGAS_ADMINS`, `MICROMEGAS_ANALYTICS_ADMINS`, `MICROMEGAS_INGESTION_ADMINS` | the `admins` group |
+| `reject_removed_cache_ttl_vars`, `rust/auth/src/env.rs:71` | `MICROMEGAS_{,ANALYTICS_,INGESTION_}API_KEY_CACHE_TTL_SECONDS`, `MICROMEGAS_{,ANALYTICS_,INGESTION_}AUDIENCE_GRANT_CACHE_TTL_SECONDS` | `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` |
+| `IsolationConfig::from_env`, `read_scope.rs:180` | `MICROMEGAS_UNSTAMPED_AUDIENCE`, `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` | `MICROMEGAS_DEFAULT_AUDIENCE` |
+
+Both `env.rs` functions are called from `ProviderBuilder::compose`
+(`rust/auth/src/default_provider.rs:87-88`) and `WebServerConfig`
+(`rust/analytics-web-srv/src/web_server.rs:79-80`).
 
 ## Design
 
 ### One variable
 
 `IsolationConfig::from_env` loses its `prefix` parameter and reads `MICROMEGAS_PUBLIC_VIEW_SETS`
-only; `resolved_var` has no remaining caller and is deleted. The `UNSTAMPED_AUDIENCE` refusal
-lists both spellings explicitly so dropping `resolved_var` doesn't shrink its reach:
+only. With the `UNSTAMPED_AUDIENCE` refusal gone too (below), `resolved_var` has no caller and is
+deleted, and the whole function is the parse:
 
 ```rust
 pub fn from_env() -> anyhow::Result<Self> {
-    for var in ["MICROMEGAS_UNSTAMPED_AUDIENCE", "MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE"] {
-        if std::env::var(var).is_ok() {
-            anyhow::bail!(/* existing MICROMEGAS_DEFAULT_AUDIENCE text, {var} interpolated */);
-        }
-    }
-    let public_view_sets = parse_comma_separated_list("MICROMEGAS_PUBLIC_VIEW_SETS")?;
-    Ok(Self { public_view_sets })
+    Ok(Self {
+        public_view_sets: parse_comma_separated_list("MICROMEGAS_PUBLIC_VIEW_SETS")?,
+    })
 }
 ```
 
@@ -89,21 +93,26 @@ Then: `AuthAndDefaults` (`:44`) drops its third element; the three branch tails 
 `IsolationConfig` import (`:26`) are deleted — it takes the builder's resolution like any other
 embedder.
 
-### Drop the `MICROMEGAS_ADMINS`-family refusal
+### Drop every removed-var refusal
 
-Delete `reject_removed_admin_vars`, both call sites (plus the import and doc-comment mention at
-`default_provider.rs:82`), and its test
-`default_provider_tests.rs::removed_admins_var_set_is_rejected_with_no_db_needed` with the three
-`*_ADMINS_VAR` constants and their `EnvGuard` entries (`:30-32`). `reject_removed_cache_ttl_vars`,
-beside it in the same file and called from the same two sites, stays.
+Delete `reject_removed_admin_vars` and `reject_removed_cache_ttl_vars` from `rust/auth/src/env.rs`,
+leaving only `resolve_prefixed_var` (whose module doc comment lists `{prefix}_ADMINS` among the
+knobs it serves and needs updating). Remove both calls and the import at
+`default_provider.rs:11,87-88` and the doc-comment mention at `:82`, both calls at
+`web_server.rs:79-80`, and the two tests
+`default_provider_tests.rs::removed_{admins,api_key_cache_ttl}_var_set_is_rejected_with_no_db_needed`
+with the three `*_ADMINS_VAR` constants and their `EnvGuard` entries (`:30-32`).
 
-`mkdocs/docs/admin/groups.md:171-176` promises the refusal; it becomes a plain instruction to
-unset the vars.
+Delete the `UNSTAMPED_AUDIENCE` arm of `IsolationConfig::from_env` (`read_scope.rs:180-188`) and
+the three tests covering it in `ownership_rewrite_config_tests.rs`.
+
+`mkdocs/docs/admin/groups.md:171-176` is the only page promising a refusal; it becomes a plain
+instruction to unset the vars.
 
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/read_scope.rs`: drop `from_env`'s `prefix` parameter, delete
-   `resolved_var`, list both `UNSTAMPED_AUDIENCE` spellings, update the doc comments.
+   `resolved_var` and the `UNSTAMPED_AUDIENCE` refusal, update the doc comments.
 2. `rust/public/src/servers/flight_sql_server.rs`: add `resolve_isolation_config` and call it at
    the top of `build_and_serve`.
 3. Same file: shrink `AuthAndDefaults`, drop the `IsolationConfig` from the three branch tails,
@@ -112,8 +121,10 @@ unset the vars.
 5. `rust/monolith/src/main.rs`: delete `analytics_isolation_config`, the `with_isolation_config`
    call, and the import.
 6. `rust/auth/src/env.rs` + `default_provider.rs` + `analytics-web-srv/src/web_server.rs` +
-   `default_provider_tests.rs`: delete `reject_removed_admin_vars` and everything referencing it.
-7. Rewrite `rust/analytics/tests/ownership_rewrite_config_tests.rs` for the prefix-free signature.
+   `default_provider_tests.rs`: delete both `reject_removed_*` functions and everything
+   referencing them; update `env.rs`'s module doc comment.
+7. Rewrite `rust/analytics/tests/ownership_rewrite_config_tests.rs` for the prefix-free signature
+   and drop its three `UNSTAMPED_AUDIENCE` tests.
 8. Add `rust/public/tests/isolation_config_fail_fast_tests.rs` and its `[[test]]` entry in
    `rust/public/Cargo.toml`.
 9. `mkdocs/docs/admin/monolith.md:51`: rename to `MICROMEGAS_PUBLIC_VIEW_SETS`, drop the
@@ -143,7 +154,7 @@ unset the vars.
 - Skip the env read when `with_isolation_config` was set — same reasoning as the injected-provider
   `ReadPolicy` default at `:293`.
 - No startup log of the resolved allowlist, and no refusal for the dropped
-  `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS`.
+  `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` — consistent with removing the other 11.
 
 ## Documentation
 
@@ -162,18 +173,16 @@ dev-dependency (`Cargo.toml:92`). The `servers` module is behind the non-default
 so `cargo test -p micromegas` alone builds zero of these silently — use `cargo test` from `rust/`,
 or `-p micromegas --features server`.
 
-Each test is `#[serial]` with an `EnvGuard` clearing `MICROMEGAS_PUBLIC_VIEW_SETS` and both
-`UNSTAMPED_AUDIENCE` spellings (`from_env` bails on those, so an ambient value would fail every
-case for the wrong reason). Cases: env set → parsed; env unset → empty; env malformed → `Err`;
+Each test is `#[serial]` with an `EnvGuard` clearing `MICROMEGAS_PUBLIC_VIEW_SETS`. Cases: env set → parsed; env unset → empty; env malformed → `Err`;
 explicit config → wins, with the env set to a different and then a malformed value, pinning that
 it isn't read on that path.
 
 **`ownership_rewrite_config_tests.rs`**, rewritten for the prefix-free signature. The four
 `PUBLIC_VIEW_SETS` parsing tests and `unset_vars_resolve_to_default` carry over against
-`from_env()`. The three prefix-resolution tests collapse to two, one per `UNSTAMPED_AUDIENCE`
-spelling. Add one pinning that `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` is *not* read — otherwise
-nothing distinguishes the intended drop from an accidental one. Its module doc comment claims
-these vars are touched by no other test in the repo, which the new `rust/public` tests falsify.
+`from_env()`; the three `UNSTAMPED_AUDIENCE` tests go with the refusal. Add one pinning that
+`MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` is *not* read — otherwise nothing distinguishes the
+intended drop from an accidental one. Its module doc comment claims these vars are touched by no
+other test in the repo, which the new `rust/public` tests falsify.
 
 **`rust/public/tests/isolation_config_fail_fast_tests.rs`**: one test asserting
 `build_and_serve()` returns the "comma-separated, not a JSON array" error with
