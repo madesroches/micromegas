@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Dependencies:** Bump `fflate` (transitive, via `three-stdlib` and `@types/three`) to `^0.6.11` and `~0.8.3` via scoped yarn `resolutions` in `analytics-web-app` to resolve Dependabot alerts 473 and 474 (GHSA-px8p-9vwx-vf98 — `unzipSync` infinite loop on malformed ZIP64 archives).
 * **Dependencies:** Bump `fast-uri` (transitive, via `ajv`) to `^3.1.6` via yarn `resolutions` at the repo root to resolve Dependabot alerts 469, 470, 471, 472 (GHSA-jqff-g426-hqxp, GHSA-fph4-wmhf-6fwf, GHSA-f65p-4m7j-42xc, GHSA-5jgf-p345-68v8 — host confusion and SSRF via IDN/IPv6/percent-decoding normalization bugs).
 
 ## v0.30.0 - 2026-09-02
