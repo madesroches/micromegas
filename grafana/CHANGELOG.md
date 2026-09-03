@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.30.0 (2026-09-02)
+
+Version sync release. Security fixes from Dependabot dependency bumps: `github.com/apache/thrift` 0.24.0 (GHSA-8wv5-x4w7-5gww) and `google.golang.org/grpc` 1.83.1 (GHSA-vp52-pcj8-j9qc) (#1555).
+
 ## 0.29.0 (2026-08-12)
 
 Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence.

@@ -77,6 +77,21 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.30.0 (September 2026)
+* Audience-Based Access Control end to end: `OwnershipRewrite` injects an audience predicate into every materialized-view query plan, `AudienceGuard` covers the arg-addressed surfaces it cannot reach (`process_spans`, `perfetto_trace_chunks`, `parse_block`, `get_payload`, `list_partitions`), and `view_instance(...)` is audience-checked before any JIT materialization work
+* Server-side audience stamping: ingestion stamps `micromegas.audience` from the authenticated credential instead of trusting the client, reserved `micromegas.*` payload properties are dropped, OTLP-derived `process_id`/`block_id` are audience-scoped, and `processes`/`streams`/`blocks` each carry their own per-row `audience` column
+* DB-backed grant store (`audience_grants`) with `list_audience_grants()`, `/api/audience-grants` routes, and non-admin self-service ingestion-key minting gated on a `mint` grant
+* Local groups in Postgres: `groups`/`group_members` tables, transitive membership resolution, a reserved `admins` group replacing the `MICROMEGAS_ADMINS` env-var family, a Groups admin page, and a `micromegas-groups` CLI
+* **Operator action required**: `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`/`MICROMEGAS_INGESTION_ADMINS` are refused at startup; the IdP `groups` claim is no longer read; the three auth cache TTL knobs collapse onto `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`; the six global-instance views bump their file-schema hash and need partition regeneration
+* Merge-path rework: every non-ordering-declaring view now merges through one reader per source file group, making merged row order deterministic and restoring row-group pruning for time-filtered queries
+* Admin-managed query deny list: Postgres-backed, replica-cached rules evaluated as DataFusion boolean expressions (including a normalized `sql_hash`) before planning
+* New `micromegas-redis-exporter` service and Docker image; tuned jemalloc `malloc_conf` with background purging on all eight service binaries; `MICROMEGAS_PROCESS_PROPERTIES` deployment tags on every micromegas process
+* JSONB completion: `jsonb_entries`/`jsonb_elements`/`jsonb_path_elements` scalar UDFs; `jsonb_object_keys` returns a plain `List<Utf8>`
+* `thread_spans` cross-segment `declared scan ordering violated` fix; density-batched JIT partition generation; `retire_partition_by_metadata()` now requires a `file_schema_hash` argument
+* Web app: automatic per-row bar charts for `Histogram` columns, a markdown-cell Run control, and role-filtered `/admin` pages for every authenticated user
+* Unreal external-profiler bridge and runtime global-context console commands
+* `postcss-selector-parser`, `qs`, `@humanfs/node`, `browserslist`, `thrift`, `grpc` security bumps
+
 ### v0.29.0 (August 2026)
 * DB-backed API key store: `ingestion_api_keys`/`analytics_api_keys` tables holding only a SHA-256 hash plus a full mint/revoke audit trail, with mint/list/revoke/import HTTP routes hosted entirely on `analytics-web-srv`
 * FlightSQL query audit hardening: failures now classify into distinct gRPC status codes instead of always `Internal`, and the audit log gains per-query peak memory/spill attribution, client attribution headers, and originating notebook/cell
@@ -105,26 +120,6 @@ Building from source or contributing code? See the [Build Guide](https://microme
 * Supply-chain CI gates: `cargo audit` and `cargo deny` run on every Rust CI build
 * `telemetry-admin` maintenance daemon renamed to `telemetry-maintenance-srv`
 * DataFusion 54.0; internal proc-macros migrated `syn` 1→2; `opentelemetry-proto` 0.32 (GHSA-w9wp-h8wv-79jx); Dependabot fixes
-
-### v0.26.0 (June 2026)
-* `micromegas-monolith`: single-process deployment running all roles (`ingestion`, `analytics`, `web`, `admin`) in one binary — simplifies self-hosted and single-machine deployments
-* Image streams: instrumented apps can send screenshots as telemetry via `send_image()`; queryable via the `images` SQL table; Unreal `telemetry.screenshot` console command with `telemetry.images.enable` CVar
-* `#[micromegas_main]` extended with optional arguments (`ctrlc_handling`, `local_sink_enabled`, `local_sink_max_level`, `install_log_capture`, `system_metrics`, `telemetry_url`, `api_key`) for inline `TelemetryGuardBuilder` configuration
-* Resilient Unreal telemetry sink: `FHttpRetrySystem` with exponential backoff, four priority queues (Metadata/Logs/Metrics/Traces), idle-aware spike sampling, `TimeSinceLastInput` metric
-* ARM64 cross-compilation support in all production Dockerfiles; `build_docker_images.py --arm64` flag
-* Deep `/ready` readiness probe for all services (PostgreSQL pool + blob storage verification, 503 on unhealthy)
-* Graceful SIGTERM shutdown for all services with configurable drain period
-* jemalloc global allocator for all production service binaries
-* Image notebook cell: carousel viewer for images stored in the `images` view
-* Chart threshold indicators: reference lines, per-row colors, series color assignment
-* Map cell: orthographic camera mode, camera-relative keyboard controls, hover tooltip preview for markers
-* Swimlane cell: optional color and label columns
-* Log cell: resizable columns, one-click copy icon
-* OTLP/JSON content-type support (`application/json`) on all three OTLP/HTTP routes
-* `make_histogram` accepts runtime scalar bounds (CTEs, subqueries, CROSS JOIN columns)
-* `format_value(value, unit)` template function for adaptive unit formatting in detail templates
-* Batched expiry pipeline: bounded memory and transaction sizes for partition retirement, block deletion, and temporary-file cleanup; `DELETE…RETURNING` for atomic operation
-* DataFusion 53.1; react-router 6.30.4 (CVE), esbuild 0.28.1, dompurify 3.4.11, undici ≥6.27.0 security updates
 
 For the full history, see [CHANGELOG.md](./CHANGELOG.md).
 
