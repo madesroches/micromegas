@@ -57,8 +57,7 @@ Existing coverage, all of which stays valid: `rust/analytics/tests/ownership_rew
 
 ### One resolution site
 
-A private free function beside the builder, so the resolution is reachable from a unit test
-without standing up `build_and_serve`'s lakehouse:
+A private free function beside the builder:
 
 ```rust
 /// The builder's single `IsolationConfig` resolution. Independent of which auth provider is
@@ -80,9 +79,7 @@ fn resolve_isolation_config(
 }
 ```
 
-Called at the very top of `build_and_serve`, before `LakehouseContext::from_env()`. Placing it
-there rather than merely before the auth branch buys the earliest possible fail-fast: a typo in
-the variable fails startup before any Postgres connection or object-store handshake.
+Called at the very top of `build_and_serve`, before `LakehouseContext::from_env()`.
 `FlightSqlServerBuilder` has no `Drop` impl and `build_and_serve` already moves fields out of
 `self` one at a time, so taking `self.isolation_config` first is a normal partial move.
 
@@ -115,19 +112,12 @@ let analytics_isolation_config = if roles.flightsql {
 };
 ```
 
-`analytics_read_policy`'s own `!args.disable_auth` gate is untouched — that one genuinely needs
-the DB grant store and matches the builder's per-branch `ReadPolicy` default.
-
 ### Behaviour changes
 
 1. **Visibility widens on upgrade** for a deployment on the injected-provider path that already
    has `MICROMEGAS_PUBLIC_VIEW_SETS` set: the listed view sets stop being audience-filtered. No
    in-repo binary is affected — only an out-of-repo embedder that never called
    `with_isolation_config`.
-   Normally something this project avoids, but the variable's only documented meaning is "honour
-   this" — nobody can be relying on it being ignored without also believing it is in effect — and
-   the alternative is leaving the bug in place. Call it out explicitly so an operator can audit
-   the value before upgrading.
 2. **A malformed value now fails startup** on the injected-provider and auth-disabled paths
    instead of being ignored. This includes the removed-knob refusal: a `--disable-auth`
    `flight-sql-srv` or monolith with `MICROMEGAS_UNSTAMPED_AUDIENCE` still set now refuses to
@@ -232,13 +222,17 @@ What is worth one pass by hand is the fail-fast that this change newly turns on 
 moved. Not automated because both require standing up a real lake and object store; breakage
 would be immediately obvious on the next run rather than silent.
 
-1. Malformed value now refuses to start, where it previously came up:
+1. Malformed value now refuses to start, where it previously came up. Unlike step 2, the
+   monolith's isolation-config check fires *after* it connects to the data lake
+   (`rust/monolith/src/main.rs:184-196` builds `LakehouseContext` before the check at `:299`), so
+   run this with a local Postgres and object store already up (e.g. after
+   `python3 local_test_env/ai_scripts/start_services.py`):
    ```
    cd rust && MICROMEGAS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin micromegas-monolith -- \
      --roles all --listen-endpoint-http 127.0.0.1:9000 --disable-auth
    ```
    Expected: startup fails with the "comma-separated, not a JSON array like MICROMEGAS_API_KEYS"
-   error.
+   error, after the lake connection succeeds.
 2. Same check on the split binary, which takes the builder's own auth-disabled branch and does go
    through `build_and_serve`:
    `MICROMEGAS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin flight-sql-srv -- --disable-auth`.
