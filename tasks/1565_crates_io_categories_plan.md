@@ -183,19 +183,22 @@ Cargo's own manifest resolution can answer.
 2. From `rust/datafusion-wasm/`, run the same command — it is a separate workspace, so step 1 does
    not cover it. Expect `["wasm", "database-implementations", "development-tools::profiling"]`.
 
-3. From `rust/`, confirm the packaged manifest flattens the inherited value (no `.workspace = true`
-   reaches the registry, and the slugs pass Cargo's own manifest validation). `cargo package`
-   unpacks the tarball only during its verify step, so read the manifest out of the `.crate` file
-   directly instead of skipping verification:
+3. Not automated because Cargo carries no category-slug list of its own — only crates.io validates
+   slugs, and only at publish time. Confirm every slug used in the manifests is currently valid
+   there (the crates.io API requires a descriptive `User-Agent` header, and `/api/v1/categories`
+   needs `?per_page=100` to return all top-level slugs):
 
    ```
-   cargo package -p micromegas-perfetto --allow-dirty
-   tar -xzOf target/package/micromegas-perfetto-0.31.0.crate micromegas-perfetto-0.31.0/Cargo.toml \
-     | grep -A5 '^categories'
+   curl -sS -A "micromegas-dev (madesroches@gmail.com)" \
+     "https://crates.io/api/v1/categories?per_page=100" | grep -o '"slug":"[^"]*"'
+   curl -sS -A "micromegas-dev (madesroches@gmail.com)" \
+     "https://crates.io/api/v1/categories/development-tools" | grep -o '"slug":"[^"]*"'
    ```
 
-4. `cargo fmt --check` and `cargo clippy --workspace -- -D warnings` from `rust/` — a malformed
-   manifest fails these before it reaches a publish.
+   Expect `database-implementations`, `authentication`, `caching`, `encoding`, and `wasm` among the
+   first command's output, and `development-tools::profiling`,
+   `development-tools::debugging`, and `development-tools::procedural-macro-helpers` among the
+   second's.
 
 ## Open Questions
 
