@@ -62,9 +62,8 @@ telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
 ### Schema migration and admin seeding
 
 This is the process (alongside the monolith) that runs the data-lake schema
-migration, including v10, which adds the `groups`/`group_members` tables and
-seeds the reserved `admins` group — see [Groups](groups.md) for the seeding
-rules and the upgrade path.
+migration, and that seeds the reserved `admins` group — see
+[Groups](groups.md) for the seeding rules.
 
 ### Key management
 
@@ -81,8 +80,9 @@ A process, stream, and block registered under a credential that carries a write 
 each stamped with their own `audience` **column** — server-written from that
 credential, never trusted from the client payload. A block's or a stream's own stamp is the
 credential that wrote *that* row, never derived from the `process_id`/`stream_id` it points at.
-This is what makes the analytics-side audience filter ([Authentication](authentication.md)) a
-real security boundary instead of a client-asserted label.
+This is what makes the analytics-side audience filter
+([Authorization](authorization.md)) a real security boundary instead of a client-asserted
+label.
 
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process, stream, and block a key writes is stamped with that audience.
@@ -91,26 +91,11 @@ real security boundary instead of a client-asserted label.
 - **No auth provider configured** (`--disable-auth`): stamped with the deployment default too,
   for the same reason.
 
-Every row registered through this HTTP ingestion path is stamped: a credential with no bound
-audience resolves to `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) at the write edge and is
-stamped with it explicitly, exactly like any other audience — see
-[Authentication → The default audience](authentication.md#audience-stamping-and-the-default).
-There is still no startup backfill and no retro-stamping: a **pre-existing** row with a NULL
-`audience` column (registered before its ingestion binary reached schema v8) keeps that absence
-permanently, and is resolved to the same deployment default on the **read** side instead — so it
-is materialized and enforced under that label without anything being written back to it. Admin
-`bulk_ingest`/replication now hard-fails on a missing `audience` column rather than ever writing
-one with none, so an unstamped row can only be a genuinely pre-v8 one.
-
-!!! warning "Deploy order matters in a split deployment"
-    Schema v8 migrations only run from ingestion's (or the monolith's) startup path — FlightSQL
-    and maintenance never migrate the database. Upgrade and restart ingestion (or the monolith)
-    *before* flight-sql/maintenance: a v8 analytics or maintenance binary reading against a
-    pre-v8 database fails every query that touches the new `audience` columns with an "undefined
-    column" error, until ingestion has migrated it. A pre-v8 ingestion binary against an
-    already-migrated v8 database is fine — writes just leave the column NULL, which reads as the
-    deployment default. Also run `regenerate_partitions` over `log_stats` for the retention
-    window as part of this rollout, since its `GROUP BY` now includes `audience`.
+Every row registered through this path is stamped: a credential with no bound audience
+resolves to `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) at the write edge and is stamped
+with it explicitly, exactly like any other audience — see [Authorization → Audience
+stamping](authorization.md#audience-stamping). Admin `bulk_ingest`/replication hard-fails on a
+missing `audience` rather than writing a row with none.
 
 The reserved `micromegas.*` property namespace is server-written only: any `micromegas.*`
 property a client sends is dropped at ingestion and logged (`warn!`), naming the key. A client
@@ -121,8 +106,7 @@ Each audience gets its own OTLP id namespace, except the deployment default, whi
 un-salted namespace — so traffic with no bound audience always derives the same
 `process_id`/`stream_id`/`block_id`. Rotating a DB-backed ingestion key to a different audience
 splits a long-lived producer's history across two process ids, since the data now genuinely
-belongs to two audiences — see [Authentication → Audience stamping and the
-default](authentication.md#audience-stamping-and-the-default) for the full mechanism.
+belongs to two audiences — see [Authorization → Audience stamping](authorization.md#audience-stamping) for the full mechanism.
 
 ## Health and readiness
 

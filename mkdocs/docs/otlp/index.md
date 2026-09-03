@@ -105,7 +105,7 @@ either, since the two hashes share neither a namespace nor a joined string.
 A credential with no bound audience (an env-keyring key, OIDC, or no auth provider at all) resolves
 to the deployment default. When the resolved write audience is the default, `key` is hashed
 directly under `NS_OTEL_PROCESS_V1` with no per-audience salt. See
-[Authentication → Audience stamping and the default](../admin/authentication.md#audience-stamping-and-the-default)
+[Authorization → Audience stamping](../admin/authorization.md#audience-stamping)
 for what a write audience resolves to for each credential kind.
 
 The first time a `process_id` is observed, a row is inserted into `processes` with these mappings:

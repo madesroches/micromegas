@@ -19,7 +19,7 @@ Minting an ingestion key is not purely an admin operation: a non-admin caller
 with a matching `mint` grant — or naming a brand-new audience explicitly,
 which lazily claims it — can mint their own `ingestion_api_keys` row
 directly, once an operator turns on `MICROMEGAS_SELF_SERVICE_MINT` (off by
-default). See [Self-service mint](authentication.md#self-service-ingestion-key-mint)
+default). See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
 for the full mechanism; every other route (list/revoke/import, and the
 analytics-key table entirely) stays admin-only.
 
@@ -192,7 +192,7 @@ unioned with the DB-backed `audience_grants` table
 `micromegas-grants` CLI) on the read axis; `audience_grants` alone on the
 mint axis, since self-service mint reads mint grants with a per-request point
 query, never a cached env-map union. See [Audiences and
-Grants](authentication.md#audiences-and-grants) for the full model. A fresh
+Grants](authorization.md#audiences-and-grants) for the full model. A fresh
 deployment ships with a seeded `('public', 'read', '*')` DB row, which makes
 every authenticated principal able to read `public` with no further grant;
 delete that row (or the equivalent env-map entry) to change that.
@@ -206,8 +206,7 @@ restamp.
 **A request that names no audience gets the deployment default**
 (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) — the same value a
 credential with no bound audience is stamped with at ingestion write time
-(see [Audience stamping and the
-default](authentication.md#audience-stamping-and-the-default)). Name the
+(see [Audience stamping](authorization.md#audience-stamping)). Name the
 audience explicitly when minting a key for anything that isn't
 deployment-wide-public data, or set `MICROMEGAS_DEFAULT_AUDIENCE` to a label
 no principal is granted so an omission fails visibly at read time instead of
@@ -223,7 +222,7 @@ exposes this via a dedicated `--claim NAME` flag (distinct from `--audience`):
 (but does not enforce) a namespace derived from the caller's own email (e.g.
 `--claim alice-ci-runner` for `alice@example.com`); the mint route itself
 accepts any valid, unclaimed name from any authorized non-admin caller,
-prefixed or not. See [Self-service mint](authentication.md#self-service-ingestion-key-mint)
+prefixed or not. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
 for the full mechanism.
 
 **An admin minting into a brand-new audience is also claimed server-side**:
@@ -237,8 +236,8 @@ rows. An admin with no email is unaffected — no `user:` row can be formed.
 **Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
 bound audience of its own** — that keyring has no audience column — so its
 processes are stamped with the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
-(default `public`) explicitly. See [Authentication → Audience stamping and
-the default](authentication.md#audience-stamping-and-the-default).
+(default `public`) explicitly. See [Authorization → Audience
+stamping](authorization.md#audience-stamping).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly**
 (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
@@ -325,7 +324,7 @@ a browser" exposure mint already avoids.
 ingestion-key mint flow — it drives the mint route's non-admin path
 (claim-and-mint) from a browser dialog, plus the audience-grant read/write
 routes covered in [Authentication → DB-backed audience
-grants](authentication.md#db-backed-audience-grants). See
+grants](authorization.md#db-backed-audience-grants). See
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
 **`created_by`/`revoked_by` always reflect the acting admin's own OIDC

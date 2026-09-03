@@ -594,7 +594,7 @@ blocks = pa.table({
 ### `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — or by any authenticated caller when this deployment can never produce an admin principal at all (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin; not audience-filtered — an admin acts across every audience. See [Admin SQL Functions](../admin/functions-reference.md).
 
 Create materialized partitions for performance optimization:
 
@@ -615,7 +615,7 @@ client.materialize_partitions(
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — or by any authenticated caller when this deployment can never produce an admin principal at all (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin; not audience-filtered — an admin acts across every audience. See [Admin SQL Functions](../admin/functions-reference.md).
 
 Force-regenerate existing partition(s) directly from source data, bypassing the "already up to date" freshness check `materialize_partitions()` stops at. Useful for rebuilding a partition whose content is unchanged but whose internal row order needs to be refreshed (e.g. an existing merged `blocks` partition materialized before ordered merges were introduced, or a `SqlBatchView` such as `log_stats` whose live partitions predate it declaring a merge sort order):
 
@@ -642,7 +642,7 @@ For a `SqlBatchView`, the bucket size is dictated by the existing partition's bo
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin — or by any authenticated caller when this deployment can never produce an admin principal at all (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
+    Only callable by an authenticated admin; not audience-filtered — an admin acts across every audience. See [Admin SQL Functions](../admin/functions-reference.md).
 
 Remove materialized partitions to free up storage:
 
@@ -683,7 +683,7 @@ print(f"Total size: {incompatible['file_size'].sum() / (1024**3):.2f} GB")
 ### `retire_incompatible_partitions(client, view_set_name=None)`
 
 !!! note "Requires admin"
-    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin — or any authenticated caller when this deployment can never produce an admin principal at all (deployment-wide, not per-audience) — see [Admin SQL Functions](../admin/functions-reference.md).
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin; not audience-filtered. See [Admin SQL Functions](../admin/functions-reference.md).
 
 Retires partitions with incompatible schemas using metadata-based retirement (works for empty and non-empty partitions).
 
@@ -973,7 +973,7 @@ Creates and deletes DB-backed audience grants (`audience_grants` table) via
 `analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. These two write
 routes are not admin-only: a non-admin caller with a matching hold on the pair can share it too,
 once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
-[Authentication → DB-backed audience grants](../admin/authentication.md#db-backed-audience-grants)).
+[Authorization → DB-backed audience grants](../admin/authorization.md#db-backed-audience-grants)).
 
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
@@ -1045,7 +1045,7 @@ Mints a personal `ingestion_api_keys` key for the caller and prints the OTLP exp
 needed to send that caller's own telemetry to the deployment. Named for what it does from the
 user's point of view ("set up telemetry"), not the server-side term ("ingestion"). Requires
 self-service mint to be enabled on the target deployment (`MICROMEGAS_SELF_SERVICE_MINT`; see
-[Self-service mint](../admin/authentication.md#self-service-ingestion-key-mint))
+[Self-service mint](../admin/authorization.md#self-service-ingestion-key-mint))
 unless the caller is an admin.
 
 ```bash
