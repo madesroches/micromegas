@@ -10,7 +10,8 @@ no allowlist and no startup error — the knob is inert, and a malformed value i
 detected. Two changes, both removals: resolve the config at exactly one site in the builder,
 unconditional and ahead of anything expensive; and collapse the knob to a single unprefixed
 variable, dropping the per-service `MICROMEGAS_ANALYTICS_` form. Nothing about the allowlist
-varies by service or by auth branch, so neither dimension should exist.
+varies by service or by auth branch, so neither dimension should exist. A third removal rides
+along: the `MICROMEGAS_ADMINS`-family startup refusal, which has outlived its usefulness.
 
 ## Current State
 
@@ -62,26 +63,15 @@ both of which construct `IsolationConfig` directly and stay valid untouched.
 ### One variable
 
 `IsolationConfig::from_env` loses its `prefix` parameter and reads `MICROMEGAS_PUBLIC_VIEW_SETS`
-only. `resolved_var` has no remaining caller and is deleted with it.
+only. `resolved_var` has no remaining caller and is deleted with it. The prefixed
+`MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` form is simply no longer read.
 
-The three prefixed spellings that resolve today must be **refused at startup**, not silently
-ignored — the same posture `from_env` already takes for `UNSTAMPED_AUDIENCE`, and the same class
-of failure this plan exists to remove. `MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` is refused today
-and must keep being refused; `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` is honoured today and becomes
-a refusal naming the unprefixed variable as its replacement:
+The `UNSTAMPED_AUDIENCE` removed-knob refusal keeps both spellings. That check exists precisely to
+stop a stale value from being silently ignored, so dropping `resolved_var` must not quietly
+shrink its reach — the two names are now listed explicitly:
 
 ```rust
 pub fn from_env() -> anyhow::Result<Self> {
-    // Refused rather than ignored: this knob resolved under the prefix until the per-service
-    // form was collapsed, so an operator's existing value must fail loudly instead of
-    // becoming an inert setting they cannot tell from an unset one.
-    if std::env::var("MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS").is_ok() {
-        anyhow::bail!(
-            "MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS is no longer supported: the public-view-set \
-             allowlist is one deployment-wide setting with no per-service form. Rename it to \
-             MICROMEGAS_PUBLIC_VIEW_SETS."
-        );
-    }
     for var in ["MICROMEGAS_UNSTAMPED_AUDIENCE", "MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE"] {
         if std::env::var(var).is_ok() {
             anyhow::bail!(/* existing MICROMEGAS_DEFAULT_AUDIENCE text, {var} interpolated */);
@@ -129,12 +119,40 @@ Called at the very top of `build_and_serve`, before `LakehouseContext::from_env(
   `IsolationConfig` import (`:26`). The monolith now takes the builder's resolution like any
   other embedder — there is no longer a per-service value for it to compute.
 
+### Drop the `MICROMEGAS_ADMINS`-family refusal
+
+`reject_removed_admin_vars` (`rust/auth/src/env.rs:36`) refuses startup when any of
+`MICROMEGAS_ADMINS`, `MICROMEGAS_ANALYTICS_ADMINS`, or `MICROMEGAS_INGESTION_ADMINS` is set. It is
+deleted along with its two call sites — `ProviderBuilder::compose`
+(`rust/auth/src/default_provider.rs:87`, plus the import and the doc-comment mention at `:82`) and
+`WebServerConfig` (`rust/analytics-web-srv/src/web_server.rs:79`) — and its test,
+`default_provider_tests.rs::removed_admins_var_set_is_rejected_with_no_db_needed`, together with
+the three `*_ADMINS_VAR` constants and their `EnvGuard` entries (`:30-32`).
+
+`reject_removed_cache_ttl_vars`, which sits beside it in the same file and is called from the same
+two sites, is **not** touched — only the admin-list refusal is in scope.
+
+`mkdocs/docs/admin/groups.md`'s upgrade path step 1 (`:171-176`) currently promises that "every
+process refuses to start (the removed-var check) if any is still set"; it becomes a plain
+instruction to unset them, since nothing enforces it afterward.
+
+**This one is not fail-closed, unlike the two above.** `MICROMEGAS_ADMINS` was read for many
+releases before v0.30.0 removed it, so any deployment upgrading from v0.29 or earlier may still
+have it set — a far wider population than the one-day `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS`
+window. Such a deployment loses the one signal telling it the variable is inert, and lands instead
+on the v10 migration's seeded `('admins', '*')` wildcard row, i.e. *every authenticated caller is
+an admin* until the operator takes over from the wildcard. That widening is pre-existing v0.30.0
+behaviour and is documented in `groups.md`, but the refusal is what currently forces an operator to
+read that page. Removing it makes the documented post-upgrade sequence the only thing standing
+between an upgrade and an open admin gate.
+
 ### Behaviour changes
 
-1. **`MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` is refused at startup.** A monolith deployment
-   setting it does not start until the operator renames it to `MICROMEGAS_PUBLIC_VIEW_SETS`. This
-   is the one change that breaks a running deployment, and it is deliberate: silently ignoring it
-   would leave exactly the inert knob this plan removes.
+1. **`MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` stops being read.** A monolith deployment setting it
+   loses its allowlist on upgrade — a fail-closed narrowing (the listed view sets go back to being
+   audience-filtered), not a leak, and the operator's fix is a one-word rename. The variable
+   shipped in v0.30.0 on 2026-09-02, so the window in which anyone could have adopted it is a day
+   wide.
 2. **Visibility widens on upgrade** for a deployment on the injected-provider path that already
    has `MICROMEGAS_PUBLIC_VIEW_SETS` set: the listed view sets stop being audience-filtered. No
    in-repo binary is affected — only an out-of-repo embedder that never called
@@ -144,6 +162,11 @@ Called at the very top of `build_and_serve`, before `LakehouseContext::from_env(
    `flight-sql-srv` or monolith with a stale value set now refuses to start where it previously
    came up.
 
+4. **The `MICROMEGAS_ADMINS` family is silently ignored** instead of refusing startup. See the
+   subsection above for why this one carries more risk than (1): the affected population is every
+   deployment upgrading from v0.29 or earlier, and the resulting state is a wildcard admin group,
+   not a narrowing.
+
 On the auth-disabled branch the allowlist itself is a no-op either way — no `AuthContext`
 extension is ever inserted, so the absent-extension convention supplies `ReadScope::All`, which
 makes `OwnershipRewrite` a true no-op. Only the injected-provider path changes visibility in
@@ -152,9 +175,9 @@ practice.
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/read_scope.rs`: drop `from_env`'s `prefix` parameter, delete
-   `resolved_var`, add the `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` refusal, and refuse both
-   `UNSTAMPED_AUDIENCE` spellings explicitly. Update the `IsolationConfig` and `from_env` doc
-   comments to describe one unprefixed variable.
+   `resolved_var`, and list both `UNSTAMPED_AUDIENCE` spellings explicitly so that refusal keeps
+   its current reach. Update the `IsolationConfig` and `from_env` doc comments to describe one
+   unprefixed variable.
 2. `rust/public/src/servers/flight_sql_server.rs`: add `resolve_isolation_config` and call it at
    the top of `build_and_serve`, before the injected-lakehouse branch.
 3. Same file: shrink `AuthAndDefaults` to two elements, update its doc comment, drop the
@@ -168,32 +191,45 @@ practice.
    (see Testing Strategy), including its module doc comment.
 8. Add `rust/public/tests/isolation_config_fail_fast_tests.rs` and its `[[test]]` entry in
    `rust/public/Cargo.toml` (see Testing Strategy).
-9. `mkdocs/docs/admin/monolith.md`: rename the `:51` row to `MICROMEGAS_PUBLIC_VIEW_SETS`, drop
-   the "falls back to unprefixed" clause, and add it to the always-unprefixed list in the
-   "One prefix asymmetry" note (`:60-68`).
-10. `CHANGELOG.md`: an **Analytics** bullet under `## Unreleased` covering the fix and all three
-    behaviour changes, with change (1) written as a `**Minor breaking change**:` clause.
-11. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas --features server`,
-    `cargo test -p micromegas-analytics`.
+9. `rust/auth/src/env.rs`: delete `reject_removed_admin_vars`. Remove its call sites in
+   `rust/auth/src/default_provider.rs` (call, import, doc-comment mention) and
+   `rust/analytics-web-srv/src/web_server.rs`, and its coverage in
+   `rust/auth/tests/default_provider_tests.rs` (the test, the three `*_ADMINS_VAR` constants, and
+   their `EnvGuard` entries). Leave `reject_removed_cache_ttl_vars` alone.
+10. `mkdocs/docs/admin/monolith.md`: rename the `:51` row to `MICROMEGAS_PUBLIC_VIEW_SETS`, drop
+    the "falls back to unprefixed" clause, and add it to the always-unprefixed list in the
+    "One prefix asymmetry" note (`:60-68`).
+11. `mkdocs/docs/admin/groups.md`: rewrite upgrade step 1 (`:171-176`) so it instructs unsetting
+    the `MICROMEGAS_ADMINS` family rather than promising a startup refusal.
+12. `CHANGELOG.md`: an **Analytics** bullet under `## Unreleased` covering the fix and behaviour
+    changes (1)-(3), plus an **Auth** bullet for (4), calling out the
+    `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` rename for anyone who adopted it in v0.30.0.
+13. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas --features server`,
+    `cargo test -p micromegas-analytics`, `cargo test -p micromegas-auth`.
 
 ## Files to Modify
 
-- `rust/analytics/src/lakehouse/read_scope.rs` — prefix-free `from_env`, `resolved_var` deleted,
-  the new refusal
+- `rust/analytics/src/lakehouse/read_scope.rs` — prefix-free `from_env`, `resolved_var` deleted
 - `rust/public/src/servers/flight_sql_server.rs` — the hoist, the doc comments, the unit tests
 - `rust/monolith/src/main.rs` — delete the per-service resolution and its import
 - `rust/analytics/tests/ownership_rewrite_config_tests.rs` — rewritten for the new signature
 - `rust/public/tests/isolation_config_fail_fast_tests.rs` — new integration test
 - `rust/public/Cargo.toml` — new `[[test]]` entry, `required-features = ["server"]`
+- `rust/auth/src/env.rs` — `reject_removed_admin_vars` deleted
+- `rust/auth/src/default_provider.rs` — its call site, import, and doc-comment mention
+- `rust/analytics-web-srv/src/web_server.rs` — its other call site
+- `rust/auth/tests/default_provider_tests.rs` — the refusal test and its `ADMINS`-var constants
 - `mkdocs/docs/admin/monolith.md` — the renamed variable and the prefix-asymmetry note
+- `mkdocs/docs/admin/groups.md` — the upgrade step that promises the refusal
 - `CHANGELOG.md` — behaviour-change entry
 
 ## Trade-offs
 
-**Refusing the prefixed variable vs. silently ignoring it.** Ignoring is a one-line change and
-breaks no running deployment, but it reproduces the exact defect being fixed: an operator's value
-becomes indistinguishable from an unset one. The refusal costs one rename, in a variable already
-documented as optional, and the repo has the established mechanism for it.
+**Dropping the prefixed variable silently vs. refusing it at startup.** A startup refusal is the
+repo's established posture for a knob that stops being honoured (`UNSTAMPED_AUDIENCE`,
+`MICROMEGAS_ADMINS`), and it would turn the narrowing into a loud one-word rename. It is not worth
+it here: `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` shipped a day before this change, the failure mode
+is fail-closed, and a permanent refusal arm is a lasting cost for a one-day adoption window.
 
 **Free function vs. inlining the `match` at the call site.** Two lines inlined would be
 marginally simpler to read, but three of the four required cases (env honoured, unset,
@@ -205,6 +241,10 @@ test.
 
 - Resolve at the top of `build_and_serve` rather than just before the auth branch: fail-fast on a
   typo before the Postgres/object-store setup, at no cost.
+- No startup refusal for `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` — it shipped in v0.30.0 one day
+  before this change and its loss is fail-closed, so a permanent refusal arm is not worth carrying.
+- Drop the `MICROMEGAS_ADMINS`-family refusal despite its wider blast radius — the user's call,
+  made with the wildcard-admin consequence stated; `groups.md`'s upgrade page remains the record.
 - Keep `with_isolation_config` even though no in-repo caller uses it after step 6 — it mirrors
   `with_read_policy` and stays the escape hatch for an out-of-repo embedder.
 - Accept the visibility widening in change (2) as the price of fixing the bug, documented in
@@ -256,14 +296,13 @@ precisely what makes these four sufficient.
 **`rust/analytics/tests/ownership_rewrite_config_tests.rs`**, rewritten for the prefix-free
 signature. Its four `PUBLIC_VIEW_SETS` parsing tests (comma-separated list, JSON-array-shaped
 entries rejected, empty entries rejected, all-whitespace → empty) and `unset_vars_resolve_to_default`
-carry over verbatim against `from_env()`. Its three prefix-resolution tests collapse: the two
-prefixed-`UNSTAMPED_AUDIENCE` cases become one test naming
-`MICROMEGAS_ANALYTICS_UNSTAMPED_AUDIENCE` explicitly, and `unprefixed_unstamped_audience_var_is_also_a_startup_error`
-loses its "also" framing. Add one new test: `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` set to a
-*well-formed* value is a startup error, which is what pins the refusal rather than a silent
-ignore. Its module doc comment must be updated too — the existing text claims these vars are
-touched by no other test in the repo, which the new `rust/public` tests falsify (harmlessly:
-separate processes).
+carry over verbatim against `from_env()`. Its three prefix-resolution tests collapse to two, one
+per `UNSTAMPED_AUDIENCE` spelling, each naming its variable explicitly instead of going through a
+test-only prefix. Add one test pinning that `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` is *not* read:
+set to a well-formed value with the unprefixed variable unset, `from_env()` yields an empty
+allowlist. Without it nothing distinguishes the intended drop from an accidental one. Its module
+doc comment must be updated too — the existing text claims these vars are touched by no other test
+in the repo, which the new `rust/public` tests falsify (harmlessly: separate processes).
 
 **`rust/public/tests/isolation_config_fail_fast_tests.rs`**: one integration test asserting
 `FlightSqlServer::builder().build_and_serve().await` returns the "comma-separated, not a JSON
@@ -296,7 +335,8 @@ run rather than silent.
    injected-provider branch; reaching those needs `flight-sql-srv` without `--disable-auth` plus
    `MICROMEGAS_API_KEYS` set, or `--monolith` with `MICROMEGAS_OIDC_CONFIG` /
    `MICROMEGAS_ANALYTICS_OIDC_CONFIG` set.
-2. With `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS=log_entries` exported instead, the monolith must
-   refuse to start, naming `MICROMEGAS_PUBLIC_VIEW_SETS`. This is the upgrade path an existing
-   deployment hits, and the unit test for the refusal cannot show that the monolith actually
-   reaches `from_env` after step 6 deletes its own resolution.
+2. Repeat with `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS=log_entries` exported instead of the
+   unprefixed name. Expected: the monolith starts, and the allowlist is *not* in effect — the
+   upgrade path a v0.30.0 deployment hits. The unit test pins that `from_env` ignores the prefixed
+   name; only this step shows the monolith actually reaches `from_env` at all once step 6 deletes
+   its own resolution.
