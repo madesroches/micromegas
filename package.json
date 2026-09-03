@@ -27,7 +27,7 @@
     "diff": "^8.0.3",
     "dompurify": "^3.4.13",
     "eslint/ajv": "6.14.0",
-    "fast-uri": "^3.1.5",
+    "fast-uri": "^3.1.6",
     "flatted": "^3.4.2",
     "immutable": "^5.1.8",
     "js-cookie": "^3.0.7",

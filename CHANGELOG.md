@@ -2,6 +2,10 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Dependencies:** Bump `fast-uri` (transitive, via `ajv`) to `^3.1.6` via yarn `resolutions` at the repo root to resolve Dependabot alerts 469, 470, 471, 472 (GHSA-jqff-g426-hqxp, GHSA-fph4-wmhf-6fwf, GHSA-f65p-4m7j-42xc, GHSA-5jgf-p345-68v8 — host confusion and SSRF via IDN/IPv6/percent-decoding normalization bugs).
+
 ## v0.30.0 - 2026-09-02
 
 * **Auth:**
