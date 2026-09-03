@@ -6,8 +6,8 @@
 
 `MICROMEGAS_PUBLIC_VIEW_SETS` is read on only one of `FlightSqlServerBuilder`'s three auth
 branches. A deployment that injects its own auth provider sets the variable, restarts, and gets
-no allowlist, no startup error, and no log line — the knob is inert, and a malformed value is not
-even detected. Hoist the resolution out of the auth branch so there is exactly one site,
+no allowlist and no startup error — the knob is inert, and a malformed value is not even
+detected. Hoist the resolution out of the auth branch so there is exactly one site,
 unconditional and resolved before anything expensive runs. `with_isolation_config` still wins;
 the per-branch value disappears entirely rather than gaining a third correct copy.
 
@@ -139,14 +139,19 @@ practice; the auth-disabled path changes only in (2).
 4. Same file: rewrite `with_isolation_config`'s doc comment to name the one default.
 5. Same file: add `#[cfg(test)] mod tests` covering the resolution (see Testing Strategy).
 6. `rust/monolith/src/main.rs`: gate `analytics_isolation_config` on `roles.flightsql` alone.
-7. `CHANGELOG.md`: an **Analytics** (or **Auth**) bullet under `## Unreleased` covering the fix
+7. Add `rust/public/tests/isolation_config_fail_fast_tests.rs` and its `[[test]]` entry in
+   `rust/public/Cargo.toml` (see Testing Strategy).
+8. `CHANGELOG.md`: an **Analytics** (or **Auth**) bullet under `## Unreleased` covering the fix
    and both behaviour changes from the Design section.
-8. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas --features server`.
+9. `cargo fmt`, `cargo clippy --workspace --all-targets`, `cargo test -p micromegas --features server`.
 
 ## Files to Modify
 
 - `rust/public/src/servers/flight_sql_server.rs` — the hoist, the doc comments, the unit tests
 - `rust/monolith/src/main.rs` — drop the `!args.disable_auth` gate
+- `rust/public/tests/isolation_config_fail_fast_tests.rs` — new integration test (see Testing
+  Strategy)
+- `rust/public/Cargo.toml` — new `[[test]]` entry for the above, `required-features = ["server"]`
 - `CHANGELOG.md` — behaviour-change entry
 
 ## Trade-offs
@@ -173,6 +178,7 @@ four cases a plain unit test.
   `CHANGELOG.md` so an operator can audit the value pre-upgrade.
 - Skip the env read when `with_isolation_config` was set — same reasoning as the injected-provider
   `ReadPolicy` default at `:293`.
+- No startup log line for the resolved allowlist — declined as out of scope for this fix.
 
 ## Documentation
 
@@ -210,35 +216,46 @@ Cases, mirroring the issue:
 The hoist removes the auth-branch dimension, so no case needs repeating per branch — that is
 precisely what makes these four sufficient.
 
+`rust/public/tests/isolation_config_fail_fast_tests.rs`: a `#[serial]` integration test asserting
+`FlightSqlServer::builder().build_and_serve().await` returns the "comma-separated, not a JSON
+array like MICROMEGAS_API_KEYS" error when `MICROMEGAS_PUBLIC_VIEW_SETS` is malformed and no lake
+env is configured. Reaching the error with no Postgres or object store set up is simultaneously
+the assertion that the resolution runs ahead of `LakehouseContext::from_env()`. Registered in
+`rust/public/Cargo.toml` as a `[[test]]` with `required-features = ["server"]`, matching the
+existing entries in that file.
+
 No new live-DB test: nothing here reproduces a bug witnessed in the wild against a real database,
-and the wiring change is covered by the manual step below.
+and the monolith-specific fail-fast and both-binaries smoke test remain manual below, since those
+do need a live lake.
 
 ## Manual Verification
 
 The visibility change is not reachable from any in-repo binary (see Current State), so there is
 nothing to check by hand for it — an out-of-repo embedder is the only caller that observes it.
-What is worth one pass by hand is the fail-fast that this change newly turns on for the
-`--disable-auth` paths, plus a smoke check that the two servers still start once the resolution
-moved. Not automated because both require standing up a real lake and object store; breakage
-would be immediately obvious on the next run rather than silent.
+The `flight-sql-srv` fail-fast is covered by the automated test in Testing Strategy instead, since
+it needs no lake. What is worth one pass by hand is the monolith's fail-fast, which does need a
+live lake because its check fires after `LakehouseContext::from_env()`, plus a smoke check that
+both binaries still start once the resolution moved. Not automated because both require standing
+up a real lake and object store; breakage would be immediately obvious on the next run rather than
+silent.
 
-1. Malformed value now refuses to start, where it previously came up. Unlike step 2, the
+1. Malformed value now refuses to start, where it previously came up. Unlike the `flight-sql-srv`
+   path (covered by the automated test above, which fails before any lake connection), the
    monolith's isolation-config check fires *after* it connects to the data lake
    (`rust/monolith/src/main.rs:184-196` builds `LakehouseContext` before the check at `:299`), so
    run this with a local Postgres and object store already up (e.g. after
    `python3 local_test_env/ai_scripts/start_services.py`):
    ```
-   cd rust && MICROMEGAS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin micromegas-monolith -- \
+   cd rust && MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin micromegas-monolith -- \
      --roles all --listen-endpoint-http 127.0.0.1:9000 --disable-auth
    ```
    Expected: startup fails with the "comma-separated, not a JSON array like MICROMEGAS_API_KEYS"
-   error, after the lake connection succeeds.
-2. Same check on the split binary, which takes the builder's own auth-disabled branch and does go
-   through `build_and_serve`:
-   `MICROMEGAS_PUBLIC_VIEW_SETS='["log_entries"]' cargo run --bin flight-sql-srv -- --disable-auth`.
-   Expected: the same failure, before any lake connection is attempted (no Postgres/object-store
-   log lines first).
-3. Smoke test both binaries with auth disabled — `python3 local_test_env/ai_scripts/start_services.py`
+   error, after the lake connection succeeds. Use the prefixed variable, not the unprefixed one:
+   it is the only one that discriminates the monolith gate removal (step 6) from the builder hoist
+   alone — with step 6 not implemented, the builder's hoisted `IsolationConfig::from_env("")`
+   still falls back to the unprefixed variable and fails identically, so the unprefixed variable
+   can't tell the two apart.
+2. Smoke test both binaries with auth disabled — `python3 local_test_env/ai_scripts/start_services.py`
    and `--monolith` (both default to `--disable-auth`) — with a valid
    `MICROMEGAS_PUBLIC_VIEW_SETS=log_entries`. Expected: both come up, and
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` returns rows. This does not
