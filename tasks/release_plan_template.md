@@ -1,7 +1,93 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.29.0 (2026-08-12)
+Last updated: v0.30.0 (2026-09-02)
+
+---
+
+## Lessons Learned from v0.30.0
+
+### Pushing four tags in one `git push` fires NO tag workflows
+
+`git push origin vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0` succeeded and created all four
+remote tags, but GitHub created **no** `push` tag events for any of them — it suppresses tag events
+once a single push carries more than three tags. `capi-release.yml` and `blender-extension.yml`
+never ran, so neither the C API archives nor the Blender extension got a release until it was
+noticed. **Push the tags in two commands** (or one at a time):
+
+```bash
+git push origin vX.Y.0 grafana-vX.Y.0
+git push origin capi-vX.Y.0 blender-vX.Y.0
+```
+
+Verify afterwards with `gh run list` that both workflows actually started — a silent no-op looks
+exactly like a successful push.
+
+**Recovery without deleting tags**: both workflows gate their release job on
+`if: startsWith(github.ref, 'refs/tags/capi-v')` (resp. `blender-v`), and a `workflow_dispatch`
+aimed at a *tag ref* satisfies that gate. So `gh workflow run capi-release.yml --ref capi-vX.Y.0`
+produces the full release, no tag deletion/re-push needed. (The workflows' own comments say manual
+dispatch "does NOT create a GitHub Release" — that is only true when dispatching from a *branch*.)
+
+### `gh release create` does not mark the main release "Latest"
+
+The `capi-vX.Y.0` and `blender-vX.Y.0` releases are created *after* `vX.Y.0` by their workflows, so
+GitHub hands the "Latest" badge to whichever landed last — the Blender add-on. Finish Phase 3 with
+`gh release edit vX.Y.0 --latest`.
+
+### Rename the section, then scrub `## Unreleased` self-references
+
+Entries amended mid-cycle carry parenthetical `(#NNNN, still \`## Unreleased\`)` markers. Once the
+section is renamed to `## vX.Y.0`, those read as stale. Replace `still \`## Unreleased\`` with
+`same release` (17 occurrences this cycle) — the meaning survives: the amendment shipped alongside
+the entry it amends, so no released version ever had the superseded behavior. Note `## Unreleased`
+appears many times in body text, so the heading rename must target the line by number, not by
+`str.replace`.
+
+### Docker phase: ~2h45m, and it parallelizes with Phase 1
+
+8 services x 2 arches took 2h45m wall-clock (20:07 -> 22:52), the last hour of it on
+`analytics-web`/`monolith`/`redis-exporter`. Phase 1 (crates.io) and Phase 2 (PyPI) do not touch the
+same inputs, so **Phase 3.5 can run concurrently with Phase 1** — both read `rust/Cargo.toml` at the
+pre-bump version, and the only real cost is CPU contention (the first two Docker services were
+visibly slower while `cargo publish`'s verification builds were running). Doing so cut ~45 min off
+this cycle. Phase 4 still must wait for *both*.
+
+### `--all-arches` needs `binfmt` even though the Dockerfiles cross-compile
+
+The builder stages are pinned to `--platform=$BUILDPLATFORM`, but the final runtime stage
+(`FROM debian:bookworm-slim`) runs `apt-get install ca-certificates` on the *target* platform, so
+arm64 still needs QEMU. `docker buildx inspect` listing only `linux/amd64*` and `linux/386` is the
+tell. Run `docker run --privileged --rm tonistiigi/binfmt --install arm64` before Phase 3.5 — it
+does not survive every WSL restart, so check rather than assume it is still registered.
+
+### A Docker image tag may already exist before the release run
+
+`micromegas-redis-exporter:0.30.0` was already on Docker Hub before Phase 3.5 started — the
+workspace has read the release version since the *previous* cycle's post-release bump, so any
+dev-time `build_docker_images.py --push` during the cycle publishes under it. Presence of a tag is
+therefore not evidence that Phase 3.5 reached that service; check the run's own BUILD SUMMARY.
+The release run overwrites it, so this is a verification trap, not a correctness problem.
+
+### `build_docker_images.py` stdout is block-buffered when redirected
+
+Its `Building <service>` headers are Python `print()` on stdout; buildx writes to stderr. Redirected
+to a file, the headers arrive in ~4KB bursts (or at exit) while buildx output streams live — so a
+log tail looks like it is on service 1 long after it has moved on, and a burst of headers looks like
+completion. For liveness use log mtime; for progress, `grep -o 'load build definition from
+[a-z-]*\.Dockerfile' <log> | uniq -c`.
+
+### New binary-only crate needs no `release.py` change
+
+`rust/redis-exporter` was new this cycle (#1497). Nothing depends on it and it is not published to
+crates.io, so only `build_docker_images.py`'s `SERVICES` mattered — and #1497 had already added it
+along with `docker/redis-exporter.Dockerfile`. The Phase 3.5 service list is now **8**.
+
+### README 3-month trim is by calendar month
+
+At a 2026-09-02 release the window is July/August/September, so v0.26.0 (2026-06-23) is dropped even
+though it is younger than 90 days. This matches what v0.29.0 did (it dropped v0.25.0, 2026-05-23, at
+an Aug 12 release). Keep four entries, not five.
 
 ---
 
@@ -155,7 +241,13 @@ All four tags must point to the **same release commit** (workspace at X.Y.0, bef
   - `grafana-vX.Y.0` — no tag-triggered workflow; the Grafana archive is built locally and attached to the release in Phase 3
   - `capi-vX.Y.0` — triggers `capi-release.yml`, which builds Linux/Windows C API libs and attaches them to a GitHub Release
   - `blender-vX.Y.0` — triggers `blender-extension.yml`, which zips the Blender extension (version stamped from workspace) and attaches it to a GitHub Release
-- [ ] Push release branch and all tags: `git push origin release && git push origin vX.Y.0 grafana-vX.Y.0 capi-vX.Y.0 blender-vX.Y.0`
+- [ ] Push release branch: `git push origin release`
+- [ ] Push the tags in **two** commands — more than three tags in one push suppresses every tag event, so `capi-release.yml`/`blender-extension.yml` never fire:
+  ```bash
+  git push origin vX.Y.0 grafana-vX.Y.0
+  git push origin capi-vX.Y.0 blender-vX.Y.0
+  ```
+- [ ] Confirm both tag workflows started: `gh run list --limit 5`
 
 ---
 
@@ -197,6 +289,9 @@ gh release create vX.Y.0 \
   --title "Micromegas vX.Y.0 - <tagline>" \
   --notes "..." \
   grafana/micromegas-micromegas-datasource.zip
+
+# capi-/blender- releases land after this one and steal the "Latest" badge
+gh release edit vX.Y.0 --latest
 ```
 
 ### Phase 3.5: Docker Images
@@ -211,7 +306,7 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64
 docker login
 ```
 
-Publish all 8 services for both architectures:
+Publish all 8 services for both architectures (this can run concurrently with Phase 1):
 
 ```bash
 python3 build/build_docker_images.py \
