@@ -42,63 +42,63 @@ Publishable-service count for Phase 3.5 is now **8**: `ingestion`, `flight-sql`,
 
 ### 0. Fix release.py (if new crates or services were added)
 
-- [ ] Verify no new published crate is missing from `build/release.py`
-- [ ] Verify no new crate in the wasm workspace
-- [ ] Verify no new server binary needs adding to `SERVICES` in `build/build_docker_images.py`
+- [x] Verify no new published crate is missing from `build/release.py`
+- [x] Verify no new crate in the wasm workspace
+- [x] Verify no new server binary needs adding to `SERVICES` in `build/build_docker_images.py`
 
 ### 1. Code Quality & Testing
 
 #### Rust Workspace (from `rust/`)
-- [ ] `python3 ../build/rust_ci.py` (native + WASM, fmt, clippy, tests, `cargo audit`/`cargo deny`)
+- [x] `python3 ../build/rust_ci.py` (native + WASM, fmt, clippy, tests, `cargo audit`/`cargo deny`)
 
 #### Python Package (from `python/micromegas/`)
-- [ ] `poetry run black . --check`
-- [ ] `poetry run pytest` (integration failures from a non-running server are expected)
+- [x] `poetry run black . --check`
+- [x] `poetry run pytest` (integration failures from a non-running server are expected)
 
 #### Grafana Plugin (from `grafana/`)
-- [ ] `yarn install`
-- [ ] `yarn lint:fix`
-- [ ] `yarn test:ci`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint:fix`
+- [x] `yarn test:ci`
+- [x] `yarn build`
 
 #### Analytics Web App (from `analytics-web-app/`)
-- [ ] `yarn install`
-- [ ] `yarn lint`
-- [ ] `yarn type-check`
-- [ ] `yarn test`
-- [ ] `yarn build`
+- [x] `yarn install`
+- [x] `yarn lint`
+- [x] `yarn type-check`
+- [x] `yarn test`
+- [x] `yarn build`
 
 ### 2. Version Verification
 
 All packages should already read 0.30.0 from the v0.29.0 post-release bump:
-- [ ] `rust/Cargo.toml` → 0.30.0
-- [ ] `rust/datafusion-wasm/Cargo.toml` → 0.30.0
-- [ ] `python/micromegas/pyproject.toml` → 0.30.0
-- [ ] `grafana/package.json` → 0.30.0
-- [ ] `analytics-web-app/package.json` → 0.30.0
-- [ ] `blender/micromegas_blender/blender_manifest.toml` → 0.30.0
+- [x] `rust/Cargo.toml` → 0.30.0
+- [x] `rust/datafusion-wasm/Cargo.toml` → 0.30.0
+- [x] `python/micromegas/pyproject.toml` → 0.30.0
+- [x] `grafana/package.json` → 0.30.0
+- [x] `analytics-web-app/package.json` → 0.30.0
+- [x] `blender/micromegas_blender/blender_manifest.toml` → 0.30.0
 
 ### 3. Documentation Updates
 
-- [ ] `CHANGELOG.md`: rename `## Unreleased` → `## v0.30.0 - 2026-09-02`
-- [ ] `grafana/CHANGELOG.md`: add `## 0.30.0 (2026-09-02)` version-sync entry
-- [ ] `README.md` "Recent Releases": add the `### v0.30.0 (September 2026)` block and trim to the last 3 calendar months — keep v0.27.0 (July) through v0.30.0 (September), drop v0.26.0 (June 2026). Keep the "For the full history" pointer.
+- [x] `CHANGELOG.md`: rename `## Unreleased` → `## v0.30.0 - 2026-09-02`
+- [x] `grafana/CHANGELOG.md`: add `## 0.30.0 (2026-09-02)` version-sync entry
+- [x] `README.md` "Recent Releases": add the `### v0.30.0 (September 2026)` block and trim to the last 3 calendar months — keep v0.27.0 (July) through v0.30.0 (September), drop v0.26.0 (June 2026). Keep the "For the full history" pointer.
 
 ### 4. Grafana Plugin Preparation
 
-- [ ] `./build-plugin.sh` from `grafana/` → `grafana/micromegas-micromegas-datasource.zip`
+- [x] `./build-plugin.sh` from `grafana/` → `grafana/micromegas-micromegas-datasource.zip`
 
 ### 5. Git Preparation
 
 All four tags point at the same release commit (workspace at 0.30.0, before the Phase 4 bump).
 
-- [ ] Commit changelog + doc updates **and this plan file** (`cargo release` rejects any untracked file, not just dirty tracked ones)
-- [ ] Create tags one at a time — `git tag A B C` does *not* create three tags:
+- [x] Commit changelog + doc updates **and this plan file** (`cargo release` rejects any untracked file, not just dirty tracked ones)
+- [x] Create tags one at a time — `git tag A B C` does *not* create three tags:
   ```bash
   for t in v0.30.0 grafana-v0.30.0 capi-v0.30.0 blender-v0.30.0; do git tag "$t"; done
   ```
-- [ ] `git push origin release` (creates the branch; `origin/release` does not exist — no force needed) — **requires explicit user instruction**
-- [ ] `git push origin v0.30.0 grafana-v0.30.0 capi-v0.30.0 blender-v0.30.0` — **requires explicit user instruction**
+- [x] `git push origin release` (creates the branch; `origin/release` does not exist — no force needed) — **requires explicit user instruction**
+- [x] `git push origin v0.30.0 grafana-v0.30.0 capi-v0.30.0 blender-v0.30.0` — **requires explicit user instruction**
 
 ## Release Process
 
