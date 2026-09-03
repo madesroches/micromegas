@@ -39,13 +39,21 @@ type ViewFactoryFn = Box<
         + Send,
 >;
 
-/// The auth provider plus the default `ReadPolicy`/`IsolationConfig` `build_and_serve`
-/// resolves per branch, before `self.read_policy`/`self.isolation_config` (if set) override them.
-type AuthAndDefaults = (
-    Option<Arc<dyn AuthProvider>>,
-    Arc<dyn ReadPolicy>,
-    Arc<IsolationConfig>,
-);
+/// The auth provider plus the default `ReadPolicy` `build_and_serve` resolves per branch, before
+/// `self.read_policy` (if set) overrides it.
+type AuthAndDefaults = (Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>);
+
+/// The env is not read at all when the caller supplied a config: `with_isolation_config` wins
+/// regardless, so reading anyway would invent a startup failure on a variable the caller
+/// deliberately overrode.
+fn resolve_isolation_config(
+    explicit: Option<Arc<IsolationConfig>>,
+) -> Result<Arc<IsolationConfig>> {
+    match explicit {
+        Some(config) => Ok(config),
+        None => Ok(Arc::new(IsolationConfig::from_env()?)),
+    }
+}
 
 /// Builder for assembling and running a FlightSQL server.
 ///
@@ -157,10 +165,9 @@ impl FlightSqlServerBuilder {
 
     /// Set an explicit `IsolationConfig` -- the data-isolation deployment knob
     /// (`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by the row-level filter
-    /// (`OwnershipRewrite`). Mirrors `with_read_policy`: wins on
-    /// every `build_and_serve` branch, overriding that branch's own default
-    /// (`IsolationConfig::from_env("")` on the `use_default_auth` branch, `IsolationConfig::default()`
-    /// on the other two).
+    /// (`OwnershipRewrite`). Mirrors `with_read_policy`: wins regardless of how auth is
+    /// configured, overriding the single default `build_and_serve` would otherwise resolve via
+    /// `IsolationConfig::from_env()`.
     pub fn with_isolation_config(mut self, config: Arc<IsolationConfig>) -> Self {
         self.isolation_config = Some(config);
         self
@@ -222,6 +229,10 @@ impl FlightSqlServerBuilder {
     ///
     /// Runs the full setup sequence and blocks until the server shuts down.
     pub async fn build_and_serve(self) -> Result<()> {
+        // Resolved first, ahead of the Postgres/object-store setup below, so a malformed
+        // `MICROMEGAS_PUBLIC_VIEW_SETS` fails fast at no cost.
+        let isolation_config = resolve_isolation_config(self.isolation_config)?;
+
         // Use injected lakehouse or build one from environment
         let lakehouse = if let Some(lh) = self.injected_lakehouse {
             lh
@@ -278,91 +289,86 @@ impl FlightSqlServerBuilder {
         // each branch only computes its own *default*, used solely when the caller never set an
         // explicit policy. This keeps `with_read_policy` order-independent with respect to
         // `with_auth_provider` / `with_default_auth`.
-        let (auth_provider, default_policy, default_isolation_config): AuthAndDefaults =
-            if let Some(provider) = self.auth_provider {
-                // Injected-provider path (the monolith's `with_auth_provider` call): the caller is
-                // expected to pair `with_auth_provider` with its own `with_read_policy` call, but
-                // when it didn't, this default must still resolve the seeded `public` read grant
-                // rather than the empty set -- an empty-grant-map default was only ever safe
-                // while `resolve` had a built-in `PUBLIC_AUDIENCE` arm; with that arm removed it
-                // would silently deny every query for an embedder that forgot `with_read_policy`.
-                // So this builds the same env+store-backed policy the `use_default_auth` branch
-                // below does.
-                //
-                // Built only when `self.read_policy` is unset -- `with_read_policy` always wins
-                // below, and the only in-repo `with_auth_provider` caller (the monolith) always
-                // pairs the two, so skipping this avoids a DB round trip -- and a needless
-                // `from_env("")` failure mode on a malformed *unprefixed* env var a caller may
-                // have deliberately overridden via `with_read_policy` -- whenever it would be
-                // discarded anyway.
-                let policy: Arc<dyn ReadPolicy> = if self.read_policy.is_none() {
-                    let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
-                    warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
-                    let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
-                    let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
-                        key_store_pool,
-                        Duration::from_secs(audience_grants_config.cache_ttl_secs),
-                    ));
-                    Arc::new(
-                        AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
-                    )
-                } else {
-                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()))
-                };
-                (Some(provider), policy, Arc::new(IsolationConfig::default()))
-            } else if self.use_default_auth {
+        let (auth_provider, default_policy): AuthAndDefaults = if let Some(provider) =
+            self.auth_provider
+        {
+            // Injected-provider path (the monolith's `with_auth_provider` call): the caller is
+            // expected to pair `with_auth_provider` with its own `with_read_policy` call, but
+            // when it didn't, this default must still resolve the seeded `public` read grant
+            // rather than the empty set -- an empty-grant-map default was only ever safe
+            // while `resolve` had a built-in `PUBLIC_AUDIENCE` arm; with that arm removed it
+            // would silently deny every query for an embedder that forgot `with_read_policy`.
+            // So this builds the same env+store-backed policy the `use_default_auth` branch
+            // below does.
+            //
+            // Built only when `self.read_policy` is unset -- `with_read_policy` always wins
+            // below, and the only in-repo `with_auth_provider` caller (the monolith) always
+            // pairs the two, so skipping this avoids a DB round trip -- and a needless
+            // `from_env("")` failure mode on a malformed *unprefixed* env var a caller may
+            // have deliberately overridden via `with_read_policy` -- whenever it would be
+            // discarded anyway.
+            let policy: Arc<dyn ReadPolicy> = if self.read_policy.is_none() {
                 let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
-                let group_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
                 warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
-                let provider = match ProviderBuilder::new("")
-                    .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
-                    .with_group_store(group_store_pool)
-                    .build()
-                    .await?
-                {
-                    Some(provider) => provider,
-                    None => {
-                        anyhow::bail!(
-                            "Authentication required but no auth providers configured. Set \
-                         MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, or populate the \
-                         analytics_api_keys DB table"
-                        );
-                    }
-                };
-                // One shared snapshot cache for this process, built from
-                // its own dedicated pool -- not `key_store_pool` above, which
-                // `DbApiKeyAuthProvider` already owns -- via the same `dedicated_key_store_pool`
-                // convention. Same prefix (`""`) `AudienceReadPolicy::from_env` beside it
-                // resolves under, so the cache-TTL knob follows the same `{prefix}_` fallback.
-                let audience_grants_pool = dedicated_key_store_pool(&lake_pool_for_keys);
                 let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
                 let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
-                    audience_grants_pool,
+                    key_store_pool,
                     Duration::from_secs(audience_grants_config.cache_ttl_secs),
                 ));
-                let policy: Arc<dyn ReadPolicy> = Arc::new(
-                    AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)),
-                );
-                let isolation_config = Arc::new(IsolationConfig::from_env("")?);
-                (Some(provider), policy, isolation_config)
+                Arc::new(AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)))
             } else {
-                info!("Authentication disabled");
-                // No `AuthContext` extension is ever inserted on this path (no `AuthService`
-                // provider configured), so the absent-extension convention already supplies
-                // `ReadScope::All` -- this default policy is never actually resolved against a
-                // real caller, but must still exist since `FlightSqlServiceImpl::new` requires
-                // one. This never-resolved property is now load-bearing: with the built-in
-                // `PUBLIC_AUDIENCE` read arm removed, an empty grant map resolves to the empty
-                // set, not `{public}` -- fine here only because `resolve` is never actually
-                // called on this branch.
-                (
-                    None,
-                    Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
-                    Arc::new(IsolationConfig::default()),
-                )
+                Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()))
             };
+            (Some(provider), policy)
+        } else if self.use_default_auth {
+            let key_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+            let group_store_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+            warn_if_data_lake_schema_stale(&lake_pool_for_keys).await;
+            let provider = match ProviderBuilder::new("")
+                .with_db_key_store(key_store_pool, ApiKeyTable::Analytics)
+                .with_group_store(group_store_pool)
+                .build()
+                .await?
+            {
+                Some(provider) => provider,
+                None => {
+                    anyhow::bail!(
+                        "Authentication required but no auth providers configured. Set \
+                         MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, or populate the \
+                         analytics_api_keys DB table"
+                    );
+                }
+            };
+            // One shared snapshot cache for this process, built from
+            // its own dedicated pool -- not `key_store_pool` above, which
+            // `DbApiKeyAuthProvider` already owns -- via the same `dedicated_key_store_pool`
+            // convention. Same prefix (`""`) `AudienceReadPolicy::from_env` beside it
+            // resolves under, so the cache-TTL knob follows the same `{prefix}_` fallback.
+            let audience_grants_pool = dedicated_key_store_pool(&lake_pool_for_keys);
+            let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
+            let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(
+                audience_grants_pool,
+                Duration::from_secs(audience_grants_config.cache_ttl_secs),
+            ));
+            let policy: Arc<dyn ReadPolicy> =
+                Arc::new(AudienceReadPolicy::from_env("")?.with_store(Some(audience_grants_store)));
+            (Some(provider), policy)
+        } else {
+            info!("Authentication disabled");
+            // No `AuthContext` extension is ever inserted on this path (no `AuthService`
+            // provider configured), so the absent-extension convention already supplies
+            // `ReadScope::All` -- this default policy is never actually resolved against a
+            // real caller, but must still exist since `FlightSqlServiceImpl::new` requires
+            // one. This never-resolved property is now load-bearing: with the built-in
+            // `PUBLIC_AUDIENCE` read arm removed, an empty grant map resolves to the empty
+            // set, not `{public}` -- fine here only because `resolve` is never actually
+            // called on this branch.
+            (
+                None,
+                Arc::new(AudienceReadPolicy::new(AudienceGrants::empty())),
+            )
+        };
         let read_policy = self.read_policy.unwrap_or(default_policy);
-        let isolation_config = self.isolation_config.unwrap_or(default_isolation_config);
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
@@ -459,5 +465,106 @@ impl FlightSqlServerBuilder {
 
         info!("bye");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    const PUBLIC_VIEW_SETS_VAR: &str = "MICROMEGAS_PUBLIC_VIEW_SETS";
+
+    /// Clears the var on drop so a failing assertion in one test can't leak state into the next.
+    struct EnvGuard;
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: tests are serialized with `#[serial]`.
+            unsafe {
+                std::env::remove_var(PUBLIC_VIEW_SETS_VAR);
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn env_set_is_parsed() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var(PUBLIC_VIEW_SETS_VAR, "log_stats,images");
+        }
+        let config = resolve_isolation_config(None).expect("resolve_isolation_config");
+        assert_eq!(
+            config.public_view_sets,
+            vec!["log_stats".to_string(), "images".to_string()]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn env_unset_is_empty() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::remove_var(PUBLIC_VIEW_SETS_VAR);
+        }
+        let config = resolve_isolation_config(None).expect("resolve_isolation_config");
+        assert!(
+            config.public_view_sets.is_empty(),
+            "an unset var must resolve to no public view sets"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn env_malformed_is_err() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var(PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
+        }
+        let err =
+            resolve_isolation_config(None).expect_err("a JSON-array-shaped value must be rejected");
+        assert!(err.to_string().contains(PUBLIC_VIEW_SETS_VAR));
+    }
+
+    /// An explicit config wins even when the env is set to a different value -- pinning that
+    /// `with_isolation_config` skips the env read entirely on this path, not merely that it
+    /// takes precedence over a matching value.
+    #[test]
+    #[serial]
+    fn explicit_config_wins_over_a_different_env_value() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var(PUBLIC_VIEW_SETS_VAR, "log_stats");
+        }
+        let explicit = Arc::new(IsolationConfig {
+            public_view_sets: vec!["images".to_string()],
+        });
+        let config =
+            resolve_isolation_config(Some(explicit.clone())).expect("resolve_isolation_config");
+        assert_eq!(config.public_view_sets, explicit.public_view_sets);
+    }
+
+    /// Same as above, but with the env set to a value that would fail to parse -- proving the
+    /// explicit config really does skip the env read, rather than merely winning after a
+    /// successful-but-discarded parse.
+    #[test]
+    #[serial]
+    fn explicit_config_wins_over_a_malformed_env_value() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var(PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
+        }
+        let explicit = Arc::new(IsolationConfig {
+            public_view_sets: vec!["images".to_string()],
+        });
+        let config =
+            resolve_isolation_config(Some(explicit.clone())).expect("resolve_isolation_config");
+        assert_eq!(config.public_view_sets, explicit.public_view_sets);
     }
 }

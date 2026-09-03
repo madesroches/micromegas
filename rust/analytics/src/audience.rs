@@ -68,11 +68,11 @@ fn is_valid_audience(aud: &str) -> bool {
 /// routine operation: already-written partitions keep the value they were materialized under
 /// until they are regenerated.
 ///
-/// Unprefixed, unlike `IsolationConfig`'s knobs: this is not a per-caller query-side setting but
-/// a property of the lake's contents. Two other code readers of the same variable fall back to
-/// this same unprefixed name: `micromegas_auth::policy::default_audience_from_env`, on the
-/// key-minting side, and the ingestion HTTP edge's own call in `serve_ingestion`, which resolves
-/// the default a credential with no bound audience is stamped with at write time.
+/// This is not a per-caller query-side setting but a property of the lake's contents. Two other
+/// code readers of the same variable fall back to this same unprefixed name:
+/// `micromegas_auth::policy::default_audience_from_env`, on the key-minting side, and the
+/// ingestion HTTP edge's own call in `serve_ingestion`, which resolves the default a credential
+/// with no bound audience is stamped with at write time.
 /// Trimming and its warning match both, so one env value can never be accepted by one role and
 /// rejected by another.
 pub fn default_audience_from_env() -> anyhow::Result<String> {

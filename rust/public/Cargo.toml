@@ -165,3 +165,8 @@ required-features = ["server"]
 name = "resolve_write_audience_tests"
 path = "tests/resolve_write_audience_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "isolation_config_fail_fast_tests"
+path = "tests/isolation_config_fail_fast_tests.rs"
+required-features = ["server"]
