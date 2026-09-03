@@ -2,7 +2,7 @@
 
 This page provides a complete reference to all SQL functions available in Micromegas queries, including both standard DataFusion functions and Micromegas-specific extensions.
 
-**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error, unless this deployment can never produce an admin principal at all, in which case any authenticated caller may call it (deployment-wide, not per-audience — see [Authentication](../admin/authentication.md#audience-filtering-activation)). See [Authentication](../admin/flight-sql.md#authentication).
+**Legend:** 🔧 administrative-flavored function (lakehouse-management, not typical query use) · 🔒 requires an authenticated admin — non-admin callers, including API keys, get a "not found"/"Invalid function" error. Not audience-filtered: an admin acts across every audience (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)). See [Authentication](../admin/flight-sql.md#authentication).
 
 ## Micromegas Extensions
 
@@ -29,7 +29,7 @@ view_instance(view_name, identifier)
 
 !!! note "Audience-filtered deployments"
     On a deployment with audience filtering active (see
-    [Authentication](../admin/authentication.md#audience-filtering-activation)), naming a
+    [Authorization](../admin/authorization.md#query-time-audience-filtering)), naming a
     process or stream id outside the caller's own audiences fails with a not-found-shaped error
     instead of returning an empty result — the same check `process_spans`,
     `perfetto_trace_chunks`, `parse_block`, and `get_payload` already apply to their own id
@@ -57,19 +57,19 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_partitions)
 
 #### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧🔒
 
-**Administrative Function** - Retires data partitions from the lakehouse for a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
+**Administrative Function** - Retires data partitions from the lakehouse for a specified time range. Admin-only (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partitionsview_set-view_instance-start_time-end_time) for details.
 
 #### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Materializes data partitions for a view over a specified time range. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
+**Administrative Function** - Materializes data partitions for a view over a specified time range. Admin-only (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `regenerate_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧🔒
 
-**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
+**Administrative Function** - Force-regenerates existing partition(s) directly from source data, bypassing the freshness check `materialize_partitions()` stops at. Admin-only (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)).
 
 See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
@@ -92,13 +92,13 @@ See [Admin Functions Reference](../admin/functions-reference.md#list_audience_gr
 
 #### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time, file_schema_hash)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
+**Administrative Function** - Retires a single partition by its metadata identifiers. Admin-only (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time-file_schema_hash) for details.
 
 #### `retire_partition_by_file(file_path)` 🔧🔒
 
-**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code. Admin-only, unless this deployment has no admin principal at all (see [Authentication](../admin/authentication.md#audience-filtering-activation)).
+**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code. Admin-only (see [Authorization](../admin/authorization.md#admin-gated-lakehouse-functions)).
 
 **⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_filefile_path) for details.
 

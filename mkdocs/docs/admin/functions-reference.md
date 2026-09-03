@@ -75,7 +75,7 @@ SELECT * FROM list_partitions();
     check) is kept only when its view set is on `MICROMEGAS_PUBLIC_VIEW_SETS`, the caller passes
     the lakehouse admin gate (the same boolean gating `retire_partitions`/`regenerate_partitions`
     below), or the caller holds `ReadScope::All`. See
-    [Authentication](authentication.md#audience-filtering-activation).
+    [Authorization](authorization.md#query-time-audience-filtering).
 
 **Example**:
 ```sql
@@ -98,7 +98,7 @@ GROUP BY view_set_name;
 ### `retire_partitions(view_set, view_instance, start_time, end_time)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin, or by any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Otherwise callers, including API keys, get "function not found".
+    Only callable by an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Otherwise callers, including API keys, get "function not found".
 
 **Description**: Retires partitions within a specified time range.
 
@@ -125,7 +125,7 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 ### `regenerate_partitions(view_set_name, begin, end, partition_delta_seconds)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin, or by any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Otherwise callers, including API keys, get "function not found".
+    Only callable by an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Otherwise callers, including API keys, get "function not found".
 
 **Description**: Force-regenerates existing partition(s) directly from source data, bypassing the "already up to date" freshness check that `materialize_partitions()` stops at. Useful when a partition's content hash is unchanged but its internal row order or format needs to be refreshed -- for example, an existing merged `blocks` partition materialized before ordered merges were introduced (see `sort_order` in [`list_partitions()`](#list_partitions)), or a `SqlBatchView` (e.g. `log_stats`) whose live partitions predate it adopting a `with_merge_sort_order` declaration and so won't certify for ordered k-way merges until regenerated.
 
@@ -157,7 +157,7 @@ SELECT * FROM regenerate_partitions('blocks', '2024-01-01T00:00:00Z', '2024-01-0
 ### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time, file_schema_hash)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin, or by any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Otherwise callers, including API keys, get an "Invalid function" error.
+    Only callable by an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Otherwise callers, including API keys, get an "Invalid function" error.
 
 **Description**: Surgically retires a single partition by its metadata identifiers. This is the preferred method for retiring partitions as it works for both empty partitions (file_path=NULL) and non-empty partitions.
 
@@ -228,7 +228,7 @@ LIMIT 10;
 ### `retire_partition_by_file(file_path)`
 
 !!! note "Requires admin"
-    Only callable by an authenticated admin, or by any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Otherwise callers, including API keys, get an "Invalid function" error.
+    Only callable by an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Otherwise callers, including API keys, get an "Invalid function" error.
 
 **Description**: Retires a single partition by exact file path match.
 
@@ -343,7 +343,7 @@ SELECT * FROM deny_queries(
 ### `list_query_denials()`
 
 !!! note "Requires admin"
-    Same gate as `retire_partitions()` and friends — see [Authentication](authentication.md#audience-filtering-activation).
+    Same gate as `retire_partitions()` and friends — see [Authorization](authorization.md#admin-gated-lakehouse-functions).
 
 **Description**: Lists every query-deny-list rule currently in force.
 
@@ -427,7 +427,7 @@ reach them anyway.
     is not admin-only. What each caller sees differs by visibility rule, below.
 
 **Description**: Lists rows of the `audience_grants` table (the DB-backed audience grant store —
-see [Authentication → DB-backed audience grants](authentication.md#db-backed-audience-grants)),
+see [Authorization → the grant store](authorization.md#the-grant-store)),
 scoped to what the calling principal may see.
 
 **Usage**:
@@ -474,10 +474,10 @@ not a bug: this function is a SQL auditing surface, ungated for every authentica
 for this one function.
 
 **Does not show every source of effective read access.** The DB table is one of several sources
-`AudienceReadPolicy` unions to decide what a caller may actually read; the
+`AudienceReadPolicy` unions to decide what a caller may actually read; the deprecated
 `MICROMEGAS_AUDIENCE_GRANTS` env map and a per-key `read_audiences` list also apply, and neither
 appears here for any caller. `public` is different: it has no built-in read grant of its own — it
-reads only through an ordinary DB row, the schema-v9 seeded `('public', 'read', '*')` grant — so
+reads only through an ordinary DB row, the seeded `('public', 'read', '*')` grant — so
 that row *is* in this table, and does appear here, but only for an admin caller (`GrantVisibility::All`).
 A non-admin caller gets `GrantVisibility::Held`, which strips `"*"` from the caller's own bound
 selectors before querying for held `(audience, axis)` pairs — but the query still returns every
@@ -551,7 +551,7 @@ print(f"Empty partitions: {len(empty_partitions)}")
 ### `micromegas.admin.retire_incompatible_partitions(client, view_set_name=None)`
 
 !!! note "Requires admin"
-    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin, or any authenticated caller when this deployment can never produce an admin principal at all -- see [Authentication](authentication.md#audience-filtering-activation). Non-admin callers, including API keys, will otherwise see this fail with an "Invalid function" error.
+    Internally calls `retire_partition_by_metadata()`, which requires an authenticated admin -- see [Authorization](authorization.md#admin-gated-lakehouse-functions). Non-admin callers, including API keys, will otherwise see this fail with an "Invalid function" error.
 
 **Description**: Safely retires partitions with incompatible schemas using metadata-based retirement. This handles both empty partitions (file_path=NULL) and non-empty partitions.
 

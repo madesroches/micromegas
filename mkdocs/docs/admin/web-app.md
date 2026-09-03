@@ -73,10 +73,9 @@ export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 
 # The deployment's default audience: what a mint/import request that supplies
-# no `audience` gets, and what the ingestion HTTP edge now stamps explicitly
-# onto any credential with no bound audience (still applied read-side only for
-# a legacy row or one written by the admin replication path; see
-# mkdocs/docs/admin/authentication.md#audience-stamping-and-the-default).
+# no `audience` gets, and what the ingestion edge stamps onto a credential
+# with no bound audience of its own (see
+# mkdocs/docs/admin/authorization.md#audience-stamping).
 # Defaults to `public` when unset -- see
 # mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
 export MICROMEGAS_DEFAULT_AUDIENCE="public"
@@ -85,7 +84,7 @@ export MICROMEGAS_DEFAULT_AUDIENCE="public"
 # explicitly enabled. Lets a non-admin caller with a matching `mint` grant
 # (or lazily claiming a brand-new audience) mint their own key, and gates
 # GET .../audience-grants/my-audiences the same way -- see
-# mkdocs/docs/admin/authentication.md#self-service-ingestion-key-mint.
+# mkdocs/docs/admin/authorization.md#self-service-ingestion-key-mint.
 export MICROMEGAS_SELF_SERVICE_MINT="false"
 
 # Per-caller bounds once MICROMEGAS_SELF_SERVICE_MINT is on -- backstops
@@ -213,8 +212,8 @@ authenticated caller, never admin-gated, and applies the same held-pair visibili
 `/visible` does for a non-admin — except that it cannot see (and so cannot apply)
 `analytics-web-srv`'s self-service knob the way `/visible` does, and so is always as wide open
 for a non-admin as the knob-on case. See
-[Self-service ingestion key mint](authentication.md#self-service-ingestion-key-mint)
-for the knob and [DB-backed audience grants](authentication.md#db-backed-audience-grants)
+[Self-service ingestion key mint](authorization.md#self-service-ingestion-key-mint)
+for the knob and [the grant store](authorization.md#the-grant-store)
 for the write policy the page's Share/Remove/Revoke controls drive.
 
 **Unavailable under `--disable-auth`.** The page's `/visible` and `/my-audiences` reads (and
@@ -294,7 +293,7 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET /api/maps/blob/{filename}`, `PUT`, `DELETE` — Fetch / upload / delete map GLB
 - `GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/import/revoke analytics API keys (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
 - `GET`/`POST /api/ingestion-api-keys`, `POST /api/ingestion-api-keys/import`, `DELETE /api/ingestion-api-keys/{key_id}` — List/mint/import/revoke ingestion API keys, written directly to Postgres (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
-- `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authentication](authentication.md#audiences-and-grants))
+- `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authorization](authorization.md#audiences-and-grants))
 - `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback

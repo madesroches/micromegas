@@ -87,7 +87,7 @@ that would leave nobody reaching it is refused.
 **Two-sided authorization.** Editing group membership requires admin
 authority over the group itself. Granting an audience to `group:X` still
 requires authority over the *audience* (the existing per-pair hold check in
-[Audiences and Grants](authentication.md#audiences-and-grants)) — holding
+[Audiences and Grants](authorization.md#audiences-and-grants)) — holding
 `admins` membership doesn't bypass that.
 
 ## The wildcard-admin warning

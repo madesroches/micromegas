@@ -111,9 +111,8 @@
 //!
 //! There is no in-product enforcement knob left for either surface; the mitigation is
 //! operational -- provision only audience-bound DB-backed ingestion credentials, and don't run
-//! ingestion with an env-keyring key, OIDC, or `--disable-auth` alongside them -- see the
-//! "Residual gap" admonition in `mkdocs/docs/admin/authentication.md` and this stage's
-//! `CHANGELOG.md` entry.
+//! ingestion with an env-keyring key, OIDC, or `--disable-auth` alongside them -- see this
+//! stage's `CHANGELOG.md` entry.
 
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{
