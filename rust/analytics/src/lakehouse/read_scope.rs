@@ -101,7 +101,7 @@ impl CallerContext {
 }
 
 /// Deployment config for the data-isolation seam: [`super::ownership_rewrite::OwnershipRewrite`]
-/// (the row-level filter). Per-service, resolved once at server startup from environment variables -- see
+/// (the row-level filter). Resolved once at server startup from environment variables -- see
 /// [`IsolationConfig::from_env`].
 ///
 /// `#[derive(Default)]`: `public_view_sets` is the only field, and its empty-by-default matches
@@ -110,12 +110,11 @@ impl CallerContext {
 pub struct IsolationConfig {
     /// View-set names `OwnershipRewrite` skips entirely -- no predicate injected at all,
     /// regardless of scope. Off (empty) by default, fail-closed for this
-    /// operator-responsibility allowlist. Parsed from `{prefix}_PUBLIC_VIEW_SETS`, falling back
-    /// to `MICROMEGAS_PUBLIC_VIEW_SETS`.
+    /// operator-responsibility allowlist. Parsed from `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub public_view_sets: Vec<String>,
 }
 
-/// Comma-separated list parser for `{prefix}_PUBLIC_VIEW_SETS` / `MICROMEGAS_PUBLIC_VIEW_SETS`.
+/// Comma-separated list parser for `MICROMEGAS_PUBLIC_VIEW_SETS`.
 ///
 /// Deliberately a comma-separated list (rejecting `[`, `]`, `"`) rather than the
 /// `MICROMEGAS_API_KEYS` JSON-array shape -- duplicated here rather than depending on
@@ -147,47 +146,13 @@ fn parse_comma_separated_list(var: &str) -> anyhow::Result<Vec<String>> {
     Ok(values)
 }
 
-/// Resolves `{prefix}_{suffix}` (falling back to `MICROMEGAS_{suffix}` if unset, or always if
-/// `prefix` is empty). Used both by [`IsolationConfig::from_env`]'s `PUBLIC_VIEW_SETS` knob and
-/// by its removed-knob check for `UNSTAMPED_AUDIENCE`.
-fn resolved_var(prefix: &str, suffix: &str) -> String {
-    if prefix.is_empty() {
-        format!("MICROMEGAS_{suffix}")
-    } else {
-        let prefixed = format!("{prefix}_{suffix}");
-        if std::env::var(&prefixed).is_ok() {
-            prefixed
-        } else {
-            format!("MICROMEGAS_{suffix}")
-        }
-    }
-}
-
 impl IsolationConfig {
-    /// Resolves the surviving knob from the environment. `{prefix}_PUBLIC_VIEW_SETS` unset ⇒ no
-    /// public view sets; a malformed entry is `Err`, not silently ignored -- a startup `?` turns
-    /// a typo into a fail-fast instead of a silently-inert knob.
-    ///
-    /// `{prefix}_UNSTAMPED_AUDIENCE` / `MICROMEGAS_UNSTAMPED_AUDIENCE`, if set at all (including
-    /// to an empty string), is a startup error rather than being silently ignored: this knob does
-    /// not exist, and for a fail-closed posture, silently ignoring it would be exactly the kind
-    /// of silent behavior change this project's env-var conventions exist to avoid. The fix named
-    /// in the error is `MICROMEGAS_DEFAULT_AUDIENCE`, the deployment default audience that
-    /// replaces it. That knob lives on `LakehouseContext`, not here: it is a property of the
-    /// lake's contents, needed by the maintenance daemon, which never builds an
-    /// `IsolationConfig`.
-    pub fn from_env(prefix: &str) -> anyhow::Result<Self> {
-        let unstamped_var = resolved_var(prefix, "UNSTAMPED_AUDIENCE");
-        if std::env::var(&unstamped_var).is_ok() {
-            anyhow::bail!(
-                "{unstamped_var} is no longer supported: the audience column is now a physical, \
-                 non-nullable column materialized on every global view (#1482), so there is no \
-                 more query-time \"unstamped\" fallback to configure. Assign legacy data an \
-                 audience with MICROMEGAS_DEFAULT_AUDIENCE instead, and remove this variable."
-            );
-        }
-        let public_view_sets_var = resolved_var(prefix, "PUBLIC_VIEW_SETS");
-        let public_view_sets = parse_comma_separated_list(&public_view_sets_var)?;
-        Ok(Self { public_view_sets })
+    /// Resolves the surviving knob from the environment. `MICROMEGAS_PUBLIC_VIEW_SETS` unset ⇒
+    /// no public view sets; a malformed entry is `Err`, not silently ignored -- a startup `?`
+    /// turns a typo into a fail-fast instead of a silently-inert knob.
+    pub fn from_env() -> anyhow::Result<Self> {
+        Ok(Self {
+            public_view_sets: parse_comma_separated_list("MICROMEGAS_PUBLIC_VIEW_SETS")?,
+        })
     }
 }

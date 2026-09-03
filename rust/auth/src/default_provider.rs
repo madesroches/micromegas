@@ -8,7 +8,7 @@ use crate::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use crate::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, key_store_has_live_rows,
 };
-use crate::env::{reject_removed_admin_vars, reject_removed_cache_ttl_vars, resolve_prefixed_var};
+use crate::env::resolve_prefixed_var;
 use crate::groups::{DbGroupsConfig, DbGroupsSource};
 use crate::membership::MembershipProvider;
 use crate::multi::MultiAuthProvider;
@@ -78,15 +78,7 @@ impl ProviderBuilder {
     ///
     /// Takes `&self` rather than `self` so `build()` can still reach the
     /// attached key store's pool for its existence query afterwards.
-    ///
-    /// Refuses via [`reject_removed_admin_vars`] and [`reject_removed_cache_ttl_vars`] before
-    /// composing anything: admin membership lives in the `admins` group from schema v10 on, and
-    /// the env-var admin lists and per-role cache-TTL vars this plan removes must never silently
-    /// be ignored.
     async fn compose(&self) -> Result<(MultiAuthProvider, bool)> {
-        reject_removed_admin_vars()?;
-        reject_removed_cache_ttl_vars()?;
-
         let oidc_config_var = self.oidc_config_var();
         let api_keys_json = self.api_keys_json();
 

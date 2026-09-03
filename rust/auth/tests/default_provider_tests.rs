@@ -27,14 +27,9 @@ use test_utils::unreachable_pool;
 
 const API_KEYS_VAR: &str = "MICROMEGAS_API_KEYS";
 const OIDC_CONFIG_VAR: &str = "MICROMEGAS_OIDC_CONFIG";
-const ADMINS_VAR: &str = "MICROMEGAS_ADMINS";
-const ANALYTICS_ADMINS_VAR: &str = "MICROMEGAS_ANALYTICS_ADMINS";
-const INGESTION_ADMINS_VAR: &str = "MICROMEGAS_INGESTION_ADMINS";
 
 /// Clears every env var on drop so a failing assertion in one test can't leak
-/// state into the next. Covers all three removed admin-list vars, not just
-/// the unprefixed one, so a stray `_ANALYTICS_`/`_INGESTION_` variant set in
-/// the shell can't leak between tests either.
+/// state into the next.
 struct EnvGuard;
 
 impl Drop for EnvGuard {
@@ -43,67 +38,8 @@ impl Drop for EnvGuard {
         unsafe {
             std::env::remove_var(API_KEYS_VAR);
             std::env::remove_var(OIDC_CONFIG_VAR);
-            std::env::remove_var(ADMINS_VAR);
-            std::env::remove_var(ANALYTICS_ADMINS_VAR);
-            std::env::remove_var(INGESTION_ADMINS_VAR);
         }
     }
-}
-
-/// **`MICROMEGAS_ADMINS` set ⇒ `Err` naming the replacement**: the removed-var refusal fires
-/// before anything else in `compose()`, so this needs no DB at all -- `build_chain()` over an
-/// unreachable key store still returns `Err` from the env check, never reaching the pool.
-#[tokio::test]
-#[serial]
-async fn removed_admins_var_set_is_rejected_with_no_db_needed() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::remove_var(API_KEYS_VAR);
-        std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::set_var(ADMINS_VAR, r#"["admin@example.com"]"#);
-    }
-
-    let result = ProviderBuilder::new("").build_chain().await;
-    let err = match result {
-        Ok(_) => panic!("MICROMEGAS_ADMINS must be refused"),
-        Err(e) => e,
-    };
-    assert!(
-        err.to_string().contains("admins"),
-        "expected the error to name the `admins` group replacement, got: {err}"
-    );
-}
-
-/// **`MICROMEGAS_API_KEY_CACHE_TTL_SECONDS` set ⇒ `Err` naming the replacement**: the same
-/// removed-var refusal shape as `removed_admins_var_set_is_rejected_with_no_db_needed`, for the
-/// renamed cache-TTL knob -- fires before anything else in `compose()`, so no DB is needed.
-#[tokio::test]
-#[serial]
-async fn removed_api_key_cache_ttl_var_set_is_rejected_with_no_db_needed() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::remove_var(API_KEYS_VAR);
-        std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
-        std::env::set_var("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS", "30");
-    }
-
-    let result = ProviderBuilder::new("").build_chain().await;
-    let err = match result {
-        Ok(_) => panic!("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS must be refused"),
-        Err(e) => e,
-    };
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::remove_var("MICROMEGAS_API_KEY_CACHE_TTL_SECONDS");
-    }
-    assert!(
-        err.to_string()
-            .contains("MICROMEGAS_AUTH_CACHE_TTL_SECONDS"),
-        "expected the error to name the replacement knob, got: {err}"
-    );
 }
 
 async fn live_pool() -> sqlx::PgPool {
@@ -166,7 +102,6 @@ async fn provider_always_registered_authenticates_key_minted_after_build() {
     unsafe {
         std::env::set_var(API_KEYS_VAR, r#"[{"name": "env", "key": "env-secret"}]"#);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let pool = live_pool().await;
@@ -208,7 +143,6 @@ async fn non_empty_table_alone_counts_as_configured() {
     unsafe {
         std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let pool = live_pool().await;
@@ -255,7 +189,6 @@ async fn empty_table_and_nothing_else_yields_none() {
     unsafe {
         std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
@@ -334,7 +267,6 @@ async fn missing_relation_is_err_not_none() {
     unsafe {
         std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
@@ -395,7 +327,6 @@ async fn build_chain_authenticates_key_minted_into_empty_table() {
     unsafe {
         std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let base_conn_str = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
@@ -500,7 +431,6 @@ async fn build_chain_issues_no_startup_query() {
     unsafe {
         std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let build_err = ProviderBuilder::new("")
@@ -535,7 +465,6 @@ async fn build_chain_with_env_keys_only_authenticates() {
             r#"[{"name": "env", "key": "chain-env-secret"}]"#,
         );
         std::env::remove_var(OIDC_CONFIG_VAR);
-        std::env::remove_var(ADMINS_VAR);
     }
 
     let chain = ProviderBuilder::new("")

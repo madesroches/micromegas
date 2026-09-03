@@ -19,7 +19,7 @@ Usage:
     python3 start_services_with_oidc.py
 
 Admin membership lives in the `admins` local group, not an env var (the
-MICROMEGAS_ADMINS family is refused at startup if set) -- see
+MICROMEGAS_ADMINS family is no longer read) -- see
 mkdocs/docs/admin/groups.md. On a fresh DB the v10 migration seeds `admins`
 with a wildcard ('*') member, making every authenticated caller an admin
 until you take over with:
@@ -148,15 +148,6 @@ def main():
     env = os.environ.copy()
     # MICROMEGAS_OIDC_CONFIG already set in environment, no need to override
     env["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
-
-    # MICROMEGAS_ADMINS (and its _ANALYTICS_/_INGESTION_ variants) is refused at startup now --
-    # admin membership lives in the `admins` local group instead (mkdocs/docs/admin/groups.md).
-    for removed_var in (
-        "MICROMEGAS_ADMINS",
-        "MICROMEGAS_ANALYTICS_ADMINS",
-        "MICROMEGAS_INGESTION_ADMINS",
-    ):
-        env.pop(removed_var, None)
 
     # Provision a local ingestion credential: the ingestion server now runs
     # WITH auth (see below), so every service's own self-telemetry needs a

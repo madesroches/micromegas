@@ -169,11 +169,10 @@ stores use.
 ## Upgrade path (schema v10)
 
 1. **Deploy the new binaries and run the migration once** — start
-   `telemetry-ingestion-srv` or the monolith. None of
+   `telemetry-ingestion-srv` or the monolith. Unset
    `MICROMEGAS_ADMINS`/`MICROMEGAS_ANALYTICS_ADMINS`/
-   `MICROMEGAS_INGESTION_ADMINS` should be set anywhere in the deployment:
-   the migration does not read them, and every process refuses to start
-   (the removed-var check) if any is still set, regardless of value.
+   `MICROMEGAS_INGESTION_ADMINS` everywhere in the deployment: none of them
+   is read anymore, by the migration or anything else.
 2. **The v10 migration always seeds `admins` with a single `('admins', '*')`
    row** — fresh install or upgrade, every time, no exception. This means
    *every authenticated caller* can reach several gates that were

@@ -23,7 +23,6 @@ use analytics_web_srv::web_server::{WebCliArgs, WebServerConfig, run_web_server}
 use anyhow::{Context, Result};
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
@@ -291,17 +290,6 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_read_policy`: `OwnershipRewrite`'s two data-isolation
-    // deployment knobs, parsed in `micromegas-analytics` (the crate that consumes them) rather
-    // than `micromegas-auth`. The mutating-function registration gate is per-request
-    // `admins`-group membership (`caller.is_admin`), resolved from the group store, not a knob
-    // here.
-    let analytics_isolation_config = if roles.flightsql && !args.disable_auth {
-        Some(Arc::new(IsolationConfig::from_env("MICROMEGAS_ANALYTICS")?))
-    } else {
-        None
-    };
-
     // One SIGTERM drives all roles
     let fanout = ShutdownFanout::new(wait_for_sigterm());
 
@@ -334,7 +322,6 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let auth = analytics_auth;
         let read_policy = analytics_read_policy;
-        let isolation_config = analytics_isolation_config;
         join_set.spawn(async move {
             let mut builder = FlightSqlServer::builder()
                 .with_lakehouse(lh)
@@ -345,9 +332,6 @@ async fn main() -> Result<()> {
             }
             if let Some(policy) = read_policy {
                 builder = builder.with_read_policy(policy);
-            }
-            if let Some(config) = isolation_config {
-                builder = builder.with_isolation_config(config);
             }
             builder.build_and_serve().await
         });
