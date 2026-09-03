@@ -323,7 +323,7 @@ a browser" exposure mint already avoids.
 **Audience Access** (`/audiences`) is the self-service counterpart of the
 ingestion-key mint flow — it drives the mint route's non-admin path
 (claim-and-mint) from a browser dialog, plus the audience-grant read/write
-routes covered in [Authentication → DB-backed audience
+routes covered in [Authorization → DB-backed audience
 grants](authorization.md#db-backed-audience-grants). See
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
