@@ -216,8 +216,6 @@ create/delete, and `GET .../audience-grants/visible`'s non-admin narrowing.
   and writes the admin's own `mint`+`read` rows if the audience looks
   unclaimed. The response's `claimed` field reports it. An admin with no email
   is unaffected.
-- **Mint grants must live in the DB.** An env-map `"mint"` selector is inert —
-  `mint_key` never consults it.
 
 `micromegas-setup-telemetry` wraps login, mint, and printing the
 `OTEL_EXPORTER_OTLP_*` env vars:

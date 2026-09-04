@@ -93,7 +93,7 @@ fn is_valid_audience_does_not_normalize() {
 
 /// `public` has no built-in read grant -- it is readable exactly when a grant names it, the same
 /// as any other audience. In production this is the seeded `('public', 'read', '*')` DB row
-/// (schema v9); a `{"public": ["*"]}` entry in the env-map grants is the equivalent here.
+/// (schema v9); a `{"public": ["*"]}` entry in the static grant map is the equivalent here.
 #[tokio::test]
 async fn read_policy_public_is_present_when_granted() {
     let policy = AudienceReadPolicy::new(grants(r#"{"public": ["*"]}"#));

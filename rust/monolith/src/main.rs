@@ -261,9 +261,9 @@ async fn main() -> Result<()> {
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process, built from its own dedicated pool via
         // the same `dedicated_key_store_pool` convention `analytics_auth` above already uses.
-        // Resolved under the same `MICROMEGAS_ANALYTICS` prefix `DbAudienceGrantsConfig` beside
-        // it uses, so the cache-TTL knob follows the same `{prefix}_` fallback every other knob
-        // at this wiring site does.
+        // The cache TTL is the flat, unprefixed `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`; the
+        // `"MICROMEGAS_ANALYTICS"` prefix below is passed only for call-site symmetry --
+        // `from_env_with_prefix` never actually consults it.
         let pool = lake_pool
             .clone()
             .expect("lakehouse must be Some when flightsql role is enabled");

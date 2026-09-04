@@ -35,8 +35,8 @@ fn removed_vars_that_are_set(removed: &[&'static str]) -> Vec<&'static str> {
 /// Warns when any of the three removed env-var API-keyrings --
 /// `MICROMEGAS_API_KEYS`, `MICROMEGAS_INGESTION_API_KEYS`, `MICROMEGAS_ANALYTICS_API_KEYS` -- is
 /// still set. `ingestion_api_keys` / `analytics_api_keys` are the only sources from here on;
-/// `micromegas-import-keys` migrates a still-set keyring into them. Unlike the #1564 precedent
-/// this removal warns rather than refuses startup -- see `## Decisions` in the design plan.
+/// `micromegas-import-keys` migrates a still-set keyring into them. Unlike the earlier
+/// removed-var families, this removal warns rather than refusing startup.
 pub(crate) fn warn_removed_api_key_vars() {
     const REMOVED: [&str; 3] = [
         "MICROMEGAS_API_KEYS",
@@ -45,12 +45,18 @@ pub(crate) fn warn_removed_api_key_vars() {
     ];
     let set = removed_vars_that_are_set(&REMOVED);
     if !set.is_empty() {
+        let api_keys_caveat = if set.contains(&"MICROMEGAS_API_KEYS") {
+            " on ingestion/flight-sql (`object-cache-srv` still requires it)"
+        } else {
+            ""
+        };
         micromegas_tracing::warn!(
             "{} {} set but no longer read -- import the keyring into ingestion_api_keys / \
-             analytics_api_keys with `micromegas-import-keys`, then unset {}",
+             analytics_api_keys with `micromegas-import-keys`, then unset {}{}",
             set.join(", "),
             if set.len() == 1 { "is" } else { "are" },
-            if set.len() == 1 { "it" } else { "them" }
+            if set.len() == 1 { "it" } else { "them" },
+            api_keys_caveat
         );
     }
 }

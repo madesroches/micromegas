@@ -338,8 +338,9 @@ impl FlightSqlServerBuilder {
                 // One shared snapshot cache for this process, built from
                 // its own dedicated pool -- not `key_store_pool` above, which
                 // `DbApiKeyAuthProvider` already owns -- via the same `dedicated_key_store_pool`
-                // convention. Same prefix (`""`) `DbApiKeyConfig::from_env_with_prefix` beside it
-                // resolves under, so the cache-TTL knob follows the same `{prefix}_` fallback.
+                // convention. The cache TTL is the flat, unprefixed
+                // `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`; the `prefix` argument below is passed only
+                // for call-site symmetry -- `from_env_with_prefix` never actually consults it.
                 let audience_grants_pool = dedicated_key_store_pool(&lake_pool_for_keys);
                 let audience_grants_config = DbAudienceGrantsConfig::from_env_with_prefix("");
                 let audience_grants_store = Arc::new(DbAudienceGrantsSource::new(

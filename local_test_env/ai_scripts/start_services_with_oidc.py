@@ -280,9 +280,10 @@ def main():
     # so it accepts that key from the other processes' self-telemetry sinks.
     print("📥 Starting Ingestion Server (WITH auth)...")
     ingestion_env = env.copy()
-    # Widens the residual race between the ingestion process binding its listener and the seed
-    # row landing in the table (see `wait_for_migration_v6`/`seed_ingestion_key` below) into a
-    # ~10s window of 401s instead of a single miss, if it fires at all in the dev path.
+    # Without this, the default 10s unknown-key negative cache would widen the residual race
+    # between the ingestion process binding its listener and the seed row landing in the table
+    # (see `wait_for_migration_v6`/`seed_ingestion_key` below) into a ~10s window of 401s instead
+    # of a single miss, if it fires at all in the dev path.
     ingestion_env["MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS"] = "0"
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen(

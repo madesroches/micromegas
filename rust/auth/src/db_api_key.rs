@@ -1,11 +1,11 @@
 //! DB-backed API key authentication.
 //!
-//! Moves API keys out of `MICROMEGAS_API_KEYS` (plaintext JSON in an env var) into
-//! two Postgres tables — `ingestion_api_keys` and `analytics_api_keys` (migration
-//! v5, `rust/ingestion/src/sql_migration.rs`) — holding only a SHA-256 hash of each
-//! key, plus a `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by`
-//! audit trail. [`DbApiKeyAuthProvider`] validates by hash-indexed lookup behind a
-//! short-TTL `moka` cache.
+//! Holds API keys in two Postgres tables — `ingestion_api_keys` and
+//! `analytics_api_keys` (migration v5, `rust/ingestion/src/sql_migration.rs`) —
+//! each row storing only a SHA-256 hash of the key, plus a
+//! `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit trail.
+//! [`DbApiKeyAuthProvider`] validates by hash-indexed lookup behind a short-TTL
+//! `moka` cache.
 
 use crate::env::resolve_prefixed_var;
 use crate::types::{AuthContext, AuthProvider, AuthType, ProviderUnavailable, RequestParts};
