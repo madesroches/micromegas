@@ -190,7 +190,6 @@ docker run -d --name analytics-web \
 |----------|----------|-------------|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection string |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3/GCS bucket URI for payloads |
-| `MICROMEGAS_API_KEYS` | No | JSON array of API keys — transitional path; the steady state is a DB-backed key minted via `POST /api/ingestion-api-keys` on `analytics-web-srv` (see [API Keys](../mkdocs/docs/admin/api-keys.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 
 ### FlightSQL Server

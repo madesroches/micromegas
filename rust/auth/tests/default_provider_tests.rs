@@ -11,7 +11,9 @@
 //! Every test here mutates process-wide env vars (`MICROMEGAS_API_KEYS`,
 //! `MICROMEGAS_OIDC_CONFIG`), so all are `#[serial]` with an `EnvGuard` that
 //! restores them on drop — the same pattern as
-//! `rust/ingestion/tests/data_lake_config_tests.rs`.
+//! `rust/ingestion/tests/data_lake_config_tests.rs`. `MICROMEGAS_API_KEYS` is no longer read by
+//! `ProviderBuilder` (see `build_chain_with_env_keys_only_rejects_them`); it stays in scope here
+//! only because a leaked value from another test binary must not affect these assertions.
 
 #![cfg(test)]
 
@@ -87,12 +89,11 @@ fn bearer_parts(token: &str) -> HttpRequestParts {
     }
 }
 
-/// **Provider always registered**: `with_db_key_store` attached alongside an env
-/// keyring (so `build()` returns `Some` regardless of the table's contents)
-/// still produces a chain containing the DB provider — asserted by inserting a
-/// row *after* `build()` returns and authenticating its key through the
-/// returned provider, with no restart: without this, a first-minted key would
-/// not authenticate until the process restarts.
+/// **Provider always registered**: `with_db_key_store` attached to a table that already has one
+/// live row (so `build()` returns `Some` via `has_live_rows`, with no env keys or OIDC involved)
+/// still produces a chain containing the DB provider — asserted by inserting a *second* row
+/// *after* `build()` returns and authenticating its key through the returned provider, with no
+/// restart: without this, a newly minted key would not authenticate until the process restarts.
 #[ignore]
 #[tokio::test]
 #[serial]
@@ -100,17 +101,28 @@ async fn provider_always_registered_authenticates_key_minted_after_build() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
-        std::env::set_var(API_KEYS_VAR, r#"[{"name": "env", "key": "env-secret"}]"#);
+        std::env::remove_var(API_KEYS_VAR);
         std::env::remove_var(OIDC_CONFIG_VAR);
     }
 
     let pool = live_pool().await;
+
+    // Live *before* build() — this is what makes `build()` return `Some`.
+    let seed_key = format!("mmk_test_registered_seed_{}", uuid::Uuid::new_v4());
+    let seed_key_id = insert_live_key(
+        &pool,
+        "provider-always-registered-seed",
+        &seed_key,
+        PUBLIC_AUDIENCE,
+    )
+    .await;
+
     let provider = ProviderBuilder::new("")
         .with_db_key_store(pool.clone(), ApiKeyTable::Ingestion)
         .build()
         .await
         .expect("build should succeed")
-        .expect("env keys configured, so build() must return Some");
+        .expect("a live key row at build time must make build() return Some");
 
     // Minted *after* build() returned.
     let key = format!("mmk_test_registered_{}", uuid::Uuid::new_v4());
@@ -130,6 +142,7 @@ async fn provider_always_registered_authenticates_key_minted_after_build() {
     );
 
     cleanup_key(&pool, key_id).await;
+    cleanup_key(&pool, seed_key_id).await;
 }
 
 /// **Non-empty table ⇒ `Some`**: a table with at least one live row and no env
@@ -452,11 +465,13 @@ async fn build_chain_issues_no_startup_query() {
     );
 }
 
-/// **Env keys alone, no key store**: `build_chain()` composes and authenticates
-/// through env keys just like `build()` does.
+/// **`MICROMEGAS_API_KEYS` alone, no key store**: `build_chain()` still succeeds (nothing fails
+/// startup, per the removed keyring's upgrade-shim warning) but the chain **rejects** a key from
+/// that variable — the direct assertion that the env-keyring arm is gone, stronger than a
+/// startup-error check would have been, since a refusal could pass with the arm still present.
 #[tokio::test]
 #[serial]
-async fn build_chain_with_env_keys_only_authenticates() {
+async fn build_chain_with_env_keys_only_rejects_them() {
     let _guard = EnvGuard;
     // SAFETY: serialized via `#[serial]`.
     unsafe {
@@ -470,12 +485,35 @@ async fn build_chain_with_env_keys_only_authenticates() {
     let chain = ProviderBuilder::new("")
         .build_chain()
         .await
-        .expect("build_chain should succeed with only env keys configured");
+        .expect("build_chain should succeed even with a stale MICROMEGAS_API_KEYS set");
 
     let parts = bearer_parts("chain-env-secret");
     let result = chain.validate_request(&parts as &dyn RequestParts).await;
     assert!(
-        result.is_ok(),
-        "an env-configured key must authenticate through the build_chain() chain"
+        result.is_err(),
+        "MICROMEGAS_API_KEYS is no longer read, so this key must not authenticate"
+    );
+}
+
+/// **`MICROMEGAS_API_KEYS` alone, no key store**: `build()` returns `Ok(None)` -- the removed
+/// keyring no longer counts toward `configured`, which is what turns the removal into the
+/// existing "no auth providers configured" bail at each binary rather than a silent start.
+#[tokio::test]
+#[serial]
+async fn build_with_env_keys_only_and_no_key_store_yields_none() {
+    let _guard = EnvGuard;
+    // SAFETY: serialized via `#[serial]`.
+    unsafe {
+        std::env::set_var(API_KEYS_VAR, r#"[{"name": "env", "key": "env-secret"}]"#);
+        std::env::remove_var(OIDC_CONFIG_VAR);
+    }
+
+    let result = ProviderBuilder::new("")
+        .build()
+        .await
+        .expect("build should succeed even with a stale MICROMEGAS_API_KEYS set");
+    assert!(
+        result.is_none(),
+        "MICROMEGAS_API_KEYS must no longer count toward `configured`"
     );
 }

@@ -18,11 +18,11 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
 
 ## API Key Authentication
 
-flight-sql accepts keys from two sources: a DB-backed `analytics_api_keys`
-table, or a static env-var keyring. Either source alone is sufficient —
-authentication does not require OIDC. See [API Keys](../admin/api-keys.md)
-for the full reference, including `analytics-web-srv`'s HTTP routes for
-minting DB-backed keys (flight-sql itself mints nothing over HTTP).
+flight-sql accepts keys from the `analytics_api_keys` table — the single key
+source; authentication does not require OIDC. See
+[API Keys](../admin/api-keys.md) for the full reference, including
+`analytics-web-srv`'s HTTP routes for minting DB-backed keys (flight-sql
+itself mints nothing over HTTP).
 
 ### Quick Setup (DB-backed key)
 
@@ -32,25 +32,6 @@ minting DB-backed keys (flight-sql itself mints nothing over HTTP).
 2. **Configure Grafana datasource**:
    - Auth Type: token
    - Token: the minted `mmk_...` key
-   - Save & Test
-
-### Quick Setup (env-var keyring)
-
-1. **Generate API Key**:
-   ```bash
-   openssl rand -base64 512
-   ```
-
-2. **Configure server** (see [Admin Guide](../admin/authentication.md)):
-   ```bash
-   export MICROMEGAS_API_KEYS='[
-     {"name": "grafana-prod", "key": "YOUR_GENERATED_KEY_HERE"}
-   ]'
-   ```
-
-3. **Configure Grafana datasource**:
-   - Auth Type: token
-   - Token: Paste your generated key
    - Save & Test
 
 ## OAuth 2.0 Client Credentials

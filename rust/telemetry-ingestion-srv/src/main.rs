@@ -6,13 +6,11 @@
 //! Env variables:
 //!  - `MICROMEGAS_SQL_CONNECTION_STRING` : to connect to postgresql
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : to write the payloads
-//!  - `MICROMEGAS_API_KEYS` : (optional) JSON array of API keys, legacy/bootstrap path
 //!  - `MICROMEGAS_OIDC_CONFIG` : (optional) OIDC configuration JSON
 //!
-//! Authentication is satisfied by any of: `MICROMEGAS_API_KEYS`,
-//! `MICROMEGAS_OIDC_CONFIG`, or a non-empty `ingestion_api_keys` DB table
-//! — the last of these is always checked, since this binary always attaches a
-//! DB-backed key store built from the data lake's own connection.
+//! Authentication is satisfied by either `MICROMEGAS_OIDC_CONFIG` or a non-empty
+//! `ingestion_api_keys` DB table — the latter is always checked, since this binary
+//! always attaches a DB-backed key store built from the data lake's own connection.
 
 #[cfg(not(target_os = "windows"))]
 #[global_allocator]
@@ -65,8 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(p) => Some(p),
             None => {
                 return Err("Authentication required but no auth providers configured. \
-                     Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, populate the \
-                     ingestion_api_keys DB table, or use --disable-auth for development"
+                     Set MICROMEGAS_OIDC_CONFIG, populate the ingestion_api_keys DB table, \
+                     or use --disable-auth for development"
                     .into());
             }
         }

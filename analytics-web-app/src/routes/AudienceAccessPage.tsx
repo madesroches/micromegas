@@ -619,12 +619,6 @@ function AudienceAccessPageContent() {
               limits minting into <code>public</code> to admins.
             </p>
             <p>
-              <strong className="text-theme-text-secondary">Env-map grants:</strong> read access
-              may also come from the <code>MICROMEGAS_AUDIENCE_GRANTS</code> startup map or a
-              per-key <code>read_audiences</code> list; neither is shown here and neither can be
-              shared from here.
-            </p>
-            <p>
               <strong className="text-theme-text-secondary">Reading through this deployment:</strong>{' '}
               Share, Remove, Revoke, and Mint always call this deployment's own store — there is
               no data-source picker here, unlike Query Deny List, since a flight-SQL data source
@@ -774,9 +768,8 @@ function AudienceAccessPageContent() {
                               </>
                             ) : (
                               <>
-                                No read grants — this audience is unreadable except through the{' '}
-                                <code>MICROMEGAS_AUDIENCE_GRANTS</code> env map or a per-key{' '}
-                                <code>read_audiences</code> list, neither shown here.
+                                No read grants — this audience is unreadable except through a
+                                per-key <code>read_audiences</code> list, not shown here.
                               </>
                             )}
                           </div>

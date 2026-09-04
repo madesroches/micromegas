@@ -1,5 +1,5 @@
-//! Unit tests for `IsolationConfig::from_env`, modeled on `AudienceReadPolicy::from_env`
-//! (`rust/auth/src/policy.rs`, covered by `rust/auth/tests/policy_tests.rs`).
+//! Unit tests for `IsolationConfig::from_env`, modeled on `resolve_isolation_config`'s own
+//! inline test module (`rust/public/src/servers/flight_sql_server.rs::mod tests`).
 //!
 //! Every test here mutates process-wide env vars, so all are `#[serial]` with an `EnvGuard` that
 //! restores them on drop, the same pattern as `rust/auth/tests/default_provider_tests.rs`. Within

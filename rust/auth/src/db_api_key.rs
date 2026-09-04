@@ -94,9 +94,10 @@ pub(crate) fn resolve_u64(prefix: &str, suffix: &str, default: u64) -> u64 {
 
 impl DbApiKeyConfig {
     /// Resolves each `API_KEY_`-specific knob as `{prefix}_*` first, falling back to the
-    /// unprefixed name — the same fallback `provider_with_prefix` already uses for
-    /// `{prefix}_API_KEYS` / `{prefix}_OIDC_CONFIG`. With an empty prefix this is
-    /// identical to the unprefixed vars, so an unprefixed caller just passes `""`.
+    /// unprefixed name, the same `{prefix}_*`-with-fallback convention
+    /// [`crate::env::resolve_prefixed_var`] implements for every other knob in this crate. With
+    /// an empty prefix this is identical to the unprefixed vars, so an unprefixed caller just
+    /// passes `""`.
     ///
     /// `cache_ttl_secs` is the exception: it reads the **flat, unprefixed**
     /// `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` knob directly (`prefix` is ignored for this one

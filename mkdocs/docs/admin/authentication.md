@@ -14,8 +14,8 @@ Both the analytics server (`flight-sql-srv`) and ingestion server
 - **API Keys** — bearer token authentication
 
 Both methods can be enabled simultaneously. When multiple providers are
-configured, they are tried in order until one succeeds (API key first for
-performance, then OIDC).
+configured, they are tried in order until one succeeds (OIDC first, then the
+DB-backed key store).
 
 ## Authentication Methods
 
@@ -43,20 +43,20 @@ support for multiple identity providers.
 
 ### API Keys
 
-Bearer token authentication. Two flavors coexist:
+Bearer token authentication. For ingestion and flight-sql, the only source is:
 
-- **Env keyring** — `MICROMEGAS_API_KEYS`, a JSON array parsed once at
-  startup. The only option for `object-cache-srv` (no DB connection);
-  also usable as a bootstrap path for ingestion and flight-sql.
 - **DB-backed keys** — `ingestion_api_keys` / `analytics_api_keys` rows,
   validated by hash lookup. Minted, listed, and revoked over HTTP without a
   redeploy. See [API Keys](api-keys.md) for the full reference.
 
-**Benefits (both flavors):**
+`object-cache-srv` is the one exception: it has no DB connection by design,
+so it authenticates against a permanent env-var keyring instead — see
+[Object Cache](object-cache.md#authentication).
+
+**Benefits:**
 
 - Simple to configure
-- Fast validation (HashMap lookup for the env keyring; cached hash lookup for
-  DB-backed keys)
+- Fast validation — cached hash lookup for DB-backed keys
 - No external identity provider dependency
 
 **Limitations:**
@@ -113,23 +113,10 @@ or an analytics key with `POST /api/analytics-api-keys` — both on
 `analytics-web-srv` (OIDC + admin required). See [API Keys](api-keys.md) for
 the full route reference and the `mmk_`-prefixed key shape.
 
-**Env keyring.** The only option for `object-cache-srv` (permanently — see
-[Object Cache](object-cache.md)), and usable as a bootstrap path for
-ingestion/flight-sql before any DB-backed key exists:
-
-```bash
-export MICROMEGAS_API_KEYS='[
-  {"name": "service1", "key": "secret-key-123"},
-  {"name": "service2", "key": "secret-key-456"}
-]'
-```
-
-**Format:**
-- JSON array of objects
-- Each object has `name` (identifier for logging) and `key` (the actual API key)
-- The `key` value is sent as the Bearer token by clients
-- Generate keys with: `openssl rand -base64 512` (or, for a DB-backed key, use
-  the mint route above instead)
+**`object-cache-srv`'s env keyring.** Not read by ingestion or flight-sql — it
+is `object-cache-srv`'s permanent auth path (no DB access by design). See
+[Object Cache](object-cache.md#authentication) for the `MICROMEGAS_API_KEYS`
+JSON shape it uses.
 
 ### Disable Authentication (Development Only)
 
@@ -302,7 +289,6 @@ The telemetry ingestion service (`telemetry-ingestion-srv`) uses the same authen
 
 ```bash
 # Start ingestion server with authentication
-export MICROMEGAS_API_KEYS='[{"name": "service1", "key": "secret-key-123"}]'
 export MICROMEGAS_OIDC_CONFIG='{"issuers": [...]}'
 telemetry-ingestion-srv
 

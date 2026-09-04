@@ -851,9 +851,9 @@ def test_firehose_dev_mode_open_without_access_key():
     """The local test stack runs ingestion with --disable-auth, so (like every
     other ingestion route) the Firehose route accepts requests with no
     X-Amz-Firehose-Access-Key header at all. This documents that dev-mode-open
-    behavior; a deployment with MICROMEGAS_API_KEYS configured would instead
-    reject this same request with a non-200 {requestId, timestamp,
-    errorMessage} body."""
+    behavior; a deployment with a populated ingestion_api_keys table (or OIDC)
+    would instead reject this same request with a non-200 {requestId,
+    timestamp, errorMessage} body."""
     request_id = f"firehose-dev-mode-{uuid.uuid4()}"
     body = _firehose_envelope(request_id, [])
 

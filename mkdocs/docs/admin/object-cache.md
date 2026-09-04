@@ -230,6 +230,12 @@ restarting the cache. This is an accepted, permanent limitation of this
 service, not an oversight: it has no DB access to hold the revocation state
 that ingestion/flight-sql's DB-backed keys use.
 
+This `MICROMEGAS_API_KEYS` keyring is unaffected by ingestion/flight-sql's move
+to DB-backed keys and stays permanent: a deployment that shares one
+environment across roles will see the *other* roles log a "no longer read"
+startup warning about this same variable name — harmless, since only
+`object-cache-srv` reads it.
+
 Apply defense in depth: API keys are the application-layer check, but the cache is a purely internal service with no public role, so restrict it at the network layer too. Bind it to a private network and use a security group / firewall / Kubernetes `NetworkPolicy` so that **only the services that use the cache can reach its listen endpoint** — nothing else, the public internet included, should be able to open a connection.
 
 `--disable-auth` drops the API-key check and is for local development only — never on an endpoint reachable by anything but localhost.

@@ -21,24 +21,19 @@ from micromegas.cli import config
 from micromegas.cli.version import add_version_argument
 from micromegas.web_client import WebClient
 
-# `--var`'s default when omitted: each table's own prefixed legacy var --
-# the same names the monolith's per-role `ProviderBuilder` reads
-# (`ProviderBuilder::new("MICROMEGAS_INGESTION")` /
-# `ProviderBuilder::new("MICROMEGAS_ANALYTICS")`, `rust/monolith/src/main.rs`).
+# `--var`'s default when omitted: each table's own prefixed legacy name --
+# no longer read by any server, kept here because that is what an
+# un-migrated deployment still has set.
 DEFAULT_VAR = {
     "ingestion": "MICROMEGAS_INGESTION_API_KEYS",
     "analytics": "MICROMEGAS_ANALYTICS_API_KEYS",
 }
 
 # When the default var above isn't set, `read_keyring` falls back to this
-# unprefixed name -- mirroring `ProviderBuilder`'s `{PREFIX}_API_KEYS`-falls-
-# back-to-`MICROMEGAS_API_KEYS` convention (`rust/auth/src/default_provider.rs`).
-# This is exactly what a split deployment populates: `telemetry-ingestion-srv`
-# and `flight-sql-srv` both build with `ProviderBuilder::new("")`
-# (`rust/telemetry-ingestion-srv/src/main.rs`,
-# `rust/public/src/servers/flight_sql_server.rs`), so the unprefixed var is
-# the *only* one they ever read. The fallback applies only to the default --
-# an explicit `--var` is used as-is, with no fallback.
+# unprefixed name -- again, the legacy server-side name, no longer read by
+# any server, kept here because that is what an un-migrated deployment still
+# has set. The fallback applies only to the default -- an explicit `--var`
+# is used as-is, with no fallback.
 FALLBACK_VAR = "MICROMEGAS_API_KEYS"
 
 
@@ -57,9 +52,10 @@ def read_keyring(args, parser):
 
     For `--source env` with no explicit `--var`, tries the table's prefixed
     default first, then falls back to the unprefixed `MICROMEGAS_API_KEYS`
-    (see `DEFAULT_VAR`/`FALLBACK_VAR` above) -- matching `ProviderBuilder`'s
-    fallback convention so this recipe works unmodified on both monolith and
-    split deployments. An explicit `--var` is used as-is.
+    (see `DEFAULT_VAR`/`FALLBACK_VAR` above) -- the legacy server-side names,
+    no longer read by any server, kept here because that is what an
+    un-migrated deployment still has set, on both monolith and split
+    deployments. An explicit `--var` is used as-is.
     """
     if args.source == "env":
         if args.var:

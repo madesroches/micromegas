@@ -1,8 +1,7 @@
 # API Keys
 
 Micromegas keys live in two Postgres tables — `ingestion_api_keys` and
-`analytics_api_keys` — or in `MICROMEGAS_API_KEYS` (a plaintext JSON env var,
-parsed once at startup). The tables hold only a SHA-256 hash of each key plus
+`analytics_api_keys`. The tables hold only a SHA-256 hash of each key plus
 a `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit
 trail.
 
@@ -23,9 +22,10 @@ default). See [Self-service mint](authorization.md#self-service-ingestion-key-mi
 for the full mechanism; every other route (list/revoke/import, and the
 analytics-key table entirely) stays admin-only.
 
-The env keyring still works and is still checked; adopting the DB-backed key
-store is an operator decision — see [Migrating from the env
-keyring](#migrating-from-the-env-keyring).
+The env-var keyring (`MICROMEGAS_API_KEYS` and its per-role forms) is no
+longer read by ingestion or flight-sql as of v0.31.0 — the DB-backed key store
+is the only source, and migrating off the keyring is required, not optional.
+See [Migrating from the env keyring](#migrating-from-the-env-keyring).
 
 !!! warning "TLS is a prerequisite for minting and importing"
     Every mint route returns the cleartext key exactly once, over whatever
@@ -188,9 +188,7 @@ An audience is an opaque label, not a principal encoding — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. Who may read or mint into it is
 separate, editable configuration: rows in the `audience_grants` table
 (`POST`/`GET`/`DELETE {base_path}/api/audience-grants`, or the
-`micromegas-grants` CLI). The deprecated `MICROMEGAS_AUDIENCE_GRANTS` env map
-is still unioned in on the read axis where it is set, but never on the mint
-axis. See [Audiences and Grants](authorization.md#audiences-and-grants) for the
+`micromegas-grants` CLI). See [Audiences and Grants](authorization.md#audiences-and-grants) for the
 full model. A fresh deployment ships with a seeded `('public', 'read', '*')`
 row, which makes every authenticated principal able to read `public` with no
 further grant; delete that row to change it.
@@ -229,12 +227,6 @@ if the audience looks unclaimed, writes the admin's own `user:<email>`
 never a mint failure if a concurrent claim wins the race. `MintResponse.claimed`
 is `true` only when this call actually created the audience's first grant
 rows. An admin with no email is unaffected — no `user:` row can be formed.
-
-**Data ingested through the env keyring (`MICROMEGAS_API_KEYS`) carries no
-bound audience of its own** — that keyring has no audience column — so its
-processes are stamped with the deployment's `MICROMEGAS_DEFAULT_AUDIENCE`
-(default `public`) explicitly. See [Authorization → Audience
-stamping](authorization.md#audience-stamping).
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly**
 (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
@@ -356,7 +348,7 @@ including any sub-path.
 `MICROMEGAS_API_KEY_CACHE_SIZE`/`_UNKNOWN_CACHE_TTL_SECONDS`/`_UNKNOWN_CACHE_SIZE` each accept a
 role prefix on the monolith — `MICROMEGAS_INGESTION_API_KEY_CACHE_SIZE` /
 `MICROMEGAS_ANALYTICS_API_KEY_CACHE_SIZE`, and so on — falling back to the unprefixed name, the
-same convention `MICROMEGAS_API_KEYS` / `MICROMEGAS_OIDC_CONFIG` use.
+same convention `MICROMEGAS_OIDC_CONFIG` uses.
 `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` is the one exception: it is a single flat, unprefixed knob
 with no role-scoped variant, since it governs the API-key, audience-grant, and group stores
 together as one process-wide value.
@@ -433,23 +425,34 @@ ingestion-key mint/revoke/import goes through it.
 
 ## Migrating from the env keyring
 
+**This is a v0.31.0 upgrade requirement, not an option.** As of v0.31.0,
+ingestion and flight-sql no longer read `MICROMEGAS_API_KEYS` (or its
+per-role/prefixed forms) at all — only `ingestion_api_keys` /
+`analytics_api_keys` and OIDC authenticate a caller. A still-set variable logs
+a `warn!` naming it and the replacement CLI, but does not stop startup or
+restore the old behavior.
+
+**The consequence of skipping this migration depends on what else is
+configured:** with OIDC also configured, the service starts normally and
+every keyring token silently stops authenticating — the `warn!` line is the
+only signal. Without OIDC and with an empty `ingestion_api_keys` /
+`analytics_api_keys` table, the service refuses to start at all (the
+pre-existing "no auth providers configured" bail), since an env-only keyring
+no longer counts as configured auth.
+
 Carrying *existing* key strings forward is an HTTP-backed operation via the
 `import` route on `analytics-web-srv` for each table, and the
 `micromegas-import-keys` CLI tool that drives it — no `psql`, no direct
 Postgres network access needed.
 
 1. **Deploy the new binaries.** The migration creates the tables (schema v5).
-   Nothing changes yet: the env keyring still authenticates every existing
-   key, and the DB tables start empty. In a split deployment, start ingestion
-   (or the monolith) before flight-sql — flight-sql never runs the
-   migration. Violating this ordering surfaces as a `warn!` log line naming
-   the table (flight-sql still starts, since the env keyring or OIDC is
-   still authenticating). Once `MICROMEGAS_API_KEYS` is removed (step 3) and
-   OIDC isn't configured either, a schema still short of v5 makes flight-sql
-   **fail to start**. For these key-management routes specifically,
-   `analytics-web-srv` never runs this migration itself — the target
-   telemetry DB must already have had ingestion or a lakehouse-role monolith
-   run against it at least once.
+   In a split deployment, start ingestion (or the monolith) before flight-sql
+   — flight-sql never runs the migration. Violating this ordering surfaces as
+   a `warn!` log line naming the table (flight-sql still starts if OIDC is
+   configured; otherwise it fails to start, per the consequence above). For
+   these key-management routes specifically, `analytics-web-srv` never runs
+   this migration itself — the target telemetry DB must already have had
+   ingestion or a lakehouse-role monolith run against it at least once.
 2. **Populate the tables with `micromegas-import-keys`** — installed
    alongside `micromegas-query`/`-screens`/`-logout` (`pip install
    micromegas`, or via poetry in `python/micromegas`):
@@ -492,12 +495,13 @@ Postgres network access needed.
      distinct key strings, one per table** — split it first, then import
      each half with `--only`/`--exclude` selecting disjoint entries per
      table run.
-3. **Remove `MICROMEGAS_API_KEYS`** (and prefixed variants) from ingestion
-   and flight-sql once the tables are populated. A non-empty key store counts
-   as "auth configured" on its own, so both services keep serving without
-   OIDC — including a key-only flight-sql deployment (see [Grafana
-   Authentication](../grafana/authentication.md)). `object-cache-srv` keeps
-   `MICROMEGAS_API_KEYS` **permanently** — see [Object Cache](object-cache.md).
+3. **Unset `MICROMEGAS_API_KEYS`** (and prefixed variants) on ingestion and
+   flight-sql once the tables are populated; leaving it set logs a warning
+   and changes nothing, since neither service reads it anymore. A non-empty
+   key store counts as "auth configured" on its own, so both services keep
+   serving without OIDC — including a key-only flight-sql deployment (see
+   [Grafana Authentication](../grafana/authentication.md)). `object-cache-srv`
+   keeps `MICROMEGAS_API_KEYS` **permanently** — see [Object Cache](object-cache.md).
 
 ## Security
 

@@ -32,6 +32,7 @@ import sys
 import subprocess
 import time
 import json
+import hashlib
 import secrets
 import requests
 import docker
@@ -39,7 +40,7 @@ from pathlib import Path
 
 # Add parent directory to path to import shared utilities
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from db.utils import ensure_app_database
+from db.utils import ensure_app_database, get_db_username
 
 
 def check_env_vars():
@@ -105,6 +106,68 @@ def check_postgres_running():
         return False
 
 
+def wait_for_migration_v6(username, max_attempts=200, interval_secs=0.1):
+    """Polls the data lake until its schema has reached migration v6.
+
+    `ingestion_api_keys` is created in v5, but its `audience` column -- which the seed INSERT
+    below needs -- is only added in v6, and `execute_migration` commits each version in its own
+    transaction, so polling for the table's mere existence could land between the two commits on
+    a fresh database. This also tolerates `relation "migration" does not exist` on a fresh
+    database, since the ingestion binary creates that table itself.
+
+    `wait_for_service`'s 1-second granularity is too coarse here -- the sink's own retry schedule
+    starts at ~10ms, so the real floor on how fast this can observe the row is the latency of one
+    `psql` exec, not a fixed sleep.
+    """
+    print("⏳ Waiting for the data lake schema to reach migration v6...")
+    for attempt in range(1, max_attempts + 1):
+        result = subprocess.run(
+            f"docker exec teledb psql -U {username} -tc "
+            '"SELECT version FROM migration ORDER BY version DESC LIMIT 1"',
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        version_str = result.stdout.strip()
+        if version_str:
+            try:
+                if int(version_str) >= 6:
+                    print(f"✅ Schema at migration v{version_str}")
+                    return True
+            except ValueError:
+                pass
+        # An empty result covers both "relation does not exist" (fresh database, the ingestion
+        # binary has not created it yet) and "no rows yet" -- either way, just keep polling.
+        if attempt == max_attempts:
+            print("❌ Data lake schema never reached migration v6")
+            return False
+        time.sleep(interval_secs)
+    return False
+
+
+def seed_ingestion_key(username, key):
+    """Seeds a live `ingestion_api_keys` row for `key`, revoking any row this script minted on a
+    previous run first -- `name` is not unique, so a fresh INSERT alone would accumulate one live
+    credential per run.
+    """
+    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    subprocess.run(
+        f"docker exec teledb psql -U {username} -c \""
+        "UPDATE ingestion_api_keys SET revoked_at = now(), revoked_by = 'start_services_with_oidc' "
+        "WHERE name = 'local-self-telemetry' AND revoked_at IS NULL\"",
+        shell=True,
+        check=True,
+    )
+    subprocess.run(
+        f"docker exec teledb psql -U {username} -c \""
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience) "
+        f"VALUES (gen_random_uuid(), decode('{key_hash}','hex'), 'local-self-telemetry', now(), "
+        "'start_services_with_oidc', 'public')\"",
+        shell=True,
+        check=True,
+    )
+
+
 def wait_for_service(url, max_attempts=30, service_name="Service"):
     """Wait for a service to be ready"""
     print(f"⏳ Waiting for {service_name}...")
@@ -148,6 +211,15 @@ def main():
     env = os.environ.copy()
     # MICROMEGAS_OIDC_CONFIG already set in environment, no need to override
     env["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
+
+    # Self-telemetry sink: without these, the services don't report their own logs/metrics
+    # anywhere, the same default-if-unset block `start_services.py` sets for split mode.
+    if not env.get("MICROMEGAS_TELEMETRY_URL"):
+        env["MICROMEGAS_TELEMETRY_URL"] = "http://127.0.0.1:9000"
+        print("Set MICROMEGAS_TELEMETRY_URL=http://127.0.0.1:9000")
+    if not env.get("MICROMEGAS_FLUSH_PERIOD"):
+        env["MICROMEGAS_FLUSH_PERIOD"] = "5"
+        print("Set MICROMEGAS_FLUSH_PERIOD=5")
 
     # Provision a local ingestion credential: the ingestion server now runs
     # WITH auth (see below), so every service's own self-telemetry needs a
@@ -204,13 +276,14 @@ def main():
     os.chdir(rust_dir)
 
     # Start Ingestion Server (WITH auth): the local self-telemetry key
-    # provisioned above is set on the ingestion process's own MICROMEGAS_API_KEYS,
+    # provisioned above is seeded into the `ingestion_api_keys` DB table below,
     # so it accepts that key from the other processes' self-telemetry sinks.
     print("📥 Starting Ingestion Server (WITH auth)...")
     ingestion_env = env.copy()
-    ingestion_env["MICROMEGAS_API_KEYS"] = json.dumps(
-        [{"name": "local-self-telemetry", "key": local_ingestion_key}]
-    )
+    # Widens the residual race between the ingestion process binding its listener and the seed
+    # row landing in the table (see `wait_for_migration_v6`/`seed_ingestion_key` below) into a
+    # ~10s window of 401s instead of a single miss, if it fires at all in the dev path.
+    ingestion_env["MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS"] = "0"
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen(
             [
@@ -228,6 +301,20 @@ def main():
         )
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")
+
+    # Seed the local self-telemetry key into `ingestion_api_keys` as early as possible relative
+    # to the sink's own `insert_process` attempts: `connect_to_remote_data_lake` (which runs
+    # `execute_migration` and commits v6 in its own transaction) executes before
+    # `serve_ingestion` binds the listener, so polling from here normally lands the row before
+    # the port ever opens, leaving only a narrow residual race on the very first request.
+    db_username = get_db_username()
+    if wait_for_migration_v6(db_username):
+        seed_ingestion_key(db_username, local_ingestion_key)
+        print("🔑 Seeded the local self-telemetry key into ingestion_api_keys")
+    else:
+        print("❌ Could not seed the local self-telemetry key -- schema never reached v6")
+        sys.exit(1)
+    print()
 
     # Wait for ingestion server
     if not wait_for_service(

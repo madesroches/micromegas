@@ -1,10 +1,10 @@
 //! DB-backed audience grant store: a whole-table snapshot cache over the `audience_grants` table
-//! (migration v7, `rust/ingestion/src/sql_migration.rs`), checked alongside the existing
-//! `{prefix}_AUDIENCE_GRANTS` env map by
-//! [`crate::policy::AudienceReadPolicy`]/[`crate::policy::AudienceMintPolicy`] -- a selector
+//! (migration v7, `rust/ingestion/src/sql_migration.rs`), checked alongside the static grant map
+//! by [`crate::policy::AudienceReadPolicy`]/[`crate::policy::AudienceMintPolicy`] -- a selector
 //! present in either source grants access, without either side being deep-cloned or merged into
 //! a combined map (`current()` hands back the cached grants behind an `Arc`). This is what makes
-//! a grant creatable without a service restart -- the env map stays the static/bootstrap layer.
+//! a grant creatable without a service restart -- the static map stays the bootstrap/test-only
+//! layer.
 //!
 //! The cache mechanics (cold-start throttling, last-good serving, `ProviderUnavailable`
 //! wrapping) live in [`crate::db_snapshot`], shared with [`crate::groups::DbGroupsSource`].

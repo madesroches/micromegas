@@ -1,11 +1,10 @@
 //! Unit tests for the authorization seam: `is_valid_audience`, `AudienceGrants`,
 //! `AudienceReadPolicy`, and `AudienceMintPolicy`.
 //!
-//! The `{prefix}_AUDIENCE_GRANTS`/`MICROMEGAS_AUDIENCE_GRANTS` fallback tests mutate
-//! process-wide env vars, so they are `#[serial]` with an `EnvGuard` that restores them on
-//! drop -- the same pattern as `rust/analytics/tests/ownership_rewrite_config_tests.rs`. A
-//! test-only prefix keeps the *prefixed* var name from colliding with any other test/process
-//! env.
+//! The `default_audience_from_env`/`resolve_prefixed_var` tests below mutate process-wide env
+//! vars, so they are `#[serial]` with an `EnvGuard` that restores them on drop -- the same pattern
+//! as `rust/analytics/tests/ownership_rewrite_config_tests.rs`. A test-only prefix keeps the
+//! *prefixed* var name from colliding with any other test/process env.
 
 use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::groups::ADMINS_GROUP;
@@ -544,14 +543,14 @@ fn from_rows_rejects_an_invalid_selector() {
 }
 
 /// `AudienceGrants::merge` as a standalone utility -- **not** a test of
-/// `resolve`'s runtime union behavior, which checks the env map and the DB store snapshot as two
-/// separate sources and never calls `merge` (see the doc comment on `merge` itself). This test
+/// `resolve`'s runtime union behavior, which checks the static map and the DB store snapshot as
+/// two separate sources and never calls `merge` (see the doc comment on `merge` itself). This test
 /// merges two maps directly, then wraps the *single* merged result in one `AudienceReadPolicy` to
 /// exercise it; a selector present in both input maps grants exactly the same access as being
 /// present in either alone -- no dedup, no special-cased "duplicate" handling.
 #[tokio::test]
 async fn merge_unions_disjoint_and_overlapping_audiences() {
-    let env_grants = grants(r#"{"team-alpha": ["group:eng"], "team-beta": ["*"]}"#);
+    let static_grants = grants(r#"{"team-alpha": ["group:eng"], "team-beta": ["*"]}"#);
     let store_grants = AudienceGrants::from_rows([
         (
             "team-alpha".to_string(),
@@ -566,7 +565,7 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
     ])
     .expect("valid rows");
 
-    let merged = env_grants.merge(&store_grants);
+    let merged = static_grants.merge(&store_grants);
     let policy = AudienceReadPolicy::new(merged);
 
     let eng_caller = caller(None, vec!["eng".to_string()], vec![], false);
@@ -595,7 +594,7 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
 /// in the resolved set (which is a `BTreeSet` regardless).
 #[tokio::test]
 async fn merge_tolerates_an_identical_selector_in_both_sources() {
-    let env_grants = grants(r#"{"team-alpha": ["group:eng"]}"#);
+    let static_grants = grants(r#"{"team-alpha": ["group:eng"]}"#);
     let store_grants = AudienceGrants::from_rows([(
         "team-alpha".to_string(),
         GrantAxis::Read,
@@ -603,7 +602,7 @@ async fn merge_tolerates_an_identical_selector_in_both_sources() {
     )])
     .expect("valid rows");
 
-    let merged = env_grants.merge(&store_grants);
+    let merged = static_grants.merge(&store_grants);
     let policy = AudienceReadPolicy::new(merged);
     let eng_caller = caller(None, vec!["eng".to_string()], vec![], false);
     let resolved = policy.resolve(&eng_caller).await.expect("resolve");
@@ -613,78 +612,6 @@ async fn merge_tolerates_an_identical_selector_in_both_sources() {
 // `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store`: store-outage/merge
 // behavior is exercised in `rust/auth/tests/db_audience_grants_tests.rs`,
 // which owns `DbAudienceGrantsSource` construction.
-
-// ---------------------------------------------------------------------------
-// {prefix}_AUDIENCE_GRANTS env fallback
-// ---------------------------------------------------------------------------
-
-const PREFIX: &str = "MICROMEGAS_1372_POLICY_TESTS";
-const PREFIXED_VAR: &str = "MICROMEGAS_1372_POLICY_TESTS_AUDIENCE_GRANTS";
-const UNPREFIXED_VAR: &str = "MICROMEGAS_AUDIENCE_GRANTS";
-
-/// Clears both vars on drop so a failing assertion in one test can't leak state into the next.
-struct EnvGuard;
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        // SAFETY: tests are serialized with `#[serial]`.
-        unsafe {
-            std::env::remove_var(PREFIXED_VAR);
-            std::env::remove_var(UNPREFIXED_VAR);
-        }
-    }
-}
-
-/// An unconfigured deployment (`{prefix}_AUDIENCE_GRANTS` unset) still resolves a scope -- the
-/// empty set, not an error and not something permissive -- with no store attached to resolve
-/// `public`'s seeded row. Uses a prefix no other test/env touches, so "unset" holds regardless of
-/// test execution order.
-#[tokio::test]
-#[serial]
-async fn from_env_with_unset_var_resolves_to_the_empty_set() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::remove_var(PREFIXED_VAR);
-        std::env::remove_var(UNPREFIXED_VAR);
-    }
-    let policy = AudienceReadPolicy::from_env(PREFIX).expect("from_env");
-    let ctx = caller(Some("alice@example.com"), vec![], vec![], false);
-    let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert_eq!(sorted(resolved.into_inner()), Vec::<String>::new());
-}
-
-#[tokio::test]
-#[serial]
-async fn from_env_reads_the_unprefixed_fallback_when_prefixed_is_unset() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::remove_var(PREFIXED_VAR);
-        std::env::set_var(UNPREFIXED_VAR, r#"{"team-alpha": ["*"]}"#);
-    }
-    let policy = AudienceReadPolicy::from_env(PREFIX).expect("from_env");
-    let ctx = caller(None, vec![], vec![], false);
-    let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
-}
-
-#[tokio::test]
-#[serial]
-async fn from_env_prefixed_var_wins_over_unprefixed_fallback() {
-    let _guard = EnvGuard;
-    // SAFETY: serialized via `#[serial]`.
-    unsafe {
-        std::env::set_var(PREFIXED_VAR, r#"{"prefixed": ["*"]}"#);
-        std::env::set_var(UNPREFIXED_VAR, r#"{"unprefixed": ["*"]}"#);
-    }
-    let policy = AudienceReadPolicy::from_env(PREFIX).expect("from_env");
-    let ctx = caller(None, vec![], vec![], false);
-    let resolved = policy.resolve(&ctx).await.expect("resolve");
-    let resolved = sorted(resolved.into_inner());
-    assert!(resolved.contains(&"prefixed".to_string()));
-    assert!(!resolved.contains(&"unprefixed".to_string()));
-}
 
 // ---------------------------------------------------------------------------
 // default_audience_from_env

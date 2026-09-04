@@ -132,6 +132,9 @@ def start_object_cache(target_dir):
     env["MICROMEGAS_OBJECT_CACHE_ORIGIN_URI"] = origin
     env["MICROMEGAS_OBJECT_CACHE_PREFIX"] = allowed_prefixes
     env["MICROMEGAS_OBJECT_CACHE_DISK_PATH"] = disk_path
+    # object-cache-srv only: it has no DB access by design, so this env-var keyring is its
+    # permanent auth path, unlike the ingestion/analytics services this script starts with
+    # `--disable-auth` instead.
     env["MICROMEGAS_API_KEYS"] = json.dumps([{"name": "local-dev", "key": api_key}])
 
     print("🗄️  Starting Object Cache Server...")
