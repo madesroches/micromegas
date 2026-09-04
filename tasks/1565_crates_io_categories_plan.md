@@ -71,8 +71,8 @@ and are not published — they stay untouched.
 ### Valid slugs
 
 Every slug below was checked against the live registry
-(`/api/v1/categories` and `/api/v1/categories/development-tools`); crates.io rejects a publish
-carrying an unknown slug, and caps a crate at 5.
+(`/api/v1/categories` and `/api/v1/categories/development-tools`); crates.io silently drops an
+unknown slug with a publish-time warning rather than failing the publish, and caps a crate at 5.
 
 `development-tools::profiling`, `development-tools::debugging`,
 `development-tools::procedural-macro-helpers`, `database-implementations`, `authentication`,
