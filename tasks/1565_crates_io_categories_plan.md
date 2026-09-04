@@ -7,8 +7,8 @@
 All 16 published Micromegas crates carry `keywords` but no `categories`, so none of them appear on
 any crates.io category page or in lib.rs's category browse tree. This plan adds a shared
 `categories` list to `[workspace.package]` in `rust/Cargo.toml`, opts every member crate into it
-the same way they already opt into `keywords`, and overrides it on the handful of crates whose own
-function is plainly outside the shared list.
+the same way they already opt into `keywords`, and overrides that default on a handful of crates —
+some add to the shared pair, others replace it outright.
 
 ## Current State
 
@@ -86,48 +86,43 @@ Add to `[workspace.package]`:
 categories = ["development-tools::profiling", "development-tools::debugging"]
 ```
 
-These two are the shared default because they are true of every crate here without exception:
-each one is a piece of a profiling and debugging toolchain. `database-implementations` is not —
-it belongs only to the crates that implement the lakehouse itself, so it is an override rather
-than part of the default.
+These two are the shared default; most crates here take them as-is. The override table below
+either adds to that pair (the lakehouse crates also gain `database-implementations`) or replaces
+it outright (auth, cache, and macro crates have no profiling/debugging role).
 
-Add `categories.workspace = true` next to the existing `keywords.workspace = true` line in the 13
+Add `categories.workspace = true` next to the existing `keywords.workspace = true` line in the 12
 members that take the shared default, published or not.
 
-The remaining 10 members omit `categories.workspace = true` and spell out a literal list instead —
+The remaining 11 members omit `categories.workspace = true` and spell out a literal list instead —
 Cargo has no per-field merge, so an override states the whole list:
 
 | Crate | Categories | Why not the default |
 |---|---|---|
 | `micromegas`, `micromegas-analytics`, `micromegas-ingestion`, `micromegas-otel-ingestion`, `micromegas-datafusion-extensions` | `["development-tools::profiling", "development-tools::debugging", "database-implementations"]` | The lakehouse itself — storage, write path, and query engine |
+| `micromegas-transit` | `["development-tools::profiling", "development-tools::debugging", "encoding"]` | Low-overhead serialization for the tracing path; keeps the profiling/debugging tie |
 | `micromegas-derive-transit` | `["development-tools::procedural-macro-helpers", "encoding"]` | A derive macro for a serialization format |
 | `micromegas-tracing-proc-macros` | `["development-tools::procedural-macro-helpers", "development-tools::profiling"]` | Instrumentation macros; keeps the profiling tie |
-| `micromegas-proc-macros` | `["development-tools::procedural-macro-helpers"]` | Same |
+| `micromegas-proc-macros` | `["development-tools::procedural-macro-helpers", "development-tools::profiling"]` | Same |
 | `micromegas-auth` | `["authentication"]` | API keys and OIDC; nothing profiling- or debugging-shaped |
 | `micromegas-object-cache` | `["caching"]` | A byte-range cache, not a database |
 
-`micromegas-transit` keeps the shared default rather than moving to `encoding`: it is the
-low-overhead event serialization the tracing path is built on, and the profiling/debugging pages
-are where someone would look for it.
-
 `micromegas-datafusion-wasm` cannot inherit, so it gets a literal
-`categories = ["wasm", "database-implementations", "development-tools::profiling"]` alongside its
-existing literal `keywords` — `wasm` first because in-browser SQL is the distinguishing property,
-and `database-implementations` because it embeds the query engine.
+`categories = ["wasm", "database-implementations", "development-tools::profiling", "development-tools::debugging"]`
+alongside its existing literal `keywords` — `wasm` first because in-browser SQL is the
+distinguishing property, and the rest match the other lakehouse crates.
 
 ## Implementation Steps
 
 1. Add the `categories` key to `[workspace.package]` in `rust/Cargo.toml`, immediately after
    `keywords`.
-2. Add `categories.workspace = true` directly below `keywords.workspace = true` in the 13
+2. Add `categories.workspace = true` directly below `keywords.workspace = true` in the 12
    manifests that take the shared default: `analytics-web-srv`, `flight-sql-srv`, `http-gateway`,
    `monolith`, `object-cache-srv`, `perfetto`, `redis-exporter`, `telemetry`,
-   `telemetry-ingestion-srv`, `telemetry-maintenance-srv`, `telemetry-sink`, `tracing`,
-   `transit`.
+   `telemetry-ingestion-srv`, `telemetry-maintenance-srv`, `telemetry-sink`, `tracing`.
 3. Add a literal `categories = [...]` line (per the override table) below `keywords.workspace = true`
-   in the 10 overriding manifests: `public`, `analytics`, `ingestion`, `otel-ingestion`,
-   `datafusion-extensions`, `transit/derive`, `tracing/proc-macros`, `micromegas-proc-macros`,
-   `auth`, `object-cache`.
+   in the 11 overriding manifests: `public`, `analytics`, `ingestion`, `otel-ingestion`,
+   `datafusion-extensions`, `transit`, `transit/derive`, `tracing/proc-macros`,
+   `micromegas-proc-macros`, `auth`, `object-cache`.
 4. Add the literal `categories` line to `rust/datafusion-wasm/Cargo.toml`, below its literal
    `keywords`.
 5. `CHANGELOG.md`: a bullet under `## Unreleased` recording the new shared `categories` metadata
@@ -182,9 +177,10 @@ Cargo's own manifest resolution can answer.
    `categories.workspace = true` line is missing.
 
 2. From `rust/datafusion-wasm/`, run the same command — it is a separate workspace, so step 1 does
-   not cover it. Expect `["wasm", "database-implementations", "development-tools::profiling"]`.
+   not cover it. Expect
+   `["wasm", "database-implementations", "development-tools::profiling", "development-tools::debugging"]`.
 
-3. Not automated because Cargo carries no category-slug list of its own — only crates.io validates
+3. From the repo root. Not automated because Cargo carries no category-slug list of its own — only crates.io validates
    slugs, and only at publish time. Diff the slugs that actually landed in both workspaces'
    manifests against the registry's live slug set (the API requires a descriptive `User-Agent`):
 
