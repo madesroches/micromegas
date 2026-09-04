@@ -83,28 +83,28 @@ unknown slug with a publish-time warning rather than failing the publish, and ca
 Add to `[workspace.package]`:
 
 ```toml
-categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
+categories = ["development-tools::profiling", "development-tools::debugging"]
 ```
 
-These three are the shared default because they describe what the stack as a whole is: a profiler
-and debugger's data source, backed by its own lakehouse implementation.
+These two are the shared default because they are true of every crate here without exception:
+each one is a piece of a profiling and debugging toolchain. `database-implementations` is not —
+it belongs only to the crates that implement the lakehouse itself, so it is an override rather
+than part of the default.
 
-Add `categories.workspace = true` next to the existing `keywords.workspace = true` line in every
-one of the 23 members that already inherits keywords — published or not. Following the keywords
-precedent uniformly keeps one rule ("members inherit the shared package metadata") instead of a
-second list of exceptions to maintain, and costs one line per manifest.
+Add `categories.workspace = true` next to the existing `keywords.workspace = true` line in the 13
+members that take the shared default, published or not.
 
-Override the default on five published crates whose own function falls outside it. An override
-replaces the inherited list entirely — these manifests drop `categories.workspace = true` and
-spell out a literal list instead:
+The remaining 10 members omit `categories.workspace = true` and spell out a literal list instead —
+Cargo has no per-field merge, so an override states the whole list:
 
-| Crate | Categories | Why the default is wrong |
+| Crate | Categories | Why not the default |
 |---|---|---|
-| `micromegas-derive-transit` | `["development-tools::procedural-macro-helpers", "encoding"]` | A derive macro for a serialization format, not a profiling or database crate |
+| `micromegas`, `micromegas-analytics`, `micromegas-ingestion`, `micromegas-otel-ingestion`, `micromegas-datafusion-extensions` | `["development-tools::profiling", "development-tools::debugging", "database-implementations"]` | The lakehouse itself — storage, write path, and query engine |
+| `micromegas-derive-transit` | `["development-tools::procedural-macro-helpers", "encoding"]` | A derive macro for a serialization format |
 | `micromegas-tracing-proc-macros` | `["development-tools::procedural-macro-helpers", "development-tools::profiling"]` | Instrumentation macros; keeps the profiling tie |
 | `micromegas-proc-macros` | `["development-tools::procedural-macro-helpers"]` | Same |
-| `micromegas-auth` | `["authentication"]` | API keys and OIDC; nothing profiling-, debugging-, or database-shaped |
-| `micromegas-object-cache` | `["caching", "database-implementations"]` | A byte-range cache; `caching` is its primary identity |
+| `micromegas-auth` | `["authentication"]` | API keys and OIDC; nothing profiling- or debugging-shaped |
+| `micromegas-object-cache` | `["caching"]` | A byte-range cache, not a database |
 
 `micromegas-transit` keeps the shared default rather than moving to `encoding`: it is the
 low-overhead event serialization the tracing path is built on, and the profiling/debugging pages
@@ -112,25 +112,26 @@ are where someone would look for it.
 
 `micromegas-datafusion-wasm` cannot inherit, so it gets a literal
 `categories = ["wasm", "database-implementations", "development-tools::profiling"]` alongside its
-existing literal `keywords` — `wasm` first because in-browser SQL is the distinguishing property.
+existing literal `keywords` — `wasm` first because in-browser SQL is the distinguishing property,
+and `database-implementations` because it embeds the query engine.
 
 ## Implementation Steps
 
 1. Add the `categories` key to `[workspace.package]` in `rust/Cargo.toml`, immediately after
    `keywords`.
-2. Add `categories.workspace = true` directly below `keywords.workspace = true` in the 18
-   manifests that take the shared default: `analytics`, `analytics-web-srv`,
-   `datafusion-extensions`, `flight-sql-srv`, `http-gateway`, `ingestion`, `monolith`,
-   `object-cache-srv`, `otel-ingestion`, `perfetto`, `public`, `redis-exporter`,
-   `telemetry`, `telemetry-ingestion-srv`, `telemetry-maintenance-srv`, `telemetry-sink`,
-   `tracing`, `transit`.
+2. Add `categories.workspace = true` directly below `keywords.workspace = true` in the 13
+   manifests that take the shared default: `analytics-web-srv`, `flight-sql-srv`, `http-gateway`,
+   `monolith`, `object-cache-srv`, `perfetto`, `redis-exporter`, `telemetry`,
+   `telemetry-ingestion-srv`, `telemetry-maintenance-srv`, `telemetry-sink`, `tracing`,
+   `transit`.
 3. Add a literal `categories = [...]` line (per the override table) below `keywords.workspace = true`
-   in the five overriding manifests: `transit/derive`, `tracing/proc-macros`,
-   `micromegas-proc-macros`, `auth`, `object-cache`.
+   in the 10 overriding manifests: `public`, `analytics`, `ingestion`, `otel-ingestion`,
+   `datafusion-extensions`, `transit/derive`, `tracing/proc-macros`, `micromegas-proc-macros`,
+   `auth`, `object-cache`.
 4. Add the literal `categories` line to `rust/datafusion-wasm/Cargo.toml`, below its literal
    `keywords`.
 5. `CHANGELOG.md`: a bullet under `## Unreleased` recording the new shared `categories` metadata
-   and the five per-crate overrides.
+   and the per-crate overrides.
 6. Run the verification below.
 
 ## Files to Modify
@@ -143,8 +144,8 @@ existing literal `keywords` — `wasm` first because in-browser SQL is the disti
 
 ## Trade-offs
 
-- **Uniform opt-in vs. published-only opt-in.** Opting in only the 16 published crates would touch
-  seven fewer files, but it would make `categories` the one shared field with a per-crate exception
+- **Uniform opt-in vs. published-only opt-in.** Opting in only the published crates would touch
+  eight fewer files, but it would make `categories` the one shared field with a per-crate exception
   list that has to be kept in sync with `build/release.py` as crates come and go. Following the
   `keywords` precedent everywhere avoids that second list.
 - **A CI lint asserting every published crate has non-empty categories** was considered and
@@ -177,7 +178,7 @@ Cargo's own manifest resolution can answer.
    ```
 
    Expect: `micromegas-capi` and `write-perfetto` empty; every other member either the shared
-   three or its override row from the table above. A crate showing `[]` means its
+   two or its override row from the table above. A crate showing `[]` means its
    `categories.workspace = true` line is missing.
 
 2. From `rust/datafusion-wasm/`, run the same command — it is a separate workspace, so step 1 does
@@ -203,6 +204,15 @@ Cargo's own manifest resolution can answer.
    ```
 
    Expect `unknown slugs: none`.
+
+## Decisions
+
+- `database-implementations` is not part of the shared default: it goes only on the crates that
+  implement the lakehouse (`micromegas`, `micromegas-analytics`, `micromegas-ingestion`,
+  `micromegas-otel-ingestion`, `micromegas-datafusion-extensions`, and the standalone
+  `micromegas-datafusion-wasm`). Pure instrumentation, serialization, and trace-export crates —
+  `micromegas-tracing`, `micromegas-transit`, `micromegas-telemetry`, `micromegas-telemetry-sink`,
+  `micromegas-perfetto` — must not carry it, and neither does `micromegas-object-cache`.
 
 ## Open Questions
 
