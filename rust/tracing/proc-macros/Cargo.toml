@@ -2,6 +2,7 @@
 name = "micromegas-tracing-proc-macros"
 description = "macros to help with instrumentation, part of micromegas"
 keywords.workspace = true
+categories = ["development-tools::procedural-macro-helpers", "development-tools::profiling"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

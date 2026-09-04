@@ -2,6 +2,7 @@
 name = "micromegas-object-cache"
 description = "object range cache for micromegas: shared cache engine and client ObjectStore"
 keywords.workspace = true
+categories = ["caching"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

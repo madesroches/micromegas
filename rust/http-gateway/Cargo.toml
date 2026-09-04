@@ -2,6 +2,7 @@
 name = "http-gateway"
 description = "Server accepting json over http requests and forwarding them to a Micromegas analytics server."
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

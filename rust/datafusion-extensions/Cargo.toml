@@ -2,6 +2,7 @@
 name = "micromegas-datafusion-extensions"
 description = "WASM-compatible DataFusion UDF extensions for micromegas"
 keywords.workspace = true
+categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

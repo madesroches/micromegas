@@ -2,6 +2,7 @@
 name = "micromegas-telemetry"
 description = "structures and functions common to both analytics and ingestion stacks for micromegas"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

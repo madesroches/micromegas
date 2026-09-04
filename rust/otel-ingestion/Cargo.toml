@@ -2,6 +2,7 @@
 name = "micromegas-otel-ingestion"
 description = "OTLP/HTTP ingestion adapter for micromegas"
 keywords.workspace = true
+categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

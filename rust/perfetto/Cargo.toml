@@ -2,6 +2,7 @@
 name = "micromegas-perfetto"
 description = "perfetto trace writer, part of micromegas"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

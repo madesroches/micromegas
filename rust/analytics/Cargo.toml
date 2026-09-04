@@ -2,6 +2,7 @@
 name = "micromegas-analytics"
 description = "analytics module of micromegas"
 keywords.workspace = true
+categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

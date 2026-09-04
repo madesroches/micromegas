@@ -2,6 +2,7 @@
 name = "micromegas-transit"
 description = "low overhead serialization, part of micromegas"
 keywords.workspace = true
+categories = ["development-tools::profiling", "development-tools::debugging", "encoding"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

@@ -2,6 +2,7 @@
 name = "analytics-web-srv"
 description = "Analytics web application for micromegas telemetry data"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

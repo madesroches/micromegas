@@ -3,6 +3,7 @@ name = "micromegas"
 description = "Micromegas is a scalable observability solution."
 readme = "README.md"
 keywords.workspace = true
+categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
