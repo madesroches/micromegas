@@ -103,15 +103,7 @@ Delete `AudienceGrants::from_env` and `AudienceReadPolicy::from_env`. `parse`, `
 `merge` stay.
 
 **Both policies keep their static `grants` field, `new(grants)`, and the corresponding loop /
-disjunct in `resolve` / `resolve_audience`.** The issue asks to remove "the env-side loop in
-`resolve` and the env-side disjunct in `resolve_audience`", but neither is env-side:
-
-- On the mint path, `self.grants` is the *only* production source — `mint_key` fills it from a point
-  query. Removing the disjunct would break the shipped mint flow.
-- On the read path, `self.grants` is the seam that lets over a dozen no-DB unit tests in
-  `rust/auth/tests/policy_tests.rs` exercise `resolve` by calling
-  `AudienceReadPolicy::new(grants(json))`. Removing the field would push all of them onto a live
-  `DbAudienceGrantsSource`, against this project's verification-tier rule.
+disjunct in `resolve` / `resolve_audience`.** (See `## Decisions`.)
 
 What changes instead is the constructor shape, so the compiler enumerates every wiring site:
 
@@ -161,10 +153,6 @@ Message shape:
 MICROMEGAS_API_KEYS is set but no longer read -- import the keyring into
 ingestion_api_keys / analytics_api_keys with `micromegas-import-keys`, then unset it
 ```
-
-No object-cache caveat is needed. `object-cache-srv` never calls `ProviderBuilder`, so it never
-warns; and a co-located process that shares the variable now emits one noisy log line rather than
-failing to start, which is why the shared-environment problem disappears entirely under this design.
 
 `compose` stays fallible for other reasons, but neither warning contributes a `?`.
 
@@ -310,7 +298,13 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     self-telemetry sink — including the ingestion process's own sink. A 401 on `insert_process` is
     non-retryable (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
     `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
-    the row must exist by the time the sink's first successful connection reaches `insert_process`.
+    the row should exist as early as possible relative to the sink's `insert_process` attempts, even
+    though the poll running in the Python parent after the server's port already binds cannot
+    guarantee it lands before the very first one (see Manual Verification #2). Also add the same
+    `MICROMEGAS_TELEMETRY_URL` / `MICROMEGAS_FLUSH_PERIOD` default-if-unset block
+    `start_services.py` already has (`:364-368`), since this script currently sets neither and the
+    self-telemetry path this migration targets is otherwise only enabled by accident, if the
+    operator's shell happens to export them.
     Migrate to a DB row: keep `generate_local_ingestion_key()` and the
     `MICROMEGAS_INGESTION_API_KEY` sink-side export, drop the `MICROMEGAS_API_KEYS` server-side
     export, and poll for schema migration version >= 6 (`SELECT version FROM migration`) rather than
@@ -320,11 +314,15 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     transaction, so a poll that fires as soon as the table exists can land between the two commits on
     a fresh database. The poll must also tolerate `relation "migration" does not exist` on a fresh
     database (the ingestion binary creates the table itself) and use a bounded attempt count, the same
-    shape as `wait_for_service`'s. Poll via the `docker exec teledb psql` path
-    `local_test_env/db/utils.py` already uses, but pass `-d <dbname>` with `<dbname>` parsed out of
-    `MICROMEGAS_SQL_CONNECTION_STRING` (the way `local_test_env/db/connect_app.py` already does) —
-    with no `-d`, `psql` connects to the database named after the role, not the data lake, and the
-    poll would never see `migration`. Insert the row as soon as the schema can accept it — i.e. as
+    shape as `wait_for_service`'s, but on a sub-second interval — `wait_for_service`'s 1-second
+    granularity is too coarse here, since the sink's own retry schedule starts at ~10ms; the poll's
+    real floor is the latency of each `psql` exec, not a fixed sleep. Poll via `docker exec teledb psql -U $MICROMEGAS_DB_USERNAME`, the
+    same no-`-d` shape `local_test_env/db/connect.py` uses to reach the data lake: with
+    `MICROMEGAS_SQL_CONNECTION_STRING` carrying no path (`doc/GETTING_STARTED.md:30`) and
+    `local_test_env/db/run.py` starting Postgres with only `POSTGRES_USER` set, the role-named default
+    database *is* the lake, so no `-d` is needed. If a dbname is ever parsed out of
+    `MICROMEGAS_SQL_CONNECTION_STRING` for this poll, it must be optional and `-d` omitted when the
+    URI carries no path. Insert the row as soon as the schema can accept it — i.e. as
     soon as migration version >= 6 is observed:
 
     ```sql
@@ -333,9 +331,14 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     ```
 
     `key_hash` is `hashlib.sha256(key.encode()).hexdigest()` — `hash_key`
-    (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string. `DbApiKeyAuthProvider`
-    validates against the table live, so a row inserted before the port binds authenticates the
-    ingestion process's own sink from its very first request, and every request after.
+    (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string.
+    `DbApiKeyAuthProvider` validates against the table live, so once the row lands it authenticates
+    the ingestion process's own sink for every subsequent request. The sub-second poll narrows, but
+    does not close, the window between the port binding and the row landing: the poll runs in the
+    Python parent after the server's own port bind, so an attempt from the sink's `insert_process`
+    retry schedule can still land before the row exists and get a 401 — which
+    `IngestionClientError::Permanent` treats as non-retryable. A transient 401 here is possible, not
+    prevented (see Manual Verification #2).
 13. **`local_test_env/ai_scripts/start_services.py`** — no functional change. Its
     `MICROMEGAS_API_KEYS` at `:135` is scoped to the `object-cache-srv` child env, which keeps the
     variable; the other services run `--disable-auth`. Add a one-line comment saying so, since the
@@ -448,10 +451,13 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 27b. **`local_test_env/claude_code_otel.py:24-25`** — the `MICROMEGAS_INGESTION_API_KEY` doc line
     ("optional bearer token (matches an entry in MICROMEGAS_API_KEYS on the server)") is rewritten to
     point at a live `ingestion_api_keys` row instead of the removed server-side variable.
-28. **`rust/analytics/src/lakehouse/read_scope.rs:120,141`** and
-    **`rust/analytics/tests/ownership_rewrite_config_tests.rs:96`** cite `MICROMEGAS_API_KEYS` only
-    as a *shape* comparison ("comma-separated, not a JSON array like MICROMEGAS_API_KEYS"). Still
-    accurate — `object-cache-srv` keeps it. No change.
+28. **`rust/analytics/tests/ownership_rewrite_config_tests.rs`** — reword the module doc's opening
+    line (`:1`, ``//! Unit tests for `IsolationConfig::from_env`, modeled on
+    `AudienceReadPolicy::from_env` ``), which cites the constructor this plan deletes; drop or
+    re-point the comparison. `read_scope.rs:120,141` and this file's `:96` cite `MICROMEGAS_API_KEYS`
+    only as a *shape* comparison ("comma-separated, not a JSON array like MICROMEGAS_API_KEYS"), which
+    stays accurate — `object-cache-srv` keeps it — and needs no change; see **Untouched,
+    deliberately**.
 29. **`CHANGELOG.md`** — one `* **Auth:**` bullet under Unreleased covering the five removed
     variables, the startup warning, the upgrade action per role, and the two ways a skipped
     migration surfaces (`## Decisions`), plus a **Minor breaking change** clause:
@@ -483,6 +489,7 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 - `rust/auth/tests/policy_tests.rs`
 - `rust/auth/tests/db_audience_grants_tests.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
+- `rust/analytics/tests/ownership_rewrite_config_tests.rs` (comment only)
 
 **Scripts / packaging**
 - `local_test_env/ai_scripts/start_services_with_oidc.py`
@@ -508,6 +515,9 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
   `object-cache-srv`'s only auth path.
 - `rust/object-cache-srv/**` — no change at all.
 - `rust/analytics-web-srv/**` — reads neither variable.
+- `rust/analytics/src/lakehouse/read_scope.rs:120,141` and
+  `rust/analytics/tests/ownership_rewrite_config_tests.rs:96` — cite `MICROMEGAS_API_KEYS` only as a
+  *shape* comparison; still accurate since `object-cache-srv` keeps it.
 - `rust/ingestion/src/sql_migration.rs:207,212` — historical prose about where the table's shape came
   from, in the file that owns the migration; leave as is.
 
@@ -519,6 +529,11 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 - The placeholder-grant-row prerequisite and its `read '*'` examples (issue §2, follow-on bullets 1
   and 2) need no work: neither is in `mkdocs/docs/` any more.
 - `AudienceMintPolicy::from_env`, named in the issue's Remove list, does not exist. Nothing to remove.
+- The issue's "remove the env-side loop in `resolve` and the env-side disjunct in
+  `resolve_audience`" is not followed: neither is env-side. The static `grants` field, `new`, and
+  both loop/disjunct stay — mint's only production source (`mint_key` fills it from a point query)
+  and the read path's no-DB test seam (`AudienceReadPolicy::new(grants(json))` in
+  `rust/auth/tests/policy_tests.rs`) both depend on them.
 - **A still-set variable logs a `warn!`; it does not refuse startup.** User call, overriding the
   issue's "fail loudly, don't fall back silently" instruction.
 - `AudienceMintPolicy::with_store` is kept even though it still has no production caller: deleting it
@@ -582,11 +597,14 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
    a failure would be immediately obvious to anyone running the script.
 2. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
-   `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
-   `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row via its
-   migration-version poll before the ingestion process's own sink connects. This is the only step
-   that exercises step 12's insert-timing against a real migrated table; the SHA-256 agreement
-   between the Python insert and Rust's `hash_key` has no in-repo test that spans both languages.
+   `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero — the
+   script now sets `MICROMEGAS_TELEMETRY_URL`/`MICROMEGAS_FLUSH_PERIOD` defaults (step 12), so the
+   self-telemetry path this MV measures is actually enabled rather than depending on the operator's
+   shell happening to export them. `/tmp/ingestion.log` may show an isolated 401 or two before the
+   key row lands (step 12's poll narrows, but does not close, that window) but should not show a
+   sustained run of them. This is the only step that exercises step 12's insert-timing against a
+   real migrated table; the SHA-256 agreement between the Python insert and Rust's `hash_key` has
+   no in-repo test that spans both languages.
 3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
