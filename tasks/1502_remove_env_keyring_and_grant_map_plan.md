@@ -108,7 +108,7 @@ disjunct in `resolve` / `resolve_audience`.** The issue asks to remove "the env-
 
 - On the mint path, `self.grants` is the *only* production source — `mint_key` fills it from a point
   query. Removing the disjunct would break the shipped mint flow.
-- On the read path, `self.grants` is the seam that lets ~30 no-DB unit tests in
+- On the read path, `self.grants` is the seam that lets over a dozen no-DB unit tests in
   `rust/auth/tests/policy_tests.rs` exercise `resolve` by calling
   `AudienceReadPolicy::new(grants(json))`. Removing the field would push all of them onto a live
   `DbAudienceGrantsSource`, against this project's verification-tier rule.
@@ -135,8 +135,7 @@ the two in `flight_sql_server.rs` (`:320`, `:368`) whose policy is documented as
 Nothing fails. A process that used to read one of these variables logs a `warn!` naming it and the
 replacement, then starts normally.
 
-New in `rust/auth/src/env.rs`, `pub(crate)` — not published API, since this is a one-release shim
-and `ProviderBuilder::compose` is the only caller:
+New in `rust/auth/src/env.rs`, `pub(crate)`:
 
 ```rust
 /// Pure detection, unit-tested directly. Returns the subset of `removed` that is set.
@@ -156,9 +155,6 @@ have meant.
 | `warn_removed_api_key_vars` | `MICROMEGAS_API_KEYS`, `MICROMEGAS_INGESTION_API_KEYS`, `MICROMEGAS_ANALYTICS_API_KEYS` | `micromegas-import-keys` into `ingestion_api_keys` / `analytics_api_keys` |
 | `warn_removed_audience_grant_vars` | `MICROMEGAS_AUDIENCE_GRANTS`, `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` | `micromegas-grants create <audience> <axis> <selector>` |
 
-`MICROMEGAS_INGESTION_AUDIENCE_GRANTS` is deliberately **not** in the list: no code ever read it, so
-warning about it would tell an operator they lost a setting that never did anything.
-
 Message shape:
 
 ```
@@ -170,12 +166,7 @@ No object-cache caveat is needed. `object-cache-srv` never calls `ProviderBuilde
 warns; and a co-located process that shares the variable now emits one noisy log line rather than
 failing to start, which is why the shared-environment problem disappears entirely under this design.
 
-**Call site: `ProviderBuilder::compose` only** — the same site #1564's two functions used. Not
-`analytics-web-srv`'s
-`WebServerConfig::from_cli_and_env`: unlike the admin and cache-TTL vars, neither of these five was
-ever read by that binary, so a warning there would be about a variable that binary never honored.
-`--disable-auth` skips `ProviderBuilder` and so skips the warning, which is correct for a
-development flag. `compose` stays fallible for other reasons, but neither warning contributes a `?`.
+`compose` stays fallible for other reasons, but neither warning contributes a `?`.
 
 These are **v0.31.0 upgrade shims**. Per the #1564 precedent they get deleted in v0.32.0, after
 which a set variable is silently ignored; the plan's final step files that follow-up.
@@ -235,7 +226,10 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
    keyed by audience name"), `AudienceGrants`'s doc comment (it currently justifies one env map "only
    because there is no store yet to split them across"), `RawAudienceGrants`'s and `parse`'s
    `{prefix}_AUDIENCE_GRANTS` references (they become "a grant map JSON document" — `parse` survives
-   only as `micromegas-import`-shaped input and test input), and the two-separate-sources comments in
+   only as `micromegas-import`-shaped input and test input), including `parse`'s doc comment's
+   dangling intra-doc link ("Split out from [`Self::from_env`] so tests can exercise parsing without
+   mutating the environment", `:253-254`), which loses the `[`Self::from_env`]` reference since
+   `from_env` no longer exists, and the two-separate-sources comments in
    `resolve` / `resolve_audience` (the static map is no longer "the env map"). `merge`'s doc comment
    loses its "they check the env map and the DB store snapshot" clause. Also rewrite
    `db_audience_grants.rs`'s module doc (`:1-7`), which opens with "checked alongside the existing
@@ -267,10 +261,11 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
    vec; two set at once → both returned, in the `const` list's order. `#[serial]` with a guard that
    clears all five on drop.
 8. **`rust/auth/tests/default_provider_tests.rs`** —
-   - `build_chain_with_env_keys_only_authenticates` (`:455-482`) inverts: with `MICROMEGAS_API_KEYS`
-     set and nothing else, `build_chain()` still returns `Ok`, and the chain **rejects** that key.
-     This is the direct assertion that the keyring arm is gone — stronger than the startup-error
-     check a refusal would have allowed, which could pass with the arm still present.
+   - `build_chain_with_env_keys_only_authenticates` (`:455-482`) inverts and is renamed to
+     `build_chain_with_env_keys_only_rejects_them`: with `MICROMEGAS_API_KEYS` set and nothing else,
+     `build_chain()` still returns `Ok`, and the chain **rejects** that key. This is the direct
+     assertion that the keyring arm is gone — stronger than the startup-error check a refusal would
+     have allowed, which could pass with the arm still present.
    - New, no DB: with `MICROMEGAS_API_KEYS` set and no key store, `build()` returns `Ok(None)` — the
      keyring no longer counts toward `configured`, which is what turns the removal into the
      existing "no auth providers configured" bail at each binary rather than a silent start.
@@ -291,8 +286,8 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
    explains the rationale the surviving `default_audience_from_env_*` and `resolve_prefixed_var_*`
    tests rely on. `merge_unions_disjoint_and_overlapping_audiences`'s doc comment (`:546-548`), which
    describes `resolve`'s runtime behavior as checking "the env map and the DB store snapshot as two
-   separate sources", loses "env map" for "the static map". Every other test in the file is
-   unaffected.
+   separate sources", loses "env map" for "the static map"; its `env_grants` local (`:554`) is renamed
+   to `static_grants` to match. Every other test in the file is unaffected.
 10. **`rust/auth/tests/db_audience_grants_tests.rs`** — `with_store(Some(store))` →
     `with_store(store)` at `:81`, `:99`, `:463`, `:423`. `live_mint_policy_with_store_merges_a_store_granted_selector`'s
     doc comment references "the env-equivalent map passed to `AudienceMintPolicy::new`" — reword to
@@ -326,8 +321,11 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     a fresh database. The poll must also tolerate `relation "migration" does not exist` on a fresh
     database (the ingestion binary creates the table itself) and use a bounded attempt count, the same
     shape as `wait_for_service`'s. Poll via the `docker exec teledb psql` path
-    `local_test_env/db/utils.py` already uses, inserting the row as soon as the schema can accept it
-    — i.e. as soon as migration version >= 6 is observed:
+    `local_test_env/db/utils.py` already uses, but pass `-d <dbname>` with `<dbname>` parsed out of
+    `MICROMEGAS_SQL_CONNECTION_STRING` (the way `local_test_env/db/connect_app.py` already does) —
+    with no `-d`, `psql` connects to the database named after the role, not the data lake, and the
+    poll would never see `migration`. Insert the row as soon as the schema can accept it — i.e. as
+    soon as migration version >= 6 is observed:
 
     ```sql
     INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
@@ -386,7 +384,8 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     `micromegas-import-keys` recipe and the three `--only`/`--exclude` routing rules verbatim; keep
     the object-cache-forever bullet.
 19. **`mkdocs/docs/admin/ingestion.md`** — drop the `MICROMEGAS_API_KEYS` table row (`:29`), the
-    `export` example (`:58`), and the keyring arm of the "If none of ..." sentence (`:50`); `:89`'s
+    `# API keys for machine-to-machine producers (legacy/bootstrap path)` comment and the `export`
+    line below it (`:57-58`), and the keyring arm of the "If none of ..." sentence (`:50`); `:89`'s
     no-bound-audience note drops env-keyring keys.
 20. **`mkdocs/docs/admin/flight-sql.md`** — drop the `MICROMEGAS_API_KEYS` (`:28`) and
     `MICROMEGAS_AUDIENCE_GRANTS` (`:31`) rows and the keyring arm at `:56`. `:72`'s
@@ -407,7 +406,10 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 22. **`mkdocs/docs/admin/object-cache.md`** — no removals; add one sentence stating this keyring is
     unaffected and permanent, and that a deployment sharing one environment across roles will see
     the other roles log a "no longer read" warning about the same variable name.
-23. **`mkdocs/docs/otlp/index.md`** — `:40` and `:47` drop the keyring; `:517`, `:647`, `:708` drop
+23. **`mkdocs/docs/otlp/index.md`** — `:40` and `:47` drop the keyring, along with the two-line
+    comment introducing `:47` ("# Server side — mint a key (see admin/api-keys.md), or use the
+    transitional / # env keyring telemetry-ingestion-srv also accepts:", `:45-46`), which otherwise
+    dangles with nothing left to introduce; `:517`, `:647`, `:708` drop
     the "or, transitionally, a value from `MICROMEGAS_API_KEYS`" clauses. `:105` ("A credential with
     no bound audience (an env-keyring key, OIDC, or no auth provider at all) resolves…") drops the
     env-keyring arm, the same sentence shape as `authorization.md`'s "Audience stamping" fix above.
@@ -431,11 +433,21 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     justify the names and the fallback by "the same names `ProviderBuilder` reads" / "mirroring
     `ProviderBuilder`'s convention". Reword to "the legacy server-side names, no longer read by any
     server — kept here because that is what an un-migrated deployment still has set."
+    **`python/micromegas/tests/cli/test_import_keys.py`** — comments only, same reword. The
+    fallback-path comment at `:89-91` ("exercises the fallback-to-unprefixed path, which is exactly
+    what a split deployment's `telemetry-ingestion-srv` (built with `ProviderBuilder::new("")`)
+    needs") and the regression-test docstring at `:125-131` ("`flight-sql-srv` builds its provider
+    with `ProviderBuilder::new("")` … so the analytics keyring only ever lives in the unprefixed
+    `MICROMEGAS_API_KEYS`") both justify the fallback by what a server reads; reword both to "the
+    legacy server-side names, no longer read by any server" per step 27's framing.
 27a. **`python/micromegas/tests/test_otlp_e2e.py:854`** —
     `test_firehose_dev_mode_open_without_access_key`'s docstring, which says "a deployment with
     MICROMEGAS_API_KEYS configured would instead reject this same request", is rewritten: ingestion
     no longer reads that variable, so the contrast is now against a deployment with a populated
     `ingestion_api_keys` table (or OIDC).
+27b. **`local_test_env/claude_code_otel.py:24-25`** — the `MICROMEGAS_INGESTION_API_KEY` doc line
+    ("optional bearer token (matches an entry in MICROMEGAS_API_KEYS on the server)") is rewritten to
+    point at a live `ingestion_api_keys` row instead of the removed server-side variable.
 28. **`rust/analytics/src/lakehouse/read_scope.rs:120,141`** and
     **`rust/analytics/tests/ownership_rewrite_config_tests.rs:96`** cite `MICROMEGAS_API_KEYS` only
     as a *shape* comparison ("comma-separated, not a JSON array like MICROMEGAS_API_KEYS"). Still
@@ -475,10 +487,12 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 **Scripts / packaging**
 - `local_test_env/ai_scripts/start_services_with_oidc.py`
 - `local_test_env/ai_scripts/start_services.py` (comment only)
+- `local_test_env/claude_code_otel.py` (comment only)
 - `build/run_flight_container.py`
 - `docker/docker-compose.monolith.yaml`
 - `docker/README.md`
 - `python/micromegas/micromegas/cli/import_keys.py` (comments only)
+- `python/micromegas/tests/cli/test_import_keys.py` (comments only)
 
 **Docs**
 - `mkdocs/docs/admin/authentication.md`, `authorization.md`, `api-keys.md`, `ingestion.md`,
@@ -532,14 +546,6 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
   keyring tokens. This is the failure mode the issue's refusal was aimed at; under the warning
   design the startup log line is the only in-process signal.
 
-## Documentation
-
-Ten `mkdocs/docs/` pages plus `docker/README.md` and `CHANGELOG.md` — enumerated per-file with line
-anchors in Phase 5 above. The load-bearing rewrite is `admin/api-keys.md`'s "Migrating from the env
-keyring" section, which changes from an optional migration to a required v0.31.0 upgrade step, and
-`admin/authorization.md`, which loses its "Deprecated: the env grant map" section and every inbound
-anchor to it.
-
 ## Testing Strategy
 
 Everything here is reachable by calling code with constructed inputs, so it is all no-DB unit tests
@@ -563,13 +569,17 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 
 1. **The object-cache keyring still works; `--disable-auth` mode is a non-regression smoke test.**
    `python3 local_test_env/ai_scripts/start_services.py`, then
-   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`; repeat with `--monolith`.
-   Expected: both come up, query returns rows, and `/tmp/object_cache.log` shows the object cache
-   authenticating — the one binary whose keyring survives. Every other service here runs with
-   `--disable-auth`, so this run never reaches `ProviderBuilder` or the audience-grant read policy
-   (MV #2 and #3 exercise those); it only confirms the disabled-auth path still starts cleanly. Not
-   automated: this is end-to-end process wiring across four binaries, and a failure would be
-   immediately obvious to anyone running the script.
+   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`. Run split mode only — do not
+   repeat with `--monolith`: `start_services.py`'s `auth_flag` (`:283`) picks
+   `--disable-ingestion-auth` instead of `--disable-auth` whenever `MICROMEGAS_OIDC_CONFIG` or
+   `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is merely present in the shell, so in an OIDC-configured shell
+   `--monolith` leaves analytics auth on and the query would need an OIDC token rather than exercising
+   the disabled-auth path this MV is for. Expected: it comes up, query returns rows, and
+   `/tmp/object_cache.log` shows the object cache authenticating — the one binary whose keyring
+   survives. Every other service here runs with `--disable-auth`, so this run never reaches
+   `ProviderBuilder` or the audience-grant read policy (MV #2 and #3 exercise those); it only confirms
+   the disabled-auth path still starts cleanly. Not automated: this is end-to-end process wiring, and
+   a failure would be immediately obvious to anyone running the script.
 2. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
