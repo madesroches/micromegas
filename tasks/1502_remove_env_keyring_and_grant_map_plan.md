@@ -615,3 +615,58 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 None. The one open call — refuse or warn on a still-set variable — is settled as warn (Decisions),
 which also closed the `MICROMEGAS_OBJECT_CACHE_API_KEYS` rename question that a refusal would have
 raised.
+
+## Implementation Progress
+
+### Phases 1–5 — ✅ Completed (commit `55e6ba879`)
+
+All 30 implementation steps (including 6a, 25a, 27a, 27b) landed as described: `ProviderBuilder`
+lost `api_keys_json`/its keyring branch and the `provider()`/`provider_with_prefix()` wrappers;
+`AudienceGrants::from_env` and `AudienceReadPolicy::from_env` were deleted and both `with_store`
+methods now take `Arc<DbAudienceGrantsSource>`; the five removed variables get a `warn!` naming
+their replacement CLI instead of a startup refusal; all three wiring sites, the four startup-guard
+messages, and every listed doc/script/CLI-comment file were updated. `object-cache-srv`,
+`parse_key_ring`, and `ApiKeyAuthProvider` were left untouched per "Untouched, deliberately".
+
+Checks (from `rust/`): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`,
+`cargo machete`, and `cargo test` (workspace) all clean. Python: `py_compile` on every touched
+script, clean.
+
+**Manual Verification:**
+- **#1** (OIDC dev path / self-telemetry via `start_services_with_oidc.py`) — skipped: requires a
+  standing multi-service stack.
+- **#2** (still-set variable warns, service still starts) — ran directly against a local OIDC +
+  Postgres environment: `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin
+  flight-sql-srv` produced exactly the two expected `warn!` lines, then started normally and served
+  queries, matching the plan's expected result.
+
+**Follow-up not filed:** step 30 (file the v0.32.0 issue to delete the two `warn!` shims) was left
+for the user — publishing a GitHub issue wasn't treated as authorized by the implementation task
+itself.
+
+### Review pass — ✅ Converged after 1 round + finalize (commit `f62fd93a1`)
+
+One `branch-review-loop` round (`opus` reviewer) against `main` found 9 confirmed issues, all
+**trivial** — no substantive issues, so the loop stopped after round 1 ("only trivial remain") and
+the finalize pass closed all 9 in a single unreviewed commit:
+
+- Dropped a `#1564` issue-number citation from a new code comment (repo convention forbids it).
+- Fixed a warning message that told operators to unset `MICROMEGAS_API_KEYS` with no caveat, even
+  though `object-cache-srv` still permanently depends on it in shared-environment deployments.
+- Corrected a comment in `start_services_with_oidc.py` that described the negative-key-cache TTL
+  override backwards.
+- Replaced a circular/incorrect comment (in both `monolith/main.rs` and `flight_sql_server.rs`)
+  claiming the audience-grants cache TTL follows a `{prefix}_` fallback it doesn't actually use.
+- Reworded two leftover "env map"/"env keyring" references (`policy_tests.rs`, `db_api_key.rs`) to
+  describe current behavior instead of removed history.
+- Deleted an `authorization.md` bullet that contrasted DB-only mint grants against the now-deleted
+  env grant map.
+- Reflowed and corrected a `functions-reference.md` paragraph left unwrapped by an in-place edit
+  ("several sources" → "two sources").
+- Renamed a `resolve_write_audience_tests.rs` fixture off the removed env-keyring name and gave it
+  an OIDC auth type, since an API-key credential can no longer reach ingestion with no bound
+  audience.
+
+Post-fix checks (`cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, targeted
+`cargo test`, `cargo check` on `micromegas-monolith`/`flight-sql-srv`, `py_compile`) all clean.
+No issues remain open.
