@@ -205,21 +205,6 @@ Startup-guard messages, all four sites, drop the removed variables and name the 
 `monolith/src/main.rs:253-262`'s comment block explaining what an unset `{prefix}_AUDIENCE_GRANTS`
 resolves to loses its premise; it collapses to a note that the store snapshot is the whole source.
 
-### 5. Behavior change operators must be told about
-
-A deployment authenticated **only** by the env keyring, with no OIDC and an empty key table,
-previously started and served. It now fails to start via the *existing* "Authentication required but
-no auth providers configured" bail — the keyring no longer counts toward `configured`, so `build()`
-returns `None`. The `warn!` fires alongside it, which is what makes the cause legible: without it,
-that bail names only the paths the operator isn't using. The Grafana token-auth recipe
-(`mkdocs/docs/grafana/authentication.md`) is exactly this shape, which is why its env-keyring Quick
-Setup section is deleted rather than annotated.
-
-A deployment with OIDC configured **and** a still-set keyring is the case a warning buys the most:
-it starts, authenticates OIDC callers, and silently stops accepting every keyring token. That is a
-real partial outage a refusal would have converted into a loud one, and it is the reason the message
-must name `micromegas-import-keys`, not just the dropped variable.
-
 ## Implementation Steps
 
 ### Phase 1 — `micromegas-auth`
@@ -262,11 +247,16 @@ must name `micromegas-import-keys`, not just the dropped variable.
 4. **`rust/public/src/servers/flight_sql_server.rs`** — both `from_env("")?.with_store(Some(..))`
    sites become `default().with_store(..)`; update the `with_read_policy` doc comment (`:150-159`),
    the injected-provider branch's comment (which says "builds the same env+store-backed policy" and
-   cites "a needless `from_env("")` failure mode on a malformed *unprefixed* env var"), and the bail
-   message at `:337`.
+   cites "a needless `from_env("")` failure mode on a malformed *unprefixed* env var"), the bail
+   message at `:337`, and the `use_default_auth` branch's comment at `:342-346` ("Same prefix (`""`)
+   `AudienceReadPolicy::from_env` beside it resolves under"), which also cites the deleted function.
 5. **`rust/monolith/src/main.rs`** — same policy change at `:286`; rewrite the `:253-262` comment
-   block and the `:218` bail message.
+   block, the `:264-268` comment ("Resolved under the same `MICROMEGAS_ANALYTICS` prefix
+   `AudienceReadPolicy::from_env` beside it uses"), and the `:218` bail message.
 6. **`rust/telemetry-ingestion-srv/src/main.rs`** — module doc `:9-12` and bail message `:68`.
+6a. **`rust/analytics/src/lakehouse/ownership_rewrite.rs:114`** — the operational-mitigation bullet
+    ("don't run ingestion with an env-keyring key, OIDC, or `--disable-auth` alongside them") drops
+    "an env-keyring key,": that arm becomes impossible once ingestion no longer has one.
 
 ### Phase 3 — Tests
 
@@ -298,11 +288,18 @@ must name `micromegas-import-keys`, not just the dropped variable.
    is gone, and `EnvGuard` would otherwise trip `dead_code` under `clippy -D warnings`. Reword, don't
    delete, the module doc comment's paragraph about the `#[serial]`/guard pattern (`:4-8`): it still
    explains the rationale the surviving `default_audience_from_env_*` and `resolve_prefixed_var_*`
-   tests rely on. Every other test in the file is unaffected.
+   tests rely on. `merge_unions_disjoint_and_overlapping_audiences`'s doc comment (`:546-548`), which
+   describes `resolve`'s runtime behavior as checking "the env map and the DB store snapshot as two
+   separate sources", loses "env map" for "the static map". Every other test in the file is
+   unaffected.
 10. **`rust/auth/tests/db_audience_grants_tests.rs`** — `with_store(Some(store))` →
     `with_store(store)` at `:81`, `:99`, `:463`, `:423`. `live_mint_policy_with_store_merges_a_store_granted_selector`'s
     doc comment references "the env-equivalent map passed to `AudienceMintPolicy::new`" — reword to
-    "the static map".
+    "the static map". `read_policy_with_unreachable_store_fails_closed_even_with_permissive_env_grants`
+    (`:78-86`) is renamed to drop "env_grants" (e.g. `..._permissive_static_grants`), its doc comment
+    ("even when the env grant map alone would be permissive") reworded to "the static grant map", and
+    its assertion message ("must not silently fall back to the env map alone") reworded to "the
+    static map alone".
 11. **`rust/public/tests/read_policy_threading_tests.rs`** —
     `unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected` (`:447-457`) becomes
     `AudienceReadPolicy::new(AudienceGrants::empty())`; rename it and its doc comment to say
@@ -320,10 +317,14 @@ must name `micromegas-import-keys`, not just the dropped variable.
     `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so the
     row must land *before* the port binds, not after `/health` first answers. Migrate to a DB row:
     keep `generate_local_ingestion_key()` and the `MICROMEGAS_INGESTION_API_KEY` sink-side export,
-    drop the `MICROMEGAS_API_KEYS` server-side export, and poll for the `ingestion_api_keys` table
-    (created by the schema migration, which runs before the port binds) via the `docker exec teledb
-    psql` path `local_test_env/db/utils.py` already uses, inserting the row as soon as the table
-    exists — before the script waits on `/health` at all:
+    drop the `MICROMEGAS_API_KEYS` server-side export, and poll for schema migration version >= 6
+    (`SELECT version FROM migration`) rather than for the `ingestion_api_keys` table's existence:
+    the table is created in `upgrade_data_lake_schema_v5` but its `audience` column, which the
+    INSERT below needs, is only added in `upgrade_data_lake_schema_v6`, and `execute_migration`
+    commits each version in its own transaction, so a poll that fires as soon as the table exists
+    can land between the two commits on a fresh database. Poll via the `docker exec teledb
+    psql` path `local_test_env/db/utils.py` already uses, inserting the row as soon as the migration
+    reaches version 6 — before the script waits on `/health` at all:
 
     ```sql
     INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
@@ -394,6 +395,9 @@ must name `micromegas-import-keys`, not just the dropped variable.
     section (`:37-53`). The DB-backed recipe immediately above it already covers token auth.
 25. **`mkdocs/docs/admin/functions-reference.md:478`** — drop the `MICROMEGAS_AUDIENCE_GRANTS` clause
     from `list_audience_grants()`'s visibility note.
+25a. **`analytics-web-app/src/routes/AudienceAccessPage.tsx`** — delete the "**Env-map grants:**"
+    paragraph (`:621-625`) naming `MICROMEGAS_AUDIENCE_GRANTS`; reword the "No read grants" empty-state
+    text (`:776-780`) to name only the per-key `read_audiences` list.
 26. **`docker/README.md`** — drop the `MICROMEGAS_API_KEYS` row from the Ingestion Server table
     (`:193`). The only `-e MICROMEGAS_API_KEYS` in the file is the object-cache `docker run` (`:132`),
     which stays along with its table row (`:207`); no other run block passes the variable.
@@ -403,13 +407,18 @@ must name `micromegas-import-keys`, not just the dropped variable.
     justify the names and the fallback by "the same names `ProviderBuilder` reads" / "mirroring
     `ProviderBuilder`'s convention". Reword to "the legacy server-side names, no longer read by any
     server — kept here because that is what an un-migrated deployment still has set."
+27a. **`python/micromegas/tests/test_otlp_e2e.py:854`** —
+    `test_firehose_dev_mode_open_without_access_key`'s docstring, which says "a deployment with
+    MICROMEGAS_API_KEYS configured would instead reject this same request", is rewritten: ingestion
+    no longer reads that variable, so the contrast is now against a deployment with a populated
+    `ingestion_api_keys` table (or OIDC).
 28. **`rust/analytics/src/lakehouse/read_scope.rs:120,141`** and
     **`rust/analytics/tests/ownership_rewrite_config_tests.rs:96`** cite `MICROMEGAS_API_KEYS` only
     as a *shape* comparison ("comma-separated, not a JSON array like MICROMEGAS_API_KEYS"). Still
     accurate — `object-cache-srv` keeps it. No change.
 29. **`CHANGELOG.md`** — one `* **Auth:**` bullet under Unreleased covering the five removed
     variables, the startup warning, the upgrade action per role, and the two ways a skipped
-    migration surfaces (§5 of Design), plus a **Minor breaking change** clause:
+    migration surfaces (`## Decisions`), plus a **Minor breaking change** clause:
     `provider`/`provider_with_prefix` removed from `micromegas_auth::default_provider`;
     `AudienceGrants::from_env` and `AudienceReadPolicy::from_env` removed from
     `micromegas_auth::policy`; both `with_store` methods take `Arc<DbAudienceGrantsSource>` instead
@@ -451,6 +460,9 @@ must name `micromegas-import-keys`, not just the dropped variable.
 - `mkdocs/docs/admin/authentication.md`, `authorization.md`, `api-keys.md`, `ingestion.md`,
   `flight-sql.md`, `monolith.md`, `object-cache.md`, `functions-reference.md`
 - `mkdocs/docs/otlp/index.md`, `mkdocs/docs/grafana/authentication.md`
+- `analytics-web-app/src/routes/AudienceAccessPage.tsx`
+- `rust/analytics/src/lakehouse/ownership_rewrite.rs`
+- `python/micromegas/tests/test_otlp_e2e.py`
 - `CHANGELOG.md`
 
 **Untouched, deliberately**
@@ -536,8 +548,9 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
    `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row as soon as
-   the table exists, before the script waits on `/health`, so the ingestion process's own sink never
-   authenticates against an empty table. This is the only step that exercises step 12's
+   the migration reaches version 6, before the script waits on `/health`, so the ingestion process's
+   own sink never authenticates against a table missing the `audience` column or an empty one. This
+   is the only step that exercises step 12's
    insert-before-health ordering against a real migrated table; the SHA-256 agreement between the
    Python insert and Rust's `hash_key` has no in-repo test that spans both languages.
 3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
