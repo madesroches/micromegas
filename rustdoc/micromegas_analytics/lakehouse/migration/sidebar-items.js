@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LATEST_LAKEHOUSE_SCHEMA_VERSION"],"fn":["migrate_lakehouse"]};

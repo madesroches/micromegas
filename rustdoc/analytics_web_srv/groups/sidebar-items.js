@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GroupsError"],"fn":["groups_router"],"struct":["GroupsState"]};

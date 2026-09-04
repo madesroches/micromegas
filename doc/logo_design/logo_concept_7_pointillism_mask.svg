@@ -1,0 +1,46 @@
+<svg width="4000" height="1000" viewBox="0 0 4000 1000" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- A pattern of sparse dots for the background -->
+    <pattern id="sparse-dots-pattern" x="0" y="0" width="5" height="5" patternUnits="userSpaceOnUse">
+      <circle cx="2.5" cy="2.5" r="2" fill="#AAAAAA"/>
+    </pattern>
+
+    <!-- A pattern of dense dots for the focused area (now made of tiny m's) -->
+    <pattern id="dense-dots-pattern" x="0" y="0" width="3" height="3" patternUnits="userSpaceOnUse">
+      <!-- A tiny 'm' shape made of even smaller dots -->
+      <circle cx="0.6" cy="2.4" r="0.7" fill="#333333"/>
+      <circle cx="0.6" cy="1.8" r="0.7" fill="#333333"/>
+      <circle cx="0.9" cy="1.2" r="0.7" fill="#333333"/>
+      <circle cx="1.2" cy="1.8" r="0.7" fill="#333333"/>
+      <circle cx="1.5" cy="2.4" r="0.7" fill="#333333"/>
+      <circle cx="1.8" cy="1.2" r="0.7" fill="#333333"/>
+      <circle cx="2.1" cy="1.8" r="0.7" fill="#333333"/>
+      <circle cx="2.4" cy="2.4" r="0.7" fill="#333333"/>
+    </pattern>
+
+    <!-- 1. MASK: An invisible shape that defines where the dots will appear -->
+    <mask id="mega-m-mask">
+      <!-- The mask is white where we want dots, black/transparent elsewhere -->
+      <path d="M 40 70 L 55 30 L 70 50 L 85 30 L 100 70" stroke-width="10" stroke="white" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+      <!-- We can add the small 'm' to the same mask -->
+      <path d="M 62 62 v -10 c 0 -6 6 -6 6 0 v 10 c 0 -6 6 -6 6 0 v -10" stroke-width="5" stroke="white" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </mask>
+
+    <!-- 2. CLIP PATH: This will cut out the dense dots to fit inside the lens -->
+    <clipPath id="lens-clip">
+        <circle cx="70" cy="50" r="22"/>
+    </clipPath>
+  </defs>
+
+  <!-- 3. DRAW THE DOTS: A rectangle filled with sparse dots, masked by the 'M' shape -->
+  <rect x="0" y="0" width="120" height="100" fill="url(#sparse-dots-pattern)" mask="url(#mega-m-mask)" />
+
+  <!-- 4. DRAW THE FOCUSED DOTS: A rectangle of dense dots, masked AND clipped by the lens -->
+  <rect x="0" y="0" width="120" height="100" fill="url(#dense-dots-pattern)" mask="url(#mega-m-mask)" clip-path="url(#lens-clip)" />
+
+  <!-- 5. THE LENS (drawn on top) -->
+  <g transform="translate(70, 50)">
+    <circle cx="0" cy="0" r="30" fill="none" stroke="#333" stroke-width="4" stroke-dasharray="150 40" transform="rotate(-30)"/>
+    <circle cx="0" cy="0" r="22" fill="rgba(0, 174, 239, 0.05)" stroke="#00AEEF" stroke-width="4" stroke-dasharray="100 30" transform="rotate(90)"/>
+  </g>
+</svg>

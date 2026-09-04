@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 400">
+  <defs>
+    <linearGradient id="ring1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#bf360c"/>
+      <stop offset="100%" style="stop-color:#8d3a14"/>
+    </linearGradient>
+    <linearGradient id="ring2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1565c0"/>
+      <stop offset="100%" style="stop-color:#0d47a1"/>
+    </linearGradient>
+    <linearGradient id="ring3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffb300"/>
+      <stop offset="100%" style="stop-color:#e6a000"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon scaled down -->
+  <g transform="translate(25, 35) scale(0.22)">
+    <ellipse cx="0" cy="0" rx="100" ry="38" fill="none" stroke="url(#ring1)" stroke-width="6" transform="rotate(-20)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="79" ry="30" fill="none" stroke="url(#ring2)" stroke-width="6" transform="rotate(25)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="58" ry="22" fill="none" stroke="url(#ring3)" stroke-width="6" transform="rotate(-8)" opacity="0.9"/>
+    <polygon points="0,-12 2,-4 9,-4 3,1 6,9 0,4 -6,9 -3,1 -9,-4 -2,-4" fill="#ffffff"/>
+  </g>
+
+  <!-- Vertical text -->
+  <text x="25" y="85" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">m</text>
+  <text x="25" y="115" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">i</text>
+  <text x="25" y="145" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">c</text>
+  <text x="25" y="175" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">r</text>
+  <text x="25" y="205" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">o</text>
+  <text x="25" y="235" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">m</text>
+  <text x="25" y="265" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">e</text>
+  <text x="25" y="295" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">g</text>
+  <text x="25" y="325" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">a</text>
+  <text x="25" y="355" text-anchor="middle" fill="#ffffff" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" font-weight="300" letter-spacing="1">s</text>
+</svg>

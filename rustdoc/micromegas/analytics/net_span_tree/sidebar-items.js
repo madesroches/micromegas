@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ROOT_PARENT_SPAN_ID"],"fn":["make_net_span_tree"],"struct":["NetSpanTreeBuilder"]};

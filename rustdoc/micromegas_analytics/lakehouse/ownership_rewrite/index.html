@@ -1,0 +1,103 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The row-level filter: injects an audience predicate into every `MaterializedView` scan based on the caller’s `ReadScope`. `OwnershipRewrite` – the row-level filter."><title>micromegas_analytics::lakehouse::ownership_rewrite - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="micromegas_analytics" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module ownership_rewrite</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../micromegas_analytics/index.html">micromegas_<wbr>analytics</a><span class="version">0.31.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module ownership_<wbr>rewrite</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#readscopeall-is-a-true-no-op" title="`ReadScope::All` is a true no-op"><code>ReadScope::All</code> is a true no-op</a></li><li><a href="#the-physical-audience-column" title="The physical `audience` column">The physical <code>audience</code> column</a></li><li><a href="#one-audience-per-row-not-derived-from-the-process-surviving-branches-only" title="One audience per row, not derived from the process (surviving branches only)">One audience per row, not derived from the process (surviving branches only)</a></li><li><a href="#branch-table" title="Branch table">Branch table</a></li><li><a href="#no-io-in-analyze" title="No I/O in `analyze()`">No I/O in <code>analyze()</code></a></li><li><a href="#the-audience-column-is-server-written-and-authenticated" title="The `audience` column is server-written and authenticated">The <code>audience</code> column is server-written and authenticated</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In micromegas_<wbr>analytics::<wbr>lakehouse</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">micromegas_analytics</a>::<wbr><a href="../index.html">lakehouse</a></div><h1>Module <span>ownership_<wbr>rewrite</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/micromegas_analytics/lakehouse/ownership_rewrite.rs.html#1-501">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The row-level filter: injects an audience predicate into every
+<code>MaterializedView</code> scan based on the caller’s <code>ReadScope</code>.
+<code>OwnershipRewrite</code> – the row-level filter.</p>
+<p>An <code>AnalyzerRule</code> that injects an audience-filtering predicate into every
+<code>MaterializedView</code>-backed <code>TableScan</code> a query plan touches, based on the caller’s <code>ReadScope</code>
+(<code>read_scope.rs</code>) and [<code>super::read_scope::IsolationConfig</code>]’s
+<code>MICROMEGAS_PUBLIC_VIEW_SETS</code>.</p>
+<h3 id="readscopeall-is-a-true-no-op"><a class="doc-anchor" href="#readscopeall-is-a-true-no-op">§</a><code>ReadScope::All</code> is a true no-op</h3>
+<p><code>ReadScope::All</code> is the internal/maintenance marker – never the output of a real <code>ReadPolicy</code>
+(see <code>read_scope.rs</code>). <code>analyze()</code> returns the plan unchanged when constructed with it, and
+<code>query.rs::make_session_context</code> does not even construct this rule for <code>ReadScope::All</code>
+callers, so their <code>ViewFactory</code> need not carry <code>processes</code>/<code>streams</code> either.</p>
+<h3 id="the-physical-audience-column"><a class="doc-anchor" href="#the-physical-audience-column">§</a>The physical <code>audience</code> column</h3>
+<p><code>blocks</code>, <code>processes</code>, <code>streams</code>, <code>log_entries</code>, <code>measures</code>, and <code>log_stats</code> each carry a
+physical <code>audience</code> column – declared non-nullable on <code>blocks</code>/<code>log_entries</code>/<code>measures</code>, and
+non-null by construction (though declared nullable in their inferred <code>SqlBatchView</code> schema) on
+<code>processes</code>/<code>streams</code>/<code>log_stats</code> – extracted once from Postgres’s own <code>audience</code> column at
+the <code>blocks</code> view’s materialization (its own row’s stamp) and propagated structurally into
+every downstream view. Those six views are consequently filtered with a bare <code>Filter</code> on that
+column (the column-filter branch in the table below): no semi-join, no <code>property_get</code>, no
+per-process aggregate. <code>async_events</code>, <code>thread_spans</code>, <code>net_spans</code>, <code>otel_spans</code>, and <code>images</code>
+don’t carry the column. They keep the <code>process_id</code>/<code>EXISTS</code> machinery below, which still
+resolves through <code>__processes__partitions</code>, but only for a scan that is <em>not</em> a guarded
+<code>view_instance(...)</code> – see the skip rule in the Branch table below.</p>
+<h3 id="one-audience-per-row-not-derived-from-the-process-surviving-branches-only"><a class="doc-anchor" href="#one-audience-per-row-not-derived-from-the-process-surviving-branches-only">§</a>One audience per row, not derived from the process (surviving branches only)</h3>
+<p><code>__processes__partitions</code> (the raw, un-merged <code>SqlBatchView</code> partitions <code>self.processes_source</code>
+scans) can carry more than one historical row per <code>process_id</code> – the partition-level
+<code>GROUP BY</code> in <code>processes_view.rs</code>’s transform query only collapses rows <em>within</em> a partition,
+not across a long-lived process’s entire history. Filtering the six column-carrying views one
+row at a time (the column-filter branch) is sound without any aggregate: every row now carries
+its own stamp from the moment it was written, so there is nothing to reconcile across rows of
+the same process. The one exception is a legacy, pre-v8 row with no <code>audience</code> column at all –
+<code>COALESCE</code> resolves that to the deployment default at read time. The <code>net_spans</code>/
+<code>otel_spans</code>/<code>images</code> semi-join branch and the <code>async_events</code>/<code>thread_spans</code> <code>EXISTS</code> branches
+still resolve through <code>per_process_audience</code> – <code>Aggregate(GROUP BY process_id, MAX(audience) AS resolved_audience)</code> – for a scan of those five that is <em>not</em> a guarded instance, since they
+have no <code>audience</code> column of their own to filter directly. A guarded instance skips the
+predicate entirely (see the Branch table below).</p>
+<h3 id="branch-table"><a class="doc-anchor" href="#branch-table">§</a>Branch table</h3>
+<p>Keyed on <code>MaterializedView::get_view().get_file_schema()</code>: whether it has an <code>audience</code> field,
+failing that whether it has a <code>process_id</code> field – not on a hardcoded view-set list, so a
+future view set that gains either column falls into the matching branch automatically:</p>
+<div><table><thead><tr><th>View set</th><th>Branch</th></tr></thead><tbody>
+<tr><td><code>processes</code>, <code>streams</code>, <code>blocks</code>, <code>log_entries</code>, <code>measures</code>, <code>log_stats</code></td><td><code>column filter</code>: direct <code>audience IN (...)</code> filter on the view’s own column – no join</td></tr>
+<tr><td><code>net_spans</code>, <code>otel_spans</code>, <code>images</code>, <code>async_events</code>, <code>thread_spans</code>, scanned as a guarded, non-<code>'global'</code> <code>view_instance(...)</code></td><td><code>skip</code>: no predicate at all – <code>MaterializedView::instance_is_audience_guarded()</code> reports <code>AudienceGuard::authorize_view_instance</code> already denies an unauthorized caller before any row is read, so the subquery predicates below would be redundant</td></tr>
+<tr><td><code>net_spans</code>, <code>otel_spans</code>, <code>images</code>, not a guarded instance</td><td><code>semi-join</code>: <code>process_id IN (subquery)</code> against <code>per_process_audience</code> (outer <code>process_id</code> cast to <code>Utf8</code>: it is <code>Dictionary(Int32, Utf8)</code> in these, and nothing coerces an uncorrelated <code>IN</code> subquery’s join keys once <code>DecorrelatePredicateSubquery</code> turns it into a <code>LeftSemi</code> join – the analyzer’s own <code>TypeCoercion</code> has already run by the time this rule executes)</td></tr>
+<tr><td><code>async_events</code>, not a guarded instance</td><td>no <code>process_id</code> column either – <code>async_events EXISTS</code>: literal-valued <code>EXISTS</code>, keyed on <code>get_view_instance_id()</code> (the process_id string, canonicalized – see <code>canonical_view_instance_id</code>)</td></tr>
+<tr><td><code>thread_spans</code>, not a guarded instance</td><td>no <code>process_id</code> <strong>or</strong> <code>stream_id</code> column – <code>thread_spans EXISTS</code>: two-hop literal <code>EXISTS</code>, through <code>streams</code> (<code>get_view_instance_id()</code> is the stream_id string, canonicalized the same way)</td></tr>
+<tr><td>anything in <code>public_view_sets</code></td><td><code>public</code>: no predicate at all – checked before any of the above</td></tr>
+<tr><td>anything else</td><td><code>analyze()</code> returns <code>Err</code> (<code>DataFusionError::Plan</code>) rather than silently leaving the scan unfiltered – a future view set must add itself to this table, not fall through</td></tr>
+</tbody></table>
+</div>
+<p>Adding a new view set to a <code>ViewFactory</code> means adding it to this table too, and to the match
+arms in [<code>OwnershipRewrite::predicate_for</code>] below.</p>
+<h3 id="no-io-in-analyze"><a class="doc-anchor" href="#no-io-in-analyze">§</a>No I/O in <code>analyze()</code></h3>
+<p><code>in_subquery</code>/<code>exists</code> build uncorrelated subquery <code>Expr</code>s; <code>DecorrelatePredicateSubquery</code> (an
+optimizer, not analyzer, rule) turns them into joins later. <code>processes_source</code>/<code>streams_source</code>
+come from <code>MaterializedView::new(..., query_range: None)</code>, which is synchronous and does no I/O
+– the actual <code>processes</code>/<code>streams</code> scans happen during normal execution, exactly like
+<code>TableScanRewrite</code>’s injected time filter.</p>
+<h3 id="the-audience-column-is-server-written-and-authenticated"><a class="doc-anchor" href="#the-audience-column-is-server-written-and-authenticated">§</a>The <code>audience</code> column is server-written and authenticated</h3>
+<p><code>processes</code>, <code>streams</code>, and <code>blocks</code> are each stamped with their own <code>audience</code> column at
+write time, from the authenticated credential’s <code>AuthContext.bound_audience</code>
+(<code>resolve_write_audience</code>), and a client can neither assert nor forge that stamp
+(<code>strip_reserved_properties</code> drops any client-supplied <code>micromegas.*</code> property, and there is
+no property to re-assert in the first place any more – the stamp is a physical column, not a
+property). A credential carrying no bound audience resolves to the deployment default at the
+HTTP write edge and is stamped with it explicitly, the same as any other audience – only a
+legacy, pre-v8 row keeps a NULL column, resolved to the deployment’s
+<code>MICROMEGAS_DEFAULT_AUDIENCE</code> where the audience is <em>read</em> instead (see <code>crate::audience</code>’s
+module doc). Admin replication (<code>replication.rs</code>) now hard-fails on a missing <code>audience</code>
+column rather than ever writing a row with none. Registration
+(<code>insert_process</code>/<code>register_otel_process</code>) rejects a same-<code>process_id</code>, different-audience
+re-registration outright – needed because the OTLP <code>process_id</code> derivation formula is public,
+so without this guard a credential could pre-register (via the native path) the exact
+<code>process_id</code> a victim audience’s OTLP producer would later derive, silently exposing that
+audience’s data to the squatter; this is a confidentiality gap, not merely an integrity one.
+The stream-side mirror, <code>check_stream_audience_conflict</code>, closes the equivalent
+re-pointed-credential gap for <code>streams</code>.</p>
+<p><strong>What remains open, tracked separately:</strong></p>
+<ul>
+<li><strong>The five instance-only view sets</strong> (<code>net_spans</code>, <code>otel_spans</code>, <code>images</code>, <code>async_events</code>,
+<code>thread_spans</code>) <strong>and the per-process JIT <code>view_instance</code> path</strong> still resolve their audience
+<em>label</em> through the owning process’s/stream’s row rather than a genuine per-row column of
+their own – via the call-level guard’s instance check (<code>AudienceGuard::authorize_view_instance</code>,
+<code>IdKind::ProcessOrStream</code>) for the guarded <code>view_instance(...)</code> scan every production caller
+takes, not by a predicate this rule injects (see the skip in the Branch table above). The
+cross-audience <em>injection</em> scenario (an attacker’s block naming a victim’s
+<code>process_id</code>/<code>stream_id</code>) is closed for both, as a side effect of the mismatch predicate on
+<code>blocks_view</code>’s own materialization – except against a victim whose <code>processes</code>/<code>streams</code>
+row is a legacy, pre-v8 NULL-audience row (next bullet).</li>
+<li><strong>The NULL-anchor window.</strong> A <code>processes</code>/<code>streams</code> row registered before its ingestion
+binary supported per-row stamping keeps <code>audience = NULL</code> for its entire remaining life
+(rows are immutable, no backfill). The mismatch predicate’s NULL-tolerant pass-through lets
+a mismatched block through unchecked against such a row for as long as it exists. This is
+an accepted, bounded limitation over already-public legacy data, bounded by the deploy-order
+requirement (every ingestion replica upgraded) and shrinking as legacy rows age out under
+retention.</li>
+</ul>
+<p>There is no in-product enforcement knob left for either surface; the mitigation is
+operational – provision only audience-bound DB-backed ingestion credentials, and don’t run
+ingestion with an env-keyring key, OIDC, or <code>--disable-auth</code> alongside them – see this
+stage’s <code>CHANGELOG.md</code> entry.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.OwnershipRewrite.html" title="struct micromegas_analytics::lakehouse::ownership_rewrite::OwnershipRewrite">Ownership<wbr>Rewrite</a></dt><dd>Injects an audience predicate into every <code>MaterializedView</code> scan (see the module doc comment).</dd></dl></section></div></main></body></html>

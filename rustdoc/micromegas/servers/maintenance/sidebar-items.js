@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["daemon","get_global_views_with_update_group","materialize_all_views","run_tasks_forever"],"struct":["EveryDayTask","EveryHourTask","EveryMinuteTask","EverySecondTask"]};

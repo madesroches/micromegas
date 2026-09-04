@@ -1,0 +1,9 @@
+<svg width="400" height="100" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .name { font: 20px sans-serif; fill: #333; }
+  </style>
+  <!-- Growing Signal -->
+  <path d="M 20 50 q 15 -30 30 0 t 30 0 q 15 20 30 0 t 30 0 q 15 -45 30 0 t 30 0" stroke="#00C49A" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <!-- Text -->
+  <text x="220" y="58" class="name">Micromegas</text>
+</svg>

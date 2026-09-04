@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"attr":["micromegas_main"],"macro":[["declare_jemalloc_conf",1]],"mod":["analytics","auth","client","config","ingestion","object_cache","perfetto","servers","telemetry","telemetry_sink","tracing","utils"]};
