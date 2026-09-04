@@ -100,7 +100,7 @@ to advertise `MICROMEGAS_API_KEYS`. An embedder writes `ProviderBuilder::new("")
 ### 2. `AudienceGrants` / the policies lose env resolution only
 
 Delete `AudienceGrants::from_env` and `AudienceReadPolicy::from_env`. `parse`, `from_rows`, and
-`merge` stay.
+`merge` stay (`parse` as a published-but-test-only entry point; see `## Decisions`).
 
 **Both policies keep their static `grants` field, `new(grants)`, and the corresponding loop /
 disjunct in `resolve` / `resolve_audience`.** (See `## Decisions`.)
@@ -213,8 +213,9 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
    `Arc<DbAudienceGrantsSource>`. Update the module doc comment's opening line ("a JSON grant map
    keyed by audience name"), `AudienceGrants`'s doc comment (it currently justifies one env map "only
    because there is no store yet to split them across"), `RawAudienceGrants`'s and `parse`'s
-   `{prefix}_AUDIENCE_GRANTS` references (they become "a grant map JSON document" — `parse` survives
-   only as `micromegas-import`-shaped input and test input), including `parse`'s doc comment's
+   `{prefix}_AUDIENCE_GRANTS` references (they become "a grant map JSON document" — `parse` becomes
+   a published-but-test-only entry point, kept as the documented grant-map JSON format), including
+   `parse`'s doc comment's
    dangling intra-doc link ("Split out from [`Self::from_env`] so tests can exercise parsing without
    mutating the environment", `:253-254`), which loses the `[`Self::from_env`]` reference since
    `from_env` no longer exists, and the two-separate-sources comments in
@@ -300,7 +301,7 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
     the row should exist as early as possible relative to the sink's `insert_process` attempts, even
     though the poll running in the Python parent after the server's port already binds cannot
-    guarantee it lands before the very first one (see Manual Verification #2). Also add the same
+    guarantee it lands before the very first one (see Manual Verification #1). Also add the same
     `MICROMEGAS_TELEMETRY_URL` / `MICROMEGAS_FLUSH_PERIOD` default-if-unset block
     `start_services.py` already has (`:364-368`), since this script currently sets neither and the
     self-telemetry path this migration targets is otherwise only enabled by accident, if the
@@ -333,12 +334,7 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     `key_hash` is `hashlib.sha256(key.encode()).hexdigest()` — `hash_key`
     (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string.
     `DbApiKeyAuthProvider` validates against the table live, so once the row lands it authenticates
-    the ingestion process's own sink for every subsequent request. The sub-second poll narrows, but
-    does not close, the window between the port binding and the row landing: the poll runs in the
-    Python parent after the server's own port bind, so an attempt from the sink's `insert_process`
-    retry schedule can still land before the row exists and get a 401 — which
-    `IngestionClientError::Permanent` treats as non-retryable. A transient 401 here is possible, not
-    prevented (see Manual Verification #2).
+    the ingestion process's own sink for every subsequent request.
 13. **`local_test_env/ai_scripts/start_services.py`** — no functional change. Its
     `MICROMEGAS_API_KEYS` at `:135` is scoped to the `object-cache-srv` child env, which keeps the
     variable; the other services run `--disable-auth`. Add a one-line comment saying so, since the
@@ -385,7 +381,11 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     from getting there: with OIDC configured the service starts and every keyring token stops
     working; without OIDC and with an empty table it does not start at all. Keep the
     `micromegas-import-keys` recipe and the three `--only`/`--exclude` routing rules verbatim; keep
-    the object-cache-forever bullet.
+    the object-cache-forever bullet. Preserve the heading text and its implicit
+    `#migrating-from-the-env-keyring` slug (or add an explicit
+    `{#migrating-from-the-env-keyring}` id) — five inbound links depend on it: this file's `:28`,
+    `:44`, and `:158`, `mkdocs/docs/admin/authentication.md:683`, and
+    `mkdocs/docs/query-guide/python-api.md:965`. Re-check all five still resolve after the rewrite.
 19. **`mkdocs/docs/admin/ingestion.md`** — drop the `MICROMEGAS_API_KEYS` table row (`:29`), the
     `# API keys for machine-to-machine producers (legacy/bootstrap path)` comment and the `export`
     line below it (`:57-58`), and the keyring arm of the "If none of ..." sentence (`:50`); `:89`'s
@@ -529,6 +529,9 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 - The placeholder-grant-row prerequisite and its `read '*'` examples (issue §2, follow-on bullets 1
   and 2) need no work: neither is in `mkdocs/docs/` any more.
 - `AudienceMintPolicy::from_env`, named in the issue's Remove list, does not exist. Nothing to remove.
+- `AudienceGrants::parse` keeps no production caller once `from_env` is deleted (only
+  `rust/auth/tests/policy_tests.rs` and `rust/auth/tests/db_audience_grants_tests.rs` call it); it
+  stays as a published, test-only entry point for the documented grant-map JSON format.
 - The issue's "remove the env-side loop in `resolve` and the env-side disjunct in
   `resolve_audience`" is not followed: neither is env-side. The static `grants` field, `new`, and
   both loop/disjunct stay — mint's only production source (`mint_key` fills it from a point query)
@@ -582,30 +585,16 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 
 ## Manual Verification
 
-1. **The object-cache keyring still works; `--disable-auth` mode is a non-regression smoke test.**
-   `python3 local_test_env/ai_scripts/start_services.py`, then
-   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`. Run split mode only — do not
-   repeat with `--monolith`: `start_services.py`'s `auth_flag` (`:283`) picks
-   `--disable-ingestion-auth` instead of `--disable-auth` whenever `MICROMEGAS_OIDC_CONFIG` or
-   `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is merely present in the shell, so in an OIDC-configured shell
-   `--monolith` leaves analytics auth on and the query would need an OIDC token rather than exercising
-   the disabled-auth path this MV is for. Expected: it comes up, query returns rows, and
-   `/tmp/object_cache.log` shows the object cache authenticating — the one binary whose keyring
-   survives. Every other service here runs with `--disable-auth`, so this run never reaches
-   `ProviderBuilder` or the audience-grant read policy (MV #2 and #3 exercise those); it only confirms
-   the disabled-auth path still starts cleanly. Not automated: this is end-to-end process wiring, and
-   a failure would be immediately obvious to anyone running the script.
-2. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
+1. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero — the
    script now sets `MICROMEGAS_TELEMETRY_URL`/`MICROMEGAS_FLUSH_PERIOD` defaults (step 12), so the
-   self-telemetry path this MV measures is actually enabled rather than depending on the operator's
-   shell happening to export them. `/tmp/ingestion.log` may show an isolated 401 or two before the
-   key row lands (step 12's poll narrows, but does not close, that window) but should not show a
-   sustained run of them. This is the only step that exercises step 12's insert-timing against a
-   real migrated table; the SHA-256 agreement between the Python insert and Rust's `hash_key` has
-   no in-repo test that spans both languages.
-3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
+   self-telemetry path this MV measures is actually enabled. `/tmp/ingestion.log` may show an
+   isolated 401 or two before the key row lands (step 12's poll narrows, but does not close, that
+   window) but should not show a sustained run of them. This is the only step that exercises step
+   12's insert-timing against a real migrated table; the SHA-256 agreement between the Python
+   insert and Rust's `hash_key` has no in-repo test that spans both languages.
+2. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
    Expected: two `warn!` lines naming the two variables and their replacement CLIs, then a normal
