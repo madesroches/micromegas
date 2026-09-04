@@ -316,13 +316,7 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     non-retryable (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
     `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
     the row must exist by the time the sink's first successful connection reaches `insert_process`.
-    The property the poll actually establishes is weaker than "row lands before the port binds": the
-    poll runs concurrently with the ingestion server's own startup, so a `>= 6` predicate can first be
-    observed only after the server has already reached a later schema version and bound its port. What
-    covers that residual window is the sink's own `ExponentialBackoff::from_millis(10).take(10)`
-    transient retry on connection-refused (`http_event_sink.rs:347`), which pushes its first
-    connectable attempt to roughly 11s after process start — comfortably after a migration poll on a
-    fresh DB. Migrate to a DB row: keep `generate_local_ingestion_key()` and the
+    Migrate to a DB row: keep `generate_local_ingestion_key()` and the
     `MICROMEGAS_INGESTION_API_KEY` sink-side export, drop the `MICROMEGAS_API_KEYS` server-side
     export, and poll for schema migration version >= 6 (`SELECT version FROM migration`) rather than
     for the `ingestion_api_keys` table's existence: the table is created in
@@ -349,10 +343,10 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     variable; the other services run `--disable-auth`. Add a one-line comment saying so, since the
     variable now means "object-cache only".
 14. **`build/run_flight_container.py`** — drop `-e MICROMEGAS_API_KEYS` from the `docker run` line;
-    `flight-sql-srv` no longer reads it. The line passes no `MICROMEGAS_OIDC_CONFIG` either, so after
-    this change the container has no auth source at all unless the `analytics_api_keys` table it
-    points at is already populated — note that dependency (or add an `-e MICROMEGAS_OIDC_CONFIG`
-    passthrough) rather than treating the change as inert.
+    `flight-sql-srv` no longer reads it. Add an `-e MICROMEGAS_OIDC_CONFIG` passthrough in its place
+    (same bare-passthrough shape as the other three vars), with a one-line comment noting it depends
+    on the caller's environment having `MICROMEGAS_OIDC_CONFIG` set or the `analytics_api_keys` table
+    already populated.
 15. **`docker/docker-compose.monolith.yaml:52-56`** — rewrite the auth comment block: the DB tables
     (and `MICROMEGAS_*_OIDC_CONFIG`) are the only options.
 
@@ -397,8 +391,13 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 20. **`mkdocs/docs/admin/flight-sql.md`** — drop the `MICROMEGAS_API_KEYS` (`:28`) and
     `MICROMEGAS_AUDIENCE_GRANTS` (`:31`) rows and the keyring arm at `:56`. `:72`'s
     "An API-key (`MICROMEGAS_API_KEYS`) caller" becomes an `analytics_api_keys` caller.
-21. **`mkdocs/docs/admin/monolith.md`** — drop the `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` row (`:50`),
-    the `MICROMEGAS_INGESTION_API_KEYS` example (`:96`), and the API-keys half of `:100`'s
+21. **`mkdocs/docs/admin/monolith.md`** — drop the `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` row (`:50`).
+    Rewrite the `:93-100` section as a whole: it is titled "API keys for ingestion only, OIDC for
+    analytics" and its body is just the two exports (`:96-97`), so deleting the
+    `MICROMEGAS_INGESTION_API_KEYS` line alone would leave a heading promising ingestion-key setup
+    with no content under it. Retitle it (e.g. "Ingestion keys via the database, OIDC for
+    analytics"), point the ingestion half at populating the `ingestion_api_keys` table with
+    `micromegas-import-keys` instead of exporting a variable, and drop the API-keys half of `:100`'s
     prefix-fallback sentence (the OIDC half stays). The "One prefix asymmetry" note (`:59-67`) stays —
     its surviving point is that `MICROMEGAS_DEFAULT_AUDIENCE`, the self-service knobs, and
     `MICROMEGAS_PUBLIC_VIEW_SETS` are read unprefixed, and both `monolith.md:53`'s table row and
@@ -562,23 +561,22 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 
 ## Manual Verification
 
-1. **Split and monolith still start with the variables unset.**
+1. **The object-cache keyring still works; `--disable-auth` mode is a non-regression smoke test.**
    `python3 local_test_env/ai_scripts/start_services.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`; repeat with `--monolith`.
    Expected: both come up, query returns rows, and `/tmp/object_cache.log` shows the object cache
-   authenticating — the one binary whose keyring survives. Not automated: this is end-to-end process
-   wiring across four binaries, and a failure would be immediately obvious to anyone running the
-   script.
+   authenticating — the one binary whose keyring survives. Every other service here runs with
+   `--disable-auth`, so this run never reaches `ProviderBuilder` or the audience-grant read policy
+   (MV #2 and #3 exercise those); it only confirms the disabled-auth path still starts cleanly. Not
+   automated: this is end-to-end process wiring across four binaries, and a failure would be
+   immediately obvious to anyone running the script.
 2. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
-   `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row as soon as
-   the schema can accept it (migration version >= 6), with the sink's transient-retry backoff on
-   connection-refused covering the residual window before that row is visible, so the ingestion
-   process's own sink never authenticates against a table missing the `audience` column or an empty
-   one. This is the only step that exercises step 12's insert-timing against a real migrated table;
-   the SHA-256 agreement between the Python insert and Rust's `hash_key` has no in-repo test that
-   spans both languages.
+   `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row via its
+   migration-version poll before the ingestion process's own sink connects. This is the only step
+   that exercises step 12's insert-timing against a real migrated table; the SHA-256 agreement
+   between the Python insert and Rust's `hash_key` has no in-repo test that spans both languages.
 3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
