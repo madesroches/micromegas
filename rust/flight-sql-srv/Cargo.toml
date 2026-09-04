@@ -2,6 +2,7 @@
 name = "flight-sql-srv"
 description = "FlightSQL server for micromegas"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

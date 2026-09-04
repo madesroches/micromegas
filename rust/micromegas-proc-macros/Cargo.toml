@@ -2,6 +2,7 @@
 name = "micromegas-proc-macros"
 description = "Top-level procedural macros for micromegas"
 keywords.workspace = true
+categories = ["development-tools::procedural-macro-helpers", "development-tools::profiling"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

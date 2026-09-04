@@ -2,6 +2,7 @@
 name = "telemetry-ingestion-srv"
 description = "test ingestion http server, part of micromegas"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

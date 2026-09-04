@@ -2,6 +2,7 @@
 name = "micromegas-auth"
 description = "Authentication providers for Micromegas (API keys, OIDC)"
 keywords.workspace = true
+categories = ["authentication"]
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

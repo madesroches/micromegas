@@ -2,6 +2,7 @@
 name = "micromegas-monolith"
 description = "Single-process (monolith) deployment of all Micromegas roles"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

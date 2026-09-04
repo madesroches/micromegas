@@ -2,6 +2,7 @@
 name = "redis-exporter"
 description = "Redis metrics exporter sending samples to a Micromegas stack"
 keywords.workspace = true
+categories.workspace = true
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true

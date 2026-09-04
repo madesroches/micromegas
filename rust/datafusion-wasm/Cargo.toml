@@ -8,6 +8,7 @@ repository = "https://github.com/madesroches/micromegas/"
 documentation = "https://docs.rs/micromegas-datafusion-wasm"
 authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
 keywords = ["observability", "telemetry", "analytics"]
+categories = ["wasm", "database-implementations", "development-tools::profiling", "development-tools::debugging"]
 description = "DataFusion compiled to WebAssembly for in-browser SQL query execution, part of micromegas"
 readme = "README.md"
 
