@@ -279,9 +279,10 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
      `build()` (so `has_live_rows` makes it `Some`), then insert a *second* key after `build()`
      returns and authenticate that one. Same property, no keyring.
    - Keep `API_KEYS_VAR` in `EnvGuard`'s clear list and the remaining
-     `std::env::remove_var(API_KEYS_VAR)` calls at `:144`, `:190`, `:268`, `:328`, `:432`: a value
-     leaked from another test would now make `build()` return `None` where the test expects `Some`,
-     so clearing it stays load-bearing. Update the module doc comment.
+     `std::env::remove_var(API_KEYS_VAR)` calls at `:144`, `:190`, `:268`, `:328`, `:432`: once
+     `compose()` sets `configured` from OIDC alone, a leaked `MICROMEGAS_API_KEYS` can no longer
+     change `build()`'s result in either direction, so the clears are hygiene only, not load-bearing.
+     Update the module doc comment.
 9. **`rust/auth/tests/policy_tests.rs`** — delete the `{prefix}_AUDIENCE_GRANTS` env-fallback section
    (`:617-687`): the three tests, the `PREFIXED_VAR`/`UNPREFIXED_VAR` consts, `const PREFIX` (`:621`),
    and the `EnvGuard` struct with its `Drop` impl (`:626-636`) — all become dead code once the section
@@ -311,20 +312,28 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 12. **`local_test_env/ai_scripts/start_services_with_oidc.py`** — this is the only in-repo script
     that runs a `ProviderBuilder` binary on the env keyring, so it breaks outright. Its ingestion
     server runs with auth ON and needs a credential for every `#[micromegas_main]` process's
-    self-telemetry sink — including the ingestion process's own sink, which starts authenticating as
-    soon as its port binds. A 401 on `insert_process` is non-retryable
-    (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
-    `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so the
-    row must land *before* the port binds, not after `/health` first answers. Migrate to a DB row:
-    keep `generate_local_ingestion_key()` and the `MICROMEGAS_INGESTION_API_KEY` sink-side export,
-    drop the `MICROMEGAS_API_KEYS` server-side export, and poll for schema migration version >= 6
-    (`SELECT version FROM migration`) rather than for the `ingestion_api_keys` table's existence:
-    the table is created in `upgrade_data_lake_schema_v5` but its `audience` column, which the
-    INSERT below needs, is only added in `upgrade_data_lake_schema_v6`, and `execute_migration`
-    commits each version in its own transaction, so a poll that fires as soon as the table exists
-    can land between the two commits on a fresh database. Poll via the `docker exec teledb
-    psql` path `local_test_env/db/utils.py` already uses, inserting the row as soon as the migration
-    reaches version 6 — before the script waits on `/health` at all:
+    self-telemetry sink — including the ingestion process's own sink. A 401 on `insert_process` is
+    non-retryable (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
+    `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
+    the row must exist by the time the sink's first successful connection reaches `insert_process`.
+    The property the poll actually establishes is weaker than "row lands before the port binds": the
+    poll runs concurrently with the ingestion server's own startup, so a `>= 6` predicate can first be
+    observed only after the server has already reached a later schema version and bound its port. What
+    covers that residual window is the sink's own `ExponentialBackoff::from_millis(10).take(10)`
+    transient retry on connection-refused (`http_event_sink.rs:347`), which pushes its first
+    connectable attempt to roughly 11s after process start — comfortably after a migration poll on a
+    fresh DB. Migrate to a DB row: keep `generate_local_ingestion_key()` and the
+    `MICROMEGAS_INGESTION_API_KEY` sink-side export, drop the `MICROMEGAS_API_KEYS` server-side
+    export, and poll for schema migration version >= 6 (`SELECT version FROM migration`) rather than
+    for the `ingestion_api_keys` table's existence: the table is created in
+    `upgrade_data_lake_schema_v5` but its `audience` column, which the INSERT below needs, is only
+    added in `upgrade_data_lake_schema_v6`, and `execute_migration` commits each version in its own
+    transaction, so a poll that fires as soon as the table exists can land between the two commits on
+    a fresh database. The poll must also tolerate `relation "migration" does not exist` on a fresh
+    database (the ingestion binary creates the table itself) and use a bounded attempt count, the same
+    shape as `wait_for_service`'s. Poll via the `docker exec teledb psql` path
+    `local_test_env/db/utils.py` already uses, inserting the row as soon as the schema can accept it
+    — i.e. as soon as migration version >= 6 is observed:
 
     ```sql
     INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
@@ -355,11 +364,18 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     list that follows it, which documents the JSON shape `object-cache-srv` still requires): keep the
     format under an `object-cache-srv`-only heading, or point to `admin/object-cache.md:41`, which
     documents the same shape. Delete the `export MICROMEGAS_API_KEYS=...` line at `:305`, keeping the
-    `object-cache-srv` pointer at `:685`.
+    `object-cache-srv` pointer at `:685`. Rewrite `:16-18` ("When multiple providers are configured,
+    they are tried in order until one succeeds (API key first for performance, then OIDC)"), which
+    the Design §1 chain order (`OidcAuthProvider` → `DbApiKeyAuthProvider`) inverts, to OIDC first,
+    then the DB-backed key store. Scope `:58`'s "Fast validation (HashMap lookup for the env keyring;
+    cached hash lookup for DB-backed keys)" so the HashMap-lookup claim applies only to
+    `object-cache-srv`'s keyring, not to ingestion/flight-sql.
 17. **`mkdocs/docs/admin/authorization.md`** — delete the `MICROMEGAS_AUDIENCE_GRANTS` row from the
     env table (`:20`) and the whole "Deprecated: the env grant map" section (`:99-128`). Check for
     inbound anchor links to `#deprecated-the-env-grant-map` and remove them (`flight-sql.md:31`,
-    `monolith.md:50`). In "Audience stamping" (`:139`), drop "env-keyring key" from the
+    `monolith.md:50`, and this same file's `:292-296`, which also drops the "[deprecated env
+    map](#deprecated-the-env-grant-map)" link and rewrites the sentence so the store snapshot is
+    the sole read-axis source). In "Audience stamping" (`:139`), drop "env-keyring key" from the
     no-bound-audience list, leaving OIDC token and no-auth-provider.
 18. **`mkdocs/docs/admin/api-keys.md`** — `:4` intro drops the "or in `MICROMEGAS_API_KEYS`"
     alternative. `:26-28`, which says the env keyring "still works and is still checked" and that
@@ -382,8 +398,13 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     `MICROMEGAS_AUDIENCE_GRANTS` (`:31`) rows and the keyring arm at `:56`. `:72`'s
     "An API-key (`MICROMEGAS_API_KEYS`) caller" becomes an `analytics_api_keys` caller.
 21. **`mkdocs/docs/admin/monolith.md`** — drop the `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` row (`:50`),
-    the `MICROMEGAS_INGESTION_API_KEYS` note (`:61`) and example (`:96`), and the API-keys half of
-    `:100`'s prefix-fallback sentence (the OIDC half stays).
+    the `MICROMEGAS_INGESTION_API_KEYS` example (`:96`), and the API-keys half of `:100`'s
+    prefix-fallback sentence (the OIDC half stays). The "One prefix asymmetry" note (`:59-67`) stays —
+    its surviving point is that `MICROMEGAS_DEFAULT_AUDIENCE`, the self-service knobs, and
+    `MICROMEGAS_PUBLIC_VIEW_SETS` are read unprefixed, and both `monolith.md:53`'s table row and
+    `ingestion.md:31` still point at it — but swap its prefixed counterexample from
+    `MICROMEGAS_INGESTION_API_KEYS` to `MICROMEGAS_INGESTION_OIDC_CONFIG`, which still resolves with
+    prefix fallback in `resolve_prefixed_var` after this change.
 22. **`mkdocs/docs/admin/object-cache.md`** — no removals; add one sentence stating this keyring is
     unaffected and permanent, and that a deployment sharing one environment across roles will see
     the other roles log a "no longer read" warning about the same variable name.
@@ -392,7 +413,11 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     no bound audience (an env-keyring key, OIDC, or no auth provider at all) resolves…") drops the
     env-keyring arm, the same sentence shape as `authorization.md`'s "Audience stamping" fix above.
 24. **`mkdocs/docs/grafana/authentication.md`** — delete the whole "Quick Setup (env-var keyring)"
-    section (`:37-53`). The DB-backed recipe immediately above it already covers token auth.
+    section (`:37-53`). The DB-backed recipe immediately above it already covers token auth. Rewrite
+    the section intro at `:20-22` ("flight-sql accepts keys from two sources: a DB-backed
+    `analytics_api_keys` table, or a static env-var keyring. Either source alone is sufficient"),
+    which otherwise still advertises the deleted keyring, to name the `analytics_api_keys` table as
+    the single key source.
 25. **`mkdocs/docs/admin/functions-reference.md:478`** — drop the `MICROMEGAS_AUDIENCE_GRANTS` clause
     from `list_audience_grants()`'s visibility note.
 25a. **`analytics-web-app/src/routes/AudienceAccessPage.tsx`** — delete the "**Env-map grants:**"
@@ -548,11 +573,12 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
    `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row as soon as
-   the migration reaches version 6, before the script waits on `/health`, so the ingestion process's
-   own sink never authenticates against a table missing the `audience` column or an empty one. This
-   is the only step that exercises step 12's
-   insert-before-health ordering against a real migrated table; the SHA-256 agreement between the
-   Python insert and Rust's `hash_key` has no in-repo test that spans both languages.
+   the schema can accept it (migration version >= 6), with the sink's transient-retry backoff on
+   connection-refused covering the residual window before that row is visible, so the ingestion
+   process's own sink never authenticates against a table missing the `audience` column or an empty
+   one. This is the only step that exercises step 12's insert-timing against a real migrated table;
+   the SHA-256 agreement between the Python insert and Rust's `hash_key` has no in-repo test that
+   spans both languages.
 3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
