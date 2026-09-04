@@ -287,55 +287,55 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     static map alone".
 11. **`rust/public/tests/read_policy_threading_tests.rs`** —
     `unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected` (`:447-457`) becomes
-    `AudienceReadPolicy::new(AudienceGrants::empty())`; rename it and its doc comment to say
+    `AudienceReadPolicy::default()`; rename it and its doc comment to say
     "a policy with no grant source" rather than "env var unset". Its `api_key_provider` helper is
     unaffected — it constructs `ApiKeyAuthProvider` directly, which stays published.
 
 ### Phase 4 — Scripts
 
 12. **`local_test_env/ai_scripts/start_services_with_oidc.py`** — this is the only in-repo script
-    that runs a `ProviderBuilder` binary on the env keyring, so it breaks outright. Its ingestion
-    server runs with auth ON and needs a credential for every `#[micromegas_main]` process's
-    self-telemetry sink — including the ingestion process's own sink. A 401 on `insert_process` is
-    non-retryable (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
-    `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
-    the row should exist as early as possible relative to the sink's `insert_process` attempts. Start
-    the migration-version poll and issue the `INSERT` immediately after the ingestion `Popen` call and
-    before `wait_for_service` — `connect_to_remote_data_lake` (which runs `execute_migration` and
-    commits v6 in its own transaction) executes before `serve_ingestion` binds the listener, so
-    polling from that point normally lands the row before the port ever opens, leaving only a narrow
-    residual race on the very first request (see Manual Verification #1). Also add the same
-    `MICROMEGAS_TELEMETRY_URL` / `MICROMEGAS_FLUSH_PERIOD` default-if-unset block
-    `start_services.py` already has (`:364-368`), since this script currently sets neither and the
-    self-telemetry path this migration targets is otherwise only enabled by accident, if the
-    operator's shell happens to export them.
-    Migrate to a DB row: keep `generate_local_ingestion_key()` and the
-    `MICROMEGAS_INGESTION_API_KEY` sink-side export, drop the `MICROMEGAS_API_KEYS` server-side
-    export, and poll for schema migration version >= 6 (`SELECT version FROM migration`) rather than
-    for the `ingestion_api_keys` table's existence: the table is created in
-    `upgrade_data_lake_schema_v5` but its `audience` column, which the INSERT below needs, is only
-    added in `upgrade_data_lake_schema_v6`, and `execute_migration` commits each version in its own
-    transaction, so a poll that fires as soon as the table exists can land between the two commits on
-    a fresh database. The poll must also tolerate `relation "migration" does not exist` on a fresh
-    database (the ingestion binary creates the table itself) and use a bounded attempt count, the same
-    shape as `wait_for_service`'s, but on a sub-second interval — `wait_for_service`'s 1-second
-    granularity is too coarse here, since the sink's own retry schedule starts at ~10ms; the poll's
-    real floor is the latency of each `psql` exec, not a fixed sleep. Poll via `docker exec teledb psql -U $MICROMEGAS_DB_USERNAME`, the
-    same no-`-d` shape `local_test_env/db/connect.py` uses to reach the data lake: with
+    that runs a `ProviderBuilder` binary on the env keyring, so it breaks outright. Migrate to a DB
+    row: keep `generate_local_ingestion_key()` and the `MICROMEGAS_INGESTION_API_KEY` sink-side
+    export, drop the `MICROMEGAS_API_KEYS` server-side export, and poll for schema migration version
+    >= 6 (`SELECT version FROM migration`) rather than for the `ingestion_api_keys` table's existence:
+    the table is created in `upgrade_data_lake_schema_v5` but its `audience` column, which the INSERT
+    below needs, is only added in `upgrade_data_lake_schema_v6`, and `execute_migration` commits each
+    version in its own transaction, so a poll that fires as soon as the table exists can land between
+    the two commits on a fresh database. The poll must also tolerate `relation "migration" does not
+    exist` on a fresh database (the ingestion binary creates the table itself) and use a bounded
+    attempt count, the same shape as `wait_for_service`'s, but on a sub-second interval —
+    `wait_for_service`'s 1-second granularity is too coarse here, since the sink's own retry schedule
+    starts at ~10ms; the poll's real floor is the latency of each `psql` exec, not a fixed sleep. Poll
+    via `docker exec teledb psql -U $MICROMEGAS_DB_USERNAME`, the same shape
+    `local_test_env/db/utils.py`'s `ensure_app_database` already uses to reach the data lake: with
     `MICROMEGAS_SQL_CONNECTION_STRING` carrying no path (`doc/GETTING_STARTED.md:30`) and
     `local_test_env/db/run.py` starting Postgres with only `POSTGRES_USER` set, the role-named default
-    database *is* the lake, so no `-d` is needed. If a dbname is ever parsed out of
-    `MICROMEGAS_SQL_CONNECTION_STRING` for this poll, it must be optional and `-d` omitted when the
-    URI carries no path. Insert the row as soon as the schema can accept it — i.e. as
-    soon as migration version >= 6 is observed:
+    database *is* the lake, so no `-d` is needed. Insert the row as soon as the schema can accept it —
+    i.e. as soon as migration version >= 6 is observed — first revoking any live row a previous run
+    left behind, since `name` is not unique and a fresh `INSERT` alone would accumulate one live
+    credential per run:
 
     ```sql
+    UPDATE ingestion_api_keys SET revoked_at = now(), revoked_by = 'start_services_with_oidc'
+    WHERE name = 'local-self-telemetry' AND revoked_at IS NULL;
+
     INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
     VALUES (gen_random_uuid(), decode('<sha256 hex>','hex'), 'local-self-telemetry', now(), 'start_services_with_oidc', 'public')
     ```
 
     `key_hash` is `hashlib.sha256(key.encode()).hexdigest()` — `hash_key`
     (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string.
+    Its ingestion server runs with auth ON and needs a credential for every `#[micromegas_main]`
+    process's self-telemetry sink — including the ingestion process's own sink. The row should exist
+    as early as possible relative to the sink's `insert_process` attempts. Start the migration-version
+    poll and issue the `INSERT` immediately after the ingestion `Popen` call and before
+    `wait_for_service` — `connect_to_remote_data_lake` (which runs `execute_migration` and commits v6
+    in its own transaction) executes before `serve_ingestion` binds the listener, so polling from that
+    point normally lands the row before the port ever opens, leaving only a narrow residual race on
+    the very first request (see Manual Verification #1). Also add the same `MICROMEGAS_TELEMETRY_URL`
+    / `MICROMEGAS_FLUSH_PERIOD` default-if-unset block `start_services.py` already has (`:364-368`),
+    since this script currently sets neither and the self-telemetry path this migration targets is
+    otherwise only enabled by accident, if the operator's shell happens to export them.
     `DbApiKeyAuthProvider` validates against the table live, but a 401 on the *first* request is not
     isolated: `DbApiKeyAuthProvider`'s unknown-key cache (`rust/auth/src/db_api_key.rs:369-372`)
     negatively caches the pre-row miss for `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS` (default 10s,
@@ -448,10 +448,12 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     **`python/micromegas/tests/cli/test_import_keys.py`** — comments only, same reword. The
     fallback-path comment at `:89-91` ("exercises the fallback-to-unprefixed path, which is exactly
     what a split deployment's `telemetry-ingestion-srv` (built with `ProviderBuilder::new("")`)
-    needs") and the regression-test docstring at `:125-131` ("`flight-sql-srv` builds its provider
-    with `ProviderBuilder::new("")` … so the analytics keyring only ever lives in the unprefixed
-    `MICROMEGAS_API_KEYS`") both justify the fallback by what a server reads; reword both to "the
-    legacy server-side names, no longer read by any server" per step 27's framing.
+    needs"), `test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set`'s docstring at
+    `:109-111` ("as the monolith's ingestion-role `ProviderBuilder` would populate it"), and the
+    regression-test docstring at `:125-131` ("`flight-sql-srv` builds its provider with
+    `ProviderBuilder::new("")` … so the analytics keyring only ever lives in the unprefixed
+    `MICROMEGAS_API_KEYS`") all justify the fallback by what a server reads; reword all three to
+    "the legacy server-side names, no longer read by any server" per step 27's framing.
 27a. **`python/micromegas/tests/test_otlp_e2e.py:854`** —
     `test_firehose_dev_mode_open_without_access_key`'s docstring, which says "a deployment with
     MICROMEGAS_API_KEYS configured would instead reject this same request", is rewritten: ingestion
@@ -532,9 +534,9 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 
 ## Decisions
 
-- `{prefix}_UNSTAMPED_AUDIENCE` (issue Problem §3, follow-on bullet 3) needs no work: #1564 removed
-  the variable entirely, so there is no env-only audience name left for `try_claim_and_mint` to be
-  blind to.
+- `{prefix}_UNSTAMPED_AUDIENCE` (issue Problem §3, follow-on bullet 3) needs no work: #1482 removed
+  the variable; #1564 dropped its startup refusal, so there is no env-only audience name left for
+  `try_claim_and_mint` to be blind to.
 - The placeholder-grant-row prerequisite and its `read '*'` examples (issue §2, follow-on bullets 1
   and 2) need no work: neither is in `mkdocs/docs/` any more.
 - `AudienceMintPolicy::from_env`, named in the issue's Remove list, does not exist. Nothing to remove.
@@ -576,7 +578,7 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 ## Testing Strategy
 
 Everything here is reachable by calling code with constructed inputs, so it is all no-DB unit tests
-except the two existing `#[ignore]` live-DB tests that need reworking. The new and reworked no-DB
+except the one existing `#[ignore]` live-DB test that needs reworking. The new and reworked no-DB
 tests are enumerated in Implementation Steps 7–9; this section covers the live-DB tier and the
 full-suite checks.
 
@@ -594,20 +596,12 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 
 ## Manual Verification
 
-1. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
-   sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
-   `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero — the
-   script now sets `MICROMEGAS_TELEMETRY_URL`/`MICROMEGAS_FLUSH_PERIOD` defaults (step 12), so the
-   self-telemetry path this MV measures is actually enabled. With
-   `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS=0` set per step 12, `/tmp/ingestion.log` may still
-   show a 401 on the ingestion process's own first `insert_process` if the narrow residual race
-   described in step 12 is hit (the port can bind before the poll observes migration version >= 6 on
-   a slow first poll); because that 401 is `Permanent`, the sink never retries it, so the ingestion
-   process's own self-telemetry stays unqueryable for the rest of the run — this MV's
-   `count(*) FROM log_entries` still passes via the other processes' sinks either way, so it cannot
-   detect that case. This is the only step that exercises step
-   12's insert-timing against a real migrated table; the SHA-256 agreement between the Python
-   insert and Rust's `hash_key` has no in-repo test that spans both languages.
+1. **The OIDC dev path still authenticates self-telemetry off a DB row, including the ingestion
+   process's own.** With an OIDC config sourced, `python3
+   local_test_env/ai_scripts/start_services_with_oidc.py`, then `micromegas-query "SELECT count(*)
+   FROM processes WHERE exe LIKE '%telemetry-ingestion-srv%'" --begin 5m`. Expected: >= 1 — this
+   directly observes the ingestion binary's own `insert_process`, the one call the residual race
+   described in step 12 can still lose.
 2. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
