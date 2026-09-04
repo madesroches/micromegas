@@ -72,19 +72,6 @@ fresh, uncached point query against `audience_grants` and passes it to `new`.
 `telemetry-ingestion-srv/src/main.rs:9-12` (module doc) and `:68` (bail message);
 `monolith/src/main.rs:218`; `flight_sql_server.rs:337`.
 
-### What the issue lists that is already gone
-
-- **`{prefix}_UNSTAMPED_AUDIENCE`** (issue Problem §3 and the third follow-on bullet) was removed
-  wholesale in #1564 (`4243898da`). There is no unstamped state left to reserve or guard, so no
-  work remains on that thread.
-- **The placeholder-grant-row pre-flight step** and its `read '*'` examples (issue §2 and the first
-  two follow-on bullets) are no longer in `mkdocs/docs/admin/authentication.md` or anywhere else in
-  `mkdocs/docs/`. Once the env map is gone, `try_claim_and_mint`'s `EXISTS` check
-  (`ingestion_keys.rs:666-674`) is authoritative by construction — nothing to delete, and nothing
-  to fix.
-- **`mkdocs/docs/admin/api-keys.md:585-590`** does not exist; the file is 521 lines. The Migration
-  section is `:434-500`.
-
 ### Removed-var precedent
 
 #1564 deleted `reject_removed_admin_vars` and `reject_removed_cache_ttl_vars` from
@@ -183,8 +170,8 @@ No object-cache caveat is needed. `object-cache-srv` never calls `ProviderBuilde
 warns; and a co-located process that shares the variable now emits one noisy log line rather than
 failing to start, which is why the shared-environment problem disappears entirely under this design.
 
-**Call site: `ProviderBuilder::compose` only** — the one startup hook every auth-enabled role passes
-through, and the same site #1564's two functions used. Not `analytics-web-srv`'s
+**Call site: `ProviderBuilder::compose` only** — the same site #1564's two functions used. Not
+`analytics-web-srv`'s
 `WebServerConfig::from_cli_and_env`: unlike the admin and cache-TTL vars, neither of these five was
 ever read by that binary, so a warning there would be about a variable that binary never honored.
 `--disable-auth` skips `ProviderBuilder` and so skips the warning, which is correct for a
@@ -245,8 +232,18 @@ must name `micromegas-import-keys`, not just the dropped variable.
    same way.
 2. **`rust/auth/src/default_provider.rs`** — delete `api_keys_json`, the `compose()` keyring branch,
    and the `parse_key_ring`/`ApiKeyAuthProvider` import. Call both `warn_removed_*` functions at the
-   top of `compose()`. Rewrite the provider-order doc comments on `build()` and `build_chain()` and
-   the `is_empty()` `warn!` text. Delete `provider()` and `provider_with_prefix()`.
+   top of `compose()`. Delete `provider()` and `provider_with_prefix()`. Rewrite every doc comment
+   that still advertises the removed keyring: the module doc (`:1-5`, "initialize authentication with
+   API key, OIDC, and …"), `ProviderBuilder`'s struct doc (`:23-28`, which references the
+   soon-to-be-deleted `provider()`/`provider_with_prefix()`), `ProviderBuilder::new`'s doc (`:37-38`,
+   "the same … convention as `provider_with_prefix`"), `compose`'s own doc (`:74-75`, "reports whether
+   env keys or OIDC counted as 'configured'"), the provider-order doc comments on `build()` and
+   `build_chain()` (`:159-175`, `:211-230`), `build()`'s existence-query paragraph (`:163-169`), the
+   inline comment at `:188-192` ("Auth is already configured via another provider (env keys or
+   OIDC)"), and the `is_empty()` `warn!` text. Also reword `db_api_key.rs`'s cache-knob fallback
+   comment (`:96-98`), which currently justifies itself as "the same fallback `provider_with_prefix`
+   already uses for `{prefix}_API_KEYS` / `{prefix}_OIDC_CONFIG`" — a function this step deletes — to
+   describe the fallback on its own terms.
 3. **`rust/auth/src/policy.rs`** — delete `AudienceGrants::from_env` and
    `AudienceReadPolicy::from_env`. Change both `with_store` signatures to take
    `Arc<DbAudienceGrantsSource>`. Update the module doc comment's opening line ("a JSON grant map
@@ -255,7 +252,10 @@ must name `micromegas-import-keys`, not just the dropped variable.
    `{prefix}_AUDIENCE_GRANTS` references (they become "a grant map JSON document" — `parse` survives
    only as `micromegas-import`-shaped input and test input), and the two-separate-sources comments in
    `resolve` / `resolve_audience` (the static map is no longer "the env map"). `merge`'s doc comment
-   loses its "they check the env map and the DB store snapshot" clause.
+   loses its "they check the env map and the DB store snapshot" clause. Also rewrite
+   `db_audience_grants.rs`'s module doc (`:1-7`), which opens with "checked alongside the existing
+   `{prefix}_AUDIENCE_GRANTS` env map by `AudienceReadPolicy`/`AudienceMintPolicy` … the env map stays
+   the static/bootstrap layer" — describe the static-map/store split without the env map.
 
 ### Phase 2 — Wiring
 
@@ -293,8 +293,12 @@ must name `micromegas-import-keys`, not just the dropped variable.
      leaked from another test would now make `build()` return `None` where the test expects `Some`,
      so clearing it stays load-bearing. Update the module doc comment.
 9. **`rust/auth/tests/policy_tests.rs`** — delete the `{prefix}_AUDIENCE_GRANTS` env-fallback section
-   (`:618-690`, three tests plus the `PREFIXED_VAR`/`UNPREFIXED_VAR` consts) and the module doc
-   comment's paragraph about env mutation. Every other test in the file is unaffected.
+   (`:617-687`): the three tests, the `PREFIXED_VAR`/`UNPREFIXED_VAR` consts, `const PREFIX` (`:621`),
+   and the `EnvGuard` struct with its `Drop` impl (`:626-636`) — all become dead code once the section
+   is gone, and `EnvGuard` would otherwise trip `dead_code` under `clippy -D warnings`. Reword, don't
+   delete, the module doc comment's paragraph about the `#[serial]`/guard pattern (`:4-8`): it still
+   explains the rationale the surviving `default_audience_from_env_*` and `resolve_prefixed_var_*`
+   tests rely on. Every other test in the file is unaffected.
 10. **`rust/auth/tests/db_audience_grants_tests.rs`** — `with_store(Some(store))` →
     `with_store(store)` at `:81`, `:99`, `:463`, `:423`. `live_mint_policy_with_store_merges_a_store_granted_selector`'s
     doc comment references "the env-equivalent map passed to `AudienceMintPolicy::new`" — reword to
@@ -310,11 +314,16 @@ must name `micromegas-import-keys`, not just the dropped variable.
 12. **`local_test_env/ai_scripts/start_services_with_oidc.py`** — this is the only in-repo script
     that runs a `ProviderBuilder` binary on the env keyring, so it breaks outright. Its ingestion
     server runs with auth ON and needs a credential for every `#[micromegas_main]` process's
-    self-telemetry sink. Migrate to a DB row: keep `generate_local_ingestion_key()` and the
-    `MICROMEGAS_INGESTION_API_KEY` sink-side export, drop the `MICROMEGAS_API_KEYS` server-side
-    export, and after the ingestion server is up (it runs the schema migration, so the table exists
-    only from that point) insert the row via the `docker exec teledb psql` path `local_test_env/db/utils.py`
-    already uses:
+    self-telemetry sink — including the ingestion process's own sink, which starts authenticating as
+    soon as its port binds. A 401 on `insert_process` is non-retryable
+    (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
+    `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so the
+    row must land *before* the port binds, not after `/health` first answers. Migrate to a DB row:
+    keep `generate_local_ingestion_key()` and the `MICROMEGAS_INGESTION_API_KEY` sink-side export,
+    drop the `MICROMEGAS_API_KEYS` server-side export, and poll for the `ingestion_api_keys` table
+    (created by the schema migration, which runs before the port binds) via the `docker exec teledb
+    psql` path `local_test_env/db/utils.py` already uses, inserting the row as soon as the table
+    exists — before the script waits on `/health` at all:
 
     ```sql
     INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
@@ -323,32 +332,38 @@ must name `micromegas-import-keys`, not just the dropped variable.
 
     `key_hash` is `hashlib.sha256(key.encode()).hexdigest()` — `hash_key`
     (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string. `DbApiKeyAuthProvider`
-    validates against the table live, so a row inserted after startup authenticates on the next
-    request with no restart; the server itself starts because `MICROMEGAS_OIDC_CONFIG` is already
-    configured. Insert it before starting the remaining services so their sinks never see a 401.
+    validates against the table live, so a row inserted before the port binds authenticates the
+    ingestion process's own sink from its very first request, and every request after.
 13. **`local_test_env/ai_scripts/start_services.py`** — no functional change. Its
     `MICROMEGAS_API_KEYS` at `:135` is scoped to the `object-cache-srv` child env, which keeps the
     variable; the other services run `--disable-auth`. Add a one-line comment saying so, since the
     variable now means "object-cache only".
 14. **`build/run_flight_container.py`** — drop `-e MICROMEGAS_API_KEYS` from the `docker run` line;
-    `flight-sql-srv` no longer reads it, so passing it through only produces a startup warning in
-    every container run this way.
+    `flight-sql-srv` no longer reads it. The line passes no `MICROMEGAS_OIDC_CONFIG` either, so after
+    this change the container has no auth source at all unless the `analytics_api_keys` table it
+    points at is already populated — note that dependency (or add an `-e MICROMEGAS_OIDC_CONFIG`
+    passthrough) rather than treating the change as inert.
 15. **`docker/docker-compose.monolith.yaml:52-56`** — rewrite the auth comment block: the DB tables
     (and `MICROMEGAS_*_OIDC_CONFIG`) are the only options.
 
 ### Phase 5 — Docs
 
 16. **`mkdocs/docs/admin/authentication.md`** — `:45-51` "Two flavors coexist" becomes DB-backed keys
-    for ingestion/flight-sql plus the `object-cache-srv`-only keyring. Delete the "**Env keyring**"
-    configuration block at `:117-131` and the `export MICROMEGAS_API_KEYS=...` line at `:305`,
-    keeping the `object-cache-srv` pointer at `:685`.
+    for ingestion/flight-sql plus the `object-cache-srv`-only keyring. Reframe, don't drop, the
+    "**Env keyring**" block at `:116-132` (the "**Env keyring**" lead-in through the "**Format:**"
+    list that follows it, which documents the JSON shape `object-cache-srv` still requires): keep the
+    format under an `object-cache-srv`-only heading, or point to `admin/object-cache.md:41`, which
+    documents the same shape. Delete the `export MICROMEGAS_API_KEYS=...` line at `:305`, keeping the
+    `object-cache-srv` pointer at `:685`.
 17. **`mkdocs/docs/admin/authorization.md`** — delete the `MICROMEGAS_AUDIENCE_GRANTS` row from the
     env table (`:20`) and the whole "Deprecated: the env grant map" section (`:99-128`). Check for
     inbound anchor links to `#deprecated-the-env-grant-map` and remove them (`flight-sql.md:31`,
     `monolith.md:50`). In "Audience stamping" (`:139`), drop "env-keyring key" from the
     no-bound-audience list, leaving OIDC token and no-auth-provider.
 18. **`mkdocs/docs/admin/api-keys.md`** — `:4` intro drops the "or in `MICROMEGAS_API_KEYS`"
-    alternative. `:191` drops the deprecated-env-map clause. `:233` (data ingested through the env
+    alternative. `:26-28`, which says the env keyring "still works and is still checked" and that
+    migrating is "an operator decision", is rewritten: the keyring is no longer read by ingestion or
+    flight-sql, and migration is required in v0.31.0. `:191` drops the deprecated-env-map clause. `:233` (data ingested through the env
     keyring carries no audience) is deleted. `:359` loses `MICROMEGAS_API_KEYS` from its
     "same convention" list. Rewrite the "Migrating from the env keyring" section (`:434-500`): it is
     now a **v0.31.0 upgrade requirement, not an option** — step 1's "nothing changes yet: the env
@@ -372,7 +387,9 @@ must name `micromegas-import-keys`, not just the dropped variable.
     unaffected and permanent, and that a deployment sharing one environment across roles will see
     the other roles log a "no longer read" warning about the same variable name.
 23. **`mkdocs/docs/otlp/index.md`** — `:40` and `:47` drop the keyring; `:517`, `:647`, `:708` drop
-    the "or, transitionally, a value from `MICROMEGAS_API_KEYS`" clauses.
+    the "or, transitionally, a value from `MICROMEGAS_API_KEYS`" clauses. `:105` ("A credential with
+    no bound audience (an env-keyring key, OIDC, or no auth provider at all) resolves…") drops the
+    env-keyring arm, the same sentence shape as `authorization.md`'s "Audience stamping" fix above.
 24. **`mkdocs/docs/grafana/authentication.md`** — delete the whole "Quick Setup (env-var keyring)"
     section (`:37-53`). The DB-backed recipe immediately above it already covers token auth.
 25. **`mkdocs/docs/admin/functions-reference.md:478`** — drop the `MICROMEGAS_AUDIENCE_GRANTS` clause
@@ -406,7 +423,9 @@ must name `micromegas-import-keys`, not just the dropped variable.
 **Rust — core**
 - `rust/auth/src/env.rs`
 - `rust/auth/src/default_provider.rs`
+- `rust/auth/src/db_api_key.rs` (comment only)
 - `rust/auth/src/policy.rs`
+- `rust/auth/src/db_audience_grants.rs` (comment only)
 
 **Rust — wiring**
 - `rust/public/src/servers/flight_sql_server.rs`
@@ -442,34 +461,6 @@ must name `micromegas-import-keys`, not just the dropped variable.
 - `rust/ingestion/src/sql_migration.rs:207,212` — historical prose about where the table's shape came
   from, in the file that owns the migration; leave as is.
 
-## Trade-offs
-
-- **Warn vs. refuse vs. silently ignore a set variable.** The issue asks for a refusal ("fail
-  loudly, don't fall back silently"); #1564 went the other way, deleting 11 refusals as
-  one-release-old shims and choosing silent-ignore for the `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS`
-  form it dropped. **Warning is the settled middle** (user call, recorded in Decisions): the operator
-  gets the named replacement at startup, and no deployment loses a process over a stale variable a
-  config template left behind. The case a refusal would have caught more forcefully — OIDC
-  configured plus a still-set keyring, where keyring tokens silently stop working — is now covered
-  by the message text and by `admin/api-keys.md`'s rewritten migration section rather than by a
-  crash. #1564's precedent still governs the *lifetime*: v0.31.0 shims, deleted in v0.32.0.
-- **`MICROMEGAS_API_KEYS` stays the name `object-cache-srv` requires.** Under a refusal this was a
-  real hazard (a shared compose `env_file` or k8s `envFrom` would take down every other role) and
-  the plan carried a caveat in the message plus a follow-up issue to rename the knob to
-  `MICROMEGAS_OBJECT_CACHE_API_KEYS`. Warning instead removes the hazard: the co-located process
-  logs one line and serves. The rename is therefore not proposed at all — it would be an
-  operator-facing break bought for nothing.
-- **Keeping the static `grants` field on both policies** rather than making the store the sole
-  source, as the issue's wording implies. Dropping it would break the shipped mint path outright and
-  would push ~30 no-DB `resolve` unit tests onto a live DB. The compiler-enumeration goal the issue
-  actually wants is met by the `Option<Arc<_>>` → `Arc<_>` change on `with_store`.
-- **Keeping `AudienceMintPolicy::with_store`**, which still has no production caller. Deleting it and
-  its `store` field would simplify `resolve_audience` to a single source, but it is not this issue's
-  scope and the symmetry with the read policy is deliberate and documented.
-- **Deleting `provider`/`provider_with_prefix` vs. keeping them as OIDC-only wrappers.** Kept, they
-  are a callerless two-line wrapper whose doc comments advertise a removed variable — pure
-  maintenance surface. `micromegas-auth`'s Rust API is explicitly changeable (CLAUDE.md).
-
 ## Decisions
 
 - `{prefix}_UNSTAMPED_AUDIENCE` (issue Problem §3, follow-on bullet 3) needs no work: #1564 removed
@@ -479,12 +470,19 @@ must name `micromegas-import-keys`, not just the dropped variable.
   and 2) need no work: neither is in `mkdocs/docs/` any more.
 - `AudienceMintPolicy::from_env`, named in the issue's Remove list, does not exist. Nothing to remove.
 - **A still-set variable logs a `warn!`; it does not refuse startup.** User call, overriding the
-  issue's "fail loudly, don't fall back silently" instruction. See Trade-offs for what this gives up.
+  issue's "fail loudly, don't fall back silently" instruction.
+- `AudienceMintPolicy::with_store` is kept even though it still has no production caller: deleting it
+  and its `store` field would simplify `resolve_audience` to a single source, but that is not this
+  issue's scope, and the symmetry with the read policy is deliberate.
 - `MICROMEGAS_INGESTION_AUDIENCE_GRANTS` is excluded from the warning list — it was never read, so
   warning about it would tell an operator they lost a setting that never did anything.
 - The warnings are called from `ProviderBuilder::compose` only, not from `analytics-web-srv`'s
   `WebServerConfig::from_cli_and_env` (which never read either variable), unlike #1564's now-deleted
   pair.
+- `FlightSqlServerBuilder`'s `with_auth_provider` branch (`flight_sql_server.rs:300-322`) builds its
+  own policy and store and never calls `ProviderBuilder`, so an embedder on that branch with a stale
+  variable set gets no warning at all. Accepted: not every auth-enabled role passes through
+  `compose`, only the ones this plan wires.
 - The `warn_removed_*` functions are `pub(crate)`, not `pub`: #1564's refusals were published and
   their removal cost a breaking-change clause. A one-release shim with one in-crate caller should not
   be in the published API at all.
@@ -509,27 +507,9 @@ anchor to it.
 ## Testing Strategy
 
 Everything here is reachable by calling code with constructed inputs, so it is all no-DB unit tests
-except the two existing `#[ignore]` live-DB tests that need reworking.
-
-**New, no DB (`rust/auth/src/env.rs`, inline `mod tests`)** — `removed_vars_that_are_set`, the pure
-half of the warning: each variable set individually → returned alone; empty-string value → still
-returned (pins that empty is not an opt-out); none set → empty; two set → both, in list order.
-`#[serial]` with a guard clearing all five. The `warn!` wrappers themselves are one call each with no
-branching and are not tested — the alternative, capturing a log sink, would assert the logging
-framework rather than this change.
-
-**New, no DB (`rust/auth/tests/default_provider_tests.rs`)** — two tests, replacing
-`build_chain_with_env_keys_only_authenticates`, both with `MICROMEGAS_API_KEYS` set and nothing else:
-
-- `build_chain()` returns `Ok` and the resulting chain **rejects** that key. This is the direct
-  assertion that the keyring arm is gone. Note it is a *stronger* check than the refusal design
-  allowed: an `Err`-on-startup assertion would pass even if the keyring arm were still present
-  behind the warning.
-- `build()` returns `Ok(None)`. Pins that the keyring no longer counts toward `configured`, which is
-  the mechanism behind §5's behavior change — a set keyring alone can no longer start a service.
-
-**Deleted** — `policy_tests.rs`'s three `{prefix}_AUDIENCE_GRANTS` env-fallback tests (`:618-690`),
-which test a removed code path.
+except the two existing `#[ignore]` live-DB tests that need reworking. The new and reworked no-DB
+tests are enumerated in Implementation Steps 7–9; this section covers the live-DB tier and the
+full-suite checks.
 
 **Reworked, live DB (`#[ignore]`, existing)** — `provider_always_registered_authenticates_key_minted_after_build`
 loses its env-keyring dependency by inserting a live row before `build()` to force `Some`, then a
@@ -538,10 +518,6 @@ second row after, and authenticating the second. It stays a live-DB test because
 `ingestion_api_keys` relation and `key_store_has_live_rows`; a lazily-connected pool or a fake store
 cannot distinguish "provider registered but table empty at build time" from "provider not
 registered", which is the whole assertion.
-
-**Unchanged and still meaningful** — every `AudienceReadPolicy::new(grants(json))` /
-`AudienceMintPolicy::new(grants(json))` test in `policy_tests.rs`. The static map they exercise is
-still the shipped mint path's only source.
 
 **Full-suite checks** (the set `build/rust_ci.py native` runs, minus dependency audits — no Cargo
 changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo machete`,
@@ -559,9 +535,11 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
 2. **The OIDC dev path still authenticates self-telemetry off a DB row.** With an OIDC config
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero, and
-   `/tmp/ingestion.log` shows no 401s. This is the only step that exercises step 12's insert-after-
-   startup ordering against a real migrated table; the SHA-256 agreement between the Python insert
-   and Rust's `hash_key` has no in-repo test that spans both languages.
+   `/tmp/ingestion.log` shows no 401s — achievable now that step 12 inserts the key row as soon as
+   the table exists, before the script waits on `/health`, so the ingestion process's own sink never
+   authenticates against an empty table. This is the only step that exercises step 12's
+   insert-before-health ordering against a real migrated table; the SHA-256 agreement between the
+   Python insert and Rust's `hash_key` has no in-repo test that spans both languages.
 3. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
    (so auth is configured and startup proceeds):
    `MICROMEGAS_API_KEYS='[]' MICROMEGAS_AUDIENCE_GRANTS='{}' cargo run --bin flight-sql-srv`.
