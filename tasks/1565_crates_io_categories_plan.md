@@ -184,21 +184,25 @@ Cargo's own manifest resolution can answer.
    not cover it. Expect `["wasm", "database-implementations", "development-tools::profiling"]`.
 
 3. Not automated because Cargo carries no category-slug list of its own — only crates.io validates
-   slugs, and only at publish time. Confirm every slug used in the manifests is currently valid
-   there (the crates.io API requires a descriptive `User-Agent` header, and `/api/v1/categories`
-   needs `?per_page=100` to return all top-level slugs):
+   slugs, and only at publish time. Diff the slugs that actually landed in both workspaces'
+   manifests against the registry's live slug set (the API requires a descriptive `User-Agent`):
 
-   ```
-   curl -sS -A "micromegas-dev (madesroches@gmail.com)" \
-     "https://crates.io/api/v1/categories?per_page=100" | grep -o '"slug":"[^"]*"'
-   curl -sS -A "micromegas-dev (madesroches@gmail.com)" \
-     "https://crates.io/api/v1/categories/development-tools" | grep -o '"slug":"[^"]*"'
+   ```python3
+   import json, subprocess, urllib.request as u
+   def get(url):
+       req = u.Request(url, headers={"User-Agent": "micromegas-dev (madesroches@gmail.com)"})
+       return json.load(u.urlopen(req))
+   reg = {c["id"] for c in get("https://crates.io/api/v1/categories?per_page=100")["categories"]}
+   reg |= {c["id"] for c in get("https://crates.io/api/v1/categories/development-tools")["category"]["subcategories"]}
+   used = set()
+   for ws in ("rust", "rust/datafusion-wasm"):
+       out = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"],
+                             cwd=ws, capture_output=True, text=True, check=True).stdout
+       used.update(c for p in json.loads(out)["packages"] for c in p["categories"])
+   print("unknown slugs:", used - reg or "none")
    ```
 
-   Expect `database-implementations`, `authentication`, `caching`, `encoding`, and `wasm` among the
-   first command's output, and `development-tools::profiling`,
-   `development-tools::debugging`, and `development-tools::procedural-macro-helpers` among the
-   second's.
+   Expect `unknown slugs: none`.
 
 ## Open Questions
 
