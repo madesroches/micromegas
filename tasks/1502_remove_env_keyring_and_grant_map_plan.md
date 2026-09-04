@@ -336,8 +336,14 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
 
     `key_hash` is `hashlib.sha256(key.encode()).hexdigest()` — `hash_key`
     (`rust/auth/src/db_api_key.rs:118`) is a plain SHA-256 over the whole key string.
-    `DbApiKeyAuthProvider` validates against the table live, so once the row lands it authenticates
-    the ingestion process's own sink for every subsequent request.
+    `DbApiKeyAuthProvider` validates against the table live, but a 401 on the *first* request is not
+    isolated: `DbApiKeyAuthProvider`'s unknown-key cache (`rust/auth/src/db_api_key.rs:369-372`)
+    negatively caches the pre-row miss for `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS` (default 10s,
+    `:109`), so every retry the ingestion sink sends in that window is also rejected without touching
+    the table, and since the 401 is `Permanent` (`http_event_sink.rs:522-528`) the sink never re-sends
+    that `insert_process`, permanently leaving the ingestion process without its own `processes` row.
+    Set `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS=0` on the ingestion child env (`ingestion_env`,
+    `:210-211`) so the dev path does not widen the race into a ~10s window of 401s.
 13. **`local_test_env/ai_scripts/start_services.py`** — no functional change. Its
     `MICROMEGAS_API_KEYS` at `:135` is scoped to the `object-cache-srv` child env, which keeps the
     variable; the other services run `--disable-auth`. Add a one-line comment saying so, since the
@@ -592,10 +598,14 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
    sourced, `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, then
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero — the
    script now sets `MICROMEGAS_TELEMETRY_URL`/`MICROMEGAS_FLUSH_PERIOD` defaults (step 12), so the
-   self-telemetry path this MV measures is actually enabled. `/tmp/ingestion.log` may show an
-   isolated 401 from the narrow residual race described in step 12 (the port can bind before the
-   poll observes migration version >= 6 on a slow first poll) but should not show a sustained run
-   of them. This is the only step that exercises step
+   self-telemetry path this MV measures is actually enabled. With
+   `MICROMEGAS_API_KEY_UNKNOWN_CACHE_TTL_SECONDS=0` set per step 12, `/tmp/ingestion.log` may still
+   show a 401 on the ingestion process's own first `insert_process` if the narrow residual race
+   described in step 12 is hit (the port can bind before the poll observes migration version >= 6 on
+   a slow first poll); because that 401 is `Permanent`, the sink never retries it, so the ingestion
+   process's own self-telemetry stays unqueryable for the rest of the run — this MV's
+   `count(*) FROM log_entries` still passes via the other processes' sinks either way, so it cannot
+   detect that case. This is the only step that exercises step
    12's insert-timing against a real migrated table; the SHA-256 agreement between the Python
    insert and Rust's `hash_key` has no in-repo test that spans both languages.
 2. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
