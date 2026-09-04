@@ -299,9 +299,12 @@ resolves to loses its premise; it collapses to a note that the store snapshot is
     self-telemetry sink — including the ingestion process's own sink. A 401 on `insert_process` is
     non-retryable (`rust/telemetry-sink/src/http_event_sink.rs:522-534` classifies `400..=499` as
     `IngestionClientError::Permanent`, unlike the `Transient`, retried connection-refused case), so
-    the row should exist as early as possible relative to the sink's `insert_process` attempts, even
-    though the poll running in the Python parent after the server's port already binds cannot
-    guarantee it lands before the very first one (see Manual Verification #1). Also add the same
+    the row should exist as early as possible relative to the sink's `insert_process` attempts. Start
+    the migration-version poll and issue the `INSERT` immediately after the ingestion `Popen` call and
+    before `wait_for_service` — `connect_to_remote_data_lake` (which runs `execute_migration` and
+    commits v6 in its own transaction) executes before `serve_ingestion` binds the listener, so
+    polling from that point normally lands the row before the port ever opens, leaving only a narrow
+    residual race on the very first request (see Manual Verification #1). Also add the same
     `MICROMEGAS_TELEMETRY_URL` / `MICROMEGAS_FLUSH_PERIOD` default-if-unset block
     `start_services.py` already has (`:364-368`), since this script currently sets neither and the
     self-telemetry path this migration targets is otherwise only enabled by accident, if the
@@ -590,8 +593,9 @@ changes): `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`, `cargo
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 5m`. Expected: non-zero — the
    script now sets `MICROMEGAS_TELEMETRY_URL`/`MICROMEGAS_FLUSH_PERIOD` defaults (step 12), so the
    self-telemetry path this MV measures is actually enabled. `/tmp/ingestion.log` may show an
-   isolated 401 or two before the key row lands (step 12's poll narrows, but does not close, that
-   window) but should not show a sustained run of them. This is the only step that exercises step
+   isolated 401 from the narrow residual race described in step 12 (the port can bind before the
+   poll observes migration version >= 6 on a slow first poll) but should not show a sustained run
+   of them. This is the only step that exercises step
    12's insert-timing against a real migrated table; the SHA-256 agreement between the Python
    insert and Rust's `hash_key` has no in-repo test that spans both languages.
 2. **A still-set variable warns and the service still starts.** With `MICROMEGAS_OIDC_CONFIG` set
