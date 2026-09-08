@@ -48,12 +48,14 @@ deleting the dead type and the unused parameter outright — and deliberately le
 ### 1. Remove `BatchPartitionMerger`
 
 Delete `rust/analytics/src/lakehouse/batch_partition_merger.rs` and its `pub mod
-batch_partition_merger;` declaration (`mod.rs:20-22`). `MergerMaker`/`PartitionMerger` stay — a
-caller can still supply a custom merger; this removes one specific, unused implementation, not the
-extension point (moot anyway once §2 deletes `SqlBatchView`'s only hook onto it). Update the doc
-comments naming `BatchPartitionMerger` as the intended fallback (`sql_batch_view.rs:173-178`) to
-describe the mechanism in general terms ("a custom `merger_maker`") instead of pointing at a type
-that no longer exists. `tasks/completed/1392_kway_merge_sorted_partitions_plan.md` is left
+batch_partition_merger;` declaration (`mod.rs:20-22`). `PartitionMerger`/`QueryMerger` stay — they're
+the mechanism `SqlBatchView` itself uses internally (see §2); this removes one specific, unused
+implementation, not the extension point. `MergerMaker` does not stay; it's deleted along with
+`merger_maker` in §2. Delete the doc-comment paragraph naming `BatchPartitionMerger` as the intended
+fallback (`sql_batch_view.rs:173-178`) outright rather than rewording it — its only purpose was
+explaining how a custom `merger_maker` coexists with `with_merge_sort_order`, and once §2 removes
+`merger_maker` there is nothing left for the paragraph to describe.
+`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` is left
 untouched — it's a closed plan's historical record of what was true when it was written, not live
 documentation.
 
@@ -93,8 +95,9 @@ Not addressed by this plan. See Open Questions.
 
 ## Implementation Steps
 
-1. Delete `batch_partition_merger.rs` and its `mod.rs` declaration; update the doc-comment
-   references in `sql_batch_view.rs:173-178` to stop naming the removed type.
+1. Delete `batch_partition_merger.rs` and its `mod.rs` declaration; delete the
+   `sql_batch_view.rs:173-178` doc-comment paragraph outright (its only purpose was explaining how a
+   custom `merger_maker` coexists with `with_merge_sort_order`, and step 2 removes `merger_maker`).
 2. `sql_batch_view.rs`: drop `merger_maker` from `new()`'s parameter list and delete the
    `MergerMaker` type alias.
 3. Update call sites:
@@ -139,64 +142,22 @@ Not addressed by this plan. See Open Questions.
 - `rust/public/tests/materialize_fail_isolation_tests.rs`
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **`BatchPartitionMerger`: remove vs. keep-and-test.** Keeping it would mean writing a unit test
-  for code with no caller anywhere, purely to justify continued existence — and the memory problem
-  it worked around is already solved for every merger by the single-sequential-reader merge scan
-  (see Design §1), so there's no gap to keep it around for. If a need for time-sliced
-  batch-and-requery ever resurfaces, it can be reintroduced with a real caller and test at that
-  point.
-- **`merger_maker`: delete outright (chosen, per user direction) vs. demote to a builder method.**
-  An earlier draft of this plan kept the hook as a `.with_merger_maker(...)` builder, matching
-  `with_merge_sort_order`'s shape. Deleting it instead is simpler and consistent with the issue's
-  own framing (zero production callers, in-repo or downstream) — it removes the `MergerMaker` type
-  alias and both test-only custom mergers (`sql_view_test.rs`'s `LogSummaryMerger`,
-  `sql_batch_view_merge_ordering_tests.rs`'s inline stand-in) rather than preserving an
-  extension point nothing currently exercises for real. If a genuine need for a
-  non-SQL-expressible merge resurfaces, it can be designed against a live requirement instead of a
-  demonstration test.
-
 ## Decisions
 
 - `merger_maker` is deleted outright rather than demoted to a builder method — user call,
-  overriding this plan's initial `with_merger_maker` proposal (see Trade-offs).
+  overriding this plan's initial `with_merger_maker` proposal.
 - Uneven sort-order adoption (issue item 3) is left out of scope for this plan — user call,
   overriding this plan's initial `accept_unordered_merge()` proposal (see Open Questions).
 - `BatchPartitionMerger` is removed, not kept as dormant API — user call: its batching approach
   was always a workaround for bounding merge memory, and the single-sequential-reader merge scan
   already bounds that for every merger (see Design §1).
 - **No `with_merge_concatenated_order` builder for `SqlBatchView`.** `ScanOrdering::Concatenated`
-  stays available only to hand-written `View` impls (`BlocksView`, `ThreadSpansView`). The parity
-  it would appear to give is not achievable for a `SqlBatchView`, for three reasons:
-  1. *No `SqlBatchView` can satisfy the contract.* `Concatenated` requires that the leading sort
-     column be the view's min-event-time column **and** that partition event-time ranges not
-     overlap (`view.rs:164-166`), proven from partition metadata alone by
-     `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:82-113`). `SqlBatchView`
-     cuts partitions on **insert time** (`log_stats_view.rs:23-24,47-48`) while its bounds and
-     leading sort column are **event time** (`time_bin`). Late-arriving telemetry — routine here —
-     puts the same `time_bin` in two insert windows, so the ranges overlap and the declaration is
-     false. The two views that can declare it get there structurally, not by choice of builder:
-     `BlocksView` sorts on `insert_time`, the same column its partitions are cut on, so non-overlap
-     holds by construction; `ThreadSpansView` gets there via per-stream JIT segments plus the exact
-     `max_sort_key_time` bound, which only that view populates (`partition.rs:30-37`) — a
-     `SqlBatchView` would fall back to the looser `max_event_time` and trip the check more often
-     still.
-  2. *The failure mode is asymmetric.* A false `PerFile` declaration degrades gracefully — an
-     uncertified partition silently drops to `Unordered` (`partitioned_execution_plan.rs:309-318`).
-     A violated `Concatenated` declaration fails the scan with `DataFusionError::Internal`, and via
-     `get_scan_output_ordering` that hits **user queries**, not just merges. The builder would hand
-     view authors a contract they cannot enforce, whose violation is a read outage rather than a
-     slow path.
-  3. *The payoff is small anyway.* `Unordered` and `Concatenated` build and execute the identical
-     single-file-group scan (`partitioned_execution_plan.rs:144-148`, `merge.rs:334-339`); they
-     differ only in whether the order is declared. Against `PerFile` the saving is one streaming
-     `SortPreservingMergeExec`, not a merge step's worth of memory.
-
-  Two things would have to change before this is worth revisiting: a view whose partitions are cut
-  on its leading sort column (or a `max_sort_key_time`-style exact per-partition bound recorded on
-  the `SqlBatchView` write path), and a `Concatenated` path that degrades to `Unordered` on
-  overlapping bounds instead of erroring, matching `PerFile`'s certification gate.
+  stays available only to hand-written `View` impls (`BlocksView`, `ThreadSpansView`).
+  `SqlBatchView` cuts partitions on **insert time** while its leading sort column is **event
+  time**, so late-arriving telemetry puts the same sort-key value in two insert windows and the
+  `Concatenated` non-overlap contract (`view.rs:164-166`) cannot hold; a violated declaration errors
+  **user queries** (via `get_scan_output_ordering`), not just merges, so this isn't a case where
+  approximating the contract is safe.
 
 ## Documentation
 
