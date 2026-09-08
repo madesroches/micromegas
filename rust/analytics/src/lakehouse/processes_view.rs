@@ -84,7 +84,6 @@ GROUP BY process_id
         Some(2000),
         TimeDelta::days(1), // from source
         TimeDelta::days(1), // when merging
-        None,
     )
     .await
 }

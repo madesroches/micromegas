@@ -84,7 +84,6 @@ pub async fn make_log_stats_view(
         Some(3000),         // update_group
         TimeDelta::days(1), // source partition delta
         TimeDelta::days(1), // merge partition delta
-        None,               // custom merger
     )
     .await?
     // Time first: keeps merged partitions time-local, preserving row-group pruning on time_bin

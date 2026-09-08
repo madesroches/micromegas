@@ -71,7 +71,6 @@ async fn make_cpu_usage_per_process_per_minute_view(
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
-        None,
     )
     .await
 }
