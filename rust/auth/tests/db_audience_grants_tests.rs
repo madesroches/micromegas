@@ -71,19 +71,19 @@ async fn cold_start_failure_is_throttled_within_the_ttl_window() {
     );
 }
 
-/// A cold-start store outage denies even when the env grant map alone would be permissive --
+/// A cold-start store outage denies even when the static grant map alone would be permissive --
 /// there is no known-good state to fall back to (design question 1: the fail-closed guarantee is
 /// preserved exactly for this case).
 #[tokio::test]
-async fn read_policy_with_unreachable_store_fails_closed_even_with_permissive_env_grants() {
+async fn read_policy_with_unreachable_store_fails_closed_even_with_permissive_static_grants() {
     let grants = AudienceGrants::parse(r#"{"team-alpha": ["*"]}"#).expect("valid grants");
     let store = Arc::new(DbAudienceGrantsSource::new(unreachable_pool(), ttl(60)));
-    let policy = AudienceReadPolicy::new(grants).with_store(Some(store));
+    let policy = AudienceReadPolicy::new(grants).with_store(store);
     let ctx = caller(None, vec![]);
     let result = policy.resolve(&ctx).await;
     assert!(
         result.is_err(),
-        "a cold-start store outage must deny, not silently fall back to the env map alone"
+        "a cold-start store outage must deny, not silently fall back to the static map alone"
     );
 }
 
@@ -96,7 +96,7 @@ async fn mint_policy_with_unreachable_store_fails_closed() {
     )
     .expect("valid grants");
     let store = Arc::new(DbAudienceGrantsSource::new(unreachable_pool(), ttl(60)));
-    let policy = AudienceMintPolicy::new(grants).with_store(Some(store));
+    let policy = AudienceMintPolicy::new(grants).with_store(store);
     let ctx = caller(Some("alice@example.com"), vec![]);
     let result = policy.resolve_audience(&ctx, Some("alice-laptop")).await;
     assert!(
@@ -403,7 +403,7 @@ async fn live_malformed_row_fails_the_whole_snapshot_load() {
 
 /// End to end: a grant written straight to the table (standing in for the admin route, which
 /// this crate cannot call directly) reaches `AudienceMintPolicy::resolve_audience` through
-/// `with_store`, merged with the env-equivalent map passed to `AudienceMintPolicy::new`.
+/// `with_store`, merged with the static map passed to `AudienceMintPolicy::new`.
 #[ignore]
 #[tokio::test]
 async fn live_mint_policy_with_store_merges_a_store_granted_selector() {
@@ -420,7 +420,7 @@ async fn live_mint_policy_with_store_merges_a_store_granted_selector() {
         .map_err(|e| format!("seeding a row: {e:#}"))?;
 
         let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), ttl(60)));
-        let policy = AudienceMintPolicy::new(AudienceGrants::empty()).with_store(Some(store));
+        let policy = AudienceMintPolicy::new(AudienceGrants::empty()).with_store(store);
         let ctx = caller(Some("alice@example.com"), vec![]);
         let resolved = policy
             .resolve_audience(&ctx, Some("alice-laptop"))
@@ -460,7 +460,7 @@ async fn live_read_policy_with_store_grants_a_store_granted_selector() {
         .map_err(|e| format!("seeding a row: {e:#}"))?;
 
         let store = Arc::new(DbAudienceGrantsSource::new(pool.clone(), ttl(60)));
-        let policy = AudienceReadPolicy::new(AudienceGrants::empty()).with_store(Some(store));
+        let policy = AudienceReadPolicy::new(AudienceGrants::empty()).with_store(store);
         let ctx = caller(None, vec!["eng".to_string()]);
         let resolved = policy
             .resolve(&ctx)

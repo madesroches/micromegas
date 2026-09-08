@@ -1,5 +1,5 @@
 //! Authorization seam: `MintPolicy`, `ReadPolicy`, and the audience-based implementations that
-//! resolve them from a caller's `AuthContext` and a JSON grant map keyed by audience name.
+//! resolve them from a caller's `AuthContext` and a static grant map keyed by audience name.
 //!
 //! **No enforcement lands with this module itself.** This module fixes the *shape* of
 //! authorization -- every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
@@ -184,11 +184,11 @@ struct RawGrantObject {
     mint: Vec<String>,
 }
 
-/// Deserializes the top-level `{prefix}_AUDIENCE_GRANTS` object while rejecting a repeated key --
-/// `serde_json`'s own `Map` deserialization silently keeps the *last* value for a duplicate key,
-/// which would discard an earlier grant list without a word (see `AudienceGrants`'s doc comment).
-/// Pulling keys one at a time through `MapAccess`, rather than deserializing straight into a
-/// `BTreeMap`, is what makes that duplicate visible before it is lost.
+/// Deserializes a grant-map JSON document while rejecting a repeated key -- `serde_json`'s own
+/// `Map` deserialization silently keeps the *last* value for a duplicate key, which would discard
+/// an earlier grant list without a word (see `AudienceGrants`'s doc comment). Pulling keys one at
+/// a time through `MapAccess`, rather than deserializing straight into a `BTreeMap`, is what makes
+/// that duplicate visible before it is lost.
 struct RawAudienceGrants(BTreeMap<String, RawGrantValue>);
 
 impl<'de> Deserialize<'de> for RawAudienceGrants {
@@ -227,10 +227,10 @@ impl<'de> Deserialize<'de> for RawAudienceGrants {
     }
 }
 
-/// The parsed, validated `{prefix}_AUDIENCE_GRANTS` map: "who can access this audience", keyed by
-/// audience name, one relation per axis (read/mint -- AbAC plan's `group_read_grants` /
-/// `group_mint_grants`, kept as one env map only because there is no store yet to split them
-/// across).
+/// The parsed, validated grant map: "who can access this audience", keyed by audience name, one
+/// relation per axis (read/mint -- AbAC plan's `group_read_grants` / `group_mint_grants`, kept as
+/// one static map here since the DB store (`DbAudienceGrantsSource`) is checked as a separate
+/// source, not merged into this one).
 ///
 /// A bare-array value is read-only shorthand: an omitted `"mint"` list is therefore always empty,
 /// never defaulted from `"read"` -- a read grant confers no mint authority, by construction.
@@ -250,8 +250,10 @@ impl AudienceGrants {
         Self::default()
     }
 
-    /// Parses a `{prefix}_AUDIENCE_GRANTS` JSON string directly. Split out from
-    /// [`Self::from_env`] so tests can exercise parsing without mutating the environment.
+    /// Parses a grant-map JSON document directly -- the documented published format for a static
+    /// grant map, kept as a test-only entry point now that no production caller builds a policy
+    /// from raw JSON (`mint_key` builds one from [`Self::from_rows`] against a live query
+    /// instead).
     ///
     /// Validates both axes of the map, not just its JSON shape -- same reason every other knob in
     /// this crate fails startup on a typo rather than shipping inert: every key must satisfy
@@ -286,23 +288,6 @@ impl AudienceGrants {
             entries.insert(audience, GrantEntry { read, mint });
         }
         Ok(Self { entries })
-    }
-
-    /// Resolves [`audience_grants_var`] and parses it. Unset ⇒ [`Self::empty`].
-    pub fn from_env(prefix: &str) -> Result<Self> {
-        let var = resolve_prefixed_var(prefix, "AUDIENCE_GRANTS");
-        let grants = match std::env::var(&var) {
-            Ok(raw) if raw.trim().is_empty() => Self::empty(),
-            Ok(raw) => Self::parse(&raw).map_err(|e| anyhow!("{var}: {e}"))?,
-            Err(_) => Self::empty(),
-        };
-        if grants.entries.is_empty() {
-            info!("{var}: no audience grants configured");
-        } else {
-            let names = grants.entries.keys().cloned().collect::<Vec<_>>().join(",");
-            info!("{var}: {} audience grants ({names})", grants.entries.len());
-        }
-        Ok(grants)
     }
 
     /// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
@@ -341,7 +326,7 @@ impl AudienceGrants {
     ///
     /// A public utility for combining two `AudienceGrants` maps, exercised by this crate's own
     /// integration tests (`rust/auth/tests/policy_tests.rs`); `resolve`/`resolve_audience` do
-    /// **not** call it -- they check the env map and the DB store snapshot as two separate
+    /// **not** call it -- they check the static map and the DB store snapshot as two separate
     /// sources instead, specifically to avoid a per-request deep clone (see the comment in
     /// [`AudienceReadPolicy::resolve`]).
     pub fn merge(&self, other: &Self) -> Self {
@@ -461,7 +446,7 @@ pub struct AudienceReadPolicy {
 }
 
 impl AudienceReadPolicy {
-    /// Builds a policy with an explicit grant map (bypassing env resolution).
+    /// Builds a policy with an explicit static grant map.
     pub fn new(grants: AudienceGrants) -> Self {
         Self {
             grants,
@@ -469,25 +454,11 @@ impl AudienceReadPolicy {
         }
     }
 
-    /// Resolves the grant map from `{prefix}_AUDIENCE_GRANTS` (falling back to
-    /// `MICROMEGAS_AUDIENCE_GRANTS`) via [`AudienceGrants::from_env`]. Unset ⇒ an empty grant map
-    /// ⇒ the readable set degenerates to `read_audiences` alone (`public` included only if a DB
-    /// store attached via `with_store` resolves the seeded row), which `OwnershipRewrite`
-    /// enforces. A malformed grant map is `Err`, not a silently-emptied one, so a startup `?`
-    /// turns a typo into a fail-fast instead of a silently-inactive knob.
-    pub fn from_env(prefix: &str) -> Result<Self> {
-        let grants = AudienceGrants::from_env(prefix)?;
-        Ok(Self {
-            grants,
-            store: None,
-        })
-    }
-
-    /// Attaches (or clears, with `None`) the DB-backed grant store. A builder method, not a
-    /// constructor argument, so `new`/`from_env` keep working unchanged for every caller with no
-    /// DB pool to back one (disabled-auth, tests).
-    pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
-        self.store = store;
+    /// Attaches the DB-backed grant store. A builder method, not a constructor argument, so
+    /// `new`/`default` keep working unchanged for every caller with no DB pool to back one
+    /// (disabled-auth, tests).
+    pub fn with_store(mut self, store: Arc<DbAudienceGrantsSource>) -> Self {
+        self.store = Some(store);
         self
     }
 }
@@ -502,9 +473,9 @@ impl ReadPolicy for AudienceReadPolicy {
             None => None,
         };
         let mut set = BTreeSet::new();
-        // The env map and the store snapshot are checked as two separate sources -- a selector
-        // present in either grants access -- rather than merged into one map, so neither side is
-        // deep-cloned on every request.
+        // The static map and the store snapshot are checked as two separate sources -- a
+        // selector present in either grants access -- rather than merged into one map, so
+        // neither side is deep-cloned on every request.
         for (audience, read) in self.grants.readers() {
             if read.iter().any(|s| selector_matches(s, caller)) {
                 set.insert(audience.clone());
@@ -550,7 +521,7 @@ pub struct AudienceMintPolicy {
 }
 
 impl AudienceMintPolicy {
-    /// Builds a policy with an explicit grant map.
+    /// Builds a policy with an explicit static grant map.
     pub fn new(grants: AudienceGrants) -> Self {
         Self {
             grants,
@@ -558,13 +529,13 @@ impl AudienceMintPolicy {
         }
     }
 
-    /// Attaches (or clears, with `None`) the DB-backed grant store. Built alongside
-    /// [`AudienceReadPolicy::with_store`] for symmetry -- unlike the read side, no production
-    /// call site attaches a store through this method: `mint_key` constructs its
-    /// `AudienceMintPolicy` via `new`, so mint grants stay resolved by a fresh, uncached point
-    /// query against `audience_grants`, never a `DbAudienceGrantsSource` snapshot.
-    pub fn with_store(mut self, store: Option<Arc<DbAudienceGrantsSource>>) -> Self {
-        self.store = store;
+    /// Attaches the DB-backed grant store. Built alongside [`AudienceReadPolicy::with_store`] for
+    /// symmetry -- unlike the read side, no production call site attaches a store through this
+    /// method: `mint_key` constructs its `AudienceMintPolicy` via `new`, so mint grants stay
+    /// resolved by a fresh, uncached point query against `audience_grants`, never a
+    /// `DbAudienceGrantsSource` snapshot.
+    pub fn with_store(mut self, store: Arc<DbAudienceGrantsSource>) -> Self {
+        self.store = Some(store);
         self
     }
 }
@@ -588,9 +559,9 @@ impl MintPolicy for AudienceMintPolicy {
                 ))
             };
         }
-        // The env map and the store snapshot are checked as two separate sources -- a selector
-        // present in either grants access -- rather than merged into one map, so neither side is
-        // deep-cloned on every request.
+        // The static map and the store snapshot are checked as two separate sources -- a
+        // selector present in either grants access -- rather than merged into one map, so
+        // neither side is deep-cloned on every request.
         let store_grants = match &self.store {
             Some(store) => Some(store.current().await?),
             None => None,

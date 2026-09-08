@@ -17,7 +17,6 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MICROMEGAS_AUDIENCE_GRANTS` | unset | **Deprecated** — JSON grant map read once at startup, superseded by the `audience_grants` table. See [Deprecated: the env grant map](#deprecated-the-env-grant-map). |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | `public` | Label stamped on rows whose credential carries no bound audience. Set it identically on **every** role that builds a lakehouse — FlightSQL, maintenance, monolith, **and ingestion**. |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | unset | Comma-separated view sets exempt from filtering entirely; an operator-responsibility allowlist. |
 | `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Lets a non-admin mint their own ingestion key and manage grants. See [Self-service mint](#self-service-ingestion-key-mint). |
@@ -96,36 +95,6 @@ before `MICROMEGAS_SELF_SERVICE_MINT` goes on — nothing seeds one, and a
 non-admin could otherwise claim the name (see
 [self-service mint](#self-service-ingestion-key-mint)).
 
-### Deprecated: the env grant map {#deprecated-the-env-grant-map}
-
-`MICROMEGAS_AUDIENCE_GRANTS` holds the same model as a JSON object keyed by
-audience name — a bare array as read-only shorthand, or `"read"`/`"mint"` lists:
-
-```json
-{
-  "team-alpha":   ["group:eng"],
-  "alice-laptop": { "read": ["user:alice@example.com"], "mint": ["user:alice@example.com"] }
-}
-```
-
-It is still read, and its `read` selectors are still unioned with the store, so
-an existing deployment keeps working. Don't add to it — migrate each entry to a
-grant row (`micromegas-grants create <audience> <axis> <selector>`) and unset
-the variable. It has three sharp edges the store does not:
-
-- **`mint` selectors are inert.** Mint authorization is a point query against
-  `audience_grants`; the env map is never consulted for it.
-- **Its audiences are invisible to the lazy claim.** The claim's existence
-  check reads only `audience_grants` and `ingestion_api_keys`, so a name that
-  exists only in the env map is claimable out from under you once
-  `MICROMEGAS_SELF_SERVICE_MINT` is on.
-- **A malformed map fails startup**: an unknown-shaped key, an unrecognized
-  selector prefix, or a duplicate JSON key for one audience.
-
-Resolution is per role, read once at startup: FlightSQL reads
-`MICROMEGAS_AUDIENCE_GRANTS`; the monolith prefers
-`MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` and falls back to it.
-
 ## Audience stamping {#audience-stamping}
 
 `processes`, `streams`, and `blocks` each carry their own `audience` column,
@@ -136,8 +105,8 @@ client payload.
   insert time. Each row's stamp is the credential that wrote *that* row, never
   derived from the `process_id`/`stream_id` it points at.
 - A DB-backed `ingestion_api_keys` row's bound audience is stamped as-is. A
-  credential with none — env-keyring key, OIDC token, or no auth provider — is
-  stamped with `MICROMEGAS_DEFAULT_AUDIENCE`.
+  credential with none — OIDC token or no auth provider — is stamped with
+  `MICROMEGAS_DEFAULT_AUDIENCE`.
 - **Client self-stamping has no effect.** To get its own label a producer needs
   a DB ingestion key bound to that audience.
 - `log_entries`, `measures`, and `log_stats` inherit the owning block's stamp.
@@ -247,8 +216,6 @@ create/delete, and `GET .../audience-grants/visible`'s non-admin narrowing.
   and writes the admin's own `mint`+`read` rows if the audience looks
   unclaimed. The response's `claimed` field reports it. An admin with no email
   is unaffected.
-- **Mint grants must live in the DB.** An env-map `"mint"` selector is inert —
-  `mint_key` never consults it.
 
 `micromegas-setup-telemetry` wraps login, mint, and printing the
 `OTEL_EXPORTER_OTLP_*` env vars:
@@ -290,9 +257,8 @@ CREATE TABLE audience_grants (
 ```
 
 Each flight-sql process — standalone, or the monolith's role — holds one
-whole-table snapshot, unioned on the `read` axis with the [deprecated env
-map](#deprecated-the-env-grant-map) when that is still set; a selector present
-in either source grants the same access, with no precedence to reason about.
+whole-table snapshot; it is the sole source `AudienceReadPolicy`/
+`AudienceMintPolicy` resolve the `read`/`mint` axes from at request time.
 `analytics-web-srv` is the write surface only; it caches nothing.
 
 The table's `CHECK` constraints are re-validated in Rust on every load, so a row

@@ -57,12 +57,12 @@ fn ctx_with_bound_audience(audience: &str) -> AuthContext {
 
 fn ctx_without_bound_audience() -> AuthContext {
     AuthContext {
-        subject: "env-keyring-test".to_string(),
+        subject: "no-bound-audience-test".to_string(),
         email: None,
-        issuer: "api_key".to_string(),
+        issuer: "test-issuer".to_string(),
         audience: None,
         expires_at: None,
-        auth_type: AuthType::ApiKey,
+        auth_type: AuthType::Oidc,
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],

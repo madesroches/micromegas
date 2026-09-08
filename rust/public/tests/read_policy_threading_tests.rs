@@ -441,21 +441,19 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
 }
 
 // ---------------------------------------------------------------------------
-// No behavior change: an unconfigured deployment still resolves a scope
+// No behavior change: a policy with no grant source still resolves a scope
 // ---------------------------------------------------------------------------
 
-/// An unconfigured deployment (audience-grants env var unset) resolves a scope through the real
-/// `AudienceReadPolicy::from_env` -- not an error, not a crash -- and a query's results are
+/// A policy with no grant source (no static map, no store) resolves a scope through the real
+/// `AudienceReadPolicy::default()` -- not an error, not a crash -- and a query's results are
 /// unaffected: `SELECT 1 AS one` never scans a `MaterializedView`, so `OwnershipRewrite` has
 /// nothing to filter here even though it is registered and active for this resolved
 /// `ReadScope::Audiences` caller; `do_get` must still succeed and return the same row it would
 /// without this seam at all.
 #[tokio::test]
-async fn unconfigured_deployment_resolves_a_scope_and_query_results_are_unaffected() {
+async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
-    let policy: Arc<dyn ReadPolicy> = Arc::new(
-        AudienceReadPolicy::from_env("MICROMEGAS_1369_THREADING_TESTS_UNSET").expect("from_env"),
-    );
+    let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::default());
     let addr = start_server(Some(auth_provider), policy).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());

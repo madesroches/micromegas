@@ -215,7 +215,7 @@ async fn main() -> Result<()> {
             None => {
                 anyhow::bail!(
                     "Ingestion auth required but no providers configured. \
-                     Set MICROMEGAS_INGESTION_API_KEYS, MICROMEGAS_API_KEYS, populate the \
+                     Set MICROMEGAS_INGESTION_OIDC_CONFIG, MICROMEGAS_OIDC_CONFIG, populate the \
                      ingestion_api_keys DB table, or --disable-auth"
                 );
             }
@@ -250,22 +250,20 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Resolved alongside `analytics_auth`: unset `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS`/
-    // `MICROMEGAS_AUDIENCE_GRANTS` -> an empty grant map -> a real caller's resolved scope is
-    // exactly what the DB-store snapshot below resolves, which is `{public}` once the seeded
-    // `('public', 'read', '*')` row (schema v9) has migrated in -- `public` has no built-in read
-    // grant of its own -- filtered by `OwnershipRewrite` directly on the physical `audience`
-    // column: a credential with no bound audience is stamped with the resolved
-    // `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time; only a legacy
-    // row registered before its ingestion binary reached schema v8 still resolves that on read
-    // -- admin replication hard-fails on a missing `audience` column, so there is no separate
-    // query-time unstamped fallback to configure here either way.
+    // The DB-store snapshot below is the whole read-axis source: a real caller's resolved scope
+    // is `{public}` once the seeded `('public', 'read', '*')` row (schema v9) has migrated in --
+    // `public` has no built-in read grant of its own -- filtered by `OwnershipRewrite` directly
+    // on the physical `audience` column: a credential with no bound audience is stamped with the
+    // resolved `MICROMEGAS_DEFAULT_AUDIENCE` (default `public`) explicitly at write time; only a
+    // legacy row registered before its ingestion binary reached schema v8 still resolves that on
+    // read -- admin replication hard-fails on a missing `audience` column, so there is no
+    // separate query-time unstamped fallback to configure here either way.
     let analytics_read_policy = if roles.flightsql && !args.disable_auth {
         // One shared snapshot cache for this process, built from its own dedicated pool via
         // the same `dedicated_key_store_pool` convention `analytics_auth` above already uses.
-        // Resolved under the same `MICROMEGAS_ANALYTICS` prefix `AudienceReadPolicy::from_env`
-        // beside it uses, so the cache-TTL knob follows the same `{prefix}_` fallback every
-        // other knob at this wiring site does.
+        // The cache TTL is the flat, unprefixed `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`; the
+        // `"MICROMEGAS_ANALYTICS"` prefix below is passed only for call-site symmetry --
+        // `from_env_with_prefix` never actually consults it.
         let pool = lake_pool
             .clone()
             .expect("lakehouse must be Some when flightsql role is enabled");
@@ -282,10 +280,10 @@ async fn main() -> Result<()> {
             audience_grants_pool,
             Duration::from_secs(audience_grants_config.cache_ttl_secs),
         ));
-        Some(Arc::new(
-            AudienceReadPolicy::from_env("MICROMEGAS_ANALYTICS")?
-                .with_store(Some(audience_grants_store)),
-        ) as Arc<dyn ReadPolicy>)
+        Some(
+            Arc::new(AudienceReadPolicy::default().with_store(audience_grants_store))
+                as Arc<dyn ReadPolicy>,
+        )
     } else {
         None
     };

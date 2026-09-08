@@ -34,17 +34,13 @@ For a production deployment with auth, see [Authentication](#authentication) bel
 ## Authentication
 
 The OTLP routes share the same auth chain as the rest of the ingestion service:
-DB-backed `ingestion_api_keys` (the steady-state path — mint one via
-`POST /api/ingestion-api-keys` on `analytics-web-srv`, see
-[API Keys](../admin/api-keys.md)), transitional env-keyring bearer tokens
-(`MICROMEGAS_API_KEYS`), and OIDC.
+DB-backed `ingestion_api_keys` (mint one via `POST /api/ingestion-api-keys` on
+`analytics-web-srv`, see [API Keys](../admin/api-keys.md)) and OIDC.
 
 OTel SDKs read `OTEL_EXPORTER_OTLP_HEADERS` and attach the parsed headers to every export request:
 
 ```bash
-# Server side — mint a key (see admin/api-keys.md), or use the transitional
-# env keyring telemetry-ingestion-srv also accepts:
-export MICROMEGAS_API_KEYS='[{"name":"team-platform","key":"mmk_2f8c...base64url..."}]'
+# Server side — mint a key (see admin/api-keys.md)
 
 # Client side
 export OTEL_EXPORTER_OTLP_ENDPOINT="https://micromegas.example.com/ingestion/otlp"
@@ -102,7 +98,7 @@ CloudWatch namespace) derive two distinct `process_id`s instead of colliding on 
 attribute value crafted to contain a raw `\x1F` byte cannot forge another audience's `process_id`
 either, since the two hashes share neither a namespace nor a joined string.
 
-A credential with no bound audience (an env-keyring key, OIDC, or no auth provider at all) resolves
+A credential with no bound audience (an OIDC token, or no auth provider at all) resolves
 to the deployment default. When the resolved write audience is the default, `key` is hashed
 directly under `NS_OTEL_PROCESS_V1` with no per-audience salt. See
 [Authorization → Audience stamping](../admin/authorization.md#audience-stamping)
@@ -514,7 +510,7 @@ supported by this endpoint.
 Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination**:
 
 - **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/otlp/v1/metrics/firehose`
-- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)), or, transitionally, a value from `MICROMEGAS_API_KEYS` — sent by
+- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)) — sent by
   Firehose as `X-Amz-Firehose-Access-Key` on every request (Firehose cannot send
   `Authorization: Bearer`, so this route authenticates via that header instead, reusing
   the same keyring check as every other ingestion route).
@@ -644,7 +640,7 @@ Configure a Kinesis Firehose delivery stream with an **HTTP endpoint destination
 subscribed from a CloudWatch Logs log group via a subscription filter:
 
 - **HTTP endpoint URL**: `https://micromegas.example.com/ingestion/cloudwatch/v1/logs/firehose`
-- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)), or, transitionally, a value from `MICROMEGAS_API_KEYS` — sent by
+- **Access key**: any live `ingestion_api_keys` key (see [API Keys](../admin/api-keys.md)) — sent by
   Firehose as `X-Amz-Firehose-Access-Key` on every request, same as the metrics route.
 - **Content encoding**: CloudWatch always gzips each record's payload at the source; this
   is independent of (and unaffected by) any additional `Content-Encoding: gzip` Firehose
@@ -705,7 +701,7 @@ distinct log lines never collide.
 
 **`415 Unsupported Media Type`** — the SDK is sending an unsupported `Content-Type` or omitting it entirely. Accepted types are `application/x-protobuf` and `application/json`. Other compression codecs (`deflate`, `zstd`) also return 415; only gzip is accepted.
 
-**`401 Unauthorized`** — verify the bearer token matches a live `ingestion_api_keys` row or an entry in `MICROMEGAS_API_KEYS` on the server. Check that the SDK is actually attaching the header (`OTEL_EXPORTER_OTLP_HEADERS` is processed at export time, not at SDK init — typos are silently ignored).
+**`401 Unauthorized`** — verify the bearer token matches a live `ingestion_api_keys` row on the server. Check that the SDK is actually attaching the header (`OTEL_EXPORTER_OTLP_HEADERS` is processed at export time, not at SDK init — typos are silently ignored).
 
 **`413 Payload Too Large`** — the compressed body exceeds 20 MiB. Lower the SDK's batch size (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`) or split into more frequent exports.
 

@@ -26,7 +26,6 @@ binary as its entrypoint.
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads (`file:///path`, `s3://…`, `gs://…`) |
-| `MICROMEGAS_API_KEYS` | No | JSON array of API keys — legacy/bootstrap path (see [Authentication](authentication.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). The ingestion role now reads it too: a process whose credential carries no audience is stamped with this value explicitly at write time, the same audience the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)) apply where a legacy or replicated row's audience is read. One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
@@ -47,17 +46,11 @@ binary as its entrypoint.
 
 ## Authentication
 
-If none of `MICROMEGAS_API_KEYS`, `MICROMEGAS_OIDC_CONFIG`, or a non-empty
-`ingestion_api_keys` DB table is present, the server refuses to start unless
-`--disable-auth` is passed. This prevents accidentally running an open
-ingestion endpoint. For configuration details and provider precedence, see
+If neither `MICROMEGAS_OIDC_CONFIG` nor a non-empty `ingestion_api_keys` DB
+table is present, the server refuses to start unless `--disable-auth` is
+passed. This prevents accidentally running an open ingestion endpoint. For
+configuration details and provider precedence, see
 [Authentication](authentication.md).
-
-```bash
-# API keys for machine-to-machine producers (legacy/bootstrap path)
-export MICROMEGAS_API_KEYS='[{"name":"game-client","key":"…"}]'
-telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
-```
 
 ### Schema migration and admin seeding
 
@@ -86,8 +79,8 @@ label.
 
 - **DB-backed ingestion keys** (`ingestion_api_keys`) each carry exactly one immutable write
   audience. Every process, stream, and block a key writes is stamped with that audience.
-- **Env-keyring keys** (`MICROMEGAS_API_KEYS`) and **OIDC** credentials carry no bound audience
-  of their own. A row registered under one is stamped with the resolved deployment default.
+- **OIDC** credentials carry no bound audience of their own. A row registered under one is
+  stamped with the resolved deployment default.
 - **No auth provider configured** (`--disable-auth`): stamped with the deployment default too,
   for the same reason.
 

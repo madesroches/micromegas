@@ -21,8 +21,8 @@ Honors the same env vars `telemetry-sink` (the native producer) reads:
                                    /ingestion/otlp so the OTel SDK's appended
                                    /v1/{logs,metrics,traces} lands on the
                                    right routes.
-    MICROMEGAS_INGESTION_API_KEY   optional bearer token (matches an entry in
-                                   MICROMEGAS_API_KEYS on the server).
+    MICROMEGAS_INGESTION_API_KEY   optional bearer token (matches a live row
+                                   in the server's ingestion_api_keys table).
 
 Plus:
     OTEL_RESOURCE_ATTRIBUTES       caller-set attrs are preserved and appended

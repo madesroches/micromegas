@@ -48,11 +48,11 @@ services:
       MICROMEGAS_BASE_PATH: "/"
       # With auth ON instead of --disable-auth, the web role additionally requires:
       #   MICROMEGAS_STATE_SECRET, MICROMEGAS_OIDC_CONFIG, MICROMEGAS_AUTH_REDIRECT_URI
-      # Ingestion / FlightSQL auth (with auth ON):
-      #   MICROMEGAS_INGESTION_API_KEYS  or  MICROMEGAS_API_KEYS  (transitional env keyring),
-      #   or a non-empty ingestion_api_keys / analytics_api_keys DB table (see
-      #   mkdocs/docs/admin/api-keys.md — the steady-state path, minted via
-      #   the web role's POST /api/ingestion-api-keys / POST /api/analytics-api-keys)
+      # Ingestion / FlightSQL auth (with auth ON): a non-empty ingestion_api_keys /
+      #   analytics_api_keys DB table is the only key source (see mkdocs/docs/admin/api-keys.md —
+      #   minted via the web role's POST /api/ingestion-api-keys / POST /api/analytics-api-keys),
+      #   or:
+      #   MICROMEGAS_INGESTION_OIDC_CONFIG  or  MICROMEGAS_OIDC_CONFIG
       #   MICROMEGAS_ANALYTICS_OIDC_CONFIG  or  MICROMEGAS_OIDC_CONFIG
     volumes:
       - lake:/data

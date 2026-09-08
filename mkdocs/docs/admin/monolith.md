@@ -47,7 +47,6 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_MONOLITH_ROLES` | No | Comma-separated roles or `all` (default: `all`) |
 | `MICROMEGAS_PORT` | No | Web server port (default: `3000`) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
-| `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` | No | **Deprecated**, superseded by the `audience_grants` table — a JSON grant map for FlightSQL callers, falling back to unprefixed `MICROMEGAS_AUDIENCE_GRANTS`. See [Deprecated: the env grant map](authorization.md#deprecated-the-env-grant-map) |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint/import routes fall back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authorization.md#self-service-ingestion-key-mint) |
@@ -58,7 +57,7 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent queries, in MB; default 100 GB (DataFusion's own default), far larger than a typical container's local disk. Exceeding the cap fails whichever query's spill write pushes past it — not necessarily the query that consumed most of the budget |
 
 !!! note "One prefix asymmetry"
-    Inside the monolith, `MICROMEGAS_INGESTION_API_KEYS` (see [Authentication](#authentication)
+    Inside the monolith, `MICROMEGAS_INGESTION_OIDC_CONFIG` (see [Authentication](#authentication)
     below) resolves under the ingestion role's own prefix, while `MICROMEGAS_DEFAULT_AUDIENCE`
     is always resolved **unprefixed**, even in-process — set the unprefixed name, not a
     `MICROMEGAS_INGESTION_`-prefixed one. Every role that builds a lakehouse (FlightSQL,
@@ -90,14 +89,17 @@ The monolith supports **per-role auth**. Ingestion (machine-to-machine) and anal
 micromegas-monolith --disable-auth
 ```
 
-### API keys for ingestion only, OIDC for analytics
+### Ingestion keys via the database, OIDC for analytics
+
+Ingestion keys live in the `ingestion_api_keys` table, populated with
+`micromegas-import-keys` or minted over HTTP — see [API Keys](api-keys.md).
+There is no env-var alternative for ingestion or analytics keys.
 
 ```bash
-export MICROMEGAS_INGESTION_API_KEYS='[{"name":"service-a","key":"key1"},{"name":"service-b","key":"key2"}]'
 export MICROMEGAS_ANALYTICS_OIDC_CONFIG='{"issuers":[{"issuer":"https://your-idp.example.com","audience":"your-client-id"}]}'
 ```
 
-The prefix fallback means `MICROMEGAS_API_KEYS` works for ingestion when `MICROMEGAS_INGESTION_API_KEYS` is not set, and `MICROMEGAS_OIDC_CONFIG` works for analytics when `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is not set.
+The prefix fallback means `MICROMEGAS_OIDC_CONFIG` works for analytics when `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is not set.
 
 ### Full OIDC (web + analytics, open ingestion)
 

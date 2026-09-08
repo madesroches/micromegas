@@ -87,8 +87,9 @@ def test_make_client_returns_web_client_for_analytics_table(monkeypatch):
 
 def test_read_keyring_from_env_var(monkeypatch):
     # No prefixed `MICROMEGAS_INGESTION_API_KEYS` set -- this exercises the
-    # fallback-to-unprefixed path, which is exactly what a split deployment's
-    # `telemetry-ingestion-srv` (built with `ProviderBuilder::new("")`) needs.
+    # fallback-to-unprefixed path. Both vars are the legacy server-side
+    # names, no longer read by any server, kept here because that is what an
+    # un-migrated deployment still has set.
     monkeypatch.delenv("MICROMEGAS_INGESTION_API_KEYS", raising=False)
     monkeypatch.setenv(
         "MICROMEGAS_API_KEYS", json.dumps([{"name": "a", "key": "secret-a"}])
@@ -108,9 +109,8 @@ def test_read_keyring_uses_analytics_default_var(monkeypatch):
 
 
 def test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set(monkeypatch):
-    """The prefixed var (as the monolith's ingestion-role `ProviderBuilder`
-    would populate it) is used as-is when present, with no need to fall
-    back."""
+    """The prefixed var -- the legacy server-side name, no longer read by any
+    server -- is used as-is when present, with no need to fall back."""
     monkeypatch.setenv(
         "MICROMEGAS_INGESTION_API_KEYS",
         json.dumps([{"name": "a", "key": "secret-a"}]),
@@ -123,11 +123,11 @@ def test_read_keyring_uses_ingestion_default_var_when_prefixed_is_set(monkeypatc
 
 def test_read_keyring_falls_back_to_unprefixed_var_for_analytics(monkeypatch):
     """Regression test for the bug this fix addresses: on a split deployment,
-    `flight-sql-srv` builds its provider with `ProviderBuilder::new("")`
-    (`rust/public/src/servers/flight_sql_server.rs`), so the analytics
-    keyring only ever lives in the unprefixed `MICROMEGAS_API_KEYS` --
-    `MICROMEGAS_ANALYTICS_API_KEYS` is never populated outside the monolith.
-    `--table analytics --source env` with no `--var` must still find it."""
+    a legacy analytics keyring only ever lived in the unprefixed
+    `MICROMEGAS_API_KEYS` -- `MICROMEGAS_ANALYTICS_API_KEYS` is never
+    populated outside the monolith. Both names are the legacy server-side
+    names, no longer read by any server. `--table analytics --source env`
+    with no `--var` must still find it."""
     monkeypatch.delenv("MICROMEGAS_ANALYTICS_API_KEYS", raising=False)
     monkeypatch.setenv(
         "MICROMEGAS_API_KEYS", json.dumps([{"name": "b", "key": "secret-b"}])

@@ -473,12 +473,12 @@ not a bug: this function is a SQL auditing surface, ungated for every authentica
 `list_query_denials()` above, and the plan behind it does not invent a second gating channel just
 for this one function.
 
-**Does not show every source of effective read access.** The DB table is one of several sources
-`AudienceReadPolicy` unions to decide what a caller may actually read; the deprecated
-`MICROMEGAS_AUDIENCE_GRANTS` env map and a per-key `read_audiences` list also apply, and neither
-appears here for any caller. `public` is different: it has no built-in read grant of its own — it
-reads only through an ordinary DB row, the seeded `('public', 'read', '*')` grant — so
-that row *is* in this table, and does appear here, but only for an admin caller (`GrantVisibility::All`).
+**Does not show every source of effective read access.** The DB table is one of two
+sources `AudienceReadPolicy` unions to decide what a caller may actually read; a per-key
+`read_audiences` list also applies, and it does not appear here for any caller. `public`
+is different: it has no built-in read grant of its own — it reads only through an ordinary
+DB row, the seeded `('public', 'read', '*')` grant — so that row *is* in this table, and
+does appear here, but only for an admin caller (`GrantVisibility::All`).
 A non-admin caller gets `GrantVisibility::Held`, which strips `"*"` from the caller's own bound
 selectors before querying for held `(audience, axis)` pairs — but the query still returns every
 row on a pair it matches, `"*"` rows included. So the seeded `('public', axis, '*')` row stays
