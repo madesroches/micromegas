@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["otel_spans_table_schema"]};

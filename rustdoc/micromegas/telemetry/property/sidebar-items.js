@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["RESERVED_PROPERTY_PREFIX"],"fn":["into_hashmap","make_properties"],"struct":["Property"]};

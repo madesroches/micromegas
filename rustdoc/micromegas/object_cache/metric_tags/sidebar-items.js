@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CLASS_DEMAND","CLASS_PREFETCH","PREFIX_OTHER","REASON_CLEAR","REASON_EVICT","REASON_REMOVE","REASON_REPLACE"],"fn":["class_tags","longest_prefix_match"],"struct":["EvictionTagTable","EvictionTags","PrefixTags"]};

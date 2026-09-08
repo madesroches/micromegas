@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_merged_partition","make_merge_session_context"],"struct":["MergeQueryResult","QueryMerger"],"trait":["PartitionMerger"]};

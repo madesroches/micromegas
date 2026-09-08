@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["block_from_batch_row","find_process","find_process_with_latest_timing","find_stream_from_view","get_thread_name_from_stream_metadata","process_metadata_from_row","stream_metadata_from_batch_row"],"struct":["ProcessMetadata","StreamMetadata"],"type":["SharedJsonbSerialized"]};

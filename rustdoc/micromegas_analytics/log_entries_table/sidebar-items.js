@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["log_table_schema"],"struct":["LogEntriesRecordBuilder"]};

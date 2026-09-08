@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["accessors","accumulator","expand","histogram_udaf","quantile","sum_histograms_udaf","variance"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_jsonb_array_length_udf"],"struct":["JsonbArrayLength"]};

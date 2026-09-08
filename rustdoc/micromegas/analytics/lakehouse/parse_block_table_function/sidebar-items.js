@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["transit_value_to_jsonb"],"struct":["ParseBlockTableFunction"]};

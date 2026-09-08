@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SpanTypes"],"fn":["write_thread_spans"],"struct":["PerfettoTraceExecutionPlan","PerfettoTraceTableProvider"]};

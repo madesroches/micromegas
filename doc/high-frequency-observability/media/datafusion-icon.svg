@@ -1,0 +1,33 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="arrowGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6b35;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f7931e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Apache Arrow inspired design with fusion/energy theme -->
+  <g>
+    <!-- Arrow pointing right with energy burst -->
+    <path d="M 4 16 L 18 16 L 18 10 L 28 16 L 18 22 L 18 16 Z"
+          fill="url(#arrowGradient)"
+          stroke="#ff6b35"
+          stroke-width="1.5"
+          stroke-linejoin="round"/>
+
+    <!-- Energy sparks -->
+    <circle cx="8" cy="12" r="1.5" fill="#ffcc00" opacity="0.9">
+      <animate attributeName="opacity" values="0.3;1;0.3" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="12" cy="20" r="1.5" fill="#ffcc00" opacity="0.9">
+      <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="6" cy="19" r="1" fill="#ffcc00" opacity="0.8">
+      <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- Speed lines -->
+    <line x1="2" y1="14" x2="8" y2="14" stroke="#ff6b35" stroke-width="1.5" opacity="0.6"/>
+    <line x1="3" y1="18" x2="7" y2="18" stroke="#ff6b35" stroke-width="1.5" opacity="0.6"/>
+  </g>
+</svg>
