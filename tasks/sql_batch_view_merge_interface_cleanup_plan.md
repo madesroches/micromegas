@@ -58,16 +58,20 @@ untouched — it's a closed plan's historical record of what was true when it wa
 documentation.
 
 Time-slicing a merge into event-time batches (`BatchPartitionMerger`'s approach) was always a
-workaround for bounding merge memory, predating `ScanOrdering`: it re-runs the merge query once
-per batch to keep any one query's working set small, but still buffers a full sort per batch and
-gives no ordering guarantee to callers. `ScanOrdering` (added by #1392, after `BatchPartitionMerger`)
-is the actual fix for the same problem, done properly at the scan level instead of by slicing
-queries: `PerFile` gives a streaming k-way merge when partitions are internally sorted but may
-overlap (`with_merge_sort_order`, already on `SqlBatchView`), and `Concatenated` gives an even
-cheaper single sequential read when partitions are also non-overlapping (today exposed only on the
-hand-written `BlocksView`, not on `SqlBatchView` — see Open Questions). Either one bounds merge
-memory without `BatchPartitionMerger`'s batch-and-requery workaround, which is why removing it
-here is a cleanup rather than a capability loss.
+workaround for bounding merge memory: it re-runs the merge query once per batch to keep any one
+query's working set small, but still buffers a full sort per batch and gives no ordering guarantee
+to callers. The problem it worked around is now fixed for **every** merger, not just ones that
+declare an ordering: a merge session sets `repartition_file_scans = false`
+(`merge.rs:66-71`, from `tasks/1491_merge_scan_memory_plan.md`), so every `QueryMerger` merge
+scans its source partitions with a single sequential reader regardless of `ScanOrdering` — a view
+with no natural sort contract gets a bounded-memory merge for free, with no ordering guarantee to
+maintain (see the note on `View::get_scan_output_ordering`, `view.rs:153-160`). `ScanOrdering`'s
+job is a different one: eliding sorts. `PerFile` lets a merge query that must preserve order
+across an aggregation stream through a k-way merge instead of a blocking `SortExec`
+(`with_merge_sort_order`, already on `SqlBatchView`), and lets user queries that `ORDER BY` those
+columns skip their own sort. Neither the memory bound nor the sort elision needs
+`BatchPartitionMerger`'s batch-and-requery workaround, which is why removing it here is a cleanup
+rather than a capability loss.
 
 ### 2. `merger_maker` is deleted outright
 
@@ -138,11 +142,11 @@ Not addressed by this plan. See Open Questions.
 ## Trade-offs
 
 - **`BatchPartitionMerger`: remove vs. keep-and-test.** Keeping it would mean writing a unit test
-  for code with no caller anywhere, purely to justify continued existence — and the problem it
-  solves already has a better, purpose-built fix (`ScanOrdering`, see Design §1), so there's no
-  gap to keep it around for. If a need for time-sliced batch-and-requery ever resurfaces for a case
-  neither `PerFile` nor `Concatenated` covers, it can be reintroduced with a real caller and test at
-  that point.
+  for code with no caller anywhere, purely to justify continued existence — and the memory problem
+  it worked around is already solved for every merger by the single-sequential-reader merge scan
+  (see Design §1), so there's no gap to keep it around for. If a need for time-sliced
+  batch-and-requery ever resurfaces, it can be reintroduced with a real caller and test at that
+  point.
 - **`merger_maker`: delete outright (chosen, per user direction) vs. demote to a builder method.**
   An earlier draft of this plan kept the hook as a `.with_merger_maker(...)` builder, matching
   `with_merge_sort_order`'s shape. Deleting it instead is simpler and consistent with the issue's
@@ -160,8 +164,39 @@ Not addressed by this plan. See Open Questions.
 - Uneven sort-order adoption (issue item 3) is left out of scope for this plan — user call,
   overriding this plan's initial `accept_unordered_merge()` proposal (see Open Questions).
 - `BatchPartitionMerger` is removed, not kept as dormant API — user call: its batching approach
-  was always a workaround for bounding merge memory, and `ScanOrdering` (`PerFile`/`Concatenated`)
-  is the real, already-built fix for that problem (see Design §1).
+  was always a workaround for bounding merge memory, and the single-sequential-reader merge scan
+  already bounds that for every merger (see Design §1).
+- **No `with_merge_concatenated_order` builder for `SqlBatchView`.** `ScanOrdering::Concatenated`
+  stays available only to hand-written `View` impls (`BlocksView`, `ThreadSpansView`). The parity
+  it would appear to give is not achievable for a `SqlBatchView`, for three reasons:
+  1. *No `SqlBatchView` can satisfy the contract.* `Concatenated` requires that the leading sort
+     column be the view's min-event-time column **and** that partition event-time ranges not
+     overlap (`view.rs:164-166`), proven from partition metadata alone by
+     `sort_and_check_non_overlapping` (`partitioned_execution_plan.rs:82-113`). `SqlBatchView`
+     cuts partitions on **insert time** (`log_stats_view.rs:23-24,47-48`) while its bounds and
+     leading sort column are **event time** (`time_bin`). Late-arriving telemetry — routine here —
+     puts the same `time_bin` in two insert windows, so the ranges overlap and the declaration is
+     false. The two views that can declare it get there structurally, not by choice of builder:
+     `BlocksView` sorts on `insert_time`, the same column its partitions are cut on, so non-overlap
+     holds by construction; `ThreadSpansView` gets there via per-stream JIT segments plus the exact
+     `max_sort_key_time` bound, which only that view populates (`partition.rs:30-37`) — a
+     `SqlBatchView` would fall back to the looser `max_event_time` and trip the check more often
+     still.
+  2. *The failure mode is asymmetric.* A false `PerFile` declaration degrades gracefully — an
+     uncertified partition silently drops to `Unordered` (`partitioned_execution_plan.rs:309-318`).
+     A violated `Concatenated` declaration fails the scan with `DataFusionError::Internal`, and via
+     `get_scan_output_ordering` that hits **user queries**, not just merges. The builder would hand
+     view authors a contract they cannot enforce, whose violation is a read outage rather than a
+     slow path.
+  3. *The payoff is small anyway.* `Unordered` and `Concatenated` build and execute the identical
+     single-file-group scan (`partitioned_execution_plan.rs:144-148`, `merge.rs:334-339`); they
+     differ only in whether the order is declared. Against `PerFile` the saving is one streaming
+     `SortPreservingMergeExec`, not a merge step's worth of memory.
+
+  Two things would have to change before this is worth revisiting: a view whose partitions are cut
+  on its leading sort column (or a `max_sort_key_time`-style exact per-partition bound recorded on
+  the `SqlBatchView` write path), and a `Concatenated` path that degrades to `Unordered` on
+  overlapping bounds instead of erroring, matching `PerFile`'s certification gate.
 
 ## Documentation
 
@@ -192,10 +227,5 @@ removed positional parameter fails every uncorrected call site at compile time).
    unordered merge path with no call-site signal it was deliberate) is left unaddressed by this
    plan. Worth a follow-up (a lint, a doc example, or an explicit opt-out builder), or is the
    status quo acceptable?
-2. `SqlBatchView` only exposes `ScanOrdering::PerFile` (via `with_merge_sort_order`) — the
-   `Concatenated` variant (cheaper: one sequential read, no merge step at all, for partitions that
-   are already non-overlapping as well as internally sorted) is only available today on the
-   hand-written `BlocksView`. Worth a `with_merge_concatenated_order`-style builder to give
-   `SqlBatchView` parity, so a qualifying view doesn't have to give up the `SqlBatchView`
-   convenience to get the cheaper merge path? Out of scope for issue #1492 as filed — flagging as a
-   possible follow-up, not part of this plan.
+
+The `Concatenated`-parity question an earlier draft raised here is now settled — see Decisions.
