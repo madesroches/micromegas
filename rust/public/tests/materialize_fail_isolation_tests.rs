@@ -57,7 +57,6 @@ async fn make_failing_view(
         Some(update_group),
         TimeDelta::days(1),
         TimeDelta::days(1),
-        None,
     )
     .await
 }

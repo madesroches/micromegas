@@ -30,10 +30,6 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
-/// A type alias for a function that creates a `PartitionMerger`.
-pub type MergerMaker =
-    dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn PartitionMerger> + Send + Sync;
-
 /// Builds the ascending `ScanSortColumn` list corresponding to a declared sort order.
 fn sort_order_as_scan_columns(columns: &[Arc<String>]) -> Vec<ScanSortColumn> {
     columns
@@ -99,7 +95,6 @@ impl SqlBatchView {
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
-        merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
@@ -119,16 +114,13 @@ impl SqlBatchView {
             .replace("{end}", &now_str);
         let extracted_df = ctx.sql(&sql).await?;
         let schema = extracted_df.schema().inner().clone();
-        let session_configurator_for_merger = session_configurator.clone();
-        let merger = merger_maker.unwrap_or(&|_runtime, schema| {
-            let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
-            Arc::new(QueryMerger::new(
-                view_factory.clone(),
-                session_configurator_for_merger.clone(),
-                schema,
-                merge_query,
-            ))
-        })(runtime.clone(), schema.clone());
+        let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
+        let merger: Arc<dyn PartitionMerger> = Arc::new(QueryMerger::new(
+            view_factory.clone(),
+            session_configurator.clone(),
+            schema.clone(),
+            merge_query,
+        ));
 
         Ok(Self {
             view_set_name,
@@ -169,13 +161,6 @@ impl SqlBatchView {
     /// 4. The merge query's aggregates must be composable over already-aggregated rows (e.g.
     ///    `sum(count)`, not `count(*)`; no bare `avg` -- carry `sum` and `count` and divide at
     ///    read time). `log_stats` is the in-repo model.
-    ///
-    /// A custom `merger_maker` passed to `new` remains fully supported alongside this
-    /// declaration: it stays the fallback merger, used whenever any input to a merge does not
-    /// certify the declared sort order, while merges whose inputs all certify take the ordered
-    /// `QueryMerger` this builder installs. This is the intended rollout path (plan Rollout steps
-    /// 1 and 4): keep e.g. a `BatchPartitionMerger` as the bounded fallback until every live
-    /// partition certifies, then drop it.
     pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self> {
         if columns.is_empty() {
             anyhow::bail!("with_merge_sort_order: columns must be non-empty");

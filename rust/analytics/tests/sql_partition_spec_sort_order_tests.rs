@@ -69,7 +69,6 @@ async fn make_test_view(lakehouse: &LakehouseContext, extract_query: &str) -> Sq
         None,
         TimeDelta::days(1),
         TimeDelta::days(1),
-        None,
     )
     .await
     .expect("SqlBatchView::new")

@@ -17,9 +17,6 @@ pub mod async_parquet_writer;
 /// through a guarded `view_instance(...)`, the row-level filter injects no predicate at all, so this guard is
 /// their sole enforcement.
 pub mod audience_guard;
-/// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
-/// The batches are based on event times.
-pub mod batch_partition_merger;
 /// Materialize views on a schedule based on the time data was received from the ingestion service
 pub mod batch_update;
 /// Format → decoder registry for `parse_block`, mirroring `BlockProcessorMap`
