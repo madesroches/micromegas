@@ -8,7 +8,7 @@ found three cleanup opportunities in the partition-merge interface (`SqlBatchVie
 no caller anywhere, a constructor parameter that's always `None` in practice, and an
 easy-to-miss default for whether a view's merges are ordered. This plan addresses the first two —
 deleting the dead type and the unused parameter outright — and deliberately leaves the third
-(uneven sort-order adoption) out of scope; see Open Questions.
+(uneven sort-order adoption) out of scope; see Decisions.
 
 ## Current State
 
@@ -91,7 +91,7 @@ constructor-level hook onto that trait is removed.
 
 ### 3. Uneven sort-order adoption — out of scope
 
-Not addressed by this plan. See Open Questions.
+Not addressed by this plan. See Decisions.
 
 ## Implementation Steps
 
@@ -147,7 +147,7 @@ Not addressed by this plan. See Open Questions.
 - `merger_maker` is deleted outright rather than demoted to a builder method — user call,
   overriding this plan's initial `with_merger_maker` proposal.
 - Uneven sort-order adoption (issue item 3) is left out of scope for this plan — user call,
-  overriding this plan's initial `accept_unordered_merge()` proposal (see Open Questions).
+  overriding this plan's initial `accept_unordered_merge()` proposal.
 - `BatchPartitionMerger` is removed, not kept as dormant API — user call: its batching approach
   was always a workaround for bounding merge memory, and the single-sequential-reader merge scan
   already bounds that for every merger (see Design §1).
@@ -158,6 +158,9 @@ Not addressed by this plan. See Open Questions.
   `Concatenated` non-overlap contract (`view.rs:164-166`) cannot hold; a violated declaration errors
   **user queries** (via `get_scan_output_ordering`), not just merges, so this isn't a case where
   approximating the contract is safe.
+- **Uneven sort-order adoption needs no follow-up** — user call: `Unordered` is the documented
+  correct default (`view.rs`'s `get_scan_output_ordering`), so `processes`/`streams` taking it is
+  deliberate, not an omission a lint or call-site signal should flag.
 
 ## Documentation
 
@@ -184,9 +187,4 @@ removed positional parameter fails every uncorrected call site at compile time).
 
 ## Open Questions
 
-1. Issue item 3 (uneven sort-order adoption — `processes`/`streams` silently take the default
-   unordered merge path with no call-site signal it was deliberate) is left unaddressed by this
-   plan. Worth a follow-up (a lint, a doc example, or an explicit opt-out builder), or is the
-   status quo acceptable?
-
-The `Concatenated`-parity question an earlier draft raised here is now settled — see Decisions.
+None — the questions earlier drafts raised here are settled; see Decisions.
