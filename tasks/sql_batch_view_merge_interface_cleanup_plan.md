@@ -6,9 +6,9 @@ Issue #1492 surveyed 8 real `SqlBatchView`-backed view definitions in a downstre
 found three cleanup opportunities in the partition-merge interface (`SqlBatchView::new`,
 `.with_merge_sort_order()`, `merger_maker`, `BatchPartitionMerger`): a merger implementation with
 no caller anywhere, a constructor parameter that's always `None` in practice, and an
-easy-to-miss default for whether a view's merges are ordered. This plan deletes the dead type and
-the unused parameter outright, and adds a builder so every view's merge-ordering choice is
-explicit at the call site.
+easy-to-miss default for whether a view's merges are ordered. This plan addresses the first two —
+deleting the dead type and the unused parameter outright — and deliberately leaves the third
+(uneven sort-order adoption) out of scope; see Open Questions.
 
 ## Current State
 
@@ -50,11 +50,24 @@ explicit at the call site.
 Delete `rust/analytics/src/lakehouse/batch_partition_merger.rs` and its `pub mod
 batch_partition_merger;` declaration (`mod.rs:20-22`). `MergerMaker`/`PartitionMerger` stay — a
 caller can still supply a custom merger; this removes one specific, unused implementation, not the
-extension point. Update the doc comments naming `BatchPartitionMerger` as the intended fallback
-(`sql_batch_view.rs:173-178`) to describe the mechanism in general terms ("a custom
-`merger_maker`") instead of pointing at a type that no longer exists.
-`tasks/completed/1392_kway_merge_sorted_partitions_plan.md` is left untouched — it's a closed
-plan's historical record of what was true when it was written, not live documentation.
+extension point (moot anyway once §2 deletes `SqlBatchView`'s only hook onto it). Update the doc
+comments naming `BatchPartitionMerger` as the intended fallback (`sql_batch_view.rs:173-178`) to
+describe the mechanism in general terms ("a custom `merger_maker`") instead of pointing at a type
+that no longer exists. `tasks/completed/1392_kway_merge_sorted_partitions_plan.md` is left
+untouched — it's a closed plan's historical record of what was true when it was written, not live
+documentation.
+
+Time-slicing a merge into event-time batches (`BatchPartitionMerger`'s approach) was always a
+workaround for bounding merge memory, predating `ScanOrdering`: it re-runs the merge query once
+per batch to keep any one query's working set small, but still buffers a full sort per batch and
+gives no ordering guarantee to callers. `ScanOrdering` (added by #1392, after `BatchPartitionMerger`)
+is the actual fix for the same problem, done properly at the scan level instead of by slicing
+queries: `PerFile` gives a streaming k-way merge when partitions are internally sorted but may
+overlap (`with_merge_sort_order`, already on `SqlBatchView`), and `Concatenated` gives an even
+cheaper single sequential read when partitions are also non-overlapping (today exposed only on the
+hand-written `BlocksView`, not on `SqlBatchView` — see Open Questions). Either one bounds merge
+memory without `BatchPartitionMerger`'s batch-and-requery workaround, which is why removing it
+here is a cleanup rather than a capability loss.
 
 ### 2. `merger_maker` is deleted outright
 
@@ -70,32 +83,19 @@ itself uses internally, and `BlocksView` (a hand-written `View`, not a `SqlBatch
 `QueryMerger` directly for its own `Concatenated`-ordering merge. Only `SqlBatchView`'s
 constructor-level hook onto that trait is removed.
 
-### 3. Explicit merge-ordering choice
+### 3. Uneven sort-order adoption — out of scope
 
-Add `SqlBatchView::accept_unordered_merge(self) -> Self`, a deliberately stateless marker —
-`{ self }` — whose only purpose is to make "unordered was a choice" grep-able and visually parallel
-to `.with_merge_sort_order(...)` at the call site, the same way the issue suggests. It stores no
-field: a field set but never read would trip `-D warnings`' dead-code lint for no behavioral
-payoff, and nothing downstream needs to branch on whether it was called. Its doc comment
-cross-references `with_merge_sort_order`'s, naming the two production examples this plan updates
-(`processes`, `streams` — small, non-time-series-shaped partitions) versus when growing
-per-partition row counts call for a sort-order declaration instead (`log_stats`, and see #1491 for
-the memory cost of leaving it undeclared). `processes_view.rs` and `streams_view.rs` are updated to
-call it, closing the gap the issue's survey found for both in-repo unordered views.
-
-There is deliberately no compiler or runtime check that one of `with_merge_sort_order` /
-`accept_unordered_merge` was called — see Trade-offs.
+Not addressed by this plan. See Open Questions.
 
 ## Implementation Steps
 
 1. Delete `batch_partition_merger.rs` and its `mod.rs` declaration; update the doc-comment
    references in `sql_batch_view.rs:173-178` to stop naming the removed type.
 2. `sql_batch_view.rs`: drop `merger_maker` from `new()`'s parameter list and delete the
-   `MergerMaker` type alias; add the stateless `accept_unordered_merge`.
+   `MergerMaker` type alias.
 3. Update call sites:
    - `log_stats_view.rs`, `processes_view.rs`, `streams_view.rs`: drop the trailing `None,`
      argument from `SqlBatchView::new(...)`.
-   - `processes_view.rs`, `streams_view.rs`: chain `.accept_unordered_merge()` after the `.await?`.
    - `histo_view_test.rs`, `materialize_fail_isolation_tests.rs`,
      `sql_partition_spec_sort_order_tests.rs`: drop the trailing `None,` argument.
    - `sql_view_test.rs`: drop the trailing `None,` argument from the remaining plain-merge view
@@ -116,8 +116,8 @@ There is deliberately no compiler or runtime check that one of `with_merge_sort_
      `merger_maker` parameter — with it gone the two functions are identical) and update its one
      remaining reference; delete the now-unused `MergerMaker`/`RuntimeEnv`/`Schema`/`QueryMerger`/
      `PartitionMerger` imports this leaves behind.
-4. Add a `CHANGELOG.md` Unreleased entry (Analytics) covering all three changes and the breaking
-   signature changes.
+4. Add a `CHANGELOG.md` Unreleased entry (Analytics) covering both changes and the breaking
+   signature change.
 5. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`.
 
 ## Files to Modify
@@ -138,9 +138,11 @@ There is deliberately no compiler or runtime check that one of `with_merge_sort_
 ## Trade-offs
 
 - **`BatchPartitionMerger`: remove vs. keep-and-test.** Keeping it would mean writing a unit test
-  for code with no caller anywhere, purely to justify continued existence. If a genuine
-  bounded-memory-batching need resurfaces for a view that can't adopt `with_merge_sort_order`, it
-  can be reintroduced with a real caller and test at that point.
+  for code with no caller anywhere, purely to justify continued existence — and the problem it
+  solves already has a better, purpose-built fix (`ScanOrdering`, see Design §1), so there's no
+  gap to keep it around for. If a need for time-sliced batch-and-requery ever resurfaces for a case
+  neither `PerFile` nor `Concatenated` covers, it can be reintroduced with a real caller and test at
+  that point.
 - **`merger_maker`: delete outright (chosen, per user direction) vs. demote to a builder method.**
   An earlier draft of this plan kept the hook as a `.with_merger_maker(...)` builder, matching
   `with_merge_sort_order`'s shape. Deleting it instead is simpler and consistent with the issue's
@@ -150,18 +152,16 @@ There is deliberately no compiler or runtime check that one of `with_merge_sort_
   extension point nothing currently exercises for real. If a genuine need for a
   non-SQL-expressible merge resurfaces, it can be designed against a live requirement instead of a
   demonstration test.
-- **Sort-order adoption signal: stateless marker method vs. a custom lint vs. a hard gate.** A
-  custom clippy lint needs lint-plugin/proc-macro infrastructure this repo doesn't otherwise carry,
-  for a 2-view gap today. A hard gate requiring one of the two builders has no natural enforcement
-  point — `new()` returns before any builder runs, so the earliest place to check "was a choice
-  made" is wherever views are collected into a `ViewFactory`, a much larger and more invasive check
-  for a purely advisory goal. The marker method is the minimal thing that satisfies the issue's ask
-  without inventing new infrastructure.
 
 ## Decisions
 
 - `merger_maker` is deleted outright rather than demoted to a builder method — user call,
   overriding this plan's initial `with_merger_maker` proposal (see Trade-offs).
+- Uneven sort-order adoption (issue item 3) is left out of scope for this plan — user call,
+  overriding this plan's initial `accept_unordered_merge()` proposal (see Open Questions).
+- `BatchPartitionMerger` is removed, not kept as dormant API — user call: its batching approach
+  was always a workaround for bounding merge memory, and `ScanOrdering` (`PerFile`/`Concatenated`)
+  is the real, already-built fix for that problem (see Design §1).
 
 ## Documentation
 
@@ -178,9 +178,6 @@ today; nothing there needs updating. `CHANGELOG.md` gets the Unreleased entry de
 - No new test is added for the deletions themselves: removing a parameter and its only two
   exercising tests has nothing left to assert beyond "it still compiles and the remaining tests
   still pass," which the compiler and `cargo test` already cover.
-- `accept_unordered_merge()` stores no state and feeds no branch, so there is nothing for a unit
-  test to observe beyond "it compiles and chains," which the updated `processes_view.rs`/
-  `streams_view.rs` call sites already prove at compile time; no dedicated test is added for it.
 - `cargo clippy --workspace -- -D warnings` catches any dead-code/unused-import fallout from
   deleting `batch_partition_merger.rs`, `MergerMaker`, and the two custom-merger test fixtures.
 
@@ -191,10 +188,14 @@ removed positional parameter fails every uncorrected call site at compile time).
 
 ## Open Questions
 
-1. Should `accept_unordered_merge()` exist as a new public builder at all, given it has zero
-   runtime effect, versus just documenting the convention in `with_merge_sort_order`'s own doc
-   comment? This plan keeps it because it gives future in-repo views (and downstream ones) a
-   grep-able, chainable way to record the choice, matching the issue's own suggested spelling.
-2. Is removing `BatchPartitionMerger` acceptable, or is it worth keeping as intentionally-dormant
-   public API for downstream consumers per the original #1392 rollout design, even though nothing
-   constructs it today (in this repo or in the issue's downstream survey)?
+1. Issue item 3 (uneven sort-order adoption — `processes`/`streams` silently take the default
+   unordered merge path with no call-site signal it was deliberate) is left unaddressed by this
+   plan. Worth a follow-up (a lint, a doc example, or an explicit opt-out builder), or is the
+   status quo acceptable?
+2. `SqlBatchView` only exposes `ScanOrdering::PerFile` (via `with_merge_sort_order`) — the
+   `Concatenated` variant (cheaper: one sequential read, no merge step at all, for partitions that
+   are already non-overlapping as well as internally sorted) is only available today on the
+   hand-written `BlocksView`. Worth a `with_merge_concatenated_order`-style builder to give
+   `SqlBatchView` parity, so a qualifying view doesn't have to give up the `SqlBatchView`
+   convenience to get the cheaper merge path? Out of scope for issue #1492 as filed — flagging as a
+   possible follow-up, not part of this plan.
