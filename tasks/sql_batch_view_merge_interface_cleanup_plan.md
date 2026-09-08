@@ -15,16 +15,16 @@ deleting the dead type and the unused parameter outright — and deliberately le
 - `SqlBatchView::new` (`rust/analytics/src/lakehouse/sql_batch_view.rs:88-151`) takes
   `merger_maker: Option<&MergerMaker>` as its last, positional, mandatory-to-pass argument.
   All 3 real in-repo views pass `None`: `log_stats_view.rs:73`, `processes_view.rs:73`,
-  `streams_view.rs:59`. So do 7 of 9 test call sites (`histo_view_test.rs:60`,
-  `sql_view_test.rs:89`, `materialize_fail_isolation_tests.rs:46`,
-  `sql_partition_spec_sort_order_tests.rs:58`, and the parameterized
-  `sql_batch_view_merge_ordering_tests.rs`, which also has one call passing a custom closure).
-  Only two call sites pass a real custom maker, both test-only: `sql_view_test.rs:203`
-  (`Some(&make_merger)`, a `#[ignore]` live-DB test's `LogSummaryMerger` — a hand-written,
-  non-SQL Rust merger that re-runs one query per distinct `process_id` instead of the SQL text in
-  `merge_partitions_query`) and `sql_batch_view_merge_ordering_tests.rs`'s
-  `custom_merger_maker_coexists_with_a_declared_merge_sort_order` test (an inline `QueryMerger`
-  closure standing in for "a custom `merger_maker`"). `with_merge_sort_order`
+  `streams_view.rs:59`. There are 6 test call sites (`histo_view_test.rs:60`,
+  `sql_batch_view_merge_ordering_tests.rs:81`, `sql_partition_spec_sort_order_tests.rs:58`,
+  `sql_view_test.rs:89` and `:255`, `materialize_fail_isolation_tests.rs:46`); 4 of the 6 pass a
+  literal `None`, one (`sql_batch_view_merge_ordering_tests.rs:81`) passes the fixture's
+  `merger_maker` variable — populated, in the
+  `custom_merger_maker_coexists_with_a_declared_merge_sort_order` test, with an inline `QueryMerger`
+  closure standing in for "a custom `merger_maker`" — and one passes a real custom maker directly:
+  `sql_view_test.rs:269` (`Some(&make_merger)`, a `#[ignore]` live-DB test's `LogSummaryMerger` — a
+  hand-written, non-SQL Rust merger that re-runs one query per distinct `process_id` instead of the
+  SQL text in `merge_partitions_query`). `with_merge_sort_order`
   (`sql_batch_view.rs:179-207`), by contrast, is a fluent builder called after `new()` —
   `merger_maker` is the only merge-related knob still forced into the constructor, and per the
   survey backing the issue, no downstream call site uses it either.
@@ -48,9 +48,8 @@ deleting the dead type and the unused parameter outright — and deliberately le
 ### 1. Remove `BatchPartitionMerger`
 
 Delete `rust/analytics/src/lakehouse/batch_partition_merger.rs` and its `pub mod
-batch_partition_merger;` declaration (`mod.rs:20-22`). `PartitionMerger`/`QueryMerger` stay — they're
-the mechanism `SqlBatchView` itself uses internally (see §2); this removes one specific, unused
-implementation, not the extension point. `MergerMaker` does not stay; it's deleted along with
+batch_partition_merger;` declaration (`mod.rs:20-22`). This removes one specific, unused
+implementation, not the extension point (see §2). `MergerMaker` does not stay; it's deleted along with
 `merger_maker` in §2. Delete the doc-comment paragraph naming `BatchPartitionMerger` as the intended
 fallback (`sql_batch_view.rs:173-178`) outright rather than rewording it — its only purpose was
 explaining how a custom `merger_maker` coexists with `with_merge_sort_order`, and once §2 removes
@@ -64,7 +63,7 @@ workaround for bounding merge memory: it re-runs the merge query once per batch 
 query's working set small, but still buffers a full sort per batch and gives no ordering guarantee
 to callers. The problem it worked around is now fixed for **every** merger, not just ones that
 declare an ordering: a merge session sets `repartition_file_scans = false`
-(`merge.rs:66-71`, from `tasks/1491_merge_scan_memory_plan.md`), so every `QueryMerger` merge
+(`merge.rs:66-71`, from `tasks/completed/1491_merge_scan_memory_plan.md`), so every `QueryMerger` merge
 scans its source partitions with a single sequential reader regardless of `ScanOrdering` — a view
 with no natural sort contract gets a bounded-memory merge for free, with no ordering guarantee to
 maintain (see the note on `View::get_scan_output_ordering`, `view.rs:153-160`). `ScanOrdering`'s
@@ -89,15 +88,10 @@ itself uses internally, and `BlocksView` (a hand-written `View`, not a `SqlBatch
 `QueryMerger` directly for its own `Concatenated`-ordering merge. Only `SqlBatchView`'s
 constructor-level hook onto that trait is removed.
 
-### 3. Uneven sort-order adoption — out of scope
-
-Not addressed by this plan. See Decisions.
-
 ## Implementation Steps
 
 1. Delete `batch_partition_merger.rs` and its `mod.rs` declaration; delete the
-   `sql_batch_view.rs:173-178` doc-comment paragraph outright (its only purpose was explaining how a
-   custom `merger_maker` coexists with `with_merge_sort_order`, and step 2 removes `merger_maker`).
+   `sql_batch_view.rs:173-178` doc-comment paragraph outright.
 2. `sql_batch_view.rs`: drop `merger_maker` from `new()`'s parameter list and delete the
    `MergerMaker` type alias.
 3. Update call sites:
@@ -113,18 +107,21 @@ Not addressed by this plan. See Decisions.
      (lines ~108-273) — along with the `sql_view_test()` block that builds that view and calls
      `test_log_summary_view` on it; `test_log_summary_view` itself and its call for the plain view
      stay. Drop the now-unused `PartitionMerger`/`MergeQueryResult`/`RecordBatchReceiverStreamBuilder`
-     /`query_partitions`/`DictionaryArray`/`StringArray`/`Int32Type`/`typed_column_by_name` imports
-     this deletion leaves behind (`cargo clippy` will flag any missed).
+     /`query_partitions`/`DictionaryArray`/`StringArray`/`Int32Type`/`typed_column_by_name`/
+     `async_trait::async_trait`/`datafusion::error::DataFusionError`/
+     `micromegas_analytics::lakehouse::partition::Partition` imports this deletion leaves behind
+     (`cargo clippy` will flag any missed).
    - `sql_batch_view_merge_ordering_tests.rs`: delete
      `custom_merger_maker_coexists_with_a_declared_merge_sort_order` (its
      uncertified-input-falls-back-to-the-plain-merger case is already covered by
      `one_uncertified_input_falls_back_to_the_plain_merger`); fold
      `make_test_view_with_merge_query_and_merger` into `make_test_view_with_merge_query` (drop the
-     `merger_maker` parameter — with it gone the two functions are identical) and update its one
-     remaining reference; delete the now-unused `MergerMaker`/`RuntimeEnv`/`Schema`/`QueryMerger`/
+     `merger_maker` parameter — with it gone the two functions are identical); delete the now-unused `MergerMaker`/`RuntimeEnv`/`Schema`/`QueryMerger`/
      `PartitionMerger` imports this leaves behind.
-4. Add a `CHANGELOG.md` Unreleased entry (Analytics) covering both changes and the breaking
-   signature change.
+4. Add a `CHANGELOG.md` Unreleased entry (Analytics) covering both changes, carrying a
+   `**Minor breaking change**:` clause naming the removal of `merger_maker` from
+   `SqlBatchView::new`, the published `MergerMaker` alias, and the `batch_partition_merger`
+   module.
 5. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test` from `rust/`.
 
 ## Files to Modify
@@ -164,8 +161,11 @@ Not addressed by this plan. See Decisions.
 
 ## Documentation
 
-No `mkdocs/` page references `BatchPartitionMerger`, `merger_maker`, or `with_merge_sort_order`
-today; nothing there needs updating. `CHANGELOG.md` gets the Unreleased entry described above.
+No `mkdocs/` page references `BatchPartitionMerger` or `merger_maker` today; nothing there needs
+updating. `with_merge_sort_order` is named in `mkdocs/docs/admin/functions-reference.md:130,148`
+and described in prose in `mkdocs/docs/query-guide/python-api.md:620,640`, but that builder is
+untouched by this plan, so those pages need no changes either. `CHANGELOG.md` gets the Unreleased
+entry described above.
 
 ## Testing Strategy
 
