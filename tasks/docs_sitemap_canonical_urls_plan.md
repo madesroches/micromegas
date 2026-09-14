@@ -7,12 +7,14 @@
 `mkdocs/mkdocs.yml` declares `site_url: https://micromegas.info`, but `publish-docs.yml` builds
 the MkDocs site into `public_docs/docs`, so it is served from `https://micromegas.info/docs/`.
 MkDocs derives both the sitemap and every `rel="canonical"` tag from `site_url`, so all 93
-sitemap entries and all 93 canonical tags point one path segment too high — at URLs that 404.
+sitemap entries and all 93 canonical tags point one path segment too high. 92 of the 93 point at
+URLs that 404; the one exception is `index.md`, whose entry points at the root, which the welcome
+landing page serves rather than 404ing.
 The blog is the worst hit: all 20 posts are live under `/docs/blog/...`, all 20 are advertised at
 `/blog/...`, and each live post tells crawlers its authoritative copy is the 404.
 
 This plan fixes `site_url`, adds the site-root discovery files that were never there
-(`robots.txt`, a sitemap covering the landing page and the four presentations), adds an RSS feed
+(`robots.txt`, a sitemap covering the landing page and the five presentations), adds an RSS feed
 and a blog-appropriate `<title>` suffix, and adds a CI check that fails the docs build whenever a
 sitemap URL, a canonical tag, or the feed autodiscovery link stops resolving inside the staged
 tree.
@@ -82,10 +84,6 @@ Sitemap: https://micromegas.info/sitemap.xml
 Sitemap: https://micromegas.info/docs/sitemap.xml
 ```
 
-Deliberately **no** `Disallow` blocks for `GPTBot`, `ClaudeBot`, `CCBot`, `PerplexityBot`, or
-`Google-Extended` — the default-allow behaviour we have today is the behaviour we want, and the
-only reason to add the file at all is to advertise the two sitemaps.
-
 `welcome/public/sitemap.xml` — a hand-written sitemap for the pages MkDocs does not know about:
 
 ```xml
@@ -96,12 +94,12 @@ only reason to add the file at all is to advertise the two sitemaps.
   <url><loc>https://micromegas.info/notebooks/</loc></url>
   <url><loc>https://micromegas.info/high-frequency-observability/</loc></url>
   <url><loc>https://micromegas.info/unified-observability-for-games/</loc></url>
+  <url><loc>https://micromegas.info/doc/design-presentation/design.html</loc></url>
 </urlset>
 ```
 
-No `lastmod` — a hand-maintained timestamp rots into a lie, and the element is optional.
-`/rustdoc/` stays crawlable but out of every sitemap: thousands of generated pages of low
-standalone value. The two sitemaps are disjoint, so no URL is advertised twice.
+No `lastmod` — a hand-maintained timestamp rots into a lie, and the element is optional. The two
+sitemaps are disjoint, so no URL is advertised twice.
 
 The landing page also gains a self-referential canonical in `welcome/index.html`'s head:
 
@@ -178,7 +176,7 @@ Design:
      moving a sitemap without updating `robots.txt` fails the build.
   4. **Every canonical tag points at the file that emitted it.** Scan `<root>/docs/**/*.html` plus
      `<root>/index.html`; extract `<link rel="canonical" href="...">`; skip files with no such tag
-     (`404.html`, the presentations). Deliberately not the whole tree: `public_docs/rustdoc/` alone
+     (`404.html`). Deliberately not the whole tree: `public_docs/rustdoc/` alone
      is thousands of generated HTML files, and nothing under either `public_docs/rustdoc/` or
      `public_docs/doc/` carries a canonical tag, so walking them would only add cost with nothing
      to check. (The sitemap checks above do scan the whole tree via `**/sitemap.xml`, since there
@@ -194,10 +192,12 @@ Design:
      other href against the HTML file's own directory.
 - Print every failure, exit 1 if there were any.
 
-Wired into `publish-docs.yml` as a step **after** "Prepare staging directory" (so `CNAME` is
-already written) and **before** "Deploy to GitHub Pages", alongside a step running the script's
-unit tests. `build/check_docs_site.py` and `build/test_check_docs_site.py` are added to the
-workflow's `pull_request.paths` filter, otherwise a change to the checker would not run it.
+The checker itself is wired into `publish-docs.yml` as a step **after** "Prepare staging directory"
+(so `CNAME` is already written) and **before** "Deploy to GitHub Pages". Its unit-test step runs
+separately and earlier — immediately after "Checkout code", before the Rust/Node build steps — so
+a broken checker fails fast instead of surfacing after ~10 minutes of unrelated build work.
+`build/check_docs_site.py` and `build/test_check_docs_site.py` are added to the workflow's
+`pull_request.paths` filter, otherwise a change to the checker would not run it.
 
 ## Implementation Steps
 
@@ -223,16 +223,17 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 9. Add `build/test_check_docs_site.py` covering the checker's logic against synthetic trees.
 10. `.github/workflows/publish-docs.yml`:
     - add `build/check_docs_site.py` and `build/test_check_docs_site.py` to `pull_request.paths`;
-    - add a step installing `pytest` and running `python3 -m pytest build/test_check_docs_site.py`;
+    - add a step installing `pytest` and running `python3 -m pytest build/test_check_docs_site.py`
+      immediately after "Checkout code", before the Rust/Node setup steps;
     - add a step running `python3 build/check_docs_site.py public_docs` after staging and before
       deploy.
 
 ### Phase 5 — Documentation
 
 11. `mkdocs/docs/development/build.md`: in the documentation-build section, note that
-    `python3 build/check_docs_site.py public_docs` validates a staged site and that CI runs it.
-12. `mkdocs/CLAUDE.md`: add the checker to the essential commands list.
-13. `CHANGELOG.md`: an `## Unreleased` entry under **Website**.
+    `python3 build/check_docs_site.py public_docs` is a CI step, run from the repo root against
+    the tree `publish-docs.yml` stages — not a command to run from `mkdocs/`.
+12. `CHANGELOG.md`: an `## Unreleased` entry under **Website**.
 
 ## Files to Modify
 
@@ -248,7 +249,6 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 | `build/test_check_docs_site.py` | new |
 | `.github/workflows/publish-docs.yml` | paths filter; pytest step; checker step |
 | `mkdocs/docs/development/build.md` | document the checker |
-| `mkdocs/CLAUDE.md` | document the checker |
 | `CHANGELOG.md` | Unreleased entry |
 
 ## Trade-offs
@@ -274,20 +274,19 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
   sitemap and the blog archive carry full history. Revisit only if a reader actually needs more.
 - Leave the JSON feed enabled (plugin default). It costs one extra generated file and some
   aggregators prefer it.
-- `/rustdoc/` stays crawlable but out of every sitemap, per the issue's judgment call.
+- `/rustdoc/` stays crawlable but out of every sitemap, per the issue's judgment call: it's
+  thousands of generated pages of low standalone value.
 - Accepted risk: a new presentation added to `publish-docs.yml` will not be added to
   `welcome/public/sitemap.xml` automatically, and nothing fails if it is forgotten — the page is
   merely unlisted. Catching that would need an allowlist of root directories that is itself
   maintenance.
-- The canonical check scans `<root>/docs/` and `<root>/index.html` only, not the whole staged
-  tree — `public_docs/rustdoc/` and `public_docs/doc/` carry no canonical tags at all, so scanning
-  them would only add cost.
+- `robots.txt` carries no AI-crawler `Disallow` blocks — default-allow is the intended posture;
+  the file exists only to advertise the two sitemaps.
 
 ## Documentation
 
 - `mkdocs/docs/development/build.md` — document `build/check_docs_site.py` in the documentation
-  build section.
-- `mkdocs/CLAUDE.md` — add the checker command.
+  build section, as a CI step run from the repo root against the workflow's staged tree.
 - `CHANGELOG.md` — `## Unreleased`, **Website** entry covering the `site_url` fix, `robots.txt`,
   the root sitemap, the RSS feed, the blog title suffix, and the CI check.
 
