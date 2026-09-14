@@ -94,13 +94,6 @@ auth from `OidcAuthProvider`/`OidcConfig::from_env()` and nothing else (`auth/st
 `roles.flightsql` and handed to the FlightSQL server (`monolith/src/main.rs:227-234`, `:321`); the
 web role at `:360-378` gets its own OIDC-only config.
 
-So a `StaticTokenAuthProvider` built from `api_key_file` would send an opaque key as
-`Authorization: Bearer <key>`, the server would fail to parse it as a JWT, and the user would get a
-401 — the exact confusing downstream failure this plan exists to remove. Making the web CLIs honor
-`api_key_file` would require adding a DB key store to `analytics-web-srv`, which is a server-side
-feature with its own questions (admin-route scoping, revocation latency, how `AdminUser` resolves
-`is_admin` for a keyed caller) and belongs in its own issue.
-
 ### Tests and docs
 
 - `tests/cli/` holds `test_config.py`, `test_grants.py`, `test_groups.py`, `test_import_keys.py`,
@@ -186,11 +179,18 @@ unreadable key file still produces this message rather than an `OSError`.
 def make_client(config, args):
     if args.no_auth:
         return WebClient(config["server"], auth_provider=None)
-    auth_provider, diagnostic = web_auth.resolve_web_auth(profile=args.profile)
+    try:
+        auth_provider, diagnostic = web_auth.resolve_web_auth(profile=args.profile)
+    except ProfileError as e:
+        raise ProfileError(f"{e}; pass --no-auth to target a server started with --disable-auth")
     if auth_provider is None:
         raise ProfileError(f"{diagnostic}; pass --no-auth to target a server started with --disable-auth")
     return WebClient(config["server"], auth_provider=auth_provider)
 ```
+
+  A `ProfileError` raised inside `resolve_web_auth` (from `resolve_connection`, e.g. "no profile
+  selected") gets the same `--no-auth` hint appended as the function's own diagnostic, so the hint
+  is visible on every path that ends in `ProfileError`, not just the `(None, diagnostic)` one.
 
   The five call sites become `make_client(config, args)`.
 - Shared flags on a parent parser, applied only to the subcommands that build a client:
@@ -260,12 +260,10 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
    `main()`. Drop the now-unused `os` import if nothing else in the module uses it.
 4. **`cli/grants.py`, `cli/groups.py`, `cli/import_keys.py`**: replace the three
    `build_auth_provider` bodies with the delegation; delete their now-dead `os`/OIDC imports.
-   `test_web_auth.py`'s env-triple-ordering case is the only guard on these three CLIs' behavior
-   preservation; consider adding one assertion per CLI that `build_auth_provider` delegates to
-   `resolve_web_auth`.
 5. **Tests**: new `tests/cli/test_web_auth.py`; new `tests/cli/test_screens_auth.py`; fix the three
    `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`.
-6. **Docs**: `screens-as-code.md` auth section, the two `python-api.md` passages, and a
+6. **Docs**: `screens-as-code.md` auth section and its five subcommand usage lines, the two
+   `python-api.md` passages, and a
    `CHANGELOG.md` **Unreleased** entry.
 
 ## Files to Modify
@@ -321,15 +319,16 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
   is evaluated *first*, before `resolve_connection`, so a complete env credential never fails on
   profile selection. This keeps `grants`/`groups`/`import-keys` byte-compatible with today on a box
   that has a `profiles` map and exported OIDC env vars.
-- Accepted regression, now narrowed to one case: on a machine that has a `profiles` map, a
-  `micromegas-screens` invocation with **no** profile selected (no `--profile`, no
-  `MICROMEGAS_PROFILE`, no `default_profile`) **and** an incomplete OIDC env triple — issuer and
-  client_id exported but no client secret, i.e. the interactive-login setup — now fails with the
-  "no profile selected" `ProfileError` from `resolve_connection`, where it previously logged in off
-  the env vars alone. This is the same rule `micromegas-query` already enforces and documents
-  (`python-api.md:797`); the fix is to select a profile or set `default_profile`. The full env
-  triple (CI) is unaffected by step 1's ordering, and so is any box with no
-  `~/.micromegas/config.json` or a flat config.
+- Accepted regression: on a machine that has a `profiles` map and no profile selected (no
+  `--profile`, no `MICROMEGAS_PROFILE`, no `default_profile`), `micromegas-screens` now fails with
+  the "no profile selected" `ProfileError` from `resolve_connection`, where it previously either
+  logged in off a complete-enough OIDC env triple or silently built an unauthenticated client —
+  including the no-env-vars-at-all case, the exact local-dev-against-a-`--disable-auth`-monolith
+  invocation `--no-auth` exists for. `make_client` appends the same `--no-auth` hint to this error
+  as to its own diagnostic, so every such failure names the fix. This is the same rule
+  `micromegas-query` already enforces and documents (`python-api.md:797`); the fix is to select a
+  profile, set `default_profile`, or pass `--no-auth`. The full env triple (CI) is unaffected by
+  step 1's ordering, and so is any box with no `~/.micromegas/config.json` or a flat config.
 - `api_key_file` stays out of the web path, and a profile that resolves one gets a diagnostic
   naming the server-side reason rather than the generic "no auth mechanism" sentence. See
   Trade-offs.
@@ -345,7 +344,9 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
   explicit failure when nothing resolves, and `--no-auth` for a `--disable-auth` server. Keep the
   existing CI example (the env triple still works, and is still checked first) and note it needs no
   profile. State that `api_key_file` is not an option here and why, pointing at
-  `micromegas-query` for the static-key workflow.
+  `micromegas-query` for the static-key workflow. Also update the **Commands** section's usage
+  lines for the five client subcommands (`import`, `pull`, `plan`, `apply`, `list`) to add
+  `[--profile NAME] [--no-auth]`, leaving `init`'s usage line unchanged.
 - `mkdocs/docs/query-guide/python-api.md` — rewrite `:843-846` to give the *reason* rather than
   listing which CLIs happen to honor `api_key_file`: the analytics web API validates OIDC tokens
   only, so `api_key_file` is a FlightSQL credential (`micromegas-query`, `connect_with_profile()`)
@@ -382,8 +383,10 @@ explicitly with `monkeypatch.setenv`.
 - Full env triple set **and** a `profiles` map with no profile selected → client-credentials, no
   `ProfileError`. This pins step 1's ordering, which is what keeps `grants`/`groups`/`import-keys`
   behavior-compatible; an implementation that resolved the config first would fail here.
-- Nothing configured (missing config file) → `(None, diagnostic)`, diagnostic naming both the
-  profile keys and the env vars; with a named profile, the diagnostic contains the profile name.
+- Nothing configured (missing config file, no profile selected) → `(None, diagnostic)`, the generic
+  diagnostic naming both the profile keys and the env vars.
+- A `profiles` map whose selected profile resolves neither OIDC nor `api_key_file` →
+  `(None, diagnostic)`, the diagnostic containing the profile name.
 
 `tests/cli/test_screens_auth.py`: these `make_client` cases monkeypatch
 `screens.web_auth.resolve_web_auth` to return a canned `(None, diagnostic)` or `(provider, None)`
@@ -397,6 +400,8 @@ rather than exercising real config resolution — `test_web_auth.py` already cov
   `--no-auth` short-circuit).
 - `resolve_web_auth` returning `(provider, None)` → the provider is passed through to the
   `WebClient` and the `server` URL is honored.
+- `resolve_web_auth` raising `ProfileError` (e.g. no profile selected) → `make_client` re-raises a
+  `ProfileError` whose message contains the original text plus the `--no-auth` hint.
 - Parser wiring, parametrized over `import`/`pull`/`plan`/`apply`/`list`: `main()` builds its parser
   and dispatches internally, so these tests monkeypatch `sys.argv` to
   `["micromegas-screens", cmd, "--profile", "prod"]` and monkeypatch the module-level `cmd_*`
