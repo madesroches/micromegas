@@ -36,7 +36,7 @@ One command mints you a personal ingestion key and claims an audience nobody els
 
 ```bash
 eval "$(micromegas-setup-telemetry --url https://analytics.example.com \
-    --name my-laptop --claim "$USER-claude")"
+    --name my-laptop --user-audience claude)"
 
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
@@ -91,7 +91,7 @@ Who may read `alice-claude` is not encoded in the data. It is a handful of rows 
 | `alice-claude` | `mint` | `user:alice@example.com` |
 | `alice-claude` | `read` | `group:agent-platform` |
 
-The first two rows were written by the `--claim` above. The third is Alice sharing with a team. Selectors are `*`, `user:<email>`, or `group:<name>`, with groups nested transitively in a `groups` table of their own. A non-admin can share what they hold with a user or a group, never with `*`; they can revoke what they created, or remove their own access. Admins see everything and can do everything. All of it is auditable from SQL through `list_audience_grants()`, and every row records who created it and when.
+The first two rows were written by the `--user-audience` mint above. The third is Alice sharing with a team. Selectors are `*`, `user:<email>`, or `group:<name>`, with groups nested transitively in a `groups` table of their own. A non-admin can share what they hold with a user or a group, never with `*`; they can revoke what they created, or remove their own access. Admins see everything and can do everything. All of it is auditable from SQL through `list_audience_grants()`, and every row records who created it and when.
 
 Each query server holds a whole-table snapshot of the grants, refreshed every 60 seconds. That is the entire cost of authorization state: a small table, one cached read.
 

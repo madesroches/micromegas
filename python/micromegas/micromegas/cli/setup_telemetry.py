@@ -8,11 +8,14 @@ from the user's point of view this script sets up telemetry transmission
 ("send my data"), so the server-side term "ingestion" stays out of the
 user-facing name.
 
-`--audience NAME` and `--claim NAME` are mutually exclusive and mean two
-different things: `--audience` mints under an audience this caller already
-holds a grant for (or, for an admin, any valid name), and errors otherwise;
-`--claim` claims a brand-new audience for this caller, verbatim -- neither
-flag ever silently rewrites the name it is given.
+`--user-audience SUFFIX` and `--audience NAME` are mutually exclusive and both
+lazily create the audience when it doesn't already exist: `--user-audience`
+composes `SUFFIX` under a namespace prefix derived server-side from the
+caller's own email (identical for an admin and a non-admin caller), while
+`--audience` uses the name verbatim, for an org/team/service audience that
+isn't namespaced under any one caller. Neither flag ever silently rewrites
+the name it is given -- `--user-audience` only ever prepends the caller's own
+prefix, nothing more.
 
 Auth reuses `import_keys.py::build_auth_provider`/`make_client`'s exact shape
 verbatim: client-credentials env vars first, else `config.resolve_connection`
@@ -58,106 +61,127 @@ def resolve_otlp_endpoint(args, parser):
     return f"{base.rstrip('/')}/ingestion/otlp"
 
 
-def _claim_suggestion(args, mint_prefix):
-    """Renders a concrete `--claim` suggestion: the caller's own namespaced name when a
-    prefix is available, or a placeholder when it isn't (no email, or an email whose
-    local part sanitizes to empty -- the two differ, see `mint_prefix_for`).
+def _fresh_audience_suggestion(mint_prefix, email):
+    """Renders a concrete suggestion for claiming a fresh audience of the caller's own:
+    `--user-audience` when a prefix is available (identical for admin and non-admin), a
+    bare `--audience <new-name>` when the caller has an email but no prefix (the local
+    part sanitizes to empty), or an ask-an-admin line when the caller has no email at
+    all and so cannot claim anything (the two "no prefix" cases differ, see
+    `mint_prefix_for`).
     """
     if mint_prefix is not None:
-        return f"--claim {mint_prefix}{args.audience}"
-    return "--claim <new-name>"
+        return f"--user-audience <name> (mints under `{mint_prefix}<name>`)"
+    if email is not None:
+        return "--audience <new-name>"
+    return (
+        "this caller has no email, so it cannot claim a fresh audience of its own; "
+        "ask an admin for a grant"
+    )
 
 
-def _cannot_mint_hint(args, mint_prefix, email, audiences):
-    """The error text for `--audience X` where X is outside this non-admin caller's
-    mintable set -- every way forward, concretely: the caller's own mintable
-    audiences (if any), a `--claim` suggestion for a fresh audience of their own, and
-    the exact `micromegas-grants` commands an admin would run to grant this one. This is
-    the answer to the issue's discoverability complaint, rendered where the caller hits
-    the error rather than left for them to find in the docs.
+def _mint_denied_hint(url, audience, my_audiences):
+    """The error text appended after a mint request's `HTTP 403` -- every way forward,
+    concretely: the caller's own mintable audiences (if any), a suggestion for claiming
+    a fresh audience of their own, and the exact `micromegas-grants` commands an admin
+    would run to grant this one. This is the answer to the issue's discoverability
+    complaint, rendered where the caller hits the error rather than left for them to
+    find in the docs.
+
+    Keyed off the resolved `audience` (not any one flag) and reads `audiences`/
+    `mint_prefix`/`email` off `my_audiences`, since the denial can now arrive whichever
+    of `--audience`/`--user-audience`/neither produced it.
     """
+    audiences = my_audiences["audiences"]
+    mint_prefix = my_audiences.get("mint_prefix")
+    email = my_audiences.get("email")
     lines = [
-        f"cannot mint audience {args.audience!r}: it is not in this caller's mintable set",
         "  mintable audiences: "
         + (", ".join(sorted(audiences)) if audiences else "(none)"),
-        f"  to claim a fresh audience of your own: {_claim_suggestion(args, mint_prefix)}",
-        "  otherwise, ask an admin to grant it:",
+        f"  to use an audience of your own: {_fresh_audience_suggestion(mint_prefix, email)}",
     ]
     if email is not None:
+        # `_fresh_audience_suggestion` already ends in "ask an admin for a grant"
+        # when there's no email -- don't repeat that lead-in here.
+        lines.append("  otherwise, ask an admin to grant it:")
         lines.append(
-            f"      micromegas-grants --url {args.url} create {args.audience} "
+            f"      micromegas-grants --url {url} create {audience} "
             f"mint 'user:{email}'"
         )
         lines.append("    or, to open it to every authenticated caller:")
-    lines.append(
-        f"      micromegas-grants --url {args.url} create {args.audience} mint '*'"
-    )
+    lines.append(f"      micromegas-grants --url {url} create {audience} mint '*'")
     return "\n".join(lines)
 
 
 def resolve_audience(args, parser, my_audiences):
     """Resolves the audience to mint under:
 
-    - `--audience` and `--claim` together: an error -- each flag means one thing.
-    - `--claim NAME`: claims `NAME` verbatim, with no prefix applied -- the name
-      passed is the name claimed. Requires a non-admin caller with an email (the
-      lazy claim the mint route performs needs an identity to write a
-      `user:<email>` grant row under); errors otherwise.
-    - `--audience X` already in `my_audiences["audiences"]` (the caller has a real
-      grant for it, or is admin): used verbatim.
-    - `--audience X` otherwise, non-admin: an error. This name is outside the
-      caller's mintable set, so minting it is refused rather than silently
-      redirected to a different name the caller didn't ask for -- see
-      `_cannot_mint_hint` for what the error suggests instead.
-    - `--audience X`, admin caller: used verbatim even when not already in
-      `audiences` -- deliberate operational naming; the mint route claims a
-      brand-new audience for an admin caller as part of the same request.
+    - `--audience` and `--user-audience` together: an error -- both are spellings
+      of the same one flag.
+    - `--user-audience SUFFIX`: composed as `f"{mint_prefix}{SUFFIX}"`, where
+      `mint_prefix` is derived server-side from the caller's own email and is
+      identical for an admin and a non-admin caller. Requires a non-empty `SUFFIX`
+      and a caller whose email yields a `mint_prefix`; errors otherwise, with
+      distinct messages for "no email at all" vs. "email sanitizes to empty".
+    - `--audience NAME`: used verbatim, unconditionally -- no client-side check of
+      `my_audiences["audiences"]` any more. A genuinely fresh name is lazily
+      claimed server-side by the mint route itself; a name someone else already
+      holds is refused there with an ordinary `403`, which `run()` enriches with a
+      hint (see `_mint_denied_hint`).
     - Both omitted, non-admin: resolved from the caller's *personally held* mint
       audiences only (`my_audiences["held_pairs"]`), filtering out audiences the
       caller can merely see via a `"*"` grant (e.g. the seeded `public` row) --
       exactly one match is used silently; more than one is an error naming the
       choices; none is an error pointing at the visible-but-unheld audiences (if
-      any), claiming a fresh name, or asking an admin.
+      any), claiming a fresh name of the caller's own, or asking an admin.
     - Both omitted, admin: an error asking for one explicitly -- `audiences` is
-      not a reliable "nothing mintable yet" signal for an admin.
+      not a reliable "nothing mintable yet" signal for an admin, but an admin
+      resolves `mint_prefix` the same way anyone else does, so `--user-audience`
+      is offered too.
 
-    Returns the resolved audience name. The admin branch does not decide or
-    report whether the name is brand-new: the mint route runs that ownership
-    check server-side and claims a brand-new audience for an admin caller in
-    the same request (`MintResponse`'s `claimed` field says so), so this
-    helper never needs to page through
-    `list_ingestion_api_keys`/`list_audience_grants` to decide it client-side.
+    Returns the resolved audience name. Neither this helper nor the mint route's
+    caller decides or reports whether the name is brand-new: the mint route runs
+    that ownership check server-side and claims a brand-new audience as part of
+    the same request (`MintResponse`'s `claimed` field says so), so this helper
+    never needs to page through `list_ingestion_api_keys`/`list_audience_grants`
+    to decide it client-side.
     """
-    if args.audience is not None and args.claim is not None:
-        parser.error("--audience and --claim are mutually exclusive; pick one")
+    if args.audience is not None and args.user_audience is not None:
+        parser.error("--audience and --user-audience are mutually exclusive; pick one")
 
-    is_admin = my_audiences["is_admin"]
-    audiences = my_audiences["audiences"]
     mint_prefix = my_audiences.get("mint_prefix")
     email = my_audiences.get("email")
 
-    if args.claim is not None:
-        if is_admin:
+    if args.user_audience is not None:
+        if not args.user_audience:
+            parser.error("--user-audience requires a non-empty name")
+        if mint_prefix is None:
+            if email is None:
+                parser.error(
+                    "--user-audience needs a caller-derived prefix and this caller "
+                    "has no email to derive one from; a caller with no email cannot "
+                    "claim a fresh audience at all, so ask an admin for a grant "
+                    "instead"
+                )
             parser.error(
-                "--claim is for a non-admin's own fresh claim; an admin's "
-                "brand-new audience is claimed server-side, use --audience "
-                f"{args.claim!r} instead"
+                "--user-audience needs a caller-derived prefix and this caller's "
+                "email sanitizes to empty; pass the whole name with --audience "
+                "<name> instead"
             )
-        if email is None:
-            parser.error(
-                f"cannot claim {args.claim!r}: this caller has no email to claim with"
-            )
-        return args.claim
+        return f"{mint_prefix}{args.user_audience}"
 
     if args.audience is not None:
-        if args.audience in audiences or is_admin:
-            return args.audience
-        parser.error(_cannot_mint_hint(args, mint_prefix, email, audiences))
+        if not args.audience:
+            parser.error("--audience requires a non-empty name")
+        return args.audience
+
+    is_admin = my_audiences["is_admin"]
+    audiences = my_audiences["audiences"]
 
     if is_admin:
         parser.error(
-            "--audience is required for an admin caller (pick an audience name "
-            "explicitly; an empty mintable-audience list means nothing for an admin)"
+            "--audience or --user-audience is required for an admin caller (pick an "
+            "audience name explicitly; an empty mintable-audience list means "
+            "nothing for an admin)"
         )
 
     # Both flags omitted: filter to the audiences this caller personally holds a
@@ -175,18 +199,23 @@ def resolve_audience(args, parser, my_audiences):
             + ", ".join(sorted(personal))
             + "); pick one with --audience"
         )
+    fresh = _fresh_audience_suggestion(mint_prefix, email)
     visible = sorted(a for a in audiences if a not in personal)
     if visible:
-        parser.error(
+        prefix = (
             "no mintable audience held personally by this caller; visible but not "
             "personally held (pass one explicitly with --audience): "
             + ", ".join(visible)
-            + "; or claim a fresh one of your own with --claim <new-name>; or ask "
-            "an admin for a personal grant"
         )
+    else:
+        prefix = "no mintable audience found for this caller"
+    if email is None:
+        # `fresh` already reads as a full sentence ending in "ask an admin for a
+        # grant" -- appending another "ask an admin" clause would just repeat it.
+        parser.error(f"{prefix}; {fresh}")
     parser.error(
-        "no mintable audience found for this caller; claim a fresh one with "
-        "--claim <new-name>, or ask an admin for a grant"
+        f"{prefix}; or claim a fresh one of your own with {fresh}; or ask an "
+        "admin for a personal grant"
     )
 
 
@@ -256,23 +285,26 @@ def build_parser():
         help="Name for the minted key (e.g. this machine's hostname)",
     )
     parser.add_argument(
-        "--audience",
+        "--user-audience",
+        metavar="SUFFIX",
         help=(
-            "Write audience to mint the key under: an audience you already have a "
-            "grant for (used verbatim; an admin may pass any valid name), or omitted "
-            "entirely to resolve one via GET .../audience-grants/my-audiences. To "
-            "claim a brand-new audience of your own, use --claim instead. "
-            "Mutually exclusive with --claim."
+            "Mint under f'{mint_prefix}{SUFFIX}', a name namespaced under this "
+            "caller's own email-derived prefix (identical composition for an admin "
+            "and a non-admin caller). Lazily claims the audience if it doesn't "
+            "already exist. Mutually exclusive with --audience."
         ),
     )
     parser.add_argument(
-        "--claim",
+        "--audience",
         help=(
-            "Claim NAME as a fresh audience, verbatim -- the name passed is the name "
-            "claimed, with no prefix applied. Fails if NAME already exists and this "
-            "caller holds no grant for it. Mutually exclusive with --audience."
+            "Write audience to mint the key under, verbatim -- for an org/team/service "
+            "audience that isn't namespaced under any one caller. Lazily claims the "
+            "audience if it doesn't already exist; for a non-admin caller, fails with "
+            "a 403 if it exists and this caller holds no grant for it (an admin caller "
+            "mints into any existing audience verbatim). Omitted entirely resolves one "
+            "via GET .../audience-grants/my-audiences. Mutually exclusive with "
+            "--user-audience."
         ),
-        metavar="NAME",
     )
     parser.add_argument(
         "--otlp-endpoint",
@@ -291,11 +323,11 @@ def build_parser():
 def run(args, parser):
     client = make_client(args, parser)
 
-    # Called unconditionally, even when --audience/--claim is passed explicitly:
-    # resolving either flag needs `mint_prefix`, `email`, and the caller's own
-    # `audiences`/`held_pairs` from this one response. A useful side effect: a
-    # knob-off caller gets a clear 403 up front, instead of a confusing denial only
-    # once the mint itself is attempted.
+    # Called unconditionally, even when --audience/--user-audience is passed
+    # explicitly: resolving either flag needs `mint_prefix`, `email`, and the
+    # caller's own `audiences`/`held_pairs` from this one response. A useful side
+    # effect: a knob-off caller gets a clear 403 up front, instead of a confusing
+    # denial only once the mint itself is attempted.
     my_audiences = client.my_audiences()
 
     audience = resolve_audience(args, parser, my_audiences)
@@ -305,7 +337,17 @@ def run(args, parser):
     # never-retrievable-again key.
     otlp_endpoint = resolve_otlp_endpoint(args, parser)
 
-    result = client.mint_ingestion_api_key(args.name, audience)
+    # The client-side mintable-set guard is gone, so a denial now only ever
+    # surfaces here, as the mint route's own 403 -- enrich it with the same
+    # discoverability hint the old pre-flight guard used to render.
+    try:
+        result = client.mint_ingestion_api_key(args.name, audience)
+    except RuntimeError as e:
+        if str(e).startswith("HTTP 403"):
+            raise RuntimeError(
+                f"{e}\n{_mint_denied_hint(args.url, audience, my_audiences)}"
+            ) from e
+        raise
 
     print(
         f"minted ingestion api key (key_id={result.get('key_id')}, "

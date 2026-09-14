@@ -191,12 +191,12 @@ class WebClient:
         - `audiences`: the audiences whose `mint` selectors match this
           caller today (meaningless for an admin, whose mint authority
           never depends on a grant row at all -- see `is_admin` instead).
-        - `mint_prefix`: the caller-derived namespace prefix used only to
-          *suggest* a fresh audience name (the web app's Mint dialog
-          composes it live before commit; this CLI uses it to render a
-          concrete `--claim` suggestion). `None` if the caller has no
-          email (and so cannot claim at all). Not something a claim is
-          minted under -- `--claim` claims the name it is given verbatim.
+        - `mint_prefix`: the caller-derived namespace prefix a name is minted
+          under via `--user-audience` (the web app's Mint dialog composes it
+          live before commit for a non-admin caller; this CLI composes it
+          for admin and non-admin callers alike). `None` if the caller has
+          no email (and so cannot claim at all). `--audience` never applies
+          it -- that flag mints under the name it is given verbatim.
         - `email`: the caller's own email, or `None`.
         - `held_pairs`: `"{audience}:{axis}"` for every pair the caller
           holds via an identity selector (`"*"` excluded) -- distinguishes
