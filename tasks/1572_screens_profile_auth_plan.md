@@ -173,6 +173,15 @@ a static analytics API key works with micromegas-query (FlightSQL), not with thi
 No provider is constructed on that path and the key file is never read, so a profile pointing at an
 unreadable key file still produces this message rather than an `OSError`.
 
+`load_or_login` and `OidcClientCredentialsProvider` are imported function-local, not at module
+scope — matching all three bodies being replaced and `connection.py`. `oidc_connection` is imported
+as a module (`import micromegas.oidc_connection as oidc_connection`, per `connection.py:93`), not
+via `from`, so a test can monkeypatch the `oidc_connection.load_or_login` attribute. A module-level
+`from`-import would (a) pull `flightsql/client.py`'s module-scope `pyarrow`/`pyarrow.flight` imports
+into every web CLI's startup path via `oidc_connection.py:10`'s own module-level FlightSQL import,
+and (b) bind a local name that a module-attribute monkeypatch can't intercept, silently letting a
+real browser login fire in tests.
+
 ### 3. `screens.py`
 
 - `make_client(config, args)`:
@@ -245,7 +254,8 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
    `ProfileError`'s docstring to also name `screens.py::make_client` as a raiser, for "no auth
    mechanism resolved".
 2. **`cli/web_auth.py`** (new): implement `resolve_web_auth` per Design §2, including the
-   diagnostic builder.
+   diagnostic builder, keeping the `load_or_login`/`OidcClientCredentialsProvider` imports
+   function-local and importing `oidc_connection` as a module.
 3. **`cli/screens.py`**: import `web_auth`, and import `ProfileError` by name (unqualified, since
    `make_client`'s `config` parameter shadows the `config` module inside that function). Rewrite
    `make_client(config, args)`, update the five call sites, add the `client_args` parent parser to
@@ -327,7 +337,9 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
   as to its own diagnostic, so every such failure names the fix. This is the same rule
   `micromegas-query` already enforces and documents (`python-api.md:797`); the fix is to select a
   profile, set `default_profile`, or pass `--no-auth`. The full env triple (CI) is unaffected by
-  step 1's ordering, and so is any box with no `~/.micromegas/config.json` or a flat config.
+  step 1's ordering. A box with no `~/.micromegas/config.json` or a flat config is also unaffected
+  by step 1's ordering, but is not unaffected by this change overall: it hits the same new strict
+  "no auth resolved" error (previously an unauthenticated client) and needs `--no-auth`.
 - `api_key_file` stays out of the web path, and a profile that resolves one gets a diagnostic
   naming the server-side reason rather than the generic "no auth mechanism" sentence. See
   Current State § "The analytics web API is OIDC-only".
@@ -349,10 +361,12 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
   rewrite must type the two flags after the subcommand, matching Design §3's flag placement.
 - `mkdocs/docs/query-guide/python-api.md` — rewrite `:843-846` to give the *reason* rather than
   listing which CLIs happen to honor `api_key_file`: the analytics web API validates OIDC tokens
-  only, so `api_key_file` is a FlightSQL credential (`micromegas-query`, `connect_with_profile()`)
-  and the `WebClient` CLIs report it as unusable instead of connecting unauthenticated. Delete the
-  "not profile-aware" paragraph at `:914-918` outright, with no replacement sentence — screens now
-  falls under the existing token-cache paragraph directly above it.
+  only, so `api_key_file` is a FlightSQL credential (`micromegas-query`, `connect_with_profile()`).
+  Of the `WebClient` CLIs, only `micromegas-screens` reports an `api_key_file`-only profile as an
+  error; `micromegas-grants`, `-groups`, `-import-keys`, and `-setup-telemetry` still connect
+  unauthenticated on that path. Delete the "not profile-aware" paragraph at `:914-918` outright,
+  with no replacement sentence — screens now falls under the existing token-cache paragraph
+  directly above it.
 - `CHANGELOG.md` — one **Unreleased** entry under the existing `**Python:**` heading covering the new
   `--profile`/`--no-auth` flags on `micromegas-screens`, the per-profile token cache, the strict
   error with its `api_key_file`-specific diagnostic, and the accepted regression above. No
@@ -370,9 +384,9 @@ explicitly with `monkeypatch.setenv`.
 - Profile whose only auth is `api_key_file` → `(None, diagnostic)`, the diagnostic naming
   `api_key_file` and saying the web API is OIDC-only; the key file is never opened (point it at a
   path that does not exist, and assert no `OSError`).
-- Profile with `issuers`/`client_id`, no env secret → `load_or_login` (monkeypatched) receives
-  `token_file=~/.micromegas/tokens-<profile>.json`, plus the profile's issuer, client id, and
-  audience.
+- Profile with `issuers`/`client_id`, no env secret → `oidc_connection.load_or_login` (monkeypatched
+  on the `oidc_connection` module attribute) receives `token_file=~/.micromegas/tokens-<profile>.json`,
+  plus the profile's issuer, client id, and audience.
 - All three `MICROMEGAS_OIDC_*` set → `OidcClientCredentialsProvider.from_env` (monkeypatched as a
   classmethod, so no OIDC discovery request is made) is the branch taken, and `load_or_login` is
   not called.
