@@ -16,8 +16,10 @@ The same helper replaces the three near-identical `build_auth_provider` copies i
 `groups.py`, and `import_keys.py` (the latter also serving `setup_telemetry.py`), so all four web
 CLIs resolve auth through one code path. It deliberately does **not** add `api_key_file` support:
 the analytics web API validates OIDC tokens only, so a static analytics API key is not a credential
-these tools can present (see Current State and Trade-offs). What the helper adds on that front is a
-diagnostic that says so, in place of the silent unauthenticated client they build today.
+these tools can present (see Current State § "The analytics web API is OIDC-only"). What the helper
+adds on that front is a diagnostic that says so; only `micromegas-screens` turns that diagnostic
+into an error, while `grants`/`groups`/`import-keys` still discard it and build an unauthenticated
+client, as they do today.
 
 The analytics web app's HTTP URL stays where it is today (`micromegas-screens.json`'s `"server"`
 key); only auth comes from the profile. See Trade-offs.
@@ -210,8 +212,10 @@ p_import = subparsers.add_parser("import", parents=[client_args], ...)
   parsed value in the shared `Namespace` — so the flags live in exactly one place, and are typed
   after the subcommand (`micromegas-screens apply --profile prod`), alongside `--auto-approve` and
   `--color`.
-- `main()`'s handler catches `config.ProfileError` alongside `RuntimeError` (`ProfileError`
-  subclasses `ValueError`, so today's handler misses it).
+- `main()`'s handler catches `ValueError` alongside `RuntimeError` (`ProfileError` subclasses
+  `ValueError` (`config.py:14`), so this covers it; it also covers `config.load_config` raising a
+  plain `ValueError` on a malformed `~/.micromegas/config.json`, a path screens can now reach for
+  the first time via `resolve_web_auth`).
 
 ### 4. `grants.py` / `groups.py` / `import_keys.py`
 
@@ -230,6 +234,10 @@ def build_auth_provider(args):
 order, same `None` for a `--disable-auth` target; they do **not** gain `--no-auth` or the strict
 error in this change (see Trade-offs).
 
+Their docstrings (and `setup_telemetry.py`'s module docstring, which repeats the same ladder for
+its imported `import_keys.make_client`) shrink from spelling out the branch ladder to a pointer at
+`web_auth.resolve_web_auth`, now the one place that ladder is described.
+
 ## Implementation Steps
 
 1. **`cli/config.py`**: add the trailing `profile: Optional[str] = None` field to
@@ -238,13 +246,18 @@ error in this change (see Trade-offs).
    mechanism resolved".
 2. **`cli/web_auth.py`** (new): implement `resolve_web_auth` per Design §2, including the
    diagnostic builder.
-3. **`cli/screens.py`**: rewrite `make_client(config, args)`, update the five call sites, add the
-   `client_args` parent parser to the five client subcommands, and catch `ProfileError` in
-   `main()`. Drop the now-unused `os` import if nothing else in the module uses it.
-4. **`cli/grants.py`, `cli/groups.py`, `cli/import_keys.py`**: replace the three
-   `build_auth_provider` bodies with the delegation; drop the now-unused `import os` from
+3. **`cli/screens.py`**: import `web_auth`, and import `ProfileError` by name (unqualified, since
+   `make_client`'s `config` parameter shadows the `config` module inside that function). Rewrite
+   `make_client(config, args)`, update the five call sites, add the `client_args` parent parser to
+   the five client subcommands, and catch `ValueError` (which subsumes `ProfileError`) alongside
+   `RuntimeError` in `main()`. Drop the now-unused `os` import if nothing else in the module uses it.
+4. **`cli/grants.py`, `cli/groups.py`, `cli/import_keys.py`, `cli/setup_telemetry.py`**: replace the
+   three `build_auth_provider` bodies with the delegation; drop the now-unused `import os` from
    `grants.py` and `groups.py` only (the OIDC imports are function-local and vanish with the body;
-   `import_keys.py` still needs `os` for `read_keyring`).
+   `import_keys.py` still needs `os` for `read_keyring`). Shrink the `build_auth_provider`
+   docstrings in `grants.py`, `groups.py`, and `import_keys.py` (`import_keys.py` keeps its note
+   about translating `ProfileError` via `parser.error()`), and `setup_telemetry.py`'s module
+   docstring, from the full branch ladder to a pointer at `web_auth.resolve_web_auth`.
 5. **Tests**: new `tests/cli/test_web_auth.py`; new `tests/cli/test_screens_auth.py`; fix the three
    `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`.
 6. **Docs**: `screens-as-code.md` auth section and its five subcommand usage lines, the two
@@ -259,6 +272,7 @@ error in this change (see Trade-offs).
 - `python/micromegas/micromegas/cli/grants.py`
 - `python/micromegas/micromegas/cli/groups.py`
 - `python/micromegas/micromegas/cli/import_keys.py`
+- `python/micromegas/micromegas/cli/setup_telemetry.py`
 - `python/micromegas/tests/cli/test_web_auth.py` *(new)*
 - `python/micromegas/tests/cli/test_screens_auth.py` *(new)*
 - `python/micromegas/tests/test_screen_files.py`
@@ -316,7 +330,7 @@ error in this change (see Trade-offs).
   step 1's ordering, and so is any box with no `~/.micromegas/config.json` or a flat config.
 - `api_key_file` stays out of the web path, and a profile that resolves one gets a diagnostic
   naming the server-side reason rather than the generic "no auth mechanism" sentence. See
-  Trade-offs.
+  Current State § "The analytics web API is OIDC-only".
 - `--no-auth` is spelled to echo the server's `--disable-auth` flag in its help text; no env-var
   equivalent is added.
 - `micromegas-screens.json` gains no `profile` key — a file-level default would invert the
@@ -331,14 +345,15 @@ error in this change (see Trade-offs).
   profile. State that `api_key_file` is not an option here and why, pointing at
   `micromegas-query` for the static-key workflow. Also update the **Commands** section's usage
   lines for the five client subcommands (`import`, `pull`, `plan`, `apply`, `list`) to add
-  `[--profile NAME] [--no-auth]`, leaving `init`'s usage line unchanged.
+  `[--profile NAME] [--no-auth]`, leaving `init`'s usage line unchanged. Every example in this
+  rewrite must type the two flags after the subcommand, matching Design §3's flag placement.
 - `mkdocs/docs/query-guide/python-api.md` — rewrite `:843-846` to give the *reason* rather than
   listing which CLIs happen to honor `api_key_file`: the analytics web API validates OIDC tokens
   only, so `api_key_file` is a FlightSQL credential (`micromegas-query`, `connect_with_profile()`)
   and the `WebClient` CLIs report it as unusable instead of connecting unauthenticated. Delete the
-  "not profile-aware" paragraph at `:914-918`, replacing it with the token-cache sentence that now
-  applies.
-- `CHANGELOG.md` — one **Unreleased** entry under a `**Python CLI:**` heading covering the new
+  "not profile-aware" paragraph at `:914-918` outright, with no replacement sentence — screens now
+  falls under the existing token-cache paragraph directly above it.
+- `CHANGELOG.md` — one **Unreleased** entry under the existing `**Python:**` heading covering the new
   `--profile`/`--no-auth` flags on `micromegas-screens`, the per-profile token cache, the strict
   error with its `api_key_file`-specific diagnostic, and the accepted regression above. No
   behavior change to advertise for `grants`/`groups`/`import-keys` — that part is a refactor.
@@ -418,7 +433,3 @@ per-profile token cache across two different CLIs.
 2. In a screens directory, run `micromegas-screens list --profile local`. Expect the inventory to
    print with **no** browser window — the issue's symptom 3, which no unit test can demonstrate
    because it depends on the real OIDC round-trip and the real IdP's refresh token.
-
-Both flags are typed **after** the subcommand, per Design §3 — they live on the five client
-subparsers, not on the top-level parser, so `micromegas-screens --profile local list` is a parse
-error. Every example in the docs rewrite must follow the same order.
