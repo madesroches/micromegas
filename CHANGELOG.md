@@ -2,7 +2,7 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## v0.31.0 - 2026-09-14
 
 * **Dependencies:** Bump `rustls` to `0.23.45` (and transitively `rustls-webpki` to `0.103.15`) in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace to resolve RUSTSEC-2026-0285 (TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries).
 * **Documentation:** Fix every `cargo doc` warning across the Rust workspace: a module-level `//!` doc comment's intra-doc link to a sibling item in the same file was failing to resolve unqualified, so those links now use fully-qualified `crate::` paths, and links pointing at genuinely private helper items are un-linked to plain code spans instead.

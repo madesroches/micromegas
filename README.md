@@ -78,6 +78,14 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.31.0 (September 2026)
+* **Postgres is the sole source of API keys and audience grants** — the `MICROMEGAS_API_KEYS` and `MICROMEGAS_AUDIENCE_GRANTS` env keyrings are no longer read; manage both at runtime with `micromegas-import-keys`, `micromegas-grants`, and the admin routes
+* **v0.30.0 upgrade shims retired** — the startup refusals for the `MICROMEGAS_ADMINS` family and the renamed cache-TTL vars are gone, and `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` collapses onto `MICROMEGAS_PUBLIC_VIEW_SETS`
+* **Simpler merge path** — `SqlBatchView`'s custom-merger hook and `BatchPartitionMerger` are removed, made redundant by the single-reader merge
+* **A website crawlers can actually read** — the landing page is prerendered, docs canonicals and sitemap entries point at real URLs, the blog has an RSS/JSON feed, and CI fails the docs build if any of it breaks again
+* **Python CLIs** — `micromegas-screens` gains `--profile`/`--no-auth`, `micromegas-setup-telemetry` gains `--user-audience`
+* **Operator action required** — migrate env-var API keys and audience grants into Postgres before upgrading; a still-set variable now only logs a warning, and will be ignored entirely in v0.32.0
+
 ### v0.30.0 (September 2026)
 * **Audience-based access control, end to end** — every materialized-view query plan carries an audience predicate, every id-addressed function is guarded, and ingestion stamps the audience from the authenticated credential instead of trusting the client
 * **Grants and groups now live in Postgres** — a database-backed grant store, local groups with a reserved `admins` group, a Groups admin page, and a `micromegas-groups` CLI

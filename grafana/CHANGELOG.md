@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.31.0 (2026-09-14)
+
+Version sync release. Security fix from a Dependabot dependency bump: `google.golang.org/grpc` 1.83.2, resolving Dependabot alert 475 (xDS servers DoS via missing `:authority`/`Host` headers) (#1578).
+
 ## 0.30.0 (2026-09-02)
 
 Version sync release. Security fixes from Dependabot dependency bumps: `github.com/apache/thrift` 0.24.0 (GHSA-8wv5-x4w7-5gww) and `google.golang.org/grpc` 1.83.1 (GHSA-vp52-pcj8-j9qc) (#1555).
