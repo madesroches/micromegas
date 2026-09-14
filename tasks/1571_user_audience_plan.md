@@ -168,25 +168,12 @@ def resolve_audience(args, parser, my_audiences):
 Aliasing `--claim` onto `args.audience` before anything else keeps exactly one code path for a
 verbatim name; the alias cannot drift from the flag it aliases.
 
-**No client-side normalization of `SUFFIX`.** No `.strip()`, no case folding, no charset check —
-only the empty-string rejection. `is_valid_audience` (`rust/auth/src/policy.rs:46-52`) is
-deliberately non-normalizing, and the CLI silently rewriting a name it was handed is precisely the
-#1535 bug. An invalid suffix therefore surfaces as the route's ordinary **400**, which is raised
-by `resolve_audience` server-side *before* any key row is inserted — a rejected name never strands
-a minted key. The empty-suffix case is rejected locally because it is the one input that is
-*valid* server-side (`alice-` passes `is_valid_audience`) while obviously not being what the
-caller meant.
+**No client-side normalization of `SUFFIX`.** Only the empty suffix is rejected locally —
+`alice-` is valid server-side but not what the caller meant.
 
-**No fallback to the bare suffix when `mint_prefix` is `None`.** The web dialog falls back to the
-unprefixed name (`MintIngestionKeyDialog.tsx:72`); the CLI errors instead. The flag's entire
-contract is "namespaced under me", so quietly minting an un-namespaced global name under it would
-be the same class of silent rewrite #1535 removed. `mint_prefix` is `None` for two different
-reasons, and the error tells them apart: a client-credentials caller with no email at all can
-never claim a fresh audience (server-side, the lazy claim needs an identity to write a
-`user:<email>` grant row under), so its error points at asking an admin for a grant; an email like
-`+++@example.com` whose local part sanitizes empty (`audience_grants_tests.rs:358-364`) still has
-an identity, so its error names `--audience <name>` as the way forward. Both are role-independent
-and rare.
+**No fallback to the bare suffix when `mint_prefix` is `None`.** `mint_prefix is None` errors
+rather than falling back to the bare suffix, with distinct messages for no-email vs.
+sanitizes-empty.
 
 ### The `_cannot_mint_hint` text moves from a pre-flight refusal to a post-403 enrichment
 
@@ -257,17 +244,20 @@ reporting the composed name when a `mint_prefix` is available.
    - Rewrite `resolve_audience` per the sketch above; delete the admin `--claim` rejection, the
      `email is None` claim precondition (the server owns it — a caller with no email hits the
      `Forbidden` arm at `ingestion_keys.rs:452-458`), and the `_cannot_mint_hint` pre-flight call.
-     Update the admin and non-admin zero-match error texts per the Design section above.
+     Update the admin and non-admin zero-match error texts per the Design section above. Rewrite
+     `resolve_audience`'s docstring (`:99-130`) to match the new flag table.
    - `build_parser`: add `--user-audience NAME`; rewrite `--audience`'s help; change `--claim`'s
      help to `argparse.SUPPRESS`.
-   - `run()`: wrap `mint_ingestion_api_key` in the 403 enrichment.
+   - `run()`: wrap `mint_ingestion_api_key` in the 403 enrichment; update its `:294-298` comment to
+     say `--audience/--user-audience`.
 2. **`python/micromegas/tests/cli/test_setup_telemetry.py`** — see Testing Strategy.
 3. **`python/micromegas/micromegas/web_client.py:196-199`** — `my_audiences`' docstring describes
    `mint_prefix` as backing a `--claim` suggestion; it now backs `--user-audience`'s composition,
    which *is* a name minted under. Reword.
 4. **Docs** — see Documentation.
 5. **`CHANGELOG.md`** — one `**Python:**` bullet under `## Unreleased` naming #1571, both flags,
-   the `--claim` deprecation, and the fact that no server change was needed.
+   the fact that no server change was needed, and that `--claim` is a hidden deprecated alias in
+   v0.31.0, to be removed in v0.32.0.
 
 ## Files to Modify
 
@@ -293,12 +283,6 @@ caps the damage, and `--user-audience` (the flag every doc now leads with) conta
 the caller's own namespace where it can neither collide with nor squat anything that matters.
 Refusing instead would mean keeping the client-side guard, which is the wart being removed.
 
-**Compose in the CLI rather than teaching the server a "prefixed" request field.** A new
-`user_audience` field on `MintRequest` would move composition server-side, but it adds wire
-surface, a second way for a request to name an audience, and a Rust change — for a concatenation
-the response already carries the operand for, and that the web app already performs client-side.
-Composing in the CLI keeps `mint_prefix` a plain suggestion value with no new wire surface.
-
 ## Decisions
 
 - Flag name: `--user-audience`, per the issue — not `--my-audience` or `--audience-suffix`.
@@ -315,6 +299,12 @@ Composing in the CLI keeps `mint_prefix` a plain suggestion value with no new wi
 - `--user-audience` composes `mint_prefix` for admins and non-admins alike, unlike
   `MintIngestionKeyDialog.tsx` (`:71`), which composes it only for non-admins. This divergence
   from the web dialog is intentional, not a follow-up to reconcile.
+- Composition happens in the CLI from `mint_prefix`; no new `MintRequest` field.
+- No client-side `SUFFIX` normalization beyond the empty-string rejection, matching
+  `is_valid_audience`'s non-normalizing contract (avoids repeating the #1535 silent-rewrite bug).
+- `mint_prefix is None` errors instead of falling back to the bare suffix, unlike
+  `MintIngestionKeyDialog.tsx:72`'s fallback for non-admins — another intentional divergence from
+  the web dialog.
 
 ## Documentation
 
@@ -351,8 +341,9 @@ Composing in the CLI keeps `mint_prefix` a plain suggestion value with no new wi
   `:94`, "The first two rows were written by the `--claim` above" becomes "...written by the
   `--user-audience` mint above".
 - **`CHANGELOG.md`** — an `## Unreleased` bullet. No **Minor breaking change** clause is needed
-  for the flag surface (`--claim` still works this release), but the deprecation is stated so the
-  next release's removal has a reference.
+  for the flag surface (`--claim` still works this release), but the bullet states `--claim` is a
+  hidden deprecated alias in v0.31.0, to be removed in v0.32.0 (the existing `## Unreleased`
+  precedent for a shim's removal reference, `CHANGELOG.md:11`).
 - **`rust/analytics-web-srv/src/audience_grants.rs:764-766`** — reword `mint_prefix_for`'s doc
   comment to describe backing `--user-audience`'s composition instead of only `--claim`'s
   error-message suggestion.
@@ -377,7 +368,10 @@ New/changed cases:
 - `--user-audience laptop` with `mint_prefix="alice-"` → `alice-laptop`.
 - **The same assertion with `is_admin=True`** and `mint_prefix="admin-"` → `admin-laptop`. This is
   the test that pins the issue's central claim: the flag is role-independent.
-- `--user-audience` with `mint_prefix=None` → `SystemExit`, message names `--audience`.
+- `--user-audience` with `mint_prefix=None, email="+++@example.com"` → `SystemExit`, message
+  names `--audience`.
+- `--user-audience` with `mint_prefix=None, email=None` → `SystemExit`, message says to ask an
+  admin for a grant and does not name `--audience`.
 - `--user-audience ""` → `SystemExit`.
 - `--user-audience` never normalizes: `--user-audience Ci_Runner` → `alice-Ci_Runner` verbatim
   (guards against a future `.lower()`/`.strip()` creeping back in).
