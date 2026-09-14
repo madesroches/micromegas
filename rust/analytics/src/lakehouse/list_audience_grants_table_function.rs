@@ -4,7 +4,7 @@
 //! `scan` that runs the DB query and builds arrays), but registered **outside** the admin gate
 //! in `register_lakehouse_functions`, next to `list_view_sets()` -- every authenticated caller
 //! (and, per `is_admin(metadata)`'s documented `--disable-auth` convention, every caller when
-//! auth is disabled) can call it, scoped by [`GrantVisibility`].
+//! auth is disabled) can call it, scoped by [`crate::lakehouse::list_audience_grants_table_function::GrantVisibility`].
 //!
 //! **Visibility.** Admin: every row. Non-admin: every grant on each `(audience, axis)` pair the
 //! caller holds a matching grant on -- deliberately wider than "rows whose selector matches me":
@@ -37,7 +37,7 @@ use datafusion::prelude::Expr;
 use sqlx::Row;
 use std::sync::Arc;
 
-/// How much of the `audience_grants` table [`ListAudienceGrantsTableFunction::scan`] returns,
+/// How much of the `audience_grants` table `scan` returns,
 /// decided once at registration time in `register_lakehouse_functions` from
 /// `CallerContext::is_admin`/`grant_selectors`.
 #[derive(Debug, Clone)]

@@ -438,8 +438,8 @@ impl WebIngestionService {
     /// else.
     ///
     /// A re-registration of an existing `stream_id` under a *different* audience is rejected
-    /// via [`Self::check_stream_audience_conflict`], mirroring
-    /// [`Self::check_process_audience_conflict`].
+    /// via `Self::check_stream_audience_conflict`, mirroring
+    /// `Self::check_process_audience_conflict`.
     #[span_fn]
     pub async fn insert_stream(
         &self,
@@ -508,7 +508,7 @@ impl WebIngestionService {
     /// should be merged into a single per-format payload column.
     ///
     /// Same conflict guard as [`Self::insert_stream`] -- see
-    /// [`Self::check_stream_audience_conflict`].
+    /// `Self::check_stream_audience_conflict`.
     #[span_fn]
     pub async fn register_otel_stream(
         &self,

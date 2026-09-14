@@ -7,10 +7,10 @@
 //! that requires a store. The `rust/public` bridge is the only place a `ReadableAudiences` (from
 //! `micromegas-auth`) becomes a `ReadScope`.
 //!
-//! Enforcement has two layers. [`super::ownership_rewrite::OwnershipRewrite`] (the row-level filter) reads
-//! `ReadScope` out of [`CallerContext`] inside `query.rs::make_session_context` and injects an
+//! Enforcement has two layers. [`crate::lakehouse::ownership_rewrite::OwnershipRewrite`] (the row-level filter) reads
+//! `ReadScope` out of [`crate::lakehouse::read_scope::CallerContext`] inside `query.rs::make_session_context` and injects an
 //! audience predicate into every `MaterializedView`-backed scan. The call-level guard is the UDTF/UDF guards
-//! ([`super::audience_guard::AudienceGuard`]) for the span/metadata functions the row-level filter structurally
+//! ([`crate::lakehouse::audience_guard::AudienceGuard`]) for the span/metadata functions the row-level filter structurally
 //! cannot reach, plus `CallerContext.is_admin`'s mutating-function registration
 //! gate. `view_instance(...)` is also guarded by the call-level guard, closing a cost/availability residual for
 //! the six view sets carrying a physical `audience` column, where the row-level filter already filters

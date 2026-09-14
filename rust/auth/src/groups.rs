@@ -1,11 +1,11 @@
 //! Local group membership: the `groups`/`group_members` tables (migration v10,
-//! `rust/ingestion/src/sql_migration.rs`), a whole-table snapshot cache ([`DbGroupsSource`])
-//! mirroring [`crate::db_audience_grants::DbAudienceGrantsSource`], and [`GroupGraph`], the
+//! `rust/ingestion/src/sql_migration.rs`), a whole-table snapshot cache ([`crate::groups::DbGroupsSource`])
+//! mirroring [`crate::db_audience_grants::DbAudienceGrantsSource`], and [`crate::groups::GroupGraph`], the
 //! in-memory closure resolver over a loaded snapshot.
 //!
 //! A `group_members.member` row is a selector in exactly the vocabulary
 //! `audience_grants.selector` uses (`*`, `user:<email>`, `group:<name>`), so nesting is the
-//! `group:` arm of the same predicate rather than a special case -- see [`GroupGraph::closure`].
+//! `group:` arm of the same predicate rather than a special case -- see [`crate::groups::GroupGraph::closure`].
 
 use crate::db_api_key::resolve_u64;
 use crate::db_snapshot::{SnapshotLoader, SnapshotSource};

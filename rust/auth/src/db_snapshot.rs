@@ -1,7 +1,7 @@
 //! Generic whole-table snapshot cache, extracted from what used to be
-//! `db_audience_grants.rs`'s entire cache-mechanics implementation. [`SnapshotLoader`] is the one
+//! `db_audience_grants.rs`'s entire cache-mechanics implementation. [`crate::db_snapshot::SnapshotLoader`] is the one
 //! thing each store (audience grants, groups) supplies: how to fetch a fresh snapshot and which
-//! metric/name to report on a refresh failure. [`SnapshotSource`] is everything else -- cold-start
+//! metric/name to report on a refresh failure. [`crate::db_snapshot::SnapshotSource`] is everything else -- cold-start
 //! throttling, last-good serving after the first success, `ProviderUnavailable` wrapping -- copied
 //! unchanged from the original `DbAudienceGrantsSource`.
 //!

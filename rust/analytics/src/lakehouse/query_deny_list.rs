@@ -3,7 +3,7 @@
 //! session context is built and before planning -- so a matching query is rejected for a few
 //! microseconds of work instead of a memory-pool reservation and a wave of object-store reads.
 //!
-//! A rule is a boolean SQL expression over a fixed, documented match context ([`match_schema`])
+//! A rule is a boolean SQL expression over a fixed, documented match context ([`crate::lakehouse::query_deny_list::match_schema`])
 //! -- parsed and evaluated by DataFusion itself, so there is no grammar of our own to specify or
 //! keep in sync, and no evaluator of our own to get subtly wrong. Rules stand until an admin
 //! removes them explicitly; there is no expiry.
@@ -245,7 +245,7 @@ impl QueryAttribution<'_> {
 ///    `Int64`/`Timestamp` literal, and Arrow's comparison kernels are the ones that actually
 ///    refuse it, only once the node is evaluated. Left there, that would be exactly the "silent
 ///    per-query failure" this design wants to avoid -- so step 4 forces that evaluation now.
-/// 4. **Canary-evaluate** the compiled expression once against [`QueryAttribution::probe`], a
+/// 4. **Canary-evaluate** the compiled expression once against `QueryAttribution::probe`, a
 ///    fixed one-row batch that exists for no other reason. Every match-context column is
 ///    `Utf8`, so the only way this can fail is the type mismatch step 3 doesn't catch; catching
 ///    it here turns "never fires" into a loud compile-time error, at the one-time cost of a

@@ -12,11 +12,11 @@
 //! before forwarding requests to FlightSQL.
 //!
 //! This module is split by concern:
-//! - [`config`] — web-specific OIDC client configuration.
-//! - [`state`] — shared `AuthState` and its lazily-initialized caches.
-//! - [`cookies`] — cookie helpers.
-//! - [`claims`] — validated-user / JWT claim types and extraction.
-//! - [`handlers`] — the Axum handlers, middleware, and extractors.
+//! - `config` — web-specific OIDC client configuration.
+//! - `state` — shared `AuthState` and its lazily-initialized caches.
+//! - `cookies` — cookie helpers.
+//! - `claims` — validated-user / JWT claim types and extraction.
+//! - `handlers` — the Axum handlers, middleware, and extractors.
 //!
 //! Login-flow OIDC client construction (provider discovery + client
 //! building) lives in the `micromegas::auth::oidc_client` crate module, not

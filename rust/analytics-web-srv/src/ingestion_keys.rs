@@ -12,7 +12,7 @@
 //! Every mint/revoke/import records the acting caller's own OIDC identity,
 //! never a shared service credential. `list_keys`/`revoke_key`/`import_key`
 //! are gated via the [`AdminUser`] extractor; `mint_key` runs through
-//! [`MintGate`]/[`AuthenticatedUser`] instead, since minting is not purely
+//! `MintGate`/[`AuthenticatedUser`] instead, since minting is not purely
 //! admin-gated -- see that extractor's own doc comment.
 //!
 //! **Duplication, accepted.** This duplicates most of `analytics_keys.rs`'s
@@ -63,12 +63,12 @@ pub struct IngestionKeysState {
     pub default_audience: String,
     /// Off-by-default self-service mint gate. Resolved once at startup
     /// from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`), default `false`. Checked by
-    /// [`MintGate`] for every non-admin caller before `mint_key`'s body runs at all -- with the
+    /// `MintGate` for every non-admin caller before `mint_key`'s body runs at all -- with the
     /// knob off, mint stays admin-only.
     pub self_service_mint_enabled: bool,
     /// `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`, default 25 -- caps how many distinct
     /// audiences one non-admin caller may claim via the lazy claim path
-    /// ([`try_claim_and_mint`]). Best-effort under concurrency, not a hard ceiling -- see that
+    /// (`try_claim_and_mint`). Best-effort under concurrency, not a hard ceiling -- see that
     /// function's own doc comment.
     pub max_claims_per_caller: i64,
     /// `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`, default 100 -- caps how many *live* keys
@@ -99,7 +99,7 @@ impl ErrorResponse {
 /// Errors this API returns.
 ///
 /// `Forbidden`/`Unavailable`/`Unauthenticated`/`Conflict` all back the self-service mint path:
-/// `mint_key` is [`MintGate`]/[`AuthenticatedUser`]-gated, not [`AdminUser`]-gated, and its own
+/// `mint_key` is `MintGate`/[`AuthenticatedUser`]-gated, not [`AdminUser`]-gated, and its own
 /// denials (the off-by-default gate, a missing-grant/malformed-audience `MintPolicy` denial, a
 /// per-caller bound, and lock contention on a lazy claim) need their own status codes.
 /// `list_keys`/`revoke_key`/`import_key` stay `AdminUser`-gated and never construct any of the
@@ -125,11 +125,11 @@ pub enum IngestionKeyError {
     /// misattributed as "you have no grant." Distinct from `NotConfigured`, whose message is
     /// specifically about an unset `MICROMEGAS_SQL_CONNECTION_STRING` and would mislead here.
     Unavailable(String),
-    /// [`AuthenticatedUser`]/[`MintGate`] found no `AuthContext` extension in the request --
+    /// [`AuthenticatedUser`]/`MintGate` found no `AuthContext` extension in the request --
     /// normally unreachable once routing is wired correctly; see `AuthenticatedUser`'s own doc
     /// comment for the (fail-closed) case this covers.
     Unauthenticated(String),
-    /// A lazy claim ([`try_claim_and_mint`]) lost the per-audience advisory-lock race to a
+    /// A lazy claim (`try_claim_and_mint`) lost the per-audience advisory-lock race to a
     /// concurrent claimant. Transient lock contention, not a denial -- the caller (in particular
     /// `micromegas-setup-telemetry`) should retry, not treat this as "you may not do this."
     Conflict(String),

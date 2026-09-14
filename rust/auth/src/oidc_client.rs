@@ -4,7 +4,8 @@
 //! construction of the `openidconnect` client used for the authorization
 //! code (login) flow. It is the single place where this happens; consumers
 //! (e.g. `analytics-web-srv`) should discover a provider once, cache the
-//! resulting [`DiscoveredProvider`], and call [`DiscoveredProvider::build_client`]
+//! resulting [`crate::oidc_client::DiscoveredProvider`], and call
+//! [`crate::oidc_client::DiscoveredProvider::build_client`]
 //! whenever they need a configured client.
 //!
 //! This is deliberately separate from `crate::oidc`'s internal

@@ -4,7 +4,7 @@
 //! `analytics_api_keys` (migration v5, `rust/ingestion/src/sql_migration.rs`) —
 //! each row storing only a SHA-256 hash of the key, plus a
 //! `created_at`/`created_by`/`last_used_at`/`revoked_at`/`revoked_by` audit trail.
-//! [`DbApiKeyAuthProvider`] validates by hash-indexed lookup behind a short-TTL
+//! [`crate::db_api_key::DbApiKeyAuthProvider`] validates by hash-indexed lookup behind a short-TTL
 //! `moka` cache.
 
 use crate::env::resolve_prefixed_var;
@@ -215,7 +215,7 @@ fn maybe_log_error(last_logged_at: &AtomicI64, window_secs: i64, table: &str, er
 /// Every DB error is wrapped in [`ProviderUnavailable`] before being returned and
 /// emits `imetric!("db_api_key_error_count", "count", {table}, 1)` unconditionally
 /// — the metric is unconditional even on requests whose `error!` line was
-/// suppressed by [`maybe_log_error`]'s rate limit.
+/// suppressed by `maybe_log_error`'s rate limit.
 pub struct DbApiKeyAuthProvider {
     pool: PgPool,
     table: ApiKeyTable,

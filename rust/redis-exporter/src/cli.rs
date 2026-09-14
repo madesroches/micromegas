@@ -133,7 +133,7 @@ pub fn derive_target_name(info: &ConnectionInfo) -> String {
 /// is case-insensitive in SQL, so the check below is too.
 const RESERVED_PROPERTY_KEYS: &[&str] = &["instance", "command", "db", "event"];
 
-/// Parses `key=value` pairs; reserved keys (see [`RESERVED_PROPERTY_KEYS`])
+/// Parses `key=value` pairs; reserved keys (see `RESERVED_PROPERTY_KEYS`)
 /// are rejected case-insensitively to avoid colliding with tags the exporter
 /// attaches itself. Empty entries are dropped first: clap's `value_delimiter`
 /// turns an empty `MICROMEGAS_REDIS_EXPORTER_PROPERTIES=""` env var into one

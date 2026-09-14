@@ -12,7 +12,7 @@
 //! target is a shape this codebase already declines elsewhere
 //! (`data_sources.rs`/`screens.rs`/`folders.rs`).
 //!
-//! **Gating, not admin-only.** `create_grant`/`delete_grant` are gated by [`GrantGate`]: an
+//! **Gating, not admin-only.** `create_grant`/`delete_grant` are gated by `GrantGate`: an
 //! admin acts unconditionally (exactly the old `AdminUser` behavior); a non-admin is admitted
 //! only when `self_service_mint_enabled` is on (the same knob `MintGate` and `/my-audiences`
 //! already gate on -- sharing an audience is the second half of the self-service feature that
@@ -55,7 +55,7 @@ pub struct AudienceGrantsState {
     pub pool: Option<PgPool>,
     /// Off-by-default self-service gate. Resolved once at startup from `MICROMEGAS_SELF_SERVICE_MINT`
     /// (`web_server.rs`, the same knob resolved onto `IngestionKeysState`), default `false`.
-    /// Gates [`GrantGate`] (`create_grant`/`delete_grant`), `GET .../my-audiences`, and the
+    /// Gates `GrantGate` (`create_grant`/`delete_grant`), `GET .../my-audiences`, and the
     /// non-admin narrowing on `GET .../visible` -- all new non-admin surface introduced by the
     /// same self-service feature, so none of it must widen on upgrade any more than the mint
     /// route itself does.
@@ -105,14 +105,14 @@ pub enum AudienceGrantError {
     /// `state.pool == None` -- the telemetry-DB pool was never configured
     /// (`MICROMEGAS_SQL_CONNECTION_STRING` unset).
     NotConfigured,
-    /// The create statement (see [`insert_or_get`]) returned zero rows twice in a row -- an
+    /// The create statement (see `insert_or_get`) returned zero rows twice in a row -- an
     /// internal error, not a caller mistake (see that function's doc comment).
     Internal(String),
     /// `GrantGate`'s knob-off denial for a non-admin caller, `/my-audiences`'s identical check,
     /// a non-admin `create_grant` naming `selector: "*"`, or a non-admin's per-pair
     /// hold/ownership check failing on `create_grant`/`delete_grant`.
     Forbidden(String),
-    /// [`GrantGate`]/[`AuthenticatedUser`] found no `AuthContext` extension in the request --
+    /// `GrantGate`/[`AuthenticatedUser`] found no `AuthContext` extension in the request --
     /// normally unreachable once routing is wired correctly; mirrors
     /// `ingestion_keys.rs::IngestionKeyError::Unauthenticated`.
     Unauthenticated(String),

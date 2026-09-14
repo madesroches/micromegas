@@ -1,6 +1,6 @@
 use micromegas_tracing::prelude::*;
 
-/// Errors returned by [`RangeCache`] that callers may want to handle distinctly.
+/// Errors returned by [`super::RangeCache`] that callers may want to handle distinctly.
 #[derive(Debug, thiserror::Error)]
 pub enum RangeError {
     /// The requested range extends past the end of the object.
