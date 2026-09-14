@@ -174,13 +174,8 @@ No provider is constructed on that path and the key file is never read, so a pro
 unreadable key file still produces this message rather than an `OSError`.
 
 `load_or_login` and `OidcClientCredentialsProvider` are imported function-local, not at module
-scope — matching all three bodies being replaced and `connection.py`. `oidc_connection` is imported
-as a module (`import micromegas.oidc_connection as oidc_connection`, per `connection.py:93`), not
-via `from`, so a test can monkeypatch the `oidc_connection.load_or_login` attribute. A module-level
-`from`-import would (a) pull `flightsql/client.py`'s module-scope `pyarrow`/`pyarrow.flight` imports
-into every web CLI's startup path via `oidc_connection.py:10`'s own module-level FlightSQL import,
-and (b) bind a local name that a module-attribute monkeypatch can't intercept, silently letting a
-real browser login fire in tests.
+scope, in the same `from micromegas.oidc_connection import load_or_login` form the three replaced
+bodies use, so a test can monkeypatch the `micromegas.oidc_connection.load_or_login` attribute.
 
 ### 3. `screens.py`
 
@@ -255,7 +250,7 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
    mechanism resolved".
 2. **`cli/web_auth.py`** (new): implement `resolve_web_auth` per Design §2, including the
    diagnostic builder, keeping the `load_or_login`/`OidcClientCredentialsProvider` imports
-   function-local and importing `oidc_connection` as a module.
+   function-local, in the `from micromegas.oidc_connection import load_or_login` form.
 3. **`cli/screens.py`**: import `web_auth`, and import `ProfileError` by name (unqualified, since
    `make_client`'s `config` parameter shadows the `config` module inside that function). Rewrite
    `make_client(config, args)`, update the five call sites, add the `client_args` parent parser to
