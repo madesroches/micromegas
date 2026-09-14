@@ -225,9 +225,11 @@ create/delete, and `GET .../audience-grants/visible`'s non-admin narrowing.
 micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
     --audience alice-laptop
 
-# Fresh claim. --claim takes the name verbatim; namespacing is your convention.
+# Fresh claim of an audience of your own. --user-audience composes the name under a
+# prefix derived server-side from your email -- the same command works for an admin
+# and a non-admin caller alike.
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
-    --claim "$USER-ci-runner"
+    --user-audience ci-runner
 
 eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
 ```
@@ -271,7 +273,7 @@ that bypassed them fails the whole snapshot load loudly.
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 created or 200 already existed, returning the row |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403. Query params, not path segments, since a `group:<id>` selector may contain `/` |
 | `GET {base_path}/api/audience-grants/visible` | The rows the caller may see — backs the Audience Access page's list |
-| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}` — audiences whose `mint` selector matches this caller, a suggested namespace prefix for a fresh name (suggestion only; nothing mints under it), the `"{audience}:{axis}"` pairs held via an identity selector (empty for an admin), and the caller's transitive group closure |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}` — audiences whose `mint` selector matches this caller, a namespace prefix a name is minted under via `micromegas-setup-telemetry --user-audience`, the `"{audience}:{axis}"` pairs held via an identity selector (empty for an admin), and the caller's transitive group closure |
 
 There is no paginated `GET` over the whole collection; arbitrary rows come from
 [`list_audience_grants()`](#list_audience_grants).

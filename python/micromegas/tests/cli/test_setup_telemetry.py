@@ -11,7 +11,7 @@ class FakeClient:
     """Records every call and returns canned responses, mirroring
     `test_import_keys.py`/`test_grants.py`'s `FakeClient` lightweight-mocking style."""
 
-    def __init__(self, my_audiences=None, mint_result=None):
+    def __init__(self, my_audiences=None, mint_result=None, mint_error=None):
         self.calls = []
         self.my_audiences_result = my_audiences or {
             "is_admin": False,
@@ -27,6 +27,9 @@ class FakeClient:
             "key": "mmk_secret",
             "claimed": False,
         }
+        # When set, `mint_ingestion_api_key` raises this instead of returning --
+        # exercises `run()`'s 403-hint enrichment / non-403 passthrough.
+        self.mint_error = mint_error
 
     def my_audiences(self):
         self.calls.append(("my_audiences",))
@@ -34,6 +37,8 @@ class FakeClient:
 
     def mint_ingestion_api_key(self, name, audience=None):
         self.calls.append(("mint", name, audience))
+        if self.mint_error is not None:
+            raise self.mint_error
         result = dict(self.mint_result)
         if audience is not None:
             result["audience"] = audience
@@ -64,6 +69,7 @@ def make_args(**overrides):
         "profile": None,
         "name": "laptop",
         "audience": None,
+        "user_audience": None,
         "claim": None,
         "otlp_endpoint": None,
         "env_file": None,
@@ -89,6 +95,7 @@ def test_build_parser_accepts_the_minimal_required_args():
     assert args.url == "http://analytics:3000"
     assert args.name == "laptop"
     assert args.audience is None
+    assert args.user_audience is None
     assert args.claim is None
     assert args.otlp_endpoint is None
     assert args.env_file is None
@@ -139,7 +146,7 @@ def test_resolve_otlp_endpoint_errors_when_neither_is_available():
 
 
 # ---------------------------------------------------------------------------
-# resolve_audience -- --audience/--claim split
+# resolve_audience -- --audience/--claim (deprecated)
 # ---------------------------------------------------------------------------
 
 
@@ -186,13 +193,16 @@ def test_omitted_audience_admin_is_always_an_error():
     my_audiences = {
         "is_admin": True,
         "audiences": [],
-        "mint_prefix": None,
+        "mint_prefix": "admin-",
         "email": "admin@example.com",
         "held_pairs": [],
     }
     args = make_args(audience=None)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    message = str(exc_info.value)
+    assert "--audience" in message
+    assert "--user-audience" in message
 
 
 def test_omitted_audience_non_admin_only_seeded_row_visible_is_a_zero_match_error():
@@ -213,7 +223,7 @@ def test_omitted_audience_non_admin_only_seeded_row_visible_is_a_zero_match_erro
     message = str(exc_info.value)
     assert "--audience" in message
     assert "public" in message
-    assert "--claim <new-name>" in message
+    assert "--user-audience" in message
 
 
 def test_audience_already_granted_is_used_verbatim(capsys):
@@ -246,11 +256,11 @@ def test_audience_public_already_granted_via_seeded_row_is_used_verbatim(capsys)
     assert capsys.readouterr().err == ""
 
 
-def test_audience_outside_mintable_set_is_an_error_naming_grant_commands():
-    """The regression test for the reported bug: an `--audience` outside the
-    caller's mintable set is now a hard error, not a silent `{mint_prefix}`-composed
-    rewrite -- and the error names both the per-user and wildcard `micromegas-grants`
-    commands an admin would run, concretely."""
+def test_audience_outside_mintable_set_is_used_verbatim_no_longer_an_error():
+    """The point of the change: `--audience` for a name outside the caller's
+    mintable set is no longer a client-side refusal -- it is passed straight
+    through, and the server's mint route lazily claims or denies it. The
+    denial-plus-hint case now lives in the `run()` 403 test below."""
     my_audiences = {
         "is_admin": False,
         "audiences": ["team-alpha"],
@@ -259,45 +269,8 @@ def test_audience_outside_mintable_set_is_an_error_naming_grant_commands():
         "held_pairs": ["team-alpha:mint"],
     }
     args = make_args(audience="prod", url="http://analytics:3000")
-    with pytest.raises(SystemExit) as exc_info:
-        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    message = str(exc_info.value)
-    assert "'prod'" in message
-    assert (
-        "micromegas-grants --url http://analytics:3000 create prod mint "
-        "'user:alice@example.com'" in message
-    )
-    assert (
-        "micromegas-grants --url http://analytics:3000 create prod mint '*'" in message
-    )
-
-
-def test_audience_outside_mintable_set_hint_uses_the_mint_prefix():
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(audience="prod")
-    with pytest.raises(SystemExit) as exc_info:
-        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    assert "--claim alice-prod" in str(exc_info.value)
-
-
-def test_audience_outside_mintable_set_hint_degrades_with_no_mint_prefix():
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": None,
-        "email": None,
-        "held_pairs": [],
-    }
-    args = make_args(audience="prod")
-    with pytest.raises(SystemExit) as exc_info:
-        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    assert "--claim <new-name>" in str(exc_info.value)
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "prod"
 
 
 def test_admin_audience_is_used_verbatim_even_when_not_in_my_audiences():
@@ -307,13 +280,26 @@ def test_admin_audience_is_used_verbatim_even_when_not_in_my_audiences():
     my_audiences = {
         "is_admin": True,
         "audiences": [],
-        "mint_prefix": None,
+        "mint_prefix": "admin-",
         "email": "admin@example.com",
         "held_pairs": [],
     }
     args = make_args(audience="ci")
     audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
     assert audience == "ci"
+
+
+def test_audience_and_user_audience_together_is_an_error():
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(audience="team-alpha", user_audience="laptop")
+    with pytest.raises(SystemExit):
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
 
 
 def test_audience_and_claim_together_is_an_error():
@@ -340,7 +326,22 @@ def test_claim_is_used_verbatim(capsys):
     args = make_args(claim="alice-ci-runner")
     audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
     assert audience == "alice-ci-runner"
-    assert capsys.readouterr().err == ""
+
+
+def test_claim_warns_on_stderr_that_it_is_deprecated(capsys):
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(claim="laptop")
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "laptop"
+    err = capsys.readouterr().err
+    assert "deprecated" in err
+    assert "--user-audience" in err
 
 
 def test_claim_is_never_prefixed_even_when_a_mint_prefix_is_available():
@@ -358,7 +359,68 @@ def test_claim_is_never_prefixed_even_when_a_mint_prefix_is_available():
     assert audience == "ci-runner"
 
 
-def test_claim_with_no_email_is_an_error():
+def test_claim_and_user_audience_together_is_an_error():
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(claim="laptop", user_audience="laptop")
+    with pytest.raises(SystemExit):
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+
+
+# ---------------------------------------------------------------------------
+# resolve_audience -- --user-audience
+# ---------------------------------------------------------------------------
+
+
+def test_user_audience_composes_the_callers_mint_prefix():
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(user_audience="laptop")
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "alice-laptop"
+
+
+def test_user_audience_composes_the_same_way_for_an_admin_caller():
+    """Pins the issue's central claim: `--user-audience` is role-independent --
+    an admin's `mint_prefix` is derived from the same email-sanitizing function
+    and composed exactly the same way as a non-admin's."""
+    my_audiences = {
+        "is_admin": True,
+        "audiences": [],
+        "mint_prefix": "admin-",
+        "email": "admin@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(user_audience="laptop")
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "admin-laptop"
+
+
+def test_user_audience_with_email_sanitizing_to_empty_names_audience_flag():
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": None,
+        "email": "+++@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(user_audience="laptop")
+    with pytest.raises(SystemExit) as exc_info:
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert "--audience" in str(exc_info.value)
+
+
+def test_user_audience_with_no_email_asks_for_an_admin_grant_not_audience_flag():
     my_audiences = {
         "is_admin": False,
         "audiences": [],
@@ -366,22 +428,41 @@ def test_claim_with_no_email_is_an_error():
         "email": None,
         "held_pairs": [],
     }
-    args = make_args(claim="laptop")
-    with pytest.raises(SystemExit):
+    args = make_args(user_audience="laptop")
+    with pytest.raises(SystemExit) as exc_info:
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    message = str(exc_info.value)
+    assert "admin" in message
+    assert "--audience" not in message
 
 
-def test_claim_as_admin_is_an_error():
+def test_user_audience_empty_string_is_an_error():
     my_audiences = {
-        "is_admin": True,
+        "is_admin": False,
         "audiences": [],
-        "mint_prefix": None,
-        "email": "admin@example.com",
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
         "held_pairs": [],
     }
-    args = make_args(claim="ci")
+    args = make_args(user_audience="")
     with pytest.raises(SystemExit):
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+
+
+def test_user_audience_never_normalizes_the_suffix():
+    """Guards against a future `.lower()`/`.strip()` creeping back into the
+    composition -- only the prefix is applied, the suffix passed straight
+    through verbatim."""
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(user_audience="Ci_Runner")
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "alice-Ci_Runner"
 
 
 # ---------------------------------------------------------------------------
@@ -390,9 +471,10 @@ def test_claim_as_admin_is_an_error():
 
 
 def test_run_non_admin_claim_does_not_call_create_audience_grant(monkeypatch, capsys):
-    """`--claim laptop` claims the verbatim name, not a `{mint_prefix}`-composed one --
-    `--audience laptop` for a name outside the caller's mintable set is now a hard error,
-    so this test drives the `--claim` path instead."""
+    """`--claim laptop` claims the verbatim name, not a `{mint_prefix}`-composed one.
+    `--claim` is deprecated now that `--audience`/`--user-audience` cover the same
+    ground lazily, so this test exercises it only to keep the deprecated-alias path
+    itself covered."""
     client = FakeClient(
         my_audiences={
             "is_admin": False,
@@ -428,7 +510,7 @@ def test_run_never_calls_create_audience_grant(monkeypatch):
         my_audiences={
             "is_admin": True,
             "audiences": [],
-            "mint_prefix": None,
+            "mint_prefix": "admin-",
             "email": "admin@example.com",
         },
         mint_result={
@@ -452,7 +534,7 @@ def test_run_reports_claimed_audience_on_stderr_when_claimed_true(monkeypatch, c
         my_audiences={
             "is_admin": True,
             "audiences": [],
-            "mint_prefix": None,
+            "mint_prefix": "admin-",
             "email": "admin@example.com",
         },
         mint_result={
@@ -495,6 +577,82 @@ def test_run_omits_claimed_line_when_claimed_false(monkeypatch, capsys):
 
     err = capsys.readouterr().err
     assert "claimed audience" not in err
+
+
+def test_run_403_appends_mint_denied_hint(monkeypatch):
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": ["team-alpha:mint"],
+    }
+    client = FakeClient(
+        my_audiences=my_audiences,
+        mint_error=RuntimeError(
+            "HTTP 403: audience 'prod' already exists and the caller has no grant "
+            "for it"
+        ),
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(audience="prod", otlp_endpoint="http://ingest:9000/ingestion/otlp")
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_telemetry.run(args, FakeParser())
+    message = str(exc_info.value)
+    assert "HTTP 403: audience 'prod' already exists" in message
+    assert "team-alpha" in message
+    assert "--user-audience" in message
+    assert (
+        "micromegas-grants --url http://analytics:3000 create prod mint "
+        "'user:alice@example.com'" in message
+    )
+    assert (
+        "micromegas-grants --url http://analytics:3000 create prod mint '*'" in message
+    )
+
+
+def test_run_non_403_runtime_error_propagates_unchanged(monkeypatch):
+    client = FakeClient(
+        my_audiences={
+            "is_admin": False,
+            "audiences": [],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+            "held_pairs": [],
+        },
+        mint_error=RuntimeError("HTTP 500: internal error"),
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(audience="prod", otlp_endpoint="http://ingest:9000/ingestion/otlp")
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_telemetry.run(args, FakeParser())
+    assert str(exc_info.value) == "HTTP 500: internal error"
+
+
+def test_run_with_user_audience_sends_the_composed_name_over_the_wire(monkeypatch):
+    client = FakeClient(
+        my_audiences={
+            "is_admin": False,
+            "audiences": [],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+            "held_pairs": [],
+        },
+        mint_result={
+            "key_id": "key-1",
+            "name": "laptop",
+            "audience": "alice-claude",
+            "key": "mmk_secret",
+            "claimed": True,
+        },
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(
+        user_audience="claude", otlp_endpoint="http://ingest:9000/ingestion/otlp"
+    )
+    setup_telemetry.run(args, FakeParser())
+
+    assert ("mint", "laptop", "alice-claude") in client.calls
 
 
 def test_run_writes_env_file_with_secure_permissions_and_prints_its_path(

@@ -209,15 +209,16 @@ publishing. An explicitly supplied but malformed `audience` is still a
 **400**. Minting for the resolved audience still requires a matching `mint`
 grant (or a lazy claim).
 
-**A non-admin caller naming a brand-new audience explicitly claims it**, once
+**A caller naming a brand-new audience explicitly claims it**, once
 `MICROMEGAS_SELF_SERVICE_MINT` is on — a genuinely fresh, never-before-granted
 name is minted *and* granted in the same request. `micromegas-setup-telemetry`
-exposes this via a dedicated `--claim NAME` flag (distinct from `--audience`):
-`--claim` claims `NAME` verbatim, with no prefix applied. The script suggests
-(but does not enforce) a namespace derived from the caller's own email (e.g.
-`--claim alice-ci-runner` for `alice@example.com`); the mint route itself
-accepts any valid, unclaimed name from any authorized non-admin caller,
-prefixed or not. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
+exposes this via `--user-audience SUFFIX`: the prefix is composed server-side
+from the caller's own email (e.g. `--user-audience ci-runner` resolves to
+`alice-ci-runner` for `alice@example.com`), so the identical command works for
+an admin and a non-admin caller alike — there is no separate admin recipe.
+`--audience NAME` mints under a name verbatim instead, for an org/team/service
+audience that isn't namespaced under any one caller; it also lazily claims a
+brand-new name. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
 for the full mechanism.
 
 **An admin minting into a brand-new audience is also claimed server-side**:

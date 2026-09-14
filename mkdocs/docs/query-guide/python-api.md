@@ -718,11 +718,11 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
   admin access required. Returns
   `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs"}` — the audiences whose `mint`
   selector matches the caller today, the caller's own admin flag, a caller-derived namespace
-  prefix used only to *suggest* a fresh audience name (not something a claim is minted under —
-  `--claim` claims the name it is given verbatim), the caller's own email, and `held_pairs`: the
-  `"{audience}:{axis}"` pairs the caller holds via an identity selector (`"*"` excluded), used to
-  tell an audience the caller personally holds a grant on from one they can merely see via a
-  wildcard grant.
+  prefix a name is minted under via `--user-audience` (identical composition for an admin and a
+  non-admin caller — `--audience` never applies it, minting under the name it is given verbatim),
+  the caller's own email, and `held_pairs`: the `"{audience}:{axis}"` pairs the caller holds via
+  an identity selector (`"*"` excluded), used to tell an audience the caller personally holds a
+  grant on from one they can merely see via a wildcard grant.
 
 ```python
 from micromegas.web_client import WebClient
@@ -1059,42 +1059,47 @@ eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my
 micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop \
     --audience public
 
-# A fresh claim of your own: --claim claims the name verbatim, with no prefix applied --
-# the namespacing convention lives in the name you pass, not in a client-side rewrite.
+# A fresh audience of your own: --user-audience composes the name under a prefix
+# derived server-side from your email -- the identical command works whether the
+# caller is an admin or not.
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
-    --claim "$USER-ci-runner" --env-file ~/.micromegas/telemetry.env
+    --user-audience ci-runner --env-file ~/.micromegas/telemetry.env
 ```
 
 `--url` (required) is `analytics-web-srv`'s base URL. `--name` (required) names the minted key
-(e.g. a hostname). `--audience` and `--claim` are mutually exclusive, and mean two different
-things:
+(e.g. a hostname). `--user-audience` and `--audience` are mutually exclusive, and mean two
+different things:
 
-- **`--audience NAME`**: an audience already in `GET .../audience-grants/my-audiences`'s
-  `audiences` list (the caller has a real grant for it — a shared team audience, or the
-  deployment's `public` audience once an operator has granted it) is used verbatim, admin or not.
-  A name *not* in that list, from a **non-admin** caller, is a hard error naming the caller's
-  mintable audiences and every way forward: a `--claim` suggestion for a fresh audience of the
-  caller's own, and the exact `micromegas-grants` commands an admin would run to grant this one
-  (concretely, with the audience and the caller's email already substituted). A name from an
-  **admin** caller is always used verbatim, even when not already in `audiences` — deliberate
-  operational naming; if the named audience is brand-new, the mint route itself claims it
-  server-side, writing that admin's own `read`/`mint` grant in the same request, and the
-  printed mint line adds `claimed audience <name>` when it did.
-- **`--claim NAME`**: claims `NAME` as a fresh audience, verbatim — the name passed is the name
-  claimed, with no prefix ever applied. Requires a non-admin caller with an email (the lazy claim
-  writes a `user:<email>` grant row, so there must be an identity to write it under); an admin's
-  brand-new audience is claimed server-side via `--audience` instead, so `--claim` errors for an
-  admin caller. Fails with the route's ordinary 403 if `NAME` already exists and this caller holds
-  no grant for it — a bare `--claim prod` is passed straight through, so it succeeds only if `prod`
-  is genuinely unclaimed.
+- **`--user-audience SUFFIX`** (recommended): mints under `f"{mint_prefix}{SUFFIX}"`, where
+  `mint_prefix` is derived server-side from the caller's own email and is composed identically for
+  an admin and a non-admin caller (e.g. `alice@example.com` → `alice-`, so `--user-audience
+  ci-runner` resolves to `alice-ci-runner`). Lazily claims the audience if it's genuinely fresh,
+  writing the caller's own `read`/`mint` grant in the same request; if it already exists and the
+  caller holds no grant for it (someone else's namespace, in practice unreachable under your own
+  prefix), the route's ordinary 403 applies. Requires a caller whose email yields a `mint_prefix`;
+  errors locally otherwise, with distinct messages for "no email at all" (ask an admin for a
+  grant) vs. "email sanitizes to empty" (use `--audience <name>` instead).
+- **`--audience NAME`**: mints under `NAME` verbatim, unconditionally — no client-side check of
+  the caller's mintable set. A genuinely fresh name is lazily claimed by the mint route itself,
+  writing the caller's own `read`/`mint` grant in the same request (the printed mint line adds
+  `claimed audience <name>` when it did); a name someone else already holds is refused with the
+  route's ordinary 403, which the CLI enriches with the caller's mintable audiences, a
+  `--user-audience` suggestion, and the exact `micromegas-grants` commands an admin would run to
+  grant this one (concretely, with the audience and the caller's email already substituted). Use
+  this for an org/team/service audience that isn't namespaced under any one caller.
 - **Omitted entirely**: resolved via `GET .../audience-grants/my-audiences`, filtered to audiences
   the caller *personally holds* a mint grant on (the response's `held_pairs`) — a deployment-wide
   wildcard grant that puts an audience in every caller's `audiences` list (e.g. a seeded `public`
   mint row) is not enough on its own to be silently auto-selected here. Exactly one personally-held
   match is used silently; more than one prints the choices and asks for `--audience`; none prints
-  the audiences the caller can see but does not personally hold (if any), plus a hint to `--claim`
-  a fresh name or ask an admin. An admin caller must always pass `--audience` explicitly (an empty
-  `audiences` list means nothing for an admin, whose mint authority never depends on a grant row).
+  the audiences the caller can see but does not personally hold (if any), plus a hint to
+  `--user-audience` a fresh name or ask an admin. An admin caller must always pass `--audience` or
+  `--user-audience` explicitly (an empty `audiences` list means nothing for an admin, whose mint
+  authority never depends on a grant row).
+
+`--claim NAME` is a hidden, deprecated alias for `--audience NAME`, kept for one release for
+existing scripts; it prints a deprecation warning on stderr and will be removed in a future
+release.
 
 `--otlp-endpoint` defaults to `f"{MICROMEGAS_TELEMETRY_URL}/ingestion/otlp"` when that env var is
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a

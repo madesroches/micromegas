@@ -760,10 +760,12 @@ async fn visible_grants(
     Ok(Json(rows))
 }
 
-/// Derives the caller-scoped namespace prefix used to *suggest* a fresh audience name -- the web
-/// app's Mint dialog composes it live before commit, and `micromegas-setup-telemetry`'s CLI uses
-/// it only to render a concrete `--claim <prefix><name>` suggestion in its zero-match error; the
-/// CLI's own `--claim` claims the name it is given verbatim, never prefixing it itself.
+/// Derives the caller-scoped namespace prefix a name is minted under -- the web app's Mint dialog
+/// composes it live before commit for a non-admin caller, and `micromegas-setup-telemetry`'s
+/// `--user-audience SUFFIX` flag composes `{mint_prefix}{SUFFIX}` for admin and non-admin callers
+/// alike, the CLI's recommended, role-independent way to claim or reuse an audience of the
+/// caller's own; the CLI's separate `--audience NAME` flag never applies it, minting under the
+/// name it is given verbatim.
 /// `pub`, not module-private, and pure/sync -- no DB, no `AuthContext` needed beyond the plain
 /// `Option<String>` email -- so the whole sanitization is unit-testable directly, the same reason
 /// `ingestion_keys::resolve_audience` is `pub`.
