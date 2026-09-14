@@ -330,6 +330,19 @@ def test_admin_audience_is_used_verbatim_even_when_not_in_my_audiences():
     assert audience == "ci"
 
 
+def test_audience_empty_string_is_an_error():
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+        "held_pairs": [],
+    }
+    args = make_args(audience="")
+    with pytest.raises(SystemExit):
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+
+
 def test_audience_and_user_audience_together_is_an_error():
     my_audiences = {
         "is_admin": False,

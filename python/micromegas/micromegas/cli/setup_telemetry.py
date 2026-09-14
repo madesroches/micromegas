@@ -183,6 +183,8 @@ def resolve_audience(args, parser, my_audiences):
         return f"{mint_prefix}{args.user_audience}"
 
     if args.audience is not None:
+        if not args.audience:
+            parser.error("--audience requires a non-empty name")
         return args.audience
 
     is_admin = my_audiences["is_admin"]

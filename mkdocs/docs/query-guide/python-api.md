@@ -1075,10 +1075,12 @@ different things:
   an admin and a non-admin caller (e.g. `alice@example.com` → `alice-`, so `--user-audience
   ci-runner` resolves to `alice-ci-runner`). Lazily claims the audience if it's genuinely fresh,
   writing the caller's own `read`/`mint` grant in the same request; if it already exists and the
-  caller holds no grant for it (someone else's namespace, in practice unreachable under your own
-  prefix), the route's ordinary 403 applies. Requires a caller whose email yields a `mint_prefix`;
-  errors locally otherwise, with distinct messages for "no email at all" (ask an admin for a
-  grant) vs. "email sanitizes to empty" (use `--audience <name>` instead).
+  caller holds no grant for it (someone else's namespace), the route's ordinary 403 applies. Note
+  that `mint_prefix` is derived from the email's local part only and isn't guaranteed unique, so
+  two callers with the same local part on different domains can share a prefix and genuinely hit
+  this 403 under what looks like "your own" prefix. Requires a caller whose email yields a
+  `mint_prefix`; errors locally otherwise, with distinct messages for "no email at all" (ask an
+  admin for a grant) vs. "email sanitizes to empty" (use `--audience <name>` instead).
 - **`--audience NAME`**: mints under `NAME` verbatim, unconditionally — no client-side check of
   the caller's mintable set. A genuinely fresh name is lazily claimed by the mint route itself,
   writing the caller's own `read`/`mint` grant in the same request (the printed mint line adds
