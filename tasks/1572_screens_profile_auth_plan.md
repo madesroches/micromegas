@@ -165,7 +165,7 @@ after configuring a working `micromegas-query` profile:
 ```
 profile 'prod' configures 'api_key_file', but the analytics web API validates OIDC tokens only --
 a static analytics API key works with micromegas-query (FlightSQL), not with this tool. Set
-'client_id' and 'issuers[0].issuer' on a profile for this server, or pass --no-auth.
+'client_id' and 'issuers[0].issuer' on a profile for this server.
 ```
 
 No provider is constructed on that path and the key file is never read, so a profile pointing at an
