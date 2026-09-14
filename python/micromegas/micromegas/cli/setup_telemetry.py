@@ -15,8 +15,7 @@ caller's own email (identical for an admin and a non-admin caller), while
 `--audience` uses the name verbatim, for an org/team/service audience that
 isn't namespaced under any one caller. Neither flag ever silently rewrites
 the name it is given -- `--user-audience` only ever prepends the caller's own
-prefix, nothing more. `--claim NAME` is a deprecated, hidden alias for
-`--audience NAME`, kept for one release.
+prefix, nothing more.
 
 Auth reuses `import_keys.py::build_auth_provider`/`make_client`'s exact shape
 verbatim: client-credentials env vars first, else `config.resolve_connection`
@@ -116,10 +115,6 @@ def _mint_denied_hint(url, audience, my_audiences):
 def resolve_audience(args, parser, my_audiences):
     """Resolves the audience to mint under:
 
-    - `--claim NAME` (deprecated, hidden alias for `--audience NAME`): warns on
-      stderr and aliases onto `args.audience`, so from here on there is exactly one
-      verbatim-name code path. An error if combined with `--audience` or
-      `--user-audience`.
     - `--audience` and `--user-audience` together: an error -- both are spellings
       of the same one flag.
     - `--user-audience SUFFIX`: composed as `f"{mint_prefix}{SUFFIX}"`, where
@@ -150,18 +145,6 @@ def resolve_audience(args, parser, my_audiences):
     never needs to page through `list_ingestion_api_keys`/`list_audience_grants`
     to decide it client-side.
     """
-    if args.claim is not None:
-        if args.audience is not None or args.user_audience is not None:
-            parser.error("--claim is a deprecated alias for --audience; pass only one")
-        if not args.claim:
-            parser.error("--claim requires a non-empty name")
-        print(
-            "warning: --claim is deprecated; use --user-audience <name> "
-            "(or --audience <name> for a verbatim name)",
-            file=sys.stderr,
-        )
-        args.audience = args.claim
-
     if args.audience is not None and args.user_audience is not None:
         parser.error("--audience and --user-audience are mutually exclusive; pick one")
 
@@ -322,11 +305,6 @@ def build_parser():
             "via GET .../audience-grants/my-audiences. Mutually exclusive with "
             "--user-audience."
         ),
-    )
-    parser.add_argument(
-        "--claim",
-        help=argparse.SUPPRESS,
-        metavar="NAME",
     )
     parser.add_argument(
         "--otlp-endpoint",

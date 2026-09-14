@@ -70,7 +70,6 @@ def make_args(**overrides):
         "name": "laptop",
         "audience": None,
         "user_audience": None,
-        "claim": None,
         "otlp_endpoint": None,
         "env_file": None,
     }
@@ -96,7 +95,6 @@ def test_build_parser_accepts_the_minimal_required_args():
     assert args.name == "laptop"
     assert args.audience is None
     assert args.user_audience is None
-    assert args.claim is None
     assert args.otlp_endpoint is None
     assert args.env_file is None
 
@@ -146,7 +144,7 @@ def test_resolve_otlp_endpoint_errors_when_neither_is_available():
 
 
 # ---------------------------------------------------------------------------
-# resolve_audience -- --audience/--claim (deprecated)
+# resolve_audience -- --audience
 # ---------------------------------------------------------------------------
 
 
@@ -356,63 +354,6 @@ def test_audience_and_user_audience_together_is_an_error():
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
 
 
-def test_audience_and_claim_together_is_an_error():
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(audience="team-alpha", claim="laptop")
-    with pytest.raises(SystemExit):
-        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-
-
-def test_claim_warns_on_stderr_that_it_is_deprecated(capsys):
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(claim="laptop")
-    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    assert audience == "laptop"
-    err = capsys.readouterr().err
-    assert "deprecated" in err
-    assert "--user-audience" in err
-
-
-def test_claim_is_never_prefixed_even_when_a_mint_prefix_is_available():
-    """Pins that `--claim` never applies the prefix to what the caller passed --
-    unlike the old `--audience` rewrite, the name passed is the name claimed."""
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(claim="ci-runner")
-    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    assert audience == "ci-runner"
-
-
-def test_claim_and_user_audience_together_is_an_error():
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(claim="laptop", user_audience="laptop")
-    with pytest.raises(SystemExit):
-        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-
-
 # ---------------------------------------------------------------------------
 # resolve_audience -- --user-audience
 # ---------------------------------------------------------------------------
@@ -509,38 +450,6 @@ def test_user_audience_never_normalizes_the_suffix():
 # ---------------------------------------------------------------------------
 # run() -- end-to-end wiring
 # ---------------------------------------------------------------------------
-
-
-def test_run_non_admin_claim_does_not_call_create_audience_grant(monkeypatch, capsys):
-    """`--claim laptop` claims the verbatim name, not a `{mint_prefix}`-composed one.
-    `--claim` is deprecated now that `--audience`/`--user-audience` cover the same
-    ground lazily, so this test exercises it only to keep the deprecated-alias path
-    itself covered."""
-    client = FakeClient(
-        my_audiences={
-            "is_admin": False,
-            "audiences": [],
-            "mint_prefix": "alice-",
-            "email": "alice@example.com",
-            "held_pairs": [],
-        },
-        mint_result={
-            "key_id": "key-1",
-            "name": "laptop",
-            "audience": "laptop",
-            "key": "mmk_secret",
-        },
-    )
-    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
-    args = make_args(claim="laptop", otlp_endpoint="http://ingest:9000/ingestion/otlp")
-    setup_telemetry.run(args, FakeParser())
-
-    assert ("mint", "laptop", "laptop") in client.calls
-    assert not any(call[0] == "create" for call in client.calls)
-
-    out = capsys.readouterr().out
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp" in out
-    assert "Authorization=Bearer mmk_secret" in out
 
 
 def test_run_never_calls_create_audience_grant(monkeypatch):

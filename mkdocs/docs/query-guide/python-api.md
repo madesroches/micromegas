@@ -1101,10 +1101,6 @@ different things:
   `--user-audience` explicitly (an empty `audiences` list means nothing for an admin, whose mint
   authority never depends on a grant row).
 
-`--claim NAME` is a hidden, deprecated alias for `--audience NAME`, kept for one release for
-existing scripts; it prints a deprecation warning on stderr and will be removed in a future
-release.
-
 `--otlp-endpoint` defaults to `f"{MICROMEGAS_TELEMETRY_URL}/ingestion/otlp"` when that env var is
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a
 required flag only when that env var is unset. `--env-file PATH` writes the exports to a `0o600`
