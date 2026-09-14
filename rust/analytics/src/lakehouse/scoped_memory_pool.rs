@@ -1,4 +1,4 @@
-//! Per-query [`MemoryPool`] wrapper that adds accounting on top of a shared pool.
+//! Per-query [`datafusion::execution::memory_pool::MemoryPool`] wrapper that adds accounting on top of a shared pool.
 //!
 //! `ScopedMemoryPool` delegates every operation to the wrapped `inner` pool, so the
 //! budget, spilling behavior, and top-consumer reporting (when `inner` is a

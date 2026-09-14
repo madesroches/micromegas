@@ -2,7 +2,7 @@
 //!
 //! An `AnalyzerRule` that injects an audience-filtering predicate into every
 //! `MaterializedView`-backed `TableScan` a query plan touches, based on the caller's `ReadScope`
-//! (`read_scope.rs`) and [`super::read_scope::IsolationConfig`]'s
+//! (`read_scope.rs`) and [`crate::lakehouse::read_scope::IsolationConfig`]'s
 //! `MICROMEGAS_PUBLIC_VIEW_SETS`.
 //!
 //! ## `ReadScope::All` is a true no-op
@@ -59,7 +59,7 @@
 //! | anything else | `analyze()` returns `Err` (`DataFusionError::Plan`) rather than silently leaving the scan unfiltered -- a future view set must add itself to this table, not fall through |
 //!
 //! Adding a new view set to a `ViewFactory` means adding it to this table too, and to the match
-//! arms in [`OwnershipRewrite::predicate_for`] below.
+//! arms in `OwnershipRewrite::predicate_for` below.
 //!
 //! ## No I/O in `analyze()`
 //!

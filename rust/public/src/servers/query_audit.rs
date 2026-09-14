@@ -1,7 +1,7 @@
 //! Structured per-query audit record for the FlightSQL service.
 //!
 //! `execute_query` (see `flight_sql_service_impl`) emits one JSON-serialized
-//! [`QueryAuditRecord`] per query, at completion, under the dedicated
+//! [`crate::servers::query_audit::QueryAuditRecord`] per query, at completion, under the dedicated
 //! `flightsql_query_audit` log target. Unlike the untagged `imetric!` cost
 //! metrics (whose `PropertySet` can't carry high-cardinality values such as
 //! SQL text), a free-text log `msg` has no cardinality constraint, so it can

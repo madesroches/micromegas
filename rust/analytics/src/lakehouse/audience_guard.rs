@@ -1,6 +1,6 @@
 //! The call-level guard -- arg-addressed guards for
 //! five entry points: the span/metadata UDTFs and the `get_payload` UDF that
-//! [`super::ownership_rewrite::OwnershipRewrite`] (the row-level filter) structurally cannot reach (they bake
+//! [`crate::lakehouse::ownership_rewrite::OwnershipRewrite`] (the row-level filter) structurally cannot reach (they bake
 //! their target id into a provider at plan time, return schemas with no `process_id` column to
 //! filter on, and some build their own inner session under `ReadScope::All`), plus
 //! `view_instance(...)`. For the six view sets carrying a physical `audience` column, the row-level filter
@@ -11,24 +11,24 @@
 //! confidentiality one. For the other five view sets (`net_spans`, `otel_spans`, `images`,
 //! `async_events`, `thread_spans` -- reachable only through a guarded `view_instance(...)`, never
 //! as a named table), the row-level filter injects no per-row predicate at all once this guard is in place --
-//! see [`super::materialized_view::MaterializedView::instance_is_audience_guarded`] and
+//! see [`crate::lakehouse::materialized_view::MaterializedView::instance_is_audience_guarded`] and
 //! `OwnershipRewrite`'s module doc for the other side of that coupling -- so this guard is their
 //! *sole* confidentiality enforcement, not a redundant belt-and-braces check.
 //!
 //! ## One cache, one question
 //!
-//! [`AudienceIndex`] answers exactly one question, for three id kinds ([`IdKind`]): what
-//! audience is *this id's own row* stamped with -- a process's for [`IdKind::Process`], a
-//! block's own for [`IdKind::Block`], a process's or a stream's own for
-//! [`IdKind::ProcessOrStream`]. It resolves from **Postgres**, by a single-table, primary-key
+//! [`crate::lakehouse::audience_guard::AudienceIndex`] answers exactly one question, for three id kinds ([`crate::lakehouse::audience_guard::IdKind`]): what
+//! audience is *this id's own row* stamped with -- a process's for [`crate::lakehouse::audience_guard::IdKind::Process`], a
+//! block's own for [`crate::lakehouse::audience_guard::IdKind::Block`], a process's or a stream's own for
+//! [`crate::lakehouse::audience_guard::IdKind::ProcessOrStream`]. It resolves from **Postgres**, by a single-table, primary-key
 //! point query per row kind -- fresher and independent of materialization, unlike
-//! [`super::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot.
+//! [`crate::lakehouse::ownership_rewrite::OwnershipRewrite`], which reads a daemon-materialized snapshot.
 //!
 //! ## Fail-closed
 //!
-//! [`is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
-//! passes everything; `ReadScope::Audiences` denies [`OwnerAudience::Unknown`] unconditionally
-//! and matches [`OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more: a
+//! [`crate::lakehouse::audience_guard::is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
+//! passes everything; `ReadScope::Audiences` denies [`crate::lakehouse::audience_guard::OwnerAudience::Unknown`] unconditionally
+//! and matches [`crate::lakehouse::audience_guard::OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more: a
 //! process/stream/block registered through the HTTP ingestion path always carries a real,
 //! non-NULL `audience` column (a credential with no bound audience is stamped with the resolved
 //! deployment default explicitly); only a legacy, pre-v8 row keeps a NULL column, and
@@ -39,16 +39,16 @@
 //! `process_id` no longer resolves (retention swept it, or it hasn't arrived yet) resolves to
 //! *its own* stamp instead of falling through to `Unknown` -- see `owner_query_sql`'s doc
 //! comment. An id ambiguous between a `process_id` and a `stream_id`
-//! interpretation ([`OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
+//! interpretation ([`crate::lakehouse::audience_guard::OwnerAudience::Ambiguous`]) is readable only when every interpretation is --
 //! never by picking one arm over the other. A resolution *error* (Postgres unreachable) is a
-//! denial too -- [`AudienceGuard::authorize`]/[`AudienceGuard::readable_ids`] map it to a query
+//! denial too -- [`crate::lakehouse::audience_guard::AudienceGuard::authorize`]/[`crate::lakehouse::audience_guard::AudienceGuard::readable_ids`] map it to a query
 //! failure, never to a readable verdict.
 //!
 //! ## No existence oracle
 //!
 //! Every guard denial and every "no such id" produce the same error text (e.g. `process_spans:
 //! 'xxx' not found or not accessible`) -- a distinct "permission denied" would let a caller
-//! enumerate which ids exist in other audiences. The server log ([`debug!`]) records the real
+//! enumerate which ids exist in other audiences. The server log (`debug!`) records the real
 //! reason so an operator can tell the two apart; the client cannot.
 
 use super::read_scope::{CallerContext, ReadScope};
@@ -92,7 +92,7 @@ pub enum IdKind {
     /// `list_partitions`' `view_instance_id`: either a `process_id` or a `stream_id`, resolved in
     /// one round trip. Cached under its own key rather than reusing `Process`/`Block` entries or a
     /// separate `streams` kind, so the `UNION ALL` result -- fail-closed on a collision between the
-    /// two arms, see [`merge_owner_rows`] -- is what actually gets cached. A second consumer,
+    /// two arms, see `merge_owner_rows` -- is what actually gets cached. A second consumer,
     /// [`AudienceGuard::authorize_view_instance`]'s scan-time check on `view_instance(...)`,
     /// resolves its `view_instance_id` argument through the same kind, sharing cache entries with
     /// `list_partitions`' row filter over the same id.

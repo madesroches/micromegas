@@ -1,4 +1,4 @@
-//! Wraps an inner [`AuthProvider`] and resolves the caller's transitive local-group membership
+//! Wraps an inner [`crate::types::AuthProvider`] and resolves the caller's transitive local-group membership
 //! once per request -- the one resolution site upstream of every consumer (`is_admin()`,
 //! `caller_selectors`/`selector_matches`'s `group:` arm).
 
