@@ -30,7 +30,7 @@ function FadeIn({ children }: { children: ReactNode }) {
   return (
     <div
       ref={ref}
-      className="opacity-0 translate-y-8 transition-all duration-700 ease-out"
+      className="fade-in opacity-0 translate-y-8 transition-all duration-700 ease-out"
     >
       {children}
     </div>

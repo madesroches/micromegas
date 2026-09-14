@@ -8,6 +8,8 @@
     <meta property="og:title" content="Micromegas — Unified Observability Platform" />
     <meta property="og:description" content="Open-source, high-performance observability platform. Logs, metrics, and traces unified with SQL." />
     <meta property="og:type" content="website" />
+    <!-- App.tsx's FadeIn keeps its children at opacity-0 until IntersectionObserver fires. -->
+    <noscript><style>.fade-in{opacity:1!important;transform:none!important}</style></noscript>
   </head>
   <body>
     <div id="root"></div>
