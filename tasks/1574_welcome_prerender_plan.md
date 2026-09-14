@@ -79,9 +79,8 @@ Vite rewrites only the `<script>`/`<link>` tags:
 Confirmed against `welcome/node_modules`:
 
 - `vite@8.0.16`. Its node entry exports `build`, `createServer`, `createBuilder`,
-  `createServerModuleRunner` — it does **not** export `ssrLoadModule`. The "spin up a dev server and
-  `ssrLoadModule('/src/entry-server.tsx')`" pattern from Vite 4/5 guides is not available here; the
-  supported route is a real SSR build.
+  `createServerModuleRunner`. A real SSR build (`build()` with `build.ssr` set) is the route taken
+  here, rather than starting a dev server (`ViteDevServer.ssrLoadModule`) inside a production build.
 - `react-dom@18.3.1` — `renderToString` (`react-dom/server`) and `hydrateRoot`
   (`react-dom/client`) both present. No new runtime dependency is needed.
 - `nodeLinker: node-modules` in `welcome/.yarnrc.yml`, no `.pnp.cjs` — plain Node resolution works,
@@ -209,11 +208,6 @@ and the rule in `index.html` is the one non-obvious thing here, which is what th
 ### Config and lint housekeeping
 
 - `welcome/.gitignore`: add `dist-ssr` (the script removes it on success; this covers a failed run).
-- `welcome/.eslintrc.json`: add `dist-ssr` to `ignorePatterns`, and an `overrides` entry giving
-  `scripts/**/*.mjs` `env: { node: true, browser: false }` — the root config is browser-only, so
-  `process`/`console` would otherwise trip `no-undef`. If `yarn lint` reports
-  `react-refresh/only-export-components` on `src/entry-server.tsx` (it exports a non-component
-  function), disable that rule for that file in the same `overrides` block.
 - `welcome/package.json`: `"build": "tsc && vite build && node scripts/prerender.mjs"`.
 
 ## Implementation Steps
@@ -226,12 +220,10 @@ and the rule in `index.html` is the one non-obvious thing here, which is what th
 5. **`welcome/src/App.tsx`** — prepend `fade-in ` to `FadeIn`'s wrapper `className`.
 6. **`welcome/index.html`** — add the `<noscript><style>` block to `<head>`, with its comment.
 7. **`welcome/.gitignore`** — add `dist-ssr`.
-8. **`welcome/.eslintrc.json`** — add `dist-ssr` to `ignorePatterns`; add the `scripts/**/*.mjs`
-   node-env override (and the `entry-server.tsx` react-refresh override if `yarn lint` asks for it).
-9. **Verify** — run `yarn build` in `welcome/`, confirm `dist-ssr/` is gone afterward and
+8. **Verify** — run `yarn build` in `welcome/`, confirm `dist-ssr/` is gone afterward and
    `dist/index.html` strips to several hundred words; run `yarn lint`; then work the
    **Manual Verification** list.
-10. **`CHANGELOG.md`** — add the `## Unreleased` entry described under Documentation.
+9. **`CHANGELOG.md`** — add the `## Unreleased` entry described under Documentation.
 
 If step 2's SSR build emits an output that fails to import — the residual risk, since Vite 8 builds
 through rolldown and dependency externalization is the one behaviour not verified from the installed
@@ -251,7 +243,6 @@ duplicated React never coexists with the client's.
 | `welcome/src/App.tsx` | `fade-in` marker class on `FadeIn`'s wrapper |
 | `welcome/index.html` | `<noscript>` style override in `<head>` |
 | `welcome/.gitignore` | ignore `dist-ssr` |
-| `welcome/.eslintrc.json` | ignore `dist-ssr`; node env for `scripts/**/*.mjs` |
 | `CHANGELOG.md` | `## Unreleased` entry |
 
 No change to `.github/workflows/publish-docs.yml` — it already calls `yarn build`.
@@ -264,10 +255,9 @@ No change to `.github/workflows/publish-docs.yml` — it already calls `yarn bui
   dependency, is the smaller permanent cost.
 - **Prerender vs. hand-writing the copy into `index.html`.** Duplicating ~400 words across the JSX
   and the shell would drift on the first copy edit, and nothing would catch it.
-- **SSR build vs. `ssrLoadModule`.** Not a real choice on this toolchain: Vite 8 no longer exports
-  `ssrLoadModule` (verified against the installed `vite@8.0.16` node entry). Its replacement,
-  `createServerModuleRunner`, means running a dev server during a production build, for no benefit
-  over a real SSR build.
+- **SSR build vs. `ssrLoadModule`.** `ssrLoadModule` is a `ViteDevServer` method, not a top-level
+  export — using it (or its successor, `createServerModuleRunner`) means starting a dev server
+  inside a production build, for no benefit over a real SSR build.
 - **`entry-server.tsx` vs. rendering from the `.mjs` directly.** The script could SSR-build
   `src/App.tsx` and call `renderToString(React.createElement(...))` itself, avoiding a new `src/`
   file and the react-refresh lint wrinkle. Keeping the JSX in a TSX file that `tsc` type-checks, in
@@ -285,7 +275,7 @@ No change to `.github/workflows/publish-docs.yml` — it already calls `yarn bui
 ## Decisions
 
 - No test framework is added to `welcome/`. The build-time assertion in `prerender.mjs` is the
-  automated regression guard and runs in CI already; see Testing Strategy.
+  automated regression guard and runs in CI already.
 - The word floor is 100 against ~400 words of real copy — a smoke floor, deliberately not a
   content contract.
 - `sitemap.xml` and the `micromegas.info` / `madesroches.github.io` host split, raised at the end of
@@ -311,28 +301,22 @@ on every `yarn build`, which means on every push to `main` and every PR touching
 the *Build welcome page* step in `publish-docs.yml`. A non-zero exit fails that step and blocks the
 deploy.
 
-This is the check that matters, because the failure mode is silent: if the SSR render ever returned
-an empty string or the placeholder were renamed, `vite build` would still succeed, the deploy would
-still go out, and the page would quietly revert to exactly the state this issue reports — visible
-only to a crawler, weeks later.
-
-**No vitest in `welcome/`.** The only genuinely unit-testable piece is the placeholder-replacement
-and word-count logic, and it is already executed against the real `dist/index.html` on every build,
-by the assertion above. Adding a test runner, a config, and CI wiring to `welcome/` to cover ~20
-lines that CI already exercises end-to-end would cost more than it catches.
-
 ## Manual Verification
 
 1. `cd welcome && yarn build`
    - Expected: exits 0; `welcome/dist-ssr/` does not exist afterward.
    - `sed 's/<[^>]*>//g' dist/index.html | wc -w` → several hundred, not 0. (This mirrors the
      issue's acceptance criterion; the build already asserts a floor, so this is confirmation.)
-   - `grep -c 'id="root"><' dist/index.html` → `0` (the placeholder is no longer empty).
+   - `grep -c 'id="root"></div>' dist/index.html` → `0` (the placeholder is no longer empty; this
+     string only matches the untouched, empty placeholder).
 2. `yarn preview`, open the page, open devtools console.
    - Expected: the page looks and behaves exactly as before, sections fade in on scroll, and the
-     console shows **no** hydration warning or `Text content did not match` error.
-   - Not automated: catching a hydration mismatch needs a real browser running React's dev build,
-     and any mismatch shows up the first time anyone opens the page.
+     console shows **no** error. `yarn preview` serves the production build, so a hydration mismatch
+     would not print the dev-only "Text content did not match" warning — it would surface as
+     React's minified recoverable-error message ("Minified React error #418" or "#423") followed by
+     a silent client-side re-render.
+   - Not automated: catching a hydration mismatch needs a real browser, and any mismatch shows up
+     the first time anyone opens the page.
 3. In the same preview, disable JavaScript (devtools → Settings → Debugger → Disable JavaScript) and
    reload.
    - Expected: all sections are readable and fully opaque — in particular `HowItWorks`,
