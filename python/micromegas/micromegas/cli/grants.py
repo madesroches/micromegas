@@ -15,47 +15,26 @@ which as a bonus gives a non-admin caller their own scoped view and an admin
 """
 
 import argparse
-import os
 import sys
 
 import requests
 
 from micromegas.cli import config
 from micromegas.cli.version import add_version_argument
+from micromegas.cli.web_auth import resolve_web_auth
 from micromegas.web_client import WebClient
 
 
 def build_auth_provider(args):
-    """`OidcClientCredentialsProvider.from_env()` for non-interactive
-    service-account use, else an interactive/cached `load_or_login` built from
-    the resolved `--profile` connection -- same auth-setup precedent as
-    `import_keys.py`/`screens.py`. Returns `None` when no OIDC config is
-    available at all (e.g. `--disable-auth` targets), matching `WebClient`'s
-    own "no auth provider" support. Raises `config.ProfileError` on an
-    unresolvable `--profile`, caught in `main()` alongside `RuntimeError`.
+    """Delegates to `web_auth.resolve_web_auth`, discarding its diagnostic --
+    see that function's doc comment for the resolution ladder. Returns `None`
+    when no auth mechanism resolves at all (e.g. `--disable-auth` targets),
+    matching `WebClient`'s own "no auth provider" support. Raises
+    `config.ProfileError` on an unresolvable `--profile`, caught in `main()`
+    alongside `RuntimeError`.
     """
-    issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
-    client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
-    client_secret = os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET")
-    if issuer and client_id and client_secret:
-        from micromegas.auth.oidc import OidcClientCredentialsProvider
-
-        return OidcClientCredentialsProvider.from_env()
-
-    conn = config.resolve_connection(profile=args.profile)
-    if not conn.oidc_issuer or not conn.oidc_client_id:
-        return None
-
-    from micromegas.oidc_connection import load_or_login
-
-    return load_or_login(
-        issuer=conn.oidc_issuer,
-        client_id=conn.oidc_client_id,
-        client_secret=conn.oidc_client_secret,
-        token_file=conn.token_file,
-        audience=conn.oidc_audience,
-        scope=conn.oidc_scope,
-    )
+    auth_provider, _diagnostic = resolve_web_auth(profile=args.profile)
+    return auth_provider
 
 
 def make_client(args):

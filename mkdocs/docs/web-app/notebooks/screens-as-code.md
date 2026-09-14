@@ -109,7 +109,7 @@ Initialize the screens directory. Must be run inside a git repository. Reads the
 ### `import`
 
 ```bash
-micromegas-screens import NAME [NAME...]
+micromegas-screens import NAME [NAME...] [--profile NAME] [--no-auth]
 ```
 
 Import existing server screens. Downloads the screen and sets `managed_by` on the server. If the screen is already managed by another repo, prompts for confirmation.
@@ -117,7 +117,7 @@ Import existing server screens. Downloads the screen and sets `managed_by` on th
 ### `pull`
 
 ```bash
-micromegas-screens pull [NAME...]
+micromegas-screens pull [NAME...] [--profile NAME] [--no-auth]
 ```
 
 Refresh local files from server. With no arguments, pulls all locally-tracked screens. Does not pull untracked screens — use `import` for that.
@@ -125,7 +125,7 @@ Refresh local files from server. With no arguments, pulls all locally-tracked sc
 ### `plan`
 
 ```bash
-micromegas-screens plan [NAME...]
+micromegas-screens plan [NAME...] [--profile NAME] [--no-auth]
 ```
 
 Preview what `apply` would change. Shows creates, updates, deletes, and untracked screens, and prints a **unified diff** for each modified screen. Colored diff output is on by default in a terminal; pass `--no-color` to disable it. Read-only — no server mutations.
@@ -133,7 +133,7 @@ Preview what `apply` would change. Shows creates, updates, deletes, and untracke
 ### `apply`
 
 ```bash
-micromegas-screens apply [NAME...] [--auto-approve]
+micromegas-screens apply [NAME...] [--auto-approve] [--profile NAME] [--no-auth]
 ```
 
 Apply local state to server. Runs `plan` first, then prompts for confirmation. Use `--auto-approve` for CI pipelines.
@@ -145,7 +145,7 @@ If a local `.json` file can't even be decoded/parsed, its identity is unknown, s
 ### `list`
 
 ```bash
-micromegas-screens list [--format table|json]
+micromegas-screens list [--format table|json] [--profile NAME] [--no-auth]
 ```
 
 Show screen inventory with sync status: `synced`, `local-only`, `server-only`, `modified`.
@@ -178,14 +178,31 @@ deploy-screens:
         MICROMEGAS_OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
 ```
 
+This example needs no `--profile`: the full `MICROMEGAS_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`
+triple is checked first, ahead of any profile resolution, so a non-interactive service-account
+login works the same way it always has.
+
 ## Authentication
 
-The CLI reuses existing OIDC environment variables:
+`micromegas-screens` resolves auth the same way as every other `WebClient`-based CLI
+(`micromegas-grants`, `micromegas-groups`, `micromegas-import-keys`), in this order:
 
-| Variable | Description |
-|----------|-------------|
-| `MICROMEGAS_OIDC_ISSUER` | OIDC provider issuer URL |
-| `MICROMEGAS_OIDC_CLIENT_ID` | OAuth client ID |
-| `MICROMEGAS_OIDC_CLIENT_SECRET` | Client secret (for CI/service accounts) |
+1. All three of `MICROMEGAS_OIDC_ISSUER`/`MICROMEGAS_OIDC_CLIENT_ID`/`MICROMEGAS_OIDC_CLIENT_SECRET`
+   set in the environment — non-interactive client-credentials login, for CI/service accounts (see
+   the CI/CD example above).
+2. Otherwise, a named connection profile from `~/.micromegas/config.json`, selected by `--profile`
+   (typed after the subcommand, e.g. `micromegas-screens apply --profile prod`), `MICROMEGAS_PROFILE`,
+   or `default_profile`. If the profile resolves an OIDC issuer and client ID, the CLI opens a
+   browser for login on first use and caches the result in a per-profile
+   `~/.micromegas/tokens-<profile>.json`, so switching `--profile` never reuses another profile's
+   cached token.
+3. If neither resolves, the command fails with an error naming what's missing, rather than
+   silently connecting unauthenticated. Pass `--no-auth` (typed after the subcommand, e.g.
+   `micromegas-screens list --no-auth`) to explicitly target a server started with
+   `--disable-auth`.
 
-Without a client secret, the CLI uses browser-based login with cached tokens.
+`api_key_file` is not an option here: the analytics web API validates OIDC tokens only, so a
+static analytics API key isn't a credential this tool can present. A profile whose only auth is
+`api_key_file` fails with a diagnostic saying so — see the
+[Python API guide](../../query-guide/python-api.md) for `micromegas-query`'s static-key workflow,
+which that server does support.
