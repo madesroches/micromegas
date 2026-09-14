@@ -99,9 +99,11 @@ def _mint_denied_hint(url, audience, my_audiences):
         "  mintable audiences: "
         + (", ".join(sorted(audiences)) if audiences else "(none)"),
         f"  to use an audience of your own: {_fresh_audience_suggestion(mint_prefix, email)}",
-        "  otherwise, ask an admin to grant it:",
     ]
     if email is not None:
+        # `_fresh_audience_suggestion` already ends in "ask an admin for a grant"
+        # when there's no email -- don't repeat that lead-in here.
+        lines.append("  otherwise, ask an admin to grant it:")
         lines.append(
             f"      micromegas-grants --url {url} create {audience} "
             f"mint 'user:{email}'"
@@ -151,6 +153,8 @@ def resolve_audience(args, parser, my_audiences):
     if args.claim is not None:
         if args.audience is not None or args.user_audience is not None:
             parser.error("--claim is a deprecated alias for --audience; pass only one")
+        if not args.claim:
+            parser.error("--claim requires a non-empty name")
         print(
             "warning: --claim is deprecated; use --user-audience <name> "
             "(or --audience <name> for a verbatim name)",
@@ -214,28 +218,21 @@ def resolve_audience(args, parser, my_audiences):
         )
     fresh = _fresh_audience_suggestion(mint_prefix, email)
     visible = sorted(a for a in audiences if a not in personal)
-    if email is None:
-        # `fresh` already reads as a full sentence ending in "ask an admin for a
-        # grant" -- appending another "ask an admin" clause would just repeat it.
-        if visible:
-            parser.error(
-                "no mintable audience held personally by this caller; visible but "
-                "not personally held (pass one explicitly with --audience): "
-                + ", ".join(visible)
-                + f"; {fresh}"
-            )
-        parser.error(f"no mintable audience found for this caller; {fresh}")
     if visible:
-        parser.error(
+        prefix = (
             "no mintable audience held personally by this caller; visible but not "
             "personally held (pass one explicitly with --audience): "
             + ", ".join(visible)
-            + f"; or claim a fresh one of your own with {fresh}; or ask an admin "
-            "for a personal grant"
         )
+    else:
+        prefix = "no mintable audience found for this caller"
+    if email is None:
+        # `fresh` already reads as a full sentence ending in "ask an admin for a
+        # grant" -- appending another "ask an admin" clause would just repeat it.
+        parser.error(f"{prefix}; {fresh}")
     parser.error(
-        "no mintable audience found for this caller; claim a fresh one with "
-        f"{fresh}, or ask an admin for a grant"
+        f"{prefix}; or claim a fresh one of your own with {fresh}; or ask an "
+        "admin for a personal grant"
     )
 
 
@@ -319,9 +316,10 @@ def build_parser():
         help=(
             "Write audience to mint the key under, verbatim -- for an org/team/service "
             "audience that isn't namespaced under any one caller. Lazily claims the "
-            "audience if it doesn't already exist; fails with a 403 if it exists and "
-            "this caller holds no grant for it. Omitted entirely resolves one via "
-            "GET .../audience-grants/my-audiences. Mutually exclusive with "
+            "audience if it doesn't already exist; for a non-admin caller, fails with "
+            "a 403 if it exists and this caller holds no grant for it (an admin caller "
+            "mints into any existing audience verbatim). Omitted entirely resolves one "
+            "via GET .../audience-grants/my-audiences. Mutually exclusive with "
             "--user-audience."
         ),
     )

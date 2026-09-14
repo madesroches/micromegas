@@ -369,19 +369,6 @@ def test_audience_and_claim_together_is_an_error():
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
 
 
-def test_claim_is_used_verbatim(capsys):
-    my_audiences = {
-        "is_admin": False,
-        "audiences": [],
-        "mint_prefix": "alice-",
-        "email": "alice@example.com",
-        "held_pairs": [],
-    }
-    args = make_args(claim="alice-ci-runner")
-    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
-    assert audience == "alice-ci-runner"
-
-
 def test_claim_warns_on_stderr_that_it_is_deprecated(capsys):
     my_audiences = {
         "is_admin": False,

@@ -1074,8 +1074,9 @@ different things:
   `mint_prefix` is derived server-side from the caller's own email and is composed identically for
   an admin and a non-admin caller (e.g. `alice@example.com` → `alice-`, so `--user-audience
   ci-runner` resolves to `alice-ci-runner`). Lazily claims the audience if it's genuinely fresh,
-  writing the caller's own `read`/`mint` grant in the same request; if it already exists and the
-  caller holds no grant for it (someone else's namespace), the route's ordinary 403 applies. Note
+  writing the caller's own `read`/`mint` grant in the same request; for a non-admin caller, if it
+  already exists and the caller holds no grant for it (someone else's namespace), the route's
+  ordinary 403 applies (an admin caller mints into any existing audience verbatim). Note
   that `mint_prefix` is derived from the email's local part only and isn't guaranteed unique, so
   two callers with the same local part on different domains can share a prefix and genuinely hit
   this 403 under what looks like "your own" prefix. Requires a caller whose email yields a
@@ -1084,11 +1085,12 @@ different things:
 - **`--audience NAME`**: mints under `NAME` verbatim, unconditionally — no client-side check of
   the caller's mintable set. A genuinely fresh name is lazily claimed by the mint route itself,
   writing the caller's own `read`/`mint` grant in the same request (the printed mint line adds
-  `claimed audience <name>` when it did); a name someone else already holds is refused with the
-  route's ordinary 403, which the CLI enriches with the caller's mintable audiences, a
-  `--user-audience` suggestion, and the exact `micromegas-grants` commands an admin would run to
-  grant this one (concretely, with the audience and the caller's email already substituted). Use
-  this for an org/team/service audience that isn't namespaced under any one caller.
+  `claimed audience <name>` when it did); for a non-admin caller, a name someone else already
+  holds is refused with the route's ordinary 403, which the CLI enriches with the caller's
+  mintable audiences, a `--user-audience` suggestion, and the exact `micromegas-grants` commands
+  an admin would run to grant this one (concretely, with the audience and the caller's email
+  already substituted). An admin caller mints into any existing audience verbatim. Use this for
+  an org/team/service audience that isn't namespaced under any one caller.
 - **Omitted entirely**: resolved via `GET .../audience-grants/my-audiences`, filtered to audiences
   the caller *personally holds* a mint grant on (the response's `held_pairs`) — a deployment-wide
   wildcard grant that puts an audience in every caller's `audiences` list (e.g. a seeded `public`
