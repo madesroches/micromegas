@@ -159,7 +159,7 @@ A standalone Python script that validates the **staged tree**, not the live site
 pull requests, before anything is published, and needs no network.
 
 ```
-python build/check_docs_site.py public_docs
+python3 build/check_docs_site.py public_docs
 ```
 
 Design:
@@ -223,14 +223,14 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 9. Add `build/test_check_docs_site.py` covering the checker's logic against synthetic trees.
 10. `.github/workflows/publish-docs.yml`:
     - add `build/check_docs_site.py` and `build/test_check_docs_site.py` to `pull_request.paths`;
-    - add a step installing `pytest` and running `pytest build/test_check_docs_site.py`;
-    - add a step running `python build/check_docs_site.py public_docs` after staging and before
+    - add a step installing `pytest` and running `python3 -m pytest build/test_check_docs_site.py`;
+    - add a step running `python3 build/check_docs_site.py public_docs` after staging and before
       deploy.
 
 ### Phase 5 — Documentation
 
 11. `mkdocs/docs/development/build.md`: in the documentation-build section, note that
-    `python build/check_docs_site.py public_docs` validates a staged site and that CI runs it.
+    `python3 build/check_docs_site.py public_docs` validates a staged site and that CI runs it.
 12. `mkdocs/CLAUDE.md`: add the checker to the essential commands list.
 13. `CHANGELOG.md`: an `## Unreleased` entry under **Website**.
 
@@ -313,7 +313,7 @@ of HTML files with canonical tags and a feed autodiscovery link):
 The permissive direction is what these pin: a checker that silently passes a broken tree is worse
 than no checker, and nothing else in CI would notice.
 
-**Whole-site check in CI** — `python build/check_docs_site.py public_docs` in `publish-docs.yml`
+**Whole-site check in CI** — `python3 build/check_docs_site.py public_docs` in `publish-docs.yml`
 runs the same logic against the real staged tree of 94 HTML files, two sitemaps, and a
 `robots.txt`. This catches what a unit test against synthetic fixtures cannot: that MkDocs,
 Material, the `blog` plugin, the `rss` plugin, Vite's `public/` copy, and the workflow's `cp`
