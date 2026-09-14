@@ -27,9 +27,10 @@ a silent prerender failure would otherwise leave a green build and a blank page.
 - `welcome/src/App.tsx` — renders `Navbar`, `Hero`, then `HowItWorks`, `Differentiators`,
   `Notebooks`, `Integrations`, `Footer`, each of the last five wrapped in a local `FadeIn`.
 - `welcome/src/components/*.tsx` — static JSX. A grep across all seven for `window`, `document`,
-  `Math.random`, `Date.`, `localStorage`, `useState`, `matchMedia` returns nothing. There is no
-  `useState` anywhere in the app, so there is no render-time nondeterminism to produce a hydration
-  mismatch.
+  `Math.random`, `Date.`, `localStorage`, `useState`, `matchMedia` matches only the word "window"
+  inside a prop's prose in `Notebooks.tsx` (copy text, not code) — no browser-API usage at render
+  time. There is no `useState` anywhere in the app, so there is no render-time nondeterminism to
+  produce a hydration mismatch.
 
 The only browser API in the tree is `IntersectionObserver`, inside `FadeIn`'s `useEffect`
 (`App.tsx:13-29`), which does not run during server rendering.
@@ -144,11 +145,12 @@ Plain ESM (`welcome/package.json` is `"type": "module"`), outside `src/` so `tsc
    `entryFileNames` is pinned so step 3 does not have to guess the emitted filename.
 3. `const { render } = await import(pathToFileURL(join(root, 'dist-ssr/entry-server.mjs')))`, then
    `const markup = render()`.
-4. Read `dist/index.html`. If it does not contain exactly one `<div id="root"></div>`, throw —
-   the injection point moved and silently producing an unprerendered page is the failure this whole
-   change exists to prevent.
-5. Replace that placeholder with `` `<div id="root">${markup}</div>` `` — exact string substitution,
-   no added whitespace, so hydration sees no stray text nodes.
+4. Read `dist/index.html`. If it does not contain exactly one `<div id="root"></div>`, throw.
+5. Replace that placeholder with the rendered markup using a `$`-safe substitution — e.g.
+   `html.split(placeholder).join('<div id="root">' + markup + '</div>')`, or `replace` with a
+   replacer *function* — never a `replace` call whose replacement is a plain string, since `$&`,
+   `` $` ``, `$'` and `$$` in future page copy would be interpreted as replacement patterns. Exact
+   string substitution, no added whitespace, so hydration sees no stray text nodes.
 6. Assert the result: strip tags (`/<[^>]*>/g`) from the final HTML and require at least
    **100 words**.
 7. Write `dist/index.html`, then `rmSync(ssrOutDir, { recursive: true, force: true })`.
@@ -176,8 +178,7 @@ if (container.firstChild) {
 Branching on whether the container actually has children — rather than on `import.meta.env.DEV` —
 keeps `yarn dev` working (no hydration-mismatch error against an empty root) and also degrades
 sanely if a prerender ever fails, without the mode flag having to stay in sync with what the build
-really produced. The build-time assertion is what keeps a failed prerender from reaching production
-unnoticed, so this branch is a fallback, not the guard.
+really produced.
 
 ### The no-JS fade-in fix
 
@@ -223,13 +224,6 @@ and the rule in `index.html` is the one non-obvious thing here, which is what th
    **Manual Verification** list.
 9. **`CHANGELOG.md`** — add the `## Unreleased` entry described under Documentation.
 
-If step 2's SSR build emits an output that fails to import — the residual risk, since Vite 8 builds
-through rolldown and dependency externalization is the one behaviour not verified from the installed
-packages alone — the fallback is `ssr: { noExternal: true }` in the `build()` options, bundling
-`react`, `react-dom`, and `lucide-react` into the SSR chunk. That is acceptable here precisely
-because the SSR bundle is a throwaway artifact of a separate process: nothing ships it, and the
-duplicated React never coexists with the client's.
-
 ## Files to Modify
 
 | File | Change |
@@ -258,11 +252,8 @@ No change to `.github/workflows/publish-docs.yml` — it already calls `yarn bui
   inside a production build, for no benefit over a real SSR build.
 - **`entry-server.tsx` vs. rendering from the `.mjs` directly.** The script could SSR-build
   `src/App.tsx` and call `renderToString(React.createElement(...))` itself, avoiding a new `src/`
-  file and the react-refresh lint wrinkle. Keeping the JSX in a TSX file that `tsc` type-checks, in
-  the shape Vite's own SSR docs use, is worth one lint override.
-- **`container.firstChild` vs. `import.meta.env.DEV`** for choosing hydrate-vs-render. The env flag
-  states the intent more directly; the DOM check is a fact about what is actually there, so it
-  cannot disagree with what the build produced. Chosen for that reason.
+  file. Keeping the JSX in a TSX file that `tsc` type-checks, in the shape Vite's own SSR docs use,
+  is worth the extra file.
 - **`<noscript>` override vs. a `.js`-class on `<html>`.** The classic progressive-enhancement
   alternative — an inline script stamping `.js` on `<html>`, with the hidden state defined as
   `.js .fade-in { ... }` — needs no `!important` and no `<noscript>`, but moves `FadeIn`'s styling
@@ -278,6 +269,9 @@ No change to `.github/workflows/publish-docs.yml` — it already calls `yarn bui
   content contract.
 - `sitemap.xml` and the `micromegas.info` / `madesroches.github.io` host split, raised at the end of
   the issue as "Related, separate", stay out of scope.
+- Default SSR externalization of `react`, `react-dom`, and `lucide-react` was verified against the
+  installed `vite@8.0.16` (the pipeline was run end to end), so no `ssr.noExternal` fallback is
+  needed.
 
 ## Documentation
 
