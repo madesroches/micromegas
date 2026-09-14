@@ -840,10 +840,13 @@ resolves; OIDC, when both an issuer and a client ID are resolved (from any sourc
 CLI connects without auth. A profile (or flat config) that resolves both `api_key_file` and a
 complete OIDC pair is a configuration error — see Named profiles below.
 
-Only `micromegas-query` and `connect_with_profile()` honor `api_key_file`. Every other CLI
-(`micromegas-grants`, `-import-keys`, `-setup-telemetry`) calls `resolve_connection()` directly and
-only branches on the OIDC fields, so a profile that resolves `api_key_file` and nothing else
-silently yields an unauthenticated connection on those tools — they remain OIDC-only.
+`api_key_file` is a FlightSQL credential: only `micromegas-query` and `connect_with_profile()`
+honor it, because the analytics web API validates OIDC tokens only, not a static key. Every
+`WebClient`-based CLI (`micromegas-screens`, `micromegas-grants`, `-groups`, `-import-keys`,
+`-setup-telemetry`) resolves auth through the shared `web_auth.resolve_web_auth()` helper, which
+only ever branches on the OIDC fields. Of those, only `micromegas-screens` reports a profile that
+resolves `api_key_file` and nothing else as an error; `micromegas-grants`, `-groups`,
+`-import-keys`, and `-setup-telemetry` still silently connect unauthenticated on that path.
 
 **Named profiles:**
 
@@ -910,11 +913,6 @@ to a per-profile `~/.micromegas/tokens-<profile>.json`, so switching profiles ne
 profile's cached token. This means turning profiles on forces one fresh login even for an
 otherwise-unchanged connection — rename your existing `tokens.json` to the new profile's
 `tokens-<profile>.json` path beforehand to avoid it.
-
-`micromegas-screens` is not profile-aware: it always authenticates against the plain
-`~/.micromegas/tokens.json`, regardless of any `profiles`/`MICROMEGAS_PROFILE` config. On a machine
-where `micromegas-query` has moved to a per-profile token file, this means `micromegas-screens`
-keeps its own separate login.
 
 ### micromegas-logout
 

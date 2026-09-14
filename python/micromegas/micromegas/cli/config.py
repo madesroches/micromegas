@@ -19,7 +19,10 @@ class ProfileError(ValueError):
     key and a complete OIDC pair, or an unreadable/empty `api_key_file` —
     the latter raised by `connect_with_profile`, which wraps
     `StaticTokenAuthProvider.from_file`'s `OSError`/`ValueError`) — never for
-    downstream transport/auth failures from the resulting connection.
+    downstream transport/auth failures from the resulting connection. Also
+    raised by `screens.py::make_client` when no auth mechanism resolves at
+    all — the one CLI in this codebase that turns that outcome into an
+    error rather than falling back to an unauthenticated client.
     Subclassing `ValueError` keeps it compatible with any existing `except
     ValueError` handling of `load_config`'s JSON-decode error, while letting
     callers that only want these errors catch `ProfileError` specifically.
@@ -59,6 +62,7 @@ class ConnectionConfig:
     oidc_scope: Optional[str] = None
     token_file: Optional[str] = None
     api_key_file: Optional[str] = None
+    profile: Optional[str] = None
 
 
 def load_config(config_path=None):
@@ -195,4 +199,5 @@ def resolve_connection(config_path=None, profile=None) -> ConnectionConfig:
         oidc_scope=_pick("MICROMEGAS_OIDC_SCOPE"),
         token_file=default_token_file(name),
         api_key_file=api_key_file,
+        profile=name,
     )

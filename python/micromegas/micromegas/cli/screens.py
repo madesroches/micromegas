@@ -6,11 +6,12 @@ Provides Terraform-inspired workflow: init, import, pull, plan, apply, list.
 import argparse
 import difflib
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
+from micromegas.cli import web_auth
+from micromegas.cli.config import ProfileError
 from micromegas.cli.version import add_version_argument
 from micromegas.web_client import WebClient
 
@@ -181,24 +182,24 @@ def server_screen_to_file(server_screen):
 # ---------------------------------------------------------------------------
 
 
-def make_client(config):
-    """Create a WebClient from config, with optional OIDC auth."""
-    auth_provider = None
-    issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
-    client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
-    if issuer and client_id:
-        client_secret = os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET")
-        if client_secret:
-            from micromegas.auth.oidc import OidcClientCredentialsProvider
-
-            auth_provider = OidcClientCredentialsProvider.from_env()
-        else:
-            from micromegas.oidc_connection import load_or_login
-
-            auth_provider = load_or_login(
-                issuer=issuer,
-                client_id=client_id,
-            )
+def make_client(config, args):
+    """Create a WebClient from the screens config, resolving auth through
+    `web_auth.resolve_web_auth` -- `--profile` selects a named connection
+    profile, `--no-auth` opts out for a server started with
+    `--disable-auth`. Raises `ProfileError` (with a `--no-auth` hint
+    appended) when no auth mechanism resolves and `--no-auth` wasn't passed,
+    whether that comes from `resolve_web_auth`'s own diagnostic or from a
+    `ProfileError` it let propagate (e.g. no profile selected).
+    """
+    if args.no_auth:
+        return WebClient(config["server"], auth_provider=None)
+    hint = "pass --no-auth to target a server started with --disable-auth"
+    try:
+        auth_provider, diagnostic = web_auth.resolve_web_auth(profile=args.profile)
+    except ProfileError as e:
+        raise ProfileError(f"{e}; {hint}")
+    if auth_provider is None:
+        raise ProfileError(f"{diagnostic}; {hint}")
     return WebClient(config["server"], auth_provider=auth_provider)
 
 
@@ -261,7 +262,7 @@ def cmd_init(args):
 def cmd_import(args):
     """Import existing server screens into the local directory."""
     config = read_config()
-    client = make_client(config)
+    client = make_client(config, args)
     managed_by = config["managed_by"]
 
     for name in args.names:
@@ -300,7 +301,7 @@ def cmd_import(args):
 def cmd_pull(args):
     """Refresh tracked screens from server to disk."""
     config = read_config()
-    client = make_client(config)
+    client = make_client(config, args)
 
     if args.names:
         names = args.names
@@ -492,7 +493,7 @@ def format_plan(creates, updates, deletes, unchanged, untracked, use_color=False
 def cmd_plan(args):
     """Preview what apply would change."""
     config = read_config()
-    client = make_client(config)
+    client = make_client(config, args)
     names = args.names if args.names else None
     use_color = sys.stdout.isatty() and args.color
 
@@ -505,7 +506,7 @@ def cmd_plan(args):
 def cmd_apply(args):
     """Apply local screen state to server."""
     config = read_config()
-    client = make_client(config)
+    client = make_client(config, args)
     managed_by = config["managed_by"]
     names = args.names if args.names else None
 
@@ -594,7 +595,7 @@ def cmd_apply(args):
 def cmd_list(args):
     """Show screen inventory."""
     config = read_config()
-    client = make_client(config)
+    client = make_client(config, args)
     managed_by = config["managed_by"]
 
     local, _unreadable, _invalid_names = list_local_screens()
@@ -654,6 +655,21 @@ def main():
     add_version_argument(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Shared by every subcommand that builds a WebClient (not `init`, which
+    # contacts no server) -- defined in exactly one place, since defining the
+    # same flag on both the main parser and a subparser is an argparse trap:
+    # the subparser's `None` default would silently overwrite the main
+    # parser's parsed value in the shared Namespace.
+    client_args = argparse.ArgumentParser(add_help=False)
+    client_args.add_argument(
+        "--profile", help="Named connection profile from ~/.micromegas/config.json"
+    )
+    client_args.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Target a server started with --disable-auth",
+    )
+
     # init
     p_init = subparsers.add_parser("init", help="Initialize screens directory")
     p_init.add_argument("server_url", help="analytics-web-srv URL")
@@ -663,17 +679,23 @@ def main():
     p_init.set_defaults(func=cmd_init)
 
     # import
-    p_import = subparsers.add_parser("import", help="Import screens from server")
+    p_import = subparsers.add_parser(
+        "import", parents=[client_args], help="Import screens from server"
+    )
     p_import.add_argument("names", nargs="+", help="Screen names to import")
     p_import.set_defaults(func=cmd_import)
 
     # pull
-    p_pull = subparsers.add_parser("pull", help="Pull screens from server")
+    p_pull = subparsers.add_parser(
+        "pull", parents=[client_args], help="Pull screens from server"
+    )
     p_pull.add_argument("names", nargs="*", help="Screen names (default: all local)")
     p_pull.set_defaults(func=cmd_pull)
 
     # plan
-    p_plan = subparsers.add_parser("plan", help="Preview changes")
+    p_plan = subparsers.add_parser(
+        "plan", parents=[client_args], help="Preview changes"
+    )
     p_plan.add_argument("names", nargs="*", help="Screen names (default: all)")
     p_plan.add_argument(
         "--color",
@@ -684,7 +706,9 @@ def main():
     p_plan.set_defaults(func=cmd_plan)
 
     # apply
-    p_apply = subparsers.add_parser("apply", help="Apply changes to server")
+    p_apply = subparsers.add_parser(
+        "apply", parents=[client_args], help="Apply changes to server"
+    )
     p_apply.add_argument("names", nargs="*", help="Screen names (default: all)")
     p_apply.add_argument(
         "--auto-approve", action="store_true", help="Skip confirmation prompt"
@@ -698,7 +722,9 @@ def main():
     p_apply.set_defaults(func=cmd_apply)
 
     # list
-    p_list = subparsers.add_parser("list", help="List screen inventory")
+    p_list = subparsers.add_parser(
+        "list", parents=[client_args], help="List screen inventory"
+    )
     p_list.add_argument(
         "--format", choices=["table", "json"], default="table", help="Output format"
     )
@@ -707,7 +733,7 @@ def main():
     args = parser.parse_args()
     try:
         args.func(args)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 

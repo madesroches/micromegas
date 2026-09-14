@@ -17,10 +17,9 @@ isn't namespaced under any one caller. Neither flag ever silently rewrites
 the name it is given -- `--user-audience` only ever prepends the caller's own
 prefix, nothing more.
 
-Auth reuses `import_keys.py::build_auth_provider`/`make_client`'s exact shape
-verbatim: client-credentials env vars first, else `config.resolve_connection`
--> `oidc_connection.load_or_login` (the interactive loopback-redirect browser
-login on first run, a cached token after that). No new OIDC code here.
+Auth reuses `import_keys.py::build_auth_provider`/`make_client` verbatim,
+which in turn delegates to `web_auth.resolve_web_auth` -- see that
+function's doc comment for the resolution ladder. No new OIDC code here.
 """
 
 import argparse

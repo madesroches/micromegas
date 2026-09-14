@@ -13,6 +13,9 @@ import pytest
 from micromegas.cli import screens as screens_module
 from micromegas.cli.screens import (
     cmd_apply,
+    cmd_import,
+    cmd_list,
+    cmd_plan,
     cmd_pull,
     compute_plan,
     format_screen_diff,
@@ -666,7 +669,9 @@ class TestCmdPull:
                     "managed_by": "test",
                 }
 
-        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: FakeClient()
+        )
 
         class Args:
             names = ["bad"]
@@ -695,7 +700,9 @@ class TestCmdPull:
                     "managed_by": "test",
                 }
 
-        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: FakeClient()
+        )
 
         class Args:
             names = ["broken"]
@@ -734,7 +741,9 @@ class TestCmdApply:
             def create_screen(self, name, screen_type, config, managed_by, folder_path):
                 pass
 
-        monkeypatch.setattr(screens_module, "make_client", lambda config: FakeClient())
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: FakeClient()
+        )
 
         class Args:
             names = []
@@ -745,6 +754,64 @@ class TestCmdApply:
 
         captured = capsys.readouterr()
         assert captured.err.count("Warning: skipping broken.json") == 1
+
+
+class TestMakeClientTwoArgCallSites:
+    """Thin checks whose only job is to catch a call site still passing
+    `make_client` a single argument (a `TypeError` at call time) -- not to
+    duplicate `TestCmdPull`/`TestCmdApply`'s existing behavioral coverage.
+    """
+
+    def test_cmd_import_calls_two_arg_make_client(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: object()
+        )
+
+        class Args:
+            names = []
+
+        cmd_import(Args())
+
+    def test_cmd_plan_calls_two_arg_make_client(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+
+        class FakeClient:
+            def list_screens(self):
+                return []
+
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: FakeClient()
+        )
+
+        class Args:
+            names = []
+            color = False
+
+        cmd_plan(Args())
+
+    def test_cmd_list_calls_two_arg_make_client(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("micromegas-screens.json", "w") as f:
+            json.dump({"managed_by": "test", "server": "http://localhost"}, f)
+
+        class FakeClient:
+            def list_screens(self):
+                return []
+
+        monkeypatch.setattr(
+            screens_module, "make_client", lambda config, args: FakeClient()
+        )
+
+        class Args:
+            format = "json"
+
+        cmd_list(Args())
 
 
 class TestFormatScreenDiff:
