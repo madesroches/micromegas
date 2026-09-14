@@ -40,6 +40,10 @@ tree.
 - Material's `base.html` `htmltitle` block renders `<title>{{ page.title }} - {{ config.site_name }}</title>`,
   and `config.site_name` is `Micromegas Documentation` — so every blog post's title ends in
   "- Micromegas Documentation".
+- Material's `base.html` (`material/templates/base.html:35-38`) already emits
+  `<link rel="alternate" type="application/rss+xml">` (and an `updated` counterpart) whenever
+  `"rss"` is in `config.plugins` — feed autodiscovery needs no template override once the plugin
+  is configured.
 - Nothing in CI looks at the generated sitemap or canonical tags.
 
 ### Verified against a local build
@@ -129,12 +133,9 @@ dependency entirely. This configuration was verified locally: it emits `feed_rss
 `/docs/feed_rss_created.xml`), with 20 items whose `<link>`s are the correct
 `https://micromegas.info/docs/blog/...` URLs and whose `<pubDate>`s come from the front matter.
 
-Feed autodiscovery goes in `mkdocs/overrides/main.html`'s existing `extrahead` block:
-
-```html
-<link rel="alternate" type="application/rss+xml" title="Micromegas Blog"
-      href="{{ 'feed_rss_created.xml' | url }}">
-```
+Once the `rss` plugin is enabled, Material's `base.html` automatically emits the feed's
+`<link rel="alternate">` autodiscovery tags (both `created` and `updated`) on every page — no
+template override is needed for this (see Current State).
 
 Blog-post titles get their own `htmltitle` override in the same file, delegating to `super()` for
 every non-post page so the rest of the site is untouched:
@@ -183,10 +184,14 @@ Design:
      to check. (The sitemap checks above do scan the whole tree via `**/sitemap.xml`, since there
      are at most two such files — cost isn't a concern there.)
   5. **Every feed autodiscovery link resolves to a file that exists.** From the same HTML files as
-     check 4, extract `<link rel="alternate" type="application/rss+xml" href="...">`. This href is
-     relative (Material's `url` filter emits e.g. `../feed_rss_created.xml`, not an absolute URL
-     like the sitemap `<loc>`s and canonical hrefs), so resolve it against the HTML file's own
-     directory rather than through `url_to_path`.
+     check 4, extract `<link rel="alternate" type="application/rss+xml" href="...">`. These are the
+     two feed links Material emits automatically once the `rss` plugin is enabled (see Current
+     State), not anything this plan adds to a template. On ordinary pages the href is genuinely
+     relative (Material's `url` filter emits e.g. `../feed_rss_created.xml`), but on `404.html` it
+     is root-absolute instead (e.g. `/docs/feed_rss_created.xml`, because `build.py` sets the error
+     template's `base_url` to `site_url`'s path). Resolve an href starting with `/` against the
+     staged root — the same rule `url_to_path` applies to a root-relative path — and resolve any
+     other href against the HTML file's own directory.
 - Print every failure, exit 1 if there were any.
 
 Wired into `publish-docs.yml` as a step **after** "Prepare staging directory" (so `CNAME` is
@@ -210,8 +215,7 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 
 5. `mkdocs/docs-requirements.txt`: add `mkdocs-rss-plugin>=1.19.0` under "Additional plugins".
 6. `mkdocs/mkdocs.yml`: add the `rss` plugin block after `- tags`.
-7. `mkdocs/overrides/main.html`: add the feed `<link rel="alternate">` inside the existing
-   `extrahead` block, and add the `htmltitle` block override.
+7. `mkdocs/overrides/main.html`: add the `htmltitle` block override.
 
 ### Phase 4 — CI guard
 
@@ -236,7 +240,7 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 | --- | --- |
 | `mkdocs/mkdocs.yml` | `site_url` → `/docs/`; add `rss` plugin |
 | `mkdocs/docs-requirements.txt` | add `mkdocs-rss-plugin` |
-| `mkdocs/overrides/main.html` | feed autodiscovery link; blog-post `htmltitle` override |
+| `mkdocs/overrides/main.html` | blog-post `htmltitle` override |
 | `welcome/public/robots.txt` | new |
 | `welcome/public/sitemap.xml` | new |
 | `welcome/index.html` | self-referential canonical |
@@ -302,6 +306,9 @@ of HTML files with canonical tags and a feed autodiscovery link):
 5. A `sitemap.xml` present in the tree but absent from `robots.txt` fails.
 6. An HTML file whose `<link rel="alternate" type="application/rss+xml">` href resolves (relative
    to the file's own directory) to a file that does not exist fails.
+7. A `404.html`-shaped fixture whose feed link href is root-absolute (e.g.
+   `/docs/feed_rss_created.xml`) resolves correctly against the staged root, and a broken
+   root-absolute href still fails — pins the check 5 fix for error templates.
 
 The permissive direction is what these pin: a checker that silently passes a broken tree is worse
 than no checker, and nothing else in CI would notice.
