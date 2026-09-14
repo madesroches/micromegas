@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 
+{% block htmltitle %}
+  {% if page and page.file and page.file.src_uri.startswith("blog/posts/") %}
+    <title>{{ (page.meta.title if page.meta and page.meta.title else page.title) | striptags }} - Micromegas Blog</title>
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}
+
 {% block extrahead %}
   {{ super() }}
   <script data-goatcounter="https://madesroches.goatcounter.com/count"
