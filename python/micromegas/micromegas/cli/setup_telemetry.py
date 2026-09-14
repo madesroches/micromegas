@@ -78,6 +78,22 @@ def _fresh_audience_suggestion(mint_prefix, email):
     )
 
 
+# Substrings of the mint route's own 403 messages (see `rust/analytics-web-srv/src/
+# ingestion_keys.rs`) that mean the denial is actually about audience grants -- as opposed to
+# the per-caller live-key cap, the per-caller claim cap, or the self-service knob being off,
+# none of which `_mint_denied_hint`'s remedies (claim a fresh audience, ask an admin for an
+# audience grant) actually fix.
+_AUDIENCE_DENIAL_MARKERS = (
+    "mintable set",
+    "cannot be claimed",
+    "already exists and the caller has no grant for it",
+)
+
+
+def _is_audience_denial(message):
+    return any(marker in message for marker in _AUDIENCE_DENIAL_MARKERS)
+
+
 def _mint_denied_hint(url, audience, my_audiences):
     """The error text appended after a mint request's `HTTP 403` -- every way forward,
     concretely: the caller's own mintable audiences (if any), a suggestion for claiming
@@ -107,7 +123,14 @@ def _mint_denied_hint(url, audience, my_audiences):
             f"mint 'user:{email}'"
         )
         lines.append("    or, to open it to every authenticated caller:")
-    lines.append(f"      micromegas-grants --url {url} create {audience} mint '*'")
+        lines.append(f"      micromegas-grants --url {url} create {audience} mint '*'")
+    else:
+        # No email to grant a `user:`-scoped command for -- the only remaining
+        # remedy is opening the audience to every authenticated caller.
+        lines.append(
+            "  otherwise, ask an admin to grant it, e.g. to every authenticated caller:"
+        )
+        lines.append(f"      micromegas-grants --url {url} create {audience} mint '*'")
     return "\n".join(lines)
 
 
@@ -338,11 +361,14 @@ def run(args, parser):
 
     # The client-side mintable-set guard is gone, so a denial now only ever
     # surfaces here, as the mint route's own 403 -- enrich it with the same
-    # discoverability hint the old pre-flight guard used to render.
+    # discoverability hint the old pre-flight guard used to render, but only when the
+    # 403 is actually about audience grants: mint_key also returns 403 for the
+    # per-caller live-key cap, the per-caller claim cap, and the self-service knob
+    # being off, none of which the hint's remedies fix.
     try:
         result = client.mint_ingestion_api_key(args.name, audience)
     except RuntimeError as e:
-        if str(e).startswith("HTTP 403"):
+        if str(e).startswith("HTTP 403") and _is_audience_denial(str(e)):
             raise RuntimeError(
                 f"{e}\n{_mint_denied_hint(args.url, audience, my_audiences)}"
             ) from e

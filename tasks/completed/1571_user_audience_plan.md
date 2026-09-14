@@ -2,6 +2,13 @@
 
 Issue: [#1571](https://github.com/madesroches/micromegas/issues/1571)
 
+**Amended during implementation:** every `--claim` reference below (kept as a hidden,
+`argparse.SUPPRESS`-ed deprecated alias for one release, with a stderr warning) describes the
+plan as originally written, not what shipped. `--claim` was removed outright instead — it had
+seen no real-world adoption yet, so there was no compatibility window worth preserving, and
+`--audience`/`--user-audience` cover the identical ground. See `CHANGELOG.md` for the shipped
+behavior.
+
 ## Overview
 
 Give `micromegas-setup-telemetry` two audience flags with one meaning each, and make both of

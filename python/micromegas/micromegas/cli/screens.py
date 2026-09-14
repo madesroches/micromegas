@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import requests
+
 from micromegas.cli import web_auth
 from micromegas.cli.config import ProfileError
 from micromegas.cli.version import add_version_argument
@@ -733,7 +735,7 @@ def main():
     args = parser.parse_args()
     try:
         args.func(args)
-    except (RuntimeError, ValueError) as e:
+    except (RuntimeError, ValueError, requests.exceptions.RequestException) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
