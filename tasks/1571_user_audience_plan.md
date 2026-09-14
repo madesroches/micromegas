@@ -23,9 +23,9 @@ server already decides all three from the audience name alone, so **no Rust chan
 
 `--user-audience` becomes the recipe every doc leads with, because the prefix is composed
 server-side from an already-shipped, role-independent pure function. That removes the two
-interface warts the issue names: the docs no longer have to publish the email-sanitization rules
-for a user to hand-derive their own name, and the identical command now works for an admin and a
-non-admin, so no guide has to classify its reader before its first command.
+interface warts the issue names: the caller no longer has to hand-compose their own namespaced
+name, and the identical command now works for an admin and a non-admin, so no guide has to
+classify its reader before its first command.
 
 `--claim` collapses into `--audience` — with the CLI's client-side refusal gone, `--audience` *is*
 `--claim`. It stays one release as a hidden, deprecated alias, since it shipped in v0.30.0 and is
@@ -185,6 +185,14 @@ rendered — the caller's mintable audiences, a fresh-name suggestion, and the e
 `micromegas-grants` commands an admin would run — is the discoverability answer #1535 added and is
 worth keeping. It moves to where the refusal now actually happens: the server's 403.
 
+Its old lead line — "cannot mint audience 'X': it is not in this caller's mintable set" — is
+dropped rather than re-sited verbatim: a 403 can now also arrive from `max_keys_per_caller`,
+`max_claims_per_caller`, the reserved-name arm, or an over-long selector, none of which is "outside
+the mintable set". The server's own message is already printed immediately above the hint (it's
+the `HTTP 403: ...` text `run()` caught), so the hint appends only the mintable-audiences list, the
+fresh-name suggestion, and the grant commands — the parts that stay useful no matter which 403
+fired.
+
 `run()` wraps the mint call:
 
 ```python
@@ -227,9 +235,10 @@ The two `parser.error`s at `:180-190` keep their structure and swap their advice
    - Rewrite the module docstring (`:11-15`): two flags, one meaning each, both lazily creating.
    - Rename `_claim_suggestion` → `_fresh_audience_suggestion`; emit the `--user-audience` /
      `--audience <new-name>` pair described above.
-   - Rewrite `_cannot_mint_hint` → `_mint_denied_hint(url, audience, my_audiences)`: same four
-     lines, keyed off the resolved audience, reading `audiences`/`mint_prefix`/`email` off the
-     response dict instead of taking them as separate parameters.
+   - Rewrite `_cannot_mint_hint` → `_mint_denied_hint(url, audience, my_audiences)`: drop the
+     diagnostic lead line, keep the mintable-audiences/fresh-name/grant-command lines, keyed off
+     the resolved audience, reading `audiences`/`mint_prefix`/`email` off the response dict instead
+     of taking them as separate parameters.
    - Rewrite `resolve_audience` per the sketch above; delete the admin `--claim` rejection, the
      `email is None` claim precondition (the server owns it — a caller with no email hits the
      `Forbidden` arm at `ingestion_keys.rs:452-458`), and the `_cannot_mint_hint` pre-flight call.
@@ -274,12 +283,6 @@ the response already carries the operand for, and that the web app already perfo
 Composing in the CLI keeps `mint_prefix` a suggestion mechanism with exactly one meaning across
 both clients.
 
-**Keep `--claim` one release as a hidden alias rather than dropping it outright.** It shipped in
-v0.30.0 (2026-09-02) and the 2026-09-03 blog post publishes `--claim "$USER-claude"` in a
-copy-paste block. Now that `--audience` is lazily creating, the alias is *exactly* `--audience`,
-so there is no behavioral drift to maintain — it is four lines and a deprecation warning. Dropping
-it outright would give `unrecognized arguments: --claim` with no pointer to the replacement.
-
 **Flag name.** `--user-audience` (the issue's name) over `--my-audience` or `--audience-suffix`:
 it reads as "an audience scoped to the user" and pairs symmetrically with `--audience`, whereas
 `--audience-suffix` leaks the composition mechanism into the name and `--my-audience` collides
@@ -308,11 +311,18 @@ conceptually with the `my-audiences` route, which lists *shared* audiences too.
 - **`mkdocs/docs/admin/authorization.md:220-235`** — the three-command block: replace the
   `--claim "$USER-ci-runner"` example with `--user-audience ci-runner`, and drop the "namespacing
   is your convention" comment, which is no longer true for that flag.
+- **`mkdocs/docs/admin/authorization.md:274`** — the route table describes `mint_prefix` as
+  "a suggested namespace prefix for a fresh name (suggestion only; nothing mints under it)";
+  reword to say a name is minted under it via `--user-audience`, matching the `web_client.py`
+  docstring update.
 - **`mkdocs/docs/query-guide/python-api.md:1042-1090`** — the CLI reference. Rewrite the flag
   list: `--user-audience` first (the recommended form, with the composition table), then
   `--audience` (verbatim, lazily creating, no longer a hard error for a name outside the mintable
-  set), then "omitted entirely" (unchanged). Remove the `--claim` bullet. **Stop publishing the
-  email-sanitization rules** — a reader no longer needs to hand-derive their own prefix.
+  set), then "omitted entirely" (unchanged). Remove the `--claim` bullet.
+- **`mkdocs/docs/query-guide/python-api.md:717-725`** — the `my_audiences()` `WebClient` bullet
+  says `mint_prefix` is used only to *suggest* a fresh audience name and that nothing is minted
+  under it; reword to match the `web_client.py` docstring update, since `--user-audience` now
+  mints under it.
 - **`mkdocs/docs/blog/posts/2026-09-03-record-your-ai-agent-share-on-your-terms.md:38`** —
   `--claim "$USER-claude"` → `--user-audience claude`. The surrounding narrative ("mints you a
   personal ingestion key and claims an audience nobody else can read") stays true, and for a
@@ -365,6 +375,11 @@ New/changed cases:
 Existing tests for the both-omitted `held_pairs` resolution keep their assertions; only the two
 that assert on `--claim <new-name>` substrings update to the new advice string.
 
+Delete `test_claim_as_admin_is_an_error` and `test_claim_with_no_email_is_an_error` — both assert
+`SystemExit` for a rejection this change removes (the admin `--claim` refusal and the
+`email is None` precondition), and after the change both inputs resolve to `"ci"`/`"laptop"`
+respectively instead of raising.
+
 ## Manual Verification
 
 One end-to-end run, because nothing below the CLI is mocked in it — the real OIDC login, the real
@@ -372,23 +387,34 @@ One end-to-end run, because nothing below the CLI is mocked in it — the real O
 Failure here would be immediately obvious to the next person who runs the command, which is why it
 is a manual step rather than a live-service test.
 
-1. `python3 local_test_env/ai_scripts/start_services.py --monolith`, with
+1. Export an OIDC config first (e.g. `. ~/set_human_auth.sh` or set `MICROMEGAS_OIDC_CONFIG`
+   directly) — `start_services.py` only starts with `--disable-ingestion-auth` (real
+   mint/grant routes) when `MICROMEGAS_OIDC_CONFIG`/`MICROMEGAS_ANALYTICS_OIDC_CONFIG` is
+   already set; otherwise it falls back to `--disable-auth`, under which the mint and
+   audience-grant routes don't exist at all. Also `export
+   MICROMEGAS_TELEMETRY_URL=http://127.0.0.1:9000` in the same shell you'll run
+   `micromegas-setup-telemetry` from — `start_services.py` only sets it for the child
+   processes it spawns, not for your shell, and `micromegas-setup-telemetry` errors out
+   without it (or an explicit `--otlp-endpoint`). Then run
+   `python3 local_test_env/ai_scripts/start_services.py --monolith`, with
    `MICROMEGAS_SELF_SERVICE_MINT=1` set for the monolith.
-2. As a **non-admin** caller:
+2. Take over the `admins` group: `micromegas-groups --url http://127.0.0.1:3000 remove admins '*'`
+   — a fresh DB's v10 migration seeds `admins` with a wildcard member, so until it's removed
+   every authenticated caller is an admin and steps 3/5 can't exercise a non-admin caller.
+3. As a **non-admin** caller (an OIDC account not added to `admins`):
    `micromegas-setup-telemetry --url http://127.0.0.1:3000 --name laptop --user-audience claude`
    → stderr reports `audience=<yourprefix>-claude` and `claimed audience <yourprefix>-claude`;
    stdout carries the three `OTEL_EXPORTER_OTLP_*` exports.
-3. Re-run the identical command → mints a second key under the same audience, and this time prints
+4. Re-run the identical command → mints a second key under the same audience, and this time prints
    **no** `claimed audience` line (the caller now holds the grant).
-4. As an **admin** caller, run the byte-identical command from step 2 → same shape, resolved under
-   the admin's own prefix. This is the "one command, both roles" claim.
-5. `micromegas-setup-telemetry --url ... --name x --audience <the non-admin's claimed audience>`
-   as a *different* non-admin → fails with the 403 plus the enriched hint block naming the
-   `micromegas-grants` commands.
+5. `micromegas-groups --url http://127.0.0.1:3000 add admins user:<the step-3 account>`, then run
+   the byte-identical command from step 3 as that now-admin caller → same shape, resolved under
+   the same prefix. This is the "one command, both roles" claim.
+6. As a **second, distinct** caller — a second OIDC account, or an admin-created `mint` grant for
+   another `user:` selector — run
+   `micromegas-setup-telemetry --url ... --name x --audience <the step-3 caller's claimed audience>`
+   → fails with the 403 plus the enriched hint block naming the `micromegas-grants` commands.
 
 ## Open Questions
 
-None blocking. The one judgment call — dropping `--claim` outright versus one release of a hidden
-alias — is settled under Decisions; flip it to an outright removal by deleting the alias branch
-and the `argparse.SUPPRESS`ed argument, with a **Minor breaking change** clause added to the
-CHANGELOG bullet instead.
+None.
