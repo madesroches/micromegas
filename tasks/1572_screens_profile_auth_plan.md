@@ -230,23 +230,6 @@ def build_auth_provider(args):
 order, same `None` for a `--disable-auth` target; they do **not** gain `--no-auth` or the strict
 error in this change (see Trade-offs).
 
-```
-screens.py  grants.py  groups.py  import_keys.py ──┐
-                                                   ├─→ web_auth.resolve_web_auth()
-                          setup_telemetry.py ──────┘            │
-                                                                ▼
-                                   env OIDC triple? ── yes ──→ OidcClientCredentials
-                                                 │              Provider.from_env()
-                                                 no
-                                                 ▼
-                                   config.resolve_connection(profile=...)
-                                                 │
-                 ┌───────────────────────────────┴───────────────────────────┐
-                 ▼                                                           ▼
-        issuer + client_id →                                          (None, diagnostic)
-        load_or_login with per-profile token_file           generic, or api_key_file-specific
-```
-
 ## Implementation Steps
 
 1. **`cli/config.py`**: add the trailing `profile: Optional[str] = None` field to
@@ -259,7 +242,9 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
    `client_args` parent parser to the five client subcommands, and catch `ProfileError` in
    `main()`. Drop the now-unused `os` import if nothing else in the module uses it.
 4. **`cli/grants.py`, `cli/groups.py`, `cli/import_keys.py`**: replace the three
-   `build_auth_provider` bodies with the delegation; delete their now-dead `os`/OIDC imports.
+   `build_auth_provider` bodies with the delegation; drop the now-unused `import os` from
+   `grants.py` and `groups.py` only (the OIDC imports are function-local and vanish with the body;
+   `import_keys.py` still needs `os` for `read_keyring`).
 5. **Tests**: new `tests/cli/test_web_auth.py`; new `tests/cli/test_screens_auth.py`; fix the three
    `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`.
 6. **Docs**: `screens-as-code.md` auth section and its five subcommand usage lines, the two
@@ -402,17 +387,20 @@ rather than exercising real config resolution — `test_web_auth.py` already cov
   `WebClient` and the `server` URL is honored.
 - `resolve_web_auth` raising `ProfileError` (e.g. no profile selected) → `make_client` re-raises a
   `ProfileError` whose message contains the original text plus the `--no-auth` hint.
-- Parser wiring, parametrized over `import`/`pull`/`plan`/`apply`/`list`: `main()` builds its parser
-  and dispatches internally, so these tests monkeypatch `sys.argv` to
-  `["micromegas-screens", cmd, "--profile", "prod"]` and monkeypatch the module-level `cmd_*`
-  function `main()` will call (`set_defaults(func=cmd_*)` binds it at parse time, so the patch is
-  in place before dispatch) to capture the `Namespace` it receives; assert `args.profile == "prod"`
-  and `args.no_auth is False`, and that `--no-auth` sets it True — this is what catches a subcommand
-  accidentally left off `parents=[client_args]`, which would otherwise only fail at runtime with an
-  `AttributeError`.
+- Parser wiring, parametrized over `(subcommand, extra_argv)` for `import`/`pull`/`plan`/`apply`/
+  `list` (`import`'s `names` positional is `nargs="+"`, so its case supplies a dummy screen name):
+  `main()` builds its parser and dispatches internally, so these tests monkeypatch `sys.argv` to
+  `["micromegas-screens", cmd, *extra_argv, "--profile", "prod"]` (e.g. `extra_argv=["some-screen"]`
+  for `import`, `[]` otherwise) and monkeypatch the module-level `cmd_*` function `main()` will call
+  (`set_defaults(func=cmd_*)` binds it at parse time, so the patch is in place before dispatch) to
+  capture the `Namespace` it receives; assert `args.profile == "prod"` and `args.no_auth is False`,
+  and that `--no-auth` sets it True — this is what catches a subcommand accidentally left off
+  `parents=[client_args]`, which would otherwise only fail at runtime with an `AttributeError`.
 - `init` rejects `--profile` (it contacts no server): monkeypatch `sys.argv` to
-  `["micromegas-screens", "init", "--profile", "prod"]` and assert `main()` raises `SystemExit(2)`
-  (argparse's exit code for an unrecognized argument).
+  `["micromegas-screens", "init", "https://example.com", "--profile", "prod"]` (supplying `init`'s
+  required `server_url` positional so the test fails only on the unrecognized `--profile`, not on a
+  missing positional) and assert `main()` raises `SystemExit(2)` (argparse's exit code for an
+  unrecognized argument).
 
 `tests/cli/test_grants.py` / `test_groups.py` / `test_import_keys.py` keep passing unchanged (the
 `build_auth_provider` seam is preserved) — none of them exercise the delegated body, so
