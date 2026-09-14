@@ -55,6 +55,7 @@ plugins:
   - rss:
       match_path: blog/posts/.*
       use_git: false
+      image: https://micromegas.info/docs/assets/images/micromegas-icon-512.png
       feed_title: Micromegas Blog
       feed_description: Engineering notes from the Micromegas observability platform.
       date_from_meta:

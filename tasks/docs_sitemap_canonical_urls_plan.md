@@ -116,12 +116,21 @@ the `tags` plugin:
   - rss:
       match_path: blog/posts/.*
       use_git: false
+      image: https://micromegas.info/docs/assets/images/micromegas-icon-512.png
       feed_title: Micromegas Blog
       feed_description: Engineering notes from the Micromegas observability platform.
       date_from_meta:
         as_creation: date
         as_update: date
 ```
+
+`image` matters too: the plugin's Jinja template guards the `<image>` block with
+`{% if feed.logo_url is defined %}`, not `is not none`, so leaving `image` unset still renders
+the block with a literal `<url>None</url>` — invalid per RSS 2.0, and an aggregator resolving it
+relatively would 404 on `https://micromegas.info/docs/None`. The value points at a new
+`mkdocs/docs/assets/images/micromegas-icon-512.png` (copied from `branding/`, which
+`publish-docs.yml` does not otherwise publish), since RSS 2.0's `<image><url>` wants a raster
+(GIF/JPEG/PNG), not the SVG marks already under `assets/images/`.
 
 `use_git: false` matters: the plugin's `date_from_meta.as_creation` and `.as_update` both default
 to the string `"git"`, and `actions/checkout@v4` clones at depth 1, so git-derived dates would be
@@ -241,6 +250,7 @@ a broken checker fails fast instead of surfacing after ~10 minutes of unrelated 
 | --- | --- |
 | `mkdocs/mkdocs.yml` | `site_url` → `/docs/`; add `rss` plugin |
 | `mkdocs/docs-requirements.txt` | add `mkdocs-rss-plugin` |
+| `mkdocs/docs/assets/images/micromegas-icon-512.png` | new (copied from `branding/`; RSS feed image) |
 | `mkdocs/overrides/main.html` | blog-post `htmltitle` override |
 | `welcome/public/robots.txt` | new |
 | `welcome/public/sitemap.xml` | new |
@@ -282,6 +292,9 @@ a broken checker fails fast instead of surfacing after ~10 minutes of unrelated 
   maintenance.
 - `robots.txt` carries no AI-crawler `Disallow` blocks — default-allow is the intended posture;
   the file exists only to advertise the two sitemaps.
+- RSS `image` points at the 512px icon PNG as-is, despite RSS 2.0's nominal 144x400px cap on
+  `<image>` — most aggregators ignore the cap, and adding a resized asset just for this one
+  element isn't worth the extra file.
 
 ## Documentation
 
