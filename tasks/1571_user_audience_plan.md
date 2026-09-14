@@ -58,7 +58,7 @@ module docstring (`:11-15`) states the same split.
 `mint_prefix_for` (`rust/analytics-web-srv/src/audience_grants.rs:782-810`) is pure and sync:
 lowercase the email's local part, map every character outside `[a-z0-9_-]` to `-`, collapse runs,
 trim, append one `-` as the separator. It takes `&Option<String>` and **never looks at
-`is_admin`** — the `my_audiences` handler calls it unconditionally at `:843`
+`is_admin`** — the `my_audiences` handler calls it unconditionally at `:871`
 (`mint_prefix_for(&caller.email)`), for every caller.
 
 | email | `mint_prefix` | `--user-audience claude` resolves to |
@@ -73,8 +73,7 @@ The web app does a similar composition in its Mint dialog, but only for non-admi
 `MintIngestionKeyDialog.tsx:71` is `const prefix = !isAdmin ? me?.mint_prefix ?? null : null`, and
 `:72` then composes `const composedNew = prefix ? \`${prefix}${newAudience}\` : newAudience` — an
 admin's dialog never prefixes, even though the server returns `mint_prefix` unconditionally
-(`audience_grants.rs:871`). `--user-audience` deliberately diverges from that dialog by composing
-for every caller regardless of role (see Decisions).
+(`audience_grants.rs:902`).
 
 ### The server needs nothing
 
@@ -133,7 +132,7 @@ plain `Namespace` and a `FakeParser`.
 ```python
 def resolve_audience(args, parser, my_audiences):
     if args.claim is not None:                      # deprecated alias, one release
-        if args.audience is not None:
+        if args.audience is not None or args.user_audience is not None:
             parser.error("--claim is a deprecated alias for --audience; pass only one")
         print("warning: --claim is deprecated; use --user-audience <name> "
               "(or --audience <name> for a verbatim name)", file=sys.stderr)
@@ -147,10 +146,16 @@ def resolve_audience(args, parser, my_audiences):
             parser.error("--user-audience requires a non-empty name")
         mint_prefix = my_audiences.get("mint_prefix")
         if mint_prefix is None:
+            email = my_audiences.get("email")
+            if email is None:
+                parser.error(
+                    "--user-audience needs a caller-derived prefix and this caller has no "
+                    "email to derive one from; a caller with no email cannot claim a fresh "
+                    "audience at all, so ask an admin for a grant instead"
+                )
             parser.error(
-                "--user-audience needs a caller-derived prefix and this caller has none "
-                "(no email, or an email whose local part sanitizes to empty); pass the "
-                "whole name with --audience <name> instead"
+                "--user-audience needs a caller-derived prefix and this caller's email "
+                "sanitizes to empty; pass the whole name with --audience <name> instead"
             )
         return f"{mint_prefix}{args.user_audience}"
 
@@ -175,10 +180,13 @@ caller meant.
 **No fallback to the bare suffix when `mint_prefix` is `None`.** The web dialog falls back to the
 unprefixed name (`MintIngestionKeyDialog.tsx:72`); the CLI errors instead. The flag's entire
 contract is "namespaced under me", so quietly minting an un-namespaced global name under it would
-be the same class of silent rewrite #1535 removed. The error names `--audience <name>` as the way
-forward. This is role-independent and rare: it means a client-credentials service account with no
-email, or an email like `+++@example.com` whose local part sanitizes empty
-(`audience_grants_tests.rs:358-364`).
+be the same class of silent rewrite #1535 removed. `mint_prefix` is `None` for two different
+reasons, and the error tells them apart: a client-credentials caller with no email at all can
+never claim a fresh audience (server-side, the lazy claim needs an identity to write a
+`user:<email>` grant row under), so its error points at asking an admin for a grant; an email like
+`+++@example.com` whose local part sanitizes empty (`audience_grants_tests.rs:358-364`) still has
+an identity, so its error names `--audience <name>` as the way forward. Both are role-independent
+and rare.
 
 ### The `_cannot_mint_hint` text moves from a pre-flight refusal to a post-403 enrichment
 
@@ -217,26 +225,31 @@ can now arrive from any of the three spellings:
 def _mint_denied_hint(url, audience, my_audiences): ...
 ```
 
-and its fresh-name line becomes the new flag:
+and its fresh-name line becomes the new flag, with the same no-email branch as `--user-audience`'s
+own error above:
 
 - `mint_prefix` available → ``to use an audience of your own: --user-audience <name> (mints under `alice-<name>`)``
-- `mint_prefix` is `None`  → `to use an audience of your own: --audience <new-name>`
+- `mint_prefix` is `None`, email present → `to use an audience of your own: --audience <new-name>`
+- email is `None` → `this caller has no email, so it cannot claim a fresh audience of its own;
+  ask an admin for a grant`
 
-`_claim_suggestion` is renamed to `_fresh_audience_suggestion` and keeps taking `mint_prefix`,
-since it still chooses between those two lines.
+`_claim_suggestion` is renamed to `_fresh_audience_suggestion` and now takes `mint_prefix` and
+`email`, since it chooses between those three lines.
 
 ### Zero-match error text (both flags omitted)
 
-The two `parser.error`s at `:180-190` keep their structure and swap their advice from
-`--claim <new-name>` to `--user-audience <name>`, reporting the composed name when a
-`mint_prefix` is available.
+The admin `parser.error` at `:157-161` ("--audience is required for an admin caller") also offers
+`--user-audience <name>` alongside `--audience <name>` — an admin resolves `mint_prefix` the same
+as anyone else, so the same two flags apply. The two non-admin `parser.error`s at `:180-190` keep
+their structure and swap their advice from `--claim <new-name>` to `--user-audience <name>`,
+reporting the composed name when a `mint_prefix` is available.
 
 ## Implementation Steps
 
 1. **`python/micromegas/micromegas/cli/setup_telemetry.py`**
    - Rewrite the module docstring (`:11-15`): two flags, one meaning each, both lazily creating.
    - Rename `_claim_suggestion` → `_fresh_audience_suggestion`; emit the `--user-audience` /
-     `--audience <new-name>` pair described above.
+     `--audience <new-name>` / no-email trio described above.
    - Rewrite `_cannot_mint_hint` → `_mint_denied_hint(url, audience, my_audiences)`: drop the
      diagnostic lead line, keep the mintable-audiences/fresh-name/grant-command lines, keyed off
      the resolved audience, reading `audiences`/`mint_prefix`/`email` off the response dict instead
@@ -244,6 +257,7 @@ The two `parser.error`s at `:180-190` keep their structure and swap their advice
    - Rewrite `resolve_audience` per the sketch above; delete the admin `--claim` rejection, the
      `email is None` claim precondition (the server owns it — a caller with no email hits the
      `Forbidden` arm at `ingestion_keys.rs:452-458`), and the `_cannot_mint_hint` pre-flight call.
+     Update the admin and non-admin zero-match error texts per the Design section above.
    - `build_parser`: add `--user-audience NAME`; rewrite `--audience`'s help; change `--claim`'s
      help to `argparse.SUPPRESS`.
    - `run()`: wrap `mint_ingestion_api_key` in the 403 enrichment.
@@ -254,9 +268,6 @@ The two `parser.error`s at `:180-190` keep their structure and swap their advice
 4. **Docs** — see Documentation.
 5. **`CHANGELOG.md`** — one `**Python:**` bullet under `## Unreleased` naming #1571, both flags,
    the `--claim` deprecation, and the fact that no server change was needed.
-6. **`rust/analytics-web-srv/src/audience_grants.rs`** — reword `mint_prefix_for`'s doc comment
-   (`:764-766`), which currently describes it as backing only `--claim`'s error-message suggestion;
-   it now also backs `--user-audience`'s composition. Doc comment only, no behavior change.
 
 ## Files to Modify
 
@@ -286,17 +297,11 @@ Refusing instead would mean keeping the client-side guard, which is the wart bei
 `user_audience` field on `MintRequest` would move composition server-side, but it adds wire
 surface, a second way for a request to name an audience, and a Rust change — for a concatenation
 the response already carries the operand for, and that the web app already performs client-side.
-Composing in the CLI keeps `mint_prefix` a plain suggestion value with no new wire surface; that
-the CLI composes it for every role while the web dialog composes it only for non-admins is a
-deliberate divergence (see Decisions), not a cost of this approach.
-
-**Flag name.** `--user-audience` (the issue's name) over `--my-audience` or `--audience-suffix`:
-it reads as "an audience scoped to the user" and pairs symmetrically with `--audience`, whereas
-`--audience-suffix` leaks the composition mechanism into the name and `--my-audience` collides
-conceptually with the `my-audiences` route, which lists *shared* audiences too.
+Composing in the CLI keeps `mint_prefix` a plain suggestion value with no new wire surface.
 
 ## Decisions
 
+- Flag name: `--user-audience`, per the issue — not `--my-audience` or `--audience-suffix`.
 - The mint-policy admin short-circuit (`rust/auth/src/policy.rs:553`) and `mint_key`'s admin
   pre-check stay exactly as they are. This change touches only the interface asymmetry, not the
   privilege asymmetry; the issue's "Optional follow-up" (~80-120 Rust lines) is explicitly a
@@ -325,12 +330,16 @@ conceptually with the `my-audiences` route, which lists *shared* audiences too.
   "a suggested namespace prefix for a fresh name (suggestion only; nothing mints under it)";
   reword to say a name is minted under it via `--user-audience`, matching the `web_client.py`
   docstring update.
-- **`mkdocs/docs/query-guide/python-api.md:1042-1097`** — the CLI reference. Rewrite the flag
-  list: `--user-audience` first (the recommended form, with the composition table), then
-  `--audience` (verbatim, lazily creating, no longer a hard error for a name outside the mintable
-  set), then "omitted entirely" — its auto-resolution logic is unchanged, but its closing advice
-  (`:1095`, "plus a hint to `--claim` a fresh name or ask an admin") changes from `--claim` to
-  `--user-audience`. Remove the `--claim` bullet.
+- **`mkdocs/docs/query-guide/python-api.md:1042-1097`** — the CLI reference. Update the
+  copy-paste example block's third command (`:1061-1065`) from `--claim "$USER-ci-runner"` to
+  `--user-audience ci-runner`, dropping its "the namespacing convention lives in the name you
+  pass" comment. Rewrite the flag list: `--user-audience` first (the recommended form, with the
+  composition table), then `--audience` (verbatim, lazily creating, no longer a hard error for a
+  name outside the mintable set), then "omitted entirely" — its auto-resolution logic is
+  unchanged, but its closing advice (`:1095`, "plus a hint to `--claim` a fresh name or ask an
+  admin") changes from `--claim` to `--user-audience`, and its final sentence ("An admin caller
+  must always pass `--audience` explicitly") is reworded to offer `--user-audience` alongside
+  `--audience`, matching the CLI's own admin zero-match error. Remove the `--claim` bullet.
 - **`mkdocs/docs/query-guide/python-api.md:717-725`** — the `my_audiences()` `WebClient` bullet
   says `mint_prefix` is used only to *suggest* a fresh audience name and that nothing is minted
   under it; reword to match the `web_client.py` docstring update, since `--user-audience` now
@@ -359,7 +368,7 @@ their own Rust coverage in `rust/analytics-web-srv/tests/ingestion_keys_tests.rs
 
 First, fix a fixture bug the new tests would otherwise inherit: every admin fixture in the file
 sets `"mint_prefix": None` alongside `"email": "admin@example.com"`, which the real server never
-returns — `mint_prefix_for` is called unconditionally at `audience_grants.rs:843` and would yield
+returns — `mint_prefix_for` is called unconditionally at `audience_grants.rs:871` and would yield
 `"admin-"`. Correct those fixtures, and add `"user_audience"` / keep `"claim"` in `make_args`'
 defaults.
 
