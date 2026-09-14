@@ -78,8 +78,7 @@ carries the resolved fields but not the resolved profile *name*.
 implements the three-mechanism branch for FlightSQL: `api_key_file` → OIDC → no auth. The web CLIs
 need a *different* ladder, not a shared one: client credentials (which FlightSQL's path doesn't
 have) and no static-key branch (which the web server can't validate). The two stay separate on
-purpose; each should carry a comment naming the other and the reason they diverge, so the next
-reader doesn't "fix" the asymmetry.
+purpose.
 
 `WebClient._headers` (`web_client.py:22-27`) only ever calls `auth_provider.get_token()` and sends
 the result as a bearer token, so both OIDC provider types drop in unchanged.
@@ -148,24 +147,12 @@ Body, in order:
 
 1. All three of `MICROMEGAS_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET` set in the environment →
    `OidcClientCredentialsProvider.from_env()`, byte-for-byte today's non-interactive CI branch.
-   This runs **before** any config resolution, preserving `grants.py:35-42`'s current order: when
-   the environment already carries a complete service-account credential, the profile contributes
-   nothing to the result, so raising `ProfileError` for an unselected profile there would be a
-   regression that buys nothing.
 2. `conn = config.resolve_connection(config_path=config_path, profile=profile)` — raises
    `ProfileError` for an unknown/unselected profile, a malformed entry, or a config naming two auth
    mechanisms. Callers surface it; this function never swallows it.
 3. `conn.oidc_issuer and conn.oidc_client_id` → `load_or_login(issuer, client_id, client_secret,
    token_file=conn.token_file, audience=conn.oidc_audience, scope=conn.oidc_scope)`.
 4. Otherwise `(None, diagnostic)`.
-
-Step 1 is keyed on the **env triple** rather than on `conn.oidc_client_secret`, even though those
-are the same value today (`ConnectionConfig.oidc_client_secret` is `_pick(
-"MICROMEGAS_OIDC_CLIENT_SECRET")` with no profile fallback, `config.py:184`). Keying on the env
-triple keeps the trigger literally unchanged: a profile-configured public client whose IdP requires
-a secret (Google, per `mkdocs/docs/admin/authentication.md:255`) keeps its interactive browser
-flow instead of silently switching to a client-credentials grant the moment someone exports a
-secret.
 
 `diagnostic` shape, built from `conn.profile`:
 
@@ -175,8 +162,8 @@ profile 'prod' resolves no auth mechanism: no OIDC issuer/client_id (set 'client
 ```
 
 and, when `conn.profile is None` (flat config or no config file), the same sentence with
-"`~/.micromegas/config.json`" in place of `profile 'prod'` and a trailing "pass --profile to select
-a named profile".
+"`~/.micromegas/config.json`" in place of `profile 'prod'` and a trailing "set 'client_id' and
+'issuers[0].issuer', or add a 'profiles' map and pass --profile to select a named profile".
 
 When `conn.api_key_file` resolved but the OIDC pair did not, the diagnostic names the actual
 problem rather than claiming nothing was configured — this is the case a user is most likely to hit
@@ -196,10 +183,13 @@ unreadable key file still produces this message rather than an `OSError`.
 - `make_client(config, args)`:
 
 ```python
-auth_provider, diagnostic = web_auth.resolve_web_auth(profile=args.profile)
-if auth_provider is None and not args.no_auth:
-    raise ProfileError(f"{diagnostic}; pass --no-auth to target a server started with --disable-auth")
-return WebClient(config["server"], auth_provider=auth_provider)
+def make_client(config, args):
+    if args.no_auth:
+        return WebClient(config["server"], auth_provider=None)
+    auth_provider, diagnostic = web_auth.resolve_web_auth(profile=args.profile)
+    if auth_provider is None:
+        raise ProfileError(f"{diagnostic}; pass --no-auth to target a server started with --disable-auth")
+    return WebClient(config["server"], auth_provider=auth_provider)
 ```
 
   The five call sites become `make_client(config, args)`.
@@ -260,7 +250,9 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
 ## Implementation Steps
 
 1. **`cli/config.py`**: add the trailing `profile: Optional[str] = None` field to
-   `ConnectionConfig` and populate it from the resolved name in `resolve_connection`.
+   `ConnectionConfig` and populate it from the resolved name in `resolve_connection`. Update
+   `ProfileError`'s docstring to also name `screens.py::make_client` as a raiser, for "no auth
+   mechanism resolved".
 2. **`cli/web_auth.py`** (new): implement `resolve_web_auth` per Design §2, including the
    diagnostic builder.
 3. **`cli/screens.py`**: rewrite `make_client(config, args)`, update the five call sites, add the
@@ -268,7 +260,9 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
    `main()`. Drop the now-unused `os` import if nothing else in the module uses it.
 4. **`cli/grants.py`, `cli/groups.py`, `cli/import_keys.py`**: replace the three
    `build_auth_provider` bodies with the delegation; delete their now-dead `os`/OIDC imports.
-   Behavior-preserving — their existing tests are the check.
+   `test_web_auth.py`'s env-triple-ordering case is the only guard on these three CLIs' behavior
+   preservation; consider adding one assertion per CLI that `build_auth_provider` delegates to
+   `resolve_web_auth`.
 5. **Tests**: new `tests/cli/test_web_auth.py`; new `tests/cli/test_screens_auth.py`; fix the three
    `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`.
 6. **Docs**: `screens-as-code.md` auth section, the two `python-api.md` passages, and a
@@ -291,15 +285,6 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
 
 ## Trade-offs
 
-- **No `api_key_file` support on the `WebClient` CLIs — the server can't accept one.** Detailed
-  under Current State: `analytics-web-srv` validates OIDC tokens only, so wiring
-  `StaticTokenAuthProvider` in would produce a 401, and every unit test that mocks the provider
-  constructors would still pass while the feature was dead end-to-end. The alternative — adding a
-  DB analytics-key store to `analytics-web-srv` so the web API accepts minted keys — is a real
-  feature worth having (it's the only way to run these CLIs non-interactively without a
-  client-credentials app), but it's server-side work with its own design questions and belongs in
-  its own issue. What this plan does instead is make the dead end legible: a named diagnostic
-  instead of a 401.
 - **Web-app URL: keep `"server"` in `micromegas-screens.json`, don't add a profile key.** The
   issue leaves this open. A profile's `uri` is a gRPC FlightSQL endpoint and can't double as the
   web app's HTTP URL, so a single `--profile` selecting both would require a new optional profile
@@ -350,6 +335,8 @@ screens.py  grants.py  groups.py  import_keys.py ──┐
   Trade-offs.
 - `--no-auth` is spelled to echo the server's `--disable-auth` flag in its help text; no env-var
   equivalent is added.
+- `micromegas-screens.json` gains no `profile` key — a file-level default would invert the
+  documented `--profile` > `MICROMEGAS_PROFILE` precedence; addable later.
 
 ## Documentation
 
@@ -398,22 +385,34 @@ explicitly with `monkeypatch.setenv`.
 - Nothing configured (missing config file) → `(None, diagnostic)`, diagnostic naming both the
   profile keys and the env vars; with a named profile, the diagnostic contains the profile name.
 
-`tests/cli/test_screens_auth.py`:
+`tests/cli/test_screens_auth.py`: these `make_client` cases monkeypatch
+`screens.web_auth.resolve_web_auth` to return a canned `(None, diagnostic)` or `(provider, None)`
+rather than exercising real config resolution — `test_web_auth.py` already covers that via
+`config_path=tmp_path` — so they never touch a developer's actual `~/.micromegas/config.json`.
 
-- `make_client` with nothing resolvable and `no_auth=False` → `ProfileError` whose message contains
-  the diagnostic and `--no-auth`.
+- `make_client` with `resolve_web_auth` returning `(None, diagnostic)` and `no_auth=False` →
+  `ProfileError` whose message contains the diagnostic and `--no-auth`.
 - Same with `no_auth=True` → a `WebClient` with `auth_provider is None` and
-  `base_url == config["server"]`.
-- A resolved provider is passed through to the `WebClient` and the `server` URL is honored.
-- Parser wiring, parametrized over `import`/`pull`/`plan`/`apply`/`list`: parsing
-  `[cmd, "--profile", "prod"]` yields `args.profile == "prod"` and `args.no_auth is False`, and
-  `--no-auth` sets it True — this is what catches a subcommand accidentally left off
-  `parents=[client_args]`, which would otherwise only fail at runtime with an `AttributeError`.
-- `init` rejects `--profile` (it contacts no server).
+  `base_url == config["server"]`, and `resolve_web_auth` is not called at all (`make_client`'s
+  `--no-auth` short-circuit).
+- `resolve_web_auth` returning `(provider, None)` → the provider is passed through to the
+  `WebClient` and the `server` URL is honored.
+- Parser wiring, parametrized over `import`/`pull`/`plan`/`apply`/`list`: `main()` builds its parser
+  and dispatches internally, so these tests monkeypatch `sys.argv` to
+  `["micromegas-screens", cmd, "--profile", "prod"]` and monkeypatch the module-level `cmd_*`
+  function `main()` will call (`set_defaults(func=cmd_*)` binds it at parse time, so the patch is
+  in place before dispatch) to capture the `Namespace` it receives; assert `args.profile == "prod"`
+  and `args.no_auth is False`, and that `--no-auth` sets it True — this is what catches a subcommand
+  accidentally left off `parents=[client_args]`, which would otherwise only fail at runtime with an
+  `AttributeError`.
+- `init` rejects `--profile` (it contacts no server): monkeypatch `sys.argv` to
+  `["micromegas-screens", "init", "--profile", "prod"]` and assert `main()` raises `SystemExit(2)`
+  (argparse's exit code for an unrecognized argument).
 
 `tests/cli/test_grants.py` / `test_groups.py` / `test_import_keys.py` keep passing unchanged (the
-`build_auth_provider` seam is preserved, and the refactor is behavior-preserving by construction) —
-if any of them needs editing, that is the signal that step 1's ordering got dropped.
+`build_auth_provider` seam is preserved) — none of them exercise the delegated body, so
+`test_web_auth.py`'s env-triple-ordering case is the only guard on these three CLIs' behavior
+preservation.
 
 ## Manual Verification
 
@@ -426,18 +425,7 @@ per-profile token cache across two different CLIs.
 2. In a screens directory, run `micromegas-screens list --profile local`. Expect the inventory to
    print with **no** browser window — the issue's symptom 3, which no unit test can demonstrate
    because it depends on the real OIDC round-trip and the real IdP's refresh token.
-3. Against a monolith started with `--disable-auth` and no OIDC config anywhere, run
-   `micromegas-screens list`. Expect a one-line error naming the missing settings and `--no-auth`,
-   and `micromegas-screens list --no-auth` to succeed.
 
 Both flags are typed **after** the subcommand, per Design §3 — they live on the five client
 subparsers, not on the top-level parser, so `micromegas-screens --profile local list` is a parse
 error. Every example in the docs rewrite must follow the same order.
-
-## Open Questions
-
-- Should `micromegas-screens init` record a suggested profile name in `micromegas-screens.json`
-  (e.g. `"profile": "prod"`) so a repo can declare which profile matches its `server`? It's
-  convenient, but it inverts the documented selection precedence (a file-level default that loses
-  to `MICROMEGAS_PROFILE` would need its own rule, since `resolve_active_profile`'s `profile`
-  argument outranks the env var). Left out; easy to add later without breaking anything.
