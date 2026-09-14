@@ -4,14 +4,15 @@
 Checks the tree that ``publish-docs.yml`` assembles under ``public_docs/`` (or
 any equivalent staging directory passed on the command line):
 
-1. Every ``<loc>`` in every ``**/sitemap.xml`` under the root resolves to a
-   file that exists.
+1. Every ``sitemap.xml`` under the root contains at least one ``<loc>``, and
+   every ``<loc>`` resolves to a file that exists.
 2. No ``<loc>`` appears twice, within a sitemap or across sitemaps.
 3. ``robots.txt`` exists at the root, every ``Sitemap:`` line resolves to an
    existing file, and the advertised set equals the set of ``sitemap.xml``
    files actually found.
-4. Every ``<link rel="canonical">`` tag (scanned from ``<root>/docs/**/*.html``
-   and ``<root>/index.html``) points at the file that emitted it.
+4. Every scanned HTML file (``<root>/docs/**/*.html`` and ``<root>/index.html``)
+   carries a ``<link rel="canonical">`` tag that points at the file that
+   emitted it, unless the file is on the exemption list (``404.html``).
 5. Every feed autodiscovery link (``<link rel="alternate"
    type="application/rss+xml">``, from the same HTML files as check 4)
    resolves to a file that exists.
@@ -38,6 +39,8 @@ FEED_RE = re.compile(
 )
 HREF_RE = re.compile(r'\bhref=(["\'])(.*?)\1', re.IGNORECASE)
 SITEMAP_LINE_RE = re.compile(r"^Sitemap:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
+
+NO_CANONICAL_EXEMPT = {"404.html"}
 
 
 class SiteCheckError(Exception):
@@ -125,7 +128,10 @@ def extract_hrefs(html_text: str, tag_re: re.Pattern) -> list[str]:
 def check_sitemap_locs_resolve(root: Path, origin: str, sitemaps: list[Path]) -> list[str]:
     failures = []
     for sitemap_path in sitemaps:
-        for loc in parse_sitemap_locs(sitemap_path):
+        locs = parse_sitemap_locs(sitemap_path)
+        if not locs:
+            failures.append(f"{sitemap_path}: contains no <loc> entries")
+        for loc in locs:
             try:
                 target = url_to_path(root, origin, loc)
             except ValueError as e:
@@ -195,7 +201,9 @@ def check_canonical_tags(root: Path, origin: str, html_files: list[Path]) -> lis
         html_text = html_file.read_text(encoding="utf-8", errors="replace")
         hrefs = extract_hrefs(html_text, CANONICAL_RE)
         if not hrefs:
-            continue  # e.g. 404.html, deliberately excluded
+            if html_file.name not in NO_CANONICAL_EXEMPT:
+                failures.append(f"{html_file}: no <link rel=\"canonical\"> tag found")
+            continue
         for href in hrefs:
             try:
                 target = url_to_path(root, origin, href)

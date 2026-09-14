@@ -176,16 +176,17 @@ Design:
 - `url_to_path(root, url)`: reject a URL not under the origin; `urlsplit` + `unquote` the path;
   a path that is empty or ends in `/` resolves to `index.html` beneath it.
 - Checks, each accumulating failures rather than aborting on the first:
-  1. **Every `<loc>` in every `**/sitemap.xml` under the root resolves to a file that exists.**
-     This is the check that would have caught the reported bug.
+  1. **Every `**/sitemap.xml` under the root contains at least one `<loc>`, and every `<loc>`
+     resolves to a file that exists.** This is the check that would have caught the reported bug.
   2. **No `<loc>` appears twice**, within a sitemap or across sitemaps — pins the root collision
      the issue describes.
   3. **`robots.txt` exists at the root**, every `Sitemap:` line resolves to an existing file, and
      the advertised set equals the set of `sitemap.xml` files actually found — so adding or
      moving a sitemap without updating `robots.txt` fails the build.
-  4. **Every canonical tag points at the file that emitted it.** Scan `<root>/docs/**/*.html` plus
-     `<root>/index.html`; extract `<link rel="canonical" href="...">`; skip files with no such tag
-     (`404.html`). Deliberately not the whole tree: `public_docs/rustdoc/` alone
+  4. **Every scanned HTML file carries a canonical tag that points at the file that emitted it.**
+     Scan `<root>/docs/**/*.html` plus `<root>/index.html`; extract
+     `<link rel="canonical" href="...">`; a file with no such tag fails unless it is on an explicit
+     exemption list (`404.html`). Deliberately not the whole tree: `public_docs/rustdoc/` alone
      is thousands of generated HTML files, and nothing under either `public_docs/rustdoc/` or
      `public_docs/doc/` carries a canonical tag, so walking them would only add cost with nothing
      to check. (The sitemap checks above do scan the whole tree via `**/sitemap.xml`, since there
@@ -321,6 +322,9 @@ of HTML files with canonical tags and a feed autodiscovery link):
 7. A `404.html`-shaped fixture whose feed link href is root-absolute (e.g.
    `/docs/feed_rss_created.xml`) resolves correctly against the staged root, and a broken
    root-absolute href still fails — pins the check 5 fix for error templates.
+8. A `sitemap.xml` with an empty `<urlset>` (zero `<loc>` entries) fails.
+9. An HTML file with no `<link rel="canonical">` tag fails, unless it is on the exemption list
+   (`404.html`, which is confirmed exempt by a dedicated fixture).
 
 The permissive direction is what these pin: a checker that silently passes a broken tree is worse
 than no checker, and nothing else in CI would notice.

@@ -91,6 +91,43 @@ def test_sitemap_loc_target_missing_fails(tmp_path):
     assert any(f"{ORIGIN}/docs/missing/" in f for f in failures)
 
 
+def test_empty_sitemap_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    write(
+        root / "docs" / "sitemap.xml",
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        "</urlset>\n",
+    )
+    failures = check_site(root)
+    assert any(
+        str(root / "docs" / "sitemap.xml") in f and "no <loc>" in f for f in failures
+    )
+
+
+def test_missing_canonical_tag_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    write(
+        root / "docs" / "page" / "index.html",
+        '<html><head>'
+        '<link rel="alternate" type="application/rss+xml" title="RSS feed" href="../feed_rss_created.xml">'
+        "</head><body></body></html>",
+    )
+    failures = check_site(root)
+    assert any(
+        str(root / "docs" / "page" / "index.html") in f and "canonical" in f
+        for f in failures
+    )
+
+
+def test_404_html_exempt_from_missing_canonical(tmp_path):
+    root = build_base_tree(tmp_path)
+    # docs/404.html in the base tree already has no canonical tag; confirm it
+    # is exempted rather than flagged.
+    failures = check_site(root)
+    assert not any(str(root / "docs" / "404.html") in f for f in failures)
+
+
 def test_canonical_pointing_elsewhere_fails(tmp_path):
     root = build_base_tree(tmp_path)
     write(
@@ -115,8 +152,9 @@ def test_duplicate_loc_across_sitemaps_fails(tmp_path):
         "</urlset>\n",
     )
     failures = check_site(root)
-    assert any(f"{ORIGIN}/docs/" in f and "twice" not in f for f in failures) or any(
-        f"{ORIGIN}/docs/" in f for f in failures
+    assert any(
+        f"{ORIGIN}/docs/" in f and str(root / "sitemap.xml") in f and str(root / "docs" / "sitemap.xml") in f
+        for f in failures
     )
 
 
