@@ -14,7 +14,8 @@ The blog is the worst hit: all 20 posts are live under `/docs/blog/...`, all 20 
 This plan fixes `site_url`, adds the site-root discovery files that were never there
 (`robots.txt`, a sitemap covering the landing page and the four presentations), adds an RSS feed
 and a blog-appropriate `<title>` suffix, and adds a CI check that fails the docs build whenever a
-sitemap URL or a canonical tag stops resolving inside the staged tree.
+sitemap URL, a canonical tag, or the feed autodiscovery link stops resolving inside the staged
+tree.
 
 ## Current State
 
@@ -176,8 +177,16 @@ Design:
      moving a sitemap without updating `robots.txt` fails the build.
   4. **Every canonical tag points at the file that emitted it.** Scan `<root>/docs/**/*.html` plus
      `<root>/index.html`; extract `<link rel="canonical" href="...">`; skip files with no such tag
-     (`404.html`, the presentations). Deliberately not the whole tree: `public_docs/doc/` is a raw
-     `cp -r` of `doc/`, which in CI contains each presentation's `node_modules/`.
+     (`404.html`, the presentations). Deliberately not the whole tree: `public_docs/rustdoc/` alone
+     is thousands of generated HTML files, and nothing under either `public_docs/rustdoc/` or
+     `public_docs/doc/` carries a canonical tag, so walking them would only add cost with nothing
+     to check. (The sitemap checks above do scan the whole tree via `**/sitemap.xml`, since there
+     are at most two such files — cost isn't a concern there.)
+  5. **Every feed autodiscovery link resolves to a file that exists.** From the same HTML files as
+     check 4, extract `<link rel="alternate" type="application/rss+xml" href="...">`. This href is
+     relative (Material's `url` filter emits e.g. `../feed_rss_created.xml`, not an absolute URL
+     like the sitemap `<loc>`s and canonical hrefs), so resolve it against the HTML file's own
+     directory rather than through `url_to_path`.
 - Print every failure, exit 1 if there were any.
 
 Wired into `publish-docs.yml` as a step **after** "Prepare staging directory" (so `CNAME` is
@@ -206,7 +215,7 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 
 ### Phase 4 — CI guard
 
-8. Add `build/check_docs_site.py` implementing the four checks.
+8. Add `build/check_docs_site.py` implementing the five checks.
 9. Add `build/test_check_docs_site.py` covering the checker's logic against synthetic trees.
 10. `.github/workflows/publish-docs.yml`:
     - add `build/check_docs_site.py` and `build/test_check_docs_site.py` to `pull_request.paths`;
@@ -267,7 +276,8 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
   merely unlisted. Catching that would need an allowlist of root directories that is itself
   maintenance.
 - The canonical check scans `<root>/docs/` and `<root>/index.html` only, not the whole staged
-  tree, because `public_docs/doc/` is a raw copy of `doc/` including CI-installed `node_modules/`.
+  tree — `public_docs/rustdoc/` and `public_docs/doc/` carry no canonical tags at all, so scanning
+  them would only add cost.
 
 ## Documentation
 
@@ -281,7 +291,7 @@ workflow's `pull_request.paths` filter, otherwise a change to the checker would 
 
 **Unit tests — `build/test_check_docs_site.py`** (pytest, `tmp_path` fixtures building a tiny
 staged tree: a `CNAME`, a root `sitemap.xml`, a `docs/sitemap.xml`, a `robots.txt`, and a couple
-of HTML files with canonical tags):
+of HTML files with canonical tags and a feed autodiscovery link):
 
 1. A well-formed tree passes (exit 0).
 2. A `<loc>` whose target file is absent fails, and the message names the URL — this is the
@@ -290,6 +300,8 @@ of HTML files with canonical tags):
    fixture.
 4. The same `<loc>` in two sitemaps fails — the root collision reduced to a fixture.
 5. A `sitemap.xml` present in the tree but absent from `robots.txt` fails.
+6. An HTML file whose `<link rel="alternate" type="application/rss+xml">` href resolves (relative
+   to the file's own directory) to a file that does not exist fails.
 
 The permissive direction is what these pin: a checker that silently passes a broken tree is worse
 than no checker, and nothing else in CI would notice.
