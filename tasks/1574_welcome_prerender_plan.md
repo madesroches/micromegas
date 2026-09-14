@@ -150,9 +150,7 @@ Plain ESM (`welcome/package.json` is `"type": "module"`), outside `src/` so `tsc
 5. Replace that placeholder with `` `<div id="root">${markup}</div>` `` — exact string substitution,
    no added whitespace, so hydration sees no stray text nodes.
 6. Assert the result: strip tags (`/<[^>]*>/g`) from the final HTML and require at least
-   **100 words**. The page's real copy is ~400 words, so this is a "did anything render at all"
-   floor, not a content contract — it will not trip on copy edits, and it does trip if `render()`
-   ever returns an empty or near-empty string.
+   **100 words**.
 7. Write `dist/index.html`, then `rmSync(ssrOutDir, { recursive: true, force: true })`.
 
 Any throw exits non-zero and fails `yarn build`, and therefore the *Build welcome page* CI step.
@@ -295,11 +293,9 @@ readably with JavaScript disabled.
 
 ## Testing Strategy
 
-**Automated:** `scripts/prerender.mjs`'s own assertions — the `<div id="root"></div>` placeholder
-must be found exactly once, and the finished `dist/index.html` must strip to ≥ 100 words. These run
-on every `yarn build`, which means on every push to `main` and every PR touching `welcome/**` via
-the *Build welcome page* step in `publish-docs.yml`. A non-zero exit fails that step and blocks the
-deploy.
+**Automated:** `scripts/prerender.mjs` asserts the `<div id="root"></div>` placeholder is found
+exactly once and the finished `dist/index.html` strips to ≥ 100 words; both run in the *Build
+welcome page* CI step in `publish-docs.yml`.
 
 ## Manual Verification
 
