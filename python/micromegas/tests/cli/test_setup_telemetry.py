@@ -226,6 +226,47 @@ def test_omitted_audience_non_admin_only_seeded_row_visible_is_a_zero_match_erro
     assert "--user-audience" in message
 
 
+def test_omitted_audience_non_admin_no_matches_no_email_asks_admin():
+    """When the caller has no email at all, `_fresh_audience_suggestion` can't offer
+    `--user-audience` (no prefix to derive) or `--audience <new-name>` (no way to claim
+    anything without an email) -- the zero-match error must fall back to asking an
+    admin, and must not do so via the (email-is-not-None) `visible` branch above it."""
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": None,
+        "email": None,
+        "held_pairs": [],
+    }
+    args = make_args(audience=None)
+    with pytest.raises(SystemExit) as exc_info:
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    message = str(exc_info.value)
+    assert "ask an admin for a grant" in message
+    assert "--audience" not in message
+    assert "--user-audience" not in message
+
+
+def test_omitted_audience_non_admin_only_seeded_row_visible_no_email_asks_admin():
+    """Same no-email caller as above, but with a seeded `"*"` row (e.g. `public`)
+    visible-but-not-held -- exercises the `visible` sub-branch of the email-is-None
+    zero-match error, not just the empty-audiences one."""
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["public"],
+        "mint_prefix": None,
+        "email": None,
+        "held_pairs": [],
+    }
+    args = make_args(audience=None)
+    with pytest.raises(SystemExit) as exc_info:
+        setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    message = str(exc_info.value)
+    assert "public" in message
+    assert "ask an admin for a grant" in message
+    assert "--user-audience" not in message
+
+
 def test_audience_already_granted_is_used_verbatim(capsys):
     my_audiences = {
         "is_admin": False,
@@ -609,6 +650,33 @@ def test_run_403_appends_mint_denied_hint(monkeypatch):
     assert (
         "micromegas-grants --url http://analytics:3000 create prod mint '*'" in message
     )
+
+
+def test_run_403_hint_degrades_to_audience_flag_when_prefix_unavailable(monkeypatch):
+    """A caller with an email that sanitizes to an empty prefix (`mint_prefix`
+    is `None` but `email` is not) can't be offered `--user-audience` -- the hint
+    must degrade to a bare `--audience <new-name>` suggestion instead."""
+    my_audiences = {
+        "is_admin": False,
+        "audiences": [],
+        "mint_prefix": None,
+        "email": "+++@example.com",
+        "held_pairs": [],
+    }
+    client = FakeClient(
+        my_audiences=my_audiences,
+        mint_error=RuntimeError(
+            "HTTP 403: audience 'prod' already exists and the caller has no grant "
+            "for it"
+        ),
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(audience="prod", otlp_endpoint="http://ingest:9000/ingestion/otlp")
+    with pytest.raises(RuntimeError) as exc_info:
+        setup_telemetry.run(args, FakeParser())
+    message = str(exc_info.value)
+    assert "--audience <new-name>" in message
+    assert "--user-audience" not in message
 
 
 def test_run_non_403_runtime_error_propagates_unchanged(monkeypatch):

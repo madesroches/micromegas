@@ -209,7 +209,7 @@ publishing. An explicitly supplied but malformed `audience` is still a
 **400**. Minting for the resolved audience still requires a matching `mint`
 grant (or a lazy claim).
 
-**A caller naming a brand-new audience explicitly claims it**, once
+**A non-admin caller naming a brand-new audience explicitly claims it**, once
 `MICROMEGAS_SELF_SERVICE_MINT` is on — a genuinely fresh, never-before-granted
 name is minted *and* granted in the same request. `micromegas-setup-telemetry`
 exposes this via `--user-audience SUFFIX`: the prefix is composed server-side
