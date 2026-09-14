@@ -4,7 +4,7 @@
 
 ## Overview
 
-`micromegas-screens` is the only CLI in the Python package that never reads
+`micromegas-screens` is the only CLI in the Python package that builds a connection without reading
 `~/.micromegas/config.json`. It resolves OIDC from two env vars, silently falls back to an
 unauthenticated client when they're unset, and caches its tokens in the plain
 `~/.micromegas/tokens.json` even on a machine where every other CLI has moved to a per-profile
@@ -26,7 +26,7 @@ key); only auth comes from the profile. See Trade-offs.
 
 ## Current State
 
-### `screens.py::make_client` (`python/micromegas/micromegas/cli/screens.py:184-207`)
+### `screens.py::make_client` (`python/micromegas/micromegas/cli/screens.py:184-201`)
 
 ```python
 def make_client(config):
@@ -76,7 +76,7 @@ wholesale (`setup_telemetry.py:32`).
 `api_key_file` and a complete OIDC pair (`config.py:186-187`, `_two_mechanism_message`). `ConnectionConfig` (`config.py:52-61`)
 carries the resolved fields but not the resolved profile *name*.
 
-`connection.py::connect_with_profile` (`python/micromegas/micromegas/connection.py:14-115`) already
+`connection.py::connect_with_profile` (`python/micromegas/micromegas/connection.py:14-113`) already
 implements the three-mechanism branch for FlightSQL: `api_key_file` → OIDC → no auth. The web CLIs
 need a *different* ladder, not a shared one: client credentials (which FlightSQL's path doesn't
 have) and no static-key branch (which the web server can't validate). The two stay separate on
@@ -157,8 +157,9 @@ profile 'prod' resolves no auth mechanism: no OIDC issuer/client_id (set 'client
 ```
 
 and, when `conn.profile is None` (flat config or no config file), the same sentence with
-"`~/.micromegas/config.json`" in place of `profile 'prod'` and a trailing "set 'client_id' and
-'issuers[0].issuer', or add a 'profiles' map and pass --profile to select a named profile".
+"`~/.micromegas/config.json`" in place of `profile 'prod'` and its parenthetical replaced (not
+appended to) by "set 'client_id' and 'issuers[0].issuer', or add a 'profiles' map and pass
+--profile to select a named profile".
 
 When `conn.api_key_file` resolved but the OIDC pair did not, the diagnostic names the actual
 problem rather than claiming nothing was configured — this is the case a user is most likely to hit
@@ -169,6 +170,9 @@ profile 'prod' configures 'api_key_file', but the analytics web API validates OI
 a static analytics API key works with micromegas-query (FlightSQL), not with this tool. Set
 'client_id' and 'issuers[0].issuer' on a profile for this server.
 ```
+
+and, when `conn.profile is None`, the same sentence with "config file" (`_two_mechanism_message`'s
+`subject` phrasing, `config.py:153`) in place of `profile 'prod'`.
 
 No provider is constructed on that path and the key file is never read, so a profile pointing at an
 unreadable key file still produces this message rather than an `OSError`.
@@ -264,7 +268,8 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
    about translating `ProfileError` via `parser.error()`), and `setup_telemetry.py`'s module
    docstring, from the full branch ladder to a pointer at `web_auth.resolve_web_auth`.
 5. **Tests**: new `tests/cli/test_web_auth.py`; new `tests/cli/test_screens_auth.py`; fix the three
-   `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`.
+   `lambda config:` monkeypatches in `tests/test_screen_files.py` to `lambda config, args:`, and add
+   a patched two-argument `make_client` case each for `cmd_import`, `cmd_plan`, and `cmd_list`.
 6. **Docs**: `screens-as-code.md` auth section and its five subcommand usage lines, the two
    `python-api.md` passages, and a
    `CHANGELOG.md` **Unreleased** entry.
@@ -312,9 +317,6 @@ its imported `import_keys.make_client`) shrink from spelling out the branch ladd
   disagree about the policy today. Returning the diagnostic instead of an
   `allow_unauthenticated=True/False` parameter keeps the decision — and the wording of the final
   error, which differs per CLI — at the call site.
-- **Keep `build_auth_provider` as a thin wrapper in the three CLIs** instead of calling
-  `resolve_web_auth` directly from their `make_client`. It's one extra line each, and it preserves
-  the monkeypatch seam their existing tests use.
 
 ## Decisions
 
@@ -379,6 +381,8 @@ explicitly with `monkeypatch.setenv`.
 - Profile whose only auth is `api_key_file` → `(None, diagnostic)`, the diagnostic naming
   `api_key_file` and saying the web API is OIDC-only; the key file is never opened (point it at a
   path that does not exist, and assert no `OSError`).
+- Flat config (no `profiles` map) whose only auth is `api_key_file` → `(None, diagnostic)`, the
+  diagnostic naming `api_key_file` with the "config file" subject, not `profile 'None'`.
 - Profile with `issuers`/`client_id`, no env secret → `oidc_connection.load_or_login` (monkeypatched
   on the `oidc_connection` module attribute) receives `token_file=~/.micromegas/tokens-<profile>.json`,
   plus the profile's issuer, client id, and audience.
@@ -425,6 +429,13 @@ rather than exercising real config resolution — `test_web_auth.py` already cov
   required `server_url` positional so the test fails only on the unrecognized `--profile`, not on a
   missing positional) and assert `main()` raises `SystemExit(2)` (argparse's exit code for an
   unrecognized argument).
+
+`tests/test_screen_files.py`: fix the three `lambda config: ...` monkeypatches of
+`screens_module.make_client` to `lambda config, args: ...` (they currently reach `cmd_pull` twice
+and `cmd_apply` once), and add one call-and-patch case each for `cmd_import`, `cmd_plan`, and
+`cmd_list` with a `lambda config, args: ...`-patched `make_client` — thin checks whose only job is
+to catch a call site still passing one argument (a `TypeError` at call time), not to duplicate
+`cmd_pull`/`cmd_apply`'s existing behavioral coverage.
 
 `tests/cli/test_grants.py` / `test_groups.py` / `test_import_keys.py` keep passing unchanged (the
 `build_auth_provider` seam is preserved) — none of them exercise the delegated body, so
