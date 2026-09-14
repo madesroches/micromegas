@@ -1,10 +1,18 @@
 import React from 'react'
-import ReactDOM from 'react-dom/client'
+import { createRoot, hydrateRoot } from 'react-dom/client'
 import App from './App'
 import './styles/globals.css'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+const container = document.getElementById('root')!
+const app = (
   <React.StrictMode>
     <App />
-  </React.StrictMode>,
+  </React.StrictMode>
 )
+
+// `vite dev` serves the unprerendered shell, so the container is empty there.
+if (container.firstChild) {
+  hydrateRoot(container, app)
+} else {
+  createRoot(container).render(app)
+}
