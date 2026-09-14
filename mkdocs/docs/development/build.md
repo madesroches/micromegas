@@ -274,6 +274,12 @@ mkdocs serve
 mkdocs build
 ```
 
+CI additionally runs `python3 build/check_docs_site.py public_docs` from the repo root,
+after `publish-docs.yml` stages the docs build, the welcome page, and the presentations into
+`public_docs/`. It validates that every sitemap URL, canonical tag, and feed autodiscovery
+link in that staged tree resolves to a file that actually exists — it is not a command you
+run from `mkdocs/` against `mkdocs build`'s own output alone.
+
 ## Self-Hosted CI Runner
 
 Developer workstations can contribute to CI builds using a Docker-based self-hosted GitHub Actions runner. Builds from the repo owner route to the dev worker when it's online, falling back to GitHub-hosted runners when it's not.

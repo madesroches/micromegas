@@ -5,3 +5,4 @@ mkdocs-material>=9.0.0
 # Additional plugins
 mkdocstrings>=0.22.0
 mkdocstrings-python>=1.0.0
+mkdocs-rss-plugin>=1.19.0

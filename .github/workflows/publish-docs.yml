@@ -11,6 +11,8 @@ on:
       - 'welcome/**'
       - 'mkdocs/**'
       - 'doc/**'
+      - 'build/check_docs_site.py'
+      - 'build/test_check_docs_site.py'
 
 jobs:
   build-and-deploy-docs:
@@ -21,6 +23,11 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Test docs site checker
+      run: |
+        pip install pytest
+        python3 -m pytest build/test_check_docs_site.py
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
@@ -137,6 +144,9 @@ jobs:
 
         # Custom domain
         echo "micromegas.info" > public_docs/CNAME
+
+    - name: Check docs site URLs
+      run: python3 build/check_docs_site.py public_docs
 
     - name: Deploy to GitHub Pages
       if: github.ref == 'refs/heads/main'
