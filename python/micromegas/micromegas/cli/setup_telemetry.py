@@ -261,12 +261,15 @@ def write_env_file(path, content):
         parent.chmod(0o700)
     flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_BINARY", 0)
     fd = os.open(str(target), flags, 0o600)
-    try:
+    with os.fdopen(fd, "wb") as f:
         # Written before the mode is re-asserted below: `os.open` already
         # create-and-truncated `target`, so a hardening failure after this point
         # costs nothing, while one before it would leave the file empty and the
-        # just-minted, never-retrievable key with nowhere to land.
-        os.write(fd, content.encode("utf-8"))
+        # just-minted, never-retrievable key with nowhere to land. Going through
+        # the buffered file object (instead of a raw `os.write`) means a short
+        # write raises instead of silently truncating the credential.
+        f.write(content.encode("utf-8"))
+        f.flush()
         # `os.fchmod` is absent on Windows before Python 3.13; where present
         # there, it only toggles the read-only bit, so it cannot deliver `0o600`.
         # `os.open`'s mode argument is masked by the umask, which can only clear
@@ -274,8 +277,6 @@ def write_env_file(path, content):
         # can never widen the file past `0o600`.
         if hasattr(os, "fchmod"):
             os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
-    finally:
-        os.close(fd)
 
 
 def format_env_exports(key, otlp_endpoint):
