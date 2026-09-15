@@ -77,7 +77,7 @@ One renderer per dialect, each `(name, value) -> str` (one line, no trailing new
 | format | rendered line | quoting rule |
 | --- | --- | --- |
 | `posix` | `export NAME=<shlex.quote(value)>` | `shlex.quote` — leaves URL/`http/protobuf` bare, single-quotes anything with a space or metacharacter |
-| `powershell` | `$env:NAME = '<value>'` | PowerShell single-quoted literal; `'` escaped by doubling |
+| `powershell` | `$env:NAME = '<value>'` | PowerShell single-quoted literal; `'` escaped by doubling, but a line break has no representation |
 | `cmd` | `set "NAME=value"` | the quoted-`set` form keeps the quotes out of the value |
 | `dotenv` | `NAME=value` | unquoted |
 
@@ -115,7 +115,8 @@ as the issue lists them (`posix` first, as the default).
 
 - **`powershell` single-quoted, not the issue's `"..."`**: PowerShell expands `$` inside
   double quotes, and a value is a credential, never a template. `'` → `''` is PowerShell's
-  own escape, so every representable value round-trips.
+  own escape and represents any value except a line break, which the `| Invoke-Expression`
+  pipeline cannot consume (§3).
 
 - **`cmd`'s `set "NAME=value"`**: the only form that keeps the quote characters out of the
   value. `cmd.exe` has no escape for a `"` inside it, and `%` means different things in a
@@ -137,8 +138,8 @@ quoting rule above:
 
 ```python
 _FORMAT_UNSAFE_CHARS = {
-    "posix": (),            # shlex.quote represents any value
-    "powershell": (),       # '' escaping represents any value
+    "posix": (),                  # shlex.quote represents any value
+    "powershell": ("\r", "\n"),   # '' escaping represents any value except a line break
     "cmd": ('"', "%", "\r", "\n"),
     "dotenv": ("#", "\r", "\n"),
 }
@@ -215,18 +216,9 @@ profile, and `dotenv` output is not a shell script.
 
 ## Trade-offs
 
-- **A renderer registry over an `if/elif` chain in `format_env_exports`.** Four dialects is
-  already the point where a chain starts duplicating the variable list; the registry also lets
-  the flag's `choices` and the unsafe-character table key off the same names.
-- **Rejecting unsafe values for `cmd`/`dotenv` over escaping them.** `cmd`'s `%` has no
-  escape that is correct both in a batch file and at the prompt, and a silently mangled
-  endpoint is worse than a pre-mint error that names another format. The rejected shapes are
-  rare (a `%`-encoded or `#`-bearing OTLP endpoint) and the check costs nothing.
 - **No OS auto-detection**, per the issue: the OS does not determine the shell (Git Bash on
   Windows wants `posix`; `pwsh` runs on Linux/macOS), and guessing wrong fails *after* a
   non-retryable key has been minted.
-- **`shlex.quote` over hand-rolled double-quote escaping** for `posix`: stdlib, already
-  minimal-diff for the typical values, and correct for the atypical ones.
 - **Ship `cmd` even though the issue rates it the weakest of the four.** It is ~3 lines and
   one test on top of the registry the other formats need, and #1588's own reporter was at a
   `cmd.exe` prompt.
