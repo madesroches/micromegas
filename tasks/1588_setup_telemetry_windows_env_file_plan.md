@@ -94,14 +94,15 @@ with os.fdopen(fd, "wb") as f:
         os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
 ```
 
-Without `O_BINARY`, the fd stays in the CRT's default text mode on Windows, where each
-`\n` written is translated to `\r\n` -- corrupting the file with CRLF line
-endings and leaving a trailing `\r` inside the `OTEL_EXPORTER_OTLP_HEADERS` value. This
-is exactly why CPython's own `tempfile` module maintains a separate binary flag set
-(`_bin_openflags = _text_openflags | O_BINARY`) alongside its text one; `write_env_file`
-needs the same treatment since it writes raw bytes through the fd. The repo's own Code
-Style rule (Unix line endings in all files) makes CRLF output here a straightforward
-bug, not just a style nit.
+The actual binary-mode guarantee comes from `os.fdopen(fd, "wb")`: on Windows,
+constructing an `_io.FileIO` in binary mode unconditionally calls `_setmode(fd,
+O_BINARY)` on the fd, regardless of what flags `os.open` was called with. So with the
+write going through the buffered `"wb"` file object rather than a raw `os.write`,
+`O_BINARY` in the `os.open` flags changes no observable behavior on any platform today.
+It is kept anyway as belt-and-suspenders: it costs nothing, and it is exactly the flag
+CPython's own `tempfile` module ORs into its binary flag set
+(`_bin_openflags = _text_openflags | O_BINARY`) to protect a raw-fd `os.write`, which is
+the path this function would need it for if it were ever refactored back onto one.
 
 ### 2. `run()`: broaden the key-preservation net to `except Exception`
 
@@ -209,6 +210,10 @@ should be documented rather than crashed on. The same caveat goes into
   atomic-write design rejected above.
 - **A hardening failure is not swallowed.** Propagating it means the user learns their
   credential file may not be restricted; fix 2 is what makes propagating safe.
+- **`O_BINARY` is kept as belt-and-suspenders, not because it changes current
+  behavior.** `os.fdopen(fd, "wb")` is what actually guarantees binary mode on the fd
+  (see Design §1); the flag is retained anyway for a raw-fd `os.write` path this
+  function does not currently use, at zero cost.
 
 ## Documentation
 
@@ -231,21 +236,12 @@ reachable by calling the two functions directly.
    raising=False)` simulates Windows on the Linux runner, then `write_env_file(tmp_path /
    "sub" / "telemetry.env", content)` must return normally and the file must contain
    `content`. Pins both the `AttributeError` crash and the 0-byte file.
-2. **`test_write_env_file_writes_bytes_exactly_no_crlf_translation`** — pins the
-   `O_BINARY` flag, which is what keeps the fd out of Windows' CRT text mode where
-   `os.write` would otherwise translate `\n` to `\r\n`. On the Linux CI runner
-   `os.O_BINARY` does not exist, so `getattr(os, "O_BINARY", 0)` is `0` with or without
-   the flag and a plain byte-content assertion would pass on unmodified code too; on a
-   real Windows host, `os.O_BINARY` does exist and is a meaningful bit, so the test
-   layers a synthetic sentinel on top of it rather than replacing it
-   (`monkeypatch.setattr(os, "O_BINARY", getattr(os, "O_BINARY", 0) | 0x40000000,
-   raising=False)`), wraps `os.open` to record the `flags` it is called with — the
-   wrapper masks the sentinel bit off and ORs the real `O_BINARY` value back in before
-   delegating to the real `os.open`, so the genuine flag is preserved on platforms where
-   it matters — and asserts the recorded flags include the sentinel bit — that assertion
-   is what actually pins the regression. It also keeps `target.read_bytes() ==
-   content.encode("utf-8")` as a cheap, documentation-only byte-exactness check that is
-   load-bearing on real Windows.
+2. **`test_write_env_file_writes_bytes_exactly`** — a plain byte-exactness check
+   (`env_file.read_bytes() == content.encode("utf-8")`). The actual binary-mode
+   guarantee comes from `os.fdopen(fd, "wb")` (see Design §1), not from the `O_BINARY`
+   flag on `os.open`, so there is nothing about the flag itself worth pinning with a
+   flag-forwarding assertion — this test is trivially true on Linux and becomes a
+   meaningful CRLF-regression check only when the suite runs on Windows.
 3. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
    ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod, raising=False)` (the
    `raising=False` avoids an error on Windows with Python 3.11/3.12, where the attribute

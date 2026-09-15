@@ -259,6 +259,10 @@ def write_env_file(path, content):
         # explicitly -- but only for a directory this call created; a pre-existing
         # directory's permissions are the caller's own business.
         parent.chmod(0o700)
+    # The binary-mode guarantee (no `\n` -> `\r\n` translation on Windows) actually
+    # comes from `os.fdopen(fd, "wb")` below, which forces the fd into binary mode.
+    # `O_BINARY` here is belt-and-suspenders for a raw `os.write` on the fd, which
+    # this function does not do.
     flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_BINARY", 0)
     fd = os.open(str(target), flags, 0o600)
     with os.fdopen(fd, "wb") as f:
