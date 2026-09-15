@@ -262,12 +262,15 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
 1. **Name.** Matches `^[a-z_][a-z0-9_]{0,254}$` and does not start with `__`; not a code-driven view
    set (`get_global_view` / `get_view_sets` on the base factory, which after this change means
    `blocks`, `processes`, `streams`, `log_entries`, `measures` and the five instance-only sets — but
-   *not* `log_stats`, so the seeded row stays replaceable); not one of the reserved table-function
-   names. The name is interpolated into `__<name>__partitions` and into table registrations, so this
-   is a correctness *and* an injection guard: without the `__` exclusion, a name like
-   `__log_stats__partitions` would collide with that view's own `__<name>__partitions` internal
-   registration and hard-error `make_session_context` for every query in the deployment, not just
-   ones touching that view.
+   *not* `log_stats`, so the seeded row stays replaceable); not `source`; not one of the reserved
+   table-function names. The name is interpolated into `__<name>__partitions` and into table
+   registrations, so this is a correctness *and* an injection guard: without the `__` exclusion, a
+   name like `__log_stats__partitions` would collide with that view's own `__<name>__partitions`
+   internal registration and hard-error `make_session_context` for every query in the deployment, not
+   just ones touching that view. `source` is excluded for the same reason: `SqlBatchView::new`
+   registers every view's merge query under the literal name `source` (the `{source}` substitution,
+   `sql_batch_view.rs:298`), and DataFusion errors on a duplicate registration, so a view set named
+   `source` would break every other view's merge on every tick.
 2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
    field. Without one, `OwnershipRewrite::predicate_for` returns `Err` for every non-admin caller
    and the view set is unqueryable in any deployment with auth on. The error message names the
@@ -342,16 +345,14 @@ that no longer projects a column `b` reads, leaves `b` unable to plan. `b` would
 the registry loader (§7) with only a `warn!`, so a user's table would quietly vanish.
 
 The mutation is therefore validated against the *resulting* definition set, not just its own row:
-inside the same transaction, after the upsert/delete, call `ViewDefinitionStore`'s transaction-scoped
-`list_tx(&mut tx)` (§7) to re-read the post-mutation rows and run them through `ViewRegistry`'s rows-in
-build seam (§7), refusing the statement if any **other** definition that built before now fails to
-build. Reading through the open transaction, rather than patching the already-loaded rows in process,
-is what makes this correct under replication: it sees both this statement's own uncommitted write and
-every row already committed by *other* flight-sql replicas, where an in-process patch of this
-replica's up-to-`MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`-stale `current()` snapshot would miss a
-concurrent mutation committed elsewhere. The error names the broken dependents. This is exact rather
-than textual — it uses the real planner, so it catches a removed column as readily as a removed view
-set — and it reuses the loader wholesale.
+`execute_view_ddl`'s transaction first calls `acquire_lock(&mut tx, <dedicated key>)`
+(`remote_data_lake.rs:13-19`, `pg_advisory_xact_lock`), serializing every view-definition mutation
+cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
+write. After the upsert/delete, it calls `ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)`
+(§7) to re-read the post-mutation rows and run them through `ViewRegistry`'s rows-in build seam (§7),
+refusing the statement if any **other** definition that built before now fails to build. The error
+names the broken dependents. This is exact rather than textual — it uses the real planner, so it
+catches a removed column as readily as a removed view set — and it reuses the loader wholesale.
 
 No `CASCADE` in v1: "drop it and everything downstream" is a second, riskier statement, and the
 refusal already tells the admin exactly which views to drop first.
@@ -387,21 +388,23 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    because this path never builds a caller session context. It is also load-bearing beyond the usual
    reason: a DDL view's queries are planned and materialized under `CallerContext::maintenance()`,
    i.e. `ReadScope::All`, so an author sees every audience regardless of their own read scope.
-2. `CREATE`: validate (§4) against the factory the loader would build for it — the base plus every
+2. Open the transaction and call `acquire_lock(&mut tx, <dedicated key>)` first (§4b), serializing
+   steps 3-5 cluster-wide.
+3. `CREATE`: validate (§4) against the factory the loader would build for it — the base plus every
    definition in a lower `update_group`, so a definition reading another DDL view validates against
    the real thing. Reject an existing name unless `or_replace`; on a replace whose definition hash
    changed, retire the old partitions (§6) and `upsert` the row via `registry.store()`'s
    transaction-scoped `upsert_tx(&mut tx, ...)`, all in the same transaction.
-3. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
+4. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
    `delete_tx(&mut tx, ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
-4. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
+5. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
    `list_tx(&mut tx)` (§4b) and calls `registry.build_from_rows(&rows)` (§7), inside the same
    transaction, rolling back if it broke a dependent. `registry.store()` is how `execute_view_ddl`
    reaches the definition store to run these calls on its own open transaction, alongside
    `retire_partitions`.
-5. `registry.reload()` inline, so the statement's own connection can query the new view set
+6. `registry.reload()` inline, so the statement's own connection can query the new view set
    immediately instead of waiting out the interval.
-6. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
+7. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
    `created | replaced | dropped | not_found`) so `client.query("CREATE ...")` yields a DataFrame
    and the FlightSQL stream shape is unchanged.
 
@@ -434,10 +437,11 @@ pub struct ViewRegistry {
     store: Arc<dyn ViewDefinitionStore>,    // Postgres in production, a fake in tests
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    session_configurator: Arc<dyn SessionConfigurator>,
+    session_configurator: Arc<dyn SessionConfigurator>, // both maintenance entry points and
+                                             // flight-sql resolve the same `StaticTablesConfigurator`
     current: RwLock<Arc<ViewFactory>>,      // base + DDL-defined global views
     loaded_digest: RwLock<Option<u64>>,     // hash of the loaded (name, updated_at) tuples
-    had_load_failures: RwLock<bool>,        // true if the last build skipped at least one row
+    failed_view_sets: RwLock<Vec<String>>,  // names skipped by the last build
     reload_mutex: tokio::sync::Mutex<()>,   // serializes reload against DDL-triggered reload
 }
 
@@ -451,14 +455,14 @@ impl ViewRegistry {
     pub fn store(&self) -> Arc<dyn ViewDefinitionStore>;
     pub async fn reload(&self) -> Result<()>;
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
-    /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 4) doesn't need those
+    /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
     /// three pieces separately.
-    pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, bool)>;
+    pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, Vec<String>)>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
 }
 
 /// Builds a factory from an explicit row set instead of `store.list()`, so a caller already holding
-/// rows inside an open transaction (§4b, §5 step 4) can validate against them without a second,
+/// rows inside an open transaction (§4b, §5 step 5) can validate against them without a second,
 /// pool-backed read that would not see its own uncommitted write. `reload()` calls this too, after
 /// its own `store.list()`. `async` because building each row's `SqlBatchView` (`SqlBatchView::new`)
 /// is itself `async` and needs `runtime`, `lake` and `session_configurator` to plan the extract
@@ -469,14 +473,14 @@ async fn build_factory(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     session_configurator: Arc<dyn SessionConfigurator>,
-) -> Result<(Arc<ViewFactory>, bool)>;
+) -> Result<(Arc<ViewFactory>, Vec<String>)>;
 ```
 
 `reload()`:
 
 1. `store.list()` → rows ordered by `(update_group NULLS LAST, view_set_name)`.
 2. Hash the `(view_set_name, updated_at)` tuples; if unchanged from `loaded_digest` **and** the
-   previous build had no failures, return — the steady-state reload is one `SELECT` and no planning,
+   previous build's failed set was empty, return — the steady-state reload is one `SELECT` and no planning,
    which is what makes a 60 s interval affordable. A digest match after a failed build does *not*
    short-circuit, so a row that failed for a transient reason (a source view momentarily unplannable
    mid-rollout, an object-store hiccup) is retried every tick rather than stuck until its row next
@@ -494,9 +498,9 @@ async fn build_factory(
    a duplicate global-view name hard-errors every query, not just ones touching that view.
 4. A row that fails to build is **skipped**, not fatal: `warn!` plus
    `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set name, and
-   `build_factory` reports that at least one row failed. One broken definition must not take out
-   every other view set, or the whole lakehouse.
-5. Swap `current`, update `loaded_digest` and `had_load_failures`.
+   `build_factory` collects its name into the returned failed-set. One broken definition must not take
+   out every other view set, or the whole lakehouse.
+5. Swap `current`, update `loaded_digest` and `failed_view_sets`.
 
 Reload interval: `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, default 60 s. The digest
 short-circuit keeps the steady-state cost at one `SELECT` whenever the last build was fully healthy,
@@ -512,9 +516,11 @@ and `execute_view_ddl` reloads inline on its own node, so the interval only boun
   signature (`make_session_context`, the UDTFs, `MaterializedView`) keeps taking `Arc<ViewFactory>`
   and is handed the snapshot — no churn there. `flight_sql_server.rs` builds the registry and calls
   `spawn_refresh_task(fanout.subscribe())` next to the existing `query_denials` one (`:406`).
-- `maintenance.rs`: `Views` becomes `Arc<ViewRegistry>` on the five `CronTask` structs; each `run()`
-  computes `get_global_views_with_update_group(&registry.current())`, sorts by `update_group`, and
-  passes the resulting `Arc<Vec<_>>` to the unchanged `materialize_all_views`. `daemon()` takes
+- `maintenance.rs`: `Views` (only its use on the five `CronTask` structs) becomes `Arc<ViewRegistry>`;
+  each `run()` computes `get_global_views_with_update_group(&registry.current())`, sorts by
+  `update_group`, and passes the resulting `Arc<Vec<Arc<dyn View>>>` to `materialize_all_views`, whose
+  `views: Arc<Vec<Arc<dyn View>>>` parameter stays spelled out (not the `Views` alias) and unchanged.
+  `daemon()` takes
   `Arc<ViewRegistry>` instead of `Vec<Arc<dyn View>>` and spawns the refresh task itself. The sort
   moves out of `daemon` into a helper both the daemon and the tasks call. `materialize_all_views`'s
   `views.first().unwrap()` (`:51`) gains an empty-list early return, now that the list is computed
@@ -560,9 +566,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    step 3. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
    definition was built against.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait
-   (pool-backed `list`, `upsert`, `delete`, `get`, for `reload()`'s periodic use, plus a
-   transaction-scoped counterpart of each — `list_tx`/`upsert_tx`/`delete_tx`, each taking a
-   `&mut sqlx::Transaction` — so the DDL path (§4b, §5) can run them on its own open transaction
+   (pool-backed `list`, for `reload()`'s periodic use, plus the transaction-scoped
+   `list_tx`/`upsert_tx`/`delete_tx`, each taking a `&mut sqlx::Transaction` — so the DDL path (§4b,
+   §5), including its existence check behind `or_replace`, runs entirely on its own open transaction
    alongside `retire_partitions`), its Postgres impl, and `partition_insert_range(view_set_name)` for
    §6.
 6. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
@@ -603,7 +609,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     structs, per-tick view resolution + sort helper, empty-list early return in
     `materialize_all_views`, `daemon`'s signature change and its `spawn_refresh_task` call.
 14. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
-    registry from `default_view_factory` and hand it to `daemon`.
+    registry from `default_view_factory` and hand it to `daemon`, resolving the same
+    `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
+    uses (`flight_sql_server.rs:275-283`) as `ViewRegistry::new`'s `session_configurator`, instead of
+    a no-op one — a DDL view reading a static table must build the same way in both services.
 
 ### Milestone 3 — introspection and `log_stats` cutover
 
@@ -624,6 +633,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     Until this step runs, the base factory and the seeded row both carry a `log_stats`; §7 step 3's
     name-collision skip is what keeps every query from hard-erroring during that window, with the
     seeded row inert (skipped) until this step removes the compiled one.
+    `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs`'s
+    `real_view_factory_covers_every_registered_view_set` derives its inventory from
+    `default_view_factory().get_global_views()`; give it the same `make_log_stats_view` +
+    `add_global_view` treatment onto its own factory clone so it keeps covering `log_stats`'s
+    audience branch instead of silently losing that coverage.
 
 ## Files to Modify
 
@@ -642,7 +656,8 @@ Created:
 Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `sql_batch_view.rs`, `query.rs`, `mod.rs`,
   `view_factory.rs`, `log_stats_view.rs`
-- `rust/analytics/tests/audience_mismatch_skip_db_test.rs`
+- `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
+  `ownership_rewrite_public_view_set_tests.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
