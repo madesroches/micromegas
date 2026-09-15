@@ -957,6 +957,13 @@ def test_check_format_endpoint_cmd_rejects_a_percent_bearing_endpoint():
         )
 
 
+def test_check_format_endpoint_cmd_rejects_a_bang_bearing_endpoint():
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(
+            "cmd", "http://ingest:9000/otlp!path", FakeParser()
+        )
+
+
 def test_check_format_endpoint_dotenv_rejects_a_hash_bearing_endpoint():
     with pytest.raises(SystemExit):
         setup_telemetry.check_format_endpoint(

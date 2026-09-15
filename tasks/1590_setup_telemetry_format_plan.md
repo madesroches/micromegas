@@ -120,10 +120,11 @@ as the issue lists them (`posix` first, as the default).
   value except a line break, which the `| Invoke-Expression` pipeline cannot consume (§3).
 
 - **`cmd`'s `@set "NAME=value"`**: the quoted-`set` form is the only one that keeps the quote
-  characters out of the value — `cmd.exe` has no escape for a `"` inside it, and `%` means
-  different things in a batch file (`%%`) than at the interactive prompt, so unsafe characters
-  are rejected rather than escaped context-dependently (§3). The leading `@` is accepted both
-  in a batch file and at the interactive prompt.
+  characters out of the value — `cmd.exe` has no escape for a `"` inside it, `%` means
+  different things in a batch file (`%%`) than at the interactive prompt, and `!` is dropped
+  silently when the caller has delayed expansion enabled but passes through untouched
+  otherwise, so unsafe characters are rejected rather than escaped context-dependently (§3).
+  The leading `@` is accepted both in a batch file and at the interactive prompt.
 
 - **`dotenv` unquoted**: loaders disagree on whether surrounding quotes are stripped (older
   `docker compose --env-file` kept them literally, `python-dotenv` strips them), while the
@@ -142,7 +143,7 @@ quoting rule above:
 _FORMAT_UNSAFE_CHARS = {
     "posix": (),                  # shlex.quote represents any value
     "powershell": ("\r", "\n"),   # doubling each of ' ‘ ’ ‚ ‛ represents any value except a line break
-    "cmd": ('"', "%", "\r", "\n"),
+    "cmd": ('"', "%", "!", "\r", "\n"),
     "dotenv": ("#", "$", "\r", "\n"),
 }
 ```

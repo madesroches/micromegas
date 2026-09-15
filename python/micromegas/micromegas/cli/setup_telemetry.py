@@ -317,7 +317,11 @@ def _render_cmd(name, value):
     # The quoted-`set` form: it is the only one that keeps the quote
     # characters out of the value (`cmd.exe` has no escape for a literal `"`
     # inside it), and the leading `@` suppresses the command echo both in a
-    # batch file and at the interactive prompt.
+    # batch file and at the interactive prompt. `%` and `!` are both
+    # rejected (see `_FORMAT_UNSAFE_CHARS`) because both expand
+    # context-dependently -- `%` at parse time always, `!` only when the
+    # caller has delayed expansion enabled -- so there's no escaping that's
+    # safe in every context this batch file might be `call`ed from.
     return f'@set "{name}={value}"'
 
 
@@ -340,7 +344,7 @@ _FORMAT_RENDERERS = {
 _FORMAT_UNSAFE_CHARS = {
     "posix": (),
     "powershell": ("\r", "\n"),
-    "cmd": ('"', "%", "\r", "\n"),
+    "cmd": ('"', "%", "!", "\r", "\n"),
     "dotenv": ("#", "$", "\r", "\n"),
 }
 
