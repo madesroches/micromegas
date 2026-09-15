@@ -145,6 +145,13 @@ Option semantics:
 
 Anything else is a hard error — an unknown option is far more likely a typo than an extension point.
 
+`sqlparser`'s `parse_create_view` and `parse_drop` also accept several clauses this grammar does not
+model — on `CREATE`: `IF NOT EXISTS`, a view column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`,
+`COMMENT`, `TO`, `WITH NO SCHEMA BINDING`; on `DROP`: `CASCADE`/`RESTRICT`/`PURGE` and a
+comma-separated list of more than one name. `parse_view_ddl` rejects every one of them with a named
+error rather than silently ignoring them, since silently ignoring `CASCADE` or a second `DROP` name
+would make the statement do less than it says.
+
 ### 2. Persistence
 
 Lakehouse migration **v9 → v10**, following `upgrade_v8_to_v9`:
@@ -281,9 +288,13 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    requirement and points at `max(audience)`-in-`GROUP BY` as the fix. This mirrors the existing
    branch table exactly; `ownership_rewrite.rs` needs no edit.
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
-   substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to
-   equal the extract query's (field names, types, and order). Today a bad merge query is not
-   detected until the daemon's first merge, and a *mismatched* one is not detected at all — yet the
+   substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to equal
+   the extract query's over field names, data types and order only — nullability and field metadata
+   are deliberately excluded from the comparison. `log_stats_view.rs` projects `count(*) as count` in
+   the extract query (non-nullable) and `sum(count) as count` in the merge query (nullable), so a
+   literal field-by-field equality would reject the seeded calibration case (§ Testing Strategy) on
+   nullability alone. Today a bad merge query is not detected until the daemon's first merge, and a
+   *mismatched* one is not detected at all — yet the
    merge query is the read path for any query spanning more than one partition
    (`sql_batch_view.rs:311-334`), so a disagreement means the table a user sees does not match the
    partitions it is built from.
@@ -363,9 +374,11 @@ The mutation is therefore validated against the *resulting* definition set, not 
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
 write. After the upsert/delete, it calls `ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)`
 (§7) to re-read the post-mutation rows and run them through `ViewRegistry`'s rows-in build seam (§7),
-refusing the statement if any **other** definition not already present in `registry.failed_view_sets()`
-(§7) fails to build against the post-mutation rows. The error names the broken dependents. This is exact rather than textual — it uses the real planner, so it
-catches a removed column as readily as a removed view set — and it reuses the loader wholesale.
+refusing the statement if any definition — including the row just written — not already present in
+`registry.failed_view_sets()` (§7) fails to build against the post-mutation rows. The error names the
+broken definition, whether a downstream dependent or the mutated row itself. This is exact rather than
+textual — it uses the real planner, so it catches a removed column as readily as a removed view set —
+and it reuses the loader wholesale.
 
 No `CASCADE` in v1: "drop it and everything downstream" is a second, riskier statement, and the
 refusal already tells the admin exactly which views to drop first.
@@ -381,7 +394,10 @@ pub enum ViewDdl {
 }
 
 /// `Ok(None)` when `sql` is not view DDL -- the overwhelmingly common case, decided by a cheap
-/// keyword peek before any full parse.
+/// keyword peek before any full parse. `Err` for any `CREATE`/`DROP` clause `sqlparser` accepts but
+/// this enum does not model (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`,
+/// `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `DROP ... CASCADE`/`RESTRICT`/`PURGE`) and for a `DROP`
+/// naming more than one object — each would otherwise silently do less than the statement says.
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
 
 /// The same gate as the eight admin-gated mutating lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
@@ -408,20 +424,25 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    i.e. `ReadScope::All`, so an author sees every audience regardless of their own read scope.
 2. Open the transaction and call `acquire_lock(&mut tx, <dedicated key>)` first (§4b), serializing
    steps 3-5 cluster-wide.
-3. `CREATE`: validate (§4) against the factory the loader would build for it — the base plus every
-   definition in a lower `update_group`, so a definition reading another DDL view validates against
-   the real thing. Reject an existing name unless `or_replace`; on a replace whose definition hash
+3. `CREATE`: validate (§4) against the factory the loader would build for this row — the base plus
+   every definition, from the post-mutation row set with this row's own name excluded, in a lower
+   `update_group` — so a definition reading another DDL view validates against the real thing, and a
+   `CREATE OR REPLACE` that raises its own `update_group` cannot validate against a since-superseded
+   copy of itself. Reject an existing name unless `or_replace`; on a replace whose definition hash
    changed, retire the old partitions (§6) and `upsert` the row via `registry.store()`'s
    transaction-scoped `upsert_tx(&mut tx, ...)`, all in the same transaction.
 4. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
    `delete_tx(&mut tx, ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
 5. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
    `list_tx(&mut tx)` (§4b) and calls `registry.build_from_rows(&rows)` (§7), inside the same
-   transaction, rolling back if it broke a dependent. `registry.store()` is how `execute_view_ddl`
-   reaches the definition store to run these calls on its own open transaction, alongside
-   `retire_partitions`.
-6. `registry.reload()` inline, so the statement's own connection can query the new view set
-   immediately instead of waiting out the interval.
+   transaction, rolling back if it broke a dependent or failed to build the mutated row itself.
+   `registry.store()` is how `execute_view_ddl` reaches the definition store to run these calls on
+   its own open transaction, alongside `retire_partitions`.
+6. After the transaction (steps 2–5) commits and its advisory lock releases, call `registry.reload()`
+   inline, so the statement's own connection can query the new view set immediately instead of
+   waiting out the interval. It must run after the commit: `reload()` starts with the pool-backed
+   `store.list()` (§7), a second, uncommitted-write-blind connection, so calling it any earlier would
+   have it read the pre-mutation rows and swap in the old factory.
 7. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
    `created | replaced | dropped | not_found`) so `client.query("CREATE ...")` yields a DataFrame
    and the FlightSQL stream shape is unchanged.
@@ -605,7 +626,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    against lower-group definitions), and §4b's post-mutation rebuild via `build_factory`.
 8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
    `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
-   option extraction and its error type; `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
+   option extraction and its error type; rejecting, with a named error, every `CREATE`/`DROP` clause
+   `sqlparser` accepts but `ViewDdl` does not model and any `DROP` naming more than one object (§1);
+   `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
    the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
    verbatim source text from the `AS` body's span in the input SQL, not rendered from the parsed
    `Query` AST.
@@ -799,7 +822,10 @@ Everything below is a no-DB unit test unless stated. The offline harness from
 `CREATE` without `OR REPLACE`; `DROP` with and without `IF EXISTS`; a plain `SELECT` and a
 non-materialized `CREATE VIEW` both returning `Ok(None)`; a missing required option, an unknown
 option, a malformed `source_partition_delta`, and a bad `merge_sort_order`, each a named error; a
-name failing the charset check; option values containing escaped quotes and newlines.
+name failing the charset check; option values containing escaped quotes and newlines; each
+accepted-but-unmodelled clause from §1 (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`,
+`CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING` on `CREATE`, `CASCADE`/`RESTRICT`/`PURGE` on
+`DROP`) and a `DROP` naming more than one object, each a named error.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
@@ -829,7 +855,9 @@ view rather than erroring. Paired with a case asserting the same definition *wit
 
 **Seeded definition passes validation** (same file) — run the full §4 check set over the seeded
 `log_stats` definition and assert it passes unmodified. It is the validator's calibration case; a
-failure here means a check is miscalibrated, not that the view is wrong.
+failure here means a check is miscalibrated, not that the view is wrong. In particular this is what
+exercises check 3's nullability exclusion: `count(*)` (non-nullable) in the extract query vs.
+`sum(count)` (nullable) in the merge query.
 
 **Definition hash** (in `view_definition_validation_tests.rs`) — identical definitions hash equal;
 changing each hashed field (`extract_query`, `count_src_query`, `merge_partitions_query`, either time
@@ -886,10 +914,7 @@ Each step below needs a running split-mode stack and is checking something no un
    *second* client. Expect it to appear within the refresh interval, and
    `/tmp/daemon.log` to show the daemon materializing it on the next minute tick — the thing the
    whole feature exists to do, and the one that cannot be observed in-process.
-5. **Backfill.** `micromegas-query "SELECT * FROM materialize_partitions('<name>', TIMESTAMP '...',
-   TIMESTAMP '...', 3600)"` and confirm `list_partitions()` shows the filled range. Confirms the
-   manual backfill path the docs promise actually works for a DDL-defined view set.
-6. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
+5. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
    over `a` at group 4001; `materialize_partitions` both over the same range and confirm `b`'s rows
    are consistent with `a`'s. Then attempt `DROP MATERIALIZED VIEW a` and expect a refusal naming
    `b`. The group-ordering half is what unit tests cannot reach — it needs two real daemon passes
