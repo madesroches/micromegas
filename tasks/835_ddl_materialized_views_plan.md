@@ -147,10 +147,16 @@ Anything else is a hard error — an unknown option is far more likely a typo th
 
 `sqlparser`'s `parse_create_view` and `parse_drop` also accept several clauses this grammar does not
 model — on `CREATE`: `IF NOT EXISTS`, a view column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`,
-`COMMENT`, `TO`, `WITH NO SCHEMA BINDING`; on `DROP`: `CASCADE`/`RESTRICT`/`PURGE` and a
-comma-separated list of more than one name. `parse_view_ddl` rejects every one of them with a named
-error rather than silently ignoring them, since silently ignoring `CASCADE` or a second `DROP` name
-would make the statement do less than it says.
+`COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, an `OPTIONS (...)` list (parsed
+unconditionally for `BigQueryDialect`/`GenericDialect`, and this repo already parses with
+`GenericDialect`), and the MySQL view params (`ALGORITHM =`/`DEFINER =`/`SQL SECURITY`, parsed
+unconditionally); on `DROP`: `CASCADE`/`RESTRICT`/`PURGE`, `TEMPORARY` (`DROP TEMPORARY ...`), `DROP
+... ON <table>`, and a comma-separated list of more than one name. Rather than hand-enumerating these
+and risking the list falling behind the grammar, `parse_view_ddl` exhaustively destructures
+`sqlparser`'s `CreateView` and `Statement::Drop` fields and rejects with a named error if any field
+outside the ones this grammar models is not at its default — silently ignoring `OPTIONS (...)` (which
+*overwrites* the `WITH (...)` option list this whole grammar depends on) or a second `DROP` name would
+make the statement do less than it says.
 
 ### 2. Persistence
 
@@ -372,13 +378,18 @@ The mutation is therefore validated against the *resulting* definition set, not 
 `execute_view_ddl`'s transaction first calls `acquire_lock(&mut tx, <dedicated key>)`
 (`remote_data_lake.rs:13-19`, `pg_advisory_xact_lock`), serializing every view-definition mutation
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
-write. After the upsert/delete, it calls `ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)`
-(§7) to re-read the post-mutation rows and run them through `ViewRegistry`'s rows-in build seam (§7),
-refusing the statement if any definition — including the row just written — not already present in
-`registry.failed_view_sets()` (§7) fails to build against the post-mutation rows. The error names the
-broken definition, whether a downstream dependent or the mutated row itself. This is exact rather than
-textual — it uses the real planner, so it catches a removed column as readily as a removed view set —
-and it reuses the loader wholesale.
+write. Still inside that transaction, before applying the mutation, it calls `ViewDefinitionStore`'s
+transaction-scoped `list_tx(&mut tx)` (§7) over the pre-mutation rows and runs them through
+`ViewRegistry`'s rows-in build seam (§7) to get the pre-mutation failed set. After the upsert/delete,
+it re-reads the post-mutation rows with another `list_tx(&mut tx)` and builds again, refusing the
+statement if any definition — including the row just written — that is *not* in the pre-mutation
+failed set fails to build against the post-mutation rows. The error names the broken definition,
+whether a downstream dependent or the mutated row itself. This is exact rather than textual — it uses
+the real planner, so it catches a removed column as readily as a removed view set — and it reuses the
+loader wholesale. The baseline is computed transactionally, from the same rows the mutation is
+validated against, rather than from `reload()`'s last periodic snapshot: that snapshot is up to
+`MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` stale and differs per replica, which would make the
+refusal nondeterministic.
 
 No `CASCADE` in v1: "drop it and everything downstream" is a second, riskier statement, and the
 refusal already tells the admin exactly which views to drop first.
@@ -394,10 +405,12 @@ pub enum ViewDdl {
 }
 
 /// `Ok(None)` when `sql` is not view DDL -- the overwhelmingly common case, decided by a cheap
-/// keyword peek before any full parse. `Err` for any `CREATE`/`DROP` clause `sqlparser` accepts but
-/// this enum does not model (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`,
-/// `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `DROP ... CASCADE`/`RESTRICT`/`PURGE`) and for a `DROP`
-/// naming more than one object — each would otherwise silently do less than the statement says.
+/// keyword peek before any full parse. `Err` when exhaustively destructuring `sqlparser`'s
+/// `CreateView`/`Statement::Drop` finds a field this enum does not model left at a non-default value
+/// (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`, `COMMENT`, `TO`, `WITH NO
+/// SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`, the MySQL view params, `DROP
+/// TEMPORARY`, `DROP ... ON <table>`, `CASCADE`/`RESTRICT`/`PURGE`) or a `DROP` naming more than one
+/// object — each would otherwise silently do less than the statement says.
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
 
 /// The same gate as the eight admin-gated mutating lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
@@ -444,8 +457,10 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    `store.list()` (§7), a second, uncommitted-write-blind connection, so calling it any earlier would
    have it read the pre-mutation rows and swap in the old factory.
 7. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
-   `created | replaced | dropped | not_found`) so `client.query("CREATE ...")` yields a DataFrame
-   and the FlightSQL stream shape is unchanged.
+   `created | replaced | dropped | not_found`), wrapped in `CompletionTrackedStream::new(...,
+   audit_state)` exactly like every other `execute_query` return, so `client.query("CREATE ...")`
+   yields a DataFrame, the FlightSQL stream shape is unchanged, and the accepted statement — not just
+   a rejected one — is recorded in `flightsql_query_audit`.
 
 `do_action_create_prepared_statement` (`flight_sql_service_impl.rs:1332-1375`) rejects a statement
 that `parse_view_ddl` matches, with a message saying DDL must be executed directly. Nothing in the
@@ -486,15 +501,11 @@ pub struct ViewRegistry {
 
 impl ViewRegistry {
     pub fn new(base: Arc<ViewFactory>, store: Arc<dyn ViewDefinitionStore>, ...) -> Self;
-    pub fn base(&self) -> Arc<ViewFactory>;
     pub fn current(&self) -> Arc<ViewFactory>;
     /// The definition store, so `execute_view_ddl` (§5) can run its own `list_tx`/`upsert_tx`/
     /// `delete_tx` on it alongside `retire_partitions`, in the same transaction as the mutation it is
     /// executing.
     pub fn store(&self) -> Arc<dyn ViewDefinitionStore>;
-    /// Names skipped by the last build, so `execute_view_ddl` (§4b) can diff pre- and post-mutation
-    /// failures instead of refusing on a row that was already broken before this statement.
-    pub fn failed_view_sets(&self) -> Vec<String>;
     pub async fn reload(&self) -> Result<()>;
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
@@ -529,7 +540,9 @@ async fn build_factory(
    changes or the process restarts.
 3. `build_factory(&self.base, &rows, self.runtime.clone(), self.lake.clone(),
    self.session_configurator.clone()).await`: `let mut factory = (*self.base).clone();` then, per row in
-   order, build the `SqlBatchView` against `Arc::new(factory.clone())` and
+   order, build the `SqlBatchView` against `Arc::new(factory.clone())`, run it through the same
+   `validate_view_definition` (§4) the DDL executor uses — against that same factory-so-far, so check
+   7's `update_group` ordering sees only the rows already folded in — and only then
    `factory.add_global_view(...)`. Each definition therefore sees the built-ins plus every DDL view
    with a lower `update_group` — the same incremental clone-and-extend chain `default_view_factory`
    uses, and the same ordering rule `materialize_all_views` already documents. A row whose name already
@@ -538,10 +551,13 @@ async fn build_factory(
    `log_stats` row would otherwise collide with the base factory's own `log_stats`, and
    `ViewFactory::add_global_view`/`make_session_context`'s registration has no overwrite semantics —
    a duplicate global-view name hard-errors every query, not just ones touching that view.
-4. A row that fails to build is **skipped**, not fatal: `warn!` plus
+4. A row that fails to **build or validate** is **skipped**, not fatal: `warn!` plus
    `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set name, and
    `build_factory` collects its name into the returned failed-set. One broken definition must not take
-   out every other view set, or the whole lakehouse.
+   out every other view set, or the whole lakehouse — and running validation here, not just
+   construction, is what keeps a definition whose merge query cannot plan, whose audience column was
+   lost to source drift, or whose `CREATE OR REPLACE` raised its own `update_group` past a dependent's
+   from ever reaching `current()`.
 5. Swap `current`, update `loaded_digest` and `failed_view_sets`.
 
 Reload interval: `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, default 60 s. The digest
@@ -619,15 +635,17 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    alongside `retire_partitions`), its Postgres impl, and `partition_insert_range(view_set_name)` for
    §6.
 7. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
-   rows-in seam, `reload` (ordered incremental build, skip-on-failure, digest short-circuit that also
-   bypasses on a prior failure), `base()`/`current()`, `spawn_refresh_task`, and the
-   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` knob (default 60). Lands in this milestone rather
-   than the next because the DDL path itself needs `base()`, the ordered build (step 11's validation
-   against lower-group definitions), and §4b's post-mutation rebuild via `build_factory`.
+   rows-in seam (building and validating each row via `validate_view_definition`), `reload` (ordered
+   incremental build, skip-on-failure, digest short-circuit that also bypasses on a prior failure),
+   `current()`, `spawn_refresh_task`, and the `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` knob
+   (default 60). Lands in this milestone rather than the next because of the ordered build (step 11's
+   validation against lower-group definitions) and §4b's post-mutation rebuild via `build_factory`.
 8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
    `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
-   option extraction and its error type; rejecting, with a named error, every `CREATE`/`DROP` clause
-   `sqlparser` accepts but `ViewDdl` does not model and any `DROP` naming more than one object (§1);
+   option extraction and its error type; rejecting, with a named error, any `CreateView`/
+   `Statement::Drop` field left at a non-default value after exhaustive destructuring — including
+   `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`, the MySQL view params, `DROP TEMPORARY`, and `DROP ...
+   ON <table>` — and any `DROP` naming more than one object (§1);
    `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
    the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
    verbatim source text from the `AS` body's span in the input SQL, not rendered from the parsed
@@ -824,8 +842,9 @@ non-materialized `CREATE VIEW` both returning `Ok(None)`; a missing required opt
 option, a malformed `source_partition_delta`, and a bad `merge_sort_order`, each a named error; a
 name failing the charset check; option values containing escaped quotes and newlines; each
 accepted-but-unmodelled clause from §1 (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`,
-`CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING` on `CREATE`, `CASCADE`/`RESTRICT`/`PURGE` on
-`DROP`) and a `DROP` naming more than one object, each a named error.
+`CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`,
+the MySQL view params on `CREATE`; `CASCADE`/`RESTRICT`/`PURGE`, `DROP TEMPORARY`, `DROP ... ON
+<table>` on `DROP`) and a `DROP` naming more than one object, each a named error.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
