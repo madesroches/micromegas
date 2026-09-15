@@ -98,60 +98,65 @@ transaction, each ending with `UPDATE lakehouse_migration SET version=N+1`. `upg
 ### 1. DDL surface
 
 ```sql
-CREATE [OR REPLACE] MATERIALIZED VIEW <name>
-WITH (
-  update_group             = 4000,
-  time_column              = 'time_bin',
-  count_src_query          = 'SELECT sum(nb_objects) as count FROM blocks WHERE ... AND insert_time >= ''{begin}'' AND insert_time < ''{end}''',
-  merge_partitions_query   = 'SELECT time_bin, target, sum(count) as count, audience FROM {source} GROUP BY time_bin, target, audience',
-  source_partition_delta   = '1 day',
-  merge_partition_delta    = '1 day',
-  merge_sort_order         = 'time_bin, target'
+CREATE [OR REPLACE] MATERIALIZED VIEW <name> WITH (
+  extract_query = $$
+    SELECT date_bin('1 minute', time) as time_bin, target, count(*) as count,
+           arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
+      FROM log_entries
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+     GROUP BY time_bin, target, audience
+     ORDER BY time_bin, target
+  $$,
+  count_src_query = $$
+    SELECT sum(nb_objects) as count FROM blocks
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+  $$,
+  merge_partitions_query = $$
+    SELECT time_bin, target, sum(count) as count, audience
+      FROM {source} GROUP BY time_bin, target, audience
+  $$,
+  update_group           = 4000,
+  time_column            = 'time_bin',
+  source_partition_delta = '1 day',
+  merge_partition_delta  = '1 day',
+  merge_sort_order       = 'time_bin, target'
 )
-AS
-SELECT date_bin('1 minute', time) as time_bin, target, count(*) as count,
-       arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience
-  FROM log_entries
- WHERE insert_time >= '{begin}' AND insert_time < '{end}'
- GROUP BY time_bin, target, audience
- ORDER BY time_bin, target;
 
-DROP MATERIALIZED VIEW [IF EXISTS] <name>;
+DROP MATERIALIZED VIEW [IF EXISTS] <name>
 ```
 
-The **extract query is the statement body**, not a `WITH` option. `sqlparser`'s
-`parse_create_view` (`sqlparser-0.62.0/src/parser/mod.rs:6517-6607`) requires `AS <query>` and
-accepts a `WITH (...)` option list immediately before it, so this is the only shape of the issue's
-3-query model that is real SQL. It also reads better: the body is the view, the options are knobs.
-`parse_create_view` hands back a parsed `Query` AST, not source text, so `ViewDefinition.extract_query`
-is populated by slicing the verbatim source text of the `AS` body out of the input SQL — never
-`Query::to_string()`. The start offset is the body's first token, located via `Query::span().start`
-(`sqlparser-0.62.0/src/ast/spans.rs:115-139,2286-2331` — the `SELECT`/`WITH` token, always populated).
-The end offset cannot come from `Query::span()`: `impl Spanned for OrderByExpr` (`:2122-2131`)
-destructures `options: _` and `Expr::IsNull`/`IsNotNull`/`IsTrue`/`IsNotTrue` (`:1473-1476`) return
-only the inner expression's span, so both drop trailing keywords (`DESC`, `NULLS FIRST`, `IS NOT
-NULL`'s `NOT NULL`), and `Offset::span()` (`:160-168`) ignores `rows` — a body ending in `ORDER BY
-time_bin DESC` would silently slice to `... ORDER BY time_bin`, valid SQL with the opposite order.
-Instead the end offset is read from the parser itself: after `Parser::try_with_sql(sql)?.parse_statement()`
-returns, the body's last consumed token is available from `parser.get_current_token()`
-(`sqlparser-0.62.0/src/parser/mod.rs:4544-4546`, `token_at(index - 1)`), and the end offset is that
-token's `span.end` — not `parser.peek_token_ref()`, whose `EOF_TOKEN` (`:212-218`) carries a
-line-0/column-0 span when the body has no trailing `;`, and which also skips over `Token::Whitespace`
-(including comments), so a trailing `-- comment` between the body's last real token and the `;` would
-otherwise land inside a peek-and-trim slice. Reading the last *consumed* token needs no `EOF` special
-case and no trailing-whitespace trim. Both
-offsets are converted from `sqlparser`'s line/column `Span` (`src/tokenizer.rs:552-561`) to byte
-offsets. This only covers the body's *interior*: leading trivia between `AS` and the first token, or
-trailing trivia after the last, falls outside the slice. This is what makes the definition hash (§3)
-sensitive to a purely cosmetic edit to the body's interior (whitespace, a comment between its tokens):
-a re-rendered AST would normalize both away, and it is also the text every later materialization
-executes, so a stored `extract_query` must be what the author wrote, not a reformatted equivalent —
-though a leading/trailing-comment edit outside the token span is invisible to the hash.
+All three queries are `WITH` options, so none of them is privileged: the extract query is a knob
+like the other two rather than the statement body. That requires parsing the statement directly
+instead of going through `sqlparser`'s `parse_create_view`, which calls
+`self.expect_keyword_is(Keyword::AS)?` unconditionally (`sqlparser-0.62.0/src/parser/mod.rs:6578`)
+and parses a query immediately after, so a `CREATE MATERIALIZED VIEW ... WITH (...)` with no `AS`
+body cannot be parsed by it at all.
+
+`parse_view_ddl` therefore hand-rolls the parse off a single `Parser::try_with_sql(sql)?`: `CREATE`,
+an optional `OR REPLACE`, `MATERIALIZED`, `VIEW`, `parse_object_name()`,
+`parse_options(Keyword::WITH)` (`:9968-9977`, which parses `WITH ( k = v, ... )` into
+`Vec<SqlOption>`), then consume any trailing `Token::SemiColon` and reject with a named error unless
+`parser.peek_token_ref()` is `Token::EOF`. The `DROP` branch is `DROP`, `MATERIALIZED`, `VIEW`, an
+optional `IF EXISTS`, one `parse_object_name()`, then the same `;`/EOF requirement. Requiring EOF
+preserves the single-statement rule `SessionContext::sql`'s `sql_to_statement` enforces for every
+non-DDL query (datafusion-54.1.0 `src/execution/session_state.rs:454-458`); intercepting DDL ahead
+of `ctx.sql` would otherwise bypass that guard and silently execute only the first of several
+statements.
+
+An option value is an `Expr` (`SqlOption::KeyValue { key: Ident, value: Expr }`,
+`sqlparser-0.62.0/src/ast/mod.rs:8808-8813`), so each query's text is just the tokenizer's value for
+a string literal and `ViewDefinition.extract_query` is that option's value verbatim. The three query
+options accept either a dollar-quoted (`$$...$$`) or a single-quoted literal — dollar-quoted strings
+parse as expression values under `GenericDialect`, which this repo already parses with
+(`sqlparser-0.62.0/src/parser/mod.rs:12191-12194` → `Expr::Value(Value::DollarQuotedString(..))`).
+Dollar-quoting is the documented form because these queries contain single quotes (`'log'`,
+`'{begin}'`, `'Dictionary(Int32, Utf8)'`) that a single-quoted literal would have to double.
 
 Option semantics:
 
 | option | required | maps to |
 |---|---|---|
+| `extract_query` | yes | `SqlBatchView::new`'s `extract_query` |
 | `update_group` | yes | `SqlBatchView::new`'s `update_group`. Must be strictly greater than the group of every view set the definition reads (enforced, §4 check 7); the daemon's group ordering is the only dependency mechanism |
 | `time_column` | yes | both `min_event_time_column` and `max_event_time_column` |
 | `min_time_column` / `max_time_column` | no | override `time_column` individually |
@@ -163,29 +168,10 @@ Option semantics:
 
 Anything else is a hard error — an unknown option is far more likely a typo than an extension point.
 
-`sqlparser`'s `parse_create_view` and `parse_drop` also accept several clauses this grammar does not
-model — on `CREATE`: `IF NOT EXISTS`, a view column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`,
-`COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, an `OPTIONS (...)` list (parsed
-unconditionally for `BigQueryDialect`/`GenericDialect`, and this repo already parses with
-`GenericDialect`), and the MySQL view params (`ALGORITHM =`/`DEFINER =`/`SQL SECURITY`, parsed
-unconditionally); on `DROP`: `CASCADE`/`RESTRICT`/`PURGE`, `TEMPORARY` (`DROP TEMPORARY ...`), `DROP
-... ON <table>`, and a comma-separated list of more than one name. Rather than hand-enumerating these
-and risking the list falling behind the grammar, `parse_view_ddl` exhaustively destructures
-`sqlparser`'s `CreateView` and `Statement::Drop` fields and rejects with a named error if any field
-outside the ones this grammar models is not at its default — silently ignoring `OPTIONS (...)` (which
-*overwrites* the `WITH (...)` option list this whole grammar depends on) or a second `DROP` name would
-make the statement do less than it says.
-
-`parse_view_ddl` never calls `Parser::parse_sql` — that associated function constructs and discards
-its own `Parser`, leaving no handle to read the end offset from (above). It drives the same
-`Parser::try_with_sql(sql)?` / `parse_statement()` call used for the end offset, then, immediately
-after reading `get_current_token().span.end`, consumes any trailing `Token::SemiColon`s and rejects
-with a named error unless `parser.peek_token_ref()` is `Token::EOF` — the same loop
-`Parser::parse_statements` (`sqlparser-0.62.0/src/parser/mod.rs:494-530`) runs internally, so this
-enforces the same single-statement rule `SessionContext::sql`'s `sql_to_statement` already applies to
-every non-DDL query (datafusion-54.1.0 `src/execution/session_state.rs:454-458`). Intercepting DDL
-ahead of `ctx.sql` would otherwise bypass that guard and silently execute only the first of several
-statements.
+Because the parse accepts only `<name>` followed by `WITH (...)` and then EOF, every clause
+`sqlparser`'s own `parse_create_view`/`parse_drop` would otherwise accept but this grammar does not
+model is rejected by construction, as a parse error. There is no hand-maintained clause list that
+could fall behind the grammar.
 
 ### 2. Persistence
 
@@ -200,14 +186,13 @@ CREATE TABLE lakehouse_view_set_definitions (
   merge_partitions_query TEXT NOT NULL,
   update_group           INTEGER NOT NULL,
   view_options           TEXT NOT NULL DEFAULT '{}',
-  definition_hash_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_by             TEXT
 );
 ```
 
-The same migration seeds `log_stats` with `definition_hash_enabled = false`:
+The same migration seeds `log_stats`:
 
 ```sql
 INSERT INTO lakehouse_view_set_definitions (...) VALUES ('log_stats', ...)
@@ -221,24 +206,18 @@ Its text comes from `const`s in a new
 
 `definition_sql` (`TEXT NOT NULL`, the verbatim DDL text — see §2 below) has no equivalent in
 `log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A fourth `const` in
-`builtin_view_definitions.rs` holds the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...) AS
-...` text, assembled from the other three consts, and seeds this column; it doubles as the
-parser round-trip fixture in the Testing Strategy.
+`builtin_view_definitions.rs` holds the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
+text, assembled from the other three consts by wrapping each in `$$...$$` — none of them contains a
+`$$`, so a plain `concat!` suffices and no quote-escaping helper is needed. It seeds this column and
+doubles as the parser round-trip fixture in the Testing Strategy, which asserts each parsed query
+option equals its `const` exactly: inside `$$...$$` the text is taken as-is, so the consts need no
+whitespace or trailing-`;` grooming for that equality to hold.
 
 The `upsert` behind `CREATE OR REPLACE` is an `ON CONFLICT (view_set_name) DO UPDATE` that sets
 `updated_at = now()` and `updated_by` explicitly on the `DO UPDATE` branch — the column defaults only
 fire on `INSERT`, and `reload()`'s digest is over `(view_set_name, updated_at)`, so an update that
 left it unset would go live only on the replacing node while every other flight-sql replica and the
 maintenance daemon kept serving and materializing the old definition.
-
-`definition_hash_enabled` is the one flag, and it exists solely to keep the seeded row's
-`file_schema_hash` byte-identical to the compiled view's (§3). A `CREATE OR REPLACE` of `log_stats`
-sets it `true` unconditionally — even when the replacing text is byte-identical to the seeded one —
-because the flag alone changes `get_file_schema_hash()`'s output (§3): the seeded row's hash omits
-the definition hash entirely, the replaced row's includes it. That is itself an effective
-`file_schema_hash` change and must retire the old partitions exactly like a text change does; §5
-step 3 keys the retire decision on the effective hash, not on whether the definition text changed,
-so this case is covered.
 
 Seeded `log_stats` otherwise gets no special treatment: it can be replaced or dropped like any other
 row, and a definition that fails to build is skipped with a `warn!` like any other. The consequence
@@ -258,62 +237,31 @@ Deliberately **absent** from the issue's proposed table:
 - **`file_schema BYTEA`** — the schema is derived by planning `extract_query`, exactly as
   `SqlBatchView::new` already does. A stored copy is a second source of truth that drifts the
   moment a source view's schema changes underneath it.
-- **`schema_version INTEGER`** — superseded by the definition hash below, which cannot be
-  forgotten and cannot disagree with the SQL it describes.
+- **`schema_version INTEGER`** — `file_schema_hash` is derived by planning `extract_query`, so it
+  already tracks every schema change automatically. A hand-maintained version column is a second
+  source of truth that can be forgotten.
 
-### 3. Definition hash → `file_schema_hash`
+### 3. What a redefinition means
 
-`SqlBatchView::get_file_schema_hash` hashes only the inferred schema, so a `CREATE OR REPLACE` that
-changes the SQL but not the output schema (a widened filter, a different source view, a fixed
-`date_bin` interval) leaves stale partitions valid and silently serves the old answer forever.
+`file_schema_hash` stays purely schema-derived: `SqlBatchView::get_file_schema_hash` is left
+unchanged, hashing the inferred Arrow schema and nothing else. There is no definition hash.
 
-Add an optional definition hash to `SqlBatchView`:
+A `CREATE OR REPLACE` whose **output schema changes** therefore self-invalidates through the
+existing mechanism — the newly inferred schema hashes differently and the query-side partition
+provider stops reading the old partitions
+(`rust/analytics/src/lakehouse/partition_cache.rs:386,420` filter on `file_schema_hash`).
 
-```rust
-/// Mixed into `get_file_schema_hash` so a definition change with an unchanged output schema still
-/// invalidates existing partitions. `None` for the built-in views, whose definitions only change
-/// with a code change.
-pub fn with_definition_hash(mut self, hash: u64) -> Self
-```
+A `CREATE OR REPLACE` that changes **content but not the output schema** (a widened filter, a
+different source view, a changed `date_bin` interval) leaves the existing partitions readable, so
+the view serves a mix of old- and new-definition data until an admin reclaims them. This is the
+deliberate tradeoff: automatically resetting a view's entire materialized history on every edit is
+too blunt for an admin-driven DDL statement, and the admin has direct tools.
 
-```rust
-fn get_file_schema_hash(&self) -> Vec<u8> {
-    let mut hasher = DefaultHasher::new();
-    self.schema.hash(&mut hasher);
-    if let Some(h) = self.definition_hash {
-        h.hash(&mut hasher);
-    }
-    hasher.finish().to_le_bytes().to_vec()
-}
-```
-
-The `None` path must stay byte-identical to today's. The CI guard for that is a no-DB unit test
-(§ Testing Strategy) pinning `get_file_schema_hash()` for a `definition_hash: None` `SqlBatchView` to
-an exact byte value, built on the `lakehouse_admin_gate_test.rs` offline harness — not
-`rust/analytics/tests/sql_view_test.rs:226`, whose matching assertion is `#[ignore]`d behind a live
-`MICROMEGAS_SQL_CONNECTION_STRING` and so never runs in CI. A change to the `None` path would
-invalidate every `SqlBatchView` partition in every existing deployment.
-
-The DDL loader computes the hash over the normalized definition: `extract_query`,
-`merge_partitions_query`, and the two time columns — the fields that determine partition *content*.
-`update_group`, `source_partition_delta`/`merge_partition_delta`, `merge_sort_order`, and
-`count_src_query` are deliberately excluded: `update_group` only orders `materialize_all_views`'s
-scheduling (`maintenance.rs:59-70`) and does not touch what a partition contains; the two deltas only
-set the width of *future* partitions, and `verify_overlapping_partitions` already tolerates mixed
-widths (`batch_update.rs:23-100`); `merge_sort_order` only affects the sort guarantee recorded in
-partition metadata (`Partition::certifies_sort_order`, `partition.rs`), which the schema
-hash plays no part in; and `count_src_query` never touches partition content either — it only
-produces the row count `fetch_sql_partition_spec` (`sql_partition_spec.rs:196-203`) stores as
-`source_data_hash`, and a probe that disagrees with that stored count already self-corrects without
-a hash change, since `verify_overlapping_partitions` (`batch_update.rs:80-88`) returns
-`CreateFromSource` whenever the counts differ. Hashing it would mean a `REPLACE` that only fixes the
-probe retires and re-materializes every partition (§5 step 3, §6) for no content change. It is
-derived, never stored, so there is nothing to keep in sync.
-
-Consequence, which must be documented rather than engineered around: a redefinition **resets the
-view's materialized history**. The daemon only fills forward (2 days / 2 hours / 2 minutes back from
-`now`); backfilling the rest is a manual
-`SELECT * FROM materialize_partitions('<name>', <begin>, <end>, <delta_secs>)`.
+The remedy is explicit and admin-driven: `retire_partitions(...)` over the affected range (or
+`micromegas.admin.retire_incompatible_partitions` for the schema-changed case), followed by
+`SELECT * FROM materialize_partitions('<name>', <begin>, <end>, <delta_secs>)` to rebuild. The
+daemon only fills forward (2 days / 2 hours / 2 minutes back from `now`), so backfilling an older
+range is that same manual call either way.
 
 ### 4. Validation at `CREATE` time
 
@@ -322,7 +270,10 @@ DDL executor and the registry loader — so a definition that the loader would s
 accepted in the first place.
 
 Constructing the `SqlBatchView` *is* most of the validation: it plans the extract query (catching
-syntax errors, unknown tables, unknown columns) and yields the schema. On top of that:
+syntax errors, unknown tables, unknown columns) and yields the schema. All three queries arrive as
+plain strings — they are option values, so none of them is pre-parsed by the DDL parse — and every
+check below that inspects a query's structure parses and plans each of the three uniformly, with the
+same walk applied to each. On top of that:
 
 1. **Name.** Matches `^[a-z_][a-z0-9_]{0,254}$` and does not start with `__`; not a code-driven view
    set (`get_global_view` / `get_view_sets` on the base factory, which after this change means
@@ -362,16 +313,16 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
    merge query is unrunnable without it.
-6. **No volatile or stable functions.** Walk the planned extract, merge and count-source query
-   `LogicalPlan`s — the merge and count-source plans are already built by checks 3 and 4, so the
-   extra walk is free — and reject any `ScalarUDF` whose `signature().volatility` is not `Immutable`
-   (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
+6. **No volatile or stable functions.** Parse and plan each of the three query texts and walk the
+   resulting `LogicalPlan`s — the merge and count-source plans are already built by checks 3 and 4,
+   so the extra walk is free — rejecting any `ScalarUDF` whose `signature().volatility` is not
+   `Immutable` (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
    frozen into a partition at materialization time and then served to every later reader — wrong
    data, no error, indefinitely; in `count_src_query` it instead corrupts freshness detection
    (`verify_overlapping_partitions` compares row counts), causing perpetual re-materialization.
 
 7. **No admin-gated mutating table function, and `update_group` strictly after every view set the
-   definition reads.** Walk the planned extract and count-source `LogicalPlan`s for every
+   definition reads.** Walk all three planned `LogicalPlan`s for every
    `TableScan`, resolving each one's `table_name` against the factory the definition was built for —
    recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
    `SqlBatchView::register_table` exposes the user-visible name; a downcast to `MaterializedView`
@@ -379,7 +330,7 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    `TableSource` resolves to one of the five admin-gated table functions among the eight
    (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
    `deny_queries`, etc.) — the only ones of the eight a `TableScan` can resolve to: check 6 only walks
-   `ScalarUDF` expressions, so a UDTF call such as `... AS SELECT * FROM retire_partitions(...)` is
+   `ScalarUDF` expressions, so a UDTF call such as `SELECT * FROM retire_partitions(...)` is
    invisible to it and would otherwise be stored and then re-executed under
    `CallerContext::maintenance()` on every daemon tick. The other three — `retire_partition_by_file`,
    `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs and, being
@@ -477,13 +428,11 @@ pub enum ViewDdl {
 }
 
 /// `Ok(None)` when `sql` is not view DDL -- the overwhelmingly common case, decided by a cheap
-/// keyword peek before any full parse. `Err` when exhaustively destructuring `sqlparser`'s
-/// `CreateView`/`Statement::Drop` finds a field this enum does not model left at a non-default value
-/// (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`, `COMMENT`, `TO`, `WITH NO
-/// SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`, the MySQL view params, `DROP
-/// TEMPORARY`, `DROP ... ON <table>`, `CASCADE`/`RESTRICT`/`PURGE`), a `DROP` naming more than one
-/// object, or the input parsing to more than one statement (matching `SessionContext::sql`'s
-/// single-statement rule) — each would otherwise silently do less than the statement says.
+/// keyword peek before any full parse. `Err` when the hand-rolled parse (§1) does not reach EOF
+/// right after `<name> WITH (...)` (or, on `DROP`, right after the single name): an unmodelled
+/// clause, an `AS` body, a second `DROP` name, or a second statement (matching
+/// `SessionContext::sql`'s single-statement rule) each would otherwise silently do less than the
+/// statement says.
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
 
 /// The same gate as the eight admin-gated lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
@@ -516,15 +465,12 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    every definition, from the post-mutation row set with this row's own name excluded, in a lower
    `update_group` — so a definition reading another DDL view validates against the real thing, and a
    `CREATE OR REPLACE` that raises its own `update_group` cannot validate against a since-superseded
-   copy of itself. Reject an existing name unless `or_replace`; on a replace, retire the old
-   partitions (§6) whenever §6's stored-hash check reports that some existing `(name, 'global')`
-   partition's `file_schema_hash` differs from the *new* row's `SqlBatchView::get_file_schema_hash()`
-   — this needs no build of the old row (which may no longer plan at all, e.g. after source drift)
-   and still catches a `definition_hash_enabled` flip (§2) as well as a definition-hash change, since
-   either alone changes the hash — then `upsert` the row via `view_definition_store::upsert_tx(&mut
-   tx, ...)`, all in the same transaction.
+   copy of itself. Reject an existing name unless `or_replace`; then `upsert` the row via
+   `view_definition_store::upsert_tx(&mut tx, ...)`, all in the same transaction. A replace retires
+   nothing (§3): partitions whose schema still matches stay readable, and reclaiming them is the
+   admin's explicit `retire_partitions` call.
 4. `DROP`: reject a built-in name; `delete` the row via `view_definition_store::delete_tx(&mut tx,
-   ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
+   ...)` and retire the partitions (§6) in one transaction; honour `IF EXISTS`.
 5. Either mutation then re-reads the post-mutation row set via `view_definition_store::list_tx(&mut
    tx)` and calls `registry.check_dependents_survive(&pre_rows, &post_rows)` (§4b, §7) with the
    pre-mutation rows read in step 2, inside the same transaction, rolling back if it broke a
@@ -548,8 +494,9 @@ repo prepares DDL, and planning it there would fail with an opaque DataFusion er
 
 ### 6. Retiring a view set's partitions
 
-`retire_partitions` (`write_partition.rs:183-383`) is keyed on `(view_set_name, view_instance_id)`
-and is deliberately hash-agnostic, but needs an explicit insert-time range. Resolve the exact range
+A `DROP` retires the view set's partitions. `retire_partitions`
+(`write_partition.rs:183-383`) is keyed on `(view_set_name, view_instance_id)` and is deliberately
+hash-agnostic, but needs an explicit insert-time range. Resolve the exact range
 first and pass it:
 
 ```sql
@@ -560,20 +507,6 @@ SELECT min(begin_insert_time), max(end_insert_time)
 `NULL` (no partitions) skips the call. This reuses the existing containment path — files land in
 `temporary_files` and the hourly `delete_expired_temporary_files` collects them — and needs no new
 "retire an entire view set" primitive.
-
-§5 step 3's "effective hash changed" test is answered from this same table rather than by rebuilding
-the old row's `SqlBatchView` (which may no longer plan at all after source drift, per §7 step 4):
-
-```sql
-SELECT EXISTS (
-  SELECT 1 FROM lakehouse_partitions
-   WHERE view_set_name = $1 AND view_instance_id = 'global' AND file_schema_hash <> $2
-);
-```
-
-with `$2` the *new* row's `get_file_schema_hash()`. This is the fact that actually governs
-reachability — `partition_cache.rs:386` and `:420` already filter reads by exact `file_schema_hash`
-— so it is well-defined whether or not the old definition still builds.
 
 ### 7. `ViewRegistry`
 
@@ -653,7 +586,7 @@ async fn build_factory(
    with a lower `update_group` — the same incremental clone-and-extend chain `default_view_factory`
    uses, and the same ordering rule `materialize_all_views` already documents. A row whose name already
    resolves via `base.get_global_view(...)` is skipped with a `warn!` instead of being built: until
-   step 16 removes `log_stats`'s compiled construction from `default_view_factory`, the seeded
+   step 15 removes `log_stats`'s compiled construction from `default_view_factory`, the seeded
    `log_stats` row would otherwise collide with the base factory's own `log_stats`, and
    `ViewFactory::add_global_view`/`make_session_context`'s registration has no overwrite semantics —
    a duplicate global-view name hard-errors every query, not just ones touching that view.
@@ -720,79 +653,74 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 ## Implementation Steps
 
-### Milestone 1 — persistence, definition hash, validation, DDL
+### Milestone 1 — persistence, validation, DDL
 
 1. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats`'s three queries and
    options as `const`s, lifted verbatim out of `log_stats_view.rs`, plus a fourth `const` assembling
    them into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
-   `definition_sql`; consumed by the migration's seed and by the hash-parity test. Registered in
+   `definition_sql`; consumed by the migration's seed and by the parser round-trip test. Registered in
    `rust/analytics/src/lakehouse/mod.rs`. First because step 2's migration seed needs these `const`s to
    exist.
 2. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from
    `builtin_view_definitions`, and ending with `UPDATE lakehouse_migration SET version=10`.
-3. `rust/analytics/src/lakehouse/sql_batch_view.rs` — add the `definition_hash: Option<u64>` field,
-   `with_definition_hash`, and the `get_file_schema_hash` change; confirm the `None` path is
-   byte-identical.
-4. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
-   set + three queries), its stable hash, `parse_time_delta`, the name charset check, and
+3. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
+   set + three queries), `parse_time_delta`, the name charset check, and
    `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`.
-5. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
-   step 4. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
+4. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
+   step 3. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
    definition was built against.
-6. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
+5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
    `partition_insert_range`, each taking a `&mut sqlx::Transaction` directly — so the DDL path (§4b,
    §5), including its existence check behind `or_replace`, runs entirely on `execute_view_ddl`'s own
    open transaction alongside `retire_partitions`, with no trait indirection for methods a test fake
    could never implement.
-7. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
+6. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
    rows-in seam (building and validating each row via `validate_view_definition`), `reload` (ordered
    incremental build, skip-on-failure, digest short-circuit that also bypasses on a prior failure),
    `current()`, `spawn_refresh_task`, and the `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` knob
-   (default 60). Lands in this milestone rather than the next because of the ordered build (step 11's
+   (default 60). Lands in this milestone rather than the next because of the ordered build (step 10's
    validation against lower-group definitions) and §4b's post-mutation rebuild via `build_factory`.
-8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
-   `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
-   option extraction and its error type; rejecting, with a named error, any `CreateView`/
-   `Statement::Drop` field left at a non-default value after exhaustive destructuring, any `DROP`
-   naming more than one object, and the input parsing to more than one statement (§1);
-   `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
-   the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
-   verbatim source text from the `AS` body's start (`Query::span().start`) through the end of the
-   body's last consumed token (`parser.get_current_token().span.end`, read after `parse_statement()`
-   returns), not rendered from the parsed `Query` AST and not using `Query::span()`'s end, which
-   truncates a trailing `ORDER BY ... DESC`/`IS NOT NULL` (§1).
-9. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
+7. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl`, hand-rolling the parse over
+   `datafusion::sql::sqlparser` (`Parser::try_with_sql`, the keyword sequence, `parse_object_name`,
+   `parse_options(Keyword::WITH)`, then the `;`/EOF requirement) into `ViewDdl`; option extraction
+   out of each `SqlOption::KeyValue`'s `Expr` value — the three query texts are the string-literal
+   values of their own options — and its error type; rejecting, with a named error, anything
+   trailing the option list, including an `AS` body, a second `DROP` name and a second statement
+   (§1); `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
+   the standalone admin gate that `execute_view_ddl` step 1 calls.
+8. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
    `rust/public/tests/read_policy_threading_tests.rs`'s `FlightSqlServiceImpl::new` call, updated to
    construct a `ViewRegistry` over its fixture factory using the Postgres-backed `ViewDefinitionStore`
    over the test's existing `connect_lazy` pool (`:55-56`) — the test never calls `reload()`, so the
-   store is never actually queried. Moved ahead of step 11 because `execute_view_ddl` (step 11) is a method on
+   store is never actually queried. Moved ahead of step 10 because `execute_view_ddl` (step 10) is a method on
    `FlightSqlServiceImpl` that calls `registry.reload()`/`build_from_rows()` and so needs the field to
    already exist.
-10. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, await
-    `registry.reload()` before `serve()` (failing startup on error, like `migrate_lakehouse`), then
-    call `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory.
-    Moved ahead of step 11 for the same reason as step 9: `execute_view_ddl` needs a constructed
-    registry to call.
-11. `rust/public/src/servers/flight_sql_service_impl.rs` — add the `parse_view_ddl` branch, inserted
+9. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, await
+   `registry.reload()` before `serve()` (failing startup on error, like `migrate_lakehouse`), then
+   call `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory.
+   Moved ahead of step 10 for the same reason as step 8: `execute_view_ddl` needs a constructed
+   registry to call.
+10. `rust/public/src/servers/flight_sql_service_impl.rs` — add the `parse_view_ddl` branch, inserted
     between the resolved `caller` and `make_session_context`, and `execute_view_ddl` (admin gate,
-    validate, upsert/delete + retire, §4b rebuild-or-rollback, inline reload, one-row answer).
+    validate, upsert/delete, retire on `DROP`, §4b rebuild-or-rollback, inline reload, one-row
+    answer).
     Reject DDL in `do_action_create_prepared_statement`.
-12. `rust/analytics/src/lakehouse/mod.rs` / `rust/public/src/servers/mod.rs` — register the remaining
+11. `rust/analytics/src/lakehouse/mod.rs` / `rust/public/src/servers/mod.rs` — register the remaining
     new modules with their one-line doc comments.
 
 ### Milestone 2 — daemon pickup
 
-13. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
+12. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
     task structs, per-tick view resolution + sort helper, empty-list early return in
     `materialize_all_views`, `daemon`'s signature change, its awaited `registry.reload()` before
     spawning the cron tasks (failing startup on error), and its `spawn_refresh_task` call.
-14. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
+13. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
     registry from `default_view_factory` and hand it to `daemon`, resolving the same
     `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
     uses (`flight_sql_server.rs:275-283`) as `ViewRegistry::new`'s `session_configurator`, instead of
@@ -800,18 +728,19 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 ### Milestone 3 — introspection and `log_stats` cutover
 
-15. New `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`, registered in
+14. New `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`, registered in
     `query.rs`'s `if lakehouse_admin` block.
-16. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
+15. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
     (`:344-352`); `default_view_factory` now returns the base. `log_stats_view.rs`'s
-    `make_log_stats_view` is kept but reduced to building from the `const`s, so the hash-parity test
-    has something to compare against. `rust/analytics/tests/audience_mismatch_skip_db_test.rs` builds
-    its `log_stats` view via `make_log_stats_view` and `add_global_view`s it onto its own clone of
-    `default_view_factory`, instead of pulling `log_stats` from `default_view_factory` directly — the
+    `make_log_stats_view` is kept but reduced to building from the `const`s, so the tests below
+    still have a compiled `log_stats` to build.
+    `rust/analytics/tests/audience_mismatch_skip_db_test.rs` builds its `log_stats` view via
+    `make_log_stats_view` and `add_global_view`s it onto its own clone of `default_view_factory`,
+    instead of pulling `log_stats` from `default_view_factory` directly — the
     test both looks the view up via `view_factory.get_global_view("log_stats")` and runs `SELECT ...
     FROM log_stats ...` through that same factory, so both need a factory that still carries it.
     Deferred to the end of this milestone (and behind the daemon's Milestone 2 pickup) because the
-    daemon (step 13) and `FlightSqlServiceImpl` (step 9) must already be reading `registry.current()`
+    daemon (step 12) and `FlightSqlServiceImpl` (step 8) must already be reading `registry.current()`
     before `log_stats` is dropped from the base factory, or the view goes unmaterialized and
     unqueryable in between.
     Until this step runs, the base factory and the seeded row both carry a `log_stats`; §7 step 3's
@@ -838,8 +767,8 @@ Created:
 - `mkdocs/docs/admin/materialized-views.md`
 
 Modified:
-- `rust/analytics/src/lakehouse/migration.rs`, `sql_batch_view.rs`, `query.rs`, `mod.rs`,
-  `view_factory.rs`, `log_stats_view.rs`
+- `rust/analytics/src/lakehouse/migration.rs`, `query.rs`, `mod.rs`, `view_factory.rs`,
+  `log_stats_view.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
   `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
@@ -853,9 +782,9 @@ Modified:
 
 **DDL interception vs. a `create_materialized_view(...)` UDTF.** A UDTF would need no parser work
 and would inherit the existing `is_admin` registration gate for free. It was rejected because the
-issue asks for DDL and because a UDTF call cannot carry a multi-line SQL body without quote-escaping
-it — the exact ergonomic problem the DDL form exists to avoid. The cost is a hand-rolled parse step
-in front of `ctx.sql`.
+issue asks for DDL, and because `CREATE OR REPLACE`/`DROP` is the statement pair an admin expects
+for defining and removing a view, with the name in the statement rather than in an argument list.
+The cost is a hand-rolled parse step in front of `ctx.sql`.
 
 **A shared `ViewRegistry` vs. separate reload paths per service.** The issue describes the daemon
 pickup and the flight-sql reload as two mechanisms. They are the same mechanism with two consumers,
@@ -878,10 +807,6 @@ which is a second design; the issue already scopes it out.
 - Validation rejects a definition whose merge-query output schema differs from its extract-query
   output schema, rather than warning — a disagreement means the user-visible table and the
   partitions backing it have different shapes, with no error at query time.
-- `CREATE OR REPLACE` with a changed *effective* `file_schema_hash` — the definition hash, or
-  `definition_hash_enabled` flipping — retires the old partitions immediately instead of leaving
-  them for retention. They are already unreachable (the query-side partition provider filters on
-  `file_schema_hash`), so keeping them buys no rollback, only storage.
 - A definition that fails to load is skipped with a `warn!` and a metric; the registry still swaps
   in every definition that did load. One bad row must not take the lakehouse down.
 - The insert-time-vs-event-time obligation and the merge-aggregate composability obligation are
@@ -900,13 +825,13 @@ which is a second design; the issue already scopes it out.
   code-driven — seeding `processes`/`streams` too would put audience resolution itself behind a
   database row, so a failed load or an operator `DROP` would break every non-admin query, unlike
   `log_stats`, whose worst failure is a clean `table not found`.
-- The definition hash (§3) is derived from the definition text rather than a stored
-  `schema_version` column, so a purely cosmetic edit to the body's interior (whitespace, a comment
-  between its tokens) also invalidates existing partitions — accepted, since re-materialization is the
-  daemon's normal steady-state work.
-- The seeded `log_stats` row carries `definition_hash_enabled = false` so its `file_schema_hash`
-  stays byte-identical and existing partitions survive the upgrade. It gets no other special
-  casing — droppable, replaceable, and skipped-with-a-warning on a load failure like any other row.
+- There is **no definition hash**: `file_schema_hash` stays purely schema-derived, so a
+  content-only `CREATE OR REPLACE` leaves stale partitions readable until the admin retires and
+  re-materializes them (§3) — accepted, since auto-invalidating a view's whole materialized history
+  is too harsh for an admin-driven DDL statement.
+- The seeded `log_stats` row is a pure data move: its `file_schema_hash` cannot change, so existing
+  partitions survive the upgrade. It gets no other special casing — droppable, replaceable, and
+  skipped-with-a-warning on a load failure like any other row.
 - The `extract_query` is **not** required to contain `{begin}`/`{end}`. `processes` and `streams`
   carry no such predicate today and are correct, because `make_batch_partition_spec` scopes the
   scan through the partition provider (`sql_batch_view.rs:238`). Only `count_src_query`'s
@@ -925,7 +850,9 @@ which is a second design; the issue already scopes it out.
   materialized view's schema carries no `insert_time` — `audience` in the projection and the
   `GROUP BY`, composable merge aggregates, `update_group` ordering), the
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
-  lifecycle. Added to `mkdocs/mkdocs.yml`'s nav.
+  lifecycle — which must state that a `REPLACE` changing content but not the output schema does
+  *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
+  sequence that reclaims and rebuilds them. Added to `mkdocs/mkdocs.yml`'s nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -959,19 +886,12 @@ Everything below is a no-DB unit test unless stated. The offline harness from
 `CREATE` without `OR REPLACE`; `DROP` with and without `IF EXISTS`; a plain `SELECT` and a
 non-materialized `CREATE VIEW` both returning `Ok(None)`; a missing required option, an unknown
 option, a malformed `source_partition_delta`, and a bad `merge_sort_order`, each a named error; a
-name failing the charset check; option values containing escaped quotes and newlines; each
-accepted-but-unmodelled clause from §1 (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`,
-`CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`,
-the MySQL view params on `CREATE`; `CASCADE`/`RESTRICT`/`PURGE`, `DROP TEMPORARY`, `DROP ... ON
-<table>` on `DROP`), a `DROP` naming more than one object, and two statements separated by a
-semicolon (`CREATE ...; DROP ...`), each a named error; a `CREATE`
-whose `AS` body has odd interior whitespace, an inline comment *between* two of its tokens, and mixed
-casing, asserting the parsed `extract_query` is byte-identical to that body as written — pinning §1's
-verbatim-slice invariant against a regression to a re-rendered `Query::to_string()`; and a body ending
-in `ORDER BY x DESC` and one ending in `WHERE y IS NOT NULL`, each asserting the trailing keyword
-survives in the sliced `extract_query` — pinning the end offset against `Query::span()`'s truncation
-of `OrderByExpr`/`Expr::IsNotNull` (§1). The fixture deliberately keeps any comment or blank line
-before the body's first token or after its last out of scope, since neither offset covers them.
+name failing the charset check; an unmodelled clause on `CREATE` (a view column list,
+`IF NOT EXISTS`) and on `DROP` (`CASCADE`, a second name), each a named error; an `AS`-body form,
+now invalid, rejected; and a trailing second statement (`CREATE ...; DROP ...`) rejected,
+pinning the single-statement rule. Round-trip: each of the three query options parses back to
+exactly the submitted text, with a `$$`-quoted body carrying single quotes, `{begin}`/`{end}`
+placeholders, newlines and mixed casing, plus the single-quoted-literal form for the same query.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
@@ -995,34 +915,11 @@ it with one that drops a column the dependent reads is refused; dropping a defin
 accepted; a definition that was *already* failing to build does not by itself block an unrelated
 `DROP`.
 
-**Hash parity for the seeded `log_stats`** (`view_definition_validation_tests.rs`) — build
-`make_log_stats_view`'s `SqlBatchView` and the one the registry builds from the seeded definition
-with `definition_hash_enabled = false`, and assert their `get_file_schema_hash()` and
-`get_file_schema()` are equal. This is the test that protects every existing deployment's
-`log_stats` partitions from the upgrade, and the failure it guards is silent: a mismatch empties the
-view rather than erroring. Paired with a case asserting the same definition *with*
-`definition_hash_enabled = true` produces a *different* hash, so the flag is doing real work, and a
-third case asserting §5 step 3's effective-hash comparison treats that same flag flip as a change —
-i.e. replacing the seeded row with byte-identical text still trips the retire condition, guarding
-the identical-text-replace orphaned-partitions bug.
-
-**Seeded definition passes validation** (same file) — run the full §4 check set over the seeded
-`log_stats` definition and assert it passes unmodified. It is the validator's calibration case; a
-failure here means a check is miscalibrated, not that the view is wrong. In particular this is what
-exercises check 3's nullability exclusion: `count(*)` (non-nullable) in the extract query vs.
-`sum(count)` (nullable) in the merge query.
-
-**Definition hash** (in `view_definition_validation_tests.rs`) — identical definitions hash equal;
-changing each hashed field (`extract_query`, `merge_partitions_query`, either time column) in turn
-changes the hash; changing `update_group`, either delta, `merge_sort_order`, or `count_src_query`
-alone does not; and, as the CI regression guard for the `None` path
-(the existing `sql_view_test.rs:226` assertion is `#[ignore]`d and does not run in CI), a new no-DB
-test builds `make_log_stats_view`'s `SqlBatchView` (`definition_hash: None`) on the
-`lakehouse_admin_gate_test.rs` offline harness — the same construction
-`ownership_rewrite_public_view_set_tests.rs:543-550` already does with no DB — and pins
-`get_file_schema_hash()` to its current exact byte value. This is the same hash every existing
-deployment's `log_stats` partitions already carry, so this test is the CI guard against the silent
-failure (an empty `log_stats` after upgrade) that a live migration run cannot surface on its own.
+**Seeded definition passes validation** (`view_definition_validation_tests.rs`) — run the full §4
+check set over the seeded `log_stats` definition and assert it passes unmodified. It is the
+validator's calibration case; a failure here means a check is miscalibrated, not that the view is
+wrong. In particular this is what exercises check 3's nullability exclusion: `count(*)`
+(non-nullable) in the extract query vs. `sum(count)` (nullable) in the merge query.
 
 **`view_registry_tests.rs`** — with a fake `ViewDefinitionStore`: definitions are built in
 `update_group` order and a higher-group definition can read a lower-group one; a definition that
@@ -1038,17 +935,17 @@ admin caller. The wiring — that `execute_query` actually routes DDL through th
 `read_policy_threading_tests.rs` case mirroring `bulk_ingest_denies_non_admin_caller` (`:479-510`):
 send a `CREATE MATERIALIZED VIEW ...` statement through the real `AuthService`/tonic stack as the
 `ApiKeyAuthProvider` (always non-admin) caller and assert `Code::PermissionDenied`. This is the
-same offline harness step 9 already edits to construct a `ViewRegistry`.
+same offline harness step 8 already edits to construct a `ViewRegistry`.
 
 **`python/micromegas/tests/test_ddl_materialized_view.py`** — the end-to-end tier, against the local
 test env, following `test_log_stats_integration.py` / `test_query_deny_list.py`: `CREATE OR REPLACE`
 a small view over `log_entries`, assert it appears in `list_view_sets()` and
 `list_view_definitions()`, `materialize_partitions` a known range, `SELECT` from it, `REPLACE` it
-with a changed definition and assert the old partitions are gone, then `DROP` and assert it is gone
-from both listings. This covers the wiring no unit test reaches — the FlightSQL round trip, the real
-migration, the real `ViewRegistry` → daemon → `lakehouse_partitions` chain — and the failure it
-guards is silent (a view set that loads but never materializes looks like an empty table, not an
-error).
+with a definition whose output schema changes and assert the old partitions are no longer read
+(§3), then `DROP` and assert it is gone from both listings. This covers the wiring no unit test
+reaches — the FlightSQL round trip, the real migration, the real `ViewRegistry` → daemon →
+`lakehouse_partitions` chain — and the failure it guards is silent (a view set that loads but never
+materializes looks like an empty table, not an error).
 
 No new `#[ignore]` live-DB Rust test: per `CONTRIBUTING.md` those are reserved for pinning a bug
 witnessed in the wild, and this is new-feature acceptance.
