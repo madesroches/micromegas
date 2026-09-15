@@ -1068,7 +1068,8 @@ micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner 
 micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop `
     --format powershell | Invoke-Expression
 
-# For a container/CI env-file loader (docker compose --env-file, python-dotenv, ...):
+# For a container/CI env-file loader (a compose service's env_file:, docker run
+# --env-file, python-dotenv, ...):
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
     --format dotenv --env-file .env
 ```
@@ -1126,7 +1127,7 @@ prompt on Windows wants `posix`; `pwsh` runs on Linux/macOS too), so pass it exp
 | `posix` (default) | `export NAME=value`, `shlex.quote`d | `eval "$(micromegas-setup-telemetry ...)"` |
 | `powershell` | `$env:NAME = 'value'` | `micromegas-setup-telemetry ... \| Invoke-Expression` |
 | `cmd` | `@set "NAME=value"` | redirect to a `.cmd` file, then `call` it |
-| `dotenv` | `NAME=value`, unquoted | `docker compose --env-file`, `python-dotenv`, or similar |
+| `dotenv` | `NAME=value`, unquoted | a compose service's `env_file:` or `docker run --env-file` to inject into the container; `python-dotenv` to inject into a process |
 
 Each dialect quotes a value the way that syntax represents a literal credential safely: `posix`
 via `shlex.quote` (bare unless the value needs quoting), `powershell` as a single-quoted literal

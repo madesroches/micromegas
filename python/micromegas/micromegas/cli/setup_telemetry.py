@@ -365,14 +365,18 @@ def check_format_endpoint(fmt, otlp_endpoint, parser):
     unsafe = _unsafe_chars_in(fmt, otlp_endpoint)
     if unsafe:
         parser.error(
-            f"--otlp-endpoint contains {unsafe[0]!r}, which --format {fmt} "
-            "cannot represent; pass a different --format or --otlp-endpoint"
+            f"the resolved OTLP endpoint (--otlp-endpoint or "
+            f"MICROMEGAS_TELEMETRY_URL) contains {unsafe[0]!r}, which "
+            f"--format {fmt} cannot represent; pass a different --format, "
+            "--otlp-endpoint, or MICROMEGAS_TELEMETRY_URL"
         )
     if fmt == "dotenv" and otlp_endpoint != otlp_endpoint.strip():
         parser.error(
-            "--otlp-endpoint has leading/trailing whitespace, which "
-            "--format dotenv cannot represent (a dotenv loader would "
-            "silently trim it); pass a different --format or --otlp-endpoint"
+            "the resolved OTLP endpoint (--otlp-endpoint or "
+            "MICROMEGAS_TELEMETRY_URL) has leading/trailing whitespace, "
+            "which --format dotenv cannot represent (a dotenv loader would "
+            "silently trim it); pass a different --format, --otlp-endpoint, "
+            "or MICROMEGAS_TELEMETRY_URL"
         )
 
 
@@ -504,16 +508,20 @@ def run(args, parser):
     # is safe in every format -- see the design plan), kept so a future change
     # to the server's key alphabet degrades to a warning instead of silently
     # mangled output. A warning, never an error: the key already exists and
-    # must not be discarded over a formatting concern.
-    header_name, header_value = _env_var_pairs(result["key"], otlp_endpoint)[2]
-    unsafe = _unsafe_chars_in(args.format, header_value)
-    if unsafe:
-        print(
-            f"warning: minted key's {header_name} value contains "
-            f"{unsafe[0]!r}, which --format {args.format} cannot represent; "
-            "output may be malformed",
-            file=sys.stderr,
-        )
+    # must not be discarded over a formatting concern. Checked across every
+    # pair (not just the header) so a future reorder/addition in
+    # `_env_var_pairs` can't silently move this safety net onto a constant
+    # value -- the endpoint is already validated pre-mint and the protocol is
+    # constant, so checking them too costs no extra noise.
+    for name, value in _env_var_pairs(result["key"], otlp_endpoint):
+        unsafe = _unsafe_chars_in(args.format, value)
+        if unsafe:
+            print(
+                f"warning: minted key's {name} value contains "
+                f"{unsafe[0]!r}, which --format {args.format} cannot represent; "
+                "output may be malformed",
+                file=sys.stderr,
+            )
 
     content = format_env_exports(result["key"], otlp_endpoint, args.format)
     if args.env_file:

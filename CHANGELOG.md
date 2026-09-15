@@ -12,7 +12,8 @@ This file documents the historical progress of the Micromegas project. For curre
   `shlex.quote` instead of an unconditional `"..."`, which also closes a latent hole where an
   unquoted endpoint carrying a shell metacharacter (e.g. `&`) mis-`eval`'d; `powershell`
   (`$env:NAME = 'value'`) single-quotes, doubling a literal `'`; `cmd` (`@set "NAME=value"`) uses
-  the quoted-`set` form so `call`ing the generated file doesn't echo the key to the console;
+  the quoted-`set` form to keep quote characters out of the value, with the leading `@` (not the
+  quoting) suppressing the echo of the key to the console when the generated file is `call`ed;
   `dotenv` (`NAME=value`) is unquoted, matching how `docker compose --env-file`/`python-dotenv`
   read it. `--otlp-endpoint` is validated against the chosen format right after it is resolved and
   before the key is minted (a minted ingestion API key is never retrievable again), erroring out

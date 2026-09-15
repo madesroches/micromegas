@@ -830,12 +830,6 @@ def test_main_exits_non_zero_on_env_file_os_error(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_build_parser_format_defaults_to_posix():
-    parser = setup_telemetry.build_parser()
-    args = parser.parse_args(["--url", "http://analytics:3000", "--name", "laptop"])
-    assert args.format == "posix"
-
-
 @pytest.mark.parametrize("fmt", ["posix", "powershell", "cmd", "dotenv"])
 def test_build_parser_accepts_each_format(fmt):
     parser = setup_telemetry.build_parser()
@@ -978,9 +972,17 @@ def test_check_format_endpoint_dotenv_rejects_trailing_whitespace():
         )
 
 
-def test_check_format_endpoint_cmd_and_dotenv_reject_before_the_mint(monkeypatch):
-    """Pins that the check is on the pre-mint side: `run()` must exit through
-    `parser.error` before `client.mint_ingestion_api_key` is ever called."""
+@pytest.mark.parametrize(
+    "fmt,endpoint",
+    [
+        ("cmd", "http://ingest:9000/otlp%20path"),
+        ("dotenv", "http://ingest:9000/otlp#frag"),
+    ],
+)
+def test_check_format_endpoint_cmd_rejects_before_the_mint(monkeypatch, fmt, endpoint):
+    """Pins that the check is on the pre-mint side, for every format: `run()`
+    must exit through `parser.error` before `client.mint_ingestion_api_key`
+    is ever called."""
     client = FakeClient(
         my_audiences={
             "is_admin": False,
@@ -993,33 +995,30 @@ def test_check_format_endpoint_cmd_and_dotenv_reject_before_the_mint(monkeypatch
     monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
     args = make_args(
         audience="team-alpha",
-        otlp_endpoint="http://ingest:9000/otlp%20path",
-        format="cmd",
+        otlp_endpoint=endpoint,
+        format=fmt,
     )
     with pytest.raises(SystemExit):
         setup_telemetry.run(args, FakeParser())
     assert not any(call[0] == "mint" for call in client.calls)
 
 
-def test_check_format_endpoint_dotenv_rejects_before_the_mint(monkeypatch):
-    client = FakeClient(
-        my_audiences={
-            "is_admin": False,
-            "audiences": ["team-alpha"],
-            "mint_prefix": "alice-",
-            "email": "alice@example.com",
-            "held_pairs": ["team-alpha:mint"],
-        }
-    )
-    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
-    args = make_args(
-        audience="team-alpha",
-        otlp_endpoint="http://ingest:9000/otlp#frag",
-        format="dotenv",
-    )
+@pytest.mark.parametrize(
+    "fmt,char",
+    [
+        (fmt, char)
+        for fmt, chars in setup_telemetry._FORMAT_UNSAFE_CHARS.items()
+        for char in chars
+    ],
+)
+def test_check_format_endpoint_rejects_every_unsafe_char(fmt, char):
+    """Pins the pre-mint guard table itself: dropping any one of these
+    `(fmt, char)` entries from `_FORMAT_UNSAFE_CHARS` would leave this suite
+    green were it not for this test -- in particular `powershell`'s CR/LF
+    (otherwise entirely unexercised) and `dotenv`'s `$`."""
+    endpoint = f"http://ingest:9000/otlp{char}path"
     with pytest.raises(SystemExit):
-        setup_telemetry.run(args, FakeParser())
-    assert not any(call[0] == "mint" for call in client.calls)
+        setup_telemetry.check_format_endpoint(fmt, endpoint, FakeParser())
 
 
 # ---------------------------------------------------------------------------

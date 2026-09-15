@@ -249,11 +249,12 @@ profile, and `dotenv` output is not a shell script.
 
 - **`mkdocs/docs/query-guide/python-api.md`** § `micromegas-setup-telemetry`: document
   `--format` next to `--env-file` — the four-row table of rendered shape and consumption
-  command (`eval "$(...)"`, `| Invoke-Expression`, redirect-to-`.cmd`-and-`call`,
-  `docker compose --env-file`/`python-dotenv`), the quoting convention per dialect, that the
-  default is `posix` and is never inferred from the OS, that the flag covers both stdout and
-  `--env-file`, and that `cmd`/`dotenv` reject an endpoint carrying a character they cannot
-  represent. Add a PowerShell and a dotenv example to the existing example block.
+  command (`eval "$(...)"`, `| Invoke-Expression`, redirect-to-`.cmd`-and-`call`, a compose
+  service's `env_file:`/`docker run --env-file`/`python-dotenv` for `dotenv`), the quoting
+  convention per dialect, that the default is `posix` and is never inferred from the OS, that
+  the flag covers both stdout and `--env-file`, and that `cmd`/`dotenv` reject an endpoint
+  carrying a character they cannot represent. Add a PowerShell and a dotenv example to the
+  existing example block.
 - **`mkdocs/docs/admin/authorization.md`** § `micromegas-setup-telemetry` wraps login…: add a
   one-line PowerShell equivalent beside the existing `eval "$(...)"` line, pointing at
   `python-api.md` for the rest.
@@ -275,9 +276,12 @@ no live DB or service.
   endpoint bare and the header value quoted, matching the documented `eval` usage).
 - `posix` quotes an endpoint containing `&` (the latent-hole regression).
 - `powershell` doubles a `'` in a value.
-- `cmd` with a `%`-bearing endpoint and `dotenv` with a `#`-bearing endpoint both exit through
-  `parser.error`, and `FakeClient.calls` records **no** `mint` — pinning that the check is on
-  the pre-mint side.
+- `cmd` with a `%`-bearing endpoint and `dotenv` with a `#`-bearing endpoint, parametrized over
+  both formats in one test, both exit through `parser.error` via `run()`, and `FakeClient.calls`
+  records **no** `mint` — pinning that the check is on the pre-mint side, format-independently.
+- A parametrized test over every `(fmt, char)` pair in `_FORMAT_UNSAFE_CHARS` asserts
+  `check_format_endpoint` exits for each — pinning the guard table itself, including
+  `powershell`'s CR/LF and `dotenv`'s `$`.
 - `dotenv` rejects a trailing-whitespace endpoint.
 - A mint result whose key carries a `cmd`-unsafe character warns on stderr and still emits the
   key (pins "never lose the key").
