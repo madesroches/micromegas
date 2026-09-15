@@ -69,6 +69,16 @@ def build_base_tree(root: Path) -> Path:
         "</head><body>not found</body></html>",
     )
 
+    write(
+        root / "llms.txt",
+        "# Example\n\n"
+        "> Summary.\n\n"
+        "## Start here\n\n"
+        f"- [Docs]({ORIGIN}/docs/): the documentation.\n"
+        f"- [A page]({ORIGIN}/docs/page/): one page.\n"
+        "- [Source](https://github.com/example/example): off-site, not checked.\n",
+    )
+
     return root
 
 
@@ -197,3 +207,34 @@ def test_root_absolute_feed_link_resolves_and_breaks_correctly(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_missing_llms_txt_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    (root / "llms.txt").unlink()
+    failures = check_site(root)
+    assert any("llms.txt does not exist" in f for f in failures)
+
+
+def test_llms_txt_link_to_missing_page_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    write(
+        root / "llms.txt",
+        "# Example\n\n"
+        "> Summary.\n\n"
+        f"- [Moved]({ORIGIN}/docs/moved/): this page is not in the tree.\n",
+    )
+    failures = check_site(root)
+    assert any(f"{ORIGIN}/docs/moved/" in f for f in failures)
+
+
+def test_llms_txt_offsite_links_are_not_checked(tmp_path):
+    root = build_base_tree(tmp_path)
+    write(
+        root / "llms.txt",
+        "# Example\n\n"
+        "> Summary.\n\n"
+        "- [Elsewhere](https://github.com/example/nope): off-site.\n"
+        "- [Also elsewhere](https://crates.io/crates/nope): off-site.\n",
+    )
+    assert check_site(root) == []
