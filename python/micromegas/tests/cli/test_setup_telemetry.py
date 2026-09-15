@@ -652,16 +652,20 @@ def test_write_env_file_writes_content_when_fchmod_is_unavailable(
 
 def test_write_env_file_writes_bytes_exactly_no_crlf_translation(monkeypatch, tmp_path):
     """Pins the `O_BINARY` flag, which keeps the fd out of Windows' CRT text
-    mode where `os.write` would otherwise translate `\\n` to `\\r\\n`. The host
-    platform has no meaningful `O_BINARY` bit, so a synthetic sentinel is used
-    to pin that the flag is actually passed through to `os.open`."""
-    monkeypatch.setattr(os, "O_BINARY", 0x8000, raising=False)
+    mode where `os.write` would otherwise translate `\\n` to `\\r\\n`. A
+    synthetic sentinel bit is layered on top of the platform's real
+    `O_BINARY` (0 on platforms without one) to pin that the flag `write_env_file`
+    passes is actually forwarded to `os.open`, without disturbing the real bit
+    when it exists (e.g. on Windows, where it does)."""
+    real_binary = getattr(os, "O_BINARY", 0)
+    sentinel = 0x40000000
+    monkeypatch.setattr(os, "O_BINARY", real_binary | sentinel, raising=False)
     recorded_flags = []
     real_open = os.open
 
     def recording_open(path, flags, mode):
         recorded_flags.append(flags)
-        return real_open(path, flags & ~0x8000, mode)
+        return real_open(path, (flags & ~sentinel) | real_binary, mode)
 
     monkeypatch.setattr(os, "open", recording_open)
     env_file = tmp_path / "telemetry.env"
@@ -669,7 +673,7 @@ def test_write_env_file_writes_bytes_exactly_no_crlf_translation(monkeypatch, tm
 
     setup_telemetry.write_env_file(env_file, content)
 
-    assert recorded_flags[0] & 0x8000
+    assert recorded_flags[0] & sentinel
     assert env_file.read_bytes() == content.encode("utf-8")
 
 

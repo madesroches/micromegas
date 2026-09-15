@@ -234,14 +234,17 @@ reachable by calling the two functions directly.
    `O_BINARY` flag, which is what keeps the fd out of Windows' CRT text mode where
    `os.write` would otherwise translate `\n` to `\r\n`. On the Linux CI runner
    `os.O_BINARY` does not exist, so `getattr(os, "O_BINARY", 0)` is `0` with or without
-   the flag and a plain byte-content assertion would pass on unmodified code too; the
-   test instead monkeypatches a synthetic sentinel (`monkeypatch.setattr(os, "O_BINARY",
-   0x8000, raising=False)`), wraps `os.open` to record the `flags` it is called with — the
-   wrapper masks the sentinel bit off before delegating to the real `os.open`, since that
-   bit is not a meaningful flag on the host platform — and asserts the recorded flags
-   include that bit — that assertion is what actually pins the regression. It also keeps
-   `target.read_bytes() == content.encode("utf-8")` as a cheap, documentation-only
-   byte-exactness check.
+   the flag and a plain byte-content assertion would pass on unmodified code too; on a
+   real Windows host, `os.O_BINARY` does exist and is a meaningful bit, so the test
+   layers a synthetic sentinel on top of it rather than replacing it
+   (`monkeypatch.setattr(os, "O_BINARY", getattr(os, "O_BINARY", 0) | 0x40000000,
+   raising=False)`), wraps `os.open` to record the `flags` it is called with — the
+   wrapper masks the sentinel bit off and ORs the real `O_BINARY` value back in before
+   delegating to the real `os.open`, so the genuine flag is preserved on platforms where
+   it matters — and asserts the recorded flags include the sentinel bit — that assertion
+   is what actually pins the regression. It also keeps `target.read_bytes() ==
+   content.encode("utf-8")` as a cheap, documentation-only byte-exactness check that is
+   load-bearing on real Windows.
 3. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
    ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod, raising=False)` (the
    `raising=False` avoids an error on Windows with Python 3.11/3.12, where the attribute
