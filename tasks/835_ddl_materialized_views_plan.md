@@ -311,10 +311,13 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
    merge query is unrunnable without it.
-6. **No volatile or stable functions.** Walk the planned extract query's `LogicalPlan` expressions
-   and reject any `ScalarUDF` whose `signature().volatility` is not `Immutable` (`now()`,
-   `random()`, `current_timestamp`). Their value is frozen into a partition at materialization
-   time and then served to every later reader — wrong data, no error, indefinitely.
+6. **No volatile or stable functions.** Walk the planned extract, merge and count-source query
+   `LogicalPlan`s — the merge and count-source plans are already built by checks 3 and 4, so the
+   extra walk is free — and reject any `ScalarUDF` whose `signature().volatility` is not `Immutable`
+   (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
+   frozen into a partition at materialization time and then served to every later reader — wrong
+   data, no error, indefinitely; in `count_src_query` it instead corrupts freshness detection
+   (`verify_overlapping_partitions` compares row counts), causing perpetual re-materialization.
 
 7. **No admin-gated mutating table function, and `update_group` strictly after every view set the
    definition reads.** Walk the planned extract and count-source `LogicalPlan`s for every
@@ -346,6 +349,14 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    mismatched top-level `ORDER BY` makes `execute_extract_query` error on every daemon tick with an
    empty table in the meantime. Running the same assertions at `CREATE` turns that into a rejection
    up front.
+9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
+   `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
+   must each name a field of the extract query's inferred schema, and that field's type must be
+   `Timestamp(Nanosecond, _)`. Neither is checked today: `NamedColumnsTimeBounds::get_time_bounds`
+   (`dataframe_time_bounds.rs:36-57`) downcasts to `TimestampNanosecondArray` and
+   `SqlBatchView::make_time_filter` (`sql_batch_view.rs:297-301`) builds
+   `col(&*self.min_event_time_column)`, so a typo'd or non-nanosecond column is otherwise accepted at
+   `CREATE` and only fails on the daemon's first tick and on every ranged query.
 
 Checks 2, 3, 5, 6, 7 and 8 are the ones that earn their keep: each covers a failure that produces wrong
 or stale *numbers* rather than an error. What stays an **unchecked author obligation**, documented
@@ -844,15 +855,20 @@ name failing the charset check; option values containing escaped quotes and newl
 accepted-but-unmodelled clause from §1 (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`,
 `CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`,
 the MySQL view params on `CREATE`; `CASCADE`/`RESTRICT`/`PURGE`, `DROP TEMPORARY`, `DROP ... ON
-<table>` on `DROP`) and a `DROP` naming more than one object, each a named error.
+<table>` on `DROP`) and a `DROP` naming more than one object, each a named error; a `CREATE`
+whose `AS` body has odd whitespace, an inline comment and mixed casing, asserting the parsed
+`extract_query` is byte-identical to that body as written — pinning §1's verbatim-slice invariant
+against a regression to a re-rendered `Query::to_string()`.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
 one with `audience` is accepted; one with `process_id` only is accepted; a merge query that does not
 plan is rejected; a merge query that plans but whose output schema differs is rejected, and the
 error names the differing field; a count query without a single `count: Int64` column is rejected; a
-query missing `{begin}`/`{end}`/`{source}` is rejected; `now()` and `random()` in the extract query
-are rejected and `date_bin` is not; a name colliding with a built-in view set is rejected. Ordering
+query missing `{begin}`/`{end}`/`{source}` is rejected; `now()` and `random()` in the extract, merge
+and count-source query are each rejected and `date_bin` is not; a `time_column` naming a field
+absent from the extract query's schema is rejected; one naming a field that is not
+`Timestamp(Nanosecond, _)` is rejected; a name colliding with a built-in view set is rejected. Ordering
 (check 7): a definition reading `log_entries` (a base view set, update_group 2000) is rejected at
 2000, accepted at 2001; a definition reading nothing is accepted at any group; a definition reading
 two base view sets is measured against the higher of the two; a definition scanning
