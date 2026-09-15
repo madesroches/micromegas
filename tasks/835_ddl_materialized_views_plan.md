@@ -125,16 +125,23 @@ accepts a `WITH (...)` option list immediately before it, so this is the only sh
 3-query model that is real SQL. It also reads better: the body is the view, the options are knobs.
 `parse_create_view` hands back a parsed `Query` AST, not source text, so `ViewDefinition.extract_query`
 is populated by slicing the verbatim source text of the `AS` body out of the input SQL — never
-`Query::to_string()`. The slice spans the body's first token through its last, located via
-`Query::span()` (`sqlparser-0.62.0/src/ast/spans.rs:115-139,2286-2331` — a union of child-node token
-spans starting at the `SELECT` token, since `CreateView` exposes no `AS`-token span of its own) and
-converted from `sqlparser`'s line/column `Span` (`src/tokenizer.rs:552-561`) to byte offsets. This
-only covers the body's *interior*: leading trivia between `AS` and the first token, or trailing trivia
-after the last, falls outside the slice. This is what makes the definition hash (§3) sensitive to a
-purely cosmetic edit to the body's interior (whitespace, a comment between its tokens): a re-rendered
-AST would normalize both away, and it is also the text every later materialization executes, so a
-stored `extract_query` must be what the author wrote, not a reformatted equivalent — though a
-leading/trailing-comment edit outside the token span is invisible to the hash.
+`Query::to_string()`. The start offset is the body's first token, located via `Query::span().start`
+(`sqlparser-0.62.0/src/ast/spans.rs:115-139,2286-2331` — the `SELECT`/`WITH` token, always populated).
+The end offset cannot come from `Query::span()`: `impl Spanned for OrderByExpr` (`:2122-2131`)
+destructures `options: _` and `Expr::IsNull`/`IsNotNull`/`IsTrue`/`IsNotTrue` (`:1473-1476`) return
+only the inner expression's span, so both drop trailing keywords (`DESC`, `NULLS FIRST`, `IS NOT
+NULL`'s `NOT NULL`), and `Offset::span()` (`:160-168`) ignores `rows` — a body ending in `ORDER BY
+time_bin DESC` would silently slice to `... ORDER BY time_bin`, valid SQL with the opposite order.
+Instead the end offset is read from the parser itself: after `Parser::try_with_sql(sql)?.parse_statement()`
+returns, the body is the trailing clause of the accepted grammar, so it runs up to the start of
+`parser.peek_token_ref()` (the `;` or `EOF` token that follows), trimmed of trailing whitespace. Both
+offsets are converted from `sqlparser`'s line/column `Span` (`src/tokenizer.rs:552-561`) to byte
+offsets. This only covers the body's *interior*: leading trivia between `AS` and the first token, or
+trailing trivia after the last, falls outside the slice. This is what makes the definition hash (§3)
+sensitive to a purely cosmetic edit to the body's interior (whitespace, a comment between its tokens):
+a re-rendered AST would normalize both away, and it is also the text every later materialization
+executes, so a stored `extract_query` must be what the author wrote, not a reformatted equivalent —
+though a leading/trailing-comment edit outside the token span is invisible to the hash.
 
 Option semantics:
 
@@ -216,8 +223,12 @@ maintenance daemon kept serving and materializing the old definition.
 
 `definition_hash_enabled` is the one flag, and it exists solely to keep the seeded row's
 `file_schema_hash` byte-identical to the compiled view's (§3). A `CREATE OR REPLACE` of `log_stats`
-sets it `true`, because at that point the definition genuinely differs from the shipped one and
-invalidation is correct.
+sets it `true` unconditionally — even when the replacing text is byte-identical to the seeded one —
+because the flag alone changes `get_file_schema_hash()`'s output (§3): the seeded row's hash omits
+the definition hash entirely, the replaced row's includes it. That is itself an effective
+`file_schema_hash` change and must retire the old partitions exactly like a text change does; §5
+step 3 keys the retire decision on the effective hash, not on whether the definition text changed,
+so this case is covered.
 
 Seeded `log_stats` otherwise gets no special treatment: it can be replaced or dropped like any other
 row, and a definition that fails to build is skipped with a `warn!` like any other. The consequence
@@ -271,14 +282,20 @@ an exact byte value, built on the `lakehouse_admin_gate_test.rs` offline harness
 invalidate every `SqlBatchView` partition in every existing deployment.
 
 The DDL loader computes the hash over the normalized definition: `extract_query`,
-`count_src_query`, `merge_partitions_query`, and the two time columns — the fields that determine
-partition *content*. `update_group`, `source_partition_delta`/`merge_partition_delta`, and
-`merge_sort_order` are deliberately excluded: `update_group` only orders `materialize_all_views`'s
+`merge_partitions_query`, and the two time columns — the fields that determine partition *content*.
+`update_group`, `source_partition_delta`/`merge_partition_delta`, `merge_sort_order`, and
+`count_src_query` are deliberately excluded: `update_group` only orders `materialize_all_views`'s
 scheduling (`maintenance.rs:59-70`) and does not touch what a partition contains; the two deltas only
 set the width of *future* partitions, and `verify_overlapping_partitions` already tolerates mixed
-widths (`batch_update.rs:23-100`); and `merge_sort_order` only affects the sort guarantee recorded in
+widths (`batch_update.rs:23-100`); `merge_sort_order` only affects the sort guarantee recorded in
 partition metadata (`Partition::certifies_sort_order`, `partition.rs`), which the schema
-hash plays no part in. It is derived, never stored, so there is nothing to keep in sync.
+hash plays no part in; and `count_src_query` never touches partition content either — it only
+produces the row count `fetch_sql_partition_spec` (`sql_partition_spec.rs:196-203`) stores as
+`source_data_hash`, and a probe that disagrees with that stored count already self-corrects without
+a hash change, since `verify_overlapping_partitions` (`batch_update.rs:80-88`) returns
+`CreateFromSource` whenever the counts differ. Hashing it would mean a `REPLACE` that only fixes the
+probe retires and re-materializes every partition (§5 step 3, §6) for no content change. It is
+derived, never stored, so there is nothing to keep in sync.
 
 Consequence, which must be documented rather than engineered around: a redefinition **resets the
 view's materialized history**. The daemon only fills forward (2 days / 2 hours / 2 minutes back from
@@ -484,9 +501,12 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    every definition, from the post-mutation row set with this row's own name excluded, in a lower
    `update_group` — so a definition reading another DDL view validates against the real thing, and a
    `CREATE OR REPLACE` that raises its own `update_group` cannot validate against a since-superseded
-   copy of itself. Reject an existing name unless `or_replace`; on a replace whose definition hash
-   changed, retire the old partitions (§6) and `upsert` the row via `registry.store()`'s
-   transaction-scoped `upsert_tx(&mut tx, ...)`, all in the same transaction.
+   copy of itself. Reject an existing name unless `or_replace`; on a replace whose *effective*
+   `file_schema_hash` changed — i.e. `SqlBatchView::get_file_schema_hash()` differs between the old
+   row's built view and the new one, which catches a `definition_hash_enabled` flip (§2) as well as
+   a definition-hash change, since either alone changes the hash — retire the old partitions (§6)
+   and `upsert` the row via `registry.store()`'s transaction-scoped `upsert_tx(&mut tx, ...)`, all in
+   the same transaction.
 4. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
    `delete_tx(&mut tx, ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
 5. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
@@ -714,8 +734,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    naming more than one object, and the input parsing to more than one statement (§1);
    `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
    the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
-   verbatim source text from the `AS` body's span in the input SQL, not rendered from the parsed
-   `Query` AST.
+   verbatim source text from the `AS` body's start (`Query::span().start`) through the byte
+   preceding the parser's `peek_token_ref()` after `parse_statement()` returns, not rendered from
+   the parsed `Query` AST and not using `Query::span()`'s end, which truncates a trailing `ORDER BY
+   ... DESC`/`IS NOT NULL` (§1).
 9. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
@@ -829,9 +851,10 @@ which is a second design; the issue already scopes it out.
 - Validation rejects a definition whose merge-query output schema differs from its extract-query
   output schema, rather than warning — a disagreement means the user-visible table and the
   partitions backing it have different shapes, with no error at query time.
-- `CREATE OR REPLACE` with a changed definition hash retires the old partitions immediately instead
-  of leaving them for retention. They are already unreachable (the query-side partition provider
-  filters on `file_schema_hash`), so keeping them buys no rollback, only storage.
+- `CREATE OR REPLACE` with a changed *effective* `file_schema_hash` — the definition hash, or
+  `definition_hash_enabled` flipping — retires the old partitions immediately instead of leaving
+  them for retention. They are already unreachable (the query-side partition provider filters on
+  `file_schema_hash`), so keeping them buys no rollback, only storage.
 - A definition that fails to load is skipped with a `warn!` and a metric; the registry still swaps
   in every definition that did load. One bad row must not take the lakehouse down.
 - The insert-time-vs-event-time obligation and the merge-aggregate composability obligation are
@@ -917,9 +940,11 @@ the MySQL view params on `CREATE`; `CASCADE`/`RESTRICT`/`PURGE`, `DROP TEMPORARY
 semicolon (`CREATE ...; DROP ...`), each a named error; a `CREATE`
 whose `AS` body has odd interior whitespace, an inline comment *between* two of its tokens, and mixed
 casing, asserting the parsed `extract_query` is byte-identical to that body as written — pinning §1's
-verbatim-slice invariant against a regression to a re-rendered `Query::to_string()`. The fixture
-deliberately keeps any comment or blank line before the body's first token or after its last out of
-scope, since `Query::span()` does not cover them.
+verbatim-slice invariant against a regression to a re-rendered `Query::to_string()`; and a body ending
+in `ORDER BY x DESC` and one ending in `WHERE y IS NOT NULL`, each asserting the trailing keyword
+survives in the sliced `extract_query` — pinning the end offset against `Query::span()`'s truncation
+of `OrderByExpr`/`Expr::IsNotNull` (§1). The fixture deliberately keeps any comment or blank line
+before the body's first token or after its last out of scope, since neither offset covers them.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
@@ -949,7 +974,10 @@ with `definition_hash_enabled = false`, and assert their `get_file_schema_hash()
 `get_file_schema()` are equal. This is the test that protects every existing deployment's
 `log_stats` partitions from the upgrade, and the failure it guards is silent: a mismatch empties the
 view rather than erroring. Paired with a case asserting the same definition *with*
-`definition_hash_enabled = true` produces a *different* hash, so the flag is doing real work.
+`definition_hash_enabled = true` produces a *different* hash, so the flag is doing real work, and a
+third case asserting §5 step 3's effective-hash comparison treats that same flag flip as a change —
+i.e. replacing the seeded row with byte-identical text still trips the retire condition, guarding
+the identical-text-replace orphaned-partitions bug.
 
 **Seeded definition passes validation** (same file) — run the full §4 check set over the seeded
 `log_stats` definition and assert it passes unmodified. It is the validator's calibration case; a
@@ -958,9 +986,9 @@ exercises check 3's nullability exclusion: `count(*)` (non-nullable) in the extr
 `sum(count)` (nullable) in the merge query.
 
 **Definition hash** (in `view_definition_validation_tests.rs`) — identical definitions hash equal;
-changing each hashed field (`extract_query`, `count_src_query`, `merge_partitions_query`, either time
-column) in turn changes the hash; changing `update_group`, either delta, or `merge_sort_order` alone
-does not; and, as the CI regression guard for the `None` path
+changing each hashed field (`extract_query`, `merge_partitions_query`, either time column) in turn
+changes the hash; changing `update_group`, either delta, `merge_sort_order`, or `count_src_query`
+alone does not; and, as the CI regression guard for the `None` path
 (the existing `sql_view_test.rs:226` assertion is `#[ignore]`d and does not run in CI), a new no-DB
 test builds a `definition_hash: None` `SqlBatchView` on the `lakehouse_admin_gate_test.rs` offline
 harness and pins `get_file_schema_hash()` to its current exact byte value.
@@ -974,7 +1002,12 @@ before the first reload; a `DROP`ped definition disappears from the swapped fact
 **Admin gate** — the gate is a standalone `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
 unit-tested directly in `rust/public/tests/view_ddl_parse_tests.rs` (same crate as the gate), plus a
 case in `lakehouse_admin_gate_test.rs` asserting `list_view_definitions()` is registered only for an
-admin caller.
+admin caller. The wiring — that `execute_query` actually routes DDL through the gate before
+`make_session_context`, not just that the gate function itself is correct — is covered by a new
+`read_policy_threading_tests.rs` case mirroring `bulk_ingest_denies_non_admin_caller` (`:479-510`):
+send a `CREATE MATERIALIZED VIEW ...` statement through the real `AuthService`/tonic stack as the
+`ApiKeyAuthProvider` (always non-admin) caller and assert `Code::PermissionDenied`. This is the
+same offline harness step 9 already edits to construct a `ViewRegistry`.
 
 **`python/micromegas/tests/test_ddl_materialized_view.py`** — the end-to-end tier, against the local
 test env, following `test_log_stats_integration.py` / `test_query_deny_list.py`: `CREATE OR REPLACE`
@@ -1003,16 +1036,16 @@ Each step below needs a running split-mode stack and is checking something no un
    `SELECT count(*) FROM log_stats` over a historical range to return the same rows as before. The
    unit test pins the hash function against the seeded text; this pins that a real deployment's
    already-written partitions still match it.
-3. **Non-admin rejection.** With auth enabled, run a `CREATE MATERIALIZED VIEW` as a non-admin:
-   `micromegas-query "CREATE MATERIALIZED VIEW t WITH (...) AS SELECT ..."`. Expect
-   `PERMISSION_DENIED` and no new row in `lakehouse_view_set_definitions`. Exercises the real auth
-   stack end to end rather than a constructed `CallerContext`.
-4. **Reload without a restart.** With both services already running, create a view set, then poll
+3. **Reload without a restart.** With both services already running, create a view set, then poll
    `micromegas-query "SELECT * FROM list_view_sets() WHERE view_set_name = '<name>'"` from a
    *second* client. Expect it to appear within the refresh interval, and
    `/tmp/daemon.log` to show the daemon materializing it on the next minute tick — the thing the
    whole feature exists to do, and the one that cannot be observed in-process.
-5. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
+4. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
    over `a` at group 4001; `materialize_partitions` both over the same range and confirm `b`'s rows
    are consistent with `a`'s. The group-ordering half is what unit tests cannot reach — it needs two
    real daemon passes over real partitions to show `b` is not reading `a`'s previous-tick state.
+
+Non-admin rejection is covered by the `read_policy_threading_tests.rs` case added to the Testing
+Strategy's "Admin gate" entry, not listed here as a numbered step — that harness already runs a
+real `AuthService`/tonic stack, so it needs no separate manual run.
