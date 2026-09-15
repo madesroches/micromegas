@@ -1,6 +1,6 @@
 [package]
 name = "micromegas"
-description = "Micromegas is a scalable observability solution."
+description = "Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."
 readme = "README.md"
 keywords.workspace = true
 categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
