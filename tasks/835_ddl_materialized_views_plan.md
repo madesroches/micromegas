@@ -17,11 +17,8 @@ instance is created.
 
 **`log_stats` becomes data.** It is a `SqlBatchView` whose only distinction from a DDL-defined view
 is that its SQL lives in Rust, so the migration seeds it into `lakehouse_view_set_definitions` and
-`default_view_factory` drops its construction step (`view_factory.rs:344-352`). This is the point of
-the feature rather than a bonus: it makes the DDL path carry a view every deployment materializes on
-every tick, instead of one only opt-in operators run, and the seeded definition is the validator's
-calibration case — it must pass every check in §4 unmodified, and if it doesn't the check is wrong,
-not the view.
+`default_view_factory` drops its construction step (`view_factory.rs:344-352`) — the seeded
+definition doubles as the validator's calibration case (see Testing Strategy).
 
 ## Current State
 
@@ -133,11 +130,11 @@ and parses a query immediately after, so a `CREATE MATERIALIZED VIEW ... WITH (.
 body cannot be parsed by it at all.
 
 `parse_view_ddl` therefore hand-rolls the parse off a single `Parser::try_with_sql(sql)?`: `CREATE`,
-an optional `OR REPLACE`, `MATERIALIZED`, `VIEW`, `parse_object_name()`,
+an optional `OR REPLACE`, `MATERIALIZED`, `VIEW`, `parse_object_name(false)`,
 `parse_options(Keyword::WITH)` (`:9968-9977`, which parses `WITH ( k = v, ... )` into
 `Vec<SqlOption>`), then consume any trailing `Token::SemiColon` and reject with a named error unless
 `parser.peek_token_ref()` is `Token::EOF`. The `DROP` branch is `DROP`, `MATERIALIZED`, `VIEW`, an
-optional `IF EXISTS`, one `parse_object_name()`, then the same `;`/EOF requirement. Requiring EOF
+optional `IF EXISTS`, one `parse_object_name(false)`, then the same `;`/EOF requirement. Requiring EOF
 preserves the single-statement rule `SessionContext::sql`'s `sql_to_statement` enforces for every
 non-DDL query (datafusion-54.1.0 `src/execution/session_state.rs:454-458`); intercepting DDL ahead
 of `ctx.sql` would otherwise bypass that guard and silently execute only the first of several
@@ -148,7 +145,8 @@ An option value is an `Expr` (`SqlOption::KeyValue { key: Ident, value: Expr }`,
 a string literal and `ViewDefinition.extract_query` is that option's value verbatim. The three query
 options accept either a dollar-quoted (`$$...$$`) or a single-quoted literal — dollar-quoted strings
 parse as expression values under `GenericDialect`, which this repo already parses with
-(`sqlparser-0.62.0/src/parser/mod.rs:12191-12194` → `Expr::Value(Value::DollarQuotedString(..))`).
+(`parse_value` at `sqlparser-0.62.0/src/parser/mod.rs:12011`, fed by the tokenizer at
+`tokenizer.rs:1929` → `Expr::Value(Value::DollarQuotedString(..))`).
 Dollar-quoting is the documented form because these queries contain single quotes (`'log'`,
 `'{begin}'`, `'Dictionary(Int32, Utf8)'`) that a single-quoted literal would have to double.
 
@@ -167,11 +165,6 @@ Option semantics:
 | `merge_sort_order` | no | comma-separated column list → `with_merge_sort_order` |
 
 Anything else is a hard error — an unknown option is far more likely a typo than an extension point.
-
-Because the parse accepts only `<name>` followed by `WITH (...)` and then EOF, every clause
-`sqlparser`'s own `parse_create_view`/`parse_drop` would otherwise accept but this grammar does not
-model is rejected by construction, as a parse error. There is no hand-maintained clause list that
-could fall behind the grammar.
 
 ### 2. Persistence
 
@@ -204,13 +197,13 @@ Its text comes from `const`s in a new
 `log_stats_view.rs`, which the migration and the tests then share as one source of truth.
 `ON CONFLICT DO NOTHING` keeps the migration idempotent.
 
-`definition_sql` (`TEXT NOT NULL`, the verbatim DDL text — see §2 below) has no equivalent in
+`definition_sql` (`TEXT NOT NULL`, the verbatim DDL text) has no equivalent in
 `log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A function in
 `builtin_view_definitions.rs` assembles the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
-text from the `ViewDefinition` const, wrapping each query in `$$...$$` — none of them contains a
+text from the `log_stats` `ViewDefinition` fn, wrapping each query in `$$...$$` — none of them contains a
 `$$`, so no quote-escaping helper is needed. It seeds this column and doubles as the parser
 round-trip fixture in the Testing Strategy, which asserts the full parsed `ViewDefinition` — every
-option, not just the three queries — equals the `const` exactly: inside `$$...$$` the text is taken
+option, not just the three queries — equals the fn's returned value exactly: inside `$$...$$` the text is taken
 as-is, so the consts need no whitespace or trailing-`;` grooming for that equality to hold.
 
 The `upsert` behind `CREATE OR REPLACE` is an `ON CONFLICT (view_set_name) DO UPDATE` that sets
@@ -232,14 +225,8 @@ feature and `serde_json` is already a dependency (`rust/analytics/Cargo.toml:42`
 its own column because `reload()` sorts and §8 projects on it. `definition_sql` is the verbatim DDL
 text, kept for display and audit only — never re-parsed.
 
-Deliberately **absent** from the issue's proposed table:
-
-- **`file_schema BYTEA`** — the schema is derived by planning `extract_query`, exactly as
-  `SqlBatchView::new` already does. A stored copy is a second source of truth that drifts the
-  moment a source view's schema changes underneath it.
-- **`schema_version INTEGER`** — `file_schema_hash` is derived by planning `extract_query`, so it
-  already tracks every schema change automatically. A hand-maintained version column is a second
-  source of truth that can be forgotten.
+See `## Decisions` for why `file_schema`/`schema_version` columns are absent from
+`lakehouse_view_set_definitions`.
 
 ### 3. What a redefinition means
 
@@ -253,9 +240,7 @@ provider stops reading the old partitions
 
 A `CREATE OR REPLACE` that changes **content but not the output schema** (a widened filter, a
 different source view, a changed `date_bin` interval) leaves the existing partitions readable, so
-the view serves a mix of old- and new-definition data until an admin reclaims them. This is the
-deliberate tradeoff: automatically resetting a view's entire materialized history on every edit is
-too blunt for an admin-driven DDL statement, and the admin has direct tools.
+the view serves a mix of old- and new-definition data until an admin reclaims them.
 
 The remedy is explicit and admin-driven: `retire_partitions(...)` over the affected range (or
 `micromegas.admin.retire_incompatible_partitions` for the schema-changed case), followed by
@@ -289,7 +274,11 @@ same walk applied to each. On top of that:
    that literal name via `register_table` on a session context that
    `make_merge_session_context` (`merge.rs:49-73`) has already populated with every global view —
    DataFusion errors on a duplicate registration, so a view set named `source` would break every other
-   view's merge on every tick.
+   view's merge on every tick. Also reject if `ctx.table_exist(name)` is true against the validation
+   session context built for this definition — that context has already run `configurator.configure`,
+   so this one probe additionally catches a collision with a static table the `SessionConfigurator`
+   registers, which the `get_global_view`/`get_view_sets` probe above cannot see and which
+   `StaticTablesConfigurator::configure` otherwise only `warn!`s about and silently shadows.
 2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
    field. Without one, `OwnershipRewrite::predicate_for` returns `Err` for every non-admin caller
    and the view set is unqueryable in any deployment with auth on. The error message names the
@@ -406,10 +395,7 @@ builds a factory from each via the same rows-in seam and refuses with a named er
 — including the row just written — that is *not* in the pre-mutation failed set fails to build against
 the post-mutation rows. The error names the broken definition, whether a downstream dependent or the
 mutated row itself. This is exact rather than textual — it uses the real planner, so it catches a
-removed column as readily as a removed view set — and it reuses the loader wholesale. Taking both row
-sets as plain arguments (rather than reading them itself) is what makes
-`check_dependents_survive` callable from a no-DB unit test against canned rows, with no `sqlx::Transaction`
-in its signature. The baseline is computed transactionally, from the same rows the mutation is
+removed column as readily as a removed view set — and it reuses the loader wholesale. The baseline is computed transactionally, from the same rows the mutation is
 validated against, rather than from `reload()`'s last periodic snapshot: that snapshot is up to
 `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` stale and differs per replica, which would make the
 refusal nondeterministic.
@@ -474,9 +460,7 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
 5. Either mutation then re-reads the post-mutation row set via `view_definition_store::list_tx(&mut
    tx)` and calls `registry.check_dependents_survive(&pre_rows, &post_rows)` (§4b, §7) with the
    pre-mutation rows read in step 2, inside the same transaction, rolling back if it broke a
-   dependent or failed to build the mutated row itself. `execute_view_ddl` calls these free functions
-   directly on its own open transaction, alongside `retire_partitions`, since `FlightSqlServiceImpl`
-   already owns the pool that transaction is opened from.
+   dependent or failed to build the mutated row itself.
 6. After the transaction (steps 2–5) commits and its advisory lock releases, call `registry.reload()`
    inline, so the statement's own connection can query the new view set immediately instead of
    waiting out the interval. It must run after the commit: `reload()` starts with the pool-backed
@@ -656,18 +640,18 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 1. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
    set + three queries), `parse_time_delta`, the name charset check, and
    `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`. First
-   because step 2's `ViewDefinition` const and step 3's migration seed both need this type to exist.
+   because step 2's `log_stats` `ViewDefinition` fn and step 3's migration seed both need this type to exist.
 2. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats` exposed as a
-   `ViewDefinition` const (the three queries plus every option: `update_group`, `time_column`, the
+   `fn` returning its `ViewDefinition` (the three queries plus every option: `update_group`, `time_column`, the
    two deltas, `merge_sort_order`), lifted verbatim out of `log_stats_view.rs`, plus a function
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
-   `definition_sql`; consumed by the migration's seed (which serializes the const's options via
+   `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
    `serde_json` for `view_options`) and by the parser round-trip test. Registered in
    `rust/analytics/src/lakehouse/mod.rs`.
 3. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from `builtin_view_definitions`'s
-   `ViewDefinition` const (`view_options` serialized with `serde_json::to_string`, `definition_sql`
+   `log_stats` `ViewDefinition` fn (`view_options` serialized with `serde_json::to_string`, `definition_sql`
    from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
@@ -687,7 +671,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    (default 60). Lands in this milestone rather than the next because of the ordered build (step 10's
    validation against lower-group definitions) and §4b's post-mutation rebuild via `build_factory`.
 7. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl`, hand-rolling the parse over
-   `datafusion::sql::sqlparser` (`Parser::try_with_sql`, the keyword sequence, `parse_object_name`,
+   `datafusion::sql::sqlparser` (`Parser::try_with_sql`, the keyword sequence, `parse_object_name(false)`,
    `parse_options(Keyword::WITH)`, then the `;`/EOF requirement) into `ViewDdl`; option extraction
    out of each `SqlOption::KeyValue`'s `Expr` value — the three query texts are the string-literal
    values of their own options — and its error type; rejecting, with a named error, anything
@@ -731,9 +715,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 ### Milestone 3 — introspection and `log_stats` cutover
 
 14. New `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`, registered in
-    `query.rs`'s `if lakehouse_admin` block.
+    `query.rs`'s `if lakehouse_admin` block. Update `rust/analytics/tests/lakehouse_admin_gate_test.rs:2`'s
+    header from "eight" to "nine".
 15. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
-    (`:344-352`); `default_view_factory` now returns the base. `log_stats_view.rs`'s
+    (`:344-352`); `default_view_factory` now returns the base. Update its module doc comment
+    (`:303`) from "the six global views" to "the five global views". `log_stats_view.rs`'s
     `make_log_stats_view` is kept but reduced to building from the `const`s, so the tests below
     still have a compiled `log_stats` to build.
     `rust/analytics/tests/audience_mismatch_skip_db_test.rs` builds its `log_stats` view via
@@ -797,15 +783,13 @@ would mean a name-keyed special case in a module whose entire design is to be sc
 `ownership_rewrite.rs` untouched and turns a plan-time error every non-admin caller would hit into a
 single error the author sees once.
 
-**No per-instance (`view_instance`) support.** A DDL-defined view set gets only its `'global'`
-instance. JIT instances need a `ViewMaker` and an id-scoped rewrite of the definition's predicates,
-which is a second design; the issue already scopes it out.
-
 ## Decisions
 
 - Validation rejects a definition whose merge-query output schema differs from its extract-query
   output schema, rather than warning — a disagreement means the user-visible table and the
   partitions backing it have different shapes, with no error at query time.
+- No `file_schema`/`schema_version` columns in `lakehouse_view_set_definitions` — both are derived by
+  planning `extract_query`.
 - A definition that fails to load is skipped with a `warn!` and a metric; the registry still swaps
   in every definition that did load. One bad row must not take the lakehouse down.
 - The insert-time-vs-event-time obligation and the merge-aggregate composability obligation are
@@ -899,7 +883,7 @@ pinning the single-statement rule. Round-trip: each of the three query options p
 exactly the submitted text, with a `$$`-quoted body carrying single quotes, `{begin}`/`{end}`
 placeholders, newlines and mixed casing, plus the single-quoted-literal form for the same query.
 Against the seeded `log_stats` DDL text specifically, the parsed `ViewDefinition` — every option,
-not just the three queries — must equal `builtin_view_definitions`'s `ViewDefinition` const exactly.
+not just the three queries — must equal `builtin_view_definitions`'s `log_stats` `ViewDefinition` fn's return value exactly.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
@@ -948,12 +932,17 @@ same offline harness step 8 already edits to construct a `ViewRegistry`.
 **`python/micromegas/tests/test_ddl_materialized_view.py`** — the end-to-end tier, against the local
 test env, following `test_log_stats_integration.py` / `test_query_deny_list.py`: `CREATE OR REPLACE`
 a small view over `log_entries`, assert it appears in `list_view_sets()` and
-`list_view_definitions()`, `materialize_partitions` a known range, `SELECT` from it, `REPLACE` it
-with a definition whose output schema changes and assert the old partitions are no longer read
-(§3), then `DROP` and assert it is gone from both listings. This covers the wiring no unit test
-reaches — the FlightSQL round trip, the real migration, the real `ViewRegistry` → daemon →
-`lakehouse_partitions` chain — and the failure it guards is silent (a view set that loads but never
-materializes looks like an empty table, not an error).
+`list_view_definitions()`; `assert_eventually` (timeout above the refresh interval plus one daemon
+minute tick) that `list_partitions()` shows rows for it *without* calling `materialize_partitions`
+first, confirming the daemon picks up a new view set without a restart; create `a` over `log_entries`
+at `update_group` 4000 and `b` over `a` at 4001, `materialize_partitions` both over the same range in
+that order, and assert `b`'s rows equal a re-aggregation of `a`'s; `materialize_partitions` a known
+range for the original view, `SELECT` from it, `REPLACE` it with a definition whose output schema
+changes and assert the old partitions are no longer read (§3), then `DROP` and assert it is gone from
+both listings. This covers the wiring no unit test reaches — the FlightSQL round trip, the real
+migration, the real `ViewRegistry` → daemon → `lakehouse_partitions` chain — and the failures it
+guards are silent (a view set that loads but never materializes looks like an empty table, not an
+error; wrong numbers in a view reading another DDL view produce no error anywhere).
 
 No new `#[ignore]` live-DB Rust test: per `CONTRIBUTING.md` those are reserved for pinning a bug
 witnessed in the wild, and this is new-feature acceptance.
@@ -966,16 +955,3 @@ Each step below needs a running split-mode stack and is checking something no un
    run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade lakehouse schema to
    v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Not automated
    because it exercises a real pre-existing schema state, not a freshly created one.
-2. **Reload without a restart.** With both services already running, create a view set, then poll
-   `micromegas-query "SELECT * FROM list_view_sets() WHERE view_set_name = '<name>'"` from a
-   *second* client. Expect it to appear within the refresh interval, and
-   `/tmp/daemon.log` to show the daemon materializing it on the next minute tick — the thing the
-   whole feature exists to do, and the one that cannot be observed in-process.
-3. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
-   over `a` at group 4001; `materialize_partitions` both over the same range and confirm `b`'s rows
-   are consistent with `a`'s. The group-ordering half is what unit tests cannot reach — it needs two
-   real daemon passes over real partitions to show `b` is not reading `a`'s previous-tick state.
-
-Non-admin rejection is covered by the `read_policy_threading_tests.rs` case added to the Testing
-Strategy's "Admin gate" entry, not listed here as a numbered step — that harness already runs a
-real `AuthService`/tonic stack, so it needs no separate manual run.
