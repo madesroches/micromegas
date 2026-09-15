@@ -11,7 +11,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-analytics-web-srv = { path = "../analytics-web-srv", version = "0.31.0" }
+analytics-web-srv = { path = "../analytics-web-srv", version = "0.32.0" }
 micromegas = { workspace = true, features = ["server", "jemalloc-metrics"] }
 
 anyhow.workspace = true

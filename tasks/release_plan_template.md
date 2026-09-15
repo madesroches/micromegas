@@ -1,9 +1,52 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.30.0 (2026-09-02)
+Last updated: v0.31.0 (2026-09-14)
 
 ---
+
+## Lessons Learned from v0.31.0
+
+### Do NOT re-add `## Unreleased` in the release or bump commit
+
+After renaming `## Unreleased` to `## vX.Y.0 - <date>`, leave the top of `CHANGELOG.md` alone. The
+convention in this repo is that the *first feature PR after the release* re-adds the header along
+with its own entry — verified with `git log -S'## Unreleased' vX.Y.0..HEAD`. Adding an empty
+`## Unreleased` in the bump commit creates a section that sits empty until someone happens to fill
+it, and produces a spurious conflict with the PR that adds it properly.
+
+### The `welcome/` package is a release-gating build
+
+Since the prerender step landed, `welcome/`'s build can fail *silently* — a broken prerender still
+emits an `index.html`, just an empty shell that crawlers see as a blank page. It is now a permanent
+Phase 1 step, and the check is not "did the build exit 0" but "does `dist/index.html` contain real
+prose": compare its byte size and word count against the ~1.3 KB empty shell.
+
+### `gh release create` marks the main release "Latest" only if it is newest
+
+The v0.30.0 lesson said the `capi-`/`blender-` releases steal the badge. That is true only when they
+are created *after* the main release. This cycle the two tag workflows finished in ~3 minutes, well
+before `gh release create` ran, so `vX.Y.0` came out newest and already held the badge. Run
+`gh release edit vX.Y.0 --latest` regardless — it is idempotent, and cheaper than checking.
+
+### Docker: ~2h is a better budget than ~2h45m, and crates.io is ~25m
+
+Measured wall-clock this cycle: 8 services x 2 arches in **1h57m**, and `release.py` (16 crates at a
+60s grace) in **23m**. Both started at the same moment and neither contended enough to matter. The
+~2h45m figure from v0.30.0 now looks like the pessimistic end of the range, not the estimate.
+
+### binfmt arm64 did not survive; re-check it every cycle
+
+`docker buildx inspect` listed only `linux/amd64*` and `linux/386` at the start of this cycle, so
+`--all-arches` would have failed on every arm64 stage. Re-running the `tonistiigi/binfmt --install
+arm64` one-liner fixed it in seconds. Treat the inspect-then-install pair as an unconditional step,
+not a conditional one.
+
+### Two-command tag push fired both workflows again
+
+`git push origin vX.Y.0 grafana-vX.Y.0` then `git push origin capi-vX.Y.0 blender-vX.Y.0` produced
+`capi-release` and `blender-extension` runs, both green in under 4 minutes. The v0.30.0 workaround
+is confirmed, not a fluke.
 
 ## Lessons Learned from v0.30.0
 
@@ -210,6 +253,14 @@ When a new crate is added to the workspace that other crates depend on (e.g. `mi
 - [ ] Run tests: `yarn test`
 - [ ] Build app: `yarn build`
 
+#### Welcome landing page (from `welcome/` directory)
+- [ ] Install dependencies: `yarn install`
+- [ ] Run linter: `yarn lint`
+- [ ] Build: `yarn build`
+- [ ] Verify the prerender actually produced content — `dist/index.html` should be tens of KB and
+      hundreds of words, not a ~1.3 KB shell — and that `favicon.svg`, `robots.txt`, and
+      `sitemap.xml` are emitted
+
 ### 2. Version Verification
 
 All versions should already be at X.Y.0 from the previous post-release bump:
@@ -223,7 +274,7 @@ All versions should already be at X.Y.0 from the previous post-release bump:
 ### 3. Documentation Updates
 
 - [ ] Review git log: `git log --oneline vX.Y.0..HEAD`
-- [ ] Update `CHANGELOG.md` — move Unreleased entries to `## vX.Y.0 - <date>` section
+- [ ] Update `CHANGELOG.md` — rename the `## Unreleased` header to `## vX.Y.0 - <date>`. Do **not** add a fresh empty `## Unreleased` above it; the first feature PR after the release adds it.
 - [ ] Update `grafana/CHANGELOG.md` with version sync entry
 - [ ] Update `README.md` "Recent Releases" — add the new `### vX.Y.0` block, **and trim the section to the last 3 months** (drop entries older than 3 months back from the release date). Keep the "For the full history, see CHANGELOG.md" pointer.
 
