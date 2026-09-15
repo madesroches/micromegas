@@ -81,8 +81,10 @@ pub fn read_advance_string(window: &mut &[u8]) -> Result<String> {
             }
             // Decode UTF-16 LE without assuming the source bytes are 2-byte aligned.
             let units = string_buffer
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair));
             let s: String = char::decode_utf16(units)
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect();
@@ -122,8 +124,10 @@ pub fn read_advance_string_in<'a>(bump: &'a Bump, window: &mut &'a [u8]) -> Resu
             }
             // Decode UTF-16 LE without assuming the source bytes are 2-byte aligned.
             let units = string_buffer
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair));
             let s: String = char::decode_utf16(units)
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
                 .collect();
