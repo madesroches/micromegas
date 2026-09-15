@@ -299,20 +299,28 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    `random()`, `current_timestamp`). Their value is frozen into a partition at materialization
    time and then served to every later reader — wrong data, no error, indefinitely.
 
-7. **`update_group` strictly after every view set the definition reads.** Walk the planned extract
-   and count-source `LogicalPlan`s for every `TableScan`, resolving each one's `table_name` against
-   the factory the definition was built for — recursing into `TableSource::get_logical_plan()` when
-   the scan is a `ViewTable` (which is how `SqlBatchView::register_table` exposes the user-visible
-   name; a downcast to `MaterializedView` alone misses it and would only catch `__<name>__partitions`
-   scans) — and collecting each matched view's `get_update_group()`. A `TableScan` reached through
-   that recursion names the underlying `__<name>__partitions` table, not the view set, so it is
-   resolved by stripping the `__..__partitions` affix or by downcasting its `TableSource` to
-   `MaterializedView` and reading `get_view().get_view_set_name()`; a scan matching neither form is
-   ignored. Require `update_group >` the maximum found. Since DDL views may read other DDL views,
-   this is what keeps that safe: `materialize_all_views`'s group ordering (`maintenance.rs:59-70`) is
-   the *only* dependency mechanism, and a definition in the wrong group reads its source's previous-tick state forever —
-   stale numbers, no error. Enforcing it turns the documented obligation into a check, and it costs
-   nothing: the plan is already built by step 3.
+7. **No admin-gated mutating table function, and `update_group` strictly after every view set the
+   definition reads.** Walk the planned extract and count-source `LogicalPlan`s for every
+   `TableScan`, resolving each one's `table_name` against the factory the definition was built for —
+   recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
+   `SqlBatchView::register_table` exposes the user-visible name; a downcast to `MaterializedView`
+   alone misses it and would only catch `__<name>__partitions` scans). Reject outright any scan whose
+   `TableSource` resolves to one of the eight admin-gated mutating lakehouse UDTFs/UDFs
+   (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
+   `deny_queries`, etc.): check 6 only walks `ScalarUDF` expressions, so a UDTF call such as
+   `... AS SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be stored and
+   then re-executed under `CallerContext::maintenance()` on every daemon tick. For every other scan,
+   collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
+   recursion names the underlying `__<name>__partitions` table, not the view set, so it is resolved by
+   stripping the `__..__partitions` affix or by downcasting its `TableSource` to `MaterializedView` and
+   reading `get_view().get_view_set_name()`; a scan matching neither form, and not one of the mutating
+   UDTFs above, is ignored. Require `update_group >` the maximum found. Because §5 step 3 validates
+   only against the base plus definitions in a strictly lower `update_group`, this ordering half of
+   the check can only ever fire for a definition reading a base view; a DDL-on-DDL reference placed in
+   the wrong group instead fails to resolve as a table name during planning, since a same-or-higher-
+   group DDL view is not part of the factory it is validated against. It still turns
+   `materialize_all_views`'s documented ordering obligation (`maintenance.rs:59-70`) into a check for
+   the base-view case, and it costs nothing: the plan is already built by step 3.
 8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
    query's physical plan and run the existing `assert_single_partition`/`assert_ordering_satisfied`
    helpers (`partitioned_execution_plan.rs:217-265`; called from `sql_partition_spec.rs:79-115`)
@@ -355,8 +363,8 @@ The mutation is therefore validated against the *resulting* definition set, not 
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
 write. After the upsert/delete, it calls `ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)`
 (§7) to re-read the post-mutation rows and run them through `ViewRegistry`'s rows-in build seam (§7),
-refusing the statement if any **other** definition that built before now fails to build. The error
-names the broken dependents. This is exact rather than textual — it uses the real planner, so it
+refusing the statement if any **other** definition not already present in `registry.failed_view_sets()`
+(§7) fails to build against the post-mutation rows. The error names the broken dependents. This is exact rather than textual — it uses the real planner, so it
 catches a removed column as readily as a removed view set — and it reuses the loader wholesale.
 
 No `CASCADE` in v1: "drop it and everything downstream" is a second, riskier statement, and the
@@ -375,6 +383,10 @@ pub enum ViewDdl {
 /// `Ok(None)` when `sql` is not view DDL -- the overwhelmingly common case, decided by a cheap
 /// keyword peek before any full parse.
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
+
+/// The same gate as the eight admin-gated mutating lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
+/// out as a standalone function so it is unit-testable without a full `execute_view_ddl` call.
+pub fn authorize_view_ddl(caller: &CallerContext) -> Result<(), Status>;
 ```
 
 In `FlightSqlServiceImpl::execute_query`, inserted between the resolved `caller` and
@@ -388,7 +400,8 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
 
 `execute_view_ddl`:
 
-1. `if !caller.is_admin { return Err(Status::permission_denied(...)) }` — the same gate as the eight
+1. `authorize_view_ddl(&caller)?` (§5's `view_ddl.rs`) — wraps
+   `if !caller.is_admin { return Err(Status::permission_denied(...)) }`, the same gate as the eight
    mutating lakehouse functions. It has to be an explicit check rather than a registration gate,
    because this path never builds a caller session context. It is also load-bearing beyond the usual
    reason: a DDL view's queries are planned and materialized under `CallerContext::maintenance()`,
@@ -458,6 +471,9 @@ impl ViewRegistry {
     /// `delete_tx` on it alongside `retire_partitions`, in the same transaction as the mutation it is
     /// executing.
     pub fn store(&self) -> Arc<dyn ViewDefinitionStore>;
+    /// Names skipped by the last build, so `execute_view_ddl` (§4b) can diff pre- and post-mutation
+    /// failures instead of refusing on a row that was already broken before this statement.
+    pub fn failed_view_sets(&self) -> Vec<String>;
     pub async fn reload(&self) -> Result<()>;
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
@@ -589,14 +605,17 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    against lower-group definitions), and §4b's post-mutation rebuild via `build_factory`.
 8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
    `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
-   option extraction and its error type. `extract_query` is sliced as verbatim source text from the
-   `AS` body's span in the input SQL, not rendered from the parsed `Query` AST.
+   option extraction and its error type; `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
+   the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
+   verbatim source text from the `AS` body's span in the input SQL, not rendered from the parsed
+   `Query` AST.
 9. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
    `rust/public/tests/read_policy_threading_tests.rs`'s `FlightSqlServiceImpl::new` call, updated to
-   construct a `ViewRegistry` over its fixture factory via the fake `ViewDefinitionStore` the Testing
-   Strategy introduces. Moved ahead of step 11 because `execute_view_ddl` (step 11) is a method on
+   construct a `ViewRegistry` over its fixture factory using the Postgres-backed `ViewDefinitionStore`
+   over the test's existing `connect_lazy` pool (`:55-56`) — the test never calls `reload()`, so the
+   store is never actually queried. Moved ahead of step 11 because `execute_view_ddl` (step 11) is a method on
    `FlightSqlServiceImpl` that calls `registry.reload()`/`build_from_rows()` and so needs the field to
    already exist.
 10. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, call
@@ -732,6 +751,11 @@ which is a second design; the issue already scopes it out.
   carry no such predicate today and are correct, because `make_batch_partition_spec` scopes the
   scan through the partition provider (`sql_batch_view.rs:238`). Only `count_src_query`'s
   placeholders are enforced. The residual idempotence obligation is documented, not checked.
+- No cap on the number of DDL-defined definitions, unlike `QueryDenyList`'s
+  `MICROMEGAS_QUERY_DENY_MAX_RULES`. Each definition adds one `ctx.sql(...)` plan build to every
+  query's `make_session_context` and, because `build_factory`'s incremental clone-and-extend chain
+  replans every prior definition on each rebuild, an O(N²) cost to every reload. Accepted for v1: the
+  admin who creates definitions is the same one who would hit the cost.
 
 ## Documentation
 
@@ -784,9 +808,10 @@ plan is rejected; a merge query that plans but whose output schema differs is re
 error names the differing field; a count query without a single `count: Int64` column is rejected; a
 query missing `{begin}`/`{end}`/`{source}` is rejected; `now()` and `random()` in the extract query
 are rejected and `date_bin` is not; a name colliding with a built-in view set is rejected. Ordering
-(check 7): a definition reading a view set in group 3000 is rejected at 3000 and at 2000, accepted
-at 3001; a definition reading nothing is accepted at any group; a definition reading *two* view sets
-is measured against the higher of the two.
+(check 7): a definition reading `log_entries` (a base view set, update_group 2000) is rejected at
+2000, accepted at 2001; a definition reading nothing is accepted at any group; a definition reading
+two base view sets is measured against the higher of the two; a definition scanning
+`retire_partitions(...)` (or another admin-gated mutating UDTF) is rejected regardless of group.
 
 **Dependent protection** (§4b, in `view_registry_tests.rs` against the fake store) — dropping a
 definition another one reads is refused and the error names the dependent; replacing it with a
