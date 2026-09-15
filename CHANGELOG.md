@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:** Bump the pinned Rust toolchain to 1.98.1 and add the `rust-analyzer` component; fix the new `clippy::chunks_exact_to_as_chunks` lint in `transit::dyn_string` by switching `chunks_exact(2)` to `as_chunks::<2>()`, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
 * **Packaging:** Rewrite the `micromegas` umbrella crate's `description`, which was `"Micromegas is a scalable observability solution."` — seven words naming none of the four stages and none of the nouns someone searching for this would type. It is now the same sentence the repository description and `/llms.txt` already use, so the phrasing is consistent everywhere the project is indexed: `"Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."`. This is the crate's front-door copy on crates.io search, lib.rs and every registry mirror; the component crates keep their deliberately modest `"part of micromegas"` descriptions. Metadata only takes effect on publish, so this lands with the next release.
 
 ## v0.31.0 - 2026-09-14
