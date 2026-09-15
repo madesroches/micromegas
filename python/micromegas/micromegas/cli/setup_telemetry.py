@@ -24,6 +24,7 @@ function's doc comment for the resolution ladder. No new OIDC code here.
 
 import argparse
 import os
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -283,19 +284,99 @@ def write_env_file(path, content):
             os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def format_env_exports(key, otlp_endpoint):
-    """`OTEL_EXPORTER_OTLP_PROTOCOL`/`_ENDPOINT`/`_HEADERS` shell export
-    lines. The protocol export is required because micromegas exposes OTLP
-    over HTTP only, so an SDK defaulting to gRPC would otherwise fail to
-    reach the endpoint. `Authorization=Bearer <key>`, capitalized with `=`,
-    matches the already-documented OTLP header format
-    (`mkdocs/docs/otlp/index.md`).
+def _env_var_pairs(key, otlp_endpoint):
+    """The `OTEL_EXPORTER_OTLP_*` variables to export, in order. The protocol
+    var is required because micromegas exposes OTLP over HTTP only, so an SDK
+    defaulting to gRPC would otherwise fail to reach the endpoint.
+    `Authorization=Bearer <key>`, capitalized with `=`, matches the
+    already-documented OTLP header format (`mkdocs/docs/otlp/index.md`).
     """
     return (
-        "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
-        f"export OTEL_EXPORTER_OTLP_ENDPOINT={otlp_endpoint}\n"
-        f'export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer {key}"\n'
+        ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint),
+        ("OTEL_EXPORTER_OTLP_HEADERS", f"Authorization=Bearer {key}"),
     )
+
+
+def _render_posix(name, value):
+    return f"export {name}={shlex.quote(value)}"
+
+
+def _render_powershell(name, value):
+    return f"$env:{name} = '{value.replace(chr(39), chr(39) * 2)}'"
+
+
+def _render_cmd(name, value):
+    # The quoted-`set` form: it is the only one that keeps the quote
+    # characters out of the value (`cmd.exe` has no escape for a literal `"`
+    # inside it), and the leading `@` suppresses the command echo both in a
+    # batch file and at the interactive prompt.
+    return f'@set "{name}={value}"'
+
+
+def _render_dotenv(name, value):
+    return f"{name}={value}"
+
+
+# Insertion order is the order `--help` lists `--format`'s choices, kept as
+# the issue lists them (`posix` first, as the default).
+_FORMAT_RENDERERS = {
+    "posix": _render_posix,
+    "powershell": _render_powershell,
+    "cmd": _render_cmd,
+    "dotenv": _render_dotenv,
+}
+
+# Characters each dialect's quoting rule cannot represent -- see
+# `_render_*`'s docstrings/comments for why. Empty for `posix`, whose
+# `shlex.quote` represents any value.
+_FORMAT_UNSAFE_CHARS = {
+    "posix": (),
+    "powershell": ("\r", "\n"),
+    "cmd": ('"', "%", "\r", "\n"),
+    "dotenv": ("#", "$", "\r", "\n"),
+}
+
+
+def _unsafe_chars_in(fmt, value):
+    """The characters of `value` that `fmt`'s rendering rule cannot
+    represent, in `_FORMAT_UNSAFE_CHARS[fmt]` order."""
+    return [c for c in _FORMAT_UNSAFE_CHARS[fmt] if c in value]
+
+
+def check_format_endpoint(fmt, otlp_endpoint, parser):
+    """Errors out -- before a key is minted -- when the resolved OTLP
+    endpoint carries a character `fmt` cannot represent. Called right after
+    `resolve_otlp_endpoint` and before `client.mint_ingestion_api_key`: a
+    minted ingestion API key is never retrievable again, so any check that
+    can fail locally must run before the mint, never after.
+    """
+    unsafe = _unsafe_chars_in(fmt, otlp_endpoint)
+    if unsafe:
+        parser.error(
+            f"--otlp-endpoint contains {unsafe[0]!r}, which --format {fmt} "
+            "cannot represent; pass a different --format or --otlp-endpoint"
+        )
+    if fmt == "dotenv" and otlp_endpoint != otlp_endpoint.strip():
+        parser.error(
+            "--otlp-endpoint has leading/trailing whitespace, which "
+            "--format dotenv cannot represent (a dotenv loader would "
+            "silently trim it); pass a different --format or --otlp-endpoint"
+        )
+
+
+def format_env_exports(key, otlp_endpoint, fmt="posix"):
+    """Renders the `OTEL_EXPORTER_OTLP_PROTOCOL`/`_ENDPOINT`/`_HEADERS`
+    variables in `fmt`'s dialect (one of `_FORMAT_RENDERERS`), one line per
+    variable, `"\\n"`-joined with a trailing `"\\n"`. Each dialect quotes a
+    value differently: `posix` via `shlex.quote` (bare unless the value needs
+    quoting), `powershell` as a single-quoted literal (`'` doubled), `cmd` as
+    a quoted `@set "NAME=value"`, and `dotenv` unquoted (`NAME=value`, value
+    is everything after the first `=`).
+    """
+    render = _FORMAT_RENDERERS[fmt]
+    lines = (render(name, value) for name, value in _env_var_pairs(key, otlp_endpoint))
+    return "\n".join(lines) + "\n"
 
 
 def build_parser():
@@ -354,6 +435,13 @@ def build_parser():
         "--env-file",
         help="Write the OTEL_EXPORTER_OTLP_* exports to this file instead of stdout",
     )
+    parser.add_argument(
+        "--format",
+        choices=tuple(_FORMAT_RENDERERS),
+        default="posix",
+        help="Output syntax for the env vars (default: posix). Applies to both "
+        "stdout and --env-file; never inferred from the OS.",
+    )
     return parser
 
 
@@ -373,6 +461,7 @@ def run(args, parser):
     # --otlp-endpoint/MICROMEGAS_TELEMETRY_URL) can never strand an already-minted,
     # never-retrievable-again key.
     otlp_endpoint = resolve_otlp_endpoint(args, parser)
+    check_format_endpoint(args.format, otlp_endpoint, parser)
 
     # The client-side mintable-set guard is gone, so a denial now only ever
     # surfaces here, as the mint route's own 403 -- enrich it with the same
@@ -400,7 +489,22 @@ def run(args, parser):
     if result.get("claimed"):
         print(f"claimed audience {result.get('audience')}", file=sys.stderr)
 
-    content = format_env_exports(result["key"], otlp_endpoint)
+    # Unreachable today (the minted key's alphabet, `mmk_` + base64url-nopad,
+    # is safe in every format -- see the design plan), kept so a future change
+    # to the server's key alphabet degrades to a warning instead of silently
+    # mangled output. A warning, never an error: the key already exists and
+    # must not be discarded over a formatting concern.
+    header_name, header_value = _env_var_pairs(result["key"], otlp_endpoint)[2]
+    unsafe = _unsafe_chars_in(args.format, header_value)
+    if unsafe:
+        print(
+            f"warning: minted key's {header_name} value contains "
+            f"{unsafe[0]!r}, which --format {args.format} cannot represent; "
+            "output may be malformed",
+            file=sys.stderr,
+        )
+
+    content = format_env_exports(result["key"], otlp_endpoint, args.format)
     if args.env_file:
         try:
             write_env_file(args.env_file, content)
