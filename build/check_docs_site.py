@@ -16,6 +16,9 @@ any equivalent staging directory passed on the command line):
 5. Every feed autodiscovery link (``<link rel="alternate"
    type="application/rss+xml">``, from the same HTML files as check 4)
    resolves to a file that exists.
+6. ``llms.txt`` exists at the root and every markdown link in it that points
+   at this site resolves to a file that exists. Off-site links are left alone
+   -- this check stays offline.
 
 This validates the staged tree offline -- it needs no network access and runs
 on every pull request that touches these paths, unlike curling the live site
@@ -39,6 +42,7 @@ FEED_RE = re.compile(
 )
 HREF_RE = re.compile(r'\bhref=(["\'])(.*?)\1', re.IGNORECASE)
 SITEMAP_LINE_RE = re.compile(r"^Sitemap:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
+MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 
 NO_CANONICAL_EXEMPT = {"404.html"}
 
@@ -231,6 +235,30 @@ def check_feed_links(root: Path, html_files: list[Path]) -> list[str]:
     return failures
 
 
+def check_llms_txt(root: Path, origin: str) -> list[str]:
+    """Check the /llms.txt index: it exists, and its on-site links resolve.
+
+    llms.txt is a hand-maintained list of URLs, so it drifts the moment a page
+    is renamed or moved -- the same failure that made the sitemap advertise 93
+    dead URLs. Off-site links (GitHub and friends) are skipped so the check
+    needs no network.
+    """
+    llms_path = root / "llms.txt"
+    if not llms_path.is_file():
+        return [f"{llms_path} does not exist"]
+
+    failures = []
+    for url in MD_LINK_RE.findall(llms_path.read_text(encoding="utf-8")):
+        if not (url.startswith(origin + "/") or url == origin):
+            continue
+        target = url_to_path(root, origin, url)
+        if not target.is_file():
+            failures.append(
+                f"{llms_path}: link {url} resolves to {target}, which does not exist"
+            )
+    return failures
+
+
 def check_site(root: Path) -> list[str]:
     origin = read_origin(root)
     sitemaps = find_sitemaps(root)
@@ -244,6 +272,7 @@ def check_site(root: Path) -> list[str]:
     failures += check_robots_txt(root, origin, sitemaps)
     failures += check_canonical_tags(root, origin, html_files)
     failures += check_feed_links(root, html_files)
+    failures += check_llms_txt(root, origin)
     return failures
 
 
