@@ -1103,7 +1103,9 @@ different things:
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a
 required flag only when that env var is unset. `--env-file PATH` writes the exports to a `0o600`
 file instead of stdout (parent directory created `0o700` if needed) — useful for sourcing from a
-shell profile instead of `eval`-ing directly. `--profile` selects a named connection profile, but
+shell profile instead of `eval`-ing directly. On Windows, those POSIX mode bits aren't enforced;
+the file lands at its parent directory's inherited ACL instead. `--profile` selects a named
+connection profile, but
 (like `-grants`/`-import-keys`) only its OIDC fields are honored — an `api_key_file`-only profile
 yields no auth here.
 

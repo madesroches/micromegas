@@ -1,4 +1,6 @@
 import argparse
+import os
+import platform
 import sys
 
 import pytest
@@ -632,6 +634,80 @@ def test_run_with_user_audience_sends_the_composed_name_over_the_wire(monkeypatc
     assert ("mint", "laptop", "alice-claude") in client.calls
 
 
+def test_write_env_file_writes_content_when_fchmod_is_unavailable(
+    monkeypatch, tmp_path
+):
+    """Regression test for the crash witnessed in the wild: before Python 3.13,
+    `os.fchmod` doesn't exist on Windows, so this simulates that on the Linux
+    runner and asserts `write_env_file` no longer raises `AttributeError`
+    before a single byte is written."""
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    env_file = tmp_path / "sub" / "telemetry.env"
+    content = "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+
+    setup_telemetry.write_env_file(env_file, content)
+
+    assert env_file.read_text() == content
+
+
+def test_write_env_file_writes_bytes_exactly_no_crlf_translation(monkeypatch, tmp_path):
+    """Pins the `O_BINARY` flag, which keeps the fd out of Windows' CRT text
+    mode where `os.write` would otherwise translate `\\n` to `\\r\\n`. The host
+    platform has no meaningful `O_BINARY` bit, so a synthetic sentinel is used
+    to pin that the flag is actually passed through to `os.open`."""
+    monkeypatch.setattr(os, "O_BINARY", 0x8000, raising=False)
+    recorded_flags = []
+    real_open = os.open
+
+    def recording_open(path, flags, mode):
+        recorded_flags.append(flags)
+        return real_open(path, flags & ~0x8000, mode)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    env_file = tmp_path / "telemetry.env"
+    content = "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+
+    setup_telemetry.write_env_file(env_file, content)
+
+    assert recorded_flags[0] & 0x8000
+    assert env_file.read_bytes() == content.encode("utf-8")
+
+
+def test_write_env_file_writes_content_before_hardening_permissions(
+    monkeypatch, tmp_path
+):
+    """Pins the ordering: without the reorder, a hardening failure leaves an
+    empty file behind instead of the already-written content."""
+
+    def raising_fchmod(fd, mode):
+        raise PermissionError("hardening failed")
+
+    monkeypatch.setattr(os, "fchmod", raising_fchmod, raising=False)
+    env_file = tmp_path / "telemetry.env"
+    content = "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+
+    with pytest.raises(PermissionError):
+        setup_telemetry.write_env_file(env_file, content)
+
+    assert env_file.read_text() == content
+
+
+def test_write_env_file_overwrites_a_pre_existing_target(tmp_path):
+    """Pins the accepted-risk end state for a pre-existing target: old content
+    is fully replaced, and the mode is narrowed to `0o600` on platforms that
+    enforce POSIX mode bits."""
+    env_file = tmp_path / "telemetry.env"
+    env_file.write_text("stale content\n")
+    env_file.chmod(0o644)
+    content = "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+
+    setup_telemetry.write_env_file(env_file, content)
+
+    assert env_file.read_text() == content
+    if platform.system() != "Windows":
+        assert env_file.stat().st_mode & 0o777 == 0o600
+
+
 def test_run_writes_env_file_with_secure_permissions_and_prints_its_path(
     monkeypatch, tmp_path, capsys
 ):
@@ -661,7 +737,8 @@ def test_run_writes_env_file_with_secure_permissions_and_prints_its_path(
     assert "Authorization=Bearer mmk_secret" in content
 
     mode = env_file.stat().st_mode & 0o777
-    assert mode == 0o600
+    if platform.system() != "Windows":
+        assert mode == 0o600
 
 
 def test_run_env_file_write_failure_prints_key_to_stdout_and_reraises(
@@ -691,6 +768,42 @@ def test_run_env_file_write_failure_prints_key_to_stdout_and_reraises(
     client.my_audiences_result = my_audiences
 
     with pytest.raises(OSError):
+        setup_telemetry.run(args, FakeParser())
+
+    captured = capsys.readouterr()
+    assert "Authorization=Bearer mmk_secret" in captured.out
+    assert "warning" in captured.err.lower()
+    assert "/no/such/place.env" in captured.err
+
+
+def test_run_env_file_write_failure_prints_key_to_stdout_and_reraises_non_oserror(
+    monkeypatch, capsys
+):
+    """Regression test for the safety net: the fallback must also catch a
+    platform-missing-syscall failure like the `AttributeError` this bug
+    actually raised, not just `OSError`."""
+    client = FakeClient()
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+
+    def boom(path, content):
+        raise AttributeError("module 'os' has no attribute 'fchmod'")
+
+    monkeypatch.setattr(setup_telemetry, "write_env_file", boom)
+
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint="http://ingest:9000/ingestion/otlp",
+        env_file="/no/such/place.env",
+    )
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+    }
+    client.my_audiences_result = my_audiences
+
+    with pytest.raises(AttributeError):
         setup_telemetry.run(args, FakeParser())
 
     captured = capsys.readouterr()

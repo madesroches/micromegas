@@ -242,11 +242,13 @@ def resolve_audience(args, parser, my_audiences):
 
 
 def write_env_file(path, content):
-    """Writes `content` to `path` with mode `0o600` (parent directory `0o700`
-    if it doesn't already exist) -- mirroring
+    """Writes `content` to `path` with mode `0o600` where the platform enforces
+    it (parent directory `0o700` if it doesn't already exist) -- mirroring
     `OidcAuthProvider.save()`'s token-cache permissions. `content` holds a
     standing `Authorization: Bearer` credential, so it must never land at
-    the process umask.
+    the process umask. On Windows, POSIX mode bits aren't enforced (restricting
+    access there needs an ACL change this CLI doesn't make), so the file lands
+    at its parent directory's inherited ACL instead.
     """
     target = Path(path)
     parent = target.parent
@@ -257,13 +259,21 @@ def write_env_file(path, content):
         # explicitly -- but only for a directory this call created; a pre-existing
         # directory's permissions are the caller's own business.
         parent.chmod(0o700)
-    fd = os.open(str(target), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(target), flags, 0o600)
     try:
-        # Belt-and-suspenders: `mkdir(mode=...)`/`os.open(..., 0o600)` are
-        # subject to umask on some platforms, so re-assert the permissions
-        # explicitly rather than trusting the create call alone.
-        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+        # Written before the mode is re-asserted below: `os.open` already
+        # create-and-truncated `target`, so a hardening failure after this point
+        # costs nothing, while one before it would leave the file empty and the
+        # just-minted, never-retrievable key with nowhere to land.
         os.write(fd, content.encode("utf-8"))
+        # `os.fchmod` is absent on Windows before Python 3.13; where present
+        # there, it only toggles the read-only bit, so it cannot deliver `0o600`.
+        # `os.open`'s mode argument is masked by the umask, which can only clear
+        # bits, so this only ever restores an owner bit the umask stripped -- it
+        # can never widen the file past `0o600`.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
     finally:
         os.close(fd)
 
@@ -389,14 +399,15 @@ def run(args, parser):
     if args.env_file:
         try:
             write_env_file(args.env_file, content)
-        except OSError as e:
+        except Exception as e:
             # The key was already minted above and is never retrievable again -- a
             # write failure here (permission denied, read-only/full filesystem, bad
-            # path) must never discard it. Fall back to emitting it on stdout, with a
-            # clear warning on stderr, then re-raise.
+            # path, a platform-missing syscall) must never discard it. Fall back to
+            # emitting it on stdout, with a clear warning on stderr, then re-raise.
             print(
-                f"warning: failed to write --env-file {args.env_file!r} ({e}); "
-                "printing the exports below instead so the key is not lost",
+                f"warning: could not complete --env-file {args.env_file!r} ({e}); "
+                "exports printed below so the key is not lost; if the file exists, "
+                "treat it as holding a live credential",
                 file=sys.stderr,
             )
             sys.stdout.write(content)
