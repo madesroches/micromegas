@@ -78,7 +78,7 @@ One renderer per dialect, each `(name, value) -> str` (one line, no trailing new
 | --- | --- | --- |
 | `posix` | `export NAME=<shlex.quote(value)>` | `shlex.quote` — leaves URL/`http/protobuf` bare, single-quotes anything with a space or metacharacter |
 | `powershell` | `$env:NAME = '<value>'` | PowerShell single-quoted literal; `'` escaped by doubling, but a line break has no representation |
-| `cmd` | `set "NAME=value"` | the quoted-`set` form keeps the quotes out of the value |
+| `cmd` | `@set "NAME=value"` | the quoted-`set` form keeps the quotes out of the value |
 | `dotenv` | `NAME=value` | unquoted |
 
 ```python
@@ -118,10 +118,14 @@ as the issue lists them (`posix` first, as the default).
   own escape and represents any value except a line break, which the `| Invoke-Expression`
   pipeline cannot consume (§3).
 
-- **`cmd`'s `set "NAME=value"`**: the only form that keeps the quote characters out of the
-  value. `cmd.exe` has no escape for a `"` inside it, and `%` means different things in a
-  batch file (`%%`) than at the interactive prompt — so unsafe characters are rejected rather
-  than escaped context-dependently (§3).
+- **`cmd`'s `@set "NAME=value"`**: the quoted-`set` form is the only one that keeps the quote
+  characters out of the value — `cmd.exe` has no escape for a `"` inside it, and `%` means
+  different things in a batch file (`%%`) than at the interactive prompt, so unsafe characters
+  are rejected rather than escaped context-dependently (§3). The leading `@` is what keeps the
+  credential out of the console: `call`ing a file of plain `set` lines echoes each line as it
+  runs, printing the bearer token into the terminal and its scrollback; `@` suppresses that
+  echo without changing the stored value, and is accepted both in a batch file and at the
+  interactive prompt.
 
 - **`dotenv` unquoted**: loaders disagree on whether surrounding quotes are stripped (older
   `docker compose --env-file` kept them literally, `python-dotenv` strips them), while the
@@ -231,6 +235,8 @@ profile, and `dotenv` output is not a shell script.
 - The minted-key alphabet is treated as a fact to *degrade gracefully* against, not to depend
   on: no pre-mint key validation (impossible), a post-mint warning instead.
 - `--env-file`'s default format stays `posix`.
+- `cmd` renders `@set` (not plain `set`) so that `call`ing the generated file does not echo the
+  key to the console.
 
 ## Documentation
 
@@ -258,9 +264,8 @@ no live DB or service.
 - `build_parser` defaults `--format` to `posix`, accepts each of the four, and `SystemExit`s on
   an unknown value.
 - One exact-output assertion per format for a fixed key and endpoint, covering line order, the
-  per-dialect quoting, and the trailing newline.
-- `posix` leaves `http/protobuf` and a plain URL bare and quotes the header value
-  (compatibility with the documented `eval` usage).
+  per-dialect quoting, and the trailing newline (for `posix`, this pins `http/protobuf` and the
+  endpoint bare and the header value quoted, matching the documented `eval` usage).
 - `posix` quotes an endpoint containing `&` (the latent-hole regression).
 - `powershell` doubles a `'` in a value.
 - `cmd` with a `%`-bearing endpoint and `dotenv` with a `#`-bearing endpoint both exit through
