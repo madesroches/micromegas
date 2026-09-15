@@ -133,8 +133,13 @@ only the inner expression's span, so both drop trailing keywords (`DESC`, `NULLS
 NULL`'s `NOT NULL`), and `Offset::span()` (`:160-168`) ignores `rows` — a body ending in `ORDER BY
 time_bin DESC` would silently slice to `... ORDER BY time_bin`, valid SQL with the opposite order.
 Instead the end offset is read from the parser itself: after `Parser::try_with_sql(sql)?.parse_statement()`
-returns, the body is the trailing clause of the accepted grammar, so it runs up to the start of
-`parser.peek_token_ref()` (the `;` or `EOF` token that follows), trimmed of trailing whitespace. Both
+returns, the body's last consumed token is available from `parser.get_current_token()`
+(`sqlparser-0.62.0/src/parser/mod.rs:4544-4546`, `token_at(index - 1)`), and the end offset is that
+token's `span.end` — not `parser.peek_token_ref()`, whose `EOF_TOKEN` (`:212-218`) carries a
+line-0/column-0 span when the body has no trailing `;`, and which also skips over `Token::Whitespace`
+(including comments), so a trailing `-- comment` between the body's last real token and the `;` would
+otherwise land inside a peek-and-trim slice. Reading the last *consumed* token needs no `EOF` special
+case and no trailing-whitespace trim. Both
 offsets are converted from `sqlparser`'s line/column `Span` (`src/tokenizer.rs:552-561`) to byte
 offsets. This only covers the body's *interior*: leading trivia between `AS` and the first token, or
 trailing trivia after the last, falls outside the slice. This is what makes the definition hash (§3)
@@ -189,7 +194,7 @@ CREATE TABLE lakehouse_view_set_definitions (
   count_src_query        TEXT NOT NULL,
   merge_partitions_query TEXT NOT NULL,
   update_group           INTEGER NOT NULL,
-  view_options           JSONB NOT NULL DEFAULT '{}',
+  view_options           TEXT NOT NULL DEFAULT '{}',
   definition_hash_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -236,9 +241,12 @@ of a skip is a clean `table not found` for `log_stats` queries — a visible err
 which is why it needs no fail-fast carve-out.
 
 `view_options` holds the non-query options other than `update_group` (the time columns, the two
-deltas, `merge_sort_order`); `update_group` is its own column because `reload()` sorts and §8
-projects on it. `definition_sql` is the verbatim DDL text, kept for display and audit only — never
-re-parsed.
+deltas, `merge_sort_order`), serialized with `serde_json::to_string`/`from_str` and stored as `TEXT`
+rather than `JSONB` — the workspace `sqlx` dependency (`rust/Cargo.toml:85`) has no `json` feature,
+and nothing else in the repo binds a Postgres column to `serde_json::Value`; `TEXT` needs no new
+feature and `serde_json` is already a dependency (`rust/analytics/Cargo.toml:42`). `update_group` is
+its own column because `reload()` sorts and §8 projects on it. `definition_sql` is the verbatim DDL
+text, kept for display and audit only — never re-parsed.
 
 Deliberately **absent** from the issue's proposed table:
 
@@ -434,8 +442,9 @@ executor (`migrate_db` already uses `0`, `migrate_lakehouse` uses `1`; reusing e
 every DDL statement against an unrelated migration lock) — serializing every view-definition mutation
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
 write. Still inside that transaction, before applying the mutation, it reads the pre-mutation rows via
-`ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)` (§7). After the upsert/delete, it
-re-reads the post-mutation rows with another `list_tx(&mut tx)`. Both row sets are handed to
+the transaction-scoped free function `view_definition_store::list_tx(&mut tx)` (§7). After the
+upsert/delete, it re-reads the post-mutation rows with another `list_tx(&mut tx)`. Both row sets are
+handed to
 `ViewRegistry::check_dependents_survive(pre_rows, post_rows)` (§7, next to `build_from_rows`), which
 builds a factory from each via the same rows-in seam and refuses with a named error if any definition
 — including the row just written — that is *not* in the pre-mutation failed set fails to build against
@@ -494,27 +503,29 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    because this path never builds a caller session context. It is also load-bearing beyond the usual
    reason: a DDL view's queries are planned and materialized under `CallerContext::maintenance()`,
    i.e. `ReadScope::All`, so an author sees every audience regardless of their own read scope.
-2. Open the transaction, call `acquire_lock(&mut tx, VIEW_DDL_ADVISORY_LOCK_KEY)` first (§4b) to serialize steps
-   3-5 cluster-wide, then read the pre-mutation rows via `registry.store()`'s transaction-scoped
-   `list_tx(&mut tx)` (§4b).
+2. Open the transaction on `self.lakehouse.lake().db_pool` (which `FlightSqlServiceImpl` already
+   owns), call `acquire_lock(&mut tx, VIEW_DDL_ADVISORY_LOCK_KEY)` first (§4b) to serialize steps
+   3-5 cluster-wide, then read the pre-mutation rows via `view_definition_store::list_tx(&mut tx)`
+   (§4b, §7).
 3. `CREATE`: validate (§4) against the factory the loader would build for this row — the base plus
    every definition, from the post-mutation row set with this row's own name excluded, in a lower
    `update_group` — so a definition reading another DDL view validates against the real thing, and a
    `CREATE OR REPLACE` that raises its own `update_group` cannot validate against a since-superseded
-   copy of itself. Reject an existing name unless `or_replace`; on a replace whose *effective*
-   `file_schema_hash` changed — i.e. `SqlBatchView::get_file_schema_hash()` differs between the old
-   row's built view and the new one, which catches a `definition_hash_enabled` flip (§2) as well as
-   a definition-hash change, since either alone changes the hash — retire the old partitions (§6)
-   and `upsert` the row via `registry.store()`'s transaction-scoped `upsert_tx(&mut tx, ...)`, all in
-   the same transaction.
-4. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
-   `delete_tx(&mut tx, ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
-5. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
-   `list_tx(&mut tx)` and calls `registry.check_dependents_survive(&pre_rows, &post_rows)` (§4b, §7)
-   with the pre-mutation rows read in step 2, inside the same transaction, rolling back if it broke a
-   dependent or failed to build the mutated row itself.
-   `registry.store()` is how `execute_view_ddl` reaches the definition store to run these calls on
-   its own open transaction, alongside `retire_partitions`.
+   copy of itself. Reject an existing name unless `or_replace`; on a replace, retire the old
+   partitions (§6) whenever §6's stored-hash check reports that some existing `(name, 'global')`
+   partition's `file_schema_hash` differs from the *new* row's `SqlBatchView::get_file_schema_hash()`
+   — this needs no build of the old row (which may no longer plan at all, e.g. after source drift)
+   and still catches a `definition_hash_enabled` flip (§2) as well as a definition-hash change, since
+   either alone changes the hash — then `upsert` the row via `view_definition_store::upsert_tx(&mut
+   tx, ...)`, all in the same transaction.
+4. `DROP`: reject a built-in name; `delete` the row via `view_definition_store::delete_tx(&mut tx,
+   ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
+5. Either mutation then re-reads the post-mutation row set via `view_definition_store::list_tx(&mut
+   tx)` and calls `registry.check_dependents_survive(&pre_rows, &post_rows)` (§4b, §7) with the
+   pre-mutation rows read in step 2, inside the same transaction, rolling back if it broke a
+   dependent or failed to build the mutated row itself. `execute_view_ddl` calls these free functions
+   directly on its own open transaction, alongside `retire_partitions`, since `FlightSqlServiceImpl`
+   already owns the pool that transaction is opened from.
 6. After the transaction (steps 2–5) commits and its advisory lock releases, call `registry.reload()`
    inline, so the statement's own connection can query the new view set immediately instead of
    waiting out the interval. It must run after the commit: `reload()` starts with the pool-backed
@@ -545,6 +556,20 @@ SELECT min(begin_insert_time), max(end_insert_time)
 `temporary_files` and the hourly `delete_expired_temporary_files` collects them — and needs no new
 "retire an entire view set" primitive.
 
+§5 step 3's "effective hash changed" test is answered from this same table rather than by rebuilding
+the old row's `SqlBatchView` (which may no longer plan at all after source drift, per §7 step 4):
+
+```sql
+SELECT EXISTS (
+  SELECT 1 FROM lakehouse_partitions
+   WHERE view_set_name = $1 AND view_instance_id = 'global' AND file_schema_hash <> $2
+);
+```
+
+with `$2` the *new* row's `get_file_schema_hash()`. This is the fact that actually governs
+reachability — `partition_cache.rs:386` and `:420` already filter reads by exact `file_schema_hash`
+— so it is well-defined whether or not the old definition still builds.
+
 ### 7. `ViewRegistry`
 
 New `rust/analytics/src/lakehouse/view_registry.rs`, shaped after `QueryDenyList`:
@@ -567,10 +592,6 @@ pub struct ViewRegistry {
 impl ViewRegistry {
     pub fn new(base: Arc<ViewFactory>, store: Arc<dyn ViewDefinitionStore>, ...) -> Self;
     pub fn current(&self) -> Arc<ViewFactory>;
-    /// The definition store, so `execute_view_ddl` (§5) can run its own `list_tx`/`upsert_tx`/
-    /// `delete_tx` on it alongside `retire_partitions`, in the same transaction as the mutation it is
-    /// executing.
-    pub fn store(&self) -> Arc<dyn ViewDefinitionStore>;
     pub async fn reload(&self) -> Result<()>;
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
@@ -715,12 +736,13 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 5. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
    step 4. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
    definition was built against.
-6. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait
-   (pool-backed `list`, for `reload()`'s periodic use, plus the transaction-scoped
-   `list_tx`/`upsert_tx`/`delete_tx`, each taking a `&mut sqlx::Transaction` — so the DDL path (§4b,
-   §5), including its existence check behind `or_replace`, runs entirely on its own open transaction
-   alongside `retire_partitions`), its Postgres impl, and `partition_insert_range(view_set_name)` for
-   §6.
+6. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
+   reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
+   Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
+   `partition_insert_range`, each taking a `&mut sqlx::Transaction` directly — so the DDL path (§4b,
+   §5), including its existence check behind `or_replace`, runs entirely on `execute_view_ddl`'s own
+   open transaction alongside `retire_partitions`, with no trait indirection for methods a test fake
+   could never implement.
 7. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
    rows-in seam (building and validating each row via `validate_view_definition`), `reload` (ordered
    incremental build, skip-on-failure, digest short-circuit that also bypasses on a prior failure),
@@ -734,10 +756,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    naming more than one object, and the input parsing to more than one statement (§1);
    `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
    the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
-   verbatim source text from the `AS` body's start (`Query::span().start`) through the byte
-   preceding the parser's `peek_token_ref()` after `parse_statement()` returns, not rendered from
-   the parsed `Query` AST and not using `Query::span()`'s end, which truncates a trailing `ORDER BY
-   ... DESC`/`IS NOT NULL` (§1).
+   verbatim source text from the `AS` body's start (`Query::span().start`) through the end of the
+   body's last consumed token (`parser.get_current_token().span.end`, read after `parse_statement()`
+   returns), not rendered from the parsed `Query` AST and not using `Query::span()`'s end, which
+   truncates a trailing `ORDER BY ... DESC`/`IS NOT NULL` (§1).
 9. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
@@ -990,8 +1012,12 @@ changing each hashed field (`extract_query`, `merge_partitions_query`, either ti
 changes the hash; changing `update_group`, either delta, `merge_sort_order`, or `count_src_query`
 alone does not; and, as the CI regression guard for the `None` path
 (the existing `sql_view_test.rs:226` assertion is `#[ignore]`d and does not run in CI), a new no-DB
-test builds a `definition_hash: None` `SqlBatchView` on the `lakehouse_admin_gate_test.rs` offline
-harness and pins `get_file_schema_hash()` to its current exact byte value.
+test builds `make_log_stats_view`'s `SqlBatchView` (`definition_hash: None`) on the
+`lakehouse_admin_gate_test.rs` offline harness — the same construction
+`ownership_rewrite_public_view_set_tests.rs:543-550` already does with no DB — and pins
+`get_file_schema_hash()` to its current exact byte value. This is the same hash every existing
+deployment's `log_stats` partitions already carry, so this test is the CI guard against the silent
+failure (an empty `log_stats` after upgrade) that a live migration run cannot surface on its own.
 
 **`view_registry_tests.rs`** — with a fake `ViewDefinitionStore`: definitions are built in
 `update_group` order and a higher-group definition can read a lower-group one; a definition that
@@ -1030,18 +1056,12 @@ Each step below needs a running split-mode stack and is checking something no un
    run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade lakehouse schema to
    v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Not automated
    because it exercises a real pre-existing schema state, not a freshly created one.
-2. **`log_stats` partitions survive the migration.** Before upgrading, record
-   `SELECT encode(file_schema_hash,'hex'), count(*) FROM lakehouse_partitions WHERE view_set_name =
-   'log_stats' GROUP BY 1`; after, re-run it and expect an identical hash and count, and
-   `SELECT count(*) FROM log_stats` over a historical range to return the same rows as before. The
-   unit test pins the hash function against the seeded text; this pins that a real deployment's
-   already-written partitions still match it.
-3. **Reload without a restart.** With both services already running, create a view set, then poll
+2. **Reload without a restart.** With both services already running, create a view set, then poll
    `micromegas-query "SELECT * FROM list_view_sets() WHERE view_set_name = '<name>'"` from a
    *second* client. Expect it to appear within the refresh interval, and
    `/tmp/daemon.log` to show the daemon materializing it on the next minute tick — the thing the
    whole feature exists to do, and the one that cannot be observed in-process.
-4. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
+3. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
    over `a` at group 4001; `materialize_partitions` both over the same range and confirm `b`'s rows
    are consistent with `a`'s. The group-ordering half is what unit tests cannot reach — it needs two
    real daemon passes over real partitions to show `b` is not reading `a`'s previous-tick state.
