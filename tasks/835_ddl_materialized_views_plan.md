@@ -236,8 +236,14 @@ an exact byte value, built on the `lakehouse_admin_gate_test.rs` offline harness
 invalidate every `SqlBatchView` partition in every existing deployment.
 
 The DDL loader computes the hash over the normalized definition: `extract_query`,
-`count_src_query`, `merge_partitions_query`, the two time columns, both deltas, `update_group`, and
-`merge_sort_order`. It is derived, never stored, so there is nothing to keep in sync.
+`count_src_query`, `merge_partitions_query`, and the two time columns — the fields that determine
+partition *content*. `update_group`, `source_partition_delta`/`merge_partition_delta`, and
+`merge_sort_order` are deliberately excluded: `update_group` only orders `materialize_all_views`'s
+scheduling (`maintenance.rs:59-70`) and does not touch what a partition contains; the two deltas only
+set the width of *future* partitions, and `verify_overlapping_partitions` already tolerates mixed
+widths (`batch_update.rs:23-100`); and `merge_sort_order` only affects the sort guarantee recorded in
+partition metadata (`Partition::certifies_sort_order`, `sql_batch_view.rs:206-215`), which the schema
+hash plays no part in. It is derived, never stored, so there is nothing to keep in sync.
 
 Consequence, which must be documented rather than engineered around: a redefinition **resets the
 view's materialized history**. The daemon only fills forward (2 days / 2 hours / 2 minutes back from
@@ -288,10 +294,13 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    the factory the definition was built for — recursing into `TableSource::get_logical_plan()` when
    the scan is a `ViewTable` (which is how `SqlBatchView::register_table` exposes the user-visible
    name; a downcast to `MaterializedView` alone misses it and would only catch `__<name>__partitions`
-   scans) — and collecting each matched view's `get_update_group()`. Require `update_group >` the
-   maximum found. Since DDL views may read other DDL views, this is what keeps that safe:
-   `materialize_all_views`'s group ordering (`maintenance.rs:59-70`) is the *only* dependency
-   mechanism, and a definition in the wrong group reads its source's previous-tick state forever —
+   scans) — and collecting each matched view's `get_update_group()`. A `TableScan` reached through
+   that recursion names the underlying `__<name>__partitions` table, not the view set, so it is
+   resolved by stripping the `__..__partitions` affix or by downcasting its `TableSource` to
+   `MaterializedView` and reading `get_view().get_view_set_name()`; a scan matching neither form is
+   ignored. Require `update_group >` the maximum found. Since DDL views may read other DDL views,
+   this is what keeps that safe: `materialize_all_views`'s group ordering (`maintenance.rs:59-70`) is
+   the *only* dependency mechanism, and a definition in the wrong group reads its source's previous-tick state forever —
    stale numbers, no error. Enforcing it turns the documented obligation into a check, and it costs
    nothing: the plan is already built by step 3.
 8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
@@ -372,9 +381,9 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
 3. `DROP`: reject a built-in name; `DELETE` the row and retire the partitions in one transaction;
    honour `IF EXISTS`.
 4. Either mutation then computes the post-mutation row set in-process (it already holds the rows it
-   just upserted/deleted plus the ones already loaded) and runs it through `ViewRegistry`'s rows-in
-   build seam (§7) inside the same transaction, rolling back if it broke a dependent — `store.list()`
-   is pool-backed and would not see the transaction's own uncommitted write.
+   just upserted/deleted plus the ones already loaded) and calls `registry.build_from_rows(&rows)`
+   (§7) inside the same transaction, rolling back if it broke a dependent — `store.list()` is
+   pool-backed and would not see the transaction's own uncommitted write.
 5. `registry.reload()` inline, so the statement's own connection can query the new view set
    immediately instead of waiting out the interval.
 6. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
@@ -422,14 +431,26 @@ impl ViewRegistry {
     pub fn base(&self) -> Arc<ViewFactory>;
     pub fn current(&self) -> Arc<ViewFactory>;
     pub async fn reload(&self) -> Result<()>;
+    /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
+    /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 4) doesn't need those
+    /// three pieces separately.
+    pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, bool)>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
 }
 
 /// Builds a factory from an explicit row set instead of `store.list()`, so a caller already holding
 /// rows inside an open transaction (§4b, §5 step 4) can validate against them without a second,
 /// pool-backed read that would not see its own uncommitted write. `reload()` calls this too, after
-/// its own `store.list()`.
-fn build_factory(base: &Arc<ViewFactory>, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, bool)>;
+/// its own `store.list()`. `async` because building each row's `SqlBatchView` (`SqlBatchView::new`)
+/// is itself `async` and needs `runtime`, `lake` and `session_configurator` to plan the extract
+/// query.
+async fn build_factory(
+    base: &Arc<ViewFactory>,
+    rows: &[ViewDefinitionRow],
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    session_configurator: Arc<dyn SessionConfigurator>,
+) -> Result<(Arc<ViewFactory>, bool)>;
 ```
 
 `reload()`:
@@ -441,11 +462,17 @@ fn build_factory(base: &Arc<ViewFactory>, rows: &[ViewDefinitionRow]) -> Result<
    short-circuit, so a row that failed for a transient reason (a source view momentarily unplannable
    mid-rollout, an object-store hiccup) is retried every tick rather than stuck until its row next
    changes or the process restarts.
-3. `build_factory(&self.base, &rows)`: `let mut factory = (*self.base).clone();` then, per row in
+3. `build_factory(&self.base, &rows, self.runtime.clone(), self.lake.clone(),
+   self.session_configurator.clone()).await`: `let mut factory = (*self.base).clone();` then, per row in
    order, build the `SqlBatchView` against `Arc::new(factory.clone())` and
    `factory.add_global_view(...)`. Each definition therefore sees the built-ins plus every DDL view
    with a lower `update_group` — the same incremental clone-and-extend chain `default_view_factory`
-   uses, and the same ordering rule `materialize_all_views` already documents.
+   uses, and the same ordering rule `materialize_all_views` already documents. A row whose name already
+   resolves via `base.get_global_view(...)` is skipped with a `warn!` instead of being built: until
+   step 16 removes `log_stats`'s compiled construction from `default_view_factory`, the seeded
+   `log_stats` row would otherwise collide with the base factory's own `log_stats`, and
+   `ViewFactory::add_global_view`/`make_session_context`'s registration has no overwrite semantics —
+   a duplicate global-view name hard-errors every query, not just ones touching that view.
 4. A row that fails to build is **skipped**, not fatal: `warn!` plus
    `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set name, and
    `build_factory` reports that at least one row failed. One broken definition must not take out
@@ -553,17 +580,20 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory.
 15. New `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`, registered in
     `query.rs`'s `if lakehouse_admin` block.
-16. Python: `client.create_materialized_view(...)` / `drop_materialized_view(name)` convenience
-    wrappers in `python/micromegas/micromegas/flightsql/client.py`, alongside
-    `retire_partitions`/`materialize_partitions`.
-17. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
+16. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
     (`:344-352`); `default_view_factory` now returns the base. `log_stats_view.rs`'s
     `make_log_stats_view` is kept but reduced to building from the `const`s, so the hash-parity test
     has something to compare against. `rust/analytics/tests/audience_mismatch_skip_db_test.rs` builds
-    its `log_stats` view via `make_log_stats_view` instead of pulling it from
-    `default_view_factory`. Deferred to the end of this milestone because the daemon (step 11) and
+    its `log_stats` view via `make_log_stats_view` and `add_global_view`s it onto its own clone of
+    `default_view_factory`, instead of pulling `log_stats` from `default_view_factory` directly — the
+    test both looks the view up via `view_factory.get_global_view("log_stats")` and runs `SELECT ...
+    FROM log_stats ...` through that same factory, so both need a factory that still carries it.
+    Deferred to the end of this milestone because the daemon (step 11) and
     `FlightSqlServiceImpl` (step 13) must already be reading `registry.current()` before `log_stats`
     is dropped from the base factory, or the view goes unmaterialized and unqueryable in between.
+    Until this step runs, the base factory and the seeded row both carry a `log_stats`; §7 step 3's
+    name-collision skip is what keeps every query from hard-erroring during that window, with the
+    seeded row inert (skipped) until this step removes the compiled one.
 
 ## Files to Modify
 
@@ -585,7 +615,6 @@ Modified:
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- `python/micromegas/micromegas/flightsql/client.py`
 - `mkdocs/docs/admin/functions-reference.md`, `maintenance.md`, `flight-sql.md`, `authorization.md`
 - `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/mkdocs.yml`
 - `CHANGELOG.md`
@@ -652,18 +681,12 @@ which is a second design; the issue already scopes it out.
 - `update_group` is a **required** option with no default. There is no dependency inference here —
   the author states the order, and a definition reading another materialized view has to place
   itself after it. A default would be silently wrong for exactly that case.
-- A DDL-defined view set **may read another one**; this is a first-class use case, not a tolerated
-  side effect of the loader's build order. Two checks pay for it: `update_group` must be strictly
-  greater than every view set the definition reads (§4, check 7), and a `DROP`/`REPLACE` that would
-  leave a surviving definition unable to plan is refused, naming the dependents (§4b). Without
-  those, a cross-DDL reference is a footgun in both directions — wrong group means permanently
-  stale numbers, and a dropped dependency means a table silently vanishing.
+- A DDL-defined view set **may read another one**, as a first-class use case; enforced by §4 check 7
+  (`update_group` ordering) and §4b (dependents block a `DROP`/`REPLACE`).
 - No `CASCADE` on `DROP` in v1.
 - `log_stats` is seeded into `lakehouse_view_set_definitions` and removed from
   `default_view_factory`; `blocks`, `processes`, `streams`, `log_entries` and `measures` stay
-  code-driven. `processes`/`streams` are SQL-based but are what `OwnershipRewrite` resolves
-  audiences through, so making them data-driven trades a redefinition nobody needs for an
-  every-query outage risk.
+  code-driven (rationale in Trade-offs).
 - The seeded `log_stats` row carries `definition_hash_enabled = false` so its `file_schema_hash`
   stays byte-identical and existing partitions survive the upgrade. It gets no other special
   casing — droppable, replaceable, and skipped-with-a-warning on a load failure like any other row.
@@ -740,7 +763,9 @@ view rather than erroring. Paired with a case asserting the same definition *wit
 failure here means a check is miscalibrated, not that the view is wrong.
 
 **Definition hash** (in `view_definition_validation_tests.rs`) — identical definitions hash equal;
-changing each field in turn changes the hash; and, as the CI regression guard for the `None` path
+changing each hashed field (`extract_query`, `count_src_query`, `merge_partitions_query`, either time
+column) in turn changes the hash; changing `update_group`, either delta, or `merge_sort_order` alone
+does not; and, as the CI regression guard for the `None` path
 (the existing `sql_view_test.rs:226` assertion is `#[ignore]`d and does not run in CI), a new no-DB
 test builds a `definition_hash: None` `SqlBatchView` on the `lakehouse_admin_gate_test.rs` offline
 harness and pins `get_file_schema_hash()` to its current exact byte value.
