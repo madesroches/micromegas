@@ -925,6 +925,20 @@ def test_format_env_exports_powershell_doubles_a_single_quote_in_a_value():
     assert "'Authorization=Bearer mmk_o''brien'" in content
 
 
+def test_format_env_exports_powershell_doubles_curly_single_quotes_in_the_endpoint():
+    """PowerShell's tokenizer ends a `'...'` literal on U+2018/U+2019/U+201A/U+201B
+    as well as the ASCII `'`, so a curly quote (e.g. from a copy-pasted URL) must be
+    doubled the same way or it breaks out of the string."""
+    content = setup_telemetry.format_env_exports(
+        "mmk_x",
+        "http://ingest:9000/‘’‚‛",
+        fmt="powershell",
+    )
+    assert (
+        "$env:OTEL_EXPORTER_OTLP_ENDPOINT = " "'http://ingest:9000/‘‘’’‚‚‛‛'"
+    ) in content
+
+
 # ---------------------------------------------------------------------------
 # check_format_endpoint
 # ---------------------------------------------------------------------------

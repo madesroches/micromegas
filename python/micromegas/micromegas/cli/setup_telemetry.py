@@ -303,7 +303,14 @@ def _render_posix(name, value):
 
 
 def _render_powershell(name, value):
-    return f"$env:{name} = '{value.replace(chr(39), chr(39) * 2)}'"
+    # PowerShell's tokenizer ends a `'...'` literal on any of these five
+    # code points (`CharTraits.IsSingleQuote`), not just the ASCII `'` that
+    # opened it, so a curly quote copy-pasted into a value would otherwise
+    # break out of the string. Doubling each one is a valid self-escape.
+    single_quotes = "'‘’‚‛"
+    for q in single_quotes:
+        value = value.replace(q, q * 2)
+    return f"$env:{name} = '{value}'"
 
 
 def _render_cmd(name, value):

@@ -76,7 +76,7 @@ One renderer per dialect, each `(name, value) -> str` (one line, no trailing new
 | format | rendered line | quoting rule |
 | --- | --- | --- |
 | `posix` | `export NAME=<shlex.quote(value)>` | `shlex.quote` — leaves URL/`http/protobuf` bare, single-quotes anything with a space or metacharacter |
-| `powershell` | `$env:NAME = '<value>'` | PowerShell single-quoted literal; `'` escaped by doubling, but a line break has no representation |
+| `powershell` | `$env:NAME = '<value>'` | PowerShell single-quoted literal; the ASCII `'` and the four curly single-quote code points (`’‘‚‛`) are each escaped by doubling, but a line break has no representation |
 | `cmd` | `@set "NAME=value"` | the quoted-`set` form keeps the quotes out of the value |
 | `dotenv` | `NAME=value` | unquoted |
 
@@ -114,8 +114,10 @@ as the issue lists them (`posix` first, as the default).
 
 - **`powershell` single-quoted, not the issue's `"..."`**: PowerShell expands `$` inside
   double quotes, and a value is a credential, never a template. `'` → `''` is PowerShell's
-  own escape and represents any value except a line break, which the `| Invoke-Expression`
-  pipeline cannot consume (§3).
+  own escape; because its tokenizer ends a single-quoted literal on the ASCII `'` *or* any of
+  the four curly single-quote code points (`’‘‚‛`), all five must be doubled the same way, or a
+  copy-pasted curly quote in the endpoint breaks out of the literal. Doing so represents any
+  value except a line break, which the `| Invoke-Expression` pipeline cannot consume (§3).
 
 - **`cmd`'s `@set "NAME=value"`**: the quoted-`set` form is the only one that keeps the quote
   characters out of the value — `cmd.exe` has no escape for a `"` inside it, and `%` means
@@ -139,7 +141,7 @@ quoting rule above:
 ```python
 _FORMAT_UNSAFE_CHARS = {
     "posix": (),                  # shlex.quote represents any value
-    "powershell": ("\r", "\n"),   # '' escaping represents any value except a line break
+    "powershell": ("\r", "\n"),   # doubling each of ' ‘ ’ ‚ ‛ represents any value except a line break
     "cmd": ('"', "%", "\r", "\n"),
     "dotenv": ("#", "$", "\r", "\n"),
 }
