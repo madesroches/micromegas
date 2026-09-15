@@ -9,9 +9,10 @@ server-side and then raises `AttributeError: module 'os' has no attribute 'fchmo
 before writing a single byte. The target file has already been created and truncated
 by that point, so the user is left with a 0-byte file and a key that was never printed
 anywhere — unrecoverable, and re-minting leaves a live orphaned key only an admin can
-revoke. This plan makes `write_env_file` platform-portable, moves its destructive step
-after the step that can fail, and widens `run()`'s key-preservation fallback so it
-actually catches the class of failure it was written to catch.
+revoke. This plan makes `write_env_file` platform-portable, writes the file before
+re-asserting its mode so the step that can fail no longer precedes the only step that
+persists the key, and widens `run()`'s key-preservation fallback so it actually catches
+the class of failure it was written to catch.
 
 ## Current State
 
@@ -69,7 +70,8 @@ because they fix different layers.
 ### 1. `write_env_file`: write first, harden second, and guard the Unix-only call
 
 ```python
-fd = os.open(str(target), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+fd = os.open(str(target), flags, 0o600)
 try:
     # Written before the mode is re-asserted below: `os.open` already
     # create-and-truncated `target`, so a hardening failure after this point costs
@@ -85,6 +87,15 @@ finally:
     os.close(fd)
 ```
 
+Without `O_BINARY`, the fd stays in the CRT's default text mode on Windows, where each
+`\n` written via `os.write` is translated to `\r\n` -- corrupting the file with CRLF line
+endings and leaving a trailing `\r` inside the `OTEL_EXPORTER_OTLP_HEADERS` value. This
+is exactly why CPython's own `tempfile` module maintains a separate binary flag set
+(`_bin_openflags = _text_openflags | O_BINARY`) alongside its text one; `write_env_file`
+needs the same treatment since it calls `os.write` on raw bytes. The repo's own Code
+Style rule (Unix line endings in all files) makes CRLF output here a straightforward
+bug, not just a style nit.
+
 `hasattr` rather than a `sys.platform` test: the availability of the syscall is the
 actual precondition, and it is also what a test can manipulate with
 `monkeypatch.delattr`.
@@ -97,8 +108,17 @@ broadened below — now guarantees the key survives the raise.
 
 The invariant being defended is "a minted key must never be discarded", which argues
 for catching everything rather than enumerating the failure types we happened to think
-of. `except OSError` → `except Exception`, keeping the existing warn-to-stderr /
-exports-to-stdout / re-raise body verbatim.
+of. `except OSError` → `except Exception`.
+
+The fallback's stderr warning must also change. With the write moved first (Design §1),
+a hardening failure now happens *after* the file has been fully written, so the existing
+wording — "failed to write --env-file ...; printing the exports below instead so the key
+is not lost" — would be wrong on this path: it asserts the write failed and casts stdout
+as a substitute, when the file actually exists and may hold the key at an unrestricted
+mode. Reword to something that doesn't assert the write failed — e.g. "could not finish
+securing --env-file ...; the path may still hold the key at an unrestricted mode" — while
+keeping the actionable part (exports also on stdout, key not lost). This is a message
+change only; the exports-to-stdout / re-raise control flow stays as-is.
 
 `BaseException` is deliberately not used — see Decisions.
 
@@ -116,6 +136,10 @@ into `mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
 1. **`python/micromegas/micromegas/cli/setup_telemetry.py` — `write_env_file`**
    - Swap the `os.write` and `os.fchmod` statements, and wrap the `os.fchmod` call in
      `if hasattr(os, "fchmod"):`.
+   - Add `getattr(os, "O_BINARY", 0)` to the `os.open` flags so `os.write` is byte-exact
+     on every platform, matching the `_bin_openflags` precedent in CPython's `tempfile`
+     module (without it, Windows' CRT text mode would translate `os.write`'s `\n` bytes
+     to `\r\n`).
    - Replace the existing "Belt-and-suspenders" comment with the two comments shown in
      Design §1 (why the write comes first; why the guard exists and why it cannot widen
      the mode).
@@ -124,13 +148,16 @@ into `mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
      ACL change this CLI does not make.
 
 2. **`python/micromegas/micromegas/cli/setup_telemetry.py` — `run()`**
-   - `except OSError as e:` → `except Exception as e:` in the `--env-file` branch. Body
-     unchanged.
+   - `except OSError as e:` → `except Exception as e:` in the `--env-file` branch.
+   - Reword the stderr warning per Design §2: drop the "failed to write" framing and
+     state that the env file could not be completed and the path may still hold the key
+     at an unrestricted mode, keeping the exports-on-stdout / key-not-lost part. Message
+     change only — no new flag or code path.
    - Extend the existing comment's parenthetical list of causes with "a platform-missing
      syscall" so the reason the net is this wide is recorded where it is widened.
 
 3. **`python/micromegas/tests/cli/test_setup_telemetry.py`** — see Testing Strategy for
-   the four tests.
+   the six tests.
 
 4. **`mkdocs/docs/query-guide/python-api.md`** — amend the `--env-file PATH` sentence
    (line ~1104) with the Windows caveat.
@@ -197,7 +224,7 @@ into `mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
 
 ## Testing Strategy
 
-All four tests are plain unit tests in
+All six tests are plain unit tests in
 `python/micromegas/tests/cli/test_setup_telemetry.py`, collected by the existing
 hermetic list (`tests/cli` is already in `build/python_ci.py`'s `HERMETIC_TEST_ARGS`).
 No live DB or service is involved, and none is warranted: every behavior here is
@@ -210,17 +237,29 @@ reachable by calling the two functions directly.
    `content`. Pins both the `AttributeError` crash and the 0-byte file. Simulating the
    platform is the only option available — CI has no Windows job, and adding one for a
    single `hasattr` branch is not worth a second matrix leg.
-2. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
+2. **`test_write_env_file_writes_bytes_exactly_no_crlf_translation`** — pins byte-exact
+   output. `write_env_file(tmp_path / "sub" / "telemetry.env", content)` then asserts
+   `target.read_bytes() == content.encode("utf-8")` (equivalently, that it contains no
+   `\r`). The repo's Code Style rule requires Unix line endings everywhere; this is the
+   regression test for the `O_BINARY` flag, which is what keeps the fd out of Windows'
+   CRT text mode where `os.write` would otherwise translate `\n` to `\r\n`.
+3. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
    ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod)` where the stub raises
    `PermissionError`; `write_env_file` must raise, *and* the target must already hold the
    full `content`. Without the reorder this test fails with an empty file.
-3. **`test_run_env_file_write_failure_prints_key_to_stdout_and_reraises_non_oserror`** —
+4. **`test_write_env_file_overwrites_a_pre_existing_target`** — covers the
+   pre-existing-target path that the reorder changes semantics for (the "Accepted risk"
+   entry in Decisions). Create the target first with old content at mode `0o644`, then
+   call `write_env_file` with new content. Asserts the file ends up containing only the
+   new content (old content fully replaced) and, where `os.fchmod` exists, that the mode
+   ends at `0o600`.
+5. **`test_run_env_file_write_failure_prints_key_to_stdout_and_reraises_non_oserror`** —
    the regression test for the safety net. Mirrors the existing
    `test_run_env_file_write_failure_prints_key_to_stdout_and_reraises` (line 667) but
    with `write_env_file` monkeypatched to raise `AttributeError("module 'os' has no
    attribute 'fchmod'")`. Asserts `Authorization=Bearer mmk_secret` on stdout, a warning
    naming the path on stderr, and `pytest.raises(AttributeError)`.
-4. **Amend `test_run_writes_env_file_with_secure_permissions_and_prints_its_path`**
+6. **Amend `test_run_writes_env_file_with_secure_permissions_and_prints_its_path`**
    (line 635) — guard its `mode == 0o600` assertion on `hasattr(os, "fchmod")` so the
    suite is honest about what the code now promises, following the
    `tests/auth/test_oidc_unit.py:73` precedent. The content and printed-path assertions
@@ -243,10 +282,9 @@ mode there is immediately obvious to whoever runs it:
    Expected: the `minted ingestion api key (...)` line on stderr, the env-file path on
    stdout, no traceback, and a `telemetry.env` containing all three
    `OTEL_EXPORTER_OTLP_*` export lines.
-2. Re-run the same command. Expected: the file is rewritten with the new key, again with
-   no traceback.
 
 Not automated because it needs a Windows runner and a live deployment to mint against;
-the platform-independent halves are both covered by tests 1–3 above. If no Windows host
-is available, say so rather than reporting the step as done — tests 1–3 are what actually
-gate the fix.
+the platform-independent halves — including overwriting a pre-existing target, which
+needs no live host — are covered by tests 1–6 above. If no Windows host is available,
+say so rather than reporting the step as done — tests 1–6 are what actually gate the
+fix.
