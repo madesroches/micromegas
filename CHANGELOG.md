@@ -11,7 +11,8 @@ This file documents the historical progress of the Micromegas project. For curre
   that syntax represents a literal credential safely: `posix` (`export NAME=value`) now quotes via
   `shlex.quote` instead of an unconditional `"..."`, which also closes a latent hole where an
   unquoted endpoint carrying a shell metacharacter (e.g. `&`) mis-`eval`'d; `powershell`
-  (`$env:NAME = 'value'`) single-quotes, doubling a literal `'`; `cmd` (`@set "NAME=value"`) uses
+  (`$env:NAME = 'value'`) single-quotes, doubling every code point PowerShell's tokenizer treats as
+  a closing quote (ASCII `'` plus the four curly variants); `cmd` (`@set "NAME=value"`) uses
   the quoted-`set` form to keep quote characters out of the value, with the leading `@` (not the
   quoting) suppressing the echo of the key to the console when the generated file is `call`ed;
   `dotenv` (`NAME=value`) is unquoted, matching how `docker compose --env-file`/`python-dotenv`
