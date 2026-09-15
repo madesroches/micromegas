@@ -176,11 +176,16 @@ outside the ones this grammar models is not at its default — silently ignoring
 *overwrites* the `WITH (...)` option list this whole grammar depends on) or a second `DROP` name would
 make the statement do less than it says.
 
-`sqlparser::Parser::parse_sql` returns a `Vec<Statement>`, so `parse_view_ddl` also rejects with a
-named error if the input parses to more than one statement — the same single-statement rule
-`SessionContext::sql`'s `sql_to_statement` already enforces for every non-DDL query
-(datafusion-54.1.0 `src/execution/session_state.rs:454-458`). Intercepting DDL ahead of `ctx.sql`
-would otherwise bypass that guard and silently execute only the first of several statements.
+`parse_view_ddl` never calls `Parser::parse_sql` — that associated function constructs and discards
+its own `Parser`, leaving no handle to read the end offset from (above). It drives the same
+`Parser::try_with_sql(sql)?` / `parse_statement()` call used for the end offset, then, immediately
+after reading `get_current_token().span.end`, consumes any trailing `Token::SemiColon`s and rejects
+with a named error unless `parser.peek_token_ref()` is `Token::EOF` — the same loop
+`Parser::parse_statements` (`sqlparser-0.62.0/src/parser/mod.rs:494-530`) runs internally, so this
+enforces the same single-statement rule `SessionContext::sql`'s `sql_to_statement` already applies to
+every non-DDL query (datafusion-54.1.0 `src/execution/session_state.rs:454-458`). Intercepting DDL
+ahead of `ctx.sql` would otherwise bypass that guard and silently execute only the first of several
+statements.
 
 ### 2. Persistence
 
