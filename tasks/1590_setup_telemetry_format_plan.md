@@ -9,13 +9,12 @@ syntax — POSIX `export` lines — on both its stdout and `--env-file` paths. A
 native PowerShell or `cmd.exe` prompt, or one feeding a container/CI env-file, cannot
 consume that output and has to transcribe the key by hand. This plan adds
 `--format {posix,powershell,cmd,dotenv}` (default `posix`) applying to both output paths,
-backed by a small per-format renderer registry so a fifth dialect is an added entry rather
-than an edit to the rendering logic.
+backed by a small per-format renderer registry.
 
 ## Current State
 
 `format_env_exports(key, otlp_endpoint)`
-(`python/micromegas/micromegas/cli/setup_telemetry.py:277`) returns a fixed string:
+(`python/micromegas/micromegas/cli/setup_telemetry.py:286`) returns a fixed string:
 
 ```python
 return (
@@ -121,19 +120,16 @@ as the issue lists them (`posix` first, as the default).
 - **`cmd`'s `@set "NAME=value"`**: the quoted-`set` form is the only one that keeps the quote
   characters out of the value — `cmd.exe` has no escape for a `"` inside it, and `%` means
   different things in a batch file (`%%`) than at the interactive prompt, so unsafe characters
-  are rejected rather than escaped context-dependently (§3). The leading `@` is what keeps the
-  credential out of the console: `call`ing a file of plain `set` lines echoes each line as it
-  runs, printing the bearer token into the terminal and its scrollback; `@` suppresses that
-  echo without changing the stored value, and is accepted both in a batch file and at the
-  interactive prompt.
+  are rejected rather than escaped context-dependently (§3). The leading `@` is accepted both
+  in a batch file and at the interactive prompt.
 
 - **`dotenv` unquoted**: loaders disagree on whether surrounding quotes are stripped (older
   `docker compose --env-file` kept them literally, `python-dotenv` strips them), while the
   bare `NAME=value` form — value is everything after the first `=`, interior spaces preserved
   — is read identically by `python-dotenv`, `docker compose`, and the common app-config
   loaders. `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer mmk_...` is correct for all of
-  them. The cost is that a value with a leading/trailing space or a `#` is not representable
-  (§3).
+  them. The cost is that a value with a leading/trailing space, a `#`, or a `$` is not
+  representable (§3).
 
 ### 3. Per-format unsafe characters, checked before the mint
 
@@ -145,7 +141,7 @@ _FORMAT_UNSAFE_CHARS = {
     "posix": (),                  # shlex.quote represents any value
     "powershell": ("\r", "\n"),   # '' escaping represents any value except a line break
     "cmd": ('"', "%", "\r", "\n"),
-    "dotenv": ("#", "\r", "\n"),
+    "dotenv": ("#", "$", "\r", "\n"),
 }
 ```
 
@@ -299,3 +295,9 @@ fail visibly and immediately if wrong, which is why they are not automated.
    `micromegas-setup-telemetry --url <url> --name cmd-check --format cmd > %TEMP%\telemetry.cmd`
    then `call %TEMP%\telemetry.cmd` and `echo %OTEL_EXPORTER_OTLP_HEADERS%` — expected: the
    same value, with no surrounding quote characters (the `set "VAR=value"` form's whole point).
+3. From `cmd.exe`, exercising the LF-only `--env-file` path (a console redirect gets CRLF for
+   free from Python's text-mode stdout translation, so it cannot stand in for this):
+   `micromegas-setup-telemetry --url <url> --name cmd-envfile-check --format cmd --env-file
+   %TEMP%\telemetry-envfile.cmd` then `call %TEMP%\telemetry-envfile.cmd` and
+   `echo %OTEL_EXPORTER_OTLP_PROTOCOL%` — expected: `http/protobuf`, confirming `cmd.exe`
+   parses the LF-only batch file `write_env_file` stores.
