@@ -171,7 +171,10 @@ Renderers join with `"\n"` only, and `write_env_file` keeps its byte-exact binar
 (#1588's guarantee). `cmd.exe` parses plain `set` lines with LF endings, and a Windows console
 redirect (`... --format cmd > telemetry.cmd`) gets CRLF for free from Python's text-mode
 stdout translation. Emitting `"\r\n"` from the renderer would instead produce `\r\r\n` on that
-path.
+path. The same text-mode translation also turns the `posix`/`dotenv` stdout path into CRLF on
+Windows, and `eval`/`source` under bash then fold that trailing `\r` into the last quoted
+value — this is pre-existing (today's hardcoded `export ... "..."` string has the same shape)
+and is neither caused nor fixed by this plan; see Decisions.
 
 ### 5. `--format` applies to both output paths; `--env-file` keeps the `posix` default
 
@@ -204,8 +207,9 @@ profile, and `dotenv` output is not a shell script.
      `args.format` to `format_env_exports`; warn on stderr when the header value carries a
      character unsafe for the chosen format.
 2. **`python/micromegas/tests/cli/test_setup_telemetry.py`** — add `"format": "posix"` to
-   `make_args`' defaults, update the two assertions that pin the current `export ... "..."`
-   header line, and add the cases in Testing Strategy.
+   `make_args`' defaults, delete `test_format_env_exports_includes_protocol_endpoint_and_bearer_header`
+   (whose coverage the posix exact-output assertion absorbs), and add the cases in Testing
+   Strategy.
 3. **Docs** — `mkdocs/docs/query-guide/python-api.md` and
    `mkdocs/docs/admin/authorization.md` (see Documentation).
 4. **`CHANGELOG.md`** — one `**Python:**` bullet under `## Unreleased`.
@@ -237,6 +241,10 @@ profile, and `dotenv` output is not a shell script.
 - `--env-file`'s default format stays `posix`.
 - `cmd` renders `@set` (not plain `set`) so that `call`ing the generated file does not echo the
   key to the console.
+- The Windows stdout CRLF-folding-into-value behavior on `posix`/`dotenv` (verified: bash's
+  `eval`/`source` fold the trailing `\r` into the last quoted value) is a pre-existing
+  limitation, unchanged by this plan; fixing it (e.g. forcing `newline=""` on `sys.stdout`) is
+  out of scope.
 
 ## Documentation
 
