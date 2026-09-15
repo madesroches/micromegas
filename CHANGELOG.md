@@ -2,6 +2,10 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Packaging:** Rewrite the `micromegas` umbrella crate's `description`, which was `"Micromegas is a scalable observability solution."` — seven words naming none of the four stages and none of the nouns someone searching for this would type. It is now the same sentence the repository description and `/llms.txt` already use, so the phrasing is consistent everywhere the project is indexed: `"Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."`. This is the crate's front-door copy on crates.io search, lib.rs and every registry mirror; the component crates keep their deliberately modest `"part of micromegas"` descriptions. Metadata only takes effect on publish, so this lands with the next release.
+
 ## v0.31.0 - 2026-09-14
 
 * **Dependencies:** Bump `rustls` to `0.23.45` (and transitively `rustls-webpki` to `0.103.15`) in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace to resolve RUSTSEC-2026-0285 (TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries).
