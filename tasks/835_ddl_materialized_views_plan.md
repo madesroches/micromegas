@@ -205,13 +205,13 @@ Its text comes from `const`s in a new
 `ON CONFLICT DO NOTHING` keeps the migration idempotent.
 
 `definition_sql` (`TEXT NOT NULL`, the verbatim DDL text — see §2 below) has no equivalent in
-`log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A fourth `const` in
-`builtin_view_definitions.rs` holds the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
-text, assembled from the other three consts by wrapping each in `$$...$$` — none of them contains a
-`$$`, so a plain `concat!` suffices and no quote-escaping helper is needed. It seeds this column and
-doubles as the parser round-trip fixture in the Testing Strategy, which asserts each parsed query
-option equals its `const` exactly: inside `$$...$$` the text is taken as-is, so the consts need no
-whitespace or trailing-`;` grooming for that equality to hold.
+`log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A function in
+`builtin_view_definitions.rs` assembles the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
+text from the `ViewDefinition` const, wrapping each query in `$$...$$` — none of them contains a
+`$$`, so no quote-escaping helper is needed. It seeds this column and doubles as the parser
+round-trip fixture in the Testing Strategy, which asserts the full parsed `ViewDefinition` — every
+option, not just the three queries — equals the `const` exactly: inside `$$...$$` the text is taken
+as-is, so the consts need no whitespace or trailing-`;` grooming for that equality to hold.
 
 The `upsert` behind `CREATE OR REPLACE` is an `ON CONFLICT (view_set_name) DO UPDATE` that sets
 `updated_at = now()` and `updated_by` explicitly on the `DO UPDATE` branch — the column defaults only
@@ -584,12 +584,10 @@ async fn build_factory(
    7's `update_group` ordering sees only the rows already folded in — and only then
    `factory.add_global_view(...)`. Each definition therefore sees the built-ins plus every DDL view
    with a lower `update_group` — the same incremental clone-and-extend chain `default_view_factory`
-   uses, and the same ordering rule `materialize_all_views` already documents. A row whose name already
-   resolves via `base.get_global_view(...)` is skipped with a `warn!` instead of being built: until
+   uses, and the same ordering rule `materialize_all_views` already documents. Check 1 (§4) already
+   rejects a name that resolves via `get_global_view`/`get_view_sets` on the base factory, so until
    step 15 removes `log_stats`'s compiled construction from `default_view_factory`, the seeded
-   `log_stats` row would otherwise collide with the base factory's own `log_stats`, and
-   `ViewFactory::add_global_view`/`make_session_context`'s registration has no overwrite semantics —
-   a duplicate global-view name hard-errors every query, not just ones touching that view.
+   `log_stats` row simply fails validation and is skipped like any other invalid row.
 4. A row that fails to **build or validate** is **skipped**, not fatal: `warn!` plus
    `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set name, and
    `build_factory` collects its name into the returned failed-set. One broken definition must not take
@@ -655,22 +653,26 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 ### Milestone 1 — persistence, validation, DDL
 
-1. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats`'s three queries and
-   options as `const`s, lifted verbatim out of `log_stats_view.rs`, plus a fourth `const` assembling
-   them into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
-   `definition_sql`; consumed by the migration's seed and by the parser round-trip test. Registered in
-   `rust/analytics/src/lakehouse/mod.rs`. First because step 2's migration seed needs these `const`s to
-   exist.
-2. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
-   append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
-   `lakehouse_view_set_definitions`, seeding `log_stats` from
-   `builtin_view_definitions`, and ending with `UPDATE lakehouse_migration SET version=10`.
-3. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
+1. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
    set + three queries), `parse_time_delta`, the name charset check, and
-   `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`.
-4. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
-   step 3. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
-   definition was built against.
+   `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`. First
+   because step 2's `ViewDefinition` const and step 3's migration seed both need this type to exist.
+2. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats` exposed as a
+   `ViewDefinition` const (the three queries plus every option: `update_group`, `time_column`, the
+   two deltas, `merge_sort_order`), lifted verbatim out of `log_stats_view.rs`, plus a function
+   assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
+   `definition_sql`; consumed by the migration's seed (which serializes the const's options via
+   `serde_json` for `view_options`) and by the parser round-trip test. Registered in
+   `rust/analytics/src/lakehouse/mod.rs`.
+3. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
+   append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
+   `lakehouse_view_set_definitions`, seeding `log_stats` from `builtin_view_definitions`'s
+   `ViewDefinition` const (`view_options` serialized with `serde_json::to_string`, `definition_sql`
+   from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
+4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
+   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
+   charset half of check 1 may additionally run in the parser). Check 7 needs the referenced view
+   sets' `update_group`s, so it takes the factory the definition was built against.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -743,9 +745,6 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     daemon (step 12) and `FlightSqlServiceImpl` (step 8) must already be reading `registry.current()`
     before `log_stats` is dropped from the base factory, or the view goes unmaterialized and
     unqueryable in between.
-    Until this step runs, the base factory and the seeded row both carry a `log_stats`; §7 step 3's
-    name-collision skip is what keeps every query from hard-erroring during that window, with the
-    seeded row inert (skipped) until this step removes the compiled one.
     `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs`'s
     `real_view_factory_covers_every_registered_view_set` derives its inventory from
     `default_view_factory().get_global_views()`; give it the same `make_log_stats_view` +
@@ -841,6 +840,10 @@ which is a second design; the issue already scopes it out.
   query's `make_session_context` and, because `build_factory`'s incremental clone-and-extend chain
   replans every prior definition on each rebuild, an O(N²) cost to every reload. Accepted for v1: the
   admin who creates definitions is the same one who would hit the cost.
+- A `DROP`'s `retire_partitions` races a lagging daemon replica for up to
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`: orphan partitions it writes after the retire are
+  reclaimed by retention, not immediately; a same-schema `CREATE` re-using the name within that
+  window should be followed by an explicit `retire_partitions` call. Accepted risk.
 
 ## Documentation
 
@@ -852,7 +855,10 @@ which is a second design; the issue already scopes it out.
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
   *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
-  sequence that reclaims and rebuilds them. Added to `mkdocs/mkdocs.yml`'s nav.
+  sequence that reclaims and rebuilds them; and that a `DROP`'s `retire_partitions` races a lagging
+  daemon replica for up to `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, so orphan partitions are
+  reclaimed by retention and a same-schema re-`CREATE` within that window should be followed by an
+  explicit `retire_partitions` call. Added to `mkdocs/mkdocs.yml`'s nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -892,6 +898,8 @@ now invalid, rejected; and a trailing second statement (`CREATE ...; DROP ...`) 
 pinning the single-statement rule. Round-trip: each of the three query options parses back to
 exactly the submitted text, with a `$$`-quoted body carrying single quotes, `{begin}`/`{end}`
 placeholders, newlines and mixed casing, plus the single-quoted-literal form for the same query.
+Against the seeded `log_stats` DDL text specifically, the parsed `ViewDefinition` — every option,
+not just the three queries — must equal `builtin_view_definitions`'s `ViewDefinition` const exactly.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
