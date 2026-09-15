@@ -29,10 +29,15 @@ finally:
     os.close(fd)
 ```
 
-`os.open` creates-and-truncates; `os.fchmod` is documented "Availability: Unix" and
-does not exist as an attribute at all on Windows, so it raises `AttributeError`; and
-`os.write` never runs. The single destructive step precedes the only step that cannot
-work on the platform.
+`os.open` creates-and-truncates; before Python 3.13, `os.fchmod` does not exist as an
+attribute on Windows, so it raises `AttributeError`; and `os.write` never runs. The
+single destructive step precedes the only step that cannot work on the platform.
+
+This version boundary matters for scoping the fix: on Windows with Python 3.11 or 3.12
+the crash above reproduces, leaving a 0-byte file and a lost key. On Windows with Python
+3.13+, `os.fchmod` exists and does not raise, but (see Design §3) it is a no-op for the
+mode this code requests, so the file is written yet the promised `0o600` is silently not
+applied.
 
 `run()`'s `--env-file` branch (`python/micromegas/micromegas/cli/setup_telemetry.py:392`)
 already carries a fallback built for exactly this hazard — it prints the exports to
@@ -67,7 +72,7 @@ has to be pinned by simulating the platform rather than running on it.
 Three changes, each independently sufficient to prevent the key loss, applied together
 because they fix different layers.
 
-### 1. `write_env_file`: write first, harden second, and guard the Unix-only call
+### 1. `write_env_file`: write first, harden second, and guard the call Windows lacks before 3.13
 
 ```python
 flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_BINARY", 0)
@@ -78,9 +83,10 @@ try:
     # nothing, while one before it would leave the file empty and the just-minted,
     # never-retrievable key with nowhere to land.
     os.write(fd, content.encode("utf-8"))
-    # `os.fchmod` is Unix-only. `os.open`'s mode argument is masked by the umask,
-    # which can only clear bits, so this only ever restores an owner bit the umask
-    # stripped -- it can never widen the file past `0o600`.
+    # `os.fchmod` is absent on Windows before Python 3.13; where present there, it only
+    # toggles the read-only bit, so it cannot deliver `0o600`. `os.open`'s mode argument
+    # is masked by the umask, which can only clear bits, so this only ever restores an
+    # owner bit the umask stripped -- it can never widen the file past `0o600`.
     if hasattr(os, "fchmod"):
         os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
 finally:
@@ -110,26 +116,28 @@ The invariant being defended is "a minted key must never be discarded", which ar
 for catching everything rather than enumerating the failure types we happened to think
 of. `except OSError` → `except Exception`.
 
-The fallback's stderr warning must also change. With the write moved first (Design §1),
-a hardening failure now happens *after* the file has been fully written, so the existing
-wording — "failed to write --env-file ...; printing the exports below instead so the key
-is not lost" — would be wrong on this path: it asserts the write failed and casts stdout
-as a substitute, when the file actually exists and may hold the key at an unrestricted
-mode. Reword to something that doesn't assert the write failed — e.g. "could not finish
-securing --env-file ...; the path may still hold the key at an unrestricted mode" — while
-keeping the actionable part (exports also on stdout, key not lost). This is a message
-change only; the exports-to-stdout / re-raise control flow stays as-is.
+The fallback's stderr warning must also change. The handler wraps the whole
+`write_env_file` call, so it still fires for failures where the target is absent or
+partial (`parent.mkdir` / `os.open` / `os.write` errors) as well as, after Design §1's
+reorder, a hardening failure where the file already holds the full content — the
+existing wording ("failed to write --env-file ...; printing the exports below instead so
+the key is not lost") only fits the former. Reword to a message that asserts neither
+outcome — e.g. "could not complete --env-file `<path>` (`<e>`); exports printed below so
+the key is not lost; if the file exists, treat it as holding a live credential." This is
+a message change only; the exports-to-stdout / re-raise control flow stays as-is.
 
 `BaseException` is deliberately not used — see Decisions.
 
 ### 3. Docstring and docs: state the Windows permission caveat instead of over-promising
 
-`write_env_file`'s docstring currently promises mode `0o600` unconditionally. On
-Windows, POSIX mode bits are not enforced: `os.fchmod` does not exist, and `os.chmod`
-there honors only the read-only bit. Genuinely restricting the file to its owner needs
-an ACL change, which is out of scope for this CLI — so the file lands at the directory's
-inherited ACL and that should be documented rather than crashed on. The same caveat goes
-into `mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
+`write_env_file`'s docstring currently promises mode `0o600` unconditionally, and
+`python-api.md:1104` additionally promises the parent directory is created at `0o700`.
+On Windows, neither POSIX mode is enforced: `os.fchmod` is absent before Python 3.13
+and, where present, only toggles the read-only bit; `os.chmod` on a directory behaves
+the same way. Genuinely restricting either to its owner needs an ACL change, which is
+out of scope for this CLI — so both land at the directory's inherited ACL and that
+should be documented rather than crashed on. The same caveat goes into
+`mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
 
 ## Implementation Steps
 
@@ -149,10 +157,9 @@ into `mkdocs/docs/query-guide/python-api.md`'s `--env-file` sentence.
 
 2. **`python/micromegas/micromegas/cli/setup_telemetry.py` — `run()`**
    - `except OSError as e:` → `except Exception as e:` in the `--env-file` branch.
-   - Reword the stderr warning per Design §2: drop the "failed to write" framing and
-     state that the env file could not be completed and the path may still hold the key
-     at an unrestricted mode, keeping the exports-on-stdout / key-not-lost part. Message
-     change only — no new flag or code path.
+   - Reword the stderr warning per Design §2 to the neutral form that asserts neither
+     that the write failed nor that the file exists, keeping the exports-on-stdout /
+     key-not-lost part. Message change only — no new flag or code path.
    - Extend the existing comment's parenthetical list of causes with "a platform-missing
      syscall" so the reason the net is this wide is recorded where it is widened.
 
@@ -237,22 +244,28 @@ reachable by calling the two functions directly.
    `content`. Pins both the `AttributeError` crash and the 0-byte file. Simulating the
    platform is the only option available — CI has no Windows job, and adding one for a
    single `hasattr` branch is not worth a second matrix leg.
-2. **`test_write_env_file_writes_bytes_exactly_no_crlf_translation`** — pins byte-exact
-   output. `write_env_file(tmp_path / "sub" / "telemetry.env", content)` then asserts
-   `target.read_bytes() == content.encode("utf-8")` (equivalently, that it contains no
-   `\r`). The repo's Code Style rule requires Unix line endings everywhere; this is the
-   regression test for the `O_BINARY` flag, which is what keeps the fd out of Windows'
-   CRT text mode where `os.write` would otherwise translate `\n` to `\r\n`.
+2. **`test_write_env_file_writes_bytes_exactly_no_crlf_translation`** — pins the
+   `O_BINARY` flag, which is what keeps the fd out of Windows' CRT text mode where
+   `os.write` would otherwise translate `\n` to `\r\n`. On the Linux CI runner
+   `os.O_BINARY` does not exist, so `getattr(os, "O_BINARY", 0)` is `0` with or without
+   the flag and a plain byte-content assertion would pass on unmodified code too; the
+   test instead monkeypatches a synthetic sentinel (`monkeypatch.setattr(os, "O_BINARY",
+   0x8000, raising=False)`), wraps `os.open` to record the `flags` it is called with, and
+   asserts the recorded flags include that bit — that assertion is what actually pins the
+   regression. It also keeps `target.read_bytes() == content.encode("utf-8")` as a cheap,
+   documentation-only byte-exactness check.
 3. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
-   ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod)` where the stub raises
-   `PermissionError`; `write_env_file` must raise, *and* the target must already hold the
-   full `content`. Without the reorder this test fails with an empty file.
+   ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod, raising=False)` (the
+   `raising=False` avoids an error on Windows with Python 3.11/3.12, where the attribute
+   is absent) where the stub raises `PermissionError`; `write_env_file` must raise, *and*
+   the target must already hold the full `content`. Without the reorder this test fails
+   with an empty file.
 4. **`test_write_env_file_overwrites_a_pre_existing_target`** — covers the
    pre-existing-target path that the reorder changes semantics for (the "Accepted risk"
    entry in Decisions). Create the target first with old content at mode `0o644`, then
    call `write_env_file` with new content. Asserts the file ends up containing only the
-   new content (old content fully replaced) and, where `os.fchmod` exists, that the mode
-   ends at `0o600`.
+   new content (old content fully replaced) and, on non-Windows platforms
+   (`platform.system() != "Windows"`), that the mode ends at `0o600`.
 5. **`test_run_env_file_write_failure_prints_key_to_stdout_and_reraises_non_oserror`** —
    the regression test for the safety net. Mirrors the existing
    `test_run_env_file_write_failure_prints_key_to_stdout_and_reraises` (line 667) but
@@ -260,10 +273,11 @@ reachable by calling the two functions directly.
    attribute 'fchmod'")`. Asserts `Authorization=Bearer mmk_secret` on stdout, a warning
    naming the path on stderr, and `pytest.raises(AttributeError)`.
 6. **Amend `test_run_writes_env_file_with_secure_permissions_and_prints_its_path`**
-   (line 635) — guard its `mode == 0o600` assertion on `hasattr(os, "fchmod")` so the
+   (line 635) — guard its `mode == 0o600` assertion on
+   `platform.system() != "Windows"` (the test module will need `import platform`) so the
    suite is honest about what the code now promises, following the
-   `tests/auth/test_oidc_unit.py:73` precedent. The content and printed-path assertions
-   stay unconditional.
+   `tests/auth/test_oidc_unit.py:73` precedent, which guards on exactly this. The content
+   and printed-path assertions stay unconditional.
 
 Run: `cd python/micromegas && poetry run pytest tests/cli/test_setup_telemetry.py`, then
 `python build/python_ci.py 3.11` from the repo root for the full hermetic suite plus the
