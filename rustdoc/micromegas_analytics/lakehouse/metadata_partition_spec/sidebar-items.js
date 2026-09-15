@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cast_to_file_schema","fetch_metadata_partition_spec","mismatch_excluded_count"],"struct":["MetadataPartitionSpec"]};

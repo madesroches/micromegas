@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["UNKNOWN_NAMESPACE"],"fn":["is_cloudwatch_metric_stream_resource","metric_namespace","rewrite_cloudwatch_metric_streams"]};
