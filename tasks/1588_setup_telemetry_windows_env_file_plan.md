@@ -69,8 +69,8 @@ has to be pinned by simulating the platform rather than running on it.
 
 ## Design
 
-Three changes, each independently sufficient to prevent the key loss, applied together
-because they fix different layers.
+Three changes. Changes 1 and 2 are each independently sufficient to prevent the key loss;
+change 3 corrects the promise the docs and docstring make.
 
 ### 1. `write_env_file`: write first, harden second, and guard the call Windows lacks before 3.13
 
@@ -101,14 +101,6 @@ is exactly why CPython's own `tempfile` module maintains a separate binary flag 
 needs the same treatment since it calls `os.write` on raw bytes. The repo's own Code
 Style rule (Unix line endings in all files) makes CRLF output here a straightforward
 bug, not just a style nit.
-
-`hasattr` rather than a `sys.platform` test: the availability of the syscall is the
-actual precondition, and it is also what a test can manipulate with
-`monkeypatch.delattr`.
-
-A hardening failure is still allowed to propagate (it is not swallowed): a secret
-sitting at a mode we could not restrict is worth surfacing, and `run()`'s fallback —
-broadened below — now guarantees the key survives the raise.
 
 ### 2. `run()`: broaden the key-preservation net to `except Exception`
 
@@ -144,10 +136,7 @@ should be documented rather than crashed on. The same caveat goes into
 1. **`python/micromegas/micromegas/cli/setup_telemetry.py` — `write_env_file`**
    - Swap the `os.write` and `os.fchmod` statements, and wrap the `os.fchmod` call in
      `if hasattr(os, "fchmod"):`.
-   - Add `getattr(os, "O_BINARY", 0)` to the `os.open` flags so `os.write` is byte-exact
-     on every platform, matching the `_bin_openflags` precedent in CPython's `tempfile`
-     module (without it, Windows' CRT text mode would translate `os.write`'s `\n` bytes
-     to `\r\n`).
+   - Add `getattr(os, "O_BINARY", 0)` to the `os.open` flags (Design §1).
    - Replace the existing "Belt-and-suspenders" comment with the two comments shown in
      Design §1 (why the write comes first; why the guard exists and why it cannot widen
      the mode).
@@ -194,7 +183,6 @@ should be documented rather than crashed on. The same caveat goes into
   attribute's presence is the actual precondition for the call, is what CPython's own
   docs describe as the portability contract, and is directly manipulable from a test on
   a Linux runner. A platform string would need a second mechanism to be testable.
-- **Considered: broadening `main()`'s `except` tuple too.** Left alone — see Decisions.
 
 ## Decisions
 
@@ -241,31 +229,31 @@ reachable by calling the two functions directly.
    test for the bug witnessed in the wild. `monkeypatch.delattr(os, "fchmod",
    raising=False)` simulates Windows on the Linux runner, then `write_env_file(tmp_path /
    "sub" / "telemetry.env", content)` must return normally and the file must contain
-   `content`. Pins both the `AttributeError` crash and the 0-byte file. Simulating the
-   platform is the only option available — CI has no Windows job, and adding one for a
-   single `hasattr` branch is not worth a second matrix leg.
+   `content`. Pins both the `AttributeError` crash and the 0-byte file.
 2. **`test_write_env_file_writes_bytes_exactly_no_crlf_translation`** — pins the
    `O_BINARY` flag, which is what keeps the fd out of Windows' CRT text mode where
    `os.write` would otherwise translate `\n` to `\r\n`. On the Linux CI runner
    `os.O_BINARY` does not exist, so `getattr(os, "O_BINARY", 0)` is `0` with or without
    the flag and a plain byte-content assertion would pass on unmodified code too; the
    test instead monkeypatches a synthetic sentinel (`monkeypatch.setattr(os, "O_BINARY",
-   0x8000, raising=False)`), wraps `os.open` to record the `flags` it is called with, and
-   asserts the recorded flags include that bit — that assertion is what actually pins the
-   regression. It also keeps `target.read_bytes() == content.encode("utf-8")` as a cheap,
-   documentation-only byte-exactness check.
+   0x8000, raising=False)`), wraps `os.open` to record the `flags` it is called with — the
+   wrapper masks the sentinel bit off before delegating to the real `os.open`, since that
+   bit is not a meaningful flag on the host platform — and asserts the recorded flags
+   include that bit — that assertion is what actually pins the regression. It also keeps
+   `target.read_bytes() == content.encode("utf-8")` as a cheap, documentation-only
+   byte-exactness check.
 3. **`test_write_env_file_writes_content_before_hardening_permissions`** — pins the
    ordering. `monkeypatch.setattr(os, "fchmod", raising_fchmod, raising=False)` (the
    `raising=False` avoids an error on Windows with Python 3.11/3.12, where the attribute
    is absent) where the stub raises `PermissionError`; `write_env_file` must raise, *and*
    the target must already hold the full `content`. Without the reorder this test fails
    with an empty file.
-4. **`test_write_env_file_overwrites_a_pre_existing_target`** — covers the
-   pre-existing-target path that the reorder changes semantics for (the "Accepted risk"
-   entry in Decisions). Create the target first with old content at mode `0o644`, then
-   call `write_env_file` with new content. Asserts the file ends up containing only the
-   new content (old content fully replaced) and, on non-Windows platforms
-   (`platform.system() != "Windows"`), that the mode ends at `0o600`.
+4. **`test_write_env_file_overwrites_a_pre_existing_target`** — pins the accepted-risk end
+   state for a pre-existing target (the "Accepted risk" entry in Decisions): old content
+   fully replaced, and mode narrowed to `0o600` on non-Windows platforms. Create the
+   target first with old content at mode `0o644`, then call `write_env_file` with new
+   content. Asserts the file ends up containing only the new content and, on non-Windows
+   platforms (`platform.system() != "Windows"`), that the mode ends at `0o600`.
 5. **`test_run_env_file_write_failure_prints_key_to_stdout_and_reraises_non_oserror`** —
    the regression test for the safety net. Mirrors the existing
    `test_run_env_file_write_failure_prints_key_to_stdout_and_reraises` (line 667) but
