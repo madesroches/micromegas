@@ -75,7 +75,7 @@ semi-join against `__processes__partitions`; else two name-keyed arms; **else
 `Err(DataFusionError::Plan("no audience rule defined for view set '...'"))`**. This rule is
 constructed for every caller whose `ReadScope != All`.
 
-**Admin gating.** `query.rs:204-246` registers the eight mutating lakehouse UDTFs/UDFs only when
+**Admin gating.** `query.rs:204-246` registers the eight admin-gated lakehouse UDTFs/UDFs only when
 `caller.is_admin`. `rust/analytics/tests/lakehouse_admin_gate_test.rs` is the offline (no-DB)
 harness for that gate: a `connect_lazy` pool, an in-memory object store, `NullPartitionProvider`,
 planning-only assertions.
@@ -125,10 +125,16 @@ accepts a `WITH (...)` option list immediately before it, so this is the only sh
 3-query model that is real SQL. It also reads better: the body is the view, the options are knobs.
 `parse_create_view` hands back a parsed `Query` AST, not source text, so `ViewDefinition.extract_query`
 is populated by slicing the verbatim source text of the `AS` body out of the input SQL — never
-`Query::to_string()`. This is what makes the definition hash (§3) sensitive to a purely cosmetic edit
-(whitespace, a comment): a re-rendered AST would normalize both away, and it is also the text every
-later materialization executes, so a stored `extract_query` must be what the author wrote, not a
-reformatted equivalent.
+`Query::to_string()`. The slice spans the body's first token through its last, located via
+`Query::span()` (`sqlparser-0.62.0/src/ast/spans.rs:115-139,2286-2331` — a union of child-node token
+spans starting at the `SELECT` token, since `CreateView` exposes no `AS`-token span of its own) and
+converted from `sqlparser`'s line/column `Span` (`src/tokenizer.rs:552-561`) to byte offsets. This
+only covers the body's *interior*: leading trivia between `AS` and the first token, or trailing trivia
+after the last, falls outside the slice. This is what makes the definition hash (§3) sensitive to a
+purely cosmetic edit to the body's interior (whitespace, a comment between its tokens): a re-rendered
+AST would normalize both away, and it is also the text every later materialization executes, so a
+stored `extract_query` must be what the author wrote, not a reformatted equivalent — though a
+leading/trailing-comment edit outside the token span is invisible to the hash.
 
 Option semantics:
 
@@ -157,6 +163,12 @@ and risking the list falling behind the grammar, `parse_view_ddl` exhaustively d
 outside the ones this grammar models is not at its default — silently ignoring `OPTIONS (...)` (which
 *overwrites* the `WITH (...)` option list this whole grammar depends on) or a second `DROP` name would
 make the statement do less than it says.
+
+`sqlparser::Parser::parse_sql` returns a `Vec<Statement>`, so `parse_view_ddl` also rejects with a
+named error if the input parses to more than one statement — the same single-statement rule
+`SessionContext::sql`'s `sql_to_statement` already enforces for every non-DDL query
+(datafusion-54.1.0 `src/execution/session_state.rs:454-458`). Intercepting DDL ahead of `ctx.sql`
+would otherwise bypass that guard and silently execute only the first of several statements.
 
 ### 2. Persistence
 
@@ -189,6 +201,12 @@ Its text comes from `const`s in a new
 `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — moved out of
 `log_stats_view.rs`, which the migration and the tests then share as one source of truth.
 `ON CONFLICT DO NOTHING` keeps the migration idempotent.
+
+`definition_sql` (`TEXT NOT NULL`, the verbatim DDL text — see §2 below) has no equivalent in
+`log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A fourth `const` in
+`builtin_view_definitions.rs` holds the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...) AS
+...` text, assembled from the other three consts, and seeds this column; it doubles as the
+parser round-trip fixture in the Testing Strategy.
 
 The `upsert` behind `CREATE OR REPLACE` is an `ON CONFLICT (view_set_name) DO UPDATE` that sets
 `updated_at = now()` and `updated_by` explicitly on the `DO UPDATE` branch — the column defaults only
@@ -285,9 +303,12 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    name like `__log_stats__partitions` would collide with that view's own `__<name>__partitions`
    internal registration and hard-error `make_session_context` for every query in the deployment, not
    just ones touching that view. `source` is excluded for the same reason: `SqlBatchView::new`
-   registers every view's merge query under the literal name `source` (the `{source}` substitution,
-   `sql_batch_view.rs:298`), and DataFusion errors on a duplicate registration, so a view set named
-   `source` would break every other view's merge on every tick.
+   substitutes `{source}` for the literal name (`sql_batch_view.rs:117`, and `:177` in
+   `with_merge_sort_order`), and `QueryMerger::execute_merge_query` (`merge.rs:322-327`) registers
+   that literal name via `register_table` on a session context that
+   `make_merge_session_context` (`merge.rs:49-73`) has already populated with every global view —
+   DataFusion errors on a duplicate registration, so a view set named `source` would break every other
+   view's merge on every tick.
 2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
    field. Without one, `OwnershipRewrite::predicate_for` returns `Err` for every non-admin caller
    and the view set is unqueryable in any deployment with auth on. The error message names the
@@ -325,16 +346,20 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
    `SqlBatchView::register_table` exposes the user-visible name; a downcast to `MaterializedView`
    alone misses it and would only catch `__<name>__partitions` scans). Reject outright any scan whose
-   `TableSource` resolves to one of the eight admin-gated mutating lakehouse UDTFs/UDFs
+   `TableSource` resolves to one of the five admin-gated table functions among the eight
    (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-   `deny_queries`, etc.): check 6 only walks `ScalarUDF` expressions, so a UDTF call such as
-   `... AS SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be stored and
-   then re-executed under `CallerContext::maintenance()` on every daemon tick. For every other scan,
+   `deny_queries`, etc.) — the only ones of the eight a `TableScan` can resolve to: check 6 only walks
+   `ScalarUDF` expressions, so a UDTF call such as `... AS SELECT * FROM retire_partitions(...)` is
+   invisible to it and would otherwise be stored and then re-executed under
+   `CallerContext::maintenance()` on every daemon tick. The other three — `retire_partition_by_file`,
+   `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs and, being
+   `Volatility::Volatile`, are already caught by check 6; the eighth, `list_query_denials`, is
+   read-only and needs no rejection here. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
    recursion names the underlying `__<name>__partitions` table, not the view set, so it is resolved by
    stripping the `__..__partitions` affix or by downcasting its `TableSource` to `MaterializedView` and
-   reading `get_view().get_view_set_name()`; a scan matching neither form, and not one of the mutating
-   UDTFs above, is ignored. Require `update_group >` the maximum found. Because §5 step 3 validates
+   reading `get_view().get_view_set_name()`; a scan matching neither form, and not one of the five
+   table functions above, is ignored. Require `update_group >` the maximum found. Because §5 step 3 validates
    only against the base plus definitions in a strictly lower `update_group`, this ordering half of
    the check can only ever fire for a definition reading a base view; a DDL-on-DDL reference placed in
    the wrong group instead fails to resolve as a table name during planning, since a same-or-higher-
@@ -386,18 +411,23 @@ that no longer projects a column `b` reads, leaves `b` unable to plan. `b` would
 the registry loader (§7) with only a `warn!`, so a user's table would quietly vanish.
 
 The mutation is therefore validated against the *resulting* definition set, not just its own row:
-`execute_view_ddl`'s transaction first calls `acquire_lock(&mut tx, <dedicated key>)`
-(`remote_data_lake.rs:13-19`, `pg_advisory_xact_lock`), serializing every view-definition mutation
+`execute_view_ddl`'s transaction first calls `acquire_lock(&mut tx, VIEW_DDL_ADVISORY_LOCK_KEY)`
+(`remote_data_lake.rs:13-19`, `pg_advisory_xact_lock`) — a new constant, `2`, alongside the DDL
+executor (`migrate_db` already uses `0`, `migrate_lakehouse` uses `1`; reusing either would serialize
+every DDL statement against an unrelated migration lock) — serializing every view-definition mutation
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
-write. Still inside that transaction, before applying the mutation, it calls `ViewDefinitionStore`'s
-transaction-scoped `list_tx(&mut tx)` (§7) over the pre-mutation rows and runs them through
-`ViewRegistry`'s rows-in build seam (§7) to get the pre-mutation failed set. After the upsert/delete,
-it re-reads the post-mutation rows with another `list_tx(&mut tx)` and builds again, refusing the
-statement if any definition — including the row just written — that is *not* in the pre-mutation
-failed set fails to build against the post-mutation rows. The error names the broken definition,
-whether a downstream dependent or the mutated row itself. This is exact rather than textual — it uses
-the real planner, so it catches a removed column as readily as a removed view set — and it reuses the
-loader wholesale. The baseline is computed transactionally, from the same rows the mutation is
+write. Still inside that transaction, before applying the mutation, it reads the pre-mutation rows via
+`ViewDefinitionStore`'s transaction-scoped `list_tx(&mut tx)` (§7). After the upsert/delete, it
+re-reads the post-mutation rows with another `list_tx(&mut tx)`. Both row sets are handed to
+`ViewRegistry::check_dependents_survive(pre_rows, post_rows)` (§7, next to `build_from_rows`), which
+builds a factory from each via the same rows-in seam and refuses with a named error if any definition
+— including the row just written — that is *not* in the pre-mutation failed set fails to build against
+the post-mutation rows. The error names the broken definition, whether a downstream dependent or the
+mutated row itself. This is exact rather than textual — it uses the real planner, so it catches a
+removed column as readily as a removed view set — and it reuses the loader wholesale. Taking both row
+sets as plain arguments (rather than reading them itself) is what makes
+`check_dependents_survive` callable from a no-DB unit test against canned rows, with no `sqlx::Transaction`
+in its signature. The baseline is computed transactionally, from the same rows the mutation is
 validated against, rather than from `reload()`'s last periodic snapshot: that snapshot is up to
 `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` stale and differs per replica, which would make the
 refusal nondeterministic.
@@ -420,11 +450,12 @@ pub enum ViewDdl {
 /// `CreateView`/`Statement::Drop` finds a field this enum does not model left at a non-default value
 /// (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`, `CLUSTER BY`, `COMMENT`, `TO`, `WITH NO
 /// SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`, the MySQL view params, `DROP
-/// TEMPORARY`, `DROP ... ON <table>`, `CASCADE`/`RESTRICT`/`PURGE`) or a `DROP` naming more than one
-/// object — each would otherwise silently do less than the statement says.
+/// TEMPORARY`, `DROP ... ON <table>`, `CASCADE`/`RESTRICT`/`PURGE`), a `DROP` naming more than one
+/// object, or the input parsing to more than one statement (matching `SessionContext::sql`'s
+/// single-statement rule) — each would otherwise silently do less than the statement says.
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
 
-/// The same gate as the eight admin-gated mutating lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
+/// The same gate as the eight admin-gated lakehouse UDTFs/UDFs (`query.rs:204-246`), pulled
 /// out as a standalone function so it is unit-testable without a full `execute_view_ddl` call.
 pub fn authorize_view_ddl(caller: &CallerContext) -> Result<(), Status>;
 ```
@@ -442,12 +473,13 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
 
 1. `authorize_view_ddl(&caller)?` (§5's `view_ddl.rs`) — wraps
    `if !caller.is_admin { return Err(Status::permission_denied(...)) }`, the same gate as the eight
-   mutating lakehouse functions. It has to be an explicit check rather than a registration gate,
+   admin-gated lakehouse functions. It has to be an explicit check rather than a registration gate,
    because this path never builds a caller session context. It is also load-bearing beyond the usual
    reason: a DDL view's queries are planned and materialized under `CallerContext::maintenance()`,
    i.e. `ReadScope::All`, so an author sees every audience regardless of their own read scope.
-2. Open the transaction and call `acquire_lock(&mut tx, <dedicated key>)` first (§4b), serializing
-   steps 3-5 cluster-wide.
+2. Open the transaction, call `acquire_lock(&mut tx, VIEW_DDL_ADVISORY_LOCK_KEY)` first (§4b) to serialize steps
+   3-5 cluster-wide, then read the pre-mutation rows via `registry.store()`'s transaction-scoped
+   `list_tx(&mut tx)` (§4b).
 3. `CREATE`: validate (§4) against the factory the loader would build for this row — the base plus
    every definition, from the post-mutation row set with this row's own name excluded, in a lower
    `update_group` — so a definition reading another DDL view validates against the real thing, and a
@@ -458,8 +490,9 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
 4. `DROP`: reject a built-in name; `delete` the row via `registry.store()`'s transaction-scoped
    `delete_tx(&mut tx, ...)` and retire the partitions in one transaction; honour `IF EXISTS`.
 5. Either mutation then re-reads the post-mutation row set via `registry.store()`'s transaction-scoped
-   `list_tx(&mut tx)` (§4b) and calls `registry.build_from_rows(&rows)` (§7), inside the same
-   transaction, rolling back if it broke a dependent or failed to build the mutated row itself.
+   `list_tx(&mut tx)` and calls `registry.check_dependents_survive(&pre_rows, &post_rows)` (§4b, §7)
+   with the pre-mutation rows read in step 2, inside the same transaction, rolling back if it broke a
+   dependent or failed to build the mutated row itself.
    `registry.store()` is how `execute_view_ddl` reaches the definition store to run these calls on
    its own open transaction, alongside `retire_partitions`.
 6. After the transaction (steps 2–5) commits and its advisory lock releases, call `registry.reload()`
@@ -507,7 +540,8 @@ pub struct ViewRegistry {
     current: RwLock<Arc<ViewFactory>>,      // base + DDL-defined global views
     loaded_digest: RwLock<Option<u64>>,     // hash of the loaded (name, updated_at) tuples
     failed_view_sets: RwLock<Vec<String>>,  // names skipped by the last build
-    reload_mutex: tokio::sync::Mutex<()>,   // serializes reload against DDL-triggered reload
+    reload_mutex: tokio::sync::Mutex<()>,   // held across all of reload() (list -> build -> swap),
+                                             // not just the swap; see reload() step 0
 }
 
 impl ViewRegistry {
@@ -522,6 +556,16 @@ impl ViewRegistry {
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
     /// three pieces separately.
     pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, Vec<String>)>;
+    /// §4b's dependent-protection refusal, factored out as a plain rows-in/rows-out function (no
+    /// `sqlx::Transaction`) so it is a no-DB unit test target: builds a factory from `pre_rows` and
+    /// one from `post_rows` via `build_from_rows`, then refuses with a named error if any definition
+    /// present in `post_rows` — including the row just written — both fails to build against
+    /// `post_rows` and was not already in the pre-mutation failed set.
+    pub async fn check_dependents_survive(
+        &self,
+        pre_rows: &[ViewDefinitionRow],
+        post_rows: &[ViewDefinitionRow],
+    ) -> Result<()>;
     pub fn spawn_refresh_task(self: Arc<Self>, shutdown: impl Future<Output = ()> + Send + 'static);
 }
 
@@ -542,6 +586,11 @@ async fn build_factory(
 
 `reload()`:
 
+0. Acquire `reload_mutex` and hold it through steps 1-5, including their `await`s — not just the
+   final swap. This matches `QueryDenyList::write_lock`'s rationale (`query_deny_list.rs:392-403`):
+   without it, a periodic reload that listed rows before a DDL-triggered reload could block behind the
+   DDL's own reload and then swap the pre-mutation factory back in over §5 step 6's post-commit one, a
+   lost update that would stay live for up to `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`.
 1. `store.list()` → rows ordered by `(update_group, view_set_name)`.
 2. Hash the `(view_set_name, updated_at)` tuples; if unchanged from `loaded_digest` **and** the
    previous build's failed set was empty, return — the steady-state reload is one `SELECT` and no planning,
@@ -583,16 +632,21 @@ and `execute_view_ddl` reloads inline on its own node, so the interval only boun
   `make_session_context`) each call `registry.current()` — not `base()`, or a prepared statement over
   a DDL-defined view set would fail to plan even though direct queries succeed. Every downstream
   signature (`make_session_context`, the UDTFs, `MaterializedView`) keeps taking `Arc<ViewFactory>`
-  and is handed the snapshot — no churn there. `flight_sql_server.rs` builds the registry and calls
-  `spawn_refresh_task(fanout.subscribe())` next to the existing `query_denials` one (`:406`).
+  and is handed the snapshot — no churn there. `flight_sql_server.rs` builds the registry, awaits `registry.reload()` before
+  `serve()` (failing startup on error, the way `migrate_lakehouse` already does), and only then calls
+  `spawn_refresh_task(fanout.subscribe())` next to the existing `query_denials` one (`:406`) —
+  otherwise every restart has a window where `log_stats` and every DDL-defined view are absent from
+  `current()`.
 - `maintenance.rs`: `Views` (only its use on the four view-carrying `CronTask` structs) becomes
   `Arc<ViewRegistry>`;
   each `run()` computes `get_global_views_with_update_group(&registry.current())`, sorts by
   `update_group`, and passes the resulting `Arc<Vec<Arc<dyn View>>>` to `materialize_all_views`, whose
   `views: Arc<Vec<Arc<dyn View>>>` parameter stays spelled out (not the `Views` alias) and unchanged.
   `daemon()` takes
-  `Arc<ViewRegistry>` instead of `Vec<Arc<dyn View>>` and spawns the refresh task itself. The sort
-  moves out of `daemon` into a helper both the daemon and the tasks call. `materialize_all_views`'s
+  `Arc<ViewRegistry>` instead of `Vec<Arc<dyn View>>`, awaits `registry.reload()` before spawning the
+  cron tasks (failing startup on error, the way `migrate_lakehouse` already does), and then spawns the
+  refresh task itself. The sort moves out of `daemon` into a helper the four view-carrying tasks call
+  per tick. `materialize_all_views`'s
   `views.first().unwrap()` (`:51`) gains an empty-list early return, now that the list is computed
   per tick rather than once at startup.
 
@@ -623,9 +677,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 ### Milestone 1 — persistence, definition hash, validation, DDL
 
 1. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats`'s three queries and
-   options as `const`s, lifted verbatim out of `log_stats_view.rs`; consumed by the migration's seed
-   and by the hash-parity test. Registered in `rust/analytics/src/lakehouse/mod.rs`. First because
-   step 2's migration seed needs these `const`s to exist.
+   options as `const`s, lifted verbatim out of `log_stats_view.rs`, plus a fourth `const` assembling
+   them into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
+   `definition_sql`; consumed by the migration's seed and by the hash-parity test. Registered in
+   `rust/analytics/src/lakehouse/mod.rs`. First because step 2's migration seed needs these `const`s to
+   exist.
 2. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from
@@ -654,9 +710,8 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
    `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
    option extraction and its error type; rejecting, with a named error, any `CreateView`/
-   `Statement::Drop` field left at a non-default value after exhaustive destructuring — including
-   `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`, the MySQL view params, `DROP TEMPORARY`, and `DROP ...
-   ON <table>` — and any `DROP` naming more than one object (§1);
+   `Statement::Drop` field left at a non-default value after exhaustive destructuring, any `DROP`
+   naming more than one object, and the input parsing to more than one statement (§1);
    `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
    the standalone admin gate that `execute_view_ddl` step 1 calls. `extract_query` is sliced as
    verbatim source text from the `AS` body's span in the input SQL, not rendered from the parsed
@@ -670,10 +725,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    store is never actually queried. Moved ahead of step 11 because `execute_view_ddl` (step 11) is a method on
    `FlightSqlServiceImpl` that calls `registry.reload()`/`build_from_rows()` and so needs the field to
    already exist.
-10. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, call
-    `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory. Moved
-    ahead of step 11 for the same reason as step 9: `execute_view_ddl` needs a constructed registry to
-    call.
+10. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, await
+    `registry.reload()` before `serve()` (failing startup on error, like `migrate_lakehouse`), then
+    call `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory.
+    Moved ahead of step 11 for the same reason as step 9: `execute_view_ddl` needs a constructed
+    registry to call.
 11. `rust/public/src/servers/flight_sql_service_impl.rs` — add the `parse_view_ddl` branch, inserted
     between the resolved `caller` and `make_session_context`, and `execute_view_ddl` (admin gate,
     validate, upsert/delete + retire, §4b rebuild-or-rollback, inline reload, one-row answer).
@@ -685,7 +741,8 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 13. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
     task structs, per-tick view resolution + sort helper, empty-list early return in
-    `materialize_all_views`, `daemon`'s signature change and its `spawn_refresh_task` call.
+    `materialize_all_views`, `daemon`'s signature change, its awaited `registry.reload()` before
+    spawning the cron tasks (failing startup on error), and its `spawn_refresh_task` call.
 14. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
     registry from `default_view_factory` and hand it to `daemon`, resolving the same
     `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
@@ -735,7 +792,7 @@ Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `sql_batch_view.rs`, `query.rs`, `mod.rs`,
   `view_factory.rs`, `log_stats_view.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
-  `ownership_rewrite_public_view_set_tests.rs`
+  `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
@@ -794,8 +851,9 @@ which is a second design; the issue already scopes it out.
   database row, so a failed load or an operator `DROP` would break every non-admin query, unlike
   `log_stats`, whose worst failure is a clean `table not found`.
 - The definition hash (§3) is derived from the definition text rather than a stored
-  `schema_version` column, so a purely cosmetic edit (whitespace, a comment) also invalidates
-  existing partitions — accepted, since re-materialization is the daemon's normal steady-state work.
+  `schema_version` column, so a purely cosmetic edit to the body's interior (whitespace, a comment
+  between its tokens) also invalidates existing partitions — accepted, since re-materialization is the
+  daemon's normal steady-state work.
 - The seeded `log_stats` row carries `definition_hash_enabled = false` so its `file_schema_hash`
   stays byte-identical and existing partitions survive the upgrade. It gets no other special
   casing — droppable, replaceable, and skipped-with-a-warning on a load failure like any other row.
@@ -855,10 +913,13 @@ name failing the charset check; option values containing escaped quotes and newl
 accepted-but-unmodelled clause from §1 (`IF NOT EXISTS`, a column list, `TEMPORARY`/`SECURE`,
 `CLUSTER BY`, `COMMENT`, `TO`, `WITH NO SCHEMA BINDING`, `COPY GRANTS`, `OR ALTER`, `OPTIONS (...)`,
 the MySQL view params on `CREATE`; `CASCADE`/`RESTRICT`/`PURGE`, `DROP TEMPORARY`, `DROP ... ON
-<table>` on `DROP`) and a `DROP` naming more than one object, each a named error; a `CREATE`
-whose `AS` body has odd whitespace, an inline comment and mixed casing, asserting the parsed
-`extract_query` is byte-identical to that body as written — pinning §1's verbatim-slice invariant
-against a regression to a re-rendered `Query::to_string()`.
+<table>` on `DROP`), a `DROP` naming more than one object, and two statements separated by a
+semicolon (`CREATE ...; DROP ...`), each a named error; a `CREATE`
+whose `AS` body has odd interior whitespace, an inline comment *between* two of its tokens, and mixed
+casing, asserting the parsed `extract_query` is byte-identical to that body as written — pinning §1's
+verbatim-slice invariant against a regression to a re-rendered `Query::to_string()`. The fixture
+deliberately keeps any comment or blank line before the body's first token or after its last out of
+scope, since `Query::span()` does not cover them.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
@@ -874,11 +935,13 @@ absent from the extract query's schema is rejected; one naming a field that is n
 two base view sets is measured against the higher of the two; a definition scanning
 `retire_partitions(...)` (or another admin-gated mutating UDTF) is rejected regardless of group.
 
-**Dependent protection** (§4b, in `view_registry_tests.rs` against the fake store) — dropping a
-definition another one reads is refused and the error names the dependent; replacing it with a
-definition that still projects the read columns is accepted; replacing it with one that drops a
-column the dependent reads is refused; dropping a definition nothing reads is accepted; a definition
-that was *already* failing to build does not by itself block an unrelated `DROP`.
+**Dependent protection** (§4b, in `view_registry_tests.rs`, calling
+`ViewRegistry::check_dependents_survive` directly with canned pre/post row slices — no transaction or
+live store needed) — dropping a definition another one reads is refused and the error names the
+dependent; replacing it with a definition that still projects the read columns is accepted; replacing
+it with one that drops a column the dependent reads is refused; dropping a definition nothing reads is
+accepted; a definition that was *already* failing to build does not by itself block an unrelated
+`DROP`.
 
 **Hash parity for the seeded `log_stats`** (`view_definition_validation_tests.rs`) — build
 `make_log_stats_view`'s `SqlBatchView` and the one the registry builds from the seeded definition
@@ -951,6 +1014,5 @@ Each step below needs a running split-mode stack and is checking something no un
    whole feature exists to do, and the one that cannot be observed in-process.
 5. **A DDL view reading another DDL view.** Create `a` over `log_entries` at group 4000, then `b`
    over `a` at group 4001; `materialize_partitions` both over the same range and confirm `b`'s rows
-   are consistent with `a`'s. Then attempt `DROP MATERIALIZED VIEW a` and expect a refusal naming
-   `b`. The group-ordering half is what unit tests cannot reach — it needs two real daemon passes
-   over real partitions to show `b` is not reading `a`'s previous-tick state.
+   are consistent with `a`'s. The group-ordering half is what unit tests cannot reach — it needs two
+   real daemon passes over real partitions to show `b` is not reading `a`'s previous-tick state.
