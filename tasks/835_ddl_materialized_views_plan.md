@@ -55,7 +55,9 @@ containing everything its SQL reads. Startup sites: `flight_sql_server.rs:254-26
 
 **The daemon.** `daemon(lakehouse, views_to_update: Vec<Arc<dyn View>>, ...)`
 (`rust/public/src/servers/maintenance.rs:408-493`) sorts the views by `update_group` once, wraps them
-in `Views = Arc<Vec<Arc<dyn View>>>` (`:26`), and hands that same `Arc` to five `CronTask`s. The view
+in `Views = Arc<Vec<Arc<dyn View>>>` (`:26`), and hands that same `Arc` to four of the five
+`CronTask`s (`EveryDayTask`, `EveryHourTask`, `EveryMinuteTask`, `EverySecondTask` — `PgStatsTask`
+holds no `views` field). The view
 list is fixed for the process's lifetime. `materialize_all_views` (`:44-105`) walks the sorted list,
 refetching the partition cache at each group boundary — the documented contract (`:59-70`) is that a
 view reading another view must sit in a *strictly later* update group.
@@ -154,6 +156,7 @@ CREATE TABLE lakehouse_view_set_definitions (
   extract_query          TEXT NOT NULL,
   count_src_query        TEXT NOT NULL,
   merge_partitions_query TEXT NOT NULL,
+  update_group           INTEGER NOT NULL,
   view_options           JSONB NOT NULL DEFAULT '{}',
   definition_hash_enabled BOOLEAN NOT NULL DEFAULT true,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -190,9 +193,10 @@ row, and a definition that fails to build is skipped with a `warn!` like any oth
 of a skip is a clean `table not found` for `log_stats` queries — a visible error, not wrong data —
 which is why it needs no fail-fast carve-out.
 
-`view_options` holds the non-query options (`update_group`, the time columns, the two deltas,
-`merge_sort_order`). `definition_sql` is the verbatim DDL text, kept for display and audit only —
-never re-parsed.
+`view_options` holds the non-query options other than `update_group` (the time columns, the two
+deltas, `merge_sort_order`); `update_group` is its own column because `reload()` sorts and §8
+projects on it. `definition_sql` is the verbatim DDL text, kept for display and audit only — never
+re-parsed.
 
 Deliberately **absent** from the issue's proposed table:
 
@@ -242,7 +246,7 @@ partition *content*. `update_group`, `source_partition_delta`/`merge_partition_d
 scheduling (`maintenance.rs:59-70`) and does not touch what a partition contains; the two deltas only
 set the width of *future* partitions, and `verify_overlapping_partitions` already tolerates mixed
 widths (`batch_update.rs:23-100`); and `merge_sort_order` only affects the sort guarantee recorded in
-partition metadata (`Partition::certifies_sort_order`, `sql_batch_view.rs:206-215`), which the schema
+partition metadata (`Partition::certifies_sort_order`, `partition.rs`), which the schema
 hash plays no part in. It is derived, never stored, so there is nothing to keep in sync.
 
 Consequence, which must be documented rather than engineered around: a redefinition **resets the
@@ -262,9 +266,9 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
 1. **Name.** Matches `^[a-z_][a-z0-9_]{0,254}$` and does not start with `__`; not a code-driven view
    set (`get_global_view` / `get_view_sets` on the base factory, which after this change means
    `blocks`, `processes`, `streams`, `log_entries`, `measures` and the five instance-only sets — but
-   *not* `log_stats`, so the seeded row stays replaceable); not `source`; not one of the reserved
-   table-function names. The name is interpolated into `__<name>__partitions` and into table
-   registrations, so this is a correctness *and* an injection guard: without the `__` exclusion, a
+   *not* `log_stats`, so the seeded row stays replaceable); not `source`. The name is interpolated
+   into `__<name>__partitions` and into table registrations, so this is a correctness *and* an
+   injection guard: without the `__` exclusion, a
    name like `__log_stats__partitions` would collide with that view's own `__<name>__partitions`
    internal registration and hard-error `make_session_context` for every query in the deployment, not
    just ones touching that view. `source` is excluded for the same reason: `SqlBatchView::new`
@@ -311,7 +315,8 @@ syntax errors, unknown tables, unknown columns) and yields the schema. On top of
    nothing: the plan is already built by step 3.
 8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
    query's physical plan and run the existing `assert_single_partition`/`assert_ordering_satisfied`
-   helpers (`sql_partition_spec.rs:79-115`) against it at `CREATE` time. `with_merge_sort_order`
+   helpers (`partitioned_execution_plan.rs:217-265`; called from `sql_partition_spec.rs:79-115`)
+   against it at `CREATE` time. `with_merge_sort_order`
    itself only checks the columns exist in the schema; the real enforcement is at write time, where a
    mismatched top-level `ORDER BY` makes `execute_extract_query` error on every daemon tick with an
    empty table in the meantime. Running the same assertions at `CREATE` turns that into a rejection
@@ -372,8 +377,8 @@ pub enum ViewDdl {
 pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>, DdlError>;
 ```
 
-In `FlightSqlServiceImpl::execute_query`, after the deny-list check and after `caller_context` is
-resolved (moved up a few lines), before `make_session_context`:
+In `FlightSqlServiceImpl::execute_query`, inserted between the resolved `caller` and
+`make_session_context`:
 
 ```rust
 if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input_error!("...", e)))? {
@@ -478,7 +483,7 @@ async fn build_factory(
 
 `reload()`:
 
-1. `store.list()` → rows ordered by `(update_group NULLS LAST, view_set_name)`.
+1. `store.list()` → rows ordered by `(update_group, view_set_name)`.
 2. Hash the `(view_set_name, updated_at)` tuples; if unchanged from `loaded_digest` **and** the
    previous build's failed set was empty, return — the steady-state reload is one `SELECT` and no planning,
    which is what makes a 60 s interval affordable. A digest match after a failed build does *not*
@@ -516,7 +521,8 @@ and `execute_view_ddl` reloads inline on its own node, so the interval only boun
   signature (`make_session_context`, the UDTFs, `MaterializedView`) keeps taking `Arc<ViewFactory>`
   and is handed the snapshot — no churn there. `flight_sql_server.rs` builds the registry and calls
   `spawn_refresh_task(fanout.subscribe())` next to the existing `query_denials` one (`:406`).
-- `maintenance.rs`: `Views` (only its use on the five `CronTask` structs) becomes `Arc<ViewRegistry>`;
+- `maintenance.rs`: `Views` (only its use on the four view-carrying `CronTask` structs) becomes
+  `Arc<ViewRegistry>`;
   each `run()` computes `get_global_views_with_update_group(&registry.current())`, sorts by
   `update_group`, and passes the resulting `Arc<Vec<Arc<dyn View>>>` to `materialize_all_views`, whose
   `views: Arc<Vec<Arc<dyn View>>>` parameter stays spelled out (not the `Views` alias) and unchanged.
@@ -552,61 +558,62 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 ### Milestone 1 — persistence, definition hash, validation, DDL
 
-1. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
+1. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats`'s three queries and
+   options as `const`s, lifted verbatim out of `log_stats_view.rs`; consumed by the migration's seed
+   and by the hash-parity test. Registered in `rust/analytics/src/lakehouse/mod.rs`. First because
+   step 2's migration seed needs these `const`s to exist.
+2. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from
    `builtin_view_definitions`, and ending with `UPDATE lakehouse_migration SET version=10`.
-2. `rust/analytics/src/lakehouse/sql_batch_view.rs` — add the `definition_hash: Option<u64>` field,
+3. `rust/analytics/src/lakehouse/sql_batch_view.rs` — add the `definition_hash: Option<u64>` field,
    `with_definition_hash`, and the `get_file_schema_hash` change; confirm the `None` path is
    byte-identical.
-3. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
+4. New `rust/analytics/src/lakehouse/view_definition.rs` — `ViewDefinition` (the normalized option
    set + three queries), its stable hash, `parse_time_delta`, the name charset check, and
    `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`.
-4. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
-   step 3. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
+5. Same module — `validate_view_definition`: §4 checks 2–8, on top of the `SqlBatchView` built in
+   step 4. Check 7 needs the referenced view sets' `update_group`s, so it takes the factory the
    definition was built against.
-5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait
+6. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait
    (pool-backed `list`, for `reload()`'s periodic use, plus the transaction-scoped
    `list_tx`/`upsert_tx`/`delete_tx`, each taking a `&mut sqlx::Transaction` — so the DDL path (§4b,
    §5), including its existence check behind `or_replace`, runs entirely on its own open transaction
    alongside `retire_partitions`), its Postgres impl, and `partition_insert_range(view_set_name)` for
    §6.
-6. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
+7. New `rust/analytics/src/lakehouse/view_registry.rs` — `ViewRegistry`, the shared `build_factory`
    rows-in seam, `reload` (ordered incremental build, skip-on-failure, digest short-circuit that also
    bypasses on a prior failure), `base()`/`current()`, `spawn_refresh_task`, and the
    `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` knob (default 60). Lands in this milestone rather
-   than the next because the DDL path itself needs `base()`, the ordered build (step 10's validation
+   than the next because the DDL path itself needs `base()`, the ordered build (step 11's validation
    against lower-group definitions), and §4b's post-mutation rebuild via `build_factory`.
-7. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
+8. New `rust/public/src/servers/view_ddl.rs` — `parse_view_ddl` over
    `datafusion::sql::sqlparser`, mapping `Statement::CreateView`/`Statement::Drop` to `ViewDdl`;
    option extraction and its error type. `extract_query` is sliced as verbatim source text from the
    `AS` body's span in the input SQL, not rendered from the parsed `Query` AST.
-8. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
+9. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
    `rust/public/tests/read_policy_threading_tests.rs`'s `FlightSqlServiceImpl::new` call, updated to
    construct a `ViewRegistry` over its fixture factory via the fake `ViewDefinitionStore` the Testing
-   Strategy introduces. Moved ahead of step 10 because `execute_view_ddl` (step 10) is a method on
+   Strategy introduces. Moved ahead of step 11 because `execute_view_ddl` (step 11) is a method on
    `FlightSqlServiceImpl` that calls `registry.reload()`/`build_from_rows()` and so needs the field to
    already exist.
-9. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, call
-   `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory. Moved
-   ahead of step 10 for the same reason as step 8: `execute_view_ddl` needs a constructed registry to
-   call.
-10. `rust/public/src/servers/flight_sql_service_impl.rs` — move `caller_context` resolution above the
-    session-context block, add the `parse_view_ddl` branch and `execute_view_ddl` (admin gate,
+10. `rust/public/src/servers/flight_sql_server.rs` — construct the registry, call
+    `spawn_refresh_task(fanout.subscribe())`; `ViewFactoryFn` keeps producing the *base* factory. Moved
+    ahead of step 11 for the same reason as step 9: `execute_view_ddl` needs a constructed registry to
+    call.
+11. `rust/public/src/servers/flight_sql_service_impl.rs` — add the `parse_view_ddl` branch, inserted
+    between the resolved `caller` and `make_session_context`, and `execute_view_ddl` (admin gate,
     validate, upsert/delete + retire, §4b rebuild-or-rollback, inline reload, one-row answer).
     Reject DDL in `do_action_create_prepared_statement`.
-11. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats`'s three queries and
-    options as `const`s, lifted verbatim out of `log_stats_view.rs`; consumed by the migration's seed
-    and by the hash-parity test.
-12. `rust/analytics/src/lakehouse/mod.rs` / `rust/public/src/servers/mod.rs` — register the new
-    modules with their one-line doc comments.
+12. `rust/analytics/src/lakehouse/mod.rs` / `rust/public/src/servers/mod.rs` — register the remaining
+    new modules with their one-line doc comments.
 
 ### Milestone 2 — daemon pickup
 
-13. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the five task
-    structs, per-tick view resolution + sort helper, empty-list early return in
+13. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
+    task structs, per-tick view resolution + sort helper, empty-list early return in
     `materialize_all_views`, `daemon`'s signature change and its `spawn_refresh_task` call.
 14. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
     registry from `default_view_factory` and hand it to `daemon`, resolving the same
@@ -627,7 +634,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     test both looks the view up via `view_factory.get_global_view("log_stats")` and runs `SELECT ...
     FROM log_stats ...` through that same factory, so both need a factory that still carries it.
     Deferred to the end of this milestone (and behind the daemon's Milestone 2 pickup) because the
-    daemon (step 13) and `FlightSqlServiceImpl` (step 8) must already be reading `registry.current()`
+    daemon (step 13) and `FlightSqlServiceImpl` (step 9) must already be reading `registry.current()`
     before `log_stats` is dropped from the base factory, or the view goes unmaterialized and
     unqueryable in between.
     Until this step runs, the base factory and the seeded row both carry a `log_stats`; §7 step 3's
@@ -747,6 +754,9 @@ which is a second design; the issue already scopes it out.
   DDL-defined view sets and that their schemas are deployment-specific, plus a note that
   `log_stats` is now a seeded definition an operator may extend or replace (its documented schema
   is the shipped default, not a guarantee).
+- `view_factory.rs`'s module rustdoc (`:1-64`) — keep the `## log_stats` schema table but note it is
+  now a seeded definition, not one `default_view_factory` builds, matching the `schema-reference.md`
+  note.
 - `CHANGELOG.md` — one entry, covering the v10 lakehouse migration and that `log_stats` is now a
   seeded definition rather than a compiled view (identical SQL surface and identical
   `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking change**
