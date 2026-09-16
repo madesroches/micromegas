@@ -310,7 +310,11 @@ same walk applied to each. On top of that:
    ("every one of the six views carries", `:241`), and `predicate_for`'s own branch comment
    enumerating the six and asserting "(all six do)" (`:375-381`).
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
-   substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to equal
+   substituted `{source}` name, plan `merge_partitions_query` in a session context built the way
+   `register_table` builds one — no admin-gated UDTFs/UDFs and no `SessionConfigurator`-registered
+   static tables, unlike the fuller admin/configured context checks 1-2 validate against — since that
+   is the context the merge query is actually planned in for every real caller (see check 7's
+   merge-query carve-out below), and require its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
    are deliberately excluded from the comparison. `log_stats_view.rs` projects `count(*) as count` in
    the extract query (non-nullable) and `sum(count) as count` in the merge query (nullable), so a
@@ -342,8 +346,13 @@ same walk applied to each. On top of that:
    cadence, which is the accepted trade-off.
 6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
    walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) with
-   `LogicalPlan::apply_with_subqueries` (and `apply_expressions` per visited node, to reach every
-   `ScalarUDF`) — never `apply`/`apply_children`, which does not descend into a plan reached through
+   `LogicalPlan::apply_with_subqueries`, and at each visited node recurse into every expression
+   `apply_expressions` hands back with `Expr::apply` — the same pairing `LogicalPlan::apply_subqueries`
+   itself uses (`self.apply_expressions(|expr| expr.apply(...))`, logical_plan/tree_node.rs:831) —
+   since `apply_expressions` alone yields only each node's top-level `Expr`s (e.g. `Filter`'s
+   predicate, `Projection`'s list elements) and would miss a `ScalarUDF` nested inside one, such as
+   `now()` inside `date_bin('1 minute', now())` or `insert_time > now() - interval '1 day'` — never
+   `apply`/`apply_children`, which does not descend into a plan reached through
    `Expr::ScalarSubquery`/`InSubquery`/`Exists`, and never an optimized or physical plan:
    `SimplifyExpressions`'s `ConstEvaluator` treats `Stable` the same as
    `Immutable`, so it folds a call like `now()` into a literal before an optimized-plan walk would
@@ -352,7 +361,8 @@ same walk applied to each. On top of that:
    relies on the `_with_subqueries` distinction — both `TableScanRewrite` and `OwnershipRewrite` walk
    with `transform_up_with_subqueries` (`table_scan_rewrite.rs:69`, `ownership_rewrite.rs:491`). The
    merge and count-source plans are already built this same unoptimized way by checks 3 and 4, so the extra
-   walk is free — rejecting any `ScalarUDF` whose `signature().volatility` is not
+   walk is free — testing volatility on every `Expr::ScalarFunction` node encountered and rejecting
+   any whose `signature().volatility` is not
    `Immutable` (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
    frozen into a partition at materialization time and then served to every later reader — wrong
    data, no error, indefinitely; in `count_src_query` it instead corrupts freshness detection
@@ -367,21 +377,31 @@ same walk applied to each. On top of that:
    alone misses it and would only catch `__<name>__partitions` scans). Reject outright any scan whose
    `TableSource` resolves to one of the four mutating admin-gated table functions
    (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-   `deny_queries`) **or** to `view_instance(...)` — table functions are the only ones of the eight
+   `deny_queries`) **or** to `view_instance(...)`, `process_spans(...)` or `perfetto_trace_chunks(...)`
+   — table functions are the only ones of the eight
    admin-gated items a `TableScan` can resolve to: check 6 only walks `ScalarUDF` expressions, so a
    UDTF call such as `SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be
    stored and then re-executed under `CallerContext::maintenance()` on every daemon tick.
-   `view_instance(...)` is not admin-gated (it is registered unconditionally in
-   `register_lakehouse_functions`) but is just as mutating: `MaterializedView::scan` calls
-   `jit_update(...)` before fetching partitions, so a stored `view_instance(...)` scan would also
+   `view_instance(...)`, `process_spans(...)` and `perfetto_trace_chunks(...)` are not admin-gated
+   (they are registered unconditionally in `register_lakehouse_functions`) but are just as mutating:
+   each of the latter two internally runs `SELECT * FROM view_instance('thread_spans'|'async_events',
+   ...)` in a nested session context (`process_spans_table_function.rs:349,398,400`,
+   `perfetto_trace_execution_plan.rs:383,518,525`), and `MaterializedView::scan` calls
+   `jit_update(...)` before fetching partitions, so a stored scan against any of the three would also
    write JIT partitions on every daemon tick and during validation itself. Other read-only table
    functions — including `list_query_denials`, `list_partitions`, `list_view_sets`,
-   `list_audience_grants` and `list_view_definitions` (§8), and the unconditionally-registered
-   `perfetto_trace_chunks`, `parse_block` and `process_spans` — resolve the same way but are not
+   `list_audience_grants`, `list_view_definitions` (§8) and the unconditionally-registered
+   `parse_block` — resolve the same way but are not
    rejected: none calls `jit_update`/writes a partition, so each is a live, non-time-ranged metadata
    or decode source, and a scan against one is frozen into a partition as of materialization time
    rather than kept current, the same class of staleness check 7 otherwise polices, but with no
-   mutation and no error to force closing it here. The remaining three admin-gated items —
+   mutation and no error to force closing it here. In `merge_partitions_query` specifically, though,
+   even these read-only admin-gated UDTFs and any `SessionConfigurator`-registered static table are
+   rejected regardless of caller: `register_table` (`sql_batch_view.rs:311-334`) plans
+   `merge_partitions_query` before that caller's own admin-gated functions are registered and before
+   `configurator.configure` runs, so a merge query resolving to one of those names can never actually
+   resolve in production — unlike in `extract_query`/`count_src_query`, which plan under the fuller
+   per-caller context and so are merely subject to the staleness above. The remaining three admin-gated items —
    `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs
    and, being `Volatility::Volatile`, are already caught by check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
