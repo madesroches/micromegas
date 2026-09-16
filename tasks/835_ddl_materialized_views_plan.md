@@ -344,9 +344,13 @@ same walk applied to each. On top of that:
    the base-view case, and it costs nothing: the plan is already built by step 3.
 8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
    query's physical plan — separately from, and solely for, this check; it is never the plan checks
-   6 and 7 walk — and run the existing `assert_single_partition`/`assert_ordering_satisfied`
-   helpers (`partitioned_execution_plan.rs:217-265`; called from `sql_partition_spec.rs:79-115`)
-   against it at `CREATE` time. `with_merge_sort_order`
+   6 and 7 walk — using the same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
+   (`sql_batch_view.rs:110-114`: both placeholders replaced with one `Utc::now()` timestamp) so an
+   extract query filtering on `insert_time` plans instead of failing `TypeCoercion`/
+   `ConstEvaluator` on the unsubstituted literal. Run the existing
+   `assert_single_partition`/`assert_ordering_satisfied` helpers (`partitioned_execution_plan.rs:217-265`;
+   called from `sql_partition_spec.rs:79-115`) against that plan, passing the zero-width
+   `TimeRange::new(now, now)` built from that same substituted timestamp. `with_merge_sort_order`
    itself only checks the columns exist in the schema; the real enforcement is at write time, where a
    mismatched top-level `ORDER BY` makes `execute_extract_query` error on every daemon tick with an
    empty table in the meantime. Running the same assertions at `CREATE` turns that into a rejection
@@ -663,7 +667,8 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
    charset half of check 1 may additionally run in the parser). Check 7 needs the referenced view
-   sets' `update_group`s, so it takes the factory the definition was built against.
+   sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds
+   its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -829,9 +834,11 @@ single error the author sees once.
   placeholders are enforced. The residual idempotence obligation is documented, not checked.
 - No cap on the number of DDL-defined definitions, unlike `QueryDenyList`'s
   `MICROMEGAS_QUERY_DENY_MAX_RULES`. Each definition adds one `ctx.sql(...)` plan build to every
-  query's `make_session_context` and, because `build_factory`'s incremental clone-and-extend chain
-  replans every prior definition on each rebuild, an O(N²) cost to every reload. Accepted for v1: the
-  admin who creates definitions is the same one who would hit the cost.
+  query's `make_session_context`; an O(N²) cost to every reload, because `build_factory`'s
+  incremental clone-and-extend chain replans every prior definition on each rebuild; and one
+  `count_src_query` execution per definition on every daemon tick (second/minute/hour/day, via
+  `get_global_views_with_update_group` feeding all four view-carrying cron tasks), independent of
+  query traffic. Accepted for v1.
 - A `DROP`'s `retire_partitions` races a lagging daemon replica for up to
   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`: orphan partitions it writes after the retire are
   reclaimed by retention, not immediately; a same-schema `CREATE` re-using the name within that
@@ -854,7 +861,11 @@ single error the author sees once.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
-  table, and that the daemon now picks up view sets without a restart.
+  table, and that the daemon now picks up view sets without a restart; also add
+  `MICROMEGAS_STATIC_TABLES_URL` to the same table, next to the `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`
+  entry, with the same "set it identically on every role" note the table already carries for
+  `MICROMEGAS_DEFAULT_AUDIENCE` (`:18`) — step 13 makes the maintenance daemon resolve this variable
+  for the first time.
 - `mkdocs/docs/admin/flight-sql.md` — the same env var, and that DDL is admin-gated.
 - `mkdocs/docs/admin/authorization.md` — a sentence that DDL-defined view sets must carry `audience`
   or `process_id` and are filtered by the same two `OwnershipRewrite` branches as the code-driven
