@@ -67,7 +67,7 @@ view reading another view must sit in a *strictly later* update group.
 
 **Freshness and invalidation.** `verify_overlapping_partitions` (`batch_update.rs:23-100`) filters
 existing partitions by exact `file_schema_hash` and compares the summed `source_data_hash` (an i64
-row count) against the spec's. `SqlBatchView::get_file_schema_hash` (`:279-283`) is a `DefaultHasher`
+row count) against the spec's. `SqlBatchView::get_file_schema_hash` (`:280-284`) is a `DefaultHasher`
 over the Arrow schema **and nothing else** — so changing a `SqlBatchView`'s SQL without changing its
 output schema leaves every existing partition valid and the daemon does nothing.
 
@@ -263,7 +263,10 @@ Constructing the `SqlBatchView` *is* most of the validation: it plans the extrac
 syntax errors, unknown tables, unknown columns) and yields the schema. All three queries arrive as
 plain strings — they are option values, so none of them is pre-parsed by the DDL parse — and every
 check below that inspects a query's structure parses and plans each of the three uniformly, with the
-same walk applied to each. On top of that:
+same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_allow_ddl(false)
+.with_allow_dml(false).with_allow_statements(false))` — never the unguarded `ctx.sql(q)`, which is
+`sql_with_options(sql, SQLOptions::new())` and so defaults every one of those three flags to `true`
+(§4 check 10). On top of that:
 
 1. **Name.** Matches `^[a-z_][a-z0-9_]{0,254}$` and does not start with `__`; not a code-driven view
    set (`get_global_view` / `get_view_sets` on the base factory, which after this change means
@@ -274,7 +277,7 @@ same walk applied to each. On top of that:
    name like `__log_stats__partitions` would collide with that view's own `__<name>__partitions`
    internal registration and hard-error `make_session_context` for every query in the deployment, not
    just ones touching that view. `source` is excluded for the same reason: `SqlBatchView::new`
-   substitutes `{source}` for the literal name (`sql_batch_view.rs:117`, and `:177` in
+   substitutes `{source}` for the literal name (`sql_batch_view.rs:117`, and `:178` in
    `with_merge_sort_order`), and `QueryMerger::execute_merge_query` (`merge.rs:322-327`) registers
    that literal name via `register_table` on a session context that
    `make_merge_session_context` (`merge.rs:49-73`) has already populated with every global view —
@@ -287,9 +290,15 @@ same walk applied to each. On top of that:
    `make_session_context`, after every global view is registered, so its own `register_table` call
    for the colliding name fails and is only `warn!`ed about — the static table silently disappears
    from every query in the deployment, not the DDL view.
-2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
-   field, and that field's type must be `Utf8` or `Dictionary(_, Utf8)`. Without one, or with the
-   wrong type, `OwnershipRewrite::audience_column_predicate`/the `process_id` arm
+2. **Audience reachability.** Mirrors `predicate_for`'s own precedence
+   (`ownership_rewrite.rs:383-385,391-401`), which checks for an `audience` field before ever looking
+   at `process_id`: if the inferred schema has an `audience` field, it must be `Utf8` or
+   `Dictionary(_, Utf8)` — a correctly-typed `process_id` field alongside it does not rescue a
+   wrong-typed `audience`, since `predicate_for` takes the audience branch whenever the field exists at
+   all, whatever its type. Only when `audience` is absent must the schema instead contain a
+   `process_id` field, itself `Utf8` or `Dictionary(_, Utf8)`. Without an `audience` field and without a
+   correctly-typed `process_id` field, or with a wrongly-typed one of whichever field governs,
+   `OwnershipRewrite::audience_column_predicate`/the `process_id` arm
    (`ownership_rewrite.rs:234-260`, `:390-401`) still plans successfully — each `cast`s the column to
    `Utf8` before comparing — but matches nothing, so a non-string `audience`/`process_id` column
    serves an empty table to every non-admin caller with no error anywhere, the same silent-failure
@@ -304,7 +313,7 @@ same walk applied to each. On top of that:
    the branch logic is unchanged, but every site in `ownership_rewrite.rs` that counts or names the
    column-carrying views goes stale for a DDL-defined one and is reworded from a fixed count of six to
    "the views carrying an `audience` column, DDL-defined ones included": the module doc's six-view
-   claim (`:17-22`, `:34`, and the branch-table row `:55`), `OwnershipRewrite::new`'s doc comment
+   claim (`:17-22`, `:34`, and the branch-table row `:53`), `OwnershipRewrite::new`'s doc comment
    ("the six column-carrying views need neither", `:160`), `audience_column_predicate`'s doc comment
    ("non-null by construction … no unstamped case either way", `:230-233`) and its inline comment
    ("every one of the six views carries", `:241`), and `predicate_for`'s own branch comment
@@ -324,9 +333,9 @@ same walk applied to each. On top of that:
    nullability alone. Today a bad merge query is not detected until the daemon's first merge, and a
    *mismatched* one is not detected at all — yet the
    merge query is the read path for any query spanning more than one partition
-   (`sql_batch_view.rs:311-334`), so a disagreement means the table a user sees does not match the
+   (`sql_batch_view.rs:312-335`), so a disagreement means the table a user sees does not match the
    partitions it is built from.
-4. **Count query shape.** `fetch_sql_partition_spec` (`sql_partition_spec.rs:196-203`) requires a
+4. **Count query shape.** `fetch_sql_partition_spec` (`sql_partition_spec.rs:214-235`) requires a
    `count` field reachable as an `Int64Array` (one batch, one row, at runtime) — it does not require
    `count` to be the query's only column. Check the planned schema contains a `count` field of type
    `Int64` and reject otherwise, rather than failing on the daemon's first tick.
@@ -334,16 +343,13 @@ same walk applied to each. On top of that:
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
    merge query is unrunnable without it. `{begin}`/`{end}` are substituted with `insert_range.begin/end`
-   (insert-time bounds, `sql_batch_view.rs:249-257`) in `count_src_query` regardless of what
+   (insert-time bounds, `sql_batch_view.rs:251-259`) in `count_src_query` regardless of what
    `extract_query` reads, so `count_src_query` must always count a raw source table carrying
    `insert_time` — in practice `blocks`, the way `log_stats` counts `blocks` while its `extract_query`
    reads `log_entries` (`log_stats_view.rs:18-26`) — even when `extract_query` reads another
-   materialized view instead of a raw source. A materialized view carries an `insert_time` column
-   only when its own extract query projects one (as `processes` and `streams` do,
-   `processes_view.rs:37`/`streams_view.rs:33`), and even then it is a copy of a source row's value
-   rather than the partition insert-time bound `{begin}`/`{end}` substitute (§4's obligation
-   paragraph below); a `count_src_query` filtering that view's event-time column
-   with insert-time bounds would mis-detect freshness silently either way; counting `blocks` instead couples a
+   materialized view instead of a raw source (§4's obligation paragraph below); a `count_src_query`
+   filtering that view's event-time column with insert-time bounds would mis-detect freshness
+   silently either way; counting `blocks` instead couples a
    dependent's freshness to its upstream's ingestion rate, not its upstream's own materialization
    cadence, which is the accepted trade-off.
 6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
@@ -399,7 +405,7 @@ same walk applied to each. On top of that:
    rather than kept current, the same class of staleness check 7 otherwise polices, but with no
    mutation and no error to force closing it here. In `merge_partitions_query` specifically, though,
    even these read-only admin-gated UDTFs and any `SessionConfigurator`-registered static table are
-   rejected regardless of caller: `register_table` (`sql_batch_view.rs:311-334`) plans
+   rejected regardless of caller: `register_table` (`sql_batch_view.rs:312-335`) plans
    `merge_partitions_query` after that caller's own function registration but before
    `configurator.configure` runs, so a merge query resolving to one of those names would resolve fine
    for an admin/maintenance caller (`CallerContext::maintenance()` is itself `is_admin: true`) but
@@ -442,14 +448,27 @@ same walk applied to each. On top of that:
    must each name a field of the extract query's inferred schema, and that field's type must be
    `Timestamp(Nanosecond, _)`. Neither is checked today: `NamedColumnsTimeBounds::get_time_bounds`
    (`dataframe_time_bounds.rs:36-57`) downcasts to `TimestampNanosecondArray` and
-   `SqlBatchView::make_time_filter` (`sql_batch_view.rs:297-301`) builds
+   `SqlBatchView::make_time_filter` (`sql_batch_view.rs:298-303`) builds
    `col(&*self.min_event_time_column)`, so a typo'd or non-nanosecond column is otherwise accepted at
    `CREATE` and only fails on the daemon's first tick and on every ranged query.
+10. **No embedded DDL/DML.** `SessionContext::sql` is `sql_with_options(sql, SQLOptions::new())`, and
+    `SQLOptions`'s defaults are `allow_ddl: true, allow_dml: true, allow_statements: true` — so
+    planning any of the three query texts with a plain `ctx.sql(...)` would itself execute an
+    embedded `CREATE EXTERNAL TABLE`, `DROP VIEW`, `COPY ... TO 'obj://lakehouse/...'`, etc., rather
+    than merely analyze it. Every plan built anywhere in this section therefore uses
+    `ctx.sql_with_options` with `allow_ddl`/`allow_dml`/`allow_statements` all `false` (see the
+    preamble above), and a query whose `LogicalPlan` root is rejected by that guard (DataFusion's own
+    `BadPlanVisitor`) is rejected here too. Without this, a stored `extract_query`/`count_src_query`/
+    `merge_partitions_query` containing such a statement would run it once at `CREATE` time and then
+    again on every daemon tick, since `SqlPartitionSpec::write` plans `extract_query` via
+    `self.ctx.sql(&self.extract_query)` under `CallerContext::maintenance()`; check 6 only inspects
+    `Expr::ScalarFunction` nodes and check 7 only `TableScan`s, so neither sees a `Ddl`/`Copy`/`Dml`
+    plan root.
 
 What stays an **unchecked author obligation**, documented
 and not enforced: `extract_query` need not carry `{begin}`/`{end}` (the extract session context is
 already range-scoped by `filter_insert_range` on the partition provider,
-`sql_batch_view.rs:238`), but because that filter matches by *overlap*, a partition wider than the
+`sql_batch_view.rs:239`), but because that filter matches by *overlap*, a partition wider than the
 bucket being materialized is scanned whole — so the query must either be idempotent under seeing
 extra rows (`GROUP BY` with `first_value`/`max`) or filter the range explicitly (as `log_stats`
 must, since `count(*)` would double-count); that any range predicate is on `insert_time` (not event
@@ -585,7 +604,7 @@ repo prepares DDL, and planning it there would fail with an opaque DataFusion er
 ### 6. Retiring a view set's partitions
 
 A `DROP` retires the view set's partitions. `retire_partitions`
-(`write_partition.rs:183-383`) is keyed on `(view_set_name, view_instance_id)` and is deliberately
+(`write_partition.rs:193-386`) is keyed on `(view_set_name, view_instance_id)` and is deliberately
 hash-agnostic, but needs an explicit insert-time range. Resolve the exact range
 first and pass it:
 
@@ -760,7 +779,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `log_stats` `ViewDefinition` fn (`view_options` serialized with `serde_json::to_string`, `definition_sql`
    from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
-   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1. Check 7 needs the referenced view
+   `validate_view_definition`: §4 checks 1–10, on top of the `SqlBatchView` built in step 1. Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
    physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling
    `sql_partition_spec::plan_sorted_extract` — the same
@@ -852,7 +871,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     instead of pulling `log_stats` from `default_view_factory` directly — the
     test both looks the view up via `view_factory.get_global_view("log_stats")` and runs `SELECT ...
     FROM log_stats ...` through that same factory, so both need a factory that still carries it.
-    `rust/analytics/tests/log_stats_ordering_tests.rs:83-85`'s comment ("mirrors how
+    `rust/analytics/tests/log_stats_ordering_tests.rs:84-86`'s comment ("mirrors how
     `view_factory::default_view_factory` wires log_stats up in production") is reworded to say the
     fixture factory now mirrors the seeded definition, not `default_view_factory`.
     Deferred to the end of this milestone (and behind the daemon's Milestone 2 pickup) because the
@@ -966,7 +985,7 @@ single error the author sees once.
   consts.
 - The `extract_query` is **not** required to contain `{begin}`/`{end}`. `processes` and `streams`
   carry no such predicate today and are correct, because `make_batch_partition_spec` scopes the
-  scan through the partition provider (`sql_batch_view.rs:238`). Only `count_src_query`'s
+  scan through the partition provider (`sql_batch_view.rs:239`). Only `count_src_query`'s
   placeholders are enforced. The residual idempotence obligation is documented, not checked.
 - No cap on the number of DDL-defined definitions, unlike `QueryDenyList`'s
   `MICROMEGAS_QUERY_DENY_MAX_RULES`. Each definition adds one `ctx.sql(...)` plan build to every
@@ -1052,12 +1071,15 @@ not just the three queries — must equal `log_stats_view.rs`'s `log_stats` `Vie
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
 one with `audience` is accepted; one with `process_id` only is accepted; one whose `audience` column
 is not `Utf8`/`Dictionary(_, Utf8)` (e.g. an integer or boolean) is rejected; one whose `process_id`
-column is not `Utf8`/`Dictionary(_, Utf8)` is rejected; a merge query that does not
+column is not `Utf8`/`Dictionary(_, Utf8)` is rejected; one with a wrongly-typed `audience` column
+*and* a correctly-typed `process_id` column is rejected (the mixed case — a valid `process_id` does
+not rescue a wrong-typed `audience`); a merge query that does not
 plan is rejected; a merge query that plans but whose output schema differs is rejected, and the
 error names the differing field; a count query without a single `count: Int64` column is rejected; a
 query missing `{begin}`/`{end}`/`{source}` is rejected; `now()` and `random()` in the extract, merge
-and count-source query are each rejected and `date_bin` is not; a `time_column` naming a field
-absent from the extract query's schema is rejected; one naming a field that is not
+and count-source query are each rejected and `date_bin` is not; a `COPY ... TO 'obj://lakehouse/...'`
+and a `CREATE EXTERNAL TABLE` in the extract query are each rejected (check 10); a `time_column`
+naming a field absent from the extract query's schema is rejected; one naming a field that is not
 `Timestamp(Nanosecond, _)` is rejected; a name colliding with a built-in view set is rejected. Ordering
 (check 7): a definition reading `log_entries` (a base view set, update_group 2000) is rejected at
 2000, accepted at 2001; a definition reading nothing is accepted at any group; a definition reading
