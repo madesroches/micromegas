@@ -96,25 +96,28 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    plan (`ctx.sql(extract_query).create_physical_plan()`) rather than going through the production
    path while still carrying the fixture's now-redundant `ORDER BY name, time_bin`. Fold them into
    one helper-driven test (named for the sort-applying path, e.g.
-   `extract_query_without_an_order_by_satisfies_the_declared_sort_order`). Inline the out-of-order
-   `VALUES` fixture (today's `:90-92`) directly into `make_test_view` instead of keeping
-   `extract_query` as its parameter, since only one query remains; reword `make_test_view`'s doc
-   comment (`:50`), which calls `extract_query` "the only thing that varies between the two tests
-   below," to match a fixture with no parameter left to vary. Call the new helper rather than
-   re-applying the sort itself or reaching for `write()`'s `expect_err` (which the fixture's
-   `connect_lazy` pool cannot reach once the ordering assertion stops firing). Because the helper
-   itself already returns `Err` when the plan isn't single-partition and ordering-satisfying,
-   re-checking `ordering_satisfy` on the plan it returns would only prove the helper returned `Ok`;
-   instead, execute that plan (`execute_stream` with the helper's returned `TaskContext`), collect
-   the resulting batches, and assert the emitted rows actually come out in `(name, time_bin)` order
-   — a check the helper's internal assertion does not make — replacing today's plan-shape assertion
-   and its failure message (`:165`). Keep the trailing "Sanity-check the view itself still declares
-   that sort_order" block (`:168-178`) unchanged: it is the only remaining coverage of
-   `SqlBatchView::with_merge_sort_order` itself, since the folded test now passes declared columns
-   to the helper directly rather than through the view. Rewrite the module header (`:1-12`), which
-   states the removed "refuses to record a false sort_order guarantee ... e.g. a missing top-level
-   `ORDER BY`" contract verbatim, to describe the sort-applying path — without citing this plan
-   document.
+   `extract_query_without_an_order_by_satisfies_the_declared_sort_order`). Drop `make_test_view` and
+   the `SqlBatchView` fixture it builds entirely: neither surviving assertion needs a view, only a
+   session context and the declared columns. Build the `DataFrame` the same way the passing test
+   already does — `make_session_context(...)` then `ctx.sql(...)` — over the out-of-order `VALUES`
+   fixture (today's `:90-92`, with its now-redundant `ORDER BY` dropped), and construct
+   `declared_columns` as a literal `[ScanSortColumn; 2]` the way `:151-154` already does, rather than
+   reading it off a view. Call the new helper rather than re-applying the sort itself or reaching for
+   `write()`'s `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering
+   assertion stops firing). Because the helper itself already returns `Err` when the plan isn't
+   single-partition and ordering-satisfying, re-checking `ordering_satisfy` on the plan it returns
+   would only prove the helper returned `Ok`; instead, execute that plan (`execute_stream` with the
+   helper's returned `TaskContext`), collect the resulting batches, and assert the emitted rows
+   actually come out in `(name, time_bin)` order — a check the helper's internal assertion does not
+   make — replacing today's plan-shape assertion and its failure message (`:165`). Delete the
+   trailing "Sanity-check the view itself still declares that sort_order" block (`:168-178`): it
+   never exercised the extract-query behavior under test (`SqlBatchView::make_batch_partition_spec`
+   only runs the count query; `SqlPartitionSpec` exposes no accessor for `sort_order` to check
+   against), and once the view fixture is gone there is nothing left for it to sanity-check.
+   `with_merge_sort_order` itself stays covered by `sql_batch_view_merge_ordering_tests.rs`. Rewrite
+   the module header (`:1-12`), which states the removed "refuses to record a false sort_order
+   guarantee ... e.g. a missing top-level `ORDER BY`" contract verbatim, to describe the
+   sort-applying path — without citing this plan document.
 5. `rust/analytics/tests/log_stats_ordering_tests.rs` — update
    `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to plan through the new
    helper rather than the raw SQL text. Since the helper itself already returns `Err` when the
@@ -141,11 +144,21 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    author-written `ORDER BY` is required any more. `mkdocs/docs/query-guide/python-api.md:640`
    carries the same note ("its extract query's **required** `ORDER BY` then sorts that whole
    bucket's aggregated output in a single blocking pass"); reword it the same way.
+9. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — once step 1 removes
+   `SqlPartitionSpec::execute_extract_query`'s own call site for `assert_single_partition` and
+   `assert_ordering_satisfied`, in favor of the new §1 helper, update both functions' rustdoc caller
+   lists, which still name it: `assert_single_partition`'s (`:209-216`, "Shared by the
+   query-execution paths that must verify this before executing: ... and
+   `SqlPartitionSpec::execute_extract_query`") and `assert_ordering_satisfied`'s (`:235-244`,
+   "Shared by the two paths that record a `sort_order` guarantee:
+   `QueryMerger::execute_sorted_merge` and `SqlPartitionSpec::execute_extract_query`"). In both,
+   replace `SqlPartitionSpec::execute_extract_query` with the new §1 helper as the caller.
 
 ## Files to Modify
 
 Modified:
-- `rust/analytics/src/lakehouse/sql_partition_spec.rs`, `sql_batch_view.rs`, `log_stats_view.rs`
+- `rust/analytics/src/lakehouse/sql_partition_spec.rs`, `sql_batch_view.rs`, `log_stats_view.rs`,
+  `partitioned_execution_plan.rs`
 - `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
   `ordered_aggregation_spike_tests.rs`
 - `CHANGELOG.md`
