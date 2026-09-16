@@ -130,26 +130,31 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    `futures::TryStreamExt` (for `try_collect`), and `datafusion::arrow::array::{Array, RecordBatch,
    StringArray}` (to read the `name` column back and check row order) — the same imports
    `sql_batch_view_merge_ordering_tests.rs` uses for its equivalent check.
-5. `rust/analytics/tests/log_stats_ordering_tests.rs` — update
-   `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to plan through the new
-   helper rather than the raw SQL text, passing it the same `declared_columns` literal for
-   `(time_bin, process_id, level, target)` the test already constructs (today's `[ScanSortColumn; 4]`
-   at `:226-229`), rather than reading it off the view (`SqlBatchView` exposes no accessor for
-   `sort_order`). Since the helper itself already returns `Err` when the plan isn't single-partition
-   and ordering-satisfying, replace the `partition_count` and `ordering_satisfied` assertions
-   (`:219-242`) with a plain `expect()` on the helper's `Ok` — re-checking those same properties here
-   would only prove the helper returned `Ok`. Reword the doc comment (`:164-171`, pinning "`ORDER BY
-   time_bin, process_id, level, target`") and the module header's `ORDER BY` half (`:4`, `:10`)
-   accordingly; the dropped assertion message (`:241`, "check for a missing or reordered top-level
+5. `rust/analytics/tests/log_stats_ordering_tests.rs` — rename
+   `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to
+   `log_stats_extract_query_still_plans_through_the_sort_applying_helper` and update it to plan
+   through the new helper rather than the raw SQL text, passing it the same `declared_columns`
+   literal for `(time_bin, process_id, level, target)` the test already constructs (today's
+   `[ScanSortColumn; 4]` at `:226-229`), rather than reading it off the view (`SqlBatchView` exposes
+   no accessor for `sort_order`). Since the helper itself already returns `Err` when the plan isn't
+   single-partition and ordering-satisfying, replace the `partition_count` and `ordering_satisfied`
+   assertions (`:219-242`) with a plain `expect()` on the helper's `Ok` — re-checking those same
+   properties here would only prove the helper returned `Ok`. Reword the doc comment (`:164-171`,
+   pinning "`ORDER BY time_bin, process_id, level, target`") and the module header's `ORDER BY` half
+   (`:4`, `:10`) to state what the renamed test still pins — that the shipped `log_stats` extract
+   query still plans and sorts cleanly through the helper — rather than that the query satisfies the
+   declared order; the dropped assertion message (`:241`, "check for a missing or reordered top-level
    ORDER BY") goes with the assertion it belonged to. Drop `make_lex_ordering` from the import list
    once the `ordering_satisfied` assertion it supports is gone; no other import in this file becomes
    unused.
-6. `rust/analytics/tests/ordered_aggregation_spike_tests.rs` — reword the rationale comments in
-   `cte_internal_order_by_is_discarded_by_a_later_join` and
-   `top_level_order_by_satisfies_the_declared_columns` that cite the removed contract
-   ("SqlPartitionSpec::write's declared-path plan verification relies on" / "plan verification relies
-   on to accept a fresh extract query"). Both assertions are about DataFusion's own plan behavior and
-   keep passing unchanged.
+6. `rust/analytics/tests/ordered_aggregation_spike_tests.rs` — delete
+   `cte_internal_order_by_is_discarded_by_a_later_join` (`:411-439`): it existed solely to justify the
+   extract query's now-removed top-level-`ORDER BY` requirement, and the fact it pinned (a join
+   discards its input's ordering) is already covered by
+   `enrichment_join_with_the_ordered_side_on_the_build_side_reinstates_a_blocking_sort` (`:479`).
+   Reword the rationale comment in `top_level_order_by_satisfies_the_declared_columns` (`:442`) that
+   cites the removed contract ("plan verification relies on to accept a fresh extract query"); the
+   assertion itself is about DataFusion's own plan behavior and keeps passing unchanged.
 7. `CHANGELOG.md` — one entry describing that `with_merge_sort_order` no longer requires a top-level
    `ORDER BY` in the extract query (the sort is now applied for every declared-sort view); existing
    views that still carry an `ORDER BY` are unaffected.
@@ -199,20 +204,10 @@ No new files, no migration, no SQL-surface change.
 All no-DB unit tests, in the offline harness the three touched test files already use (lazy pool,
 in-memory object store, `NullPartitionProvider`).
 
-**`sql_partition_spec_sort_order_tests.rs`** — the folded test from step 4: an extract query with no
-`ORDER BY`, planned through the new helper against declared columns `(name, time_bin)`, then executed
-and its rows collected. The test asserts the rows actually come out in `(name, time_bin)` order, and
-it exercises the production path rather than a test-local re-implementation of it.
-
-**`log_stats_ordering_tests.rs`** — the shipped `log_stats` extract query, with its `ORDER BY` now
-gone, still plans successfully through the helper, which itself asserts the plan is single-partition
-and satisfies `(time_bin, process_id, level, target)`; the test only `expect()`s that `Ok`. Together
-with the existing `log_stats_merge_query_stays_a_streaming_kway_merge` this keeps both halves of the
+**`log_stats_ordering_tests.rs`** — together with the existing
+`log_stats_merge_query_stays_a_streaming_kway_merge`,
+`log_stats_extract_query_still_plans_through_the_sort_applying_helper` keeps both halves of the
 streaming contract pinned for the one shipped declared-sort view.
-
-**`ordered_aggregation_spike_tests.rs`** — assertions unchanged; the file is touched for comment
-accuracy only, and its continued passing is the check that this change does not depend on the
-DataFusion behaviors it characterizes.
 
 No new `#[ignore]` live-DB test: per `CONTRIBUTING.md` those are reserved for pinning a bug witnessed
 in the wild.
