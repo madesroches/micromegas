@@ -378,9 +378,13 @@ same walk applied to each. On top of that:
    not representable on either side. This needs one change to existing code:
    `execute_extract_query` (`sql_partition_spec.rs:79-115`) today only *asserts* the ordering,
    erroring with "Check for a missing or mismatched top-level ORDER BY" — the same guarantee
-   enforced by blame on one side of the option and by construction on the other. Build the extract
-   query's physical plan — separately from, and solely for, this check; it is never the plan checks 6
-   and 7 walk — using the same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
+   enforced by blame on one side of the option and by construction on the other. Applying the sort
+   and building the physical plan is factored into one `pub(crate)` helper in `sql_partition_spec.rs`
+   that `execute_extract_query`, this check, and the rewritten tests all call, so the validated plan
+   and the daemon's plan cannot diverge — a divergence would show up as a definition that passes
+   `CREATE` and fails on the first tick, or the reverse. This check's call is separate from, and
+   solely for, validation; the plan it produces is never the one checks 6 and 7 walk. It passes the
+   same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
    (`sql_batch_view.rs:110-114`: both placeholders replaced with one `Utc::now()` timestamp) so an
    extract query filtering on `insert_time` plans instead of failing `TypeCoercion`/
    `ConstEvaluator` on the unsubstituted literal. That build is what this check buys: an extract
@@ -710,10 +714,12 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
    charset half of check 1 may additionally run in the parser). Check 7 needs the referenced view
-   sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds
-   its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also
-   here: `sql_partition_spec.rs`'s `execute_extract_query` applies the declared `sort_order` as a
-   `DataFrame::sort` before planning, mirroring `merge.rs:210-233`, and `with_merge_sort_order`'s
+   sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
+   physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also here:
+   `sql_partition_spec.rs` grows a `pub(crate)` helper that applies a declared `sort_order` as a
+   `DataFrame::sort` and builds the physical plan, mirroring `merge.rs:210-233`;
+   `execute_extract_query` is reduced to calling it, and it is the single path check 8 and the
+   rewritten tests below use, so no caller re-implements the sort. `with_merge_sort_order`'s
    doc comment loses item 3's top-level-`ORDER BY` requirement. Two more comments describing the old
    verify-the-`ORDER BY` semantics are updated in the same step: `SqlPartitionSpec::sort_order`'s
    field doc (`sql_partition_spec.rs:40-44`, "When set, `write` verifies the extract query's physical
@@ -723,14 +729,15 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
    row's `file_schema_hash` is unaffected. Update all the tests and comments this enables in the same
    step: `sql_partition_spec_sort_order_tests.rs`'s `extract_query_missing_order_by_fails_the_write` to
-   assert the extract query's physical plan, built through this sort-applying path, satisfies the
-   declared order — mirroring `extract_query_matching_order_by_passes_the_ordering_check` — instead
-   of asserting `write()`'s `expect_err`, and that file's module header (today stating the removed
+   assert that the plan the new helper returns satisfies the declared order — calling the helper
+   rather than re-applying the sort itself, which is what keeps the production path under test —
+   instead of asserting `write()`'s `expect_err`, which the fixture's `connect_lazy` pool cannot
+   reach once the ordering assertion stops firing; and that file's module header (today stating the removed
    "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`" contract
    verbatim), rewritten to describe the sort-applying path; `log_stats_ordering_tests.rs`'s
    `log_stats_extract_query_satisfies_its_declared_sort_order` (and its header comment pinning
    "`ORDER BY time_bin, process_id, level, target`") to match the removed `ORDER BY`, planning
-   through this same sort-applying path rather than the raw SQL text; and
+   through this same helper rather than the raw SQL text; and
    `ordered_aggregation_spike_tests.rs`'s `cte_internal_order_by_is_discarded_by_a_later_join` and
    `top_level_order_by_satisfies_the_declared_columns`, whose rationale comments cite the same removed
    contract ("SqlPartitionSpec::write's declared-path plan verification relies on"/"plan verification
@@ -876,6 +883,9 @@ single error the author sees once.
 
 ## Decisions
 
+- Applying the declared sort and planning the extract query lives in one `pub(crate)` helper shared
+  by `execute_extract_query`, check 8 and the sort-order tests, rather than each building its own
+  sort-applied plan.
 - Validation rejects a definition whose merge-query output schema differs from its extract-query
   output schema, rather than warning — a disagreement means the user-visible table and the
   partitions backing it have different shapes, with no error at query time.
