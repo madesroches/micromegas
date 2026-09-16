@@ -17,7 +17,8 @@ instance is created.
 
 **`log_stats` becomes data.** It is a `SqlBatchView` whose only distinction from a DDL-defined view
 is that its SQL lives in Rust, so the migration seeds it into `lakehouse_view_set_definitions` and
-`default_view_factory` drops its construction step (`view_factory.rs:344-352`) — the seeded
+`default_view_factory` drops its construction step (the `make_log_stats_view` call and its
+`add_global_view`, `view_factory.rs:346-348,350,352`) — the seeded
 definition doubles as the validator's calibration case (see Testing Strategy).
 
 ## Current State
@@ -143,7 +144,8 @@ An option value is an `Expr` (`SqlOption::KeyValue { key: Ident, value: Expr }`,
 `sqlparser-0.62.0/src/ast/mod.rs:8808-8813`), so each query's text is just the tokenizer's value for
 a string literal and `ViewDefinition.extract_query` is that option's value verbatim. The three query
 options accept either a dollar-quoted (`$$...$$`) or a single-quoted literal — dollar-quoted strings
-parse as expression values under `GenericDialect`, which this repo already parses with
+parse as expression values under `GenericDialect`, which `parse_view_ddl` uses and which matches
+DataFusion's own default `datafusion.sql_parser.dialect`
 (`parse_value` at `sqlparser-0.62.0/src/parser/mod.rs:12011`, fed by the tokenizer at
 `tokenizer.rs:1929` → `Expr::Value(Value::DollarQuotedString(..))`).
 Dollar-quoting is the documented form because these queries contain single quotes (`'log'`,
@@ -191,14 +193,13 @@ INSERT INTO lakehouse_view_set_definitions (...) VALUES ('log_stats', ...)
 ON CONFLICT (view_set_name) DO NOTHING;
 ```
 
-Its text comes from a `log_stats` `ViewDefinition` fn in a new
-`rust/analytics/src/lakehouse/builtin_view_definitions.rs` — moved out of
-`log_stats_view.rs`, which the migration and the tests then share as one source of truth.
-`ON CONFLICT DO NOTHING` keeps the migration idempotent.
+Its text comes from a `log_stats` `ViewDefinition` fn in `log_stats_view.rs`, which the migration
+and the tests then share as one source of truth. `ON CONFLICT DO NOTHING` keeps the migration
+idempotent.
 
 `definition_sql` (`TEXT NOT NULL`, the verbatim DDL text) has no equivalent in
 `log_stats_view.rs` today, since `log_stats` has never been expressed as DDL. A function in
-`builtin_view_definitions.rs` assembles the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
+`log_stats_view.rs` assembles the equivalent `CREATE MATERIALIZED VIEW log_stats WITH (...)`
 text from the `log_stats` `ViewDefinition` fn, wrapping each query in `$$...$$` — none of them contains a
 `$$`, so no quote-escaping helper is needed. It seeds this column and doubles as the parser
 round-trip fixture in the Testing Strategy, which asserts the full parsed `ViewDefinition` — every
@@ -290,11 +291,21 @@ same walk applied to each. On top of that:
    `Utf8` before comparing — but matches nothing, so a non-string `audience`/`process_id` column
    serves an empty table to every non-admin caller with no error anywhere, the same silent-failure
    class check 9 already closes for the time columns. The error message names the requirement and
-   points at `max(audience)`-in-`GROUP BY` as the fix. This mirrors the existing branch table exactly;
-   the branch logic is unchanged, but `ownership_rewrite.rs`'s module doc — the six-view table, the
-   claim that the column is always `Dictionary(Int32, Utf8)`, and the "non-null by construction …
-   no unstamped case either way" claim — is reworded to cover DDL-defined view sets and the
-   documented NULL obligation below.
+   points at `max(audience)`-in-`GROUP BY` as the fix. A `process_id`-only definition is accepted, but
+   `predicate_for` (`ownership_rewrite.rs:391-401`) then resolves its audience per-process via
+   `per_process_audience`'s `MAX(audience)` — coarser than a direct column filter, and wrong for a
+   process whose rows span two audiences, since `MAX` collapses them and a caller holding only the
+   winning audience sees the other audience's rows too (the failure `log_stats_view.rs:33-38` adds
+   `audience` to its own `GROUP BY` to avoid). The error/warning for a `process_id`-only definition
+   recommends projecting `audience` instead. This mirrors the existing branch table exactly;
+   the branch logic is unchanged, but every site in `ownership_rewrite.rs` that counts or names the
+   column-carrying views goes stale for a DDL-defined one and is reworded from a fixed count of six to
+   "the views carrying an `audience` column, DDL-defined ones included": the module doc's six-view
+   claim (`:17-22`, `:34`, and the branch-table row `:55`), `OwnershipRewrite::new`'s doc comment
+   ("the six column-carrying views need neither", `:160`), `audience_column_predicate`'s doc comment
+   ("non-null by construction … no unstamped case either way", `:230-233`) and its inline comment
+   ("every one of the six views carries", `:241`), and `predicate_for`'s own branch comment
+   enumerating the six and asserting "(all six do)" (`:375-381`).
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
    substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
@@ -306,9 +317,10 @@ same walk applied to each. On top of that:
    merge query is the read path for any query spanning more than one partition
    (`sql_batch_view.rs:311-334`), so a disagreement means the table a user sees does not match the
    partitions it is built from.
-4. **Count query shape.** `fetch_sql_partition_spec` (`sql_partition_spec.rs:196-203`) requires one
-   batch, one row, one `Int64` column literally named `count`. Check the planned schema for that
-   single `count: Int64` column and reject otherwise, rather than failing on the daemon's first tick.
+4. **Count query shape.** `fetch_sql_partition_spec` (`sql_partition_spec.rs:196-203`) requires a
+   `count` field reachable as an `Int64Array` (one batch, one row, at runtime) — it does not require
+   `count` to be the query's only column. Check the planned schema contains a `count` field of type
+   `Int64` and reject otherwise, rather than failing on the daemon's first tick.
 5. **Placeholders.** `count_src_query` must contain `{begin}` and `{end}`;
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
@@ -317,18 +329,26 @@ same walk applied to each. On top of that:
    `extract_query` reads, so `count_src_query` must always count a raw source table carrying
    `insert_time` — in practice `blocks`, the way `log_stats` counts `blocks` while its `extract_query`
    reads `log_entries` (`log_stats_view.rs:18-26`) — even when `extract_query` reads another
-   materialized view instead of a raw source. A materialized view carries no `insert_time` column
-   (§4's obligation paragraph below), so a `count_src_query` filtering that view's event-time column
-   with insert-time bounds would mis-detect freshness silently; counting `blocks` instead couples a
+   materialized view instead of a raw source. A materialized view carries an `insert_time` column
+   only when its own extract query projects one (as `processes` and `streams` do,
+   `processes_view.rs:37`/`streams_view.rs:33`), and even then it is a copy of a source row's value
+   rather than the partition insert-time bound `{begin}`/`{end}` substitute (§4's obligation
+   paragraph below); a `count_src_query` filtering that view's event-time column
+   with insert-time bounds would mis-detect freshness silently either way; counting `blocks` instead couples a
    dependent's freshness to its upstream's ingestion rate, not its upstream's own materialization
    cadence, which is the accepted trade-off.
 6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
-   walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) — never an
-   optimized or physical plan: `SimplifyExpressions`'s `ConstEvaluator` treats `Stable` the same as
+   walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) with
+   `LogicalPlan::apply_with_subqueries` (and `apply_expressions` per visited node, to reach every
+   `ScalarUDF`) — never `apply`/`apply_children`, which does not descend into a plan reached through
+   `Expr::ScalarSubquery`/`InSubquery`/`Exists`, and never an optimized or physical plan:
+   `SimplifyExpressions`'s `ConstEvaluator` treats `Stable` the same as
    `Immutable`, so it folds a call like `now()` into a literal before an optimized-plan walk would
    ever see the `ScalarUDF` node, silently defeating this check for every `Stable` function while
-   leaving `Volatile` ones (which the optimizer does not fold) looking caught. The merge and
-   count-source plans are already built this same unoptimized way by checks 3 and 4, so the extra
+   leaving `Volatile` ones (which the optimizer does not fold) looking caught. This repo already
+   relies on the `_with_subqueries` distinction — both `TableScanRewrite` and `OwnershipRewrite` walk
+   with `transform_up_with_subqueries` (`table_scan_rewrite.rs:69`, `ownership_rewrite.rs:491`). The
+   merge and count-source plans are already built this same unoptimized way by checks 3 and 4, so the extra
    walk is free — rejecting any `ScalarUDF` whose `signature().volatility` is not
    `Immutable` (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
    frozen into a partition at materialization time and then served to every later reader — wrong
@@ -336,7 +356,8 @@ same walk applied to each. On top of that:
    (`verify_overlapping_partitions` compares row counts), causing perpetual re-materialization.
 
 7. **No mutating table function, and `update_group` strictly after every view set the
-   definition reads.** Walk all three of the same pre-optimization `LogicalPlan`s check 6 walks, for
+   definition reads.** Walk all three of the same pre-optimization `LogicalPlan`s check 6 walks, with
+   the same `LogicalPlan::apply_with_subqueries` traversal, for
    every `TableScan`, resolving each one's `table_name` against the factory the definition was built
    for — recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
    `SqlBatchView::register_table` exposes the user-visible name; a downcast to `MaterializedView`
@@ -400,10 +421,7 @@ same walk applied to each. On top of that:
    `col(&*self.min_event_time_column)`, so a typo'd or non-nanosecond column is otherwise accepted at
    `CREATE` and only fails on the daemon's first tick and on every ranged query.
 
-Checks 2, 3, 5, 6 and 7 are the ones that earn their keep: each covers a failure that produces wrong
-or stale *numbers* rather than an error. Check 8's payoff is different: it moves a hard failure —
-an extract query that cannot be planned at all — from the daemon's first tick to `CREATE` time. What
-stays an **unchecked author obligation**, documented
+What stays an **unchecked author obligation**, documented
 and not enforced: `extract_query` need not carry `{begin}`/`{end}` (the extract session context is
 already range-scoped by `filter_insert_range` on the partition provider,
 `sql_batch_view.rs:238`), but because that filter matches by *overlap*, a partition wider than the
@@ -419,9 +437,11 @@ one is already spelled out for hand-written views, by `with_merge_sort_order`'s 
 (`sql_batch_view.rs:145-163`); none of the four is decidable from a logical plan.
 
 The insert-time half of that obligation does not apply to `extract_query` when it reads another
-materialized view rather than a raw source table: a materialized view's schema is whatever its own
-`extract_query` projects, and carries no `insert_time` column at all — only `time_column`'s
-event-time column is guaranteed to exist. A definition `b` reading definition `a` therefore filters
+materialized view rather than a raw source table: a materialized view carries an `insert_time`
+column only when its own extract query projects one (as `processes` and `streams` do,
+`processes_view.rs:37`/`streams_view.rs:33`), and even then it is a copy of a source row's value
+rather than the partition insert-time bound `{begin}`/`{end}` substitute — only `time_column`'s
+event-time column is guaranteed to bound the partition. A definition `b` reading definition `a` therefore filters
 `extract_query` on `a`'s event-time column instead; the consequence, also documented rather than
 enforced, is that a row arriving late into `a`'s own partitions after `b` has already covered that
 time range is not picked up by `b`. `count_src_query` is unaffected by this — it is always written
@@ -659,11 +679,12 @@ and `execute_view_ddl` reloads inline on its own node, so the interval only boun
   `spawn_refresh_task(fanout.subscribe())` next to the existing `query_denials` one (`:406`) —
   otherwise every restart has a window where `log_stats` and every DDL-defined view are absent from
   `current()`.
-- `maintenance.rs`: `Views` (only its use on the four view-carrying `CronTask` structs) becomes
-  `Arc<ViewRegistry>`;
+- `maintenance.rs`: the `Views` alias (`type Views = Arc<Vec<Arc<dyn View>>>`, `:26`) is deleted — its
+  only uses are the four view-carrying `CronTask` structs, which spell out a new
+  `view_registry: Arc<ViewRegistry>` field instead;
   each `run()` computes `get_global_views_with_update_group(&registry.current())`, sorts by
   `update_group`, and passes the resulting `Arc<Vec<Arc<dyn View>>>` to `materialize_all_views`, whose
-  `views: Arc<Vec<Arc<dyn View>>>` parameter stays spelled out (not the `Views` alias) and unchanged.
+  `views: Arc<Vec<Arc<dyn View>>>` parameter stays spelled out and unchanged.
   `daemon()` takes
   `Arc<ViewRegistry>` instead of `Vec<Arc<dyn View>>`, awaits `registry.reload()` before spawning the
   cron tasks (failing startup on error, the way `migrate_lakehouse` already does), and then spawns the
@@ -702,23 +723,22 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    set + three queries), `parse_time_delta`, the name charset check, and
    `build_sql_batch_view(&ViewDefinition, Arc<ViewFactory>, ...) -> Result<SqlBatchView>`. First
    because step 2's `log_stats` `ViewDefinition` fn and step 3's migration seed both need this type to exist.
-2. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats` exposed as a
+2. `rust/analytics/src/lakehouse/log_stats_view.rs` — `log_stats` exposed as a
    `fn` returning its `ViewDefinition` (the three queries plus every option: `update_group`, `time_column`, the
-   two deltas, `merge_sort_order`), lifted out of `log_stats_view.rs` verbatim — its transform
+   two deltas, `merge_sort_order`), factored out of its existing query consts — its transform
    query keeps its `ORDER BY` until step 4 adds the sort-applying path that makes it redundant —
    plus a function
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
    `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
-   `serde_json` for `view_options`) and by the parser round-trip test. Registered in
-   `rust/analytics/src/lakehouse/mod.rs`.
+   `serde_json` for `view_options`) and by the parser round-trip test.
 3. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
-   `lakehouse_view_set_definitions`, seeding `log_stats` from `builtin_view_definitions`'s
+   `lakehouse_view_set_definitions`, seeding `log_stats` from `log_stats_view.rs`'s
    `log_stats` `ViewDefinition` fn (`view_options` serialized with `serde_json::to_string`, `definition_sql`
    from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
-   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
-   charset half of check 1 may additionally run in the parser). Check 7 needs the referenced view
+   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (`parse_view_ddl`
+   owns the name charset check). Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
    physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also here:
    `sql_partition_spec.rs` grows a `pub(crate)` helper that applies a declared `sort_order` as a
@@ -802,8 +822,8 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 ### Milestone 2 — daemon pickup
 
-12. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
-    task structs, per-tick view resolution + sort helper, empty-list early return in
+12. `rust/public/src/servers/maintenance.rs` — delete the `Views` alias; the four view-carrying
+    task structs get a `view_registry: Arc<ViewRegistry>` field instead, per-tick view resolution + sort helper, empty-list early return in
     `materialize_all_views`, `daemon`'s signature change, its awaited `registry.reload()` before
     spawning the cron tasks (failing startup on error), and its `spawn_refresh_task` call. Update
     `daemon`'s rustdoc `views_to_update` argument entry (`:404`) to match the new `Arc<ViewRegistry>`
@@ -813,10 +833,13 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
     uses (`flight_sql_server.rs:275-283`) as `ViewRegistry::new`'s `session_configurator`, instead of
     a no-op one — a DDL view reading a static table must build the same way in both services. Also
-    update `local_test_env/ai_scripts/start_services.py` to export a low
-    `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (e.g. `5`) for the flight-sql and maintenance
-    services it starts, so the Milestone 3 e2e test's daemon-pickup assertion (Testing Strategy) can
-    use a timeout on the order of seconds instead of the 60 s production default.
+    update `local_test_env/ai_scripts/start_services.py` to set a low
+    `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (e.g. `5`) once in the shared environment before
+    either `start_split_mode` or `start_monolith_mode` runs, so both the split-mode flight-sql/
+    maintenance services and the `--monolith` process inherit it (`start_monolith_mode` builds its own
+    `env = os.environ.copy()` and would otherwise miss a var set only for the split-mode services), and
+    the Milestone 3 e2e test's daemon-pickup assertion (Testing Strategy) can
+    use a timeout on the order of seconds instead of the 60 s production default in either mode.
 
 ### Milestone 3 — introspection and `log_stats` cutover
 
@@ -824,8 +847,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     `rust/analytics/src/lakehouse/mod.rs` and in `query.rs`'s `if lakehouse_admin` block. Update
     `rust/analytics/tests/lakehouse_admin_gate_test.rs:2-5`'s header from "eight" to "nine" and add
     `list_view_definitions` to its inline enumeration.
-15. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
-    (`:344-352`); `default_view_factory` now returns the base. Update its module doc comment
+15. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step (the
+    `make_log_stats_view` call and its `add_global_view`, `:346-348,350,352`; `factory_arc`/
+    `updated_factory` stay — the latter is what the `async_events`/`net_spans`/`thread_spans`/
+    `otel_spans` view sets extend and what the function returns); `default_view_factory` now returns
+    the base. Update `default_view_factory`'s own doc comment
     (`:303`) from "the six global views" to "the five global views". `log_stats_view.rs`'s
     `make_log_stats_view` is kept but reduced to `build_sql_batch_view` over the `log_stats`
     `ViewDefinition` fn (step 1, step 2), so the tests below still have a compiled `log_stats` to
@@ -835,6 +861,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     instead of pulling `log_stats` from `default_view_factory` directly — the
     test both looks the view up via `view_factory.get_global_view("log_stats")` and runs `SELECT ...
     FROM log_stats ...` through that same factory, so both need a factory that still carries it.
+    `rust/analytics/tests/log_stats_ordering_tests.rs:83-85`'s comment ("mirrors how
+    `view_factory::default_view_factory` wires log_stats up in production") is reworded to say the
+    fixture factory now mirrors the seeded definition, not `default_view_factory`.
     Deferred to the end of this milestone (and behind the daemon's Milestone 2 pickup) because the
     daemon (step 12) and `FlightSqlServiceImpl` (step 8) must already be reading `registry.current()`
     before `log_stats` is dropped from the base factory, or the view goes unmaterialized and
@@ -849,7 +878,6 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 
 Created:
 - `rust/analytics/src/lakehouse/view_definition.rs`
-- `rust/analytics/src/lakehouse/builtin_view_definitions.rs`
 - `rust/analytics/src/lakehouse/view_definition_store.rs`
 - `rust/analytics/src/lakehouse/view_registry.rs`
 - `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`
@@ -886,7 +914,7 @@ The cost is a hand-rolled parse step in front of `ctx.sql`.
 **A shared `ViewRegistry` vs. separate reload paths per service.** The issue describes the daemon
 pickup and the flight-sql reload as two mechanisms. They are the same mechanism with two consumers,
 and building one seam means a definition can never be live in one service and not the other. It does
-force `daemon`'s signature to change and the `Views` alias to be reworked; that is cheap, and the
+force `daemon`'s signature to change and the `Views` alias to be deleted; that is cheap, and the
 Rust API is explicitly not a stability surface.
 
 **Requiring `audience`-or-`process_id` vs. adding a DDL-view arm to `OwnershipRewrite`.** A new arm
@@ -909,6 +937,9 @@ single error the author sees once.
   in every definition that did load. One bad row must not take the lakehouse down.
 - The insert-time-vs-event-time obligation and the merge-aggregate composability obligation are
   documented author contracts, not enforced checks — neither is decidable from a logical plan.
+- Check 2 accepts a `process_id`-only definition even though it resolves audience per-process via
+  `MAX(audience)` (coarser, and wrong for a process spanning audiences); the check recommends
+  projecting `audience` instead but does not require it. Accepted risk.
 - `merge_sort_order` applies the sort to both queries instead of requiring a top-level `ORDER BY` in
   the extract query, which changes `execute_extract_query` for every declared-sort view, not only
   DDL ones. The alternative is a DDL option that silently demands an `ORDER BY` the author cannot
@@ -941,7 +972,7 @@ single error the author sees once.
   skipped-with-a-warning on a load failure like any other row.
 - `ON CONFLICT DO NOTHING` freezes the seeded `log_stats` text at v10: a later release changing
   `log_stats`'s shipped SQL must ship its own migration step that **upserts** the row (accepting that
-  it overwrites an operator's `CREATE OR REPLACE`), not just edit the `builtin_view_definitions`
+  it overwrites an operator's `CREATE OR REPLACE`), not just edit the `log_stats_view.rs`
   consts.
 - The `extract_query` is **not** required to contain `{begin}`/`{end}`. `processes` and `streams`
   carry no such predicate today and are correct, because `make_batch_partition_spec` scopes the
@@ -980,7 +1011,9 @@ single error the author sees once.
 - `mkdocs/docs/admin/flight-sql.md` — the same env var, and that DDL is admin-gated.
 - `mkdocs/docs/admin/authorization.md` — a sentence that DDL-defined view sets must carry `audience`
   or `process_id` and are filtered by the same two `OwnershipRewrite` branches as the code-driven
-  views already listed there; also update its admin-gated-functions section (`:174`, `:186`) from
+  views already listed there, noting that a `process_id`-only definition resolves audience per-process
+  via `MAX(audience)` (coarser, and wrong for a process spanning audiences) and recommending
+  `audience` instead; also update its admin-gated-functions section (`:174`, `:186`) from
   eight to nine functions, adding `list_view_definitions()` to the enumeration, and note that view
   DDL (`CREATE`/`DROP`, §5) is gated by the same admin check.
 - `mkdocs/docs/admin/authentication.md` — its cross-reference (`:579`) to "the eight gated SQL
@@ -1000,7 +1033,7 @@ single error the author sees once.
   that `log_stats` is now a seeded definition rather than a compiled view (identical SQL surface and
   identical `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking
   change** clause for `daemon`'s signature, `FlightSqlServiceImpl::new`'s `view_factory` →
-  `view_registry` parameter, `Views`, `default_view_factory` no longer returning `log_stats`, and
+  `view_registry` parameter, the `Views` alias's removal, `default_view_factory` no longer returning `log_stats`, and
   `with_merge_sort_order` no longer requiring a top-level `ORDER BY` in the extract query (the sort
   is now applied for every declared-sort view, hand-written or DDL).
 
@@ -1015,7 +1048,8 @@ Everything below is a no-DB unit test unless stated. The offline harness from
 `parse_view_ddl` and `authorize_view_ddl` live there. `parse_view_ddl` over: each valid form;
 `CREATE` without `OR REPLACE`; `DROP` with and without `IF EXISTS`; a plain `SELECT` and a
 non-materialized `CREATE VIEW` both returning `Ok(None)`; a missing required option, an unknown
-option, a malformed `source_partition_delta`, and a bad `merge_sort_order`, each a named error; a
+option, a malformed `source_partition_delta`, and a `merge_sort_order` that is not a non-empty
+string literal, each a named error; a
 name failing the charset check; an unmodelled clause on `CREATE` (a view column list,
 `IF NOT EXISTS`) and on `DROP` (`CASCADE`, a second name), each a named error; an `AS`-body form,
 now invalid, rejected; and a trailing second statement (`CREATE ...; DROP ...`) rejected,
@@ -1023,7 +1057,7 @@ pinning the single-statement rule. Round-trip: each of the three query options p
 exactly the submitted text, with a `$$`-quoted body carrying single quotes, `{begin}`/`{end}`
 placeholders, newlines and mixed casing, plus the single-quoted-literal form for the same query.
 Against the seeded `log_stats` DDL text specifically, the parsed `ViewDefinition` — every option,
-not just the three queries — must equal `builtin_view_definitions`'s `log_stats` `ViewDefinition` fn's return value exactly.
+not just the three queries — must equal `log_stats_view.rs`'s `log_stats` `ViewDefinition` fn's return value exactly.
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
