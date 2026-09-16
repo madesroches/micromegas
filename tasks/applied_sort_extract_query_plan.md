@@ -133,10 +133,10 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
 5. `rust/analytics/tests/log_stats_ordering_tests.rs` — rename
    `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to
    `log_stats_extract_query_still_plans_through_the_sort_applying_helper` and update it to plan
-   through the new helper rather than the raw SQL text, passing it the same `declared_columns`
-   literal for `(time_bin, process_id, level, target)` the test already constructs (today's
-   `[ScanSortColumn; 4]` at `:226-229`), rather than reading it off the view (`SqlBatchView` exposes
-   no accessor for `sort_order`). Since the helper itself already returns `Err` when the plan isn't
+   through the new helper rather than the raw SQL text, passing it the `declared_columns` read off
+   the shipped view via `view.get_scan_output_ordering()` (`match`ing out the `ScanOrdering::PerFile`
+   columns, `_ => panic!`) instead of re-declaring `(time_bin, process_id, level, target)` as a
+   literal. Since the helper itself already returns `Err` when the plan isn't
    single-partition and ordering-satisfying, replace the `partition_count` and `ordering_satisfied`
    assertions (`:219-242`) with a plain `expect()` on the helper's `Ok` — re-checking those same
    properties here would only prove the helper returned `Ok`. Reword the doc comment (`:164-171`,
