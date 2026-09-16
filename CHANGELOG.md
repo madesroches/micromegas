@@ -4,6 +4,14 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:** Bump the pinned Rust toolchain to 1.98.1 and add the `rust-analyzer` component; fix the new `clippy::chunks_exact_to_as_chunks` lint in `transit::dyn_string` by switching `chunks_exact(2)` to `as_chunks::<2>()`, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
+* **Packaging:** Rewrite the `micromegas` umbrella crate's `description`, which was `"Micromegas is a scalable observability solution."` — seven words naming none of the four stages and none of the nouns someone searching for this would type. It is now the same sentence the repository description and `/llms.txt` already use, so the phrasing is consistent everywhere the project is indexed: `"Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."`. This is the crate's front-door copy on crates.io search, lib.rs and every registry mirror; the component crates keep their deliberately modest `"part of micromegas"` descriptions. Metadata only takes effect on publish, so this lands with the next release.
+
+## v0.31.1 - 2026-09-16 (Python client only)
+
+An out-of-band PyPI-only patch cut from `main`'s python tree while the repo's in-tree version read
+0.32.0-dev; no crates, images, or plugin shipped at this version.
+
 * **Python:** `micromegas-setup-telemetry` gains `--format {posix,powershell,cmd,dotenv}` (default
   `posix`), applying to both the stdout and `--env-file` output paths, so a caller at a native
   PowerShell or `cmd.exe` prompt, or one feeding a container/CI env-file loader, no longer has to
@@ -24,8 +32,6 @@ This file documents the historical progress of the Micromegas project. For curre
   keeps defaulting to `posix` regardless (it's sourced from a shell profile, and `dotenv` output
   isn't a shell script).
 * **Python:** Fix `micromegas-setup-telemetry --env-file` crashing with `AttributeError: module 'os' has no attribute 'fchmod'` on Windows before Python 3.13, which left a 0-byte env file and a just-minted, never-retrievable ingestion API key lost with no way to recover it (#1588). `write_env_file` now writes the content before re-asserting its mode, skips the `fchmod` call entirely where the platform doesn't provide it, and opens the file in binary mode so a `\n` in the exports can't be translated to `\r\n` on Windows. `run()`'s `--env-file` fallback (which prints the exports and re-raises rather than discarding the key) now catches `Exception` instead of only `OSError`, so a platform-missing-syscall failure like this one still hits the safety net instead of escaping it. On Windows, the `0o600` mode was never enforced (genuinely restricting it needs an ACL change out of scope for this CLI); what changes here is the documented promise, not the actual permissions -- the docstring and docs now say the file lands at its parent directory's inherited ACL there instead of claiming `0o600` unconditionally.
-* **Build:** Bump the pinned Rust toolchain to 1.98.1 and add the `rust-analyzer` component; fix the new `clippy::chunks_exact_to_as_chunks` lint in `transit::dyn_string` by switching `chunks_exact(2)` to `as_chunks::<2>()`, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
-* **Packaging:** Rewrite the `micromegas` umbrella crate's `description`, which was `"Micromegas is a scalable observability solution."` — seven words naming none of the four stages and none of the nouns someone searching for this would type. It is now the same sentence the repository description and `/llms.txt` already use, so the phrasing is consistent everywhere the project is indexed: `"Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."`. This is the crate's front-door copy on crates.io search, lib.rs and every registry mirror; the component crates keep their deliberately modest `"part of micromegas"` descriptions. Metadata only takes effect on publish, so this lands with the next release.
 
 ## v0.31.0 - 2026-09-14
 
