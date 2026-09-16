@@ -232,6 +232,10 @@ micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner 
     --user-audience ci-runner
 
 eval "$(micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop)"
+
+# PowerShell equivalent (--format is never inferred from the OS -- pass it explicitly):
+micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop `
+    --format powershell | Invoke-Expression
 ```
 
 See [`python-api.md`](../query-guide/python-api.md#micromegas-setup-telemetry)

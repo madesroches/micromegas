@@ -1062,6 +1062,16 @@ micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop 
 # caller is an admin or not.
 micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
     --user-audience ci-runner --env-file ~/.micromegas/telemetry.env
+
+# From a PowerShell prompt (Windows or pwsh on Linux/macOS) -- --format is never
+# inferred from the OS, so pass it explicitly:
+micromegas-setup-telemetry --url https://analytics.example.com --name my-laptop `
+    --format powershell | Invoke-Expression
+
+# For a container/CI env-file loader (a compose service's env_file:, docker run
+# --env-file, python-dotenv, ...):
+micromegas-setup-telemetry --url https://analytics.example.com --name ci-runner \
+    --format dotenv --env-file .env
 ```
 
 `--url` (required) is `analytics-web-srv`'s base URL. `--name` (required) names the minted key
@@ -1107,6 +1117,29 @@ shell profile instead of `eval`-ing directly. On Windows, those POSIX mode bits 
 the file lands at its parent directory's inherited ACL instead. `--profile` selects a named
 connection profile, but (like `-grants`/`-import-keys`) only its OIDC fields are honored — an
 `api_key_file`-only profile yields no auth here.
+
+`--format {posix,powershell,cmd,dotenv}` (default `posix`) picks the rendered syntax and applies
+to both the stdout and `--env-file` output paths — it is never inferred from the OS (a Git Bash
+prompt on Windows wants `posix`; `pwsh` runs on Linux/macOS too), so pass it explicitly:
+
+| `--format` | rendered shape | consume with |
+| --- | --- | --- |
+| `posix` (default) | `export NAME=value`, `shlex.quote`d | `eval "$(micromegas-setup-telemetry ...)"` |
+| `powershell` | `$env:NAME = 'value'` | `micromegas-setup-telemetry ... \| Invoke-Expression` |
+| `cmd` | `@set "NAME=value"` | redirect to a `.cmd` file, then `call` it |
+| `dotenv` | `NAME=value`, unquoted | a compose service's `env_file:` or `docker run --env-file` to inject into the container; `python-dotenv` to inject into a process |
+
+Each dialect quotes a value the way that syntax represents a literal credential safely: `posix`
+via `shlex.quote` (bare unless the value needs quoting), `powershell` as a single-quoted literal
+(a literal `'` doubled), `cmd` as a quoted `@set "NAME=value"` (the only form that keeps quote
+characters out of the value), and `dotenv` unquoted (the value is everything after the first
+`=`). Because `cmd` and `dotenv` cannot represent every character, `--otlp-endpoint` is validated
+against the chosen format before the key is minted, and the command errors out naming the
+offending character rather than minting a key it then can't render (`dotenv` also rejects a
+leading/trailing-whitespace endpoint, which a loader would silently trim). Passing `--env-file`
+does not change `--format`'s own default to `dotenv` — the documented use of `--env-file` is
+sourcing it from a shell profile, and `dotenv` output is not a shell script, so `posix` stays the
+default for both output paths.
 
 Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`.
 

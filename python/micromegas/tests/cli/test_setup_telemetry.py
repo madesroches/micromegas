@@ -74,6 +74,7 @@ def make_args(**overrides):
         "user_audience": None,
         "otlp_endpoint": None,
         "env_file": None,
+        "format": "posix",
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -99,6 +100,7 @@ def test_build_parser_accepts_the_minimal_required_args():
     assert args.user_audience is None
     assert args.otlp_endpoint is None
     assert args.env_file is None
+    assert args.format == "posix"
 
 
 def test_make_client_returns_web_client(monkeypatch):
@@ -824,17 +826,293 @@ def test_main_exits_non_zero_on_env_file_os_error(monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# --format -- build_parser
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fmt", ["posix", "powershell", "cmd", "dotenv"])
+def test_build_parser_accepts_each_format(fmt):
+    parser = setup_telemetry.build_parser()
+    args = parser.parse_args(
+        ["--url", "http://analytics:3000", "--name", "laptop", "--format", fmt]
+    )
+    assert args.format == fmt
+
+
+def test_build_parser_rejects_an_unknown_format():
+    parser = setup_telemetry.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--url",
+                "http://analytics:3000",
+                "--name",
+                "laptop",
+                "--format",
+                "bogus",
+            ]
+        )
+
+
+# ---------------------------------------------------------------------------
 # format_env_exports
 # ---------------------------------------------------------------------------
 
 
-def test_format_env_exports_includes_protocol_endpoint_and_bearer_header():
+def test_format_env_exports_posix_exact_output():
     content = setup_telemetry.format_env_exports(
-        "mmk_x", "http://ingest:9000/ingestion/otlp"
+        "mmk_x", "http://ingest:9000/ingestion/otlp", fmt="posix"
     )
-    assert "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf" in content
+    assert content == (
+        "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+        "export OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp\n"
+        "export OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer mmk_x'\n"
+    )
+
+
+def test_format_env_exports_powershell_exact_output():
+    content = setup_telemetry.format_env_exports(
+        "mmk_x", "http://ingest:9000/ingestion/otlp", fmt="powershell"
+    )
+    assert content == (
+        "$env:OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf'\n"
+        "$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://ingest:9000/ingestion/otlp'\n"
+        "$env:OTEL_EXPORTER_OTLP_HEADERS = 'Authorization=Bearer mmk_x'\n"
+    )
+
+
+def test_format_env_exports_cmd_exact_output():
+    content = setup_telemetry.format_env_exports(
+        "mmk_x", "http://ingest:9000/ingestion/otlp", fmt="cmd"
+    )
+    assert content == (
+        '@set "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"\n'
+        '@set "OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp"\n'
+        '@set "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer mmk_x"\n'
+    )
+
+
+def test_format_env_exports_dotenv_exact_output():
+    content = setup_telemetry.format_env_exports(
+        "mmk_x", "http://ingest:9000/ingestion/otlp", fmt="dotenv"
+    )
+    assert content == (
+        "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+        "OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp\n"
+        "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer mmk_x\n"
+    )
+
+
+def test_format_env_exports_posix_quotes_an_endpoint_containing_ampersand():
+    """The latent-hole regression: an unquoted `&` in the endpoint used to
+    background the `export` line under `eval`."""
+    content = setup_telemetry.format_env_exports(
+        "mmk_x", "https://h/otlp?a=b&c=d", fmt="posix"
+    )
+    assert "export OTEL_EXPORTER_OTLP_ENDPOINT='https://h/otlp?a=b&c=d'" in content
+
+
+def test_format_env_exports_powershell_doubles_a_single_quote_in_a_value():
+    content = setup_telemetry.format_env_exports(
+        "mmk_o'brien", "http://ingest:9000/ingestion/otlp", fmt="powershell"
+    )
+    assert "'Authorization=Bearer mmk_o''brien'" in content
+
+
+def test_format_env_exports_powershell_doubles_curly_single_quotes_in_the_endpoint():
+    """PowerShell's tokenizer ends a `'...'` literal on U+2018/U+2019/U+201A/U+201B
+    as well as the ASCII `'`, so a curly quote (e.g. from a copy-pasted URL) must be
+    doubled the same way or it breaks out of the string."""
+    content = setup_telemetry.format_env_exports(
+        "mmk_x",
+        "http://ingest:9000/‘’‚‛",
+        fmt="powershell",
+    )
     assert (
-        "export OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp"
-        in content
+        "$env:OTEL_EXPORTER_OTLP_ENDPOINT = " "'http://ingest:9000/‘‘’’‚‚‛‛'"
+    ) in content
+
+
+# ---------------------------------------------------------------------------
+# check_format_endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_check_format_endpoint_posix_accepts_any_endpoint():
+    setup_telemetry.check_format_endpoint(
+        "posix", "https://h/otlp?a=b&c=d", FakeParser()
     )
-    assert 'export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer mmk_x"' in content
+
+
+def test_check_format_endpoint_cmd_rejects_a_percent_bearing_endpoint():
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(
+            "cmd", "http://ingest:9000/otlp%20path", FakeParser()
+        )
+
+
+def test_check_format_endpoint_cmd_rejects_a_bang_bearing_endpoint():
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(
+            "cmd", "http://ingest:9000/otlp!path", FakeParser()
+        )
+
+
+def test_check_format_endpoint_dotenv_rejects_a_hash_bearing_endpoint():
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(
+            "dotenv", "http://ingest:9000/otlp#frag", FakeParser()
+        )
+
+
+def test_check_format_endpoint_dotenv_rejects_trailing_whitespace():
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(
+            "dotenv", "http://ingest:9000/ingestion/otlp ", FakeParser()
+        )
+
+
+@pytest.mark.parametrize(
+    "fmt,endpoint",
+    [
+        ("cmd", "http://ingest:9000/otlp%20path"),
+        ("dotenv", "http://ingest:9000/otlp#frag"),
+    ],
+)
+def test_check_format_endpoint_cmd_rejects_before_the_mint(monkeypatch, fmt, endpoint):
+    """Pins that the check is on the pre-mint side, for every format: `run()`
+    must exit through `parser.error` before `client.mint_ingestion_api_key`
+    is ever called."""
+    client = FakeClient(
+        my_audiences={
+            "is_admin": False,
+            "audiences": ["team-alpha"],
+            "mint_prefix": "alice-",
+            "email": "alice@example.com",
+            "held_pairs": ["team-alpha:mint"],
+        }
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint=endpoint,
+        format=fmt,
+    )
+    with pytest.raises(SystemExit):
+        setup_telemetry.run(args, FakeParser())
+    assert not any(call[0] == "mint" for call in client.calls)
+
+
+@pytest.mark.parametrize(
+    "fmt,char",
+    [
+        (fmt, char)
+        for fmt, chars in setup_telemetry._FORMAT_UNSAFE_CHARS.items()
+        for char in chars
+    ],
+)
+def test_check_format_endpoint_rejects_every_unsafe_char(fmt, char):
+    """Pins the pre-mint guard table itself: dropping any one of these
+    `(fmt, char)` entries from `_FORMAT_UNSAFE_CHARS` would leave this suite
+    green were it not for this test -- in particular `powershell`'s CR/LF
+    (otherwise entirely unexercised) and `dotenv`'s `$`."""
+    endpoint = f"http://ingest:9000/otlp{char}path"
+    with pytest.raises(SystemExit):
+        setup_telemetry.check_format_endpoint(fmt, endpoint, FakeParser())
+
+
+# ---------------------------------------------------------------------------
+# run() -- --format wiring, and the post-mint header-value warning
+# ---------------------------------------------------------------------------
+
+
+def test_run_format_dotenv_with_env_file_writes_dotenv_content(
+    monkeypatch, tmp_path, capsys
+):
+    client = FakeClient()
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    env_file = tmp_path / "telemetry.env"
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint="http://ingest:9000/ingestion/otlp",
+        env_file=str(env_file),
+        format="dotenv",
+    )
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+    }
+    client.my_audiences_result = my_audiences
+
+    setup_telemetry.run(args, FakeParser())
+
+    out = capsys.readouterr().out
+    assert out.strip() == str(env_file)
+    content = env_file.read_text()
+    assert content == (
+        "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\n"
+        "OTEL_EXPORTER_OTLP_ENDPOINT=http://ingest:9000/ingestion/otlp\n"
+        "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer mmk_secret\n"
+    )
+
+
+def test_run_format_powershell_with_no_env_file_writes_to_stdout(monkeypatch, capsys):
+    client = FakeClient()
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint="http://ingest:9000/ingestion/otlp",
+        format="powershell",
+    )
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+    }
+    client.my_audiences_result = my_audiences
+
+    setup_telemetry.run(args, FakeParser())
+
+    out = capsys.readouterr().out
+    assert out == (
+        "$env:OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf'\n"
+        "$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://ingest:9000/ingestion/otlp'\n"
+        "$env:OTEL_EXPORTER_OTLP_HEADERS = 'Authorization=Bearer mmk_secret'\n"
+    )
+
+
+def test_run_warns_on_stderr_when_minted_key_is_unsafe_for_format(monkeypatch, capsys):
+    """Unreachable with the real key alphabet today, but pins the safety net:
+    a mint result whose key carries a character unsafe for the chosen format
+    warns on stderr and still emits the key -- it must never be discarded."""
+    client = FakeClient(
+        mint_result={
+            "key_id": "key-1",
+            "name": "laptop",
+            "audience": "team-alpha",
+            "key": 'mmk_"quoted"',
+            "claimed": False,
+        }
+    )
+    monkeypatch.setattr(setup_telemetry, "make_client", lambda args, parser: client)
+    args = make_args(
+        audience="team-alpha",
+        otlp_endpoint="http://ingest:9000/ingestion/otlp",
+        format="cmd",
+    )
+    my_audiences = {
+        "is_admin": False,
+        "audiences": ["team-alpha"],
+        "mint_prefix": "alice-",
+        "email": "alice@example.com",
+    }
+    client.my_audiences_result = my_audiences
+
+    setup_telemetry.run(args, FakeParser())
+
+    captured = capsys.readouterr()
+    assert "warning" in captured.err.lower()
+    assert 'mmk_"quoted"' in captured.out
