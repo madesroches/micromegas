@@ -521,7 +521,12 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    inline, so the statement's own connection can query the new view set immediately instead of
    waiting out the interval. It must run after the commit: `reload()` starts with the pool-backed
    `store.list()` (§7), a second, uncommitted-write-blind connection, so calling it any earlier would
-   have it read the pre-mutation rows and swap in the old factory.
+   have it read the pre-mutation rows and swap in the old factory. Its `Err` is `warn!`-logged and
+   metered, then discarded rather than propagated — the same treatment `spawn_refresh_task` already
+   gives a failed periodic `reload()` (`query_deny_list.rs:682-698` for the analogous
+   `QueryDenyList::refresh`). The row is already committed, so a client-visible failure here would be
+   reporting a mutation that already happened, and the next periodic refresh will pick it up
+   regardless; the statement still returns its `created | replaced | dropped` row.
 7. Return a one-row, two-column result (`view_set_name: Utf8`, `status: Utf8` ∈
    `created | replaced | dropped | not_found`), wrapped in `CompletionTrackedStream::new(...,
    audit_state)` exactly like every other `execute_query` return, so `client.query("CREATE ...")`
@@ -728,11 +733,20 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    author-written `ORDER BY` safe, so it is also where `log_stats`'s transform query's `ORDER BY`
    (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
    row's `file_schema_hash` is unaffected. Update all the tests and comments this enables in the same
-   step: `sql_partition_spec_sort_order_tests.rs`'s `extract_query_missing_order_by_fails_the_write` to
-   assert that the plan the new helper returns satisfies the declared order — calling the helper
-   rather than re-applying the sort itself, which is what keeps the production path under test —
-   instead of asserting `write()`'s `expect_err`, which the fixture's `connect_lazy` pool cannot
-   reach once the ordering assertion stops firing; and that file's module header (today stating the removed
+   step: `sql_partition_spec_sort_order_tests.rs` has exactly two tests —
+   `extract_query_missing_order_by_fails_the_write` and
+   `extract_query_matching_order_by_passes_the_ordering_check` — both asserting the same
+   ordering property once the sort is applied unconditionally, with the latter already building its
+   own plan (`ctx.sql(extract_query).create_physical_plan()`) instead of going through the new
+   helper and still carrying the fixture's now-redundant `ORDER BY name, time_bin`. Fold the two
+   into one helper-driven test (named for the sort-applying path, e.g.
+   `extract_query_without_an_order_by_satisfies_the_declared_sort_order`): drop the fixture's
+   `ORDER BY`, call the new helper rather than re-applying the sort itself or reaching for
+   `write()`'s `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering
+   assertion stops firing), and assert the plan it returns satisfies the declared order, rewording
+   the surviving assertion's failure message (today's `:165`, "a matching top-level ORDER BY must
+   satisfy the declared (name, time_bin) sort_order") to drop its reference to the removed `ORDER BY`
+   requirement. Also update that file's module header (today stating the removed
    "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`" contract
    verbatim), rewritten to describe the sort-applying path; `log_stats_ordering_tests.rs`'s
    `log_stats_extract_query_satisfies_its_declared_sort_order` (and its header comment pinning
