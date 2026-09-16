@@ -1,0 +1,183 @@
+# Apply the Declared Sort to the Extract Query
+
+## Overview
+
+A view declaring `with_merge_sort_order` must today also carry a matching top-level `ORDER BY` in its
+extract query: `SqlPartitionSpec::execute_extract_query` builds the physical plan and *asserts* that
+its output ordering satisfies the declared columns, erroring with "Check for a missing or mismatched
+top-level ORDER BY" when it does not. The merge side of the same option works the other way around —
+`QueryMerger::execute_sorted_merge` applies the declared columns as a logical-plan `DataFrame::sort`,
+so a missing or mismatched merge sort is not representable at all.
+
+This makes the extract side match the merge side: **apply** the declared sort, don't demand it.
+After this change neither query carries an author-written `ORDER BY`, and the ordering guarantee is
+enforced by construction on both sides rather than by construction on one and by blame on the other.
+
+It is also a prerequisite for DDL-defined view sets (`tasks/835_ddl_materialized_views_plan.md`),
+where `merge_sort_order` is a DDL option and a definition author has no way to see a missing
+`ORDER BY` until the daemon's first materialization tick fails. That plan depends on the
+`pub(crate)` helper this one introduces, so this lands first and on its own.
+
+## Current State
+
+- `rust/analytics/src/lakehouse/sql_partition_spec.rs:72-115` — `execute_extract_query` returns
+  `df.execute_stream()` directly when `sort_order` is `None`; when it is declared, it builds the
+  physical plan and runs `assert_single_partition` + `assert_ordering_satisfied` against it, then
+  executes that exact plan via `execute_stream`.
+- `sql_partition_spec.rs:40-44` — `SqlPartitionSpec::sort_order`'s field doc states the verify
+  semantics ("When set, `write` verifies the extract query's physical plan actually satisfies it").
+- `rust/analytics/src/lakehouse/merge.rs:210-233` — `execute_sorted_merge`'s apply-then-plan
+  sequence: four optimizer settings, `ctx.sql(...)`, `df.sort(...)` over the `ScanSortColumn`s,
+  `create_physical_plan()`, then the same two assertions. This is the pattern to mirror.
+- `rust/analytics/src/lakehouse/sql_batch_view.rs:145-163` — `with_merge_sort_order`'s doc comment
+  states a four-item author contract whose item 3 is the top-level-`ORDER BY` requirement.
+- `rust/analytics/src/lakehouse/log_stats_view.rs:50` — the only shipped view declaring a sort order
+  carries `ORDER BY time_bin, process_id, level, target`, with comments at `:29` and `:35`
+  explaining that the `ORDER BY` is what lets the fresh-write path record the guarantee.
+- Three test files pin the current contract: `sql_partition_spec_sort_order_tests.rs` (two tests and
+  a module header stating the verify semantics verbatim), `log_stats_ordering_tests.rs`
+  (`log_stats_extract_query_satisfies_its_declared_sort_order` and its doc comment), and
+  `ordered_aggregation_spike_tests.rs` (two rationale comments citing the verify contract, though
+  their assertions are unaffected).
+
+## Design
+
+### 1. One shared sort-apply-and-plan helper
+
+`sql_partition_spec.rs` grows a `pub(crate)` helper that takes the `DataFrame`, the optional declared
+`sort_order`, and the context the assertions need (the subject string and the insert range for their
+error messages). When a sort order is declared it applies it as a `DataFrame::sort` over the
+`ScanSortColumn`s, builds the physical plan, and runs the existing `assert_single_partition` and
+`assert_ordering_satisfied` checks; with `sort_order: None` it builds the plan unsorted and skips
+both. It returns the plan (and the `TaskContext` the caller needs to execute it).
+
+`execute_extract_query` is reduced to calling the helper and `execute_stream`-ing what it returns.
+The helper is the single path every other caller uses too, so no caller re-implements the sort and
+the plan a validator builds cannot diverge from the plan the daemon executes.
+
+The two assertions stay. They can no longer fire on an author's missing `ORDER BY` — there is no
+author `ORDER BY` left to miss — so their remaining job is to catch a plan-shape regression: an
+optimizer setting or a source change that repartitions the scan and destroys the single-partition,
+globally-ordered property the recorded sort guarantee claims. That failure is otherwise silent (a
+written partition carrying a false ordering guarantee, which the k-way merge then trusts), and the
+checks cost one plan walk on a path that already builds the plan.
+
+### 2. The author contract loses an item
+
+`with_merge_sort_order`'s item 3 becomes a statement that neither query needs an author-written
+`ORDER BY`: the builder forwards the columns to both sides, `QueryMerger` applies the sort to the
+merge query and the extract path applies it to the extract query. Items 1 (declared columns must be
+`GROUP BY` keys), 2 (join side placement) and 4 (composable aggregates) are unaffected — they are
+properties of the merge query's shape, not of a sort the caller writes.
+
+### 3. `log_stats` drops its `ORDER BY`
+
+With the sort applied unconditionally, `log_stats`'s extract-query `ORDER BY` is redundant. Removing
+it is projection-identical — same columns, same types, same nullability, same order — so the view's
+inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and every existing
+`log_stats` partition stays readable with no rebuild.
+
+## Implementation Steps
+
+1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub(crate)` sort-apply-and-plan
+   helper described in §1, mirroring `merge.rs:210-233`; reduce `execute_extract_query` to calling
+   it; rewrite `SqlPartitionSpec::sort_order`'s field doc (`:40-44`) and `execute_extract_query`'s
+   own doc comment (`:72-78`), both of which describe the removed verify semantics, to describe the
+   sort-applying path.
+2. `rust/analytics/src/lakehouse/sql_batch_view.rs` — rewrite `with_merge_sort_order`'s doc item 3
+   (`:145-163`) per §2.
+3. `rust/analytics/src/lakehouse/log_stats_view.rs` — drop `ORDER BY time_bin, process_id, level,
+   target` (`:50`) and reword the two comments that explain it (`:29`, `:35`).
+4. `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs` — the file's two tests,
+   `extract_query_missing_order_by_fails_the_write` (`:83-115`) and
+   `extract_query_matching_order_by_passes_the_ordering_check` (`:120-178`), assert the same
+   ordering property once the sort is applied unconditionally, and the latter already builds its own
+   plan (`ctx.sql(extract_query).create_physical_plan()`) rather than going through the production
+   path while still carrying the fixture's now-redundant `ORDER BY name, time_bin`. Fold them into
+   one helper-driven test (named for the sort-applying path, e.g.
+   `extract_query_without_an_order_by_satisfies_the_declared_sort_order`): drop the fixture's
+   `ORDER BY`, call the new helper rather than re-applying the sort itself or reaching for `write()`'s
+   `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering assertion
+   stops firing), and assert the returned plan satisfies the declared order, rewording the surviving
+   failure message (today's `:165`, "a matching top-level ORDER BY must satisfy the declared
+   (name, time_bin) sort_order"). Rewrite the module header (`:1-12`), which states the removed
+   "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`" contract
+   verbatim, to describe the sort-applying path — without citing this plan document.
+5. `rust/analytics/tests/log_stats_ordering_tests.rs` — update
+   `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to plan through the new
+   helper rather than the raw SQL text, and reword its doc comment (`:165-169`, pinning
+   "`ORDER BY time_bin, process_id, level, target`"), its assertion message (`:241`, "check for a
+   missing or reordered top-level ORDER BY") and the module header's `ORDER BY` half (`:4`, `:10`).
+6. `rust/analytics/tests/ordered_aggregation_spike_tests.rs` — reword the rationale comments in
+   `cte_internal_order_by_is_discarded_by_a_later_join` and
+   `top_level_order_by_satisfies_the_declared_columns` that cite the removed contract
+   ("SqlPartitionSpec::write's declared-path plan verification relies on" / "plan verification relies
+   on to accept a fresh extract query"). Both assertions are about DataFusion's own plan behavior and
+   keep passing unchanged.
+7. `CHANGELOG.md` — one entry with the **Minor breaking change** clause for `with_merge_sort_order`
+   no longer requiring a top-level `ORDER BY` in the extract query (the sort is now applied for every
+   declared-sort view).
+
+## Files to Modify
+
+Modified:
+- `rust/analytics/src/lakehouse/sql_partition_spec.rs`, `sql_batch_view.rs`, `log_stats_view.rs`
+- `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
+  `ordered_aggregation_spike_tests.rs`
+- `CHANGELOG.md`
+
+No new files, no migration, no SQL-surface change.
+
+## Trade-offs
+
+**Applying the sort vs. keeping the assertion-only contract.** The current contract is cheaper — no
+logical-plan node is added — and it is honest for a hand-written view, whose author can read the
+error and add the `ORDER BY`. It stops being honest the moment the sort order arrives as
+configuration rather than as code, which is what the DDL work needs. Applying the sort also makes the
+two sides of one option behave the same way, which is worth the extra node on its own.
+
+**Changing `execute_extract_query` for every declared-sort view rather than only for new ones.** A
+DDL-only sort-applying path would leave the existing behavior untouched, at the cost of two extract
+paths differing in whether they trust the author. One path is the point of the change.
+
+## Decisions
+
+- Applying the declared sort and building the physical plan lives in one `pub(crate)` helper rather
+  than being re-implemented by each caller, so a validated plan and the daemon's plan cannot diverge.
+- `assert_single_partition` and `assert_ordering_satisfied` are kept on the extract path even though
+  no author mistake can trip them any more; they become the regression guard against a plan shape
+  that silently invalidates a recorded sort guarantee.
+- `log_stats`'s `ORDER BY` is removed in this change rather than left as dead SQL, since the shipped
+  view is the in-repo proof that the sort-applying path works.
+
+## Testing Strategy
+
+All no-DB unit tests, in the offline harness the three touched test files already use (lazy pool,
+in-memory object store, `NullPartitionProvider`).
+
+**`sql_partition_spec_sort_order_tests.rs`** — the folded test from step 4: an extract query with no
+`ORDER BY`, planned through the new helper against a view declaring `(name, time_bin)`, yields a plan
+whose output ordering satisfies the declared columns. This is the direct assertion that the sort is
+applied rather than demanded, and it exercises the production path rather than a test-local
+re-implementation of it.
+
+**`log_stats_ordering_tests.rs`** — the shipped `log_stats` extract query, with its `ORDER BY` now
+gone, still plans to a single-partition plan satisfying `(time_bin, process_id, level, target)` when
+planned through the helper. Together with the existing
+`log_stats_merge_query_stays_a_streaming_kway_merge` this keeps both halves of the streaming contract
+pinned for the one shipped declared-sort view.
+
+**`ordered_aggregation_spike_tests.rs`** — assertions unchanged; the file is touched for comment
+accuracy only, and its continued passing is the check that this change does not depend on the
+DataFusion behaviors it characterizes.
+
+No new `#[ignore]` live-DB test: per `CONTRIBUTING.md` those are reserved for pinning a bug witnessed
+in the wild.
+
+## Manual Verification
+
+Materialize a `log_stats` range on a local stack (`python3 local_test_env/ai_scripts/start_services.py`,
+then `materialize_partitions`) and confirm the written partitions still record their sort guarantee
+and that a `log_stats` query over the range returns rows — the end-to-end check that the applied sort
+produces the same materialization as the author-written `ORDER BY` did, which no planning-only test
+covers.
