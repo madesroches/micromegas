@@ -66,7 +66,7 @@ over the Arrow schema **and nothing else** — so changing a `SqlBatchView`'s SQ
 output schema leaves every existing partition valid and the daemon does nothing.
 
 **Read authorization.** `OwnershipRewrite::predicate_for`
-(`rust/analytics/src/lakehouse/ownership_rewrite.rs:366-434`) picks a per-scan audience predicate by
+(`rust/analytics/src/lakehouse/ownership_rewrite.rs:351-434`) picks a per-scan audience predicate by
 schema introspection: an `audience` field → direct column filter; else a `process_id` field →
 semi-join against `__processes__partitions`; else two name-keyed arms; **else
 `Err(DataFusionError::Plan("no audience rule defined for view set '...'"))`**. This rule is
@@ -191,7 +191,7 @@ INSERT INTO lakehouse_view_set_definitions (...) VALUES ('log_stats', ...)
 ON CONFLICT (view_set_name) DO NOTHING;
 ```
 
-Its text comes from `const`s in a new
+Its text comes from a `log_stats` `ViewDefinition` fn in a new
 `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — moved out of
 `log_stats_view.rs`, which the migration and the tests then share as one source of truth.
 `ON CONFLICT DO NOTHING` keeps the migration idempotent.
@@ -210,11 +210,6 @@ The `upsert` behind `CREATE OR REPLACE` is an `ON CONFLICT (view_set_name) DO UP
 fire on `INSERT`, and `reload()`'s digest is over `(view_set_name, updated_at)`, so an update that
 left it unset would go live only on the replacing node while every other flight-sql replica and the
 maintenance daemon kept serving and materializing the old definition.
-
-Seeded `log_stats` otherwise gets no special treatment: it can be replaced or dropped like any other
-row, and a definition that fails to build is skipped with a `warn!` like any other. The consequence
-of a skip is a clean `table not found` for `log_stats` queries — a visible error, not wrong data —
-which is why it needs no fail-fast carve-out.
 
 `view_options` holds the non-query options other than `update_group` (the time columns, the two
 deltas, `merge_sort_order`), serialized with `serde_json::to_string`/`from_str` and stored as `TEXT`
@@ -284,7 +279,10 @@ same walk applied to each. On top of that:
    session context built for this definition — that context has already run `configurator.configure`,
    so this one probe additionally catches a collision with a static table the `SessionConfigurator`
    registers, which the `get_global_view`/`get_view_sets` probe above cannot see and which
-   `StaticTablesConfigurator::configure` otherwise only `warn!`s about and silently shadows.
+   otherwise fails silently the other way: `StaticTablesConfigurator::configure` runs last in
+   `make_session_context`, after every global view is registered, so its own `register_table` call
+   for the colliding name fails and is only `warn!`ed about — the static table silently disappears
+   from every query in the deployment, not the DDL view.
 2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
    field, and that field's type must be `Utf8` or `Dictionary(_, Utf8)`. Without one, or with the
    wrong type, `OwnershipRewrite::audience_column_predicate`/the `process_id` arm
@@ -293,7 +291,10 @@ same walk applied to each. On top of that:
    serves an empty table to every non-admin caller with no error anywhere, the same silent-failure
    class check 9 already closes for the time columns. The error message names the requirement and
    points at `max(audience)`-in-`GROUP BY` as the fix. This mirrors the existing branch table exactly;
-   `ownership_rewrite.rs` needs no edit.
+   the branch logic is unchanged, but `ownership_rewrite.rs`'s module doc — the six-view table, the
+   claim that the column is always `Dictionary(Int32, Utf8)`, and the "non-null by construction …
+   no unstamped case either way" claim — is reworded to cover DDL-defined view sets and the
+   documented NULL obligation below.
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
    substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
@@ -349,12 +350,14 @@ same walk applied to each. On top of that:
    `view_instance(...)` is not admin-gated (it is registered unconditionally in
    `register_lakehouse_functions`) but is just as mutating: `MaterializedView::scan` calls
    `jit_update(...)` before fetching partitions, so a stored `view_instance(...)` scan would also
-   write JIT partitions on every daemon tick and during validation itself. The remaining read-only
-   table functions — `list_query_denials`, `list_partitions`, `list_view_sets` and
-   `list_audience_grants` — resolve the same way but are not rejected: each is a live, non-time-ranged
-   metadata source, so a scan against one is frozen into a partition as of materialization time rather
-   than kept current, the same class of staleness check 7 otherwise polices, but with no mutation and
-   no error to force closing it here. The remaining three admin-gated items —
+   write JIT partitions on every daemon tick and during validation itself. Other read-only table
+   functions — including `list_query_denials`, `list_partitions`, `list_view_sets`,
+   `list_audience_grants` and `list_view_definitions` (§8), and the unconditionally-registered
+   `perfetto_trace_chunks`, `parse_block` and `process_spans` — resolve the same way but are not
+   rejected: none calls `jit_update`/writes a partition, so each is a live, non-time-ranged metadata
+   or decode source, and a scan against one is frozen into a partition as of materialization time
+   rather than kept current, the same class of staleness check 7 otherwise polices, but with no
+   mutation and no error to force closing it here. The remaining three admin-gated items —
    `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs
    and, being `Volatility::Volatile`, are already caught by check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
@@ -382,35 +385,8 @@ same walk applied to each. On top of that:
    extract query filtering on `insert_time` plans instead of failing `TypeCoercion`/
    `ConstEvaluator` on the unsubstituted literal. That build is what this check buys: an extract
    query that cannot be planned at all is rejected at `CREATE` rather than on the daemon's first
-   tick. `assert_single_partition`/`assert_ordering_satisfied`
-   (`partitioned_execution_plan.rs:217-265`) still run against it, passing the zero-width
-   `TimeRange::new(now, now)` built from that same timestamp, as a defense against a column list that
-   survives `with_merge_sort_order`'s existence-only schema check. This changes the ordering
-   guarantee for every declared-sort view, not only DDL ones, and breaks existing offline tests and
-   rationale comments that must be updated in the same step: `sql_partition_spec_sort_order_tests.rs`'s
-   `extract_query_missing_order_by_fails_the_write`, which today asserts `write()` fails on an
-   extract query with no top-level `ORDER BY`, is rewritten to assert that the extract query's
-   physical plan, built through the new sort-applying path, satisfies the declared order —
-   mirroring `extract_query_matching_order_by_passes_the_ordering_check` — rather than asserting
-   `write()`'s `expect_err`, since the test's fixture pool (`connect_lazy` against an unreachable
-   address) cannot actually run `write()` to completion; that file's module header (today stating,
-   verbatim, the removed contract — that `execute_extract_query` "refuses to record a false
-   sort_order guarantee when the extract query's physical plan doesn't actually satisfy it (e.g. a
-   missing top-level `ORDER BY`)") is rewritten in the same step to describe the sort-applying path,
-   not just the one test function; and `log_stats_ordering_tests.rs`'s
-   `log_stats_extract_query_satisfies_its_declared_sort_order`, which plans the shipped `log_stats`
-   extract-query text directly via `ctx.sql`/`create_physical_plan` and pins its own doc comment to
-   "line 43 of `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`)", is rewritten
-   (test and header comment) to plan through the sort-applying path instead of the raw SQL text, to
-   match step 4's removal of that `ORDER BY`. `ordered_aggregation_spike_tests.rs`'s
-   `cte_internal_order_by_is_discarded_by_a_later_join` and
-   `top_level_order_by_satisfies_the_declared_columns` still pass unmodified (they assert DataFusion
-   planning properties directly, not `write()`), but their rationale comments — "This is what
-   SqlPartitionSpec::write's declared-path plan verification relies on" and "what
-   SqlPartitionSpec::write's plan verification relies on to accept a fresh extract query" — describe
-   the removed contract; both are rewritten in terms of the sort-applying path in the same step, and
-   the CTE negative control (`cte_internal_order_by_is_discarded_by_a_later_join`) is kept since a
-   CTE-internal-only `ORDER BY` still must not satisfy the declared order under the new path either.
+   tick. This changes the ordering guarantee for every declared-sort view, not only DDL ones; step 4
+   lists the existing offline tests and rationale comments this breaks and how each is updated.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -420,8 +396,10 @@ same walk applied to each. On top of that:
    `col(&*self.min_event_time_column)`, so a typo'd or non-nanosecond column is otherwise accepted at
    `CREATE` and only fails on the daemon's first tick and on every ranged query.
 
-Checks 2, 3, 5, 6, 7 and 8 are the ones that earn their keep: each covers a failure that produces wrong
-or stale *numbers* rather than an error. What stays an **unchecked author obligation**, documented
+Checks 2, 3, 5, 6 and 7 are the ones that earn their keep: each covers a failure that produces wrong
+or stale *numbers* rather than an error. Check 8's payoff is different: it moves a hard failure —
+an extract query that cannot be planned at all — from the daemon's first tick to `CREATE` time. What
+stays an **unchecked author obligation**, documented
 and not enforced: `extract_query` need not carry `{begin}`/`{end}` (the extract session context is
 already range-scoped by `filter_insert_range` on the partition provider,
 `sql_batch_view.rs:238`), but because that filter matches by *overlap*, a partition wider than the
@@ -458,7 +436,9 @@ executor (`migrate_db` already uses `0`, `migrate_lakehouse` uses `1`; reusing e
 every DDL statement against an unrelated migration lock) — serializing every view-definition mutation
 cluster-wide so two replicas can't each validate against a row set that omits the other's in-flight
 write. Still inside that transaction, before applying the mutation, it reads the pre-mutation rows via
-the transaction-scoped free function `view_definition_store::list_tx(&mut tx)` (§7). After the
+the transaction-scoped free function `view_definition_store::list_tx(&mut tx)` (§7), which returns
+rows in the same `(update_group, view_set_name)` order as `store.list()`, since `build_factory` relies
+on that ordering regardless of which one fed it. After the
 upsert/delete, it re-reads the post-mutation rows with another `list_tx(&mut tx)`. Both row sets are
 handed to
 `ViewRegistry::check_dependents_survive(pre_rows, post_rows)` (§7, next to `build_from_rows`), which
@@ -589,7 +569,7 @@ impl ViewRegistry {
     pub async fn reload(&self) -> Result<()>;
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
-    /// three pieces separately.
+    /// four pieces separately.
     pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, Vec<String>)>;
     /// §4b's dependent-protection refusal, factored out as a plain rows-in/rows-out function (no
     /// `sqlx::Transaction`) so it is a no-DB unit test target: builds a factory from `pre_rows` and
@@ -734,7 +714,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also
    here: `sql_partition_spec.rs`'s `execute_extract_query` applies the declared `sort_order` as a
    `DataFrame::sort` before planning, mirroring `merge.rs:210-233`, and `with_merge_sort_order`'s
-   doc comment loses item 3's top-level-`ORDER BY` requirement. This is what makes dropping the
+   doc comment loses item 3's top-level-`ORDER BY` requirement. Two more comments describing the old
+   verify-the-`ORDER BY` semantics are updated in the same step: `SqlPartitionSpec::sort_order`'s
+   field doc (`sql_partition_spec.rs:40-44`, "When set, `write` verifies the extract query's physical
+   plan actually satisfies it") and `execute_extract_query`'s own doc comment (`:72-78`, "verifies …
+   that its output ordering satisfies the declared columns"). This is what makes dropping the
    author-written `ORDER BY` safe, so it is also where `log_stats`'s transform query's `ORDER BY`
    (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
    row's `file_schema_hash` is unaffected. Update all the tests and comments this enables in the same
@@ -800,7 +784,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 12. `rust/public/src/servers/maintenance.rs` — `Views` → `Arc<ViewRegistry>` on the four view-carrying
     task structs, per-tick view resolution + sort helper, empty-list early return in
     `materialize_all_views`, `daemon`'s signature change, its awaited `registry.reload()` before
-    spawning the cron tasks (failing startup on error), and its `spawn_refresh_task` call.
+    spawning the cron tasks (failing startup on error), and its `spawn_refresh_task` call. Update
+    `daemon`'s rustdoc `views_to_update` argument entry (`:404`) to match the new `Arc<ViewRegistry>`
+    parameter.
 13. `rust/telemetry-maintenance-srv/src/main.rs` and `rust/monolith/src/main.rs` — build the
     registry from `default_view_factory` and hand it to `daemon`, resolving the same
     `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
@@ -814,13 +800,15 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
 ### Milestone 3 — introspection and `log_stats` cutover
 
 14. New `rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`, registered in
-    `query.rs`'s `if lakehouse_admin` block. Update `rust/analytics/tests/lakehouse_admin_gate_test.rs:2`'s
-    header from "eight" to "nine".
+    `rust/analytics/src/lakehouse/mod.rs` and in `query.rs`'s `if lakehouse_admin` block. Update
+    `rust/analytics/tests/lakehouse_admin_gate_test.rs:2-5`'s header from "eight" to "nine" and add
+    `list_view_definitions` to its inline enumeration.
 15. `rust/analytics/src/lakehouse/view_factory.rs` — drop the `log_stats` construction step
     (`:344-352`); `default_view_factory` now returns the base. Update its module doc comment
     (`:303`) from "the six global views" to "the five global views". `log_stats_view.rs`'s
-    `make_log_stats_view` is kept but reduced to building from the `const`s, so the tests below
-    still have a compiled `log_stats` to build.
+    `make_log_stats_view` is kept but reduced to `build_sql_batch_view` over the `log_stats`
+    `ViewDefinition` fn (step 1, step 2), so the tests below still have a compiled `log_stats` to
+    build.
     `rust/analytics/tests/audience_mismatch_skip_db_test.rs` builds its `log_stats` view via
     `make_log_stats_view` and `add_global_view`s it onto its own clone of `default_view_factory`,
     instead of pulling `log_stats` from `default_view_factory` directly — the
@@ -852,7 +840,7 @@ Created:
 
 Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `query.rs`, `mod.rs`, `view_factory.rs`,
-  `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`
+  `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`, `ownership_rewrite.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
   `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`,
   `sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
@@ -863,7 +851,7 @@ Modified:
 - `local_test_env/ai_scripts/start_services.py`
 - `mkdocs/docs/admin/functions-reference.md`, `maintenance.md`, `flight-sql.md`, `authorization.md`,
   `authentication.md`
-- `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/mkdocs.yml`
+- `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/mkdocs.yml`, `mkdocs/docs/grafana/usage.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -943,37 +931,17 @@ single error the author sees once.
   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`: orphan partitions it writes after the retire are
   reclaimed by retention, not immediately; a same-schema `CREATE` re-using the name within that
   window should be followed by an explicit `retire_partitions` call. Accepted risk.
-- A content-only `CREATE OR REPLACE`'s `retire_partitions` + `materialize_partitions` sequence (§3)
-  races a lagging daemon replica the same way, but silently: a replica still on the old definition
-  writes a partition with a matching `file_schema_hash` into the just-retired range, and it is read
-  forever as new-definition data with no error. The admin must wait out
-  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` after the `REPLACE` before retiring and
-  re-materializing. Accepted risk.
+- A content-only `CREATE OR REPLACE`'s `retire_partitions` + `materialize_partitions` sequence races
+  a lagging daemon replica the same way, but silently, with no error anywhere — see §3 for the
+  mechanism. Accepted risk.
 
 ## Documentation
 
-- **New** `mkdocs/docs/admin/materialized-views.md` — the DDL reference (both statements, every
-  option), the three-part model, the author obligations (insert-time filtering — or, for a definition
-  reading another materialized view, filtering on that view's event-time column instead, since a
-  materialized view's schema carries no `insert_time` — that `count_src_query` must always count a
-  raw source carrying `insert_time` (in practice `blocks`), never the upstream view, regardless of
-  what `extract_query` reads — `audience` in the projection and the
-  `GROUP BY`, composable merge aggregates, `update_group` ordering, and that every row's
-  `audience`/`process_id` must be non-NULL since a NULL is fail-closed and silently hides the row from
-  every non-admin caller), the fact that
-  `merge_sort_order` is applied by the engine to both queries so neither writes an `ORDER BY`, the
-  backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
-  lifecycle — which must state that a `REPLACE` changing content but not the output schema does
-  *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
-  sequence that reclaims and rebuilds them; state directly, in this page's own prose, both races this
-  creates and their accepted-risk posture: a `DROP` re-using the same view set name within
-  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` can have a still-lagging daemon replica write an
-  orphan partition after the retire (reclaimed by retention, not immediately; follow up with an
-  explicit `retire_partitions` call), and a content-only `REPLACE`'s `retire_partitions` +
-  `materialize_partitions` sequence can have a still-lagging replica write a partition that hashes as
-  new-definition data into the just-retired range with no error, so an admin must wait out that same
-  interval after the `REPLACE` before retiring and re-materializing. Added to `mkdocs/mkdocs.yml`'s
-  nav.
+- **New** `mkdocs/docs/admin/materialized-views.md` — the DDL reference (§1), the redefinition/`DROP`
+  lifecycle and the two accepted-risk races (§3), the author obligations (§4's obligation paragraph),
+  and the accepted risks recorded in `## Decisions`. The page states its content in self-contained
+  prose — it must not cite this plan's section numbers or decision entries directly. Added to
+  `mkdocs/mkdocs.yml`'s nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -990,6 +958,8 @@ single error the author sees once.
   DDL (`CREATE`/`DROP`, §5) is gated by the same admin check.
 - `mkdocs/docs/admin/authentication.md` — its cross-reference (`:579`) to "the eight gated SQL
   functions" becomes nine, matching `authorization.md`'s updated count.
+- `mkdocs/docs/grafana/usage.md` — its "Materialized Views" pointer (`:133`) currently links to
+  `../admin/maintenance.md`; repoint it at `../admin/materialized-views.md`.
 - `mkdocs/docs/query-guide/schema-reference.md` — one paragraph saying `list_view_sets()` includes
   DDL-defined view sets and that their schemas are deployment-specific, plus a note that
   `log_stats` is now a seeded definition an operator may extend or replace (its documented schema
