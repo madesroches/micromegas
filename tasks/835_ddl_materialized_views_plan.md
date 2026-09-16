@@ -380,13 +380,16 @@ same walk applied to each. On top of that:
    guarantee for every declared-sort view, not only DDL ones, and breaks two existing offline tests
    that must be updated in the same step: `sql_partition_spec_sort_order_tests.rs`'s
    `extract_query_missing_order_by_fails_the_write`, which today asserts `write()` fails on an
-   extract query with no top-level `ORDER BY`, is inverted to assert the applied sort makes that
-   same write succeed; and `log_stats_ordering_tests.rs`'s
+   extract query with no top-level `ORDER BY`, is rewritten to assert that the extract query's
+   physical plan, built through the new sort-applying path, satisfies the declared order —
+   mirroring `extract_query_matching_order_by_passes_the_ordering_check` — rather than asserting
+   `write()`'s `expect_err`, since the test's fixture pool (`connect_lazy` against an unreachable
+   address) cannot actually run `write()` to completion; and `log_stats_ordering_tests.rs`'s
    `log_stats_extract_query_satisfies_its_declared_sort_order`, which plans the shipped `log_stats`
    extract-query text directly via `ctx.sql`/`create_physical_plan` and pins its own doc comment to
    "line 43 of `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`)", is rewritten
    (test and header comment) to plan through the sort-applying path instead of the raw SQL text, to
-   match step 2's removal of that `ORDER BY`.
+   match step 4's removal of that `ORDER BY`.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -690,16 +693,13 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    because step 2's `log_stats` `ViewDefinition` fn and step 3's migration seed both need this type to exist.
 2. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats` exposed as a
    `fn` returning its `ViewDefinition` (the three queries plus every option: `update_group`, `time_column`, the
-   two deltas, `merge_sort_order`), lifted out of `log_stats_view.rs` minus its transform query's
-   now-redundant `ORDER BY` (§4 check 8) — a projection-identical change, so the seeded row's
-   `file_schema_hash` is unaffected — plus a function
+   two deltas, `merge_sort_order`), lifted out of `log_stats_view.rs` verbatim — its transform
+   query keeps its `ORDER BY` until step 4 adds the sort-applying path that makes it redundant —
+   plus a function
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
    `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
    `serde_json` for `view_options`) and by the parser round-trip test. Registered in
-   `rust/analytics/src/lakehouse/mod.rs`. Also here: update
-   `log_stats_ordering_tests.rs`'s `log_stats_extract_query_satisfies_its_declared_sort_order` (and
-   its header comment pinning "`ORDER BY time_bin, process_id, level, target`") to match the removed
-   `ORDER BY`, planning through the sort-applying path added in step 4 rather than the raw SQL text.
+   `rust/analytics/src/lakehouse/mod.rs`.
 3. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from `builtin_view_definitions`'s
@@ -712,10 +712,17 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also
    here: `sql_partition_spec.rs`'s `execute_extract_query` applies the declared `sort_order` as a
    `DataFrame::sort` before planning, mirroring `merge.rs:210-233`, and `with_merge_sort_order`'s
-   doc comment loses item 3's top-level-`ORDER BY` requirement. This is what makes the removed
-   `ORDER BY`s survive: update `sql_partition_spec_sort_order_tests.rs`'s
-   `extract_query_missing_order_by_fails_the_write` to assert the applied sort makes the
-   previously-failing write succeed instead of asserting `write()`'s `expect_err`.
+   doc comment loses item 3's top-level-`ORDER BY` requirement. This is what makes dropping the
+   author-written `ORDER BY` safe, so it is also where `log_stats`'s transform query's `ORDER BY`
+   (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
+   row's `file_schema_hash` is unaffected. Update both tests this enables in the same step:
+   `sql_partition_spec_sort_order_tests.rs`'s `extract_query_missing_order_by_fails_the_write` to
+   assert the extract query's physical plan, built through this sort-applying path, satisfies the
+   declared order — mirroring `extract_query_matching_order_by_passes_the_ordering_check` — instead
+   of asserting `write()`'s `expect_err`; and `log_stats_ordering_tests.rs`'s
+   `log_stats_extract_query_satisfies_its_declared_sort_order` (and its header comment pinning
+   "`ORDER BY time_bin, process_id, level, target`") to match the removed `ORDER BY`, planning
+   through this same sort-applying path rather than the raw SQL text.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -1011,10 +1018,12 @@ check set over the seeded `log_stats` definition and assert it passes unmodified
 validator's calibration case; a failure here means a check is miscalibrated, not that the view is
 wrong. In particular this is what exercises check 3's nullability exclusion: `count(*)`
 (non-nullable) in the extract query vs. `sum(count)` (nullable) in the merge query. The same test
-module also asserts `build_sql_batch_view(<seeded log_stats ViewDefinition>).get_file_schema_hash()
-== make_log_stats_view(...).get_file_schema_hash()`, built from the same base factory — a no-DB check
+module also asserts `build_sql_batch_view(<seeded log_stats ViewDefinition>)`'s inferred schema
+against an explicit expected field list (names, types, nullability) captured from today's compiled
+`log_stats` view — not a comparison against `make_log_stats_view(...)`'s own hash, which is derived
+from the same `ViewDefinition` and so cannot catch a divergence — a no-DB check
 that the migration's seeded definition infers the identical Arrow schema as the compiled view it
-replaces, since a divergent hash would make every pre-upgrade `log_stats` partition unreadable
+replaces, since a divergent schema would make every pre-upgrade `log_stats` partition unreadable
 (`partition_cache.rs:386,420` filter on exact `file_schema_hash`) with no error anywhere.
 
 **`view_registry_tests.rs`** — with a fake `ViewDefinitionStore`: definitions are built in
@@ -1058,9 +1067,11 @@ witnessed in the wild, and this is new-feature acceptance.
 
 Each step below needs a running split-mode stack and is checking something no unit test can reach.
 
-1. **Migration on an existing lake.** Point `MICROMEGAS_SQL_CONNECTION_STRING` at a v9 database and
-   run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade lakehouse schema to
-   v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Not automated
-   because it exercises a real pre-existing schema state, not a freshly created one. (The seeded
-   `log_stats` definition's schema-hash stability with the compiled view it replaces is covered by the
-   no-DB unit test in `## Testing Strategy`, not by this manual step.)
+1. **Pre-upgrade `log_stats` partitions stay readable through the seeded definition.** Point
+   `MICROMEGAS_SQL_CONNECTION_STRING` at a v9 database that already has materialized `log_stats`
+   partitions and run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade
+   lakehouse schema to v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` =
+   10, then query `log_stats` for a time range predating the upgrade and confirm those partitions
+   are still returned. Not automated because it needs a real pre-existing v9 database with
+   materialized data, which the Milestone 3 e2e stack (a freshly created lake) does not have — it is
+   the one property a fresh lake cannot exercise.
