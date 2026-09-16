@@ -4,7 +4,7 @@ use super::{
     partition_cache::{PartitionCache, QueryPartitionProvider},
     partition_source_data::hash_to_object_count,
     partitioned_execution_plan::{
-        ScanOrdering, assert_ordering_satisfied, assert_single_partition,
+        ScanOrdering, assert_ordering_satisfied, assert_single_partition, sort_exprs,
     },
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
@@ -224,17 +224,7 @@ impl QueryMerger {
         }
 
         let df = ctx.sql(&self.query).await?;
-        let df = df.sort(
-            columns
-                .iter()
-                .map(|c| {
-                    Expr::Column(datafusion::common::Column::new_unqualified(
-                        c.column.as_str(),
-                    ))
-                    .sort(!c.descending, c.descending)
-                })
-                .collect(),
-        )?;
+        let df = df.sort(sort_exprs(columns))?;
         let task_ctx = Arc::new(df.task_ctx());
         let plan = df
             .create_physical_plan()

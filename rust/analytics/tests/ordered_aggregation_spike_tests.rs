@@ -409,40 +409,11 @@ async fn fuller_measure_set_still_streams() {
 }
 
 #[tokio::test]
-async fn cte_internal_order_by_is_discarded_by_a_later_join() {
-    // The extract query's ORDER BY must be top-level. A CTE-internal ORDER BY that is later
-    // joined does not count -- relational joins carry no row-order guarantee over their inputs, so
-    // the join discards it. This is what SqlPartitionSpec::write's declared-path plan verification
-    // relies on: it checks ordering_satisfy against the *actual* physical plan, so a
-    // CTE-internal-only ORDER BY would correctly fail that check rather than falsely certify the
-    // fresh partition.
-    let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
-    register_dim(&ctx).await;
-    let plan = plan_query(
-        &ctx,
-        "WITH sorted AS (SELECT name, time_bin, measure FROM source ORDER BY name, time_bin) \
-         SELECT s.name, s.time_bin, s.measure FROM sorted s JOIN dim d ON s.name = d.name",
-    )
-    .await;
-    let lex = lex_ordering_name_time_bin(&spike_schema());
-    let satisfied = plan
-        .properties()
-        .equivalence_properties()
-        .ordering_satisfy(lex)
-        .expect("ordering_satisfy should not error");
-    assert!(
-        !satisfied,
-        "a CTE-internal ORDER BY must not survive a later join -- if it did, the extract-query \
-         contract's top-level requirement would be unnecessarily strict, got:\n{}",
-        displayable(plan.as_ref()).indent(true)
-    );
-}
-
-#[tokio::test]
 async fn top_level_order_by_satisfies_the_declared_columns() {
-    // Positive control for the same requirement: a genuinely top-level ORDER BY does satisfy the
-    // declared columns -- what SqlPartitionSpec::write's plan verification relies on to accept a
-    // fresh extract query.
+    // A general DataFusion planning fact: a genuinely top-level ORDER BY does satisfy the declared
+    // columns. `plan_sorted_extract` (sql_partition_spec.rs) relies on this same
+    // `ordering_satisfy` check to verify that the sort it applies to an extract query's DataFrame
+    // actually survives planning.
     let ctx = streaming_merge_session(PerFileOrderedProvider::new(3, true));
     let plan = plan_query(
         &ctx,
