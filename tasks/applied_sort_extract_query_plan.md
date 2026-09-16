@@ -182,22 +182,12 @@ Modified:
 
 No new files, no migration, no SQL-surface change.
 
-## Trade-offs
-
-**Applying the sort vs. keeping the assertion-only contract.** The current contract is cheaper — no
-logical-plan node is added — and it is honest for a hand-written view, whose author can read the
-error and add the `ORDER BY`. It stops being honest the moment the sort order arrives as
-configuration rather than as code, which is what the DDL work needs. Applying the sort also makes the
-two sides of one option behave the same way, which is worth the extra node on its own.
-
-**Changing `execute_extract_query` for every declared-sort view rather than only for new ones.** A
-DDL-only sort-applying path would leave the existing behavior untouched, at the cost of two extract
-paths differing in whether they trust the author. One path is the point of the change.
-
 ## Decisions
 
 - Applying the declared sort and building the physical plan lives in one `pub` helper rather
   than being re-implemented by each caller, so a validated plan and the daemon's plan cannot diverge.
+- Accepted cost: the applied sort adds a logical-plan `Sort` node the assertion-only contract did
+  not.
 - `assert_single_partition` and `assert_ordering_satisfied` are kept on the extract path even though
   no author mistake can trip them any more; they become the regression guard against a plan shape
   that silently invalidates a recorded sort guarantee.
