@@ -311,7 +311,16 @@ same walk applied to each. On top of that:
 5. **Placeholders.** `count_src_query` must contain `{begin}` and `{end}`;
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
-   merge query is unrunnable without it.
+   merge query is unrunnable without it. `{begin}`/`{end}` are substituted with `insert_range.begin/end`
+   (insert-time bounds, `sql_batch_view.rs:249-257`) in `count_src_query` regardless of what
+   `extract_query` reads, so `count_src_query` must always count a raw source table carrying
+   `insert_time` — in practice `blocks`, the way `log_stats` counts `blocks` while its `extract_query`
+   reads `log_entries` (`log_stats_view.rs:18-26`) — even when `extract_query` reads another
+   materialized view instead of a raw source. A materialized view carries no `insert_time` column
+   (§4's obligation paragraph below), so a `count_src_query` filtering that view's event-time column
+   with insert-time bounds would mis-detect freshness silently; counting `blocks` instead couples a
+   dependent's freshness to its upstream's ingestion rate, not its upstream's own materialization
+   cadence, which is the accepted trade-off.
 6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
    walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) — never an
    optimized or physical plan: `SimplifyExpressions`'s `ConstEvaluator` treats `Stable` the same as
@@ -377,19 +386,31 @@ same walk applied to each. On top of that:
    (`partitioned_execution_plan.rs:217-265`) still run against it, passing the zero-width
    `TimeRange::new(now, now)` built from that same timestamp, as a defense against a column list that
    survives `with_merge_sort_order`'s existence-only schema check. This changes the ordering
-   guarantee for every declared-sort view, not only DDL ones, and breaks two existing offline tests
-   that must be updated in the same step: `sql_partition_spec_sort_order_tests.rs`'s
+   guarantee for every declared-sort view, not only DDL ones, and breaks existing offline tests and
+   rationale comments that must be updated in the same step: `sql_partition_spec_sort_order_tests.rs`'s
    `extract_query_missing_order_by_fails_the_write`, which today asserts `write()` fails on an
    extract query with no top-level `ORDER BY`, is rewritten to assert that the extract query's
    physical plan, built through the new sort-applying path, satisfies the declared order —
    mirroring `extract_query_matching_order_by_passes_the_ordering_check` — rather than asserting
    `write()`'s `expect_err`, since the test's fixture pool (`connect_lazy` against an unreachable
-   address) cannot actually run `write()` to completion; and `log_stats_ordering_tests.rs`'s
+   address) cannot actually run `write()` to completion; that file's module header (today stating,
+   verbatim, the removed contract — that `execute_extract_query` "refuses to record a false
+   sort_order guarantee when the extract query's physical plan doesn't actually satisfy it (e.g. a
+   missing top-level `ORDER BY`)") is rewritten in the same step to describe the sort-applying path,
+   not just the one test function; and `log_stats_ordering_tests.rs`'s
    `log_stats_extract_query_satisfies_its_declared_sort_order`, which plans the shipped `log_stats`
    extract-query text directly via `ctx.sql`/`create_physical_plan` and pins its own doc comment to
    "line 43 of `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`)", is rewritten
    (test and header comment) to plan through the sort-applying path instead of the raw SQL text, to
-   match step 4's removal of that `ORDER BY`.
+   match step 4's removal of that `ORDER BY`. `ordered_aggregation_spike_tests.rs`'s
+   `cte_internal_order_by_is_discarded_by_a_later_join` and
+   `top_level_order_by_satisfies_the_declared_columns` still pass unmodified (they assert DataFusion
+   planning properties directly, not `write()`), but their rationale comments — "This is what
+   SqlPartitionSpec::write's declared-path plan verification relies on" and "what
+   SqlPartitionSpec::write's plan verification relies on to accept a fresh extract query" — describe
+   the removed contract; both are rewritten in terms of the sort-applying path in the same step, and
+   the CTE negative control (`cte_internal_order_by_is_discarded_by_a_later_join`) is kept since a
+   CTE-internal-only `ORDER BY` still must not satisfy the declared order under the new path either.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -415,13 +436,14 @@ NULL is fail-closed and silently hides that row from every non-admin caller. Onl
 one is already spelled out for hand-written views, by `with_merge_sort_order`'s doc comment
 (`sql_batch_view.rs:145-163`); none of the four is decidable from a logical plan.
 
-The insert-time half of that obligation does not apply when `extract_query` reads another
+The insert-time half of that obligation does not apply to `extract_query` when it reads another
 materialized view rather than a raw source table: a materialized view's schema is whatever its own
 `extract_query` projects, and carries no `insert_time` column at all — only `time_column`'s
 event-time column is guaranteed to exist. A definition `b` reading definition `a` therefore filters
-on `a`'s event-time column instead; the consequence, also documented rather than enforced, is that a
-row arriving late into `a`'s own partitions after `b` has already covered that time range is not
-picked up by `b`.
+`extract_query` on `a`'s event-time column instead; the consequence, also documented rather than
+enforced, is that a row arriving late into `a`'s own partitions after `b` has already covered that
+time range is not picked up by `b`. `count_src_query` is unaffected by this — it is always written
+against a raw source carrying `insert_time` (check 5), never against `a` itself.
 
 ### 4b. Dependents survive a `DROP` or a `REPLACE`
 
@@ -715,14 +737,21 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    doc comment loses item 3's top-level-`ORDER BY` requirement. This is what makes dropping the
    author-written `ORDER BY` safe, so it is also where `log_stats`'s transform query's `ORDER BY`
    (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
-   row's `file_schema_hash` is unaffected. Update both tests this enables in the same step:
-   `sql_partition_spec_sort_order_tests.rs`'s `extract_query_missing_order_by_fails_the_write` to
+   row's `file_schema_hash` is unaffected. Update all the tests and comments this enables in the same
+   step: `sql_partition_spec_sort_order_tests.rs`'s `extract_query_missing_order_by_fails_the_write` to
    assert the extract query's physical plan, built through this sort-applying path, satisfies the
    declared order — mirroring `extract_query_matching_order_by_passes_the_ordering_check` — instead
-   of asserting `write()`'s `expect_err`; and `log_stats_ordering_tests.rs`'s
+   of asserting `write()`'s `expect_err`, and that file's module header (today stating the removed
+   "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`" contract
+   verbatim), rewritten to describe the sort-applying path; `log_stats_ordering_tests.rs`'s
    `log_stats_extract_query_satisfies_its_declared_sort_order` (and its header comment pinning
    "`ORDER BY time_bin, process_id, level, target`") to match the removed `ORDER BY`, planning
-   through this same sort-applying path rather than the raw SQL text.
+   through this same sort-applying path rather than the raw SQL text; and
+   `ordered_aggregation_spike_tests.rs`'s `cte_internal_order_by_is_discarded_by_a_later_join` and
+   `top_level_order_by_satisfies_the_declared_columns`, whose rationale comments cite the same removed
+   contract ("SqlPartitionSpec::write's declared-path plan verification relies on"/"plan verification
+   relies on to accept a fresh extract query") though their assertions are unaffected and keep passing
+   — reworded to describe the sort-applying path instead.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -826,7 +855,8 @@ Modified:
   `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
   `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`,
-  `sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`
+  `sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
+  `ordered_aggregation_spike_tests.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
@@ -878,7 +908,9 @@ single error the author sees once.
   the author states the order, and a definition reading another materialized view has to place
   itself after it. A default would be silently wrong for exactly that case.
 - A DDL-defined view set **may read another one**, as a first-class use case; enforced by §4 check 7
-  (`update_group` ordering) and §4b (dependents block a `DROP`/`REPLACE`).
+  (`update_group` ordering) and §4b (dependents block a `DROP`/`REPLACE`). Its `count_src_query` must
+  still count a raw source carrying `insert_time` (in practice `blocks`), never the upstream view
+  itself, since `{begin}`/`{end}` there are always insert-time bounds (§4 check 5).
 - No `CASCADE` on `DROP` in v1.
 - `log_stats` is seeded into `lakehouse_view_set_definitions` and removed from
   `default_view_factory`; `blocks`, `processes`, `streams`, `log_entries` and `measures` stay
@@ -923,7 +955,9 @@ single error the author sees once.
 - **New** `mkdocs/docs/admin/materialized-views.md` — the DDL reference (both statements, every
   option), the three-part model, the author obligations (insert-time filtering — or, for a definition
   reading another materialized view, filtering on that view's event-time column instead, since a
-  materialized view's schema carries no `insert_time` — `audience` in the projection and the
+  materialized view's schema carries no `insert_time` — that `count_src_query` must always count a
+  raw source carrying `insert_time` (in practice `blocks`), never the upstream view, regardless of
+  what `extract_query` reads — `audience` in the projection and the
   `GROUP BY`, composable merge aggregates, `update_group` ordering, and that every row's
   `audience`/`process_id` must be non-NULL since a NULL is fail-closed and silently hides the row from
   every non-admin caller), the fact that
@@ -931,9 +965,15 @@ single error the author sees once.
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
   *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
-  sequence that reclaims and rebuilds them; for the content-only-`REPLACE` race and the `DROP` race,
-  point the reader at §3 for the mechanism and at the corresponding `## Decisions` entries for the
-  accepted risk in each case, rather than re-deriving them. Added to `mkdocs/mkdocs.yml`'s nav.
+  sequence that reclaims and rebuilds them; state directly, in this page's own prose, both races this
+  creates and their accepted-risk posture: a `DROP` re-using the same view set name within
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` can have a still-lagging daemon replica write an
+  orphan partition after the retire (reclaimed by retention, not immediately; follow up with an
+  explicit `retire_partitions` call), and a content-only `REPLACE`'s `retire_partitions` +
+  `materialize_partitions` sequence can have a still-lagging replica write a partition that hashes as
+  new-definition data into the just-retired range with no error, so an admin must wait out that same
+  interval after the `REPLACE` before retiring and re-materializing. Added to `mkdocs/mkdocs.yml`'s
+  nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -1051,7 +1091,9 @@ a small view over `log_entries`, assert it appears in `list_view_sets()` and
 one daemon minute tick, rather than the 60 s production default) that `list_partitions()` shows rows
 for it *without* calling `materialize_partitions` first, confirming the daemon picks up a new view
 set without a restart; create `a` over `log_entries`
-at `update_group` 4000 and `b` over `a` at 4001, `materialize_partitions` both over the same range in
+at `update_group` 4000 (`count_src_query` counting `blocks`, per check 5) and `b` over `a` at 4001
+(`extract_query` reading `a` and filtering on `a`'s event-time column; `count_src_query` also
+counting `blocks`, not `a`), `materialize_partitions` both over the same range in
 that order, and assert `b`'s rows equal a re-aggregation of `a`'s; `materialize_partitions` a known
 range for the original view, `SELECT` from it, `REPLACE` it with a definition whose output schema
 changes and assert the old partitions are no longer read (§3), then `DROP` and assert it is gone from
