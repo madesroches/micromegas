@@ -15,11 +15,10 @@ the parts that fail *silently* when wrong, and a reload seam. Per-process / per-
 a DDL-defined view set (`view_instance('...', process_id)`) stay out of scope; only the `'global'`
 instance is created.
 
-**Prerequisite.** `tasks/applied_sort_extract_query_plan.md` lands first and on its own: it makes
-`execute_extract_query` *apply* a declared sort instead of demanding a matching top-level `ORDER BY`,
-and factors that into the `pub(crate)` helper §4 check 8 calls. It is the only part of this work that
-changes materialization behavior for views that already ship, so it is separated to keep that risk
-out of this plan's diff.
+**Prerequisite (shipped).** The applied-sort extract path
+(`tasks/completed/applied_sort_extract_query_plan.md`) already landed: `execute_extract_query` applies
+a declared sort via `sql_partition_spec::plan_sorted_extract` instead of demanding a matching
+top-level `ORDER BY`. This plan builds on that existing helper.
 
 **`log_stats` becomes data.** It is a `SqlBatchView` whose only distinction from a DDL-defined view
 is that its SQL lives in Rust, so the migration seeds it into `lakehouse_view_set_definitions` and
@@ -220,9 +219,7 @@ maintenance daemon kept serving and materializing the old definition.
 
 `view_options` holds the non-query options other than `update_group` (the time columns, the two
 deltas, `merge_sort_order`), serialized with `serde_json::to_string`/`from_str` and stored as `TEXT`
-rather than `JSONB` — the workspace `sqlx` dependency (`rust/Cargo.toml:85`) has no `json` feature,
-and nothing else in the repo binds a Postgres column to `serde_json::Value`; `TEXT` needs no new
-feature and `serde_json` is already a dependency (`rust/analytics/Cargo.toml:42`). `update_group` is
+rather than `JSONB` (see `## Decisions`). `update_group` is
 its own column because `reload()` sorts and §8 projects on it. `definition_sql` is the verbatim DDL
 text, kept for display and audit only — never re-parsed.
 
@@ -402,19 +399,19 @@ same walk applied to each. On top of that:
    become a logical-plan `DataFrame::sort` on the extract query before its physical plan is built,
    exactly as `QueryMerger::execute_sorted_merge` (`merge.rs:210-233`) already does for the merge
    query. Neither query then carries an author-written `ORDER BY`, and a missing or mismatched one is
-   not representable on either side. This relies on the `pub(crate)` sort-apply-and-plan helper in
-   `sql_partition_spec.rs` that `tasks/applied_sort_extract_query_plan.md` introduces, which
-   `execute_extract_query` and this check both call, so the validated plan and the daemon's plan
-   cannot diverge — a divergence would show up as a definition that passes `CREATE` and fails on the
-   first tick, or the reverse. This check's call is separate from, and
+   not representable on either side. This calls `sql_partition_spec::plan_sorted_extract`, the same
+   helper `execute_extract_query` calls, so the validated plan and the daemon's plan cannot diverge —
+   a divergence would show up as a definition that passes `CREATE` and fails on the first tick, or the
+   reverse. `plan_sorted_extract`'s `subject`/`insert_range` arguments only feed the assertions' error
+   messages; this check passes a string naming the definition and the same substituted
+   `{begin}`/`{end}` range described below. This check's call is separate from, and
    solely for, validation; the plan it produces is never the one checks 6 and 7 walk. It passes the
    same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
    (`sql_batch_view.rs:110-114`: both placeholders replaced with one `Utc::now()` timestamp) so an
    extract query filtering on `insert_time` plans instead of failing `TypeCoercion`/
    `ConstEvaluator` on the unsubstituted literal. That build is what this check buys: an extract
    query that cannot be planned at all is rejected at `CREATE` rather than on the daemon's first
-   tick. This changes the ordering guarantee for every declared-sort view, not only DDL ones; step 4
-   lists the existing offline tests and rationale comments this breaks and how each is updated.
+   tick.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -741,8 +738,8 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (`parse_view_ddl`
    owns the name charset check). Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
-   physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling the
-   `sql_partition_spec.rs` sort-apply-and-plan helper the prerequisite plan introduces — the same
+   physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling
+   `sql_partition_spec::plan_sorted_extract` — the same
    path `execute_extract_query` takes, so the validated plan and the daemon's plan cannot diverge.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
@@ -904,10 +901,10 @@ single error the author sees once.
   `MAX(audience)` (coarser, and wrong for a process spanning audiences); the check recommends
   projecting `audience` instead but does not require it. Accepted risk.
 - `merge_sort_order` applies the sort to both queries instead of requiring a top-level `ORDER BY` in
-  the extract query. That is settled by the prerequisite plan
-  (`tasks/applied_sort_extract_query_plan.md`), which lands the applied-sort path for every
-  declared-sort view; the alternative here would have been a DDL option that silently demands an
-  `ORDER BY` the author cannot see is missing until the daemon's first tick fails.
+  the extract query. That is settled by the already-shipped applied-sort path
+  (`tasks/completed/applied_sort_extract_query_plan.md`); the alternative here would have been a DDL
+  option that silently demands an `ORDER BY` the author cannot see is missing until the daemon's
+  first tick fails.
 - `MICROMEGAS_PUBLIC_VIEW_SETS` can name a DDL-defined view set, which disables its audience filter
   entirely. That is the existing operator knob behaving as designed; no extra guard. The knob is
   slated for removal, so §4 check 2 stays unconditional for such a view set: a definition meant to
@@ -921,6 +918,9 @@ single error the author sees once.
   still count a raw source carrying `insert_time` (in practice `blocks`), never the upstream view
   itself, since `{begin}`/`{end}` there are always insert-time bounds (§4 check 5).
 - No `CASCADE` on `DROP` in v1.
+- `view_options` is stored as `TEXT`, not `JSONB`: the column is opaque to SQL — always read back as a
+  whole and round-tripped through `serde_json::to_string`/`from_str` — so `JSONB`'s indexing and
+  validation buy nothing.
 - `log_stats` is seeded into `lakehouse_view_set_definitions` and removed from
   `default_view_factory`; `blocks`, `processes`, `streams`, `log_entries` and `measures` stay
   code-driven — seeding `processes`/`streams` too would put audience resolution itself behind a
