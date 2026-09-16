@@ -286,10 +286,14 @@ same walk applied to each. On top of that:
    registers, which the `get_global_view`/`get_view_sets` probe above cannot see and which
    `StaticTablesConfigurator::configure` otherwise only `warn!`s about and silently shadows.
 2. **Audience reachability.** The inferred schema must contain an `audience` field or a `process_id`
-   field. Without one, `OwnershipRewrite::predicate_for` returns `Err` for every non-admin caller
-   and the view set is unqueryable in any deployment with auth on. The error message names the
-   requirement and points at `max(audience)`-in-`GROUP BY` as the fix. This mirrors the existing
-   branch table exactly; `ownership_rewrite.rs` needs no edit.
+   field, and that field's type must be `Utf8` or `Dictionary(_, Utf8)`. Without one, or with the
+   wrong type, `OwnershipRewrite::audience_column_predicate`/the `process_id` arm
+   (`ownership_rewrite.rs:234-260`, `:390-401`) still plans successfully — each `cast`s the column to
+   `Utf8` before comparing — but matches nothing, so a non-string `audience`/`process_id` column
+   serves an empty table to every non-admin caller with no error anywhere, the same silent-failure
+   class check 9 already closes for the time columns. The error message names the requirement and
+   points at `max(audience)`-in-`GROUP BY` as the fix. This mirrors the existing branch table exactly;
+   `ownership_rewrite.rs` needs no edit.
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
    substituted `{source}` name, plan `merge_partitions_query`, and require its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
@@ -321,7 +325,7 @@ same walk applied to each. On top of that:
    data, no error, indefinitely; in `count_src_query` it instead corrupts freshness detection
    (`verify_overlapping_partitions` compares row counts), causing perpetual re-materialization.
 
-7. **No admin-gated mutating table function, and `update_group` strictly after every view set the
+7. **No mutating table function, and `update_group` strictly after every view set the
    definition reads.** Walk all three of the same pre-optimization `LogicalPlan`s check 6 walks, for
    every `TableScan`, resolving each one's `table_name` against the factory the definition was built
    for — recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
@@ -329,19 +333,26 @@ same walk applied to each. On top of that:
    alone misses it and would only catch `__<name>__partitions` scans). Reject outright any scan whose
    `TableSource` resolves to one of the four mutating admin-gated table functions
    (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-   `deny_queries`) — table functions are the only ones of the eight admin-gated items a `TableScan`
-   can resolve to: check 6 only walks `ScalarUDF` expressions, so a UDTF call such as
-   `SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be stored and then
-   re-executed under `CallerContext::maintenance()` on every daemon tick. A fifth table function,
-   `list_query_denials`, resolves the same way but is read-only and is deliberately not rejected. The
-   remaining three — `retire_partition_by_file`, `retire_partition_by_metadata`,
-   `remove_query_denial` — are scalar UDFs and, being `Volatility::Volatile`, are already caught by
-   check 6. For every other scan,
+   `deny_queries`) **or** to `view_instance(...)` — table functions are the only ones of the eight
+   admin-gated items a `TableScan` can resolve to: check 6 only walks `ScalarUDF` expressions, so a
+   UDTF call such as `SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be
+   stored and then re-executed under `CallerContext::maintenance()` on every daemon tick.
+   `view_instance(...)` is not admin-gated (it is registered unconditionally in
+   `register_lakehouse_functions`) but is just as mutating: `MaterializedView::scan` calls
+   `jit_update(...)` before fetching partitions, so a stored `view_instance(...)` scan would also
+   write JIT partitions on every daemon tick and during validation itself. The remaining read-only
+   table functions — `list_query_denials`, `list_partitions`, `list_view_sets` and
+   `list_audience_grants` — resolve the same way but are not rejected: each is a live, non-time-ranged
+   metadata source, so a scan against one is frozen into a partition as of materialization time rather
+   than kept current, the same class of staleness check 7 otherwise polices, but with no mutation and
+   no error to force closing it here. The remaining three admin-gated items —
+   `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs
+   and, being `Volatility::Volatile`, are already caught by check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
    recursion names the underlying `__<name>__partitions` table, not the view set, so it is resolved by
    stripping the `__..__partitions` affix or by downcasting its `TableSource` to `MaterializedView` and
-   reading `get_view().get_view_set_name()`; a scan matching neither form, and not one of the five
-   table functions above, is ignored. Require `update_group >` the maximum found. Because §5 step 3 validates
+   reading `get_view().get_view_set_name()`; a scan matching neither form, and not one of the table
+   functions named above, is ignored. Require `update_group >` the maximum found. Because §5 step 3 validates
    only against the base plus definitions in a strictly lower `update_group`, this ordering half of
    the check can only ever fire for a definition reading a base view; a DDL-on-DDL reference placed in
    the wrong group instead fails to resolve as a table name during planning, since a same-or-higher-
@@ -891,14 +902,9 @@ single error the author sees once.
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
   *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
-  sequence that reclaims and rebuilds them; that this sequence must wait out
-  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` after the `REPLACE` so every replica holds the new
-  definition first, since a lagging replica still on the old definition would otherwise write a
-  partition into the retired range that hashes identically and is then read forever as new-definition
-  data with no error; and that a `DROP`'s `retire_partitions` races a lagging daemon replica for up to
-  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, so orphan partitions are reclaimed by retention and a
-  same-schema re-`CREATE` within that window should be followed by an explicit `retire_partitions`
-  call. Added to `mkdocs/mkdocs.yml`'s nav.
+  sequence that reclaims and rebuilds them; for the content-only-`REPLACE` race and the `DROP` race,
+  point the reader at §3 for the mechanism and at the corresponding `## Decisions` entries for the
+  accepted risk in each case, rather than re-deriving them. Added to `mkdocs/mkdocs.yml`'s nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -955,7 +961,9 @@ not just the three queries — must equal `builtin_view_definitions`'s `log_stat
 
 **`view_definition_validation_tests.rs`** — against a fixture factory carrying a fake source view
 with a fixed schema: a definition whose schema has neither `audience` nor `process_id` is rejected;
-one with `audience` is accepted; one with `process_id` only is accepted; a merge query that does not
+one with `audience` is accepted; one with `process_id` only is accepted; one whose `audience` column
+is not `Utf8`/`Dictionary(_, Utf8)` (e.g. an integer or boolean) is rejected; one whose `process_id`
+column is not `Utf8`/`Dictionary(_, Utf8)` is rejected; a merge query that does not
 plan is rejected; a merge query that plans but whose output schema differs is rejected, and the
 error names the differing field; a count query without a single `count: Int64` column is rejected; a
 query missing `{begin}`/`{end}`/`{source}` is rejected; `now()` and `random()` in the extract, merge
@@ -965,7 +973,8 @@ absent from the extract query's schema is rejected; one naming a field that is n
 (check 7): a definition reading `log_entries` (a base view set, update_group 2000) is rejected at
 2000, accepted at 2001; a definition reading nothing is accepted at any group; a definition reading
 two base view sets is measured against the higher of the two; a definition scanning
-`retire_partitions(...)` (or another admin-gated mutating UDTF) is rejected regardless of group.
+`retire_partitions(...)` (or another admin-gated mutating UDTF) is rejected regardless of group; a
+definition scanning `view_instance(...)` is rejected regardless of group.
 
 **Dependent protection** (§4b, in `view_registry_tests.rs`, calling
 `ViewRegistry::check_dependents_survive` directly with canned pre/post row slices — no transaction or
@@ -979,7 +988,12 @@ accepted; a definition that was *already* failing to build does not by itself bl
 check set over the seeded `log_stats` definition and assert it passes unmodified. It is the
 validator's calibration case; a failure here means a check is miscalibrated, not that the view is
 wrong. In particular this is what exercises check 3's nullability exclusion: `count(*)`
-(non-nullable) in the extract query vs. `sum(count)` (nullable) in the merge query.
+(non-nullable) in the extract query vs. `sum(count)` (nullable) in the merge query. The same test
+module also asserts `build_sql_batch_view(<seeded log_stats ViewDefinition>).get_file_schema_hash()
+== make_log_stats_view(...).get_file_schema_hash()`, built from the same base factory — a no-DB check
+that the migration's seeded definition infers the identical Arrow schema as the compiled view it
+replaces, since a divergent hash would make every pre-upgrade `log_stats` partition unreadable
+(`partition_cache.rs:386,420` filter on exact `file_schema_hash`) with no error anywhere.
 
 **`view_registry_tests.rs`** — with a fake `ViewDefinitionStore`: definitions are built in
 `update_group` order and a higher-group definition can read a lower-group one; a definition that
@@ -1024,8 +1038,7 @@ Each step below needs a running split-mode stack and is checking something no un
 
 1. **Migration on an existing lake.** Point `MICROMEGAS_SQL_CONNECTION_STRING` at a v9 database and
    run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade lakehouse schema to
-   v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Then, on that
-   same pre-v9 database, confirm `log_stats` survives the cutover: `SELECT count(*) FROM log_stats`
-   over a pre-upgrade time range still returns the pre-upgrade rows, and `list_partitions()` shows no
-   new `file_schema_hash` for `log_stats` after the upgrade. Not automated because it exercises a real
-   pre-existing schema state, not a freshly created one.
+   v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Not automated
+   because it exercises a real pre-existing schema state, not a freshly created one. (The seeded
+   `log_stats` definition's schema-hash stability with the compiled view it replaces is covered by the
+   no-DB unit test in `## Testing Strategy`, not by this manual step.)
