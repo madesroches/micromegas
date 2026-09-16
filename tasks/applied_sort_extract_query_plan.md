@@ -44,18 +44,19 @@ option safe. This lands first and on its own.
 
 ## Design
 
-### 1. One shared sort-apply-and-plan helper
+### 1. One shared sort-apply-and-plan helper: `plan_sorted_extract`
 
-`sql_partition_spec.rs` grows a `pub` helper that takes the `DataFrame`, the declared sort order as
-`sort_order: Option<&[ScanSortColumn]>`, and the context the assertions need (the subject string and
-the insert range for their error messages). When a sort order is declared it applies it as a
-`DataFrame::sort` over the `ScanSortColumn`s, builds the physical plan, and runs the existing
-`assert_single_partition` and `assert_ordering_satisfied` checks; with `sort_order: None` it builds
-the plan unsorted and skips both. It returns the plan (and the `TaskContext` the caller needs to
-execute it).
+`sql_partition_spec.rs` grows a `pub fn plan_sorted_extract` that takes the `DataFrame`, the
+declared sort order as `sort_order: Option<&[ScanSortColumn]>`, and the context the assertions need
+(the subject string and the insert range for their error messages). When a sort order is declared it
+applies it as a `DataFrame::sort` over the `ScanSortColumn`s, builds the physical plan, and runs the
+existing `assert_single_partition` and `assert_ordering_satisfied` checks; with `sort_order: None`
+it builds the plan unsorted and skips both. It returns the plan (and the `TaskContext` the caller
+needs to execute it).
 
 `execute_extract_query` keeps today's `Vec<String>` → `ScanSortColumn` conversion (`:82-88`) at its
-own call site, then calls the helper with the converted slice and `execute_stream`-s what it returns.
+own call site, then calls `plan_sorted_extract` with the converted slice and `execute_stream`-s
+what it returns.
 
 ### 2. The author contract loses an item
 
@@ -76,14 +77,14 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
 
 ## Implementation Steps
 
-1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub` sort-apply-and-plan
-   helper described in §1, mirroring `merge.rs:227-270`; reduce `execute_extract_query` to calling
-   it; rewrite `SqlPartitionSpec::sort_order`'s field doc (`:40-44`) and `execute_extract_query`'s
-   own doc comment (`:73-77`), both of which describe the removed verify semantics, to describe the
-   sort-applying path; rewrite the `assert_ordering_satisfied` `reason` string (`:109-112`), which
-   still tells the reader to check for a missing top-level `ORDER BY`, to describe the plan-shape
-   regression it now guards; the `assert_single_partition` `reason` string (`:96-101`) stays accurate
-   and needs no change.
+1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub` sort-apply-and-plan helper
+   `plan_sorted_extract` described in §1, mirroring `merge.rs:227-270`; reduce
+   `execute_extract_query` to calling it; rewrite `SqlPartitionSpec::sort_order`'s field doc
+   (`:40-44`) and `execute_extract_query`'s own doc comment (`:73-77`), both of which describe the
+   removed verify semantics, to describe the sort-applying path; rewrite the
+   `assert_ordering_satisfied` `reason` string (`:109-112`), which still tells the reader to check
+   for a missing top-level `ORDER BY`, to describe the plan-shape regression it now guards; the
+   `assert_single_partition` `reason` string (`:96-101`) stays accurate and needs no change.
 2. `rust/analytics/src/lakehouse/sql_batch_view.rs` — rewrite `with_merge_sort_order`'s doc comment
    (`:145-163`) per §2: drop item 3, renumber items 1/2/4 as 1–3, change the `:148` lead-in to
    "three-item", and add the "neither query needs an author-written `ORDER BY`" statement as prose
@@ -101,50 +102,49 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    the `SqlBatchView` fixture it builds entirely: neither surviving assertion needs a view, only a
    session context and the declared columns. Build the `DataFrame` the same way the passing test
    already does — `make_session_context(...)` then `ctx.sql(...)` — over the out-of-order `VALUES`
-   fixture (today's `:90-92`), and construct
-   `declared_columns` as a literal `[ScanSortColumn; 2]` the way `:151-154` already does, rather than
-   reading it off a view. Call the new helper rather than re-applying the sort itself or reaching for
-   `write()`'s `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering
-   assertion stops firing). Because the helper itself already returns `Err` when the plan isn't
-   single-partition and ordering-satisfying, re-checking `ordering_satisfy` on the plan it returns
-   would only prove the helper returned `Ok`; instead, execute that plan (`execute_stream` with the
-   helper's returned `TaskContext`), collect the resulting batches, and assert the emitted rows
-   actually come out in `(name, time_bin)` order — a check the helper's internal assertion does not
-   make — replacing today's plan-shape assertion and its failure message (`:165`). Delete the
-   trailing "Sanity-check the view itself still declares that sort_order" block (`:168-178`): it
-   never exercised the extract-query behavior under test (`SqlBatchView::make_batch_partition_spec`
-   only runs the count query; `SqlPartitionSpec` exposes no accessor for `sort_order` to check
-   against), and once the view fixture is gone there is nothing left for it to sanity-check.
-   `with_merge_sort_order` itself stays covered by `sql_batch_view_merge_ordering_tests.rs`. Rewrite
-   the module header (`:1-12`), which states the removed "refuses to record a false sort_order
-   guarantee ... e.g. a missing top-level `ORDER BY`" contract verbatim, to describe the
-   sort-applying path — without citing this plan document. Update the import list: `SqlBatchView`,
-   `PartitionCache`, `TracingLogger`, `make_lex_ordering`, and the `View` trait become unused once
-   the view fixture and the old plan-shape assertion are gone, so drop them; add
-   `datafusion::physical_plan::execute_stream` (to run the plan the helper returns) — new for this
-   call site, since `sql_batch_view_merge_ordering_tests.rs` gets its stream from `MergeQueryResult`
-   rather than executing a plan itself — plus `futures::TryStreamExt` (for `try_collect`) and
-   `datafusion::arrow::array::{Array, RecordBatch, StringArray}` (to read the `name` column back and
-   check row order), the same two imports `sql_batch_view_merge_ordering_tests.rs` uses for its
-   equivalent check.
+   fixture (today's `:90-92`), and construct `declared_columns` as a literal `[ScanSortColumn; 2]`
+   the way `:151-154` already does, rather than reading it off a view. Call `plan_sorted_extract`
+   rather than re-applying the sort itself or reaching for `write()`'s `expect_err` (which the
+   fixture's `connect_lazy` pool cannot reach once the ordering assertion stops firing). Because the
+   helper itself already returns `Err` when the plan isn't single-partition and ordering-satisfying,
+   re-checking `ordering_satisfy` on the plan it returns would only prove the helper returned `Ok`;
+   instead, execute that plan (`execute_stream` with the helper's returned `TaskContext`), collect
+   the resulting batches, and assert the emitted rows actually come out in `(name, time_bin)` order
+   — a check the helper's internal assertion does not make — replacing today's plan-shape assertion
+   and its failure message (`:165`). Delete the trailing "Sanity-check the view itself still
+   declares that sort_order" block (`:168-178`): it never exercised the extract-query behavior under
+   test (`SqlBatchView::make_batch_partition_spec` only runs the count query; `SqlPartitionSpec`
+   exposes no accessor for `sort_order` to check against), and once the view fixture is gone there
+   is nothing left for it to sanity-check. `with_merge_sort_order` itself stays covered by
+   `sql_batch_view_merge_ordering_tests.rs`. Rewrite the module header (`:1-12`), which states the
+   removed "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`"
+   contract verbatim, to describe the sort-applying path — without citing this plan document. Update
+   the import list: `SqlBatchView`, `PartitionCache`, `TracingLogger`, `make_lex_ordering`, and the
+   `View` trait become unused once the view fixture and the old plan-shape assertion are gone, so
+   drop them; add `datafusion::physical_plan::execute_stream` (to run the plan the helper returns) —
+   new for this call site, since `sql_batch_view_merge_ordering_tests.rs` gets its stream from
+   `MergeQueryResult` rather than executing a plan itself — plus `futures::TryStreamExt` (for
+   `try_collect`) and `datafusion::arrow::array::{Array, RecordBatch, StringArray}` (to read the
+   `name` column back and check row order), the same two imports
+   `sql_batch_view_merge_ordering_tests.rs` uses for its equivalent check.
 5. `rust/analytics/tests/log_stats_ordering_tests.rs` — rename
    `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to
    `log_stats_extract_query_still_plans_through_the_sort_applying_helper` and update it to plan
-   through the new helper rather than the raw SQL text, passing it the `declared_columns` read off
-   the shipped view via `view.get_scan_output_ordering()` (`match`ing out the `ScanOrdering::PerFile`
-   columns, `_ => panic!`) instead of re-declaring `(time_bin, process_id, level, target)` as a
-   literal. Since the helper itself already returns `Err` when the plan isn't
+   through `plan_sorted_extract` rather than the raw SQL text, passing it the `declared_columns`
+   read off the shipped view via `view.get_scan_output_ordering()` (`match`ing out the
+   `ScanOrdering::PerFile` columns, `_ => panic!`) instead of re-declaring `(time_bin, process_id,
+   level, target)` as a literal. Since the helper itself already returns `Err` when the plan isn't
    single-partition and ordering-satisfying, replace the `partition_count` and `ordering_satisfied`
    assertions (`:219-242`) with a plain `expect()` on the helper's `Ok` — re-checking those same
    properties here would only prove the helper returned `Ok`. Reword the doc comment (`:164-171`,
    pinning "`ORDER BY time_bin, process_id, level, target`") and the module header's `ORDER BY` half
    (`:4`, `:10`) to state what the renamed test still pins — that the shipped `log_stats` extract
    query still plans and sorts cleanly through the helper — rather than that the query satisfies the
-   declared order; the dropped assertion message (`:241`, "check for a missing or reordered top-level
-   ORDER BY") goes with the assertion it belonged to. Drop `make_lex_ordering` and `ScanSortColumn`
-   from the import list once the `ordering_satisfied` assertion and the literal `declared_columns`
-   they supported are gone; add `partitioned_execution_plan::ScanOrdering` for the new `match` on
-   `view.get_scan_output_ordering()`.
+   declared order; the dropped assertion message (`:241`, "check for a missing or reordered
+   top-level ORDER BY") goes with the assertion it belonged to. Drop `make_lex_ordering` and
+   `ScanSortColumn` from the import list once the `ordering_satisfied` assertion and the literal
+   `declared_columns` they supported are gone; add `partitioned_execution_plan::ScanOrdering` for
+   the new `match` on `view.get_scan_output_ordering()`.
 6. `rust/analytics/tests/ordered_aggregation_spike_tests.rs` — delete
    `cte_internal_order_by_is_discarded_by_a_later_join` (`:411-439`): it existed solely to justify the
    extract query's now-removed top-level-`ORDER BY` requirement, and the fact it pinned (a join
@@ -165,13 +165,14 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    bucket's aggregated output in a single blocking pass"); reword it the same way.
 9. `rust/analytics/src/lakehouse/partitioned_execution_plan.rs` — once step 1 removes
    `SqlPartitionSpec::execute_extract_query`'s own call site for `assert_single_partition` and
-   `assert_ordering_satisfied`, in favor of the new §1 helper, update both functions' rustdoc caller
-   lists, which still name it: `assert_single_partition`'s (`:209-216`, "Shared by the
+   `assert_ordering_satisfied`, in favor of `plan_sorted_extract`, update both functions' rustdoc
+   caller lists, which still name it: `assert_single_partition`'s (`:209-216`, "Shared by the
    query-execution paths that must verify this before executing: ... and
    `SqlPartitionSpec::execute_extract_query`") and `assert_ordering_satisfied`'s (`:235-244`,
    "Shared by the two paths that record a `sort_order` guarantee:
    `QueryMerger::execute_sorted_merge` and `SqlPartitionSpec::execute_extract_query`"). In both,
-   replace `SqlPartitionSpec::execute_extract_query` with the new §1 helper as the caller.
+   replace `SqlPartitionSpec::execute_extract_query` with
+   `sql_partition_spec::plan_sorted_extract` as the caller.
 
 ## Files to Modify
 
@@ -187,8 +188,9 @@ No new files, no migration, no SQL-surface change.
 
 ## Decisions
 
-- Applying the declared sort and building the physical plan lives in one `pub` helper rather
-  than being re-implemented by each caller, so a validated plan and the daemon's plan cannot diverge.
+- Applying the declared sort and building the physical plan lives in one `pub` helper
+  (`plan_sorted_extract`) rather than being re-implemented by each caller, so a validated plan and
+  the daemon's plan cannot diverge.
 - Accepted cost: the applied sort adds a logical-plan `Sort` node the assertion-only contract did
   not.
 - `assert_single_partition` and `assert_ordering_satisfied` are kept on the extract path even though
