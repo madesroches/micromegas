@@ -16,7 +16,7 @@ enforced by construction on both sides rather than by construction on one and by
 It is also a prerequisite for DDL-defined view sets (`tasks/835_ddl_materialized_views_plan.md`),
 where `merge_sort_order` is a DDL option and a definition author has no way to see a missing
 `ORDER BY` until the daemon's first materialization tick fails. That plan depends on the
-`pub(crate)` helper this one introduces, so this lands first and on its own.
+`pub` helper this one introduces, so this lands first and on its own.
 
 ## Current State
 
@@ -44,7 +44,7 @@ where `merge_sort_order` is a DDL option and a definition author has no way to s
 
 ### 1. One shared sort-apply-and-plan helper
 
-`sql_partition_spec.rs` grows a `pub(crate)` helper that takes the `DataFrame`, the optional declared
+`sql_partition_spec.rs` grows a `pub` helper that takes the `DataFrame`, the optional declared
 `sort_order`, and the context the assertions need (the subject string and the insert range for their
 error messages). When a sort order is declared it applies it as a `DataFrame::sort` over the
 `ScanSortColumn`s, builds the physical plan, and runs the existing `assert_single_partition` and
@@ -52,15 +52,6 @@ error messages). When a sort order is declared it applies it as a `DataFrame::so
 both. It returns the plan (and the `TaskContext` the caller needs to execute it).
 
 `execute_extract_query` is reduced to calling the helper and `execute_stream`-ing what it returns.
-The helper is the single path every other caller uses too, so no caller re-implements the sort and
-the plan a validator builds cannot diverge from the plan the daemon executes.
-
-The two assertions stay. They can no longer fire on an author's missing `ORDER BY` — there is no
-author `ORDER BY` left to miss — so their remaining job is to catch a plan-shape regression: an
-optimizer setting or a source change that repartitions the scan and destroys the single-partition,
-globally-ordered property the recorded sort guarantee claims. That failure is otherwise silent (a
-written partition carrying a false ordering guarantee, which the k-way merge then trusts), and the
-checks cost one plan walk on a path that already builds the plan.
 
 ### 2. The author contract loses an item
 
@@ -79,11 +70,14 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
 
 ## Implementation Steps
 
-1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub(crate)` sort-apply-and-plan
+1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub` sort-apply-and-plan
    helper described in §1, mirroring `merge.rs:210-233`; reduce `execute_extract_query` to calling
    it; rewrite `SqlPartitionSpec::sort_order`'s field doc (`:40-44`) and `execute_extract_query`'s
    own doc comment (`:72-78`), both of which describe the removed verify semantics, to describe the
-   sort-applying path.
+   sort-applying path; rewrite the `assert_ordering_satisfied` `reason` string (`:104-111`), which
+   still tells the reader to check for a missing top-level `ORDER BY`, to describe the plan-shape
+   regression it now guards; the `assert_single_partition` `reason` string (`:80-84`) stays accurate
+   and needs no change.
 2. `rust/analytics/src/lakehouse/sql_batch_view.rs` — rewrite `with_merge_sort_order`'s doc item 3
    (`:145-163`) per §2.
 3. `rust/analytics/src/lakehouse/log_stats_view.rs` — drop `ORDER BY time_bin, process_id, level,
@@ -114,9 +108,9 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    ("SqlPartitionSpec::write's declared-path plan verification relies on" / "plan verification relies
    on to accept a fresh extract query"). Both assertions are about DataFusion's own plan behavior and
    keep passing unchanged.
-7. `CHANGELOG.md` — one entry with the **Minor breaking change** clause for `with_merge_sort_order`
-   no longer requiring a top-level `ORDER BY` in the extract query (the sort is now applied for every
-   declared-sort view).
+7. `CHANGELOG.md` — one entry describing that `with_merge_sort_order` no longer requires a top-level
+   `ORDER BY` in the extract query (the sort is now applied for every declared-sort view); existing
+   views that still carry an `ORDER BY` are unaffected.
 
 ## Files to Modify
 
@@ -142,7 +136,7 @@ paths differing in whether they trust the author. One path is the point of the c
 
 ## Decisions
 
-- Applying the declared sort and building the physical plan lives in one `pub(crate)` helper rather
+- Applying the declared sort and building the physical plan lives in one `pub` helper rather
   than being re-implemented by each caller, so a validated plan and the daemon's plan cannot diverge.
 - `assert_single_partition` and `assert_ordering_satisfied` are kept on the extract path even though
   no author mistake can trip them any more; they become the regression guard against a plan shape
