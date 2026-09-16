@@ -376,7 +376,17 @@ same walk applied to each. On top of that:
    tick. `assert_single_partition`/`assert_ordering_satisfied`
    (`partitioned_execution_plan.rs:217-265`) still run against it, passing the zero-width
    `TimeRange::new(now, now)` built from that same timestamp, as a defense against a column list that
-   survives `with_merge_sort_order`'s existence-only schema check.
+   survives `with_merge_sort_order`'s existence-only schema check. This changes the ordering
+   guarantee for every declared-sort view, not only DDL ones, and breaks two existing offline tests
+   that must be updated in the same step: `sql_partition_spec_sort_order_tests.rs`'s
+   `extract_query_missing_order_by_fails_the_write`, which today asserts `write()` fails on an
+   extract query with no top-level `ORDER BY`, is inverted to assert the applied sort makes that
+   same write succeed; and `log_stats_ordering_tests.rs`'s
+   `log_stats_extract_query_satisfies_its_declared_sort_order`, which plans the shipped `log_stats`
+   extract-query text directly via `ctx.sql`/`create_physical_plan` and pins its own doc comment to
+   "line 43 of `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`)", is rewritten
+   (test and header comment) to plan through the sort-applying path instead of the raw SQL text, to
+   match step 2's removal of that `ORDER BY`.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -394,10 +404,13 @@ already range-scoped by `filter_insert_range` on the partition provider,
 bucket being materialized is scanned whole — so the query must either be idempotent under seeing
 extra rows (`GROUP BY` with `first_value`/`max`) or filter the range explicitly (as `log_stats`
 must, since `count(*)` would double-count); that any range predicate is on `insert_time` (not event
-time); and that the merge query's aggregates are composable over already-aggregated rows
-(`sum(count)`, never `count(*)`, no bare `avg`). Only the last is already spelled out for
-hand-written views, by `with_merge_sort_order`'s doc comment (`sql_batch_view.rs:145-163`); none of
-the three is decidable from a logical plan.
+time); that the merge query's aggregates are composable over already-aggregated rows
+(`sum(count)`, never `count(*)`, no bare `avg`); and that every row's `audience`/`process_id` (check
+2) must be non-NULL — `OwnershipRewrite::audience_column_predicate` and the `process_id` arm
+(`ownership_rewrite.rs:234-260`) both evaluate to NULL, i.e. drop the row, for a NULL value, so a
+NULL is fail-closed and silently hides that row from every non-admin caller. Only the merge-aggregate
+one is already spelled out for hand-written views, by `with_merge_sort_order`'s doc comment
+(`sql_batch_view.rs:145-163`); none of the four is decidable from a logical plan.
 
 The insert-time half of that obligation does not apply when `extract_query` reads another
 materialized view rather than a raw source table: a materialized view's schema is whatever its own
@@ -683,7 +696,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
    `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
    `serde_json` for `view_options`) and by the parser round-trip test. Registered in
-   `rust/analytics/src/lakehouse/mod.rs`.
+   `rust/analytics/src/lakehouse/mod.rs`. Also here: update
+   `log_stats_ordering_tests.rs`'s `log_stats_extract_query_satisfies_its_declared_sort_order` (and
+   its header comment pinning "`ORDER BY time_bin, process_id, level, target`") to match the removed
+   `ORDER BY`, planning through the sort-applying path added in step 4 rather than the raw SQL text.
 3. `rust/analytics/src/lakehouse/migration.rs` — bump `LATEST_LAKEHOUSE_SCHEMA_VERSION` to `10`,
    append the `9 == current_version` block, add `upgrade_v9_to_v10` creating
    `lakehouse_view_set_definitions`, seeding `log_stats` from `builtin_view_definitions`'s
@@ -696,7 +712,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also
    here: `sql_partition_spec.rs`'s `execute_extract_query` applies the declared `sort_order` as a
    `DataFrame::sort` before planning, mirroring `merge.rs:210-233`, and `with_merge_sort_order`'s
-   doc comment loses item 3's top-level-`ORDER BY` requirement.
+   doc comment loses item 3's top-level-`ORDER BY` requirement. This is what makes the removed
+   `ORDER BY`s survive: update `sql_partition_spec_sort_order_tests.rs`'s
+   `extract_query_missing_order_by_fails_the_write` to assert the applied sort makes the
+   previously-failing write succeed instead of asserting `write()`'s `expect_err`.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -799,7 +818,8 @@ Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `query.rs`, `mod.rs`, `view_factory.rs`,
   `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
-  `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`
+  `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`,
+  `sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
@@ -897,7 +917,9 @@ single error the author sees once.
   option), the three-part model, the author obligations (insert-time filtering — or, for a definition
   reading another materialized view, filtering on that view's event-time column instead, since a
   materialized view's schema carries no `insert_time` — `audience` in the projection and the
-  `GROUP BY`, composable merge aggregates, `update_group` ordering), the fact that
+  `GROUP BY`, composable merge aggregates, `update_group` ordering, and that every row's
+  `audience`/`process_id` must be non-NULL since a NULL is fail-closed and silently hides the row from
+  every non-admin caller), the fact that
   `merge_sort_order` is applied by the engine to both queries so neither writes an `ORDER BY`, the
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
