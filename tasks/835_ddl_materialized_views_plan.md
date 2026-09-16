@@ -15,6 +15,12 @@ the parts that fail *silently* when wrong, and a reload seam. Per-process / per-
 a DDL-defined view set (`view_instance('...', process_id)`) stay out of scope; only the `'global'`
 instance is created.
 
+**Prerequisite.** `tasks/applied_sort_extract_query_plan.md` lands first and on its own: it makes
+`execute_extract_query` *apply* a declared sort instead of demanding a matching top-level `ORDER BY`,
+and factors that into the `pub(crate)` helper §4 check 8 calls. It is the only part of this work that
+changes materialization behavior for views that already ship, so it is separated to keep that risk
+out of this plan's diff.
+
 **`log_stats` becomes data.** It is a `SqlBatchView` whose only distinction from a DDL-defined view
 is that its SQL lives in Rust, so the migration seeds it into `lakehouse_view_set_definitions` and
 `default_view_factory` drops its construction step (the `make_log_stats_view` call and its
@@ -396,14 +402,11 @@ same walk applied to each. On top of that:
    become a logical-plan `DataFrame::sort` on the extract query before its physical plan is built,
    exactly as `QueryMerger::execute_sorted_merge` (`merge.rs:210-233`) already does for the merge
    query. Neither query then carries an author-written `ORDER BY`, and a missing or mismatched one is
-   not representable on either side. This needs one change to existing code:
-   `execute_extract_query` (`sql_partition_spec.rs:79-115`) today only *asserts* the ordering,
-   erroring with "Check for a missing or mismatched top-level ORDER BY" — the same guarantee
-   enforced by blame on one side of the option and by construction on the other. Applying the sort
-   and building the physical plan is factored into one `pub(crate)` helper in `sql_partition_spec.rs`
-   that `execute_extract_query`, this check, and the rewritten tests all call, so the validated plan
-   and the daemon's plan cannot diverge — a divergence would show up as a definition that passes
-   `CREATE` and fails on the first tick, or the reverse. This check's call is separate from, and
+   not representable on either side. This relies on the `pub(crate)` sort-apply-and-plan helper in
+   `sql_partition_spec.rs` that `tasks/applied_sort_extract_query_plan.md` introduces, which
+   `execute_extract_query` and this check both call, so the validated plan and the daemon's plan
+   cannot diverge — a divergence would show up as a definition that passes `CREATE` and fails on the
+   first tick, or the reverse. This check's call is separate from, and
    solely for, validation; the plan it produces is never the one checks 6 and 7 walk. It passes the
    same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
    (`sql_batch_view.rs:110-114`: both placeholders replaced with one `Utc::now()` timestamp) so an
@@ -725,9 +728,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    because step 2's `log_stats` `ViewDefinition` fn and step 3's migration seed both need this type to exist.
 2. `rust/analytics/src/lakehouse/log_stats_view.rs` — `log_stats` exposed as a
    `fn` returning its `ViewDefinition` (the three queries plus every option: `update_group`, `time_column`, the
-   two deltas, `merge_sort_order`), factored out of its existing query consts — its transform
-   query keeps its `ORDER BY` until step 4 adds the sort-applying path that makes it redundant —
-   plus a function
+   two deltas, `merge_sort_order`), factored out of its existing query consts — plus a function
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
    `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
    `serde_json` for `view_options`) and by the parser round-trip test.
@@ -740,43 +741,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (`parse_view_ddl`
    owns the name charset check). Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
-   physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also here:
-   `sql_partition_spec.rs` grows a `pub(crate)` helper that applies a declared `sort_order` as a
-   `DataFrame::sort` and builds the physical plan, mirroring `merge.rs:210-233`;
-   `execute_extract_query` is reduced to calling it, and it is the single path check 8 and the
-   rewritten tests below use, so no caller re-implements the sort. `with_merge_sort_order`'s
-   doc comment loses item 3's top-level-`ORDER BY` requirement. Two more comments describing the old
-   verify-the-`ORDER BY` semantics are updated in the same step: `SqlPartitionSpec::sort_order`'s
-   field doc (`sql_partition_spec.rs:40-44`, "When set, `write` verifies the extract query's physical
-   plan actually satisfies it") and `execute_extract_query`'s own doc comment (`:72-78`, "verifies …
-   that its output ordering satisfies the declared columns"). This is what makes dropping the
-   author-written `ORDER BY` safe, so it is also where `log_stats`'s transform query's `ORDER BY`
-   (lifted, still present, in step 2) is removed — a projection-identical change, so the seeded
-   row's `file_schema_hash` is unaffected. Update all the tests and comments this enables in the same
-   step: `sql_partition_spec_sort_order_tests.rs` has exactly two tests —
-   `extract_query_missing_order_by_fails_the_write` and
-   `extract_query_matching_order_by_passes_the_ordering_check` — both asserting the same
-   ordering property once the sort is applied unconditionally, with the latter already building its
-   own plan (`ctx.sql(extract_query).create_physical_plan()`) instead of going through the new
-   helper and still carrying the fixture's now-redundant `ORDER BY name, time_bin`. Fold the two
-   into one helper-driven test (named for the sort-applying path, e.g.
-   `extract_query_without_an_order_by_satisfies_the_declared_sort_order`): drop the fixture's
-   `ORDER BY`, call the new helper rather than re-applying the sort itself or reaching for
-   `write()`'s `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering
-   assertion stops firing), and assert the plan it returns satisfies the declared order, rewording
-   the surviving assertion's failure message (today's `:165`, "a matching top-level ORDER BY must
-   satisfy the declared (name, time_bin) sort_order") to drop its reference to the removed `ORDER BY`
-   requirement. Also update that file's module header (today stating the removed
-   "refuses to record a false sort_order guarantee ... e.g. a missing top-level `ORDER BY`" contract
-   verbatim), rewritten to describe the sort-applying path; `log_stats_ordering_tests.rs`'s
-   `log_stats_extract_query_satisfies_its_declared_sort_order` (and its header comment pinning
-   "`ORDER BY time_bin, process_id, level, target`") to match the removed `ORDER BY`, planning
-   through this same helper rather than the raw SQL text; and
-   `ordered_aggregation_spike_tests.rs`'s `cte_internal_order_by_is_discarded_by_a_later_join` and
-   `top_level_order_by_satisfies_the_declared_columns`, whose rationale comments cite the same removed
-   contract ("SqlPartitionSpec::write's declared-path plan verification relies on"/"plan verification
-   relies on to accept a fresh extract query") though their assertions are unaffected and keep passing
-   — reworded to describe the sort-applying path instead.
+   physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling the
+   `sql_partition_spec.rs` sort-apply-and-plan helper the prerequisite plan introduces — the same
+   path `execute_extract_query` takes, so the validated plan and the daemon's plan cannot diverge.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -889,11 +856,10 @@ Created:
 
 Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `query.rs`, `mod.rs`, `view_factory.rs`,
-  `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`, `ownership_rewrite.rs`
+  `log_stats_view.rs`, `ownership_rewrite.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
   `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`,
-  `sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
-  `ordered_aggregation_spike_tests.rs`
+  `log_stats_ordering_tests.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
@@ -925,9 +891,6 @@ single error the author sees once.
 
 ## Decisions
 
-- Applying the declared sort and planning the extract query lives in one `pub(crate)` helper shared
-  by `execute_extract_query`, check 8 and the sort-order tests, rather than each building its own
-  sort-applied plan.
 - Validation rejects a definition whose merge-query output schema differs from its extract-query
   output schema, rather than warning — a disagreement means the user-visible table and the
   partitions backing it have different shapes, with no error at query time.
@@ -941,10 +904,10 @@ single error the author sees once.
   `MAX(audience)` (coarser, and wrong for a process spanning audiences); the check recommends
   projecting `audience` instead but does not require it. Accepted risk.
 - `merge_sort_order` applies the sort to both queries instead of requiring a top-level `ORDER BY` in
-  the extract query, which changes `execute_extract_query` for every declared-sort view, not only
-  DDL ones. The alternative is a DDL option that silently demands an `ORDER BY` the author cannot
-  see is missing until the daemon's first tick fails.
-  Accepted risk, and the same one hand-written `SqlBatchView`s already carry.
+  the extract query. That is settled by the prerequisite plan
+  (`tasks/applied_sort_extract_query_plan.md`), which lands the applied-sort path for every
+  declared-sort view; the alternative here would have been a DDL option that silently demands an
+  `ORDER BY` the author cannot see is missing until the daemon's first tick fails.
 - `MICROMEGAS_PUBLIC_VIEW_SETS` can name a DDL-defined view set, which disables its audience filter
   entirely. That is the existing operator knob behaving as designed; no extra guard. The knob is
   slated for removal, so §4 check 2 stays unconditional for such a view set: a definition meant to
@@ -1033,9 +996,8 @@ single error the author sees once.
   that `log_stats` is now a seeded definition rather than a compiled view (identical SQL surface and
   identical `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking
   change** clause for `daemon`'s signature, `FlightSqlServiceImpl::new`'s `view_factory` →
-  `view_registry` parameter, the `Views` alias's removal, `default_view_factory` no longer returning `log_stats`, and
-  `with_merge_sort_order` no longer requiring a top-level `ORDER BY` in the extract query (the sort
-  is now applied for every declared-sort view, hand-written or DDL).
+  `view_registry` parameter, the `Views` alias's removal, and `default_view_factory` no longer
+  returning `log_stats`.
 
 ## Testing Strategy
 
