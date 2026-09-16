@@ -26,9 +26,14 @@ where `merge_sort_order` is a DDL option and a definition author has no way to s
   executes that exact plan via `execute_stream`.
 - `sql_partition_spec.rs:40-44` — `SqlPartitionSpec::sort_order`'s field doc states the verify
   semantics ("When set, `write` verifies the extract query's physical plan actually satisfies it").
-- `rust/analytics/src/lakehouse/merge.rs:210-233` — `execute_sorted_merge`'s apply-then-plan
-  sequence: four optimizer settings, `ctx.sql(...)`, `df.sort(...)` over the `ScanSortColumn`s,
-  `create_physical_plan()`, then the same two assertions. This is the pattern to mirror.
+- `rust/analytics/src/lakehouse/merge.rs:227-270` — `execute_sorted_merge`'s apply-then-plan
+  sequence to mirror: `df.sort(...)` over the `ScanSortColumn`s, `df.task_ctx()`,
+  `create_physical_plan()`, then the same two assertions. The four optimizer settings at
+  `merge.rs:216-224` (`enable_round_robin_repartition`, `repartition_aggregations`,
+  `prefer_existing_sort`, `repartition_joins`) are merge-specific, not part of this pattern: they
+  must be set on the `SessionContext` before `ctx.sql`, which a helper that receives an
+  already-built `DataFrame` cannot do, and the extract path builds its context with
+  `make_session_context` (`query.rs:278`), not `make_merge_session_context`.
 - `rust/analytics/src/lakehouse/sql_batch_view.rs:145-163` — `with_merge_sort_order`'s doc comment
   states a four-item author contract whose item 3 is the top-level-`ORDER BY` requirement.
 - `rust/analytics/src/lakehouse/log_stats_view.rs:50` — the only shipped view declaring a sort order
@@ -71,7 +76,8 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
 ## Implementation Steps
 
 1. `rust/analytics/src/lakehouse/sql_partition_spec.rs` — add the `pub` sort-apply-and-plan
-   helper described in §1, mirroring `merge.rs:210-233`; reduce `execute_extract_query` to calling
+   helper described in §1, mirroring `merge.rs:227-270` (the four merge-specific optimizer
+   settings at `:216-224` are not part of the helper); reduce `execute_extract_query` to calling
    it; rewrite `SqlPartitionSpec::sort_order`'s field doc (`:40-44`) and `execute_extract_query`'s
    own doc comment (`:72-78`), both of which describe the removed verify semantics, to describe the
    sort-applying path; rewrite the `assert_ordering_satisfied` `reason` string (`:104-111`), which
@@ -111,6 +117,11 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
 7. `CHANGELOG.md` — one entry describing that `with_merge_sort_order` no longer requires a top-level
    `ORDER BY` in the extract query (the sort is now applied for every declared-sort view); existing
    views that still carry an `ORDER BY` are unaffected.
+8. `mkdocs/docs/admin/functions-reference.md:148` — the `regenerate_partitions` "Alignment
+   invariant" warning says the blocking sort over an already-merged bucket comes from "the extract
+   query's `ORDER BY` (required by `with_merge_sort_order`)"; reword it to attribute the sort to
+   the sort order that `with_merge_sort_order` now applies to the extract query, since no
+   author-written `ORDER BY` is required any more.
 
 ## Files to Modify
 
@@ -119,6 +130,7 @@ Modified:
 - `rust/analytics/tests/sql_partition_spec_sort_order_tests.rs`, `log_stats_ordering_tests.rs`,
   `ordered_aggregation_spike_tests.rs`
 - `CHANGELOG.md`
+- `mkdocs/docs/admin/functions-reference.md`
 
 No new files, no migration, no SQL-surface change.
 
