@@ -248,6 +248,13 @@ The remedy is explicit and admin-driven: `retire_partitions(...)` over the affec
 daemon only fills forward (2 days / 2 hours / 2 minutes back from `now`), so backfilling an older
 range is that same manual call either way.
 
+Unlike the `DROP` case (§6), a content-only `REPLACE` leaves the view set's rows in place while a
+lagging daemon replica is still running the *old* definition, so the admin must wait out
+`MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` between the `REPLACE` and the `retire_partitions` +
+`materialize_partitions` sequence — otherwise a replica still on the old definition can write, into
+the range just retired, a partition that hashes identically (`get_file_schema_hash` is schema-only)
+and is then read forever as if it were new-definition data, with no error anywhere.
+
 ### 4. Validation at `CREATE` time
 
 Every check runs before the row is written, in one `validate_view_definition` function shared by the
@@ -459,7 +466,8 @@ if let Some(ddl) = parse_view_ddl(sql).map_err(|e| audit_state.fail(client_input
    3-5 cluster-wide, then read the pre-mutation rows via `view_definition_store::list_tx(&mut tx)`
    (§4b, §7).
 3. `CREATE`: validate (§4) against the factory the loader would build for this row — the base plus
-   every definition, from the post-mutation row set with this row's own name excluded, in a lower
+   every definition, from the pre-mutation rows read in step 2 with this row's own name excluded
+   (identical to the post-mutation set for a single-row mutation), in a lower
    `update_group` — so a definition reading another DDL view validates against the real thing, and a
    `CREATE OR REPLACE` that raises its own `update_group` cannot validate against a since-superseded
    copy of itself. Reject an existing name unless `or_replace`; then `upsert` the row via
@@ -722,7 +730,11 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
     registry from `default_view_factory` and hand it to `daemon`, resolving the same
     `StaticTablesConfigurator::from_env("MICROMEGAS_STATIC_TABLES_URL", ...)` the FlightSQL builder
     uses (`flight_sql_server.rs:275-283`) as `ViewRegistry::new`'s `session_configurator`, instead of
-    a no-op one — a DDL view reading a static table must build the same way in both services.
+    a no-op one — a DDL view reading a static table must build the same way in both services. Also
+    update `local_test_env/ai_scripts/start_services.py` to export a low
+    `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (e.g. `5`) for the flight-sql and maintenance
+    services it starts, so the Milestone 3 e2e test's daemon-pickup assertion (Testing Strategy) can
+    use a timeout on the order of seconds instead of the 60 s production default.
 
 ### Milestone 3 — introspection and `log_stats` cutover
 
@@ -771,6 +783,7 @@ Modified:
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
+- `local_test_env/ai_scripts/start_services.py`
 - `mkdocs/docs/admin/functions-reference.md`, `maintenance.md`, `flight-sql.md`, `authorization.md`,
   `authentication.md`
 - `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/mkdocs.yml`
@@ -828,6 +841,10 @@ single error the author sees once.
 - The seeded `log_stats` row is a pure data move: its `file_schema_hash` cannot change, so existing
   partitions survive the upgrade. It gets no other special casing — droppable, replaceable, and
   skipped-with-a-warning on a load failure like any other row.
+- `ON CONFLICT DO NOTHING` freezes the seeded `log_stats` text at v10: a later release changing
+  `log_stats`'s shipped SQL must ship its own migration step that **upserts** the row (accepting that
+  it overwrites an operator's `CREATE OR REPLACE`), not just edit the `builtin_view_definitions`
+  consts.
 - The `extract_query` is **not** required to contain `{begin}`/`{end}`. `processes` and `streams`
   carry no such predicate today and are correct, because `make_batch_partition_spec` scopes the
   scan through the partition provider (`sql_batch_view.rs:238`). Only `count_src_query`'s
@@ -843,6 +860,12 @@ single error the author sees once.
   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`: orphan partitions it writes after the retire are
   reclaimed by retention, not immediately; a same-schema `CREATE` re-using the name within that
   window should be followed by an explicit `retire_partitions` call. Accepted risk.
+- A content-only `CREATE OR REPLACE`'s `retire_partitions` + `materialize_partitions` sequence (§3)
+  races a lagging daemon replica the same way, but silently: a replica still on the old definition
+  writes a partition with a matching `file_schema_hash` into the just-retired range, and it is read
+  forever as new-definition data with no error. The admin must wait out
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` after the `REPLACE` before retiring and
+  re-materializing. Accepted risk.
 
 ## Documentation
 
@@ -854,10 +877,14 @@ single error the author sees once.
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
   *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
-  sequence that reclaims and rebuilds them; and that a `DROP`'s `retire_partitions` races a lagging
-  daemon replica for up to `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, so orphan partitions are
-  reclaimed by retention and a same-schema re-`CREATE` within that window should be followed by an
-  explicit `retire_partitions` call. Added to `mkdocs/mkdocs.yml`'s nav.
+  sequence that reclaims and rebuilds them; that this sequence must wait out
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` after the `REPLACE` so every replica holds the new
+  definition first, since a lagging replica still on the old definition would otherwise write a
+  partition into the retired range that hashes identically and is then read forever as new-definition
+  data with no error; and that a `DROP`'s `retire_partitions` races a lagging daemon replica for up to
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, so orphan partitions are reclaimed by retention and a
+  same-schema re-`CREATE` within that window should be followed by an explicit `retire_partitions`
+  call. Added to `mkdocs/mkdocs.yml`'s nav.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
@@ -881,11 +908,13 @@ single error the author sees once.
 - `view_factory.rs`'s module rustdoc (`:1-64`) — keep the `## log_stats` schema table but note it is
   now a seeded definition, not one `default_view_factory` builds, matching the `schema-reference.md`
   note.
-- `CHANGELOG.md` — one entry, covering the v10 lakehouse migration and that `log_stats` is now a
-  seeded definition rather than a compiled view (identical SQL surface and identical
-  `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking change**
-  clause for `daemon`'s signature, `FlightSqlServiceImpl::new`'s `view_factory` → `view_registry`
-  parameter, `Views`, and `default_view_factory` no longer returning `log_stats`.
+- `CHANGELOG.md` — one entry, covering the new `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP
+  MATERIALIZED VIEW` DDL surface, the `list_view_definitions()` UDTF, the
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` reload-interval knob, the v10 lakehouse migration, and
+  that `log_stats` is now a seeded definition rather than a compiled view (identical SQL surface and
+  identical `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking
+  change** clause for `daemon`'s signature, `FlightSqlServiceImpl::new`'s `view_factory` →
+  `view_registry` parameter, `Views`, and `default_view_factory` no longer returning `log_stats`.
 
 ## Testing Strategy
 
@@ -953,11 +982,14 @@ send a `CREATE MATERIALIZED VIEW ...` statement through the real `AuthService`/t
 same offline harness step 8 already edits to construct a `ViewRegistry`.
 
 **`python/micromegas/tests/test_ddl_materialized_view.py`** — the end-to-end tier, against the local
-test env, following `test_log_stats_integration.py` / `test_query_deny_list.py`: `CREATE OR REPLACE`
+test env, following `test_log_stats_integration.py` / `test_query_deny_list.py`, and relying on
+`start_services.py` (step 13) exporting a low `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` so the
+daemon-pickup assertion below runs in seconds rather than minutes: `CREATE OR REPLACE`
 a small view over `log_entries`, assert it appears in `list_view_sets()` and
-`list_view_definitions()`; `assert_eventually` (timeout above the refresh interval plus one daemon
-minute tick) that `list_partitions()` shows rows for it *without* calling `materialize_partitions`
-first, confirming the daemon picks up a new view set without a restart; create `a` over `log_entries`
+`list_view_definitions()`; `assert_eventually` (timeout sized off that lowered refresh interval plus
+one daemon minute tick, rather than the 60 s production default) that `list_partitions()` shows rows
+for it *without* calling `materialize_partitions` first, confirming the daemon picks up a new view
+set without a restart; create `a` over `log_entries`
 at `update_group` 4000 and `b` over `a` at 4001, `materialize_partitions` both over the same range in
 that order, and assert `b`'s rows equal a re-aggregation of `a`'s; `materialize_partitions` a known
 range for the original view, `SELECT` from it, `REPLACE` it with a definition whose output schema
@@ -976,5 +1008,8 @@ Each step below needs a running split-mode stack and is checking something no un
 
 1. **Migration on an existing lake.** Point `MICROMEGAS_SQL_CONNECTION_STRING` at a v9 database and
    run `python3 local_test_env/ai_scripts/start_services.py`. Expect `upgrade lakehouse schema to
-   v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Not automated
-   because it exercises a real pre-existing schema state, not a freshly created one.
+   v10` in `/tmp/analytics.log` and `SELECT version FROM lakehouse_migration` = 10. Then, on that
+   same pre-v9 database, confirm `log_stats` survives the cutover: `SELECT count(*) FROM log_stats`
+   over a pre-upgrade time range still returns the pre-upgrade rows, and `list_partitions()` shows no
+   new `file_schema_hash` for `log_stats` after the upgrade. Not automated because it exercises a real
+   pre-existing schema state, not a freshly created one.
