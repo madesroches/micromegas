@@ -1,6 +1,6 @@
 use super::{
     dataframe_time_bounds::DataFrameTimeBounds,
-    partitioned_execution_plan::{assert_ordering_satisfied, assert_single_partition},
+    partitioned_execution_plan::{assert_ordering_satisfied, assert_single_partition, sort_exprs},
     view::{PartitionSpec, ScanSortColumn, ViewMetadata},
     write_partition::write_partition_from_rows,
 };
@@ -118,17 +118,7 @@ pub async fn plan_sorted_extract(
         return Ok((plan, task_ctx));
     };
 
-    let df = df.sort(
-        columns
-            .iter()
-            .map(|c| {
-                Expr::Column(datafusion::common::Column::new_unqualified(
-                    c.column.as_str(),
-                ))
-                .sort(!c.descending, c.descending)
-            })
-            .collect(),
-    )?;
+    let df = df.sort(sort_exprs(columns))?;
     let task_ctx = Arc::new(df.task_ctx());
     let plan = df
         .create_physical_plan()

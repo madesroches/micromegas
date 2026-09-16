@@ -14,6 +14,7 @@ use datafusion::{
         physical_plan::{FileScanConfigBuilder, ParquetSource},
     },
     execution::object_store::ObjectStoreUrl,
+    logical_expr::SortExpr,
     physical_expr::{LexOrdering, PhysicalSortExpr},
     physical_plan::{ColumnStatistics, ExecutionPlan, Statistics},
     prelude::*,
@@ -177,6 +178,22 @@ impl ScanOrdering {
     pub fn declares_concatenated_ordering(&self) -> bool {
         matches!(self, ScanOrdering::Concatenated { .. })
     }
+}
+
+/// Builds the `DataFrame::sort` expressions for `columns`, pairing each with `!descending` for
+/// `asc` so the logical sort matches the `nulls_first: c.descending` physical ordering
+/// `make_lex_ordering` declares below -- the two must stay in lockstep or
+/// `assert_ordering_satisfied` stops matching the sort that was actually applied.
+pub fn sort_exprs(columns: &[ScanSortColumn]) -> Vec<SortExpr> {
+    columns
+        .iter()
+        .map(|c| {
+            Expr::Column(datafusion::common::Column::new_unqualified(
+                c.column.as_str(),
+            ))
+            .sort(!c.descending, c.descending)
+        })
+        .collect()
 }
 
 /// Builds the `LexOrdering` declaring the already-satisfied output ordering of the scan, matching

@@ -59,8 +59,7 @@ async fn make_test_view_with_merge_query(
 ) -> SqlBatchView {
     let count_src_query = Arc::new(String::from("SELECT 0::BIGINT as count"));
     let extract_query = Arc::new(String::from(
-        "SELECT 'n' AS name, TIMESTAMP '1970-01-01 00:00:00' AS time_bin, 1 AS measure \
-         ORDER BY name, time_bin",
+        "SELECT 'n' AS name, TIMESTAMP '1970-01-01 00:00:00' AS time_bin, 1 AS measure",
     ));
     let merge_query = Arc::new(merge_query.to_owned());
     let time_column = Arc::new(String::from("time_bin"));
