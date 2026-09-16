@@ -902,6 +902,12 @@ single error the author sees once.
   Accepted risk, and the same one hand-written `SqlBatchView`s already carry.
 - `MICROMEGAS_PUBLIC_VIEW_SETS` can name a DDL-defined view set, which disables its audience filter
   entirely. That is the existing operator knob behaving as designed; no extra guard.
+- §4 check 2 stays unconditional even for a view set named in `MICROMEGAS_PUBLIC_VIEW_SETS`: all DDL
+  validation runs under `CallerContext::maintenance()`, whose `IsolationConfig` is always the
+  all-empty `default()`, never `IsolationConfig::from_env()`'s per-replica resolution of that
+  variable, so validation must not depend on it. A view set meant to be public still has to carry an
+  `audience`/`process_id` column and group by it; the operator knob only turns off the row filter at
+  query time, it does not exempt the DDL from having the column.
 - `update_group` is a **required** option with no default. There is no dependency inference here —
   the author states the order, and a definition reading another materialized view has to place
   itself after it. A default would be silently wrong for exactly that case.
@@ -951,7 +957,9 @@ single error the author sees once.
   lifecycle and the two accepted-risk races (§3), the author obligations (§4's obligation paragraph),
   and the accepted risks recorded in `## Decisions`. The page states its content in self-contained
   prose — it must not cite this plan's section numbers or decision entries directly. Added to
-  `mkdocs/mkdocs.yml`'s nav.
+  `mkdocs/mkdocs.yml`'s nav. Also states that naming a view set in `MICROMEGAS_PUBLIC_VIEW_SETS`
+  does not lift the requirement that its definition carry an `audience`/`process_id` column and
+  group by it — the variable only turns off the row filter at query time, not the DDL requirement.
 - `mkdocs/docs/admin/functions-reference.md` — `list_view_definitions()`, and a pointer to the page
   above from the admin-function list.
 - `mkdocs/docs/admin/maintenance.md` — `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` in the env-var
