@@ -302,29 +302,35 @@ same walk applied to each. On top of that:
    `merge_partitions_query` must contain `{source}`. The probe without a range returns a constant,
    so freshness is never detected — stale forever. The `{source}` requirement is mechanical: the
    merge query is unrunnable without it.
-6. **No volatile or stable functions.** Parse and plan each of the three query texts and walk the
-   resulting `LogicalPlan`s — the merge and count-source plans are already built by checks 3 and 4,
-   so the extra walk is free — rejecting any `ScalarUDF` whose `signature().volatility` is not
+6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
+   walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) — never an
+   optimized or physical plan: `SimplifyExpressions`'s `ConstEvaluator` treats `Stable` the same as
+   `Immutable`, so it folds a call like `now()` into a literal before an optimized-plan walk would
+   ever see the `ScalarUDF` node, silently defeating this check for every `Stable` function while
+   leaving `Volatile` ones (which the optimizer does not fold) looking caught. The merge and
+   count-source plans are already built this same unoptimized way by checks 3 and 4, so the extra
+   walk is free — rejecting any `ScalarUDF` whose `signature().volatility` is not
    `Immutable` (`now()`, `random()`, `current_timestamp`). A volatile call in the extract or merge query is
    frozen into a partition at materialization time and then served to every later reader — wrong
    data, no error, indefinitely; in `count_src_query` it instead corrupts freshness detection
    (`verify_overlapping_partitions` compares row counts), causing perpetual re-materialization.
 
 7. **No admin-gated mutating table function, and `update_group` strictly after every view set the
-   definition reads.** Walk all three planned `LogicalPlan`s for every
-   `TableScan`, resolving each one's `table_name` against the factory the definition was built for —
-   recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
+   definition reads.** Walk all three of the same pre-optimization `LogicalPlan`s check 6 walks, for
+   every `TableScan`, resolving each one's `table_name` against the factory the definition was built
+   for — recursing into `TableSource::get_logical_plan()` when the scan is a `ViewTable` (which is how
    `SqlBatchView::register_table` exposes the user-visible name; a downcast to `MaterializedView`
    alone misses it and would only catch `__<name>__partitions` scans). Reject outright any scan whose
-   `TableSource` resolves to one of the five admin-gated table functions among the eight
+   `TableSource` resolves to one of the four mutating admin-gated table functions
    (`query.rs:204-246` — `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-   `deny_queries`, etc.) — the only ones of the eight a `TableScan` can resolve to: check 6 only walks
-   `ScalarUDF` expressions, so a UDTF call such as `SELECT * FROM retire_partitions(...)` is
-   invisible to it and would otherwise be stored and then re-executed under
-   `CallerContext::maintenance()` on every daemon tick. The other three — `retire_partition_by_file`,
-   `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs and, being
-   `Volatility::Volatile`, are already caught by check 6; the eighth, `list_query_denials`, is
-   read-only and needs no rejection here. For every other scan,
+   `deny_queries`) — table functions are the only ones of the eight admin-gated items a `TableScan`
+   can resolve to: check 6 only walks `ScalarUDF` expressions, so a UDTF call such as
+   `SELECT * FROM retire_partitions(...)` is invisible to it and would otherwise be stored and then
+   re-executed under `CallerContext::maintenance()` on every daemon tick. A fifth table function,
+   `list_query_denials`, resolves the same way but is read-only and is deliberately not rejected. The
+   remaining three — `retire_partition_by_file`, `retire_partition_by_metadata`,
+   `remove_query_denial` — are scalar UDFs and, being `Volatility::Volatile`, are already caught by
+   check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
    recursion names the underlying `__<name>__partitions` table, not the view set, so it is resolved by
    stripping the `__..__partitions` affix or by downcasting its `TableSource` to `MaterializedView` and
@@ -337,7 +343,8 @@ same walk applied to each. On top of that:
    `materialize_all_views`'s documented ordering obligation (`maintenance.rs:59-70`) into a check for
    the base-view case, and it costs nothing: the plan is already built by step 3.
 8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
-   query's physical plan and run the existing `assert_single_partition`/`assert_ordering_satisfied`
+   query's physical plan — separately from, and solely for, this check; it is never the plan checks
+   6 and 7 walk — and run the existing `assert_single_partition`/`assert_ordering_satisfied`
    helpers (`partitioned_execution_plan.rs:217-265`; called from `sql_partition_spec.rs:79-115`)
    against it at `CREATE` time. `with_merge_sort_order`
    itself only checks the columns exist in the schema; the real enforcement is at write time, where a
@@ -759,7 +766,8 @@ Modified:
 - `rust/public/tests/read_policy_threading_tests.rs`
 - `rust/public/src/servers/maintenance.rs`, `flight_sql_service_impl.rs`, `flight_sql_server.rs`, `mod.rs`
 - `rust/telemetry-maintenance-srv/src/main.rs`, `rust/monolith/src/main.rs`
-- `mkdocs/docs/admin/functions-reference.md`, `maintenance.md`, `flight-sql.md`, `authorization.md`
+- `mkdocs/docs/admin/functions-reference.md`, `maintenance.md`, `flight-sql.md`, `authorization.md`,
+  `authentication.md`
 - `mkdocs/docs/query-guide/schema-reference.md`, `mkdocs/mkdocs.yml`
 - `CHANGELOG.md`
 
@@ -850,7 +858,11 @@ single error the author sees once.
 - `mkdocs/docs/admin/flight-sql.md` — the same env var, and that DDL is admin-gated.
 - `mkdocs/docs/admin/authorization.md` — a sentence that DDL-defined view sets must carry `audience`
   or `process_id` and are filtered by the same two `OwnershipRewrite` branches as the code-driven
-  views already listed there.
+  views already listed there; also update its admin-gated-functions section (`:174`, `:186`) from
+  eight to nine functions, adding `list_view_definitions()` to the enumeration, and note that view
+  DDL (`CREATE`/`DROP`, §5) is gated by the same admin check.
+- `mkdocs/docs/admin/authentication.md` — its cross-reference (`:579`) to "the eight gated SQL
+  functions" becomes nine, matching `authorization.md`'s updated count.
 - `mkdocs/docs/query-guide/schema-reference.md` — one paragraph saying `list_view_sets()` includes
   DDL-defined view sets and that their schemas are deployment-specific, plus a note that
   `log_stats` is now a seeded definition an operator may extend or replace (its documented schema
