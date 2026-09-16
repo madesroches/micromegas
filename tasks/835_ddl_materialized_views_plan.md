@@ -312,9 +312,11 @@ same walk applied to each. On top of that:
 3. **Merge query plans, and agrees.** Register an empty table carrying the inferred schema under the
    substituted `{source}` name, plan `merge_partitions_query` in a session context built the way
    `register_table` builds one — no admin-gated UDTFs/UDFs and no `SessionConfigurator`-registered
-   static tables, unlike the fuller admin/configured context checks 1-2 validate against — since that
-   is the context the merge query is actually planned in for every real caller (see check 7's
-   merge-query carve-out below), and require its output schema to equal
+   static tables, unlike the fuller admin/configured context checks 1-2 validate against — deliberately
+   the narrowest context, since `merge_partitions_query` is planned after the caller's own functions
+   are registered but before `configurator.configure` runs, and must still resolve for a non-admin
+   caller, not only an admin/maintenance one (see check 7's merge-query carve-out below), and require
+   its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
    are deliberately excluded from the comparison. `log_stats_view.rs` projects `count(*) as count` in
    the extract query (non-nullable) and `sum(count) as count` in the merge query (nullable), so a
@@ -398,10 +400,13 @@ same walk applied to each. On top of that:
    mutation and no error to force closing it here. In `merge_partitions_query` specifically, though,
    even these read-only admin-gated UDTFs and any `SessionConfigurator`-registered static table are
    rejected regardless of caller: `register_table` (`sql_batch_view.rs:311-334`) plans
-   `merge_partitions_query` before that caller's own admin-gated functions are registered and before
-   `configurator.configure` runs, so a merge query resolving to one of those names can never actually
-   resolve in production — unlike in `extract_query`/`count_src_query`, which plan under the fuller
-   per-caller context and so are merely subject to the staleness above. The remaining three admin-gated items —
+   `merge_partitions_query` after that caller's own function registration but before
+   `configurator.configure` runs, so a merge query resolving to one of those names would resolve fine
+   for an admin/maintenance caller (`CallerContext::maintenance()` is itself `is_admin: true`) but
+   would make `make_session_context` itself fail for every non-admin caller — breaking that caller's
+   every query, not just ones touching this view — unlike in `extract_query`/`count_src_query`, which
+   plan under the fuller per-caller context and so are merely subject to the staleness above. The
+   remaining three admin-gated items —
    `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs
    and, being `Volatility::Volatile`, are already caught by check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
@@ -1105,14 +1110,16 @@ a small view over `log_entries`, assert it appears in `list_view_sets()` and
 `list_view_definitions()`; `assert_eventually` (timeout sized off that lowered refresh interval plus
 one daemon minute tick, rather than the 60 s production default) that `list_partitions()` shows rows
 for it *without* calling `materialize_partitions` first, confirming the daemon picks up a new view
-set without a restart; create `a` over `log_entries`
-at `update_group` 4000 (`count_src_query` counting `blocks`, per check 5) and `b` over `a` at 4001
+set without a restart; `CREATE OR REPLACE` `a` over `log_entries`
+at `update_group` 4000 (`count_src_query` counting `blocks`, per check 5) and `CREATE OR REPLACE` `b`
+over `a` at 4001
 (`extract_query` reading `a` and filtering on `a`'s event-time column; `count_src_query` also
 counting `blocks`, not `a`), `materialize_partitions` both over the same range in
 that order, and assert `b`'s rows equal a re-aggregation of `a`'s; `materialize_partitions` a known
 range for the original view, `SELECT` from it, `REPLACE` it with a definition whose output schema
-changes and assert the old partitions are no longer read (§3), then `DROP` and assert it is gone from
-both listings. This covers the wiring no unit test reaches — the FlightSQL round trip, the real
+changes and assert the old partitions are no longer read (§3), then `DROP` all three definitions —
+`b` before `a` before the original view, the reverse of their dependency/creation order — and assert
+none is left in either listing. This covers the wiring no unit test reaches — the FlightSQL round trip, the real
 migration, the real `ViewRegistry` → daemon → `lakehouse_partitions` chain — and the failures it
 guards are silent (a view set that loads but never materializes looks like an empty table, not an
 error; wrong numbers in a view reading another DDL view produce no error anywhere).
