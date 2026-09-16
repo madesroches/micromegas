@@ -1,15 +1,15 @@
 //! Offline (no live DB) regression test for `log_stats`' order-preserving k-way merges:
 //! unlike `per_file_scan_ordering_tests.rs` and `sql_batch_view_merge_ordering_tests.rs`, which use
 //! fabricated views, this pins the *shipped* `log_stats` view definition, so a later edit to its
-//! `ORDER BY`/`GROUP BY` that silently breaks the streaming contract fails CI instead of quietly
-//! degrading to the unordered merge.
+//! `GROUP BY` that silently breaks the streaming contract fails CI instead of quietly degrading to
+//! the unordered merge.
 //!
 //! It plans the shipped merge query itself over the view's own declared scan ordering rather than
 //! going through `View::merge_partitions`: the plan shape is what's under test, and executing the
-//! merge would only hide it behind a stream. It also plans the shipped *extract* query and checks
-//! its output ordering, pinning the other half of the streaming contract: the top-level `ORDER BY`
-//! that `SqlPartitionSpec::execute_extract_query` requires before it will record a fresh
-//! partition's `sort_order` guarantee.
+//! merge would only hide it behind a stream. It also plans the shipped *extract* query through
+//! `plan_sorted_extract`, pinning the other half of the streaming contract: that the extract query
+//! still plans and sorts cleanly through the sort-applying helper `SqlPartitionSpec::write` uses to
+//! record a fresh partition's `sort_order` guarantee.
 
 use chrono::{TimeDelta, Utc};
 use datafusion::physical_plan::displayable;
@@ -20,14 +20,15 @@ use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
-use micromegas_analytics::lakehouse::partitioned_execution_plan::make_lex_ordering;
+use micromegas_analytics::lakehouse::partitioned_execution_plan::ScanOrdering;
 use micromegas_analytics::lakehouse::partitioned_table_provider::PartitionedTableProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
-use micromegas_analytics::lakehouse::view::{ScanSortColumn, View, ViewMetadata};
+use micromegas_analytics::lakehouse::sql_partition_spec::plan_sorted_extract;
+use micromegas_analytics::lakehouse::view::{View, ViewMetadata};
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, ViewMaker};
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -161,16 +162,15 @@ async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
     );
 }
 
-/// Pins the other half of the streaming contract: the *extract* query's declared top-level
-/// `ORDER BY`. This is what `SqlPartitionSpec::execute_extract_query`
-/// (`sql_partition_spec.rs`) checks before recording
-/// a fresh partition's `sort_order`: a single-partition physical plan whose output ordering
-/// satisfies the declared `(time_bin, process_id, level, target)` columns. If line 43 of
-/// `log_stats_view.rs` (`ORDER BY time_bin, process_id, level, target`) were dropped or reordered,
-/// that check would `anyhow::bail!` and every fresh `log_stats` materialization would fail -- this
-/// test catches that offline, without needing a live database.
+/// Pins the other half of the streaming contract: the shipped extract query still plans and
+/// sorts cleanly through `plan_sorted_extract` (`sql_partition_spec.rs`), which applies the
+/// declared `(time_bin, process_id, level, target)` sort_order to the extract query before
+/// building its physical plan and verifies the result is single-partition and actually ordered.
+/// `plan_sorted_extract` itself already returns `Err` on either failure, so this test does not
+/// re-check those properties -- it only proves the shipped extract query still reaches `Ok`
+/// through the helper, offline and without a live database.
 #[tokio::test]
-async fn log_stats_extract_query_satisfies_its_declared_sort_order() {
+async fn log_stats_extract_query_still_plans_through_the_sort_applying_helper() {
     let lakehouse = make_offline_lakehouse_context().await;
 
     let log_view_maker = LogViewMaker {};
@@ -208,36 +208,25 @@ async fn log_stats_extract_query_satisfies_its_declared_sort_order() {
         .get_extract_query()
         .replace("{begin}", &now_str)
         .replace("{end}", &now_str);
-    let plan = ctx
+    let df = ctx
         .sql(&sql)
         .await
-        .expect("planning log_stats' shipped extract query")
-        .create_physical_plan()
-        .await
-        .expect("create_physical_plan");
+        .expect("planning log_stats' shipped extract query");
 
-    let partition_count = plan.properties().output_partitioning().partition_count();
-    assert_eq!(
-        partition_count, 1,
-        "a declared sort_order requires the extract query's physical plan to be single-partition, \
-         got {partition_count}"
-    );
-
-    let declared_columns = ["time_bin", "process_id", "level", "target"].map(|c| ScanSortColumn {
-        column: Arc::new(c.to_owned()),
-        descending: false,
-    });
-    let lex = make_lex_ordering(&plan.schema(), &declared_columns)
-        .expect("building the declared extract-query ordering")
-        .expect("declared sort_order columns must be non-empty");
-    let ordering_satisfied = plan
-        .properties()
-        .equivalence_properties()
-        .ordering_satisfy(lex)
-        .expect("checking extract query plan output ordering");
-    assert!(
-        ordering_satisfied,
-        "log_stats' shipped extract query must produce output already ordered by \
-         (time_bin, process_id, level, target); check for a missing or reordered top-level ORDER BY"
+    let declared_columns = match view.get_scan_output_ordering() {
+        ScanOrdering::PerFile { columns } => columns,
+        other => panic!("expected log_stats to declare a PerFile scan ordering, got {other:?}"),
+    };
+    let insert_range = TimeRange::new(Utc::now(), Utc::now() + TimeDelta::hours(1));
+    plan_sorted_extract(
+        df,
+        Some(&declared_columns),
+        "extract query for log_stats",
+        insert_range,
+    )
+    .await
+    .expect(
+        "log_stats' shipped extract query must plan and sort cleanly through \
+         plan_sorted_extract",
     );
 }

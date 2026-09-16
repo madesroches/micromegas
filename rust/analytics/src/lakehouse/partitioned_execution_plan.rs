@@ -213,7 +213,7 @@ pub fn make_lex_ordering(
 /// silently destroy a declared ordering before it is safe to record or execute. Shared by the
 /// query-execution paths that must verify this before executing:
 /// `QueryMerger::execute_concatenated_merge` (only when its ordering is declared),
-/// `QueryMerger::execute_sorted_merge`, and `SqlPartitionSpec::execute_extract_query`.
+/// `QueryMerger::execute_sorted_merge`, and `sql_partition_spec::plan_sorted_extract`.
 pub fn assert_single_partition(
     plan: &Arc<dyn ExecutionPlan>,
     subject: &str,
@@ -239,7 +239,7 @@ pub fn assert_single_partition(
 /// `reason` supplies the full, call-site-specific trailing text of the bail message (what was
 /// declared, and any guidance for diagnosing a mismatch). Shared by the two paths that record a
 /// `sort_order` guarantee: `QueryMerger::execute_sorted_merge` and
-/// `SqlPartitionSpec::execute_extract_query`. `QueryMerger::execute_concatenated_merge` does not
+/// `sql_partition_spec::plan_sorted_extract`. `QueryMerger::execute_concatenated_merge` does not
 /// call this -- its ordering is a structural property of the sorted, non-overlapping file group
 /// rather than a query-plan sort DataFusion could get wrong.
 pub fn assert_ordering_satisfied(

@@ -25,16 +25,17 @@ pub async fn make_log_stats_view(
         ;"#,
     ));
 
-    // Transform query to aggregate logs by time bin, process, level, and target. The top-level
-    // ORDER BY lets the fresh-write path record the (time_bin, process_id, level, target)
-    // sort_order guarantee with_merge_sort_order below declares.
+    // Transform query to aggregate logs by time bin, process, level, and target. No ORDER BY is
+    // written here -- the extract path applies the sort from the with_merge_sort_order columns
+    // below (see sql_partition_spec::plan_sorted_extract) before recording the
+    // (time_bin, process_id, level, target) sort_order guarantee, never reaching this SQL text.
     //
     // `audience` joins the GROUP BY: `log_entries.audience` is a per-row stamp, and a single
     // `process_id` can still span two audiences, so grouping on it too keeps those rows separate
     // instead of letting `max(audience)` collapse them into one mislabelled row. It does **not**
-    // join the declared `ORDER BY`/`with_merge_sort_order` columns below -- see that builder's
-    // doc comment for why an extra, unordered `GROUP BY` key degrades the merge query's
-    // `InputOrderMode` to `PartiallySorted` rather than blocking streaming aggregation outright.
+    // join the declared `with_merge_sort_order` columns below -- see that builder's doc comment
+    // for why an extra, unordered `GROUP BY` key degrades the merge query's `InputOrderMode` to
+    // `PartiallySorted` rather than blocking streaming aggregation outright.
     let transform_query = Arc::new(String::from(
         r#"
         SELECT date_bin('1 minute', time) as time_bin,
@@ -47,7 +48,6 @@ pub async fn make_log_stats_view(
         WHERE insert_time >= '{begin}'
         AND insert_time < '{end}'
         GROUP BY process_id, level, target, time_bin, audience
-        ORDER BY time_bin, process_id, level, target
         ;"#,
     ));
 

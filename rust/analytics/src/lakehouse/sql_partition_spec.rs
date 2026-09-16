@@ -18,8 +18,8 @@ use datafusion::{
         array::{Int64Array, RecordBatch},
         datatypes::Schema,
     },
-    execution::SendableRecordBatchStream,
-    physical_plan::execute_stream,
+    execution::{SendableRecordBatchStream, TaskContext},
+    physical_plan::{ExecutionPlan, execute_stream},
     prelude::*,
 };
 use futures::StreamExt;
@@ -38,9 +38,10 @@ pub struct SqlPartitionSpec {
     insert_range: TimeRange,
     record_count: i64,
     /// The sort guarantee to record on the fresh partition this extract query writes, if any (see
-    /// `SqlBatchView::with_merge_sort_order`). When set, `write` verifies the extract query's
-    /// physical plan actually satisfies it before recording it -- a config typo must never
-    /// record a false guarantee.
+    /// `SqlBatchView::with_merge_sort_order`). When set, `write` applies it to the extract
+    /// query's `DataFrame` as a `DataFrame::sort` before executing it (see
+    /// `plan_sorted_extract`), so the guarantee it records always matches what was actually
+    /// written.
     sort_order: Option<Vec<String>>,
 }
 
@@ -70,50 +71,91 @@ impl SqlPartitionSpec {
         }
     }
 
-    /// Builds the extract query's physical plan once, verifies (only when `sort_order` is
-    /// declared) that it is single-partition and that its output ordering satisfies the declared
-    /// columns, and executes that exact plan -- the same discipline as
-    /// `QueryMerger::execute_merge_query`'s ordering-declared branches. The undeclared path
-    /// (`sort_order: None`) keeps the plain `df.execute_stream()`.
+    /// Converts the declared `sort_order` (if any) to `ScanSortColumn`s and delegates to
+    /// `plan_sorted_extract`, which applies it to the extract query's `DataFrame` before building
+    /// the physical plan -- the same apply-then-plan discipline as
+    /// `QueryMerger::execute_sorted_merge` -- then executes the plan it returns. The undeclared
+    /// path (`sort_order: None`) plans and executes the query unsorted.
     async fn execute_extract_query(&self, df: DataFrame) -> Result<SendableRecordBatchStream> {
-        let Some(sort_order) = &self.sort_order else {
-            return df.execute_stream().await.map_err(Into::into);
-        };
-        let columns: Vec<ScanSortColumn> = sort_order
-            .iter()
-            .map(|c| ScanSortColumn {
-                column: Arc::new(c.clone()),
-                descending: false,
-            })
-            .collect();
+        let columns: Option<Vec<ScanSortColumn>> = self.sort_order.as_ref().map(|sort_order| {
+            sort_order
+                .iter()
+                .map(|c| ScanSortColumn {
+                    column: Arc::new(c.clone()),
+                    descending: false,
+                })
+                .collect()
+        });
+        let subject = format!("extract query for {}", self.view_metadata.view_set_name);
+        let (plan, task_ctx) =
+            plan_sorted_extract(df, columns.as_deref(), &subject, self.insert_range).await?;
+        execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")
+    }
+}
+
+/// Applies `sort_order` (if declared) to `df` as a `DataFrame::sort` over its `ScanSortColumn`s,
+/// builds the physical plan, and -- only when a sort order was declared -- runs
+/// `assert_single_partition` and `assert_ordering_satisfied` against it, mirroring
+/// `QueryMerger::execute_sorted_merge`'s apply-then-plan sequence (`merge.rs:227-270`; its four
+/// merge-specific optimizer settings have no counterpart here). With `sort_order: None` the plan
+/// is built unsorted and neither assertion runs. `subject` names the query for the assertions'
+/// error messages (e.g. `format!("extract query for {view}")`); `insert_range` is the range being
+/// written. Returns the physical plan and the `TaskContext` the caller needs to execute it --
+/// callers are left to `execute_stream` it themselves, since only they know what to do with the
+/// resulting stream.
+pub async fn plan_sorted_extract(
+    df: DataFrame,
+    sort_order: Option<&[ScanSortColumn]>,
+    subject: &str,
+    insert_range: TimeRange,
+) -> Result<(Arc<dyn ExecutionPlan>, Arc<TaskContext>)> {
+    let Some(columns) = sort_order else {
         let task_ctx = Arc::new(df.task_ctx());
         let plan = df
             .create_physical_plan()
             .await
             .with_context(|| "creating physical plan for extract query")?;
+        return Ok((plan, task_ctx));
+    };
 
-        let subject = format!("extract query for {}", self.view_metadata.view_set_name);
-        assert_single_partition(
-            &plan,
-            &subject,
-            self.insert_range,
-            "a declared sort_order requires a single-partition, globally-ordered output.",
-        )?;
+    let df = df.sort(
+        columns
+            .iter()
+            .map(|c| {
+                Expr::Column(datafusion::common::Column::new_unqualified(
+                    c.column.as_str(),
+                ))
+                .sort(!c.descending, c.descending)
+            })
+            .collect(),
+    )?;
+    let task_ctx = Arc::new(df.task_ctx());
+    let plan = df
+        .create_physical_plan()
+        .await
+        .with_context(|| "creating physical plan for extract query")?;
 
-        assert_ordering_satisfied(
-            &plan,
-            &columns,
-            "extract-query",
-            &subject,
-            self.insert_range,
-            &format!(
-                "the declared sort_order {sort_order:?}; refusing to record a false guarantee. \
-                 Check for a missing or mismatched top-level ORDER BY."
-            ),
-        )?;
+    assert_single_partition(
+        &plan,
+        subject,
+        insert_range,
+        "a declared sort_order requires a single-partition, globally-ordered output.",
+    )?;
 
-        execute_stream(plan, task_ctx).with_context(|| "executing extract query plan")
-    }
+    assert_ordering_satisfied(
+        &plan,
+        columns,
+        "extract-query",
+        subject,
+        insert_range,
+        &format!(
+            "the declared sort_order {columns:?} even after applying it as a DataFrame::sort; \
+             this indicates the physical plan silently dropped or reordered the applied sort, \
+             not an author mistake."
+        ),
+    )?;
+
+    Ok((plan, task_ctx))
 }
 
 impl std::fmt::Debug for SqlPartitionSpec {

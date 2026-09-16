@@ -145,7 +145,7 @@ impl SqlBatchView {
     /// Declares that this view's partitions are internally sorted, ascending, by `columns` in
     /// order. `columns` must be non-empty and every name must exist in this view's schema.
     ///
-    /// This is a four-item view-author contract:
+    /// This is a three-item view-author contract:
     /// 1. Every declared sort column must appear among the merge query's `GROUP BY` keys (order
     ///    within `GROUP BY` is irrelevant; extra keys degrade to `PartiallySorted`, not a blocking
     ///    sort).
@@ -153,14 +153,15 @@ impl SqlBatchView {
     ///    ordered stream on the right -- `CollectLeft` buffers its left (build) input and inherits
     ///    its output ordering from its right (probe) input, so the natural phrasing
     ///    `(<ordered agg>) a LEFT JOIN dim d` reinstates a blocking sort.
-    /// 3. The extract query needs a top-level `ORDER BY` matching the declared columns -- and it
-    ///    must be top-level: a CTE-internal `ORDER BY` that is later joined does not count, since
-    ///    the join discards it. The merge query needs no author-written `ORDER BY` at all: this
-    ///    builder forwards `columns` to `with_merge_scan_ordering`, and `QueryMerger` applies the
-    ///    sort as a DataFusion logical-plan node -- no SQL text is derived or rewritten.
-    /// 4. The merge query's aggregates must be composable over already-aggregated rows (e.g.
+    /// 3. The merge query's aggregates must be composable over already-aggregated rows (e.g.
     ///    `sum(count)`, not `count(*)`; no bare `avg` -- carry `sum` and `count` and divide at
     ///    read time). `log_stats` is the in-repo model.
+    ///
+    /// Neither query needs an author-written `ORDER BY` any more: this builder forwards `columns`
+    /// to both sides, `QueryMerger` applies the sort to the merge query as a DataFusion
+    /// logical-plan node, and the extract path applies it to the extract query the same way (see
+    /// `sql_partition_spec::plan_sorted_extract`) -- no SQL text is derived or rewritten on either
+    /// side.
     pub fn with_merge_sort_order(mut self, columns: Vec<Arc<String>>) -> Result<Self> {
         if columns.is_empty() {
             anyhow::bail!("with_merge_sort_order: columns must be non-empty");

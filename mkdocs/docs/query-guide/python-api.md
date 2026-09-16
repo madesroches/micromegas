@@ -637,7 +637,7 @@ client.regenerate_partitions(
 
 **Warning:** `(begin, end, partition_delta_seconds)` must exactly cover an existing partition's boundaries, or the call fails loudly instead of silently creating a duplicate partition. This is an admin/rollout tool -- run calls serially, never with overlapping ranges in flight concurrently.
 
-For a `SqlBatchView`, the bucket size is dictated by the existing partition's boundaries, not freely choosable: an already-large, merged partition can only be regenerated as one equally large bucket, and its extract query's required `ORDER BY` then sorts that whole bucket's aggregated output in a single blocking pass. There is no smaller `partition_delta_seconds` that avoids this once a partition has already grown large -- retire it (`retire_partitions`) and re-materialize at a smaller delta instead.
+For a `SqlBatchView`, the bucket size is dictated by the existing partition's boundaries, not freely choosable: an already-large, merged partition can only be regenerated as one equally large bucket, and its extract query's applied sort order (for a view declaring `with_merge_sort_order`) then sorts that whole bucket's aggregated output in a single blocking pass. There is no smaller `partition_delta_seconds` that avoids this once a partition has already grown large -- retire it (`retire_partitions`) and re-materialize at a smaller delta instead.
 
 ### `retire_partitions(view_set_name, view_instance_id, begin, end)`
 
