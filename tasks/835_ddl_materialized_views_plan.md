@@ -735,8 +735,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `log_stats` `ViewDefinition` fn (`view_options` serialized with `serde_json::to_string`, `definition_sql`
    from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
-   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (`parse_view_ddl`
-   owns the name charset check). Check 7 needs the referenced view
+   `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1. Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
    physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling
    `sql_partition_spec::plan_sorted_extract` — the same
@@ -761,7 +760,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    values of their own options — and its error type; rejecting, with a named error, anything
    trailing the option list, including an `AS` body, a second `DROP` name and a second statement
    (§1); `authorize_view_ddl(&CallerContext) -> Result<(), Status>`,
-   the standalone admin gate that `execute_view_ddl` step 1 calls.
+   the standalone admin gate that `execute_view_ddl` step 1 calls. `parse_view_ddl` also calls
+   `view_definition.rs`'s name charset helper, purely as a fast, redundant client-side pre-check —
+   `validate_view_definition` (§4 check 1) remains the sole enforcement point, since it is the only
+   check that also runs on rows the registry loader reads back.
 8. `rust/public/src/servers/flight_sql_service_impl.rs` — `view_factory: Arc<ViewFactory>` field
    becomes `view_registry: Arc<ViewRegistry>`; `execute_query`, `do_get_tables`, and
    `do_action_create_prepared_statement` call `current()`. This breaks
