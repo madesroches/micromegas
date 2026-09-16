@@ -102,7 +102,6 @@ CREATE [OR REPLACE] MATERIALIZED VIEW <name> WITH (
       FROM log_entries
      WHERE insert_time >= '{begin}' AND insert_time < '{end}'
      GROUP BY time_bin, target, audience
-     ORDER BY time_bin, target
   $$,
   count_src_query = $$
     SELECT sum(nb_objects) as count FROM blocks
@@ -349,19 +348,24 @@ same walk applied to each. On top of that:
    group DDL view is not part of the factory it is validated against. It still turns
    `materialize_all_views`'s documented ordering obligation (`maintenance.rs:59-70`) into a check for
    the base-view case, and it costs nothing: the plan is already built by step 3.
-8. **`merge_sort_order`, if given, matches the extract query's actual ordering.** Build the extract
-   query's physical plan — separately from, and solely for, this check; it is never the plan checks
-   6 and 7 walk — using the same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
+8. **`merge_sort_order`, if given, plans.** The declared columns are *applied*, not demanded: they
+   become a logical-plan `DataFrame::sort` on the extract query before its physical plan is built,
+   exactly as `QueryMerger::execute_sorted_merge` (`merge.rs:210-233`) already does for the merge
+   query. Neither query then carries an author-written `ORDER BY`, and a missing or mismatched one is
+   not representable on either side. This needs one change to existing code:
+   `execute_extract_query` (`sql_partition_spec.rs:79-115`) today only *asserts* the ordering,
+   erroring with "Check for a missing or mismatched top-level ORDER BY" — the same guarantee
+   enforced by blame on one side of the option and by construction on the other. Build the extract
+   query's physical plan — separately from, and solely for, this check; it is never the plan checks 6
+   and 7 walk — using the same `{begin}`/`{end}` substitution `SqlBatchView::new` already does
    (`sql_batch_view.rs:110-114`: both placeholders replaced with one `Utc::now()` timestamp) so an
    extract query filtering on `insert_time` plans instead of failing `TypeCoercion`/
-   `ConstEvaluator` on the unsubstituted literal. Run the existing
-   `assert_single_partition`/`assert_ordering_satisfied` helpers (`partitioned_execution_plan.rs:217-265`;
-   called from `sql_partition_spec.rs:79-115`) against that plan, passing the zero-width
-   `TimeRange::new(now, now)` built from that same substituted timestamp. `with_merge_sort_order`
-   itself only checks the columns exist in the schema; the real enforcement is at write time, where a
-   mismatched top-level `ORDER BY` makes `execute_extract_query` error on every daemon tick with an
-   empty table in the meantime. Running the same assertions at `CREATE` turns that into a rejection
-   up front.
+   `ConstEvaluator` on the unsubstituted literal. That build is what this check buys: an extract
+   query that cannot be planned at all is rejected at `CREATE` rather than on the daemon's first
+   tick. `assert_single_partition`/`assert_ordering_satisfied`
+   (`partitioned_execution_plan.rs:217-265`) still run against it, passing the zero-width
+   `TimeRange::new(now, now)` built from that same timestamp, as a defense against a column list that
+   survives `with_merge_sort_order`'s existence-only schema check.
 9. **Time columns exist and are nanosecond timestamps.** The resolved `min_event_time_column` and
    `max_event_time_column` (from `time_column`, or `min_time_column`/`max_time_column` if given)
    must each name a field of the extract query's inferred schema, and that field's type must be
@@ -380,9 +384,9 @@ bucket being materialized is scanned whole — so the query must either be idemp
 extra rows (`GROUP BY` with `first_value`/`max`) or filter the range explicitly (as `log_stats`
 must, since `count(*)` would double-count); that any range predicate is on `insert_time` (not event
 time); and that the merge query's aggregates are composable over already-aggregated rows
-(`sum(count)`, never `count(*)`, no bare `avg`). All three are exactly the contract
-`with_merge_sort_order`'s doc comment (`sql_batch_view.rs:145-163`) already spells out for
-hand-written views, and none is decidable from a logical plan.
+(`sum(count)`, never `count(*)`, no bare `avg`). Only the last is already spelled out for
+hand-written views, by `with_merge_sort_order`'s doc comment (`sql_batch_view.rs:145-163`); none of
+the three is decidable from a logical plan.
 
 The insert-time half of that obligation does not apply when `extract_query` reads another
 materialized view rather than a raw source table: a materialized view's schema is whatever its own
@@ -662,7 +666,9 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    because step 2's `log_stats` `ViewDefinition` fn and step 3's migration seed both need this type to exist.
 2. New `rust/analytics/src/lakehouse/builtin_view_definitions.rs` — `log_stats` exposed as a
    `fn` returning its `ViewDefinition` (the three queries plus every option: `update_group`, `time_column`, the
-   two deltas, `merge_sort_order`), lifted verbatim out of `log_stats_view.rs`, plus a function
+   two deltas, `merge_sort_order`), lifted out of `log_stats_view.rs` minus its transform query's
+   now-redundant `ORDER BY` (§4 check 8) — a projection-identical change, so the seeded row's
+   `file_schema_hash` is unaffected — plus a function
    assembling it into the equivalent `CREATE MATERIALIZED VIEW log_stats ...` DDL text for the seed's
    `definition_sql`; consumed by the migration's seed (which serializes the fn's returned options via
    `serde_json` for `view_options`) and by the parser round-trip test. Registered in
@@ -676,7 +682,10 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `validate_view_definition`: §4 checks 1–9, on top of the `SqlBatchView` built in step 1 (the
    charset half of check 1 may additionally run in the parser). Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds
-   its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4.
+   its own physical plan from the extract query with `{begin}`/`{end}` substituted, per §4. Also
+   here: `sql_partition_spec.rs`'s `execute_extract_query` applies the declared `sort_order` as a
+   `DataFrame::sort` before planning, mirroring `merge.rs:210-233`, and `with_merge_sort_order`'s
+   doc comment loses item 3's top-level-`ORDER BY` requirement.
 5. New `rust/analytics/src/lakehouse/view_definition_store.rs` — the `ViewDefinitionStore` trait,
    reduced to the single pool-backed `list()` method `reload()` needs (its only implementors are the
    Postgres impl and a test fake), plus free functions `list_tx`/`upsert_tx`/`delete_tx` and
@@ -777,7 +786,7 @@ Created:
 
 Modified:
 - `rust/analytics/src/lakehouse/migration.rs`, `query.rs`, `mod.rs`, `view_factory.rs`,
-  `log_stats_view.rs`
+  `log_stats_view.rs`, `sql_partition_spec.rs`, `sql_batch_view.rs`
 - `rust/analytics/tests/audience_mismatch_skip_db_test.rs`,
   `ownership_rewrite_public_view_set_tests.rs`, `lakehouse_admin_gate_test.rs`
 - `rust/public/tests/read_policy_threading_tests.rs`
@@ -820,6 +829,10 @@ single error the author sees once.
   in every definition that did load. One bad row must not take the lakehouse down.
 - The insert-time-vs-event-time obligation and the merge-aggregate composability obligation are
   documented author contracts, not enforced checks — neither is decidable from a logical plan.
+- `merge_sort_order` applies the sort to both queries instead of requiring a top-level `ORDER BY` in
+  the extract query, which changes `execute_extract_query` for every declared-sort view, not only
+  DDL ones. The alternative is a DDL option that silently demands an `ORDER BY` the author cannot
+  see is missing until the daemon's first tick fails.
   Accepted risk, and the same one hand-written `SqlBatchView`s already carry.
 - `MICROMEGAS_PUBLIC_VIEW_SETS` can name a DDL-defined view set, which disables its audience filter
   entirely. That is the existing operator knob behaving as designed; no extra guard.
@@ -873,7 +886,8 @@ single error the author sees once.
   option), the three-part model, the author obligations (insert-time filtering — or, for a definition
   reading another materialized view, filtering on that view's event-time column instead, since a
   materialized view's schema carries no `insert_time` — `audience` in the projection and the
-  `GROUP BY`, composable merge aggregates, `update_group` ordering), the
+  `GROUP BY`, composable merge aggregates, `update_group` ordering), the fact that
+  `merge_sort_order` is applied by the engine to both queries so neither writes an `ORDER BY`, the
   backfill-is-manual fact and the `materialize_partitions` recipe, and the redefinition/`DROP`
   lifecycle — which must state that a `REPLACE` changing content but not the output schema does
   *not* invalidate existing partitions, and name the `retire_partitions` + `materialize_partitions`
@@ -914,7 +928,9 @@ single error the author sees once.
   that `log_stats` is now a seeded definition rather than a compiled view (identical SQL surface and
   identical `file_schema_hash`, so no rebuild and no dashboard change), with the **Minor breaking
   change** clause for `daemon`'s signature, `FlightSqlServiceImpl::new`'s `view_factory` →
-  `view_registry` parameter, `Views`, and `default_view_factory` no longer returning `log_stats`.
+  `view_registry` parameter, `Views`, `default_view_factory` no longer returning `log_stats`, and
+  `with_merge_sort_order` no longer requiring a top-level `ORDER BY` in the extract query (the sort
+  is now applied for every declared-sort view, hand-written or DDL).
 
 ## Testing Strategy
 
