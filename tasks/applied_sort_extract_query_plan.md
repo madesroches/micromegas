@@ -30,12 +30,7 @@ option safe. This lands first and on its own.
   sequence to mirror: `df.sort(...)` over the `ScanSortColumn`s, `df.task_ctx()`,
   `create_physical_plan()`, then the same two assertions. The four optimizer settings at
   `merge.rs:216-224` (`enable_round_robin_repartition`, `repartition_aggregations`,
-  `prefer_existing_sort`, `repartition_joins`) are merge-specific, not part of this pattern; the
-  real reason `execute_sorted_merge` keeps its own full sequence rather than delegating to the
-  shared helper is what follows the two assertions: a warn-only check for a surviving `SortExec`
-  (`:272-286`) and the `MergeQueryResult.ordering_honored` value it returns, neither of which the
-  extract path needs since it builds its context with `make_session_context` (`query.rs:278`),
-  not `make_merge_session_context`.
+  `prefer_existing_sort`, `repartition_joins`) are merge-specific, not part of this pattern.
 - `rust/analytics/src/lakehouse/sql_batch_view.rs:145-163` — `with_merge_sort_order`'s doc comment
   states a four-item author contract whose item 3 is the top-level-`ORDER BY` requirement.
 - `rust/analytics/src/lakehouse/log_stats_view.rs:50` — the only shipped view declaring a sort order
@@ -106,7 +101,7 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    the `SqlBatchView` fixture it builds entirely: neither surviving assertion needs a view, only a
    session context and the declared columns. Build the `DataFrame` the same way the passing test
    already does — `make_session_context(...)` then `ctx.sql(...)` — over the out-of-order `VALUES`
-   fixture (today's `:90-92`, with its now-redundant `ORDER BY` dropped), and construct
+   fixture (today's `:90-92`), and construct
    `declared_columns` as a literal `[ScanSortColumn; 2]` the way `:151-154` already does, rather than
    reading it off a view. Call the new helper rather than re-applying the sort itself or reaching for
    `write()`'s `expect_err` (which the fixture's `connect_lazy` pool cannot reach once the ordering
@@ -126,10 +121,12 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    sort-applying path — without citing this plan document. Update the import list: `SqlBatchView`,
    `PartitionCache`, `TracingLogger`, `make_lex_ordering`, and the `View` trait become unused once
    the view fixture and the old plan-shape assertion are gone, so drop them; add
-   `datafusion::physical_plan::execute_stream` (to run the plan the helper returns),
-   `futures::TryStreamExt` (for `try_collect`), and `datafusion::arrow::array::{Array, RecordBatch,
-   StringArray}` (to read the `name` column back and check row order) — the same imports
-   `sql_batch_view_merge_ordering_tests.rs` uses for its equivalent check.
+   `datafusion::physical_plan::execute_stream` (to run the plan the helper returns) — new for this
+   call site, since `sql_batch_view_merge_ordering_tests.rs` gets its stream from `MergeQueryResult`
+   rather than executing a plan itself — plus `futures::TryStreamExt` (for `try_collect`) and
+   `datafusion::arrow::array::{Array, RecordBatch, StringArray}` (to read the `name` column back and
+   check row order), the same two imports `sql_batch_view_merge_ordering_tests.rs` uses for its
+   equivalent check.
 5. `rust/analytics/tests/log_stats_ordering_tests.rs` — rename
    `log_stats_extract_query_satisfies_its_declared_sort_order` (`:173`) to
    `log_stats_extract_query_still_plans_through_the_sort_applying_helper` and update it to plan
@@ -144,9 +141,10 @@ inferred Arrow schema and therefore its `file_schema_hash` are unchanged, and ev
    (`:4`, `:10`) to state what the renamed test still pins — that the shipped `log_stats` extract
    query still plans and sorts cleanly through the helper — rather than that the query satisfies the
    declared order; the dropped assertion message (`:241`, "check for a missing or reordered top-level
-   ORDER BY") goes with the assertion it belonged to. Drop `make_lex_ordering` from the import list
-   once the `ordering_satisfied` assertion it supports is gone; no other import in this file becomes
-   unused.
+   ORDER BY") goes with the assertion it belonged to. Drop `make_lex_ordering` and `ScanSortColumn`
+   from the import list once the `ordering_satisfied` assertion and the literal `declared_columns`
+   they supported are gone; add `partitioned_execution_plan::ScanOrdering` for the new `match` on
+   `view.get_scan_output_ordering()`.
 6. `rust/analytics/tests/ordered_aggregation_spike_tests.rs` — delete
    `cte_internal_order_by_is_discarded_by_a_later_join` (`:411-439`): it existed solely to justify the
    extract query's now-removed top-level-`ORDER BY` requirement, and the fact it pinned (a join
@@ -198,11 +196,18 @@ No new files, no migration, no SQL-surface change.
   that silently invalidates a recorded sort guarantee.
 - `log_stats`'s `ORDER BY` is removed in this change rather than left as dead SQL, since the shipped
   view is the in-repo proof that the sort-applying path works.
+- `execute_sorted_merge` keeps its own full apply-then-plan sequence rather than delegating to the
+  shared helper: its warn-only check for a surviving `SortExec` (`merge.rs:272-286`) and the
+  `MergeQueryResult.ordering_honored` value it returns have no extract-path counterpart, since the
+  extract path builds its context with `make_session_context` (`query.rs:278`), not
+  `make_merge_session_context`.
 
 ## Testing Strategy
 
-All no-DB unit tests, in the offline harness the three touched test files already use (lazy pool,
-in-memory object store, `NullPartitionProvider`).
+All no-DB unit tests. `sql_partition_spec_sort_order_tests.rs` and `log_stats_ordering_tests.rs` use
+the offline lakehouse harness (lazy pool, in-memory object store, `NullPartitionProvider`);
+`ordered_aggregation_spike_tests.rs` is a planning-only DataFusion harness with no database or
+object store access, and step 6 only deletes a test from it.
 
 **`log_stats_ordering_tests.rs`** — together with the existing
 `log_stats_merge_query_stays_a_streaming_kway_merge`,
