@@ -2,11 +2,10 @@
 //! `log_entries`/`blocks` fixture factory, exactly like the offline harness in
 //! `lakehouse_admin_gate_test.rs`.
 
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_analytics::lakehouse::log_stats_view::{
-    log_stats_view_definition, make_log_stats_view,
-};
+use micromegas_analytics::lakehouse::log_stats_view::log_stats_view_definition;
 use micromegas_analytics::lakehouse::log_view::LogViewMaker;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
@@ -480,28 +479,57 @@ async fn seeded_log_stats_definition_passes_validation() {
         .await
         .expect("the seeded log_stats definition must pass validation unmodified");
 
-    // The inferred schema must match what `make_log_stats_view` (the compiled view it replaces)
-    // infers, field-for-field including nullability -- a divergence would make every pre-upgrade
-    // `log_stats` partition unreadable.
-    let compiled = make_log_stats_view(
-        lakehouse.runtime().clone(),
-        lakehouse.lake().clone(),
-        factory,
-    )
-    .await
-    .expect("make_log_stats_view");
+    // The inferred schema must match today's shipped `log_stats` schema, field-for-field
+    // including nullability -- a divergence (e.g. a later edit to `EXTRACT_QUERY`) would make
+    // every pre-upgrade `log_stats` partition unreadable, since `partition_cache` filters
+    // existing partitions on an exact `file_schema_hash` match. This is deliberately an explicit
+    // expected field list rather than a comparison against `make_log_stats_view(...)`'s own
+    // schema: that function is now defined as exactly `build_sql_batch_view(&log_stats_view_definition(),
+    // ...)`, so comparing against it would compare the definition against itself and could never
+    // catch a schema drift.
     let via_definition = build_sql_batch_view(
         &definition,
         lakehouse.runtime().clone(),
         lakehouse.lake().clone(),
-        Arc::new(make_base_factory(&lakehouse)),
+        factory,
         Arc::new(NoOpSessionConfigurator),
     )
     .await
     .expect("build_sql_batch_view");
+    let expected_fields = vec![
+        Field::new(
+            "time_bin",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            true,
+        ),
+        Field::new(
+            "process_id",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("level", DataType::Int32, false),
+        Field::new(
+            "target",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("count", DataType::Int64, false),
+        Field::new(
+            "audience",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ];
+    let actual_fields: Vec<Field> = via_definition
+        .get_file_schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
     assert_eq!(
-        via_definition.get_file_schema(),
-        compiled.get_file_schema(),
-        "the seeded ViewDefinition must infer the identical Arrow schema as the compiled view"
+        actual_fields, expected_fields,
+        "the seeded log_stats ViewDefinition's inferred schema must match today's shipped \
+         log_stats schema (names, types, nullability) -- if this legitimately changed, update \
+         the expected field list here and treat it as a schema-breaking migration"
     );
 }

@@ -67,6 +67,9 @@ pub fn parse_time_delta(s: &str) -> Result<TimeDelta> {
         .trim()
         .parse()
         .with_context(|| format!("parse_time_delta: invalid integer {num_str:?} in {s:?}"))?;
+    if n <= 0 {
+        anyhow::bail!("parse_time_delta: expected a positive integer, got {n} in {s:?}");
+    }
     match unit.trim().to_lowercase().as_str() {
         "second" | "seconds" => Ok(TimeDelta::seconds(n)),
         "minute" | "minutes" => Ok(TimeDelta::minutes(n)),
