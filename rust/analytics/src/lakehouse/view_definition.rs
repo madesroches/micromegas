@@ -20,11 +20,13 @@ use anyhow::{Context, Result};
 use chrono::{TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::{DataType, Schema, TimeUnit},
-    common::tree_node::{TreeNode, TreeNodeRecursion},
+    common::{
+        TableReference,
+        tree_node::{TreeNode, TreeNodeRecursion},
+    },
     datasource::{DefaultTableSource, MemTable},
     execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, LogicalPlan, TableScan, Volatility, expr::ScalarFunction},
-    sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use serde::{Deserialize, Serialize};
