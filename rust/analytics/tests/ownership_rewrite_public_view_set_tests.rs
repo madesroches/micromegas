@@ -27,6 +27,7 @@ use micromegas_analytics::lakehouse::async_events_view::AsyncEventsViewMaker;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::dataframe_time_bounds::DataFrameTimeBounds;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::partition_cache::{NullPartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::processes_view::make_processes_view;
 use micromegas_analytics::lakehouse::query::make_session_context;
@@ -540,7 +541,7 @@ async fn real_view_factory_covers_every_registered_view_set() {
     let stream_id = "00000000-0000-0000-0000-000000000004";
 
     let lakehouse = make_offline_lakehouse_context().await;
-    let inventory_view_factory = Arc::new(
+    let base_view_factory = Arc::new(
         default_view_factory(
             lakehouse.runtime().clone(),
             lakehouse.lake().clone(),
@@ -549,6 +550,21 @@ async fn real_view_factory_covers_every_registered_view_set() {
         .await
         .expect("default_view_factory"),
     );
+    // `log_stats` is no longer built by `default_view_factory` (it is seeded into
+    // `lakehouse_view_set_definitions` instead) -- add it onto our own factory clone, the same
+    // way `ViewRegistry` would, so this test keeps covering its audience branch.
+    let mut inventory_view_factory = (*base_view_factory).clone();
+    let log_stats_view = Arc::new(
+        make_log_stats_view(
+            lakehouse.runtime().clone(),
+            lakehouse.lake().clone(),
+            base_view_factory.clone(),
+        )
+        .await
+        .expect("make_log_stats_view"),
+    );
+    inventory_view_factory.add_global_view(log_stats_view);
+    let inventory_view_factory = Arc::new(inventory_view_factory);
 
     // Global instances, implicitly available with no view_instance(...) call. Keyed on whether
     // the view's own file schema carries `audience` -- the same schema introspection

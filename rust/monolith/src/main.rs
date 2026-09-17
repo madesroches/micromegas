@@ -23,7 +23,10 @@ use analytics_web_srv::web_server::{WebCliArgs, WebServerConfig, run_web_server}
 use anyhow::{Context, Result};
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas::analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
+use micromegas::analytics::lakehouse::view_definition_store::PgViewDefinitionStore;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
+use micromegas::analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas::auth::default_provider::ProviderBuilder;
@@ -34,7 +37,7 @@ use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion;
-use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
+use micromegas::servers::maintenance::daemon;
 use micromegas::servers::shutdown::{ShutdownFanout, wait_for_sigterm};
 use micromegas::tracing::prelude::*;
 use std::collections::HashSet;
@@ -345,14 +348,28 @@ async fn main() -> Result<()> {
         let grace_c = grace;
         let retention_days = args.retention_days;
         join_set.spawn(async move {
-            let view_factory = default_view_factory(
+            let base_view_factory = default_view_factory(
                 lh.runtime().clone(),
                 lh.lake().clone(),
                 lh.default_audience(),
             )
             .await?;
-            let views_to_update = get_global_views_with_update_group(&view_factory);
-            daemon(lh, views_to_update, retention_days, shutdown, grace_c).await
+            // Resolves the same `MICROMEGAS_STATIC_TABLES_URL` the FlightSQL builder uses,
+            // instead of a no-op configurator: a DDL-defined view reading a static table must
+            // build the same way in both services.
+            let session_configurator = StaticTablesConfigurator::from_env(
+                "MICROMEGAS_STATIC_TABLES_URL",
+                lh.runtime().clone(),
+            )
+            .await?;
+            let view_registry = Arc::new(ViewRegistry::new(
+                Arc::new(base_view_factory),
+                Arc::new(PgViewDefinitionStore::new(lh.lake().db_pool.clone())),
+                lh.runtime().clone(),
+                lh.lake().clone(),
+                session_configurator,
+            ));
+            daemon(lh, view_registry, retention_days, shutdown, grace_c).await
         });
     }
 

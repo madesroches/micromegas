@@ -82,8 +82,9 @@ async fn log_stats_merge_query_stays_a_streaming_kway_merge() {
     let lakehouse = make_offline_lakehouse_context().await;
 
     // log_stats' extract query reads FROM log_entries, so make_log_stats_view's own schema
-    // resolution (SqlBatchView::new) needs that table resolvable -- mirrors how
-    // view_factory::default_view_factory wires log_stats up in production.
+    // resolution (SqlBatchView::new) needs that table resolvable -- this fixture factory mirrors
+    // the seeded `lakehouse_view_set_definitions` row's dependency on `log_entries`, the same way
+    // `ViewRegistry` resolves it in production.
     let log_view_maker = LogViewMaker {};
     let log_entries_view = log_view_maker
         .make_view("global")

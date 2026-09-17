@@ -10,6 +10,7 @@ use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_tracing::intern_string::intern_string;
@@ -23,7 +24,15 @@ use tokio::task::{JoinError, JoinSet};
 use super::cron_task::{CronTask, TaskCallback};
 use super::pg_stats::PgStatsTask;
 
-type Views = Arc<Vec<Arc<dyn View>>>;
+/// Resolves and sorts the view-carrying task's per-tick view list from `registry.current()`: the
+/// base plus every DDL-defined view with an `update_group`, sorted by that group. Computed fresh
+/// on every tick (rather than once at `daemon()` startup, as before DDL-defined views existed)
+/// so a newly created or dropped view set is picked up without a restart.
+fn sorted_views_from_registry(registry: &ViewRegistry) -> Arc<Vec<Arc<dyn View>>> {
+    let mut views = get_global_views_with_update_group(&registry.current());
+    views.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
+    Arc::new(views)
+}
 
 /// Materializes all views within a given time range.
 ///
@@ -44,10 +53,15 @@ type Views = Arc<Vec<Arc<dyn View>>>;
 #[span_fn]
 pub async fn materialize_all_views(
     lakehouse: Arc<LakehouseContext>,
-    views: Views,
+    views: Arc<Vec<Arc<dyn View>>>,
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
 ) -> Result<()> {
+    // A DDL-defined view set can be dropped between one tick and the next, so `views` is no
+    // longer guaranteed non-empty the way it was when computed once at daemon startup.
+    if views.is_empty() {
+        return Ok(());
+    }
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions_all_views = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
@@ -107,7 +121,7 @@ pub async fn materialize_all_views(
 /// task running once a day to materialize older partitions
 pub struct EveryDayTask {
     pub lakehouse: Arc<LakehouseContext>,
-    pub views: Views,
+    pub view_registry: Arc<ViewRegistry>,
 }
 
 #[async_trait]
@@ -118,9 +132,10 @@ impl TaskCallback for EveryDayTask {
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         let end_range = trunc_task_time;
+        let views = sorted_views_from_registry(&self.view_registry);
         materialize_all_views(
             self.lakehouse.clone(),
-            self.views.clone(),
+            views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
@@ -200,7 +215,7 @@ async fn measure_block_audience_mismatch_rows(
 /// task running once an hour to materialize recent partitions
 pub struct EveryHourTask {
     pub lakehouse: Arc<LakehouseContext>,
-    pub views: Views,
+    pub view_registry: Arc<ViewRegistry>,
     pub retention_days: i32,
 }
 
@@ -219,9 +234,10 @@ impl TaskCallback for EveryHourTask {
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         let end_range = trunc_task_time;
+        let views = sorted_views_from_registry(&self.view_registry);
         materialize_all_views(
             self.lakehouse.clone(),
-            self.views.clone(),
+            views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
@@ -232,7 +248,7 @@ impl TaskCallback for EveryHourTask {
 /// task running once a minute to materialize recent partitions
 pub struct EveryMinuteTask {
     pub lakehouse: Arc<LakehouseContext>,
-    pub views: Views,
+    pub view_registry: Arc<ViewRegistry>,
 }
 
 #[async_trait]
@@ -244,9 +260,10 @@ impl TaskCallback for EveryMinuteTask {
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
+        let views = sorted_views_from_registry(&self.view_registry);
         materialize_all_views(
             self.lakehouse.clone(),
-            self.views.clone(),
+            views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
@@ -257,7 +274,7 @@ impl TaskCallback for EveryMinuteTask {
 /// task running once a second to materialize newest partitions
 pub struct EverySecondTask {
     pub lakehouse: Arc<LakehouseContext>,
-    pub views: Views,
+    pub view_registry: Arc<ViewRegistry>,
 }
 
 #[async_trait]
@@ -275,9 +292,10 @@ impl TaskCallback for EverySecondTask {
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
+        let views = sorted_views_from_registry(&self.view_registry);
         materialize_all_views(
             self.lakehouse.clone(),
-            self.views.clone(),
+            views,
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
@@ -401,13 +419,16 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 /// # Arguments
 ///
 /// * `lakehouse` - The lakehouse context with shared metadata cache.
-/// * `views_to_update` - A vector of views that need to be updated by the daemon.
+/// * `view_registry` - The shared registry (base views plus every DDL-defined global view);
+///   each view-carrying task resolves and sorts its own view list from `view_registry.current()`
+///   fresh on every tick, so a view set created or dropped after the daemon started is picked up
+///   without a restart.
 /// * `retention_days` - Delete lake data older than this many days (retention horizon).
 /// * `shutdown` - Future that completes when the process should begin shutting down.
 /// * `grace` - Maximum time to wait for in-flight tasks after the shutdown signal.
 pub async fn daemon<F>(
     lakehouse: Arc<LakehouseContext>,
-    mut views_to_update: Vec<Arc<dyn View>>,
+    view_registry: Arc<ViewRegistry>,
     retention_days: i32,
     shutdown: F,
     grace: Duration,
@@ -417,8 +438,13 @@ where
 {
     use super::shutdown::ShutdownFanout;
 
-    views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
-    let views = Arc::new(views_to_update);
+    // Loaded once, synchronously, before the cron tasks are spawned -- failing startup on error,
+    // the way `migrate_lakehouse` already does -- so the daemon never materializes with a
+    // DDL-defined view set (or the now-seeded `log_stats`) silently missing from `current()`.
+    view_registry
+        .reload()
+        .await
+        .with_context(|| "initial view_registry reload")?;
 
     let every_day = CronTask::new(
         String::from("every_day"),
@@ -426,7 +452,7 @@ where
         TimeDelta::hours(4),
         Arc::new(EveryDayTask {
             lakehouse: lakehouse.clone(),
-            views: views.clone(),
+            view_registry: view_registry.clone(),
         }),
     )?;
     let every_hour = CronTask::new(
@@ -435,7 +461,7 @@ where
         TimeDelta::minutes(10),
         Arc::new(EveryHourTask {
             lakehouse: lakehouse.clone(),
-            views: views.clone(),
+            view_registry: view_registry.clone(),
             retention_days,
         }),
     )?;
@@ -445,7 +471,7 @@ where
         TimeDelta::seconds(30),
         Arc::new(EveryMinuteTask {
             lakehouse: lakehouse.clone(),
-            views: views.clone(),
+            view_registry: view_registry.clone(),
         }),
     )?;
     let pg_stats = CronTask::new(
@@ -460,11 +486,18 @@ where
         String::from("every second"),
         TimeDelta::seconds(1),
         TimeDelta::milliseconds(500),
-        Arc::new(EverySecondTask { lakehouse, views }),
+        Arc::new(EverySecondTask {
+            lakehouse,
+            view_registry: view_registry.clone(),
+        }),
     )?;
 
     let fanout = ShutdownFanout::new(shutdown);
     let grace_secs = grace.as_secs();
+
+    // Keeps `view_registry.current()` fresh for every task above, independent of their own
+    // schedules.
+    view_registry.spawn_refresh_task(fanout.subscribe());
 
     let mut runners = tokio::task::JoinSet::new();
     runners.spawn(run_tasks_forever(vec![every_day], 1, fanout.subscribe()));

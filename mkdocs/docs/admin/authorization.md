@@ -171,23 +171,36 @@ survives. Both resolve a row's stamp identically — the only skew is this timin
 
 ## Admin-gated lakehouse functions {#admin-gated-lakehouse-functions}
 
-Eight functions are gated on admin-ness rather than audience:
+Nine functions are gated on admin-ness rather than audience:
 `retire_partitions`, `materialize_partitions`, `regenerate_partitions`,
-`retire_partition_by_file`, `retire_partition_by_metadata`, and the [query deny
+`retire_partition_by_file`, `retire_partition_by_metadata`, the [query deny
 list](functions-reference.md#query-deny-list)'s `list_query_denials`,
-`deny_queries`, `remove_query_denial`. A non-admin does not get them registered
-at all, so a call reads as "function not found".
+`deny_queries`, `remove_query_denial`, and
+[`list_view_definitions`](functions-reference.md#list_view_definitions). A
+non-admin does not get them registered at all, so a call reads as "function
+not found". `CREATE`/`DROP MATERIALIZED VIEW` (see [Materialized
+Views](materialized-views.md)) is gated by this same admin check, applied
+directly rather than through function registration, since view DDL is
+intercepted ahead of the normal query path.
 
 Admin-ness is transitive membership in the reserved `admins` local group — see
 [Groups](groups.md) and [Authentication → Admin
 Privileges](authentication.md#admin-privileges).
 
 !!! warning "Deployment-wide, not per-audience"
-    None of the eight filters by audience: an admin can retire any audience's
+    None of the nine filters by audience: an admin can retire any audience's
     partitions and deny every query. A fresh deployment's `admins` group holds
     a wildcard `('admins', '*')` member, which makes **every** authenticated
     caller admin until an operator takes over — `micromegas-groups add admins
     user:<you>`, then `remove admins '*'`.
+
+## DDL-defined materialized views and audience
+
+A [DDL-defined materialized view](materialized-views.md) is filtered by the same two
+`OwnershipRewrite` branches as the code-driven views listed above: its extract query must project
+either an `audience` column (preferred, filtered directly) or a `process_id` column (resolved to
+an audience per-process via `MAX(audience)` — coarser, and wrong for a process whose rows span
+two audiences). This is enforced at `CREATE` time, not left to fail silently at query time.
 
 ## Self-service ingestion key mint {#self-service-ingestion-key-mint}
 

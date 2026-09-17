@@ -682,3 +682,28 @@ FROM total_summary t
 LEFT JOIN incompatible_summary i ON t.view_set_name = i.view_set_name
 ORDER BY size_percentage DESC;
 ```
+
+### `list_view_definitions()`
+
+!!! note "Requires admin"
+    Same gate as `retire_partitions()` and friends — see [Authorization](authorization.md#admin-gated-lakehouse-functions).
+
+**Description**: Lists every row of `lakehouse_view_set_definitions` — every
+[DDL-defined materialized view](materialized-views.md), straight from Postgres rather than from
+the currently-loaded view set. This is what lets an admin see a definition that exists on disk
+but failed to load (present here, absent from `list_view_sets()`).
+
+**Usage**:
+```sql
+SELECT * FROM list_view_definitions();
+```
+
+**Returns**: Table with columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `view_set_name` | String | The view set's name |
+| `definition_sql` | String | The `CREATE MATERIALIZED VIEW` statement text, verbatim, as last submitted |
+| `update_group` | Int32 | The daemon's materialization ordering group |
+| `updated_at` | Timestamp | When this row was last created or replaced |
+| `updated_by` | String, nullable | The identity of the caller who last created or replaced it |

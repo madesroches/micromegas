@@ -53,7 +53,10 @@
 //! ## log_stats
 //!
 //! Materialized aggregate of `log_entries` by process, minute, level, and target -- one global
-//! instance, implicitly available (no `view_instance(...)` form).
+//! instance, implicitly available (no `view_instance(...)` form). `log_stats` is
+//! a seeded row in `lakehouse_view_set_definitions`, not one `default_view_factory` builds -- it
+//! is droppable and replaceable by an operator like any other DDL-defined view, and the schema
+//! below is its shipped default, not a guarantee.
 //!
 //! | field        | type                        | description                                                |
 //! |------------- |-----------------------------|------------------------------------------------------------|
@@ -220,7 +223,6 @@
 //!
 //!
 use super::blocks_view::BlocksView;
-use super::log_stats_view::make_log_stats_view;
 use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
@@ -300,7 +302,8 @@ impl ViewFactory {
 /// `blocks` view binds when it materializes. Callers source it from
 /// `LakehouseContext::default_audience` so every role that builds a factory bakes the same value
 /// into partitions -- notably the maintenance role, which is the one that actually materializes
-/// the six global views.
+/// the five global views. `log_stats` is no longer one of them: it is a seeded row in
+/// `lakehouse_view_set_definitions`, folded in by `ViewRegistry` rather than by this function.
 pub async fn default_view_factory(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -340,16 +343,11 @@ pub async fn default_view_factory(
     factory.add_view_set(String::from("log_entries"), log_view_maker.clone());
     factory.add_view_set(String::from("measures"), metrics_view_maker);
 
-    // Create the factory as Arc to pass to other view makers
+    // Create the factory as Arc to pass to other view makers. `log_stats` no longer joins it
+    // here -- it is seeded into `lakehouse_view_set_definitions` and folded in by `ViewRegistry`
+    // instead (see the module doc comment).
     let factory_arc = Arc::new(factory);
-
-    // Create log_stats view with access to the complete factory (including log_entries)
-    let log_stats_view =
-        Arc::new(make_log_stats_view(runtime.clone(), lake.clone(), factory_arc.clone()).await?);
-
-    // Clone factory and add log_stats view
     let mut updated_factory = (*factory_arc).clone();
-    updated_factory.add_global_view(log_stats_view);
 
     // Add async_events view maker
     updated_factory.add_view_set(

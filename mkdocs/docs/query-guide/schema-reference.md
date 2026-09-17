@@ -20,6 +20,11 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`otel_spans`](#otel_spans) | OpenTelemetry spans materialized from OTLP-ingested traces | Distributed tracing, OTel SDK interop |
 | [`images`](#images) | Screenshots and image data captured via `send_image()` | Visual telemetry, screenshot history |
 
+`list_view_sets()` returns this same inventory plus any [DDL-defined materialized
+view](../admin/materialized-views.md) an admin has created — their schemas are
+deployment-specific, since an admin controls what such a view projects, unlike the built-in views
+documented below.
+
 ## Core Views
 
 ### `processes`
@@ -206,6 +211,11 @@ ORDER BY level;
 ### `log_stats`
 
 Materialized view of aggregated log statistics by process, minute, level, and target — for analyzing log volume trends and patterns over time.
+
+`log_stats` is a seeded [DDL-defined materialized view](../admin/materialized-views.md) rather
+than a built-in view baked into the server binary — an admin may extend or replace it. The
+schema below is its shipped default, not a guarantee: `list_view_sets()` reflects a deployment's
+actual current schema for it, the same as for any other view set (built-in or DDL-defined).
 
 | Field | Type | Description |
 |-------|------|-------------|

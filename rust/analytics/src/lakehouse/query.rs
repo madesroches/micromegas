@@ -6,6 +6,7 @@ use super::{
     list_audience_grants_table_function::{GrantVisibility, ListAudienceGrantsTableFunction},
     list_partitions_table_function::ListPartitionsTableFunction,
     list_query_denials_table_function::ListQueryDenialsTableFunction,
+    list_view_definitions_table_function::ListViewDefinitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     parse_block_table_function::ParseBlockTableFunction,
@@ -242,6 +243,15 @@ pub fn register_lakehouse_functions(
         );
         ctx.register_udf(
             make_remove_query_denial_udf(lakehouse.query_denials().clone()).into_scalar_udf(),
+        );
+        // DDL-defined view sets: lists every row of
+        // `lakehouse_view_set_definitions` straight from Postgres, so an admin can see a
+        // definition that exists on disk but failed to load.
+        ctx.register_udtf(
+            "list_view_definitions",
+            Arc::new(ListViewDefinitionsTableFunction::new(
+                lakehouse.lake().clone(),
+            )),
         );
     }
 }

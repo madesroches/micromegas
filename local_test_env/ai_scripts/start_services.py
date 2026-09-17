@@ -380,6 +380,16 @@ def main():
         os.environ["MICROMEGAS_MAPS_OBJECT_STORE_URI"] = f"{lake_uri}/maps/"
         print(f"Set MICROMEGAS_MAPS_OBJECT_STORE_URI={lake_uri}/maps/")
 
+    # A low refresh interval so a DDL-defined view set (and its daemon pickup) is testable in
+    # seconds rather than the 60s production default. Set once, here, before either
+    # start_split_mode or start_monolith_mode runs, so both the split-mode flight-sql/maintenance
+    # services and the --monolith process inherit it (start_monolith_mode builds its own
+    # `env = os.environ.copy()` and would otherwise miss a var set only for the split-mode
+    # services).
+    if not os.environ.get("MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS"):
+        os.environ["MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS"] = "5"
+        print("Set MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS=5")
+
     if args.monolith:
         print(f"🔧 Building monolith ({mode})...")
         os.chdir(rust_dir)

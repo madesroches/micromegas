@@ -5,6 +5,28 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Dependencies:** Bump `datafusion` from `54.1` to `55.1` (and `arrow`/`arrow-flight`/`arrow-ipc`/`parquet` from `58.0` to `59.2`) in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace. **Minor breaking change:** `ExecutionPlan` gained a new required method, `apply_expressions`; the three in-tree implementations that own no physical expressions (`TaskLogExecPlan`, `PerfettoTraceExecutionPlan`, `ProcessSpansExecutionPlan`) now return `TreeNodeRecursion::Continue`. `datafusion::sql::TableReference` moved to `datafusion::common::TableReference`; `datafusion::physical_optimizer::enforce_sorting::EnforceSorting` was folded into `datafusion::physical_optimizer::ensure_requirements::EnsureRequirements`; `physical_expr::create_physical_expr` gained a trailing `&PhysicalPlanningContext` argument (`PhysicalPlanningContext::default()` for the non-subquery case already in use here). Parquet dropped its public `format`/`thrift` thrift modules in favor of an in-memory metadata builder API, so `partition_metadata::strip_column_index_info` (the legacy-file page-index workaround from the DataFusion 51 upgrade) now rebuilds `ParquetMetaData` via `ColumnChunkMetaData`/`RowGroupMetaData`/`ParquetMetaData` builders instead of round-tripping through hand-rolled thrift (de)serialization, dropping the now-unused `thrift` crate dependency entirely. `arrow_ipc::writer::CompressionContext` is renamed to `IpcWriteContext`. `cargo-deny`'s duplicate-version skip list gains `syn`, since the new `datafusion-macros` crate requires `syn` 3.x alongside the rest of the tree's 2.x. The datafusion-wasm bindings are regenerated for the shifted dependency tree (comment-only diff — no public TS API change).
+* **Analytics:** DDL-defined eagerly materialized views (#835): an admin can now define a new,
+  eagerly materialized view set at runtime with `CREATE [OR REPLACE] MATERIALIZED VIEW <name>
+  WITH (extract_query = ..., count_src_query = ..., merge_partitions_query = ..., update_group =
+  ..., time_column = ..., ...)` / `DROP MATERIALIZED VIEW [IF EXISTS] <name>` over FlightSQL,
+  instead of editing `default_view_factory` and redeploying. The definition is validated at
+  `CREATE` time (schema, audience/process_id reachability, merge-query agreement, update_group
+  ordering, no volatile functions, no embedded DDL/DML, no stored scan of a mutating admin
+  function) and persisted in a new `lakehouse_view_set_definitions` table (lakehouse migration
+  v9 → v10); a shared `ViewRegistry` rebuilds an `Arc<ViewFactory>` from it every
+  `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (default 60s), so `telemetry-maintenance-srv`
+  starts materializing a new view set and `flight-sql-srv` starts answering queries against it,
+  both without a restart — a same-node DDL statement reloads its own replica inline, right after
+  commit. New admin-gated UDTF `list_view_definitions()` lists every stored definition, including
+  one that failed to load. `log_stats` is now one of these: the migration seeds it into
+  `lakehouse_view_set_definitions` from the exact SQL it always shipped with (identical
+  `file_schema_hash`, so no partition rebuild and no dashboard change), and
+  `default_view_factory` no longer builds it in code — it is droppable and replaceable by an
+  admin like any other DDL-defined view. **Minor breaking change**: `daemon` (published,
+  `micromegas::servers::maintenance`) now takes `Arc<ViewRegistry>` instead of `Vec<Arc<dyn
+  View>>`, and the `Views` type alias is removed; `FlightSqlServiceImpl::new` takes
+  `Arc<ViewRegistry>` instead of `Arc<ViewFactory>`; `default_view_factory` (`micromegas_analytics::lakehouse::view_factory`)
+  no longer returns a factory carrying `log_stats`.
 * **Analytics:** `with_merge_sort_order` no longer requires a top-level `ORDER BY` in a view's extract query: the extract path now applies the declared sort itself (`sql_partition_spec::plan_sorted_extract`, mirroring how `QueryMerger::execute_sorted_merge` already applies it to the merge query) instead of asserting one was hand-written, so a missing or mismatched `ORDER BY` can no longer make a fresh write fail (#1596). `log_stats`, the one shipped view declaring a sort order, drops its now-redundant `ORDER BY`; views that still carry one are unaffected, since the extract query's rows are already in the applied order.
 * **Build:** Bump the pinned Rust toolchain to 1.98.1 and add the `rust-analyzer` component; fix the new `clippy::chunks_exact_to_as_chunks` lint in `transit::dyn_string` by switching `chunks_exact(2)` to `as_chunks::<2>()`, and regenerate the datafusion-wasm bindings whose internal closure-glue symbol names changed under the new compiler
 * **Packaging:** Rewrite the `micromegas` umbrella crate's `description`, which was `"Micromegas is a scalable observability solution."` — seven words naming none of the four stages and none of the nouns someone searching for this would type. It is now the same sentence the repository description and `/llms.txt` already use, so the phrasing is consistent everywhere the project is indexed: `"Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, OTLP ingestion, SQL analytics on Apache DataFusion over Parquet, and presentation through Grafana, Python and notebooks. Self-hosted."`. This is the crate's front-door copy on crates.io search, lib.rs and every registry mirror; the component crates keep their deliberately modest `"part of micromegas"` descriptions. Metadata only takes effect on publish, so this lands with the next release.
