@@ -464,12 +464,7 @@ same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_a
     than merely analyze it. Every plan built anywhere in this section therefore uses
     `ctx.sql_with_options` with `allow_ddl`/`allow_dml`/`allow_statements` all `false` (see the
     preamble above), and a query whose `LogicalPlan` root is rejected by that guard (DataFusion's own
-    `BadPlanVisitor`) is rejected here too. This includes the extract-query plan `SqlBatchView::new`
-    builds during construction, which — per the preamble — runs before `validate_view_definition`'s
-    own checks ever start: `SqlBatchView::new` is changed to plan with the same guarded
-    `ctx.sql_with_options` instead of the unguarded `ctx.sql`, so construction can never execute an
-    embedded statement even on the code path (Implementation Step 1, § 7 step 3) that builds the
-    `SqlBatchView` ahead of validation. Without this, a stored `extract_query`/`count_src_query`/
+    `BadPlanVisitor`) is rejected here too. Without this, a stored `extract_query`/`count_src_query`/
     `merge_partitions_query` containing such a statement would run it once at `CREATE` time — during
     `SqlBatchView::new`'s own construction, not merely on some later, already-guarded check — and then
     again on every daemon tick, since `SqlPartitionSpec::write` plans `extract_query` via
@@ -703,11 +698,7 @@ async fn build_factory(
    order, build the `SqlBatchView` against `Arc::new(factory.clone())`, run it through the same
    `validate_view_definition` (§4) the DDL executor uses — against that same factory-so-far, so check
    7's `update_group` ordering sees only the rows already folded in — and only then
-   `factory.add_global_view(...)`. Building the `SqlBatchView` here still precedes
-   `validate_view_definition`, exactly as in Implementation Step 1's `build_sql_batch_view`; that is
-   safe for the same reason given in § 4's preamble and check 10: `SqlBatchView::new` plans its own
-   extract query with the guarded `ctx.sql_with_options`, so this construction cannot execute an
-   embedded DDL/DML statement even though it runs ahead of validation. Each definition therefore sees the built-ins plus every DDL view
+   `factory.add_global_view(...)`. Each definition therefore sees the built-ins plus every DDL view
    with a lower `update_group` — the same incremental clone-and-extend chain `default_view_factory`
    uses, and the same ordering rule `materialize_all_views` already documents. Check 1 (§4) already
    rejects a name that resolves via `get_global_view`/`get_view_sets` on the base factory, so until
@@ -801,9 +792,7 @@ exists on disk but failed to load (present here, absent from `list_view_sets()`)
    `log_stats` `ViewDefinition` fn (`view_options` serialized with `serde_json::to_string`, `definition_sql`
    from the assembled DDL text), and ending with `UPDATE lakehouse_migration SET version=10`.
 4. `rust/analytics/src/lakehouse/view_definition.rs` (same module as step 1) —
-   `validate_view_definition`: §4 checks 1–10, on top of the `SqlBatchView` built in step 1. That
-   `SqlBatchView` is built, via step 1's guarded `SqlBatchView::new`, before this function ever runs,
-   so check 10's guarantee does not depend on this function running first. Check 7 needs the referenced view
+   `validate_view_definition`: §4 checks 1–10, on top of the `SqlBatchView` built in step 1. Check 7 needs the referenced view
    sets' `update_group`s, so it takes the factory the definition was built against. Check 8 builds a
    physical plan from the extract query with `{begin}`/`{end}` substituted, per §4, by calling
    `sql_partition_spec::plan_sorted_extract` — the same
