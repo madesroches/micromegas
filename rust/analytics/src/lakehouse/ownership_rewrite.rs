@@ -117,6 +117,7 @@
 use super::{materialized_view::MaterializedView, read_scope::ReadScope};
 use datafusion::{
     arrow::datatypes::{DataType, Field},
+    common::TableReference,
     common::{Column, tree_node::Transformed},
     config::ConfigOptions,
     datasource::DefaultTableSource,
@@ -126,7 +127,6 @@ use datafusion::{
     optimizer::AnalyzerRule,
     prelude::*,
     scalar::ScalarValue,
-    sql::TableReference,
 };
 use std::sync::Arc;
 use uuid::Uuid;

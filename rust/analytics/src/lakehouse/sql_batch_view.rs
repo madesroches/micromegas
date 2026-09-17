@@ -22,7 +22,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema, execution::runtime_env::RuntimeEnv, prelude::*, sql::TableReference,
+    arrow::datatypes::Schema, common::TableReference, execution::runtime_env::RuntimeEnv,
+    prelude::*,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;

@@ -19,10 +19,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::Schema,
+    common::TableReference,
     execution::SendableRecordBatchStream,
     physical_plan::{displayable, execute_stream},
     prelude::*,
-    sql::TableReference,
 };
 use futures::stream::StreamExt;
 use micromegas_tracing::prelude::*;

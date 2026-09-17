@@ -1,6 +1,6 @@
 //! Offline (no live DB) regression tests for perfetto-export sort elimination:
 //! - the file-group sort + non-overlap loud-failure guard in `make_partitioned_execution_plan`
-//! - the resulting plan shape: a declared ordering lets `EnforceSorting` elide a redundant `Sort`
+//! - the resulting plan shape: a declared ordering lets `EnsureRequirements` elide a redundant `Sort`
 //!   for a multi-partition file group, while an undeclared ordering keeps it (negative control)
 //! - the runtime `begin`-monotonicity guard in `write_thread_spans`
 
@@ -11,7 +11,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, expressions::Column};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, displayable};
@@ -187,9 +187,9 @@ async fn declared_ordering_elides_redundant_sort_for_multi_partition_group() {
         bounds: OrderingBounds::EventTime,
     })
     .await;
-    let optimized = EnforceSorting::new()
+    let optimized = EnsureRequirements::new()
         .optimize(sorted_plan, &Default::default())
-        .expect("EnforceSorting should not fail");
+        .expect("EnsureRequirements should not fail");
     let plan_str = displayable(optimized.as_ref()).indent(false).to_string();
     assert!(
         !plan_str.contains("SortExec"),
@@ -201,9 +201,9 @@ async fn declared_ordering_elides_redundant_sort_for_multi_partition_group() {
 #[tokio::test]
 async fn undeclared_ordering_keeps_sort_negative_control() {
     let sorted_plan = build_plan_wrapped_in_sort(&ScanOrdering::Unordered).await;
-    let optimized = EnforceSorting::new()
+    let optimized = EnsureRequirements::new()
         .optimize(sorted_plan, &Default::default())
-        .expect("EnforceSorting should not fail");
+        .expect("EnsureRequirements should not fail");
     let plan_str = displayable(optimized.as_ref()).indent(false).to_string();
     assert!(
         plan_str.contains("SortExec"),

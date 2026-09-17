@@ -17,55 +17,34 @@ use super::metadata_cache::MetadataCache;
 /// This removes column_index_offset and column_index_length from ColumnChunk metadata
 /// to prevent DataFusion from trying to read legacy ColumnIndex structures that may
 /// have incomplete or malformed null_pages fields (required in Arrow 57.0+).
-///
-/// The approach: serialize metadata to thrift, modify it, then re-parse.
-#[allow(deprecated)]
 fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData> {
-    use datafusion::parquet::file::metadata::ParquetMetaDataWriter;
-    use parquet::format::FileMetaData as ThriftFileMetaData;
-    use parquet::thrift::TSerializable;
-    use thrift::protocol::{TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol};
-    // Serialize metadata using ParquetMetaDataWriter
-    let mut buffer = Vec::new();
-    let writer = ParquetMetaDataWriter::new(&mut buffer, &metadata);
-    writer.finish()?;
-    // Extract FileMetaData portion: the parquet footer is laid out as
-    // [Page Indexes][FileMetaData][Length][PAR1]
-    let metadata_len = u32::from_le_bytes([
-        buffer[buffer.len() - 8],
-        buffer[buffer.len() - 7],
-        buffer[buffer.len() - 6],
-        buffer[buffer.len() - 5],
-    ]) as usize;
-    let file_metadata_start = buffer.len() - 8 - metadata_len;
-    let file_metadata_bytes = &buffer[file_metadata_start..buffer.len() - 8];
-    // Parse FileMetaData with thrift
-    let mut transport =
-        thrift::transport::TBufferChannel::with_capacity(file_metadata_bytes.len(), 0);
-    transport.set_readable_bytes(file_metadata_bytes);
-    let mut protocol = TCompactInputProtocol::new(transport);
-    let mut thrift_meta = ThriftFileMetaData::read_from_in_protocol(&mut protocol)
-        .context("parsing thrift metadata to strip column index")?;
-    // Remove column index information from all row groups and columns
-    for rg in thrift_meta.row_groups.iter_mut() {
-        for col in rg.columns.iter_mut() {
-            col.column_index_offset = None;
-            col.column_index_length = None;
-            // Also remove offset index for consistency
-            col.offset_index_offset = None;
-            col.offset_index_length = None;
-        }
-    }
-    // Re-serialize - use Vec<u8> which auto-grows as needed
-    let mut modified_bytes: Vec<u8> = Vec::with_capacity(file_metadata_bytes.len() * 2);
-    let mut out_protocol = TCompactOutputProtocol::new(&mut modified_bytes);
-    thrift_meta
-        .write_to_out_protocol(&mut out_protocol)
-        .context("serializing modified thrift metadata")?;
-    out_protocol.flush()?;
-    // Parse back to ParquetMetaData
-    ParquetMetaDataReader::decode_metadata(&Bytes::copy_from_slice(&modified_bytes))
-        .context("re-parsing metadata after stripping column index")
+    let mut builder = metadata.into_builder();
+    let row_groups = builder
+        .take_row_groups()
+        .into_iter()
+        .map(|row_group| {
+            let mut row_group_builder = row_group.into_builder();
+            let columns = row_group_builder
+                .take_columns()
+                .into_iter()
+                .map(|column| {
+                    column
+                        .into_builder()
+                        .set_column_index_offset(None)
+                        .set_column_index_length(None)
+                        .set_offset_index_offset(None)
+                        .set_offset_index_length(None)
+                        .build()
+                        .context("rebuilding column chunk metadata without column index pointers")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            row_group_builder
+                .set_column_metadata(columns)
+                .build()
+                .context("rebuilding row group metadata without column index pointers")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(builder.set_row_groups(row_groups).build())
 }
 
 /// Adapts `ObjectStore::get_range` to the `MetadataFetch` interface expected by

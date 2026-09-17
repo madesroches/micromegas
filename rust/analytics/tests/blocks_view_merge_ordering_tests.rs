@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::SessionContext;
 use micromegas_analytics::lakehouse::blocks_view::blocks_view_schema;
@@ -177,9 +177,9 @@ async fn insert_time_non_overlapping_partitions_elide_redundant_sort() {
         Some(vec!["insert_time".to_owned()]),
     );
     let sorted_plan = build_plan_wrapped_in_insert_time_sort(vec![part_later, part_earlier]).await;
-    let optimized = EnforceSorting::new()
+    let optimized = EnsureRequirements::new()
         .optimize(sorted_plan, &Default::default())
-        .expect("EnforceSorting should not fail");
+        .expect("EnsureRequirements should not fail");
     let plan_str = displayable(optimized.as_ref()).indent(false).to_string();
     assert!(
         !plan_str.contains("SortExec"),
@@ -227,9 +227,9 @@ async fn undeclared_insert_time_ordering_keeps_sort_negative_control() {
     let sorted_plan: Arc<dyn ExecutionPlan> = Arc::new(
         datafusion::physical_plan::sorts::sort::SortExec::new(lex, plan),
     );
-    let optimized = EnforceSorting::new()
+    let optimized = EnsureRequirements::new()
         .optimize(sorted_plan, &Default::default())
-        .expect("EnforceSorting should not fail");
+        .expect("EnsureRequirements should not fail");
     let plan_str = displayable(optimized.as_ref()).indent(false).to_string();
     assert!(
         plan_str.contains("SortExec"),

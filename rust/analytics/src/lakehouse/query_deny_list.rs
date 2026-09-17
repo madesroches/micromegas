@@ -270,6 +270,7 @@ pub fn compile_match_expr(
         &expr,
         &schema,
         &datafusion::execution::context::ExecutionProps::new(),
+        &datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext::default(),
     )?;
     let probe_batch = QueryAttribution::probe().to_batch();
     physical.evaluate(&probe_batch).map_err(|e| {

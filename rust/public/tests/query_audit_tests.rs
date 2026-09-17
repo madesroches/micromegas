@@ -130,6 +130,17 @@ impl ExecutionPlan for FakeExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn micromegas::datafusion::physical_plan::PhysicalExpr>,
+        ) -> DataFusionResult<
+            micromegas::datafusion::common::tree_node::TreeNodeRecursion,
+        >,
+    ) -> DataFusionResult<micromegas::datafusion::common::tree_node::TreeNodeRecursion> {
+        unimplemented!("not exercised by aggregate_scan_metrics tests")
+    }
 }
 
 #[test]
