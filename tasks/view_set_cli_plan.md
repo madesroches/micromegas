@@ -59,7 +59,10 @@ functions directly against a fake client.
 falls back to unauthenticated — so no `--no-auth` flag is needed, and a static API key works in CI
 with no browser. `mkdocs/docs/query-guide/python-api.md:842-849` currently states that
 `micromegas-query` and `connect_with_profile()` are the only `api_key_file` honorers; the new tool
-joins that list.
+joins that list. Every subcommand needs an admin identity: `list_view_definitions` is registered
+only inside the `lakehouse_admin` block (`rust/analytics/src/lakehouse/query.rs:237-255`), so even
+read-only `list`/`show`/`plan` fail as an unknown-function planner error for a non-admin caller,
+and `authorize_view_ddl` (`view_ddl.rs:49-55`) gates the write path the same way.
 
 **Today's workflow.** Hand-write the statement and pipe it through `micromegas-query --file`. There
 is no preview, no desired-state file, and no way to tell whether the server matches the repo.
@@ -84,6 +87,10 @@ endpoint from the standard `--profile` resolution and has no ownership marker to
 One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 `CREATE [OR REPLACE] MATERIALIZED VIEW` statement. Nothing else in the directory is read.
 
+Bare `pull` (no names) refreshes only the files already present in `--dir` — the
+`screens.py:cmd_pull` default. A named `pull` also adopts a server-only name into a new file, which
+is the merged pull/import behavior §5 relies on.
+
 ### 2. Local file model and parsing
 
 A `.sql` file is read as text and reduced to a `LocalDefinition`:
@@ -98,7 +105,8 @@ sitting inside an `extract_query` body cannot be mistaken for the option:
 
 ```python
 def _strip_bodies(text):
-    """Blank out $$...$$ bodies, /*...*/ and -- comments, for header scanning only."""
+    """Blank out $$...$$ bodies, single-quoted string literals (handling '' escapes),
+    /*...*/ and -- comments, for header scanning only."""
 ```
 
 From the stripped copy:
@@ -106,13 +114,18 @@ From the stripped copy:
 - `name` — from `CREATE\s+(OR\s+REPLACE\s+)?MATERIALIZED\s+VIEW\s+(<ident>)`. Must equal the
   filename stem, or the file is rejected: the diff, the plan output, and `pull` all key on the
   filename, and a mismatch would silently apply a view under a name the repo doesn't show.
-- `update_group` — from `\bupdate_group\s*=\s*(\d+)`. Used **only** for apply ordering and plan
-  display; the server remains the authority on whether the value is legal. A file with no
-  extractable `update_group` is not rejected — it sorts last and the server rejects it on apply,
-  which keeps this regex from becoming a second, weaker copy of the Rust validator.
+- `update_group` — from `\bupdate_group\s*=\s*'?(\d+)'?`, matching both the plain-integer and
+  single-quoted-integer forms `value_to_i32` accepts (`view_ddl.rs:169-183`). Used **only** for
+  apply ordering and plan display; the server remains the authority on whether the value is legal.
+  A file with no extractable `update_group` is not rejected — it sorts last, and the resulting
+  ordering may be wrong for that file, which keeps this regex from becoming a second, weaker copy
+  of the Rust validator.
 
 A file whose header does not parse at all, or whose name disagrees with its filename, is reported
-and skipped, and (as in `screens.py:360-450`) a skipped file suppresses pruning for its own name.
+and skipped. Following `screens.py`'s two-tier handling (`:94-157`, `:396-425`): a name/filename
+mismatch suppresses pruning for both the filename stem and the name the header actually declares,
+since either could be the definition the author meant to manage; a header that yields no name at
+all suppresses pruning repo-wide, because there is no name to scope the suppression to.
 
 ### 3. Comparison: canonical statement text
 
@@ -169,7 +182,13 @@ Classification, per local file:
 | present | absent | `create` |
 | present | present, canonical text differs | `update` |
 | present | present, canonical text equal | `unchanged` |
-| absent | present | `unmanaged`, or `delete` when `--prune` |
+| absent | present | `unmanaged`, or `delete` when `--prune` **and** `names` is empty |
+
+Deletes are computed only in whole-repo mode: `--prune` combined with an explicit `names` subset
+drops nothing (matching `screens.py:compute_plan`'s `if not names` fence around its delete loop,
+`screens.py:396-425`) — a named-subset run has no way to know whether a view set outside the
+subset is still managed elsewhere in the directory, so treating "not mentioned" as "delete" would
+be wrong.
 
 **Apply order.** Creates and updates run in ascending `update_group` (ties broken by name); drops
 run in descending server `update_group`. `update_group` must be strictly greater than that of every
@@ -185,9 +204,14 @@ MATERIALIZED VIEW <name>` without `IF EXISTS` — the plan just established it e
 `not_found` status is worth an error rather than a shrug.
 
 `apply` reports each statement's returned `(view_set_name, status)` row, continues past a failure
-(counting it, as `screens.py:cmd_apply` does), and exits non-zero if any failed. Each DDL statement
-is its own server-side transaction, so a partial apply is a real outcome; the workflow is
-idempotent, so the remedy is re-running `apply`.
+(counting it, as `screens.py:cmd_apply` does), and exits non-zero if any failed. The exceptions
+caught per statement are `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` — what
+`FlightSQLClient.query` actually raises (`flightsql/client.py:355-419`,
+`tests/test_ddl_materialized_view.py:263`), not the `RuntimeError` `screens.py`'s `WebClient`
+raises. `connect_with_profile`'s `ProfileError` (a `ValueError`) is caught once at connect time,
+as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-side transaction,
+so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
+`apply`.
 
 ### 5. Deletes are opt-in
 
@@ -197,6 +221,9 @@ used to manage and that was removed from the repo" from "a view set this repo ne
 Server-only definitions are therefore reported as `unmanaged` and **never dropped** unless `--prune`
 is passed. Two guards on top:
 
+- `--prune` only ever considers deletes in whole-repo mode: `--prune` alongside an explicit
+  `names` list drops nothing (§4). A named-subset run cannot tell a view set outside the subset
+  apart from one this repo never managed, so it cannot safely prune it either.
 - `--prune` refuses to run when the directory contains zero readable `.sql` files. A wrong `--dir`
   or a checkout at the wrong commit is the plausible way to ask a reconciler to drop production
   views, and an empty desired state is the signature of it.
@@ -270,9 +297,12 @@ Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
 
 4. Create `python/micromegas/micromegas/cli/views.py`: `_strip_bodies`, `parse_local_definition`,
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
-   `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`.
+   `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
+   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` per statement; `main` catches
+   `ProfileError` at connect time (§4).
 5. Wire the argparse surface of §1, with a `client_args` parent parser carrying `--profile` and
-   `--dir` (defined exactly once — see `screens.py:665-676` for why).
+   `--dir` (defined exactly once — see `screens.py:665-676` for why), and call
+   `add_version_argument(parser)` so `--version` matches the other six console scripts.
 6. Add `micromegas-views = "micromegas.cli.views:main"` to `[tool.poetry.scripts]` in
    `python/micromegas/pyproject.toml`.
 
@@ -296,6 +326,7 @@ Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
 | `python/micromegas/micromegas/cli/screens.py` | Refactor onto `state_sync` |
 | `python/micromegas/pyproject.toml` | `micromegas-views` console script |
 | `python/micromegas/tests/cli/test_views.py` | New — unit tests |
+| `python/micromegas/tests/cli/test_version.py` | Add `micromegas-views` `--version` case |
 | `mkdocs/docs/admin/views-as-code.md` | New — user documentation |
 | `mkdocs/mkdocs.yml` | Administration nav entry |
 | `mkdocs/docs/admin/materialized-views.md` | Cross-link to the new page |
@@ -335,7 +366,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - Interior whitespace is not normalized: a false `unchanged` on a differing string literal is worse
   than reformat churn in the plan output.
 - `update_group` is regex-extracted from the local header for ordering and display only; the server
-  stays the authority, and an unextractable value sorts last rather than failing locally.
+  stays the authority, and an unextractable value sorts last rather than failing locally, accepting
+  that the apply ordering may be wrong for that one file rather than blocking the whole run.
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory.
@@ -345,8 +377,10 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as unmanaged on a fresh
-  deployment, the fact that a drop also retires partitions, reformat-only diffs, and a CI example
-  using a profile with `api_key_file`.
+  deployment, the fact that a drop also retires partitions, reformat-only diffs, that every
+  subcommand (including read-only `list`/`show`/`plan`) requires an admin identity because
+  `list_view_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI example
+  using a profile with `api_key_file` — where that key must be an admin key.
 - **Updated:** `mkdocs/docs/admin/materialized-views.md` — a pointer from "Introspection" to the new
   page.
 - **Updated:** `mkdocs/docs/query-guide/python-api.md` — `micromegas-views` is FlightSQL-based, so
@@ -365,9 +399,10 @@ inputs.
 - Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name, text,
   and `update_group`.
 - `update_group` extracted from the header; **not** taken from an `update_group = 1` occurrence
-  inside a `$$...$$` body, a `--` comment, or a `/* */` comment.
-- Filename/DDL-name mismatch is reported and skipped.
-- An unparseable header is reported and skipped, and suppresses pruning for its own name.
+  inside a `$$...$$` body, a single-quoted body, a `--` comment, or a `/* */` comment.
+- Filename/DDL-name mismatch is reported and skipped, and suppresses pruning for both the filename
+  stem and the declared name.
+- An unparseable header is reported and skipped, and suppresses pruning repo-wide.
 
 **Canonicalization**
 - `CREATE OR REPLACE ...` and `CREATE ...` of otherwise identical text canonicalize equal.
@@ -376,8 +411,9 @@ inputs.
 - `with_or_replace` is idempotent and inverse to step 4.
 
 **Plan**
-- Each row of the §4 table, including named-subset mode.
+- Each row of the §4 table.
 - Server-only definitions land in `unmanaged` without `--prune` and in `deletes` with it.
+- `--prune` combined with an explicit `names` subset drops nothing.
 - `--prune` against an empty directory errors instead of proposing drops.
 
 **Apply**
@@ -391,6 +427,8 @@ inputs.
 **Output**
 - The diff shown for an update contains no `OR REPLACE` line.
 - `list` and `show` in both formats.
+- `test_views_version_flag`: `--version` prints the version, Python version, and interpreter path
+  (extending `tests/cli/test_version.py`, which already carries this test per tool).
 
 **Regression guard for the extraction:** `tests/test_screen_files.py` and
 `tests/cli/test_screens_auth.py` must pass with no edits after Phase 1.
@@ -420,8 +458,6 @@ tool generates are accepted by the real parser, validator, and registry.
 7. `rm request_stats.sql && micromegas-views plan`
    → `? request_stats` under unmanaged, no drop proposed. Then `micromegas-views apply --prune`
    → `dropped`, and `list_partitions()` shows its partitions retired.
-8. `cd /tmp/empty && micromegas-views apply --prune`
-   → refused for an empty desired state, with nothing dropped.
 
 ## Open Questions
 
