@@ -304,6 +304,23 @@ fn inspect_scan(
     max_group: &mut Option<i32>,
     mutating_hit: &mut Option<String>,
 ) -> datafusion::error::Result<()> {
+    // Checked first, and unconditionally: `view_instance` resolves to a `MaterializedView` just
+    // like a well-behaved DDL view scan does (see `ViewInstanceTableFunction::call_with_args`),
+    // so the name check must run before the downcast branch below would otherwise `return Ok(())`
+    // and hide it.
+    // DataFusion's `TableFactor::Table` path (the one `foo('a', 'b')` call syntax actually takes,
+    // as opposed to the `TABLE(foo(...))` / `LATERAL` `TableFactor::Function` form) names the
+    // resulting scan `"{name}()"`, not `"{name}"` -- strip that suffix so the comparison below
+    // matches either form.
+    let raw_name = ts.table_name.table();
+    let leaf = raw_name
+        .strip_suffix("()")
+        .unwrap_or(raw_name)
+        .to_lowercase();
+    if mutating_hit.is_none() && MUTATING_TABLE_FUNCTIONS.contains(&leaf.as_str()) {
+        *mutating_hit = Some(leaf);
+        return Ok(());
+    }
     if let Some(default_source) = ts.source.downcast_ref::<DefaultTableSource>()
         && let Some(mat_view) = default_source
             .table_provider
@@ -319,10 +336,6 @@ fn inspect_scan(
     // `MaterializedView` directly -- recurse into it to find the real scan.
     if let Some(inner) = ts.source.get_logical_plan() {
         return walk_plan_for_scans(&inner, max_group, mutating_hit);
-    }
-    let leaf = ts.table_name.table().to_lowercase();
-    if mutating_hit.is_none() && MUTATING_TABLE_FUNCTIONS.contains(&leaf.as_str()) {
-        *mutating_hit = Some(leaf);
     }
     Ok(())
 }

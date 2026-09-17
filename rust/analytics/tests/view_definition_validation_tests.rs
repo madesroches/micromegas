@@ -440,6 +440,34 @@ async fn scanning_a_mutating_table_function_is_rejected() {
         .expect_err("a stored scan of retire_partitions must be rejected");
 }
 
+#[tokio::test]
+async fn scanning_view_instance_is_rejected() {
+    // Unlike `retire_partitions` (whose schema is unrelated to `log_entries`'s and so could be
+    // rejected by an earlier, incidental check), `view_instance('log_entries', 'global')` yields
+    // exactly `log_entries`'s own schema -- this definition is otherwise identical to
+    // `definition_with_audience_is_accepted`'s accepted one, so it can only be caught by check 7's
+    // by-name rejection of the mutating table function itself.
+    let lakehouse = make_offline_lakehouse_context().await;
+    let factory = Arc::new(make_base_factory(&lakehouse));
+    let d = def(
+        "my_view",
+        "SELECT date_bin('1 minute', time) as time_bin, \
+                arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+                count(*) as count \
+         FROM view_instance('log_entries', 'global') \
+         WHERE insert_time >= '{begin}' AND insert_time < '{end}' \
+         GROUP BY time_bin",
+        VALID_COUNT_SRC,
+        "SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience, \
+                sum(count) as count \
+         FROM {source} GROUP BY time_bin",
+        2500,
+    );
+    try_validate(&lakehouse, factory, &d)
+        .await
+        .expect_err("a stored scan of view_instance must be rejected");
+}
+
 /// The validator's calibration case: the seeded `log_stats` definition must pass validation
 /// unmodified, over the exact same base factory `default_view_factory` builds it against in
 /// production.
