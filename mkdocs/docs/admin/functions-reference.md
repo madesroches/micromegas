@@ -683,7 +683,7 @@ LEFT JOIN incompatible_summary i ON t.view_set_name = i.view_set_name
 ORDER BY size_percentage DESC;
 ```
 
-### `list_view_definitions()`
+### `list_view_set_definitions()`
 
 !!! note "Requires admin"
     Same gate as `retire_partitions()` and friends — see [Authorization](authorization.md#admin-gated-lakehouse-functions).
@@ -695,7 +695,7 @@ but failed to load (present here, absent from `list_view_sets()`).
 
 **Usage**:
 ```sql
-SELECT * FROM list_view_definitions();
+SELECT * FROM list_view_set_definitions();
 ```
 
 **Returns**: Table with columns:

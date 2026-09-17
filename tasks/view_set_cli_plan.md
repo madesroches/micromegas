@@ -6,7 +6,7 @@ A `micromegas-views` console script that treats a directory of `.sql` files as t
 the deployment's DDL-defined materialized view sets, and the server as the current state, with a
 terraform-shaped `plan` / `apply` / `pull` / `list` / `show` workflow. Nothing new is stored: the
 desired state is the files (in git), the current state is `lakehouse_view_set_definitions` read
-through the existing admin UDTF `list_view_definitions()`, and the write path is the existing
+through the existing admin UDTF `list_view_set_definitions()`, and the write path is the existing
 `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` DDL executed over FlightSQL. This
 is a client-side diff/apply layer and no server change at all.
 
@@ -27,8 +27,8 @@ status)`, where status is `created`, `replaced`, `dropped`, or `not_found` (the 
 `already_exists` error (`:1020-1025`); a `DROP` of a view another definition reads is refused by
 `check_dependents_survive` (`:1118-1128`) with no `CASCADE`.
 
-**The current-state read.** `list_view_definitions()`
-(`rust/analytics/src/lakehouse/list_view_definitions_table_function.rs`) returns one row per stored
+**The current-state read.** `list_view_set_definitions()`
+(`rust/analytics/src/lakehouse/list_view_set_definitions_table_function.rs`) returns one row per stored
 definition with `(view_set_name, definition_sql, update_group, updated_at, updated_by)`, read
 straight from Postgres and ordered by name, so it also shows a definition that failed to load.
 `definition_sql` is **the verbatim statement text as submitted** — `ViewDdl::Create::sql` is
@@ -58,7 +58,7 @@ functions directly against a fake client.
 falls back to unauthenticated — so no `--no-auth` flag is needed, and a static API key works in CI
 with no browser. `mkdocs/docs/query-guide/python-api.md:842-849` currently states that
 `micromegas-query` and `connect_with_profile()` are the only `api_key_file` honorers; the new tool
-joins that list. Every subcommand needs an admin identity: `list_view_definitions` is registered
+joins that list. Every subcommand needs an admin identity: `list_view_set_definitions` is registered
 only inside the `lakehouse_admin` block (`rust/analytics/src/lakehouse/query.rs:237-255`), so even
 read-only `list`/`show`/`plan` fail as an unknown-function planner error for a non-admin caller,
 and `authorize_view_ddl` (`view_ddl.rs:49-55`) gates the write path the same way.
@@ -200,12 +200,12 @@ production, a canned-DataFrame fake in tests. Current state is one call:
 
 ```sql
 SELECT view_set_name, definition_sql, update_group, updated_at, updated_by
-  FROM list_view_definitions()
+  FROM list_view_set_definitions()
 ```
 
 The column list is spelled out rather than `SELECT *`, deliberately: under the repo's append-last
 rule for SQL-surface changes (`CLAUDE.md`, "Interface stability"), a column added to
-`list_view_definitions()` — an instance key or a materialized-instance count, once §8 lands — then
+`list_view_set_definitions()` — an instance key or a materialized-instance count, once §8 lands — then
 cannot shift what this query reads.
 
 No name is ever interpolated into SQL. `show <name>` and a named-subset `plan` fetch every row and
@@ -253,7 +253,7 @@ as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-
 so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
 `apply`.
 
-**Current-state read.** The `SELECT ... FROM list_view_definitions()` call in `compute_plan` is the
+**Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is the
 first FlightSQL round trip every subcommand makes, including read-only `list`/`show`/`plan`, and it
 is the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
 the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowInvalid` catch as `cmd_apply`'s
@@ -280,7 +280,7 @@ adopts it into the directory; leaving it unmanaged is equally fine.
 A third guard is needed only if the server's state model changes, and is worth writing down now
 because getting it wrong is destructive. `compute_plan` classifies every server row this tool does
 not recognize as `unmanaged`, and `--prune` turns that into a drop. That is safe precisely because
-`list_view_definitions()` returns the DDL tier and nothing else — the anonymous cached definitions of
+`list_view_set_definitions()` returns the DDL tier and nothing else — the anonymous cached definitions of
 §8 are not stored in `lakehouse_view_set_definitions`. If they ever are, an unrelated user's cache
 becomes a drop candidate in this tool's output, so the table must then carry a tier discriminator
 that `compute_plan` filters on *before* classifying anything as `unmanaged`. That discriminator is
@@ -344,7 +344,7 @@ head.
 - **The anonymous tier** — on-demand caching of a time-ranged query, identified by a hash of its
   canonical `LogicalPlan`, created by *running a query* rather than by DDL. No file, no name, no
   owner; it is not a candidate for desired-state management and never appears in
-  `list_view_definitions()`. The predicate sugar over it needs nothing from this tool either: it
+  `list_view_set_definitions()`. The predicate sugar over it needs nothing from this tool either: it
   desugars to the same path and produces no DDL row.
 - **Per-instance eager materialization** — today a DDL definition materializes exactly one instance,
   `'global'` (`sql_batch_view.rs:145`). If a definition gains an instance dimension, it arrives as
@@ -416,7 +416,7 @@ head.
 **Text comparison vs. semantic comparison.** Comparing canonical statement text needs no local
 understanding of the DDL. The alternative — compare parsed definitions — requires either a Python
 reimplementation of `view_definition_from_options` (`view_ddl.rs:185`), a second and weaker copy of
-a validator that already exists in Rust, or extending `list_view_definitions()` to expose the
+a validator that already exists in Rust, or extending `list_view_set_definitions()` to expose the
 normalized columns and *still* parsing the local file. Text comparison gives a faithful diff and one
 source of truth for what a definition means, at the cost of reporting reformat-only edits as
 updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — an instance key (§8), a
@@ -451,7 +451,7 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
-  depends on `list_view_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
+  depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
   the table, `compute_plan` must filter on a tier discriminator before classifying `unmanaged` (§5).
 - The comparison depends on the server storing `definition_sql` verbatim and never rewriting it
   (§3). Stated as an invariant rather than assumed, because server-side column injection is being
@@ -467,7 +467,7 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as unmanaged on a fresh
   deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
   every subcommand (including read-only `list`/`show`/`plan`) requires an admin identity because
-  `list_view_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI example
+  `list_view_set_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI example
   using a profile with `api_key_file` — where that key must be an admin key. It should also say what
   this tool does *not* manage: built-in view sets, which have no stored definition, and on-demand
   cached queries, which have no name (§8) — so a user who misses `log_entries` from `list` knows
@@ -547,7 +547,7 @@ tool generates are accepted by the real parser, validator, and registry.
    `mkdocs/docs/admin/materialized-views.md`, `update_group = 4000`), then `micromegas-views plan`
    → `+ create: request_stats (update_group 4000)`.
 4. `micromegas-views apply --auto-approve`
-   → `created`; `micromegas-query "SELECT * FROM list_view_definitions()" --all` shows both rows.
+   → `created`; `micromegas-query "SELECT * FROM list_view_set_definitions()" --all` shows both rows.
 5. Widen the `WHERE` clause in `request_stats.sql`; `micromegas-views plan`
    → `~ update` with a diff of just that line; `apply` → `replaced`.
 6. Break the file (a column the source doesn't have) and `apply`

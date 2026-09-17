@@ -1,4 +1,4 @@
-//! `list_view_definitions()` -- admin UDTF listing every row of `lakehouse_view_set_definitions`,
+//! `list_view_set_definitions()` -- admin UDTF listing every row of `lakehouse_view_set_definitions`,
 //! straight from Postgres rather than from `ViewRegistry::current()` -- so an admin can see a
 //! definition that exists on disk but failed to load (present here, absent from
 //! `list_view_sets()`). Registered inside the same admin-gated block as `list_query_denials()`'s
@@ -34,36 +34,36 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-/// A DataFusion `TableFunctionImpl` for `list_view_definitions()`.
+/// A DataFusion `TableFunctionImpl` for `list_view_set_definitions()`.
 #[derive(Debug)]
-pub struct ListViewDefinitionsTableFunction {
+pub struct ListViewSetDefinitionsTableFunction {
     lake: Arc<DataLakeConnection>,
 }
 
-impl ListViewDefinitionsTableFunction {
+impl ListViewSetDefinitionsTableFunction {
     pub fn new(lake: Arc<DataLakeConnection>) -> Self {
         Self { lake }
     }
 }
 
-impl TableFunctionImpl for ListViewDefinitionsTableFunction {
+impl TableFunctionImpl for ListViewSetDefinitionsTableFunction {
     fn call_with_args(
         &self,
         _args: TableFunctionArgs,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        Ok(Arc::new(ListViewDefinitionsTableProvider {
+        Ok(Arc::new(ListViewSetDefinitionsTableProvider {
             lake: self.lake.clone(),
         }))
     }
 }
 
 #[derive(Debug)]
-struct ListViewDefinitionsTableProvider {
+struct ListViewSetDefinitionsTableProvider {
     lake: Arc<DataLakeConnection>,
 }
 
 #[async_trait]
-impl TableProvider for ListViewDefinitionsTableProvider {
+impl TableProvider for ListViewSetDefinitionsTableProvider {
     fn schema(&self) -> SchemaRef {
         schema()
     }

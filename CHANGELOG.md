@@ -17,7 +17,7 @@ This file documents the historical progress of the Micromegas project. For curre
   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (default 60s), so `telemetry-maintenance-srv`
   starts materializing a new view set and `flight-sql-srv` starts answering queries against it,
   both without a restart — a same-node DDL statement reloads its own replica inline, right after
-  commit. New admin-gated UDTF `list_view_definitions()` lists every stored definition, including
+  commit. New admin-gated UDTF `list_view_set_definitions()` lists every stored definition, including
   one that failed to load. `log_stats` is now one of these: the migration seeds it into
   `lakehouse_view_set_definitions` from the exact SQL it always shipped with (identical
   `file_schema_hash`, so no partition rebuild and no dashboard change), and

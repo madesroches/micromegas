@@ -3,7 +3,7 @@
 //! admin-gated lakehouse UDTFs/UDFs (`retire_partitions`, `materialize_partitions`,
 //! `regenerate_partitions`, `retire_partition_by_file`, `retire_partition_by_metadata`, the
 //! query deny list's `list_query_denials`, `deny_queries`, `remove_query_denial`, and
-//! `list_view_definitions`). These tests
+//! `list_view_set_definitions`). These tests
 //! only assert on DataFusion *planning*, never execution: the gated functions' own
 //! `call_with_args` implementations only parse arguments and return a lazy provider (or, for
 //! `deny_queries`, additionally compile the match expression and read `rule_count()` from the
@@ -68,7 +68,7 @@ const MUTATING_UDTF_CALLS: &[&str] = &[
     "SELECT * FROM regenerate_partitions('log_entries', TIMESTAMP '2024-01-01T00:00:00Z', TIMESTAMP '2024-01-02T00:00:00Z', 86400)",
     "SELECT * FROM list_query_denials()",
     "SELECT * FROM deny_queries('client = ''x''', 'r')",
-    "SELECT * FROM list_view_definitions()",
+    "SELECT * FROM list_view_set_definitions()",
 ];
 
 const MUTATING_UDF_CALLS: &[&str] = &[

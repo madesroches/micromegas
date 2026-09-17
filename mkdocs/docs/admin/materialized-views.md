@@ -159,7 +159,7 @@ conventions instead:
 
 - `list_view_sets()` includes every DDL-defined view set alongside the built-in ones, since it
   simply walks whatever is currently loaded.
-- [`list_view_definitions()`](functions-reference.md#list_view_definitions) lists every row in
+- [`list_view_set_definitions()`](functions-reference.md#list_view_set_definitions) lists every row in
   Postgres directly, including one that failed to load — so it is the way to see a definition
   `list_view_sets()` doesn't know about.
 

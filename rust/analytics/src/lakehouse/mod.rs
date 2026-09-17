@@ -49,7 +49,7 @@ pub mod list_partitions_table_function;
 /// Admin UDTF listing every query-deny-list rule currently in force
 pub mod list_query_denials_table_function;
 /// Admin UDTF listing every row of `lakehouse_view_set_definitions`, straight from Postgres
-pub mod list_view_definitions_table_function;
+pub mod list_view_set_definitions_table_function;
 /// Read access to view sets with their schema information
 pub mod list_view_sets_table_function;
 /// Implementation of `BlockProcessor` for log entries
