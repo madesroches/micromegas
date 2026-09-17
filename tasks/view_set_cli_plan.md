@@ -108,32 +108,24 @@ A `.sql` file is read as text (`encoding="utf-8-sig"`, matching `screens.py:38,5
 LocalDefinition = namedtuple("LocalDefinition", "name update_group text path")
 ```
 
-Only the statement *header* is parsed locally — never the three queries. The header scan runs over a
-copy of the text with dollar-quoted bodies and SQL comments blanked out, so an `update_group = 1`
-sitting inside an `extract_query` body cannot be mistaken for the option:
+Only the statement *header* is parsed locally — never the three queries. The header is read from
+`sqlglot.tokenize(text, read="postgres")`, walking tokens rather than regexes: a dollar-quoted body,
+tagged or untagged, is a single `TokenType.HEREDOC_STRING` token, and comments are never emitted as
+tokens at all (they attach to the following token's `.comments`), so an `update_group = 1` sitting
+inside an `extract_query` body, or behind a decoy comment, cannot be mistaken for the option.
 
-```python
-def _strip_bodies(text):
-    """Blank out $$...$$ and tagged $tag$...$tag$ bodies, single-quoted string literals
-    (handling '' escapes), /*...*/ and -- comments, for header scanning only. Single
-    left-to-right scan: a dollar-quote opener wins over the other rules, consuming its
-    whole body before quote/comment scanning resumes past it."""
-```
-
-From the stripped copy:
-
-- `name` — from `CREATE\s+(OR\s+REPLACE\s+)?MATERIALIZED\s+VIEW\s+(<ident>)`. Must equal the
-  filename stem, or the file is rejected: the diff, the plan output, and `pull` all key on the
-  filename, and a mismatch would silently apply a view under a name the repo doesn't show.
-- `update_group` — from `\bupdate_group\s*=\s*(\d+)`, the plain-integer form only. `value_to_i32`
-  (`view_ddl.rs:164-178`) also accepts a single-quoted-integer form, but the header scan runs over
-  the `_strip_bodies` output, which blanks single-quoted literals along with everything else it
-  treats as string bodies — so a quoted `update_group = '3000'` is never extracted and sorts last,
-  same as any other unextractable value (see below). Used **only** for apply ordering and plan
-  display; the server remains the authority on whether the value is legal. A file with no
-  extractable `update_group` is not rejected — it sorts last, and the resulting ordering may be
-  wrong for that file, which keeps this regex from becoming a second, weaker copy of the Rust
-  validator.
+- `name` — the `IDENTIFIER`/`VAR` token following the `VIEW` token. The header tokenizes as
+  `CREATE`, `OR`, `REPLACE`, `VAR('MATERIALIZED')`, `VIEW`, `IDENTIFIER(<name>)`; `MATERIALIZED`
+  comes back as `VAR`, not a dedicated keyword, so it's matched on `.text.upper()`, and a
+  double-quoted identifier is unwrapped (`"my_view"` → `IDENTIFIER` with text `my_view`). Must
+  equal the filename stem, or the file is rejected: the diff, the plan output, and `pull` all key
+  on the filename, and a mismatch would silently apply a view under a name the repo doesn't show.
+- `update_group` — the `NUMBER` or `STRING` token following an `update_group =` header token pair.
+  Both forms are extracted, matching what `value_to_i32` (`view_ddl.rs:164-178`) accepts. Used
+  **only** for apply ordering and plan display; the server remains the authority on whether the
+  value is legal. A file with no extractable `update_group` is not rejected — it sorts last, and
+  the resulting ordering may be wrong for that file, which keeps this from becoming a second,
+  weaker copy of the Rust validator.
 
 A file whose header does not parse at all, or whose name disagrees with its filename, is reported
 and skipped. Following `screens.py`'s two-tier handling (`:94-157`, `:396-425`): a name/filename
@@ -179,20 +171,20 @@ stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registr
 ### 4. The plan model
 
 ```python
-def compute_plan(client, local_scan, names=None, prune=False):
-    """-> (creates, updates, deletes, unchanged, unmanaged)"""
+def compute_plan(client, local_scan, names=None):
+    """-> (creates, updates, unchanged, server_only)"""
 ```
 
 `local_scan` is the `(definitions, unparseable_stems, mismatched_names)` tuple `list_local_definitions`
 returns (§2), unpacked exactly as `screens.py:compute_plan` unpacks `local_scan` — `unparseable_stems`
-suppresses pruning repo-wide, `mismatched_names` suppresses it for those two names, and an empty
-`definitions` with `prune=True` is the "zero readable `.sql` files" case §5 refuses to run.
+suppresses pruning repo-wide and `mismatched_names` suppresses it for those two names, both consulted
+by `cmd_plan`/`cmd_apply` when `--prune` is set. An empty `definitions` is the "zero readable `.sql`
+files" case that `--prune` refuses to run (§5), checked before drops are rendered.
 
 `client` is anything with `.query(sql)` returning a DataFrame — the real FlightSQL client in
 production, a canned-DataFrame fake in tests. Current state is one call:
 
 ```sql
--- columns listed explicitly so a later added column can't shift this read
 SELECT view_set_name, definition_sql, update_group, updated_at, updated_by
   FROM list_view_set_definitions()
 ```
@@ -208,18 +200,18 @@ Classification, per local file:
 | present | absent | `create` |
 | present | present, canonical text differs | `update` |
 | present | present, canonical text equal | `unchanged` |
-| absent | present | `unmanaged`, or `delete` when `--prune` **and** `names` is empty |
+| absent | present | `server-only` |
 
 `names` narrows only the create/update/unchanged classification, which iterates the named subset;
-`unmanaged` is always computed against the full `definitions` map from `list_local_definitions`, so
-a locally-managed view outside the named subset is never misreported as unmanaged — there is no
-`managed_by` column (§5) to shield it otherwise.
+`server_only` is always computed against the full `definitions` map from `list_local_definitions`,
+so a locally-managed view outside the named subset is never misreported as server-only.
 
-Deletes are computed only in whole-repo mode: `--prune` combined with an explicit `names` subset
-drops nothing (matching `screens.py:compute_plan`'s `if not names` fence around its delete loop,
-`screens.py:396-425`) — a named-subset run has no way to know whether a view set outside the
-subset is still managed elsewhere in the directory, so treating "not mentioned" as "delete" would
-be wrong.
+Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
+and `cmd_apply` compute `drops = server_only if (prune and not names) else []` — the same fence as
+`screens.py:compute_plan`'s `if not names` guard around its delete loop (`screens.py:396-425`), now
+applied at the call site instead of inside the plan function: a named-subset run has no way to know
+whether a view set outside the subset is still managed elsewhere in the directory, so treating "not
+mentioned" as "delete" would be wrong.
 
 **Apply order.** All creates and updates run first, then all drops — matching `screens.py:cmd_apply`
 (`:549-586`) — so that an update which removes a view's dependency on a to-be-pruned view lands
@@ -265,11 +257,12 @@ requirement, rather than letting the planner's unknown-function error surface as
 
 ### 5. Deletes are opt-in
 
-`lakehouse_view_set_definitions` has no `managed_by` column, so — unlike `micromegas-screens`, which
-can tell its own screens from someone else's — this tool cannot distinguish "a view set this repo
-used to manage and that was removed from the repo" from "a view set this repo never managed."
-Server-only definitions are therefore reported as `unmanaged` and **never dropped** unless `--prune`
-is passed. Two guards on top:
+The directory is the desired state of the *entire* table: DDL creation is admin-gated with no UI
+path, so — unlike `micromegas-screens`, which needs `managed_by` to tell its own screens from one
+born ad hoc in the web UI — a server-only row here is plain drift, not an ownership question.
+`--prune` still gates dropping it, justified by blast radius (a `DROP` also retires partitions,
+below) plus the migration-seeded `log_stats` row. Server-only definitions are therefore reported as
+`server-only` and **never dropped** unless `--prune` is passed. Two guards on top:
 
 - `--prune` refuses to run when the directory contains zero readable `.sql` files. A wrong `--dir`
   or a checkout at the wrong commit is the plausible way to ask a reconciler to drop production
@@ -277,8 +270,8 @@ is passed. Two guards on top:
 - `--prune` still routes through the same confirmation gate, and `--auto-approve` still bypasses the
   gate (CI needs it) — the explicitness lives in `--prune` itself.
 
-A fresh deployment lists `log_stats` as unmanaged, since the migration seeds it. `pull log_stats`
-adopts it into the directory; leaving it unmanaged is equally fine.
+A fresh deployment lists `log_stats` as `server-only`, since the migration seeds it. `pull log_stats`
+adopts it into the directory; leaving it unadopted means `--prune` will propose dropping it.
 
 A `DROP` also retires the view's partitions (`flight_sql_service_impl.rs:1092-1108`), so pruning is
 destructive beyond the definition row. Worth one line in the docs — phrased without promising how
@@ -319,12 +312,13 @@ micromegas-views will perform the following actions:
 
 Plan: 1 to create, 1 to update, 0 to drop, 2 unchanged.
 
-Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
+Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
   ? error_rollup
 ```
 
-`list` prints name / status (`synced`, `modified`, `local-only`, `server-only`) / `update_group` /
-`updated_at` / `updated_by`, with `--format json`. `show <name>` prints the server's stored
+`list` renders `compute_plan`'s output directly, joining the server rows for
+`update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`, `unchanged`,
+`server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`. `show <name>` prints the server's stored
 `definition_sql` verbatim; `--local` prints the file instead. `pull` differs from `show`: it writes
 `canonical_ddl(definition_sql)`, not the verbatim stored text (§1).
 
@@ -361,7 +355,7 @@ head.
 
 **Phase 2 — the new tool**
 
-4. Create `python/micromegas/micromegas/cli/views.py`: `_strip_bodies`, `parse_local_definition`,
+4. Create `python/micromegas/micromegas/cli/views.py`: `parse_local_definition`,
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
    `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `compute_plan`'s
@@ -396,7 +390,7 @@ head.
 | `python/micromegas/micromegas/cli/state_sync.py` | New — shared diff/prompt/color helpers |
 | `python/micromegas/micromegas/cli/views.py` | New — the tool |
 | `python/micromegas/micromegas/cli/screens.py` | Refactor onto `state_sync` |
-| `python/micromegas/pyproject.toml` | `micromegas-views` console script |
+| `python/micromegas/pyproject.toml` | `micromegas-views` console script; add `sqlglot` dependency |
 | `python/micromegas/tests/cli/test_views.py` | New — unit tests |
 | `python/micromegas/tests/cli/test_version.py` | Add `micromegas-views` `--version` case |
 | `mkdocs/docs/admin/views-as-code.md` | New — user documentation |
@@ -417,9 +411,12 @@ updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — a
 retention setting — diffs and round-trips correctly through a tool that never learned what it means,
 where a semantic comparison would need a new field and a new local parser branch per option.
 
+**New dependency: sqlglot.** It is the plan's only new third-party dependency, and it is pure
+Python (no binary wheel). It buys deleting a hand-rolled SQL lexer in favor of walking real tokens.
+
 **No Terraform provider.** A provider (Go, `terraform-plugin-framework`, reusing the in-tree
 FlightSQL client at `grafana/pkg/flightsql/`) would get a real state file, and with it safe deletes
-and drift detection without a `managed_by` column. Against that: a Go release/signing/registry
+and drift detection driven by that state rather than by diffing the whole table. Against that: a Go release/signing/registry
 pipeline, a second auth stack to keep in step with the Python one, and a split from the
 `micromegas-screens` pattern that this repo's other as-code surface already established. A Terraform
 *module* is not an alternative on its own — modules compose a provider's resources, and the nearest
@@ -439,14 +436,19 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   the two tools.
 - Interior whitespace is not normalized: a false `unchanged` on a differing string literal is worse
   than reformat churn in the plan output.
-- `update_group` is regex-extracted from the local header for ordering and display only; the server
+- `update_group` is extracted from the local header for ordering and display only; the server
   stays the authority, and an unextractable value sorts last rather than failing locally, accepting
   that the apply ordering may be wrong for that one file rather than blocking the whole run.
+- Local header parsing uses sqlglot's tokenizer rather than a hand-rolled scanner: datafusion's
+  Python package exposes no parser and cannot parse this DDL form at all.
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
-  the table, `compute_plan` must filter on a tier discriminator before classifying `unmanaged`.
+  the table, `compute_plan` must filter on a tier discriminator before classifying `server-only`.
+- View sets get no `managed_by` column: creation is admin-gated DDL with no UI path, so there is no
+  exploratory tier to distinguish from — that tier already exists separately, as §8's anonymous
+  cached-range functions.
 - The comparison depends on the server storing `definition_sql` verbatim and never rewriting it
   (§3). Stated as an invariant rather than assumed, because server-side column injection is being
   designed for the adjacent tier.
@@ -458,8 +460,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 ## Documentation
 
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
-  subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as unmanaged on a fresh
-  deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
+  subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as server-only on a
+  fresh deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
   every subcommand that touches the server (including read-only `list`/`show`/`plan`, but not
   `show --local`) requires an admin identity because `list_view_set_definitions` and the DDL path
   are both gated to `lakehouse_admin`, and a CI example
@@ -485,10 +487,9 @@ inputs.
 - Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name, text,
   and `update_group`.
 - `update_group` extracted from the header; **not** taken from an `update_group = 1` occurrence
-  inside a `$$...$$` body, a tagged `$tag$...$tag$` body, a single-quoted body, a `--` comment, or
-  a `/* */` comment.
-- A quoted `update_group = '3000'` in the header itself is also not extracted and sorts last,
-  pinning that `_strip_bodies` blanks it the same as any other single-quoted literal.
+  inside a `$$...$$` body or a tagged `$tag$...$tag$` body (each tokenizes as one `HEREDOC_STRING`).
+- A header-level `update_group = '3000'` (quoted) IS read, same as the unquoted form.
+- A leading `--` comment before `CREATE` does not defeat the name scan.
 - A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
   (pins that `pull` writes `canonical_ddl(definition_sql)`, not the verbatim stored text).
 - Filename/DDL-name mismatch is reported and skipped, and suppresses pruning for both the filename
@@ -506,8 +507,10 @@ inputs.
 
 **Plan**
 - Each row of the §4 table.
-- Server-only definitions land in `unmanaged` without `--prune` and in `deletes` with it.
-- `--prune` combined with an explicit `names` subset drops nothing.
+- A server-only definition lands in `compute_plan`'s `server_only` return value regardless of
+  `--prune`.
+- `drops` is empty unless the call site sets `prune and not names`, and equals `server_only` when it
+  does — covers both the no-`--prune` and the `--prune`-plus-named-subset cases.
 - `--prune` against an empty directory errors instead of proposing drops.
 
 **Apply**
@@ -553,9 +556,17 @@ tool generates are accepted by the real parser, validator, and registry.
    → the server's validation error is reported and the exit code is non-zero. This is the
    `plan`-can't-validate gap from Trade-offs, checked by hand once.
 7. `rm request_stats.sql && micromegas-views plan`
-   → `? request_stats` under unmanaged, no drop proposed. Then `micromegas-views apply --prune`
+   → `? request_stats` under server-only, no drop proposed. Then `micromegas-views apply --prune`
    → `dropped`, and `list_partitions()` shows its partitions retired.
 
 ## Open Questions
 
 None.
+
+
+## possible simplifications
+
+· Drop local `update_group` extraction and the tokenizer-based header scan, ordering instead by the server's `update_group`? (Drop it, add a fixed-point retry / Drop it, no retry / Keep the header scan as-is)
+· Collapse the two-tier prune suppression (`unparseable_stems` + `mismatched_names`) into one boolean? (Collapse to one rule (Recommended) / Keep the two-tier model)
+· Narrow the shared `cli/state_sync.py` module? (Export unified_diff + confirm_apply / Export unified_diff only / Keep all four helpers)
+· Keep `show --local`? (Drop it / Keep it)
