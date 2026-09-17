@@ -245,7 +245,12 @@ MATERIALIZED VIEW <name>` without `IF EXISTS` — the plan just established it e
 
 `apply` reports each statement's returned `(view_set_name, status)` row, continues past a failure
 (counting it, as `screens.py:cmd_apply` does), and exits non-zero if any failed. The exceptions
-caught per statement are `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` — what
+caught per statement are `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` — the latter
+because the gRPC statuses this design leans on, `already_exists` and `not_found`
+(`flight_sql_service_impl.rs:1021,1082`), surface from pyarrow as `ArrowException` and
+`ArrowKeyError` respectively, neither a `FlightError` nor an `ArrowInvalid`; `ArrowException` is
+their common base (along with `ArrowInvalid`, used for `INVALID_ARGUMENT`), so it is caught rather
+than the narrower subclasses. This is what
 `FlightSQLClient.query` actually raises (`flightsql/client.py:355-419`,
 `tests/test_ddl_materialized_view.py:263`), not the `RuntimeError` `screens.py`'s `WebClient`
 raises. `connect_with_profile`'s `ProfileError` (a `ValueError`) is caught once at connect time,
@@ -256,7 +261,7 @@ so a partial apply is a real outcome; the workflow is idempotent, so the remedy 
 **Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is the
 first FlightSQL round trip every subcommand makes, including read-only `list`/`show`/`plan`, and it
 is the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
-the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowInvalid` catch as `cmd_apply`'s
+the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch as `cmd_apply`'s
 per-statement calls, reporting the error and exiting non-zero with a pointer to the admin-identity
 requirement, rather than letting the planner's unknown-function error surface as a raw traceback.
 
@@ -371,7 +376,7 @@ head.
 4. Create `python/micromegas/micromegas/cli/views.py`: `_strip_bodies`, `parse_local_definition`,
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
    `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
-   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` per statement; `compute_plan`'s
+   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `compute_plan`'s
    current-state query catches the same two exceptions, reporting the error and exiting non-zero
    with a pointer to the admin-identity requirement (§4); `main` catches `ProfileError` at connect
    time (§4). `cmd_pull` writes with `encoding="utf-8"`, matching
@@ -519,7 +524,9 @@ inputs.
   `update_group` — asserted over the fake client's recorded statement sequence, which is what pins
   the dependency ordering.
 - An update sends `OR REPLACE`; a create sends the file text verbatim.
-- A statement that raises is counted, does not abort the rest, and produces a non-zero exit.
+- A statement that raises `pyarrow.lib.ArrowKeyError` (the `not_found` case) and one that raises
+  bare `pyarrow.lib.ArrowException` (the `already_exists` case) are each counted, do not abort the
+  rest, and produce a non-zero exit — pinning the widened catch, not just `ArrowInvalid`.
 - `--auto-approve` skips the prompt; a declined prompt applies nothing.
 
 **Output**
