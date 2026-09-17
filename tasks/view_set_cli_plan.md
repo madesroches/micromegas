@@ -32,14 +32,14 @@ status)`, where status is `created`, `replaced`, `dropped`, or `not_found` (the 
 definition with `(view_set_name, definition_sql, update_group, updated_at, updated_by)`, read
 straight from Postgres and ordered by name, so it also shows a definition that failed to load.
 `definition_sql` is **the verbatim statement text as submitted** — `ViewDdl::Create::sql` is
-`sql.to_string()` of the whole statement (`view_ddl.rs:34`, `:113`), stored unmodified by
+`sql.to_string()` of the whole statement (`view_ddl.rs:34`, `:117`), stored unmodified by
 `upsert_tx` (`view_definition_store.rs:127-160`). The normalized columns
 (`extract_query`, `count_src_query`, `view_options`, ...) exist in the table but are not exposed by
 the UDTF.
 
 **`log_stats` is one of these rows.** The lakehouse migration seeds it into
 `lakehouse_view_set_definitions` and `default_view_factory` no longer builds it
-(`rust/analytics/src/lakehouse/view_factory.rs:57`, `log_stats_view.rs:63`). So a fresh deployment
+(`rust/analytics/src/lakehouse/view_factory.rs:305,346`, `log_stats_view.rs:65`). So a fresh deployment
 already has exactly one stored definition that nobody checked into a views directory.
 
 **The sibling tool.** `micromegas-screens` (`python/micromegas/micromegas/cli/screens.py`, 744
@@ -53,15 +53,16 @@ functions directly against a fake client.
 
 **Auth.** `micromegas-screens` and its `WebClient` siblings resolve auth through
 `web_auth.resolve_web_auth()`, which branches only on OIDC fields. A FlightSQL tool instead uses
-`micromegas.connection.connect_with_profile(profile=..., client_entrypoint=...)`
+`micromegas.connection.connect_with_profile(profile=..., client_entrypoint="cli-views")`
 (`python/micromegas/micromegas/connection.py:14`), which honors `api_key_file`, then OIDC, then
 falls back to unauthenticated — so no `--no-auth` flag is needed, and a static API key works in CI
-with no browser. `mkdocs/docs/query-guide/python-api.md:842-849` currently states that
+with no browser. `mkdocs/docs/query-guide/python-api.md:843-850` currently states that
 `micromegas-query` and `connect_with_profile()` are the only `api_key_file` honorers; the new tool
-joins that list. Every subcommand needs an admin identity: `list_view_set_definitions` is registered
-only inside the `lakehouse_admin` block (`rust/analytics/src/lakehouse/query.rs:237-255`), so even
-read-only `list`/`show`/`plan` fail as an unknown-function planner error for a non-admin caller,
-and `authorize_view_ddl` (`view_ddl.rs:49-55`) gates the write path the same way.
+joins that list. Every subcommand that touches the server needs an admin identity:
+`list_view_set_definitions` is registered only inside the `lakehouse_admin` block
+(`rust/analytics/src/lakehouse/query.rs:237-255`), so even read-only `list`/`show`/`plan` (but not
+`show --local`, which never connects) fail as an unknown-function planner error for a non-admin
+caller, and `authorize_view_ddl` (`view_ddl.rs:49-55`) gates the write path the same way.
 
 **Today's workflow.** Hand-write the statement and pipe it through `micromegas-query --file`. There
 is no preview, no desired-state file, and no way to tell whether the server matches the repo.
@@ -88,7 +89,9 @@ One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 
 Bare `pull` (no names) refreshes only the files already present in `--dir` — the
 `screens.py:cmd_pull` default. A named `pull` also adopts a server-only name into a new file, which
-is the merged pull/import behavior §5 relies on. `pull` skips, with a warning, any target file that
+is the merged pull/import behavior §5 relies on. A named `pull` (and `show <name>`) for a name
+present on neither side reports an error and exits non-zero, matching `screens.py:cmd_pull`
+(`:308-317`). `pull` skips, with a warning, any target file that
 fails to decode or whose header does not parse, rather than overwriting it — mirroring
 `screens.py:cmd_pull`'s (`:337-352`) guard against clobbering a file that can't be safely read.
 `pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
@@ -112,7 +115,9 @@ sitting inside an `extract_query` body cannot be mistaken for the option:
 ```python
 def _strip_bodies(text):
     """Blank out $$...$$ and tagged $tag$...$tag$ bodies, single-quoted string literals
-    (handling '' escapes), /*...*/ and -- comments, for header scanning only."""
+    (handling '' escapes), /*...*/ and -- comments, for header scanning only. Single
+    left-to-right scan: a dollar-quote opener wins over the other rules, consuming its
+    whole body before quote/comment scanning resumes past it."""
 ```
 
 From the stripped copy:
@@ -121,17 +126,14 @@ From the stripped copy:
   filename stem, or the file is rejected: the diff, the plan output, and `pull` all key on the
   filename, and a mismatch would silently apply a view under a name the repo doesn't show.
 - `update_group` — from `\bupdate_group\s*=\s*(\d+)`, the plain-integer form only. `value_to_i32`
-  (`view_ddl.rs:169-183`) also accepts a single-quoted-integer form, but the header scan runs over
+  (`view_ddl.rs:164-178`) also accepts a single-quoted-integer form, but the header scan runs over
   the `_strip_bodies` output, which blanks single-quoted literals along with everything else it
   treats as string bodies — so a quoted `update_group = '3000'` is never extracted and sorts last,
   same as any other unextractable value (see below). Used **only** for apply ordering and plan
   display; the server remains the authority on whether the value is legal. A file with no
   extractable `update_group` is not rejected — it sorts last, and the resulting ordering may be
   wrong for that file, which keeps this regex from becoming a second, weaker copy of the Rust
-  validator. That tolerance is also the forward-compatible behavior rather than an
-  accident: if a definition ever declares per-instance materialization (§8), `update_group` stops
-  being meaningful for it — a just-in-time instance materializes on query, so it has no place in the
-  daemon's update ordering at all — and the option plausibly becomes optional in the DDL.
+  validator.
 
 A file whose header does not parse at all, or whose name disagrees with its filename, is reported
 and skipped. Following `screens.py`'s two-tier handling (`:94-157`, `:396-425`): a name/filename
@@ -174,15 +176,6 @@ stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registr
 `plan`'s per-view diff is a `difflib.unified_diff` over the canonical text of both sides
 (`fromfile="server"`, `tofile="local"`), so the `OR REPLACE` bookkeeping never appears in output.
 
-**The invariant this rests on.** `definition_sql` is the submitted statement text stored unmodified
-(`view_ddl.rs:34`, `:113`; `view_definition_store.rs:127-160`) — nothing on the server rewrites it.
-Every comparison here is only as good as that. A server that normalized the stored text, or injected
-columns into it, would make `pull` write something the author never submitted and `plan` report a
-diff that no edit can ever close. This matters because the cached-range-function work (§8) appends
-obligatory event-time and ownership columns to a definition's extract query server-side: as long as
-that injection happens below the stored statement rather than into it, this tool is unaffected.
-Manual Verification step 2 is the check that the invariant still holds.
-
 ### 4. The plan model
 
 ```python
@@ -199,14 +192,10 @@ suppresses pruning repo-wide, `mismatched_names` suppresses it for those two nam
 production, a canned-DataFrame fake in tests. Current state is one call:
 
 ```sql
+-- columns listed explicitly so a later added column can't shift this read
 SELECT view_set_name, definition_sql, update_group, updated_at, updated_by
   FROM list_view_set_definitions()
 ```
-
-The column list is spelled out rather than `SELECT *`, deliberately: under the repo's append-last
-rule for SQL-surface changes (`CLAUDE.md`, "Interface stability"), a column added to
-`list_view_set_definitions()` — an instance key or a materialized-instance count, once §8 lands — then
-cannot shift what this query reads.
 
 No name is ever interpolated into SQL. `show <name>` and a named-subset `plan` fetch every row and
 filter in pandas; the table holds one row per view set, so there is nothing to optimize and no
@@ -221,6 +210,11 @@ Classification, per local file:
 | present | present, canonical text equal | `unchanged` |
 | absent | present | `unmanaged`, or `delete` when `--prune` **and** `names` is empty |
 
+`names` narrows only the create/update/unchanged classification, which iterates the named subset;
+`unmanaged` is always computed against the full `definitions` map from `list_local_definitions`, so
+a locally-managed view outside the named subset is never misreported as unmanaged — there is no
+`managed_by` column (§5) to shield it otherwise.
+
 Deletes are computed only in whole-repo mode: `--prune` combined with an explicit `names` subset
 drops nothing (matching `screens.py:compute_plan`'s `if not names` fence around its delete loop,
 `screens.py:396-425`) — a named-subset run has no way to know whether a view set outside the
@@ -231,10 +225,11 @@ be wrong.
 (`:549-586`) — so that an update which removes a view's dependency on a to-be-pruned view lands
 before the drop, rather than having `check_dependents_survive` refuse it. Within the create/update
 phase, statements run in ascending `update_group` (ties broken by name); within the drop phase, in
-descending server `update_group`. `update_group` must be strictly greater than that of every view a
-definition reads, so that ordering is a valid topological order in both directions — which matters
-because the server validates a `CREATE` against the definitions already stored
-(`flight_sql_service_impl.rs:1032-1046`) and refuses a `DROP` whose dependent survives.
+descending server `update_group`. Ascending order is the right default for creates, but a breaking
+`CREATE OR REPLACE` is validated the same way a `DROP` is
+(`flight_sql_service_impl.rs:1032-1046`), so a replace that narrows a view ahead of its
+higher-`update_group` dependent's own update can still be refused; the idempotence remedy already
+stated above (re-running `apply`) covers that case too.
 
 **Statement sent.** For an update, the file text with `OR REPLACE` injected into the header when
 absent (the inverse of `canonical_ddl`'s step 4). For a create, `canonical_ddl(text)` — guaranteed
@@ -260,8 +255,10 @@ so a partial apply is a real outcome; the workflow is idempotent, so the remedy 
 `apply`.
 
 **Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is the
-first FlightSQL round trip every subcommand makes, including read-only `list`/`show`/`plan`, and it
-is the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
+first FlightSQL round trip every subcommand but `show --local` makes, including read-only
+`list`/`show`/`plan` — `show --local` skips both the connect and this read, since it only needs
+`list_local_definitions(dir)`. Where it runs, it is the anticipated failure point for a non-admin
+identity (Current State, "Auth"). It is wrapped in
 the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch as `cmd_apply`'s
 per-statement calls, reporting the error and exiting non-zero with a pointer to the admin-identity
 requirement, rather than letting the planner's unknown-function error surface as a raw traceback.
@@ -283,15 +280,6 @@ is passed. Two guards on top:
 A fresh deployment lists `log_stats` as unmanaged, since the migration seeds it. `pull log_stats`
 adopts it into the directory; leaving it unmanaged is equally fine.
 
-A third guard is needed only if the server's state model changes, and is worth writing down now
-because getting it wrong is destructive. `compute_plan` classifies every server row this tool does
-not recognize as `unmanaged`, and `--prune` turns that into a drop. That is safe precisely because
-`list_view_set_definitions()` returns the DDL tier and nothing else — the anonymous cached definitions of
-§8 are not stored in `lakehouse_view_set_definitions`. If they ever are, an unrelated user's cache
-becomes a drop candidate in this tool's output, so the table must then carry a tier discriminator
-that `compute_plan` filters on *before* classifying anything as `unmanaged`. That discriminator is
-also the `managed_by` column this section opens by lamenting the absence of.
-
 A `DROP` also retires the view's partitions (`flight_sql_service_impl.rs:1092-1108`), so pruning is
 destructive beyond the definition row. Worth one line in the docs — phrased without promising how
 many instances' partitions go with it, since `partition_insert_range` keys on
@@ -302,10 +290,9 @@ many instances' partitions go with it, since `partition_insert_range` keys on
 
 Extracted from `screens.py`, used by both tools:
 
-- `colorize_diff(diff_lines, use_color)` — the `---`/`+++`/`@@`/`-`/`+` coloring and 4-space indent,
-  currently the back half of `format_screen_diff` (`screens.py:445-463`).
 - `unified_diff(before_lines, after_lines, from_label, to_label, use_color)` — `difflib` plus the
-  above; returns `""` when there is no difference.
+  `---`/`+++`/`@@`/`-`/`+` coloring and 4-space indent currently the back half of
+  `format_screen_diff` (`screens.py:445-463`); returns `""` when there is no difference.
 - `confirm_apply(auto_approve)` — the `[y/N]` prompt, the `Apply cancelled.` message, and
   `sys.exit(1)` (`screens.py:531-535`).
 - `add_color_arg(parser)` — the `--color` `BooleanOptionalAction` default-`True` flag.
@@ -364,7 +351,7 @@ head.
 
 **Phase 1 — shared module**
 
-1. Create `python/micromegas/micromegas/cli/state_sync.py` with the five helpers in §6.
+1. Create `python/micromegas/micromegas/cli/state_sync.py` with the four helpers in §6.
 2. Refactor `python/micromegas/micromegas/cli/screens.py` to use them: `format_screen_diff` becomes
    a wrapper over `unified_diff`; `cmd_apply`'s inline prompt becomes `confirm_apply`; the two
    `--color` definitions and the two `sys.stdout.isatty() and args.color` expressions become
@@ -380,7 +367,8 @@ head.
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `compute_plan`'s
    current-state query catches the same two exceptions, reporting the error and exiting non-zero
    with a pointer to the admin-identity requirement (§4); `main` catches `ProfileError` at connect
-   time (§4). `cmd_pull` writes with `encoding="utf-8"`, matching
+   time (§4), except for `show --local`, which never connects. `cmd_pull` writes with
+   `encoding="utf-8"`, matching
    `screens.py:89,256`; `main` calls `sys.stdout.reconfigure(encoding="utf-8",
    errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
    output survives a non-UTF-8 locale.
@@ -396,7 +384,7 @@ head.
 8. Write `mkdocs/docs/admin/views-as-code.md`, add it to the Administration nav in
    `mkdocs/mkdocs.yml` right after `admin/materialized-views.md`, and cross-link it from
    `mkdocs/docs/admin/materialized-views.md`.
-9. Update `mkdocs/docs/query-guide/python-api.md:842-849` to include `micromegas-views` among the
+9. Update `mkdocs/docs/query-guide/python-api.md:843-850` to include `micromegas-views` among the
    FlightSQL, `api_key_file`-honoring tools.
 10. Add the `CHANGELOG.md` **Unreleased** entry.
 11. `black` over the new and changed Python files.
@@ -458,7 +446,7 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   stopping at the first error.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
-  the table, `compute_plan` must filter on a tier discriminator before classifying `unmanaged` (§5).
+  the table, `compute_plan` must filter on a tier discriminator before classifying `unmanaged`.
 - The comparison depends on the server storing `definition_sql` verbatim and never rewriting it
   (§3). Stated as an invariant rather than assumed, because server-side column injection is being
   designed for the adjacent tier.
@@ -472,8 +460,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as unmanaged on a fresh
   deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
-  every subcommand (including read-only `list`/`show`/`plan`) requires an admin identity because
-  `list_view_set_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI example
+  every subcommand that touches the server (including read-only `list`/`show`/`plan`, but not
+  `show --local`) requires an admin identity because `list_view_set_definitions` and the DDL path
+  are both gated to `lakehouse_admin`, and a CI example
   using a profile with `api_key_file` — where that key must be an admin key. It should also say what
   this tool does *not* manage: built-in view sets, which have no stored definition, and on-demand
   cached queries, which have no name (§8) — so a user who misses `log_entries` from `list` knows
@@ -481,7 +470,7 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - **Updated:** `mkdocs/docs/admin/materialized-views.md` — a pointer from "Introspection" to the new
   page.
 - **Updated:** `mkdocs/docs/query-guide/python-api.md` — `micromegas-views` is FlightSQL-based, so
-  it honors `api_key_file`; the paragraph at `:842-849` currently implies only `micromegas-query`
+  it honors `api_key_file`; the paragraph at `:843-850` currently implies only `micromegas-query`
   and `connect_with_profile()` do.
 - **Updated:** `mkdocs/mkdocs.yml` — nav entry.
 
@@ -534,7 +523,7 @@ inputs.
 
 **Output**
 - The diff shown for an update contains no `OR REPLACE` line.
-- `list` and `show` in both formats.
+- `list` in both formats; `show` with and without `--local`.
 - `test_views_version_flag`: `--version` prints the version, Python version, and interpreter path
   (extending `tests/cli/test_version.py`).
 
