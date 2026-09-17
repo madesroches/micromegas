@@ -48,6 +48,8 @@ pub mod list_audience_grants_table_function;
 pub mod list_partitions_table_function;
 /// Admin UDTF listing every query-deny-list rule currently in force
 pub mod list_query_denials_table_function;
+/// Admin UDTF listing every row of `lakehouse_view_set_definitions`, straight from Postgres
+pub mod list_view_definitions_table_function;
 /// Read access to view sets with their schema information
 pub mod list_view_sets_table_function;
 /// Implementation of `BlockProcessor` for log entries
@@ -150,8 +152,18 @@ pub mod temp;
 pub mod thread_spans_view;
 /// Basic interface for a set of rows queryable and materializable
 pub mod view;
+/// The normalized shape of a DDL-defined (or seeded) materialized view, and the validation shared
+/// by the DDL executor and the registry loader.
+pub mod view_definition;
+/// Postgres-backed persistence for DDL-defined view definitions
+/// (`lakehouse_view_set_definitions`).
+pub mod view_definition_store;
 pub mod view_factory;
 /// Table function to query process-specific views
 pub mod view_instance_table_function;
+/// Shared `Arc<ViewFactory>` rebuilt from Postgres-backed view definitions on a timer, giving
+/// `telemetry-maintenance-srv` and `flight-sql-srv` a common, reloadable view of DDL-defined view
+/// sets without a restart.
+pub mod view_registry;
 /// Add or remove view partitions
 pub mod write_partition;

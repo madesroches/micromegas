@@ -31,6 +31,20 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
+/// The `SQLOptions` every plan-only build of a stored query text (extract/count/merge, at
+/// construction or validation time) must use instead of the unguarded `ctx.sql(...)`:
+/// `SQLOptions::new()`'s defaults are `allow_ddl`/`allow_dml`/`allow_statements: true`, so planning
+/// a stored query containing an embedded `CREATE EXTERNAL TABLE`/`DROP VIEW`/`COPY ... TO` would
+/// otherwise execute it once here and again on every daemon tick (`SqlPartitionSpec::write` plans
+/// `extract_query` the same way it was first planned). `pub(crate)` so `view_definition.rs`'s
+/// validation checks reuse the exact same guard.
+pub(crate) fn guarded_sql_options() -> SQLOptions {
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
 /// Builds the ascending `ScanSortColumn` list corresponding to a declared sort order.
 fn sort_order_as_scan_columns(columns: &[Arc<String>]) -> Vec<ScanSortColumn> {
     columns
@@ -113,7 +127,10 @@ impl SqlBatchView {
         let sql = extract_query
             .replace("{begin}", &now_str)
             .replace("{end}", &now_str);
-        let extracted_df = ctx.sql(&sql).await?;
+        // Guarded: an embedded DDL/DML statement in extract_query must never execute here (see
+        // `guarded_sql_options`'s doc comment) -- this is what makes the DDL validator's own check
+        // 10 hold even though construction runs before validation.
+        let extracted_df = ctx.sql_with_options(&sql, guarded_sql_options()).await?;
         let schema = extracted_df.schema().inner().clone();
         let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
         let merger: Arc<dyn PartitionMerger> = Arc::new(QueryMerger::new(

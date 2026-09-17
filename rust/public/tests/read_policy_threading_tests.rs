@@ -31,7 +31,9 @@ use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::streams_view::make_streams_view;
+use micromegas_analytics::lakehouse::view_definition_store::PgViewDefinitionStore;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::policy::{AudienceReadPolicy, ReadPolicy, ReadableAudiences};
 use micromegas_auth::tower::AuthService;
@@ -128,10 +130,20 @@ async fn start_server(
     let part_provider = Arc::new(NullPartitionProvider {});
     let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
     let session_configurator = Arc::new(NoOpSessionConfigurator);
+    // A `ViewRegistry` over the fixture factory, backed by the Postgres store over this test's
+    // existing `connect_lazy` pool -- this test never calls `reload()`, so the store is never
+    // actually queried, and `current()` returns the fixture factory unchanged.
+    let view_registry = Arc::new(ViewRegistry::new(
+        view_factory,
+        Arc::new(PgViewDefinitionStore::new(lakehouse.lake().db_pool.clone())),
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        session_configurator.clone(),
+    ));
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,
         part_provider,
-        view_factory,
+        view_registry,
         session_configurator,
         read_policy,
         Arc::new(IsolationConfig::default()),
@@ -507,5 +519,46 @@ async fn bulk_ingest_denies_non_admin_caller() {
         expect_status_code(result),
         Code::PermissionDenied,
         "a non-admin caller must be rejected by the bulk_ingest admin gate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// View DDL admin gate: non-admin callers must be rejected
+// ---------------------------------------------------------------------------
+
+/// Mirrors `bulk_ingest_denies_non_admin_caller`: covers the wiring that `execute_query` actually
+/// routes DDL through `authorize_view_ddl` before `make_session_context`, not just that the gate
+/// function itself is correct. An `ApiKeyAuthProvider` credential is always non-admin, so
+/// `authorize_view_ddl` must reject this before any DB or object-store access happens (the view
+/// definition is already parsed and validated by this point).
+#[tokio::test]
+async fn view_ddl_denies_non_admin_caller() {
+    let auth_provider = api_key_provider("test", "secret");
+    let policy = Arc::new(RecordingReadPolicy::default());
+    let addr = start_server(Some(auth_provider), policy).await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+
+    let info = client
+        .execute(
+            "CREATE MATERIALIZED VIEW ddl_gate_test WITH (\
+               extract_query = $$SELECT 1 as x$$, \
+               count_src_query = $$SELECT 0 as count$$, \
+               merge_partitions_query = $$SELECT * FROM {source}$$, \
+               update_group = 9000, \
+               time_column = 'x'\
+             )"
+            .to_string(),
+            None,
+        )
+        .await
+        .expect("get_flight_info_statement never plans or executes the statement");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    let result = client.do_get(ticket).await;
+
+    assert_eq!(
+        expect_status_code(result.map(|_| ())),
+        Code::PermissionDenied,
+        "a non-admin caller must be rejected by the view DDL admin gate"
     );
 }

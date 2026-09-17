@@ -171,3 +171,8 @@ required-features = ["server"]
 name = "isolation_config_fail_fast_tests"
 path = "tests/isolation_config_fail_fast_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "view_ddl_parse_tests"
+path = "tests/view_ddl_parse_tests.rs"
+required-features = ["server"]

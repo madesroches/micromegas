@@ -73,3 +73,7 @@ pub mod shutdown;
 
 /// shared readiness probe logic (DB + blob, 1 s success cache)
 pub mod readiness;
+
+/// `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` DDL: parsing and the
+/// admin gate.
+pub mod view_ddl;

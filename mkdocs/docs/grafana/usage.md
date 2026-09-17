@@ -130,7 +130,7 @@ GROUP BY 1
 ORDER BY 1
 ```
 
-`log_stats` holds log counts pre-aggregated by minute, process, level, and target, updated as new data arrives and partitioned daily — querying it scans orders of magnitude fewer rows than aggregating `log_entries` directly. Use it for log volume analysis and trend monitoring. For other frequently-used aggregations, ask your administrator to create a custom materialized view — see [Admin Guide - Materialized Views](../admin/maintenance.md).
+`log_stats` holds log counts pre-aggregated by minute, process, level, and target, updated as new data arrives and partitioned daily — querying it scans orders of magnitude fewer rows than aggregating `log_entries` directly. Use it for log volume analysis and trend monitoring. For other frequently-used aggregations, ask your administrator to create a custom materialized view — see [Admin Guide - Materialized Views](../admin/materialized-views.md).
 
 ## Manual Time Filter Macros
 

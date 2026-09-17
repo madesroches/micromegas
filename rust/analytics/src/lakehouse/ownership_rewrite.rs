@@ -19,8 +19,10 @@
 //! non-null by construction (though declared nullable in their inferred `SqlBatchView` schema) on
 //! `processes`/`streams`/`log_stats` -- extracted once from Postgres's own `audience` column at
 //! the `blocks` view's materialization (its own row's stamp) and propagated structurally into
-//! every downstream view. Those six views are consequently filtered with a bare `Filter` on that
-//! column (the column-filter branch in the table below): no semi-join, no `property_get`, no
+//! every downstream view. A DDL-defined materialized view carrying its own `audience` column
+//! (enforced at `CREATE` time, see `view_definition.rs`) joins this group too. Every view
+//! carrying an `audience` column is consequently filtered with a bare `Filter` on that column
+//! (the column-filter branch in the table below): no semi-join, no `property_get`, no
 //! per-process aggregate. `async_events`, `thread_spans`, `net_spans`, `otel_spans`, and `images`
 //! don't carry the column. They keep the `process_id`/`EXISTS` machinery below, which still
 //! resolves through `__processes__partitions`, but only for a scan that is *not* a guarded
@@ -31,8 +33,9 @@
 //! `__processes__partitions` (the raw, un-merged `SqlBatchView` partitions `self.processes_source`
 //! scans) can carry more than one historical row per `process_id` -- the partition-level
 //! `GROUP BY` in `processes_view.rs`'s transform query only collapses rows *within* a partition,
-//! not across a long-lived process's entire history. Filtering the six column-carrying views one
-//! row at a time (the column-filter branch) is sound without any aggregate: every row now carries
+//! not across a long-lived process's entire history. Filtering the views carrying an `audience`
+//! column, DDL-defined ones included, one row at a time (the column-filter branch) is sound
+//! without any aggregate: every row now carries
 //! its own stamp from the moment it was written, so there is nothing to reconcile across rows of
 //! the same process. The one exception is a legacy, pre-v8 row with no `audience` column at all --
 //! `COALESCE` resolves that to the deployment default at read time. The `net_spans`/
@@ -50,7 +53,7 @@
 //!
 //! | View set | Branch |
 //! |---|---|
-//! | `processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats` | `column filter`: direct `audience IN (...)` filter on the view's own column -- no join |
+//! | `processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats`, and any DDL-defined view carrying an `audience` column | `column filter`: direct `audience IN (...)` filter on the view's own column -- no join |
 //! | `net_spans`, `otel_spans`, `images`, `async_events`, `thread_spans`, scanned as a guarded, non-`'global'` `view_instance(...)` | `skip`: no predicate at all -- `MaterializedView::instance_is_audience_guarded()` reports `AudienceGuard::authorize_view_instance` already denies an unauthorized caller before any row is read, so the subquery predicates below would be redundant |
 //! | `net_spans`, `otel_spans`, `images`, not a guarded instance | `semi-join`: `process_id IN (subquery)` against `per_process_audience` (outer `process_id` cast to `Utf8`: it is `Dictionary(Int32, Utf8)` in these, and nothing coerces an uncorrelated `IN` subquery's join keys once `DecorrelatePredicateSubquery` turns it into a `LeftSemi` join -- the analyzer's own `TypeCoercion` has already run by the time this rule executes) |
 //! | `async_events`, not a guarded instance | no `process_id` column either -- `async_events EXISTS`: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string, canonicalized -- see `canonical_view_instance_id`) |
@@ -156,8 +159,8 @@ impl OwnershipRewrite {
     /// query_range: None)` over the raw partitions (equivalent to `__processes__partitions` /
     /// `__streams__partitions`) -- see `query.rs::make_session_context`: the audience lookup must
     /// be time-unbounded, and must not go through the `SqlBatchView`-merged `processes`/`streams`
-    /// named tables. Used only by the semi-join/`async_events`/`thread_spans` branches -- the six
-    /// column-carrying views need neither.
+    /// named tables. Used only by the semi-join/`async_events`/`thread_spans` branches -- the
+    /// views carrying an `audience` column, DDL-defined ones included, need neither.
     pub fn new(
         read_scope: ReadScope,
         public_view_sets: Vec<String>,
@@ -229,7 +232,9 @@ impl OwnershipRewrite {
     /// The column-filter branch: `audience IN (caller audiences)`; `false` for an empty set
     /// (fail-closed, as [`Self::resolved_predicate`] already does). The column is declared `NOT NULL` on
     /// `blocks`/`log_entries`/`measures` and non-null by construction (though declared nullable)
-    /// on `processes`/`streams`/`log_stats`, so there is no unstamped case either way.
+    /// on `processes`/`streams`/`log_stats`, so there is no unstamped case either way -- a
+    /// DDL-defined view's `audience` column is a documented author obligation to keep non-`NULL`
+    /// the same way (see `view_definition.rs`).
     fn audience_column_predicate(&self, table_name: &TableReference, field: &Field) -> Expr {
         let audiences = self.audiences();
         if audiences.is_empty() {
@@ -237,7 +242,7 @@ impl OwnershipRewrite {
         }
         let raw = Expr::Column(Column::new(Some(table_name.clone()), "audience"));
         // This rule runs after DataFusion's own TypeCoercion pass, so the Dictionary(Int32, Utf8)
-        // column every one of the six views carries must be cast to compare against Utf8
+        // column every audience-carrying view carries must be cast to compare against Utf8
         // literals. The cast is not a pruning barrier: `PruningPredicate` rewrites `cast(col) op
         // lit` by applying the same cast to the column's min/max statistics
         // (`datafusion-pruning`'s `rewrite_expr_to_prunable`), and a Dictionary -> Utf8 cast is on
@@ -375,10 +380,11 @@ impl OwnershipRewrite {
         let skip = mat_view.instance_is_audience_guarded();
         // The column-filter branch: views carrying a physical `audience` column -- processes,
         // streams, blocks, log_entries, measures, log_stats (global and per-process instances
-        // alike). Filtered directly, no semi-join, no property_get. Checked ahead of the
-        // semi-join branch so a view set that has *both* an `audience` and a `process_id` column
-        // (all six do) takes this cheaper branch; keyed on schema introspection, so a view set
-        // that gains the column later upgrades automatically with no edit here.
+        // alike), and any DDL-defined view carrying the column. Filtered directly, no semi-join,
+        // no property_get. Checked ahead of the semi-join branch so a view set that has *both* an
+        // `audience` and a `process_id` column (every one of these does) takes this cheaper
+        // branch; keyed on schema introspection, so a view set that gains the column later
+        // upgrades automatically with no edit here.
         if let Ok(field) = view.get_file_schema().field_with_name("audience") {
             return Ok(Some(self.audience_column_predicate(table_name, field)));
         }

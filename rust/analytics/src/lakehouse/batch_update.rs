@@ -239,6 +239,10 @@ pub async fn materialize_partition_range(
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        partition_time_delta > TimeDelta::zero(),
+        "materialize_partition_range: partition_time_delta must be positive, got {partition_time_delta:?}"
+    );
     let mut begin_part = insert_range.begin;
     let mut end_part = begin_part + partition_time_delta;
     while end_part <= insert_range.end {

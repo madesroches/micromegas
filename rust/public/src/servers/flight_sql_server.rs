@@ -1,10 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
+use micromegas_analytics::lakehouse::view_definition_store::PgViewDefinitionStore;
 use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
+use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas_auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas_auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas_auth::default_provider::ProviderBuilder;
@@ -251,13 +253,13 @@ impl FlightSqlServerBuilder {
             lakehouse.metadata_cache()
         );
 
-        let view_factory = if let Some(factory_fn) = self.view_factory_fn {
-            Arc::new(factory_fn(lakehouse.runtime().clone(), data_lake).await?)
+        let base_view_factory: Arc<ViewFactory> = if let Some(factory_fn) = self.view_factory_fn {
+            Arc::new(factory_fn(lakehouse.runtime().clone(), data_lake.clone()).await?)
         } else {
             Arc::new(
                 default_view_factory(
                     lakehouse.runtime().clone(),
-                    data_lake,
+                    data_lake.clone(),
                     lakehouse.default_audience(),
                 )
                 .await?,
@@ -281,6 +283,24 @@ impl FlightSqlServerBuilder {
                 )
                 .await?
             };
+
+        // The shared registry: `base_view_factory` (code-driven views) plus every DDL-defined
+        // global view (`lakehouse_view_set_definitions`), rebuilt on
+        // `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`. Loaded once, synchronously, before
+        // `serve()` -- failing startup on error, the way `migrate_lakehouse` already does --
+        // so there is never a window after startup where a DDL-defined view (or the now-seeded
+        // `log_stats`) is absent from `current()`.
+        let view_registry = Arc::new(ViewRegistry::new(
+            base_view_factory,
+            Arc::new(PgViewDefinitionStore::new(lakehouse.lake().db_pool.clone())),
+            lakehouse.runtime().clone(),
+            data_lake,
+            session_configurator.clone(),
+        ));
+        view_registry
+            .reload()
+            .await
+            .with_context(|| "initial view_registry reload")?;
 
         // `FlightSqlServiceImpl::new` takes the resolved `ReadPolicy` as a constructor argument,
         // so auth/policy resolution happens here, before construction.
@@ -370,7 +390,7 @@ impl FlightSqlServerBuilder {
         let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
             lakehouse,
             partition_provider,
-            view_factory,
+            view_registry.clone(),
             session_configurator,
             read_policy,
             isolation_config,
@@ -404,6 +424,13 @@ impl FlightSqlServerBuilder {
         // `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS`, once immediately and then on a tick, until
         // this replica shuts down.
         query_denials.spawn_refresh_task(fanout.subscribe());
+
+        // DDL-defined view sets: refreshes `view_registry.current()` every
+        // `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS`, until this replica shuts down. A
+        // same-node `CREATE`/`DROP MATERIALIZED VIEW` reloads inline instead (see
+        // `flight_sql_service_impl.rs::execute_view_ddl`); this bounds how long a *different*
+        // node lags a definition change.
+        view_registry.spawn_refresh_task(fanout.subscribe());
 
         if let Some(health_addr) = self.health_listen_addr {
             use super::readiness::ReadinessProbe;

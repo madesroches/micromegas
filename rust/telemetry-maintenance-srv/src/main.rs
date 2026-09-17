@@ -8,10 +8,14 @@ micromegas::declare_jemalloc_conf!();
 use anyhow::Result;
 use clap::Parser;
 use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas::analytics::lakehouse::static_tables_configurator::StaticTablesConfigurator;
+use micromegas::analytics::lakehouse::view_definition_store::PgViewDefinitionStore;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
+use micromegas::analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas::micromegas_main;
-use micromegas::servers::maintenance::{daemon, get_global_views_with_update_group};
+use micromegas::servers::maintenance::daemon;
 use micromegas::servers::shutdown::wait_for_sigterm;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas Telemetry Maintenance")]
@@ -35,17 +39,31 @@ async fn main() -> Result<()> {
 
     let lakehouse = LakehouseContext::from_env().await?;
     let data_lake = lakehouse.lake().clone();
-    let view_factory = default_view_factory(
+    let base_view_factory = default_view_factory(
         lakehouse.runtime().clone(),
         data_lake.clone(),
         lakehouse.default_audience(),
     )
     .await?;
-    let views_to_update = get_global_views_with_update_group(&view_factory);
+    // Resolves the same `MICROMEGAS_STATIC_TABLES_URL` the FlightSQL builder uses, instead of a
+    // no-op configurator: a DDL-defined view reading a static table must build the same way in
+    // both services.
+    let session_configurator = StaticTablesConfigurator::from_env(
+        "MICROMEGAS_STATIC_TABLES_URL",
+        lakehouse.runtime().clone(),
+    )
+    .await?;
+    let view_registry = Arc::new(ViewRegistry::new(
+        Arc::new(base_view_factory),
+        Arc::new(PgViewDefinitionStore::new(lakehouse.lake().db_pool.clone())),
+        lakehouse.runtime().clone(),
+        data_lake,
+        session_configurator,
+    ));
     let grace = args.common.grace();
     daemon(
         lakehouse,
-        views_to_update,
+        view_registry,
         args.retention_days,
         wait_for_sigterm(),
         grace,

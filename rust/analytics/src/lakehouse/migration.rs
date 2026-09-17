@@ -1,11 +1,12 @@
 use crate::arrow_utils::parse_parquet_metadata;
+use crate::lakehouse::log_stats_view::{log_stats_ddl_text, log_stats_view_definition};
 use anyhow::{Context, Result};
 use micromegas_ingestion::remote_data_lake::acquire_lock;
 use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 9;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 10;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -112,6 +113,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v9");
         let mut tr = pool.begin().await?;
         upgrade_v8_to_v9(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 9 == current_version {
+        info!("upgrade lakehouse schema to v10");
+        let mut tr = pool.begin().await?;
+        upgrade_v9_to_v10(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -563,5 +571,62 @@ async fn upgrade_v8_to_v9(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("UPDATE lakehouse_migration SET version=9;")
         .await
         .with_context(|| "Updating lakehouse schema version to 9")?;
+    Ok(())
+}
+
+async fn upgrade_v9_to_v10(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // DDL-defined eagerly materialized views: persistence for `CREATE [OR REPLACE]
+    // MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW`. `view_options` is TEXT (serde_json), not
+    // JSONB -- the column is always read back as a whole and round-tripped, so JSONB's indexing
+    // buys nothing. No SCHEMA_VERSION (partition file-schema) change -- no partition content is
+    // affected by this migration.
+    tr.execute(
+        "CREATE TABLE lakehouse_view_set_definitions(
+             view_set_name          VARCHAR(255) PRIMARY KEY,
+             definition_sql         TEXT NOT NULL,
+             extract_query          TEXT NOT NULL,
+             count_src_query        TEXT NOT NULL,
+             merge_partitions_query TEXT NOT NULL,
+             update_group           INTEGER NOT NULL,
+             view_options           TEXT NOT NULL DEFAULT '{}',
+             created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+             updated_by             TEXT
+         );",
+    )
+    .await
+    .with_context(|| "creating lakehouse_view_set_definitions table")?;
+
+    // `log_stats` becomes data: its only distinction from a DDL-defined view was that its SQL
+    // lived in Rust. Seeded here, from the same `ViewDefinition` `view_factory.rs` used to build
+    // it in code (see `log_stats_view.rs`), so this is a pure data move -- its `file_schema_hash`
+    // cannot change, and existing partitions survive the upgrade unaffected.
+    // `ON CONFLICT DO NOTHING` keeps this idempotent and freezes the seeded text at this version:
+    // a later release changing `log_stats`'s shipped SQL must ship its own migration step that
+    // upserts the row, not just edit `log_stats_view.rs`'s consts.
+    let def = log_stats_view_definition();
+    let view_options = serde_json::to_string(&def.options)
+        .with_context(|| "serializing log_stats's seeded view_options")?;
+    sqlx::query(
+        "INSERT INTO lakehouse_view_set_definitions
+             (view_set_name, definition_sql, extract_query, count_src_query,
+              merge_partitions_query, update_group, view_options, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'migration')
+         ON CONFLICT (view_set_name) DO NOTHING;",
+    )
+    .bind(&def.view_set_name)
+    .bind(log_stats_ddl_text())
+    .bind(&def.extract_query)
+    .bind(&def.count_src_query)
+    .bind(&def.merge_partitions_query)
+    .bind(def.update_group)
+    .bind(view_options)
+    .execute(&mut **tr)
+    .await
+    .with_context(|| "seeding log_stats into lakehouse_view_set_definitions")?;
+
+    tr.execute("UPDATE lakehouse_migration SET version=10;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 10")?;
     Ok(())
 }

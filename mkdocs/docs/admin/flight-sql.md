@@ -35,6 +35,11 @@ The gRPC listener binds to `0.0.0.0:50051`. The Docker image
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent queries, in MB; default 100 GB (DataFusion's own default), far larger than a typical Fargate container's local disk. Exceeding the cap fails whichever query's spill write pushes past it — not necessarily the query that consumed most of the budget |
 | `MICROMEGAS_QUERY_DENY_REFRESH_SECONDS` | No | [Query deny list](functions-reference.md#query-deny-list) snapshot refresh / `last_hit_at` flush interval; default `10`. Also the bound on cross-replica propagation of a newly created or removed rule — the inserting replica applies its own rule immediately, other replicas within one tick |
 | `MICROMEGAS_QUERY_DENY_MAX_RULES` | No | [Query deny list](functions-reference.md#query-deny-list) rule cap; default `100`. Bounds the per-query evaluation cost (~3.4 µs at one rule, ~45 µs at the cap) |
+| `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` | No | How often this replica reloads [DDL-defined materialized views](materialized-views.md) from Postgres; default `60`. A `CREATE`/`DROP MATERIALIZED VIEW` executed on this replica reloads immediately after commit — this interval only bounds how long a *different* replica lags the change |
+
+`CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` are ordinary SQL statements sent
+to this server, gated by the same admin check as the [admin SQL
+functions](functions-reference.md) — see [Materialized Views](materialized-views.md).
 
 ## CLI flags
 

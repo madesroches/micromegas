@@ -16,6 +16,7 @@ use chrono::{DurationRound, TimeDelta, Utc};
 use common::db_fixtures::{ensure_telemetry_guard, reset_global_view};
 use micromegas_analytics::dfext::string_column_accessor::string_column_by_name;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
+use micromegas_analytics::lakehouse::log_stats_view::make_log_stats_view;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas_analytics::lakehouse::query::query;
 use micromegas_analytics::lakehouse::read_scope::CallerContext;
@@ -232,9 +233,18 @@ async fn cross_audience_injected_block_is_excluded_from_materialization() -> Res
     let lake = Arc::new(lake);
     let runtime = Arc::new(make_runtime_env()?);
     let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
-    let view_factory = Arc::new(
+    let base_view_factory = Arc::new(
         default_view_factory(runtime.clone(), lake.clone(), lakehouse.default_audience()).await?,
     );
+    // `log_stats` is no longer built by `default_view_factory` (it is seeded into
+    // `lakehouse_view_set_definitions` instead) -- add it onto our own factory clone, the same
+    // way `ViewRegistry` would, so this test still covers its audience-mismatch handling.
+    let mut view_factory_with_log_stats = (*base_view_factory).clone();
+    let log_stats_view = Arc::new(
+        make_log_stats_view(runtime.clone(), lake.clone(), base_view_factory.clone()).await?,
+    );
+    view_factory_with_log_stats.add_global_view(log_stats_view);
+    let view_factory = Arc::new(view_factory_with_log_stats);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
 
     let insert_begin = (Utc::now() - TimeDelta::hours(1)).duration_trunc(TimeDelta::hours(1))?;

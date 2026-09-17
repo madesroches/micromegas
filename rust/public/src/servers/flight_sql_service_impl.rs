@@ -29,7 +29,8 @@ use arrow_flight::{
     Ticket, flight_service_server::FlightService,
 };
 use core::str;
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::array::{RecordBatch, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
@@ -45,12 +46,21 @@ use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
-use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::lakehouse::view_definition::{
+    build_sql_batch_view, validate_view_definition,
+};
+use micromegas_analytics::lakehouse::view_definition_store::{
+    delete_tx, list_tx, partition_insert_range, upsert_tx,
+};
+use micromegas_analytics::lakehouse::view_registry::{BuildPurpose, ViewRegistry};
+use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::replication::bulk_ingest;
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
 use micromegas_auth::policy::{ReadPolicy, caller_selectors};
 use micromegas_auth::types::{AuthContext, ProviderUnavailable};
 use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
+use micromegas_ingestion::remote_data_lake::acquire_lock;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -62,6 +72,13 @@ use std::time::Instant;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
+
+use super::view_ddl::{ViewDdl, authorize_view_ddl, parse_view_ddl};
+
+/// `pg_advisory_xact_lock` key serializing every view-definition mutation cluster-wide: `0` is
+/// `migrate_db`'s, `1` is `migrate_lakehouse`'s, so this DDL executor gets its own, `2`, rather
+/// than reusing either and serializing unrelated migrations against it.
+const VIEW_DDL_ADVISORY_LOCK_KEY: i64 = 2;
 
 type FlightDataStream =
     Pin<Box<dyn Stream<Item = Result<arrow_flight::FlightData, Status>> + Send>>;
@@ -526,7 +543,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 pub struct FlightSqlServiceImpl {
     lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    view_factory: Arc<ViewFactory>,
+    view_registry: Arc<ViewRegistry>,
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
     isolation_config: Arc<IsolationConfig>,
@@ -536,7 +553,7 @@ impl FlightSqlServiceImpl {
     pub fn new(
         lakehouse: Arc<LakehouseContext>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        view_factory: Arc<ViewFactory>,
+        view_registry: Arc<ViewRegistry>,
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
         isolation_config: Arc<IsolationConfig>,
@@ -544,7 +561,7 @@ impl FlightSqlServiceImpl {
         Self {
             lakehouse,
             part_provider,
-            view_factory,
+            view_registry,
             session_configurator,
             read_policy,
             isolation_config,
@@ -813,6 +830,34 @@ impl FlightSqlServiceImpl {
             return Err(audit_state.fail_with_class(status, "denied"));
         }
 
+        // Caller is resolved here, ahead of the scoped runtime, because the view-DDL intercept
+        // below needs it and returns before either the scoped runtime or a session context is
+        // ever built for a `CREATE`/`DROP MATERIALIZED VIEW` statement.
+        //
+        // `context_init_ms` is measured starting here (not at `make_session_context`) because
+        // caller resolution can itself hit the read-policy store (e.g. a DB round trip to
+        // resolve audience grants), and that cost belongs in the same phase.
+        let session_begin = now();
+        let session_begin_instant = Instant::now();
+        let caller = self
+            .caller_context(extensions, metadata)
+            .await
+            .map_err(|status| audit_state.fail(status))?;
+
+        // View DDL is intercepted here, ahead of the scoped runtime/`make_session_context`: a
+        // `CREATE`/`DROP MATERIALIZED VIEW` statement is never planned as an ordinary query.
+        match parse_view_ddl(sql) {
+            Ok(Some(ddl)) => {
+                return self
+                    .execute_view_ddl(ddl, &caller, begin_request, audit_state)
+                    .await;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(audit_state.fail(client_input_error!("error parsing view DDL", e)));
+            }
+        }
+
         // Build a `RuntimeEnv`/`LakehouseContext` scoped to this query's memory-pool
         // wrapper, so every session context created from it (including nested ones,
         // e.g. Perfetto trace queries and JIT materialization) attributes its memory
@@ -822,17 +867,11 @@ impl FlightSqlServiceImpl {
         let lakehouse = self.lakehouse.with_runtime(scoped_env);
 
         // Session context creation phase
-        let session_begin = now();
-        let session_begin_instant = Instant::now();
-        let caller = self
-            .caller_context(extensions, metadata)
-            .await
-            .map_err(|status| audit_state.fail(status))?;
         let ctx = make_session_context(
             lakehouse,
             self.part_provider.clone(),
             query_range,
-            self.view_factory.clone(),
+            self.view_registry.current(),
             self.session_configurator.clone(),
             caller,
         )
@@ -938,6 +977,187 @@ impl FlightSqlServiceImpl {
         });
         let completion_tracked_stream =
             CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request, audit_state);
+        Ok(Response::new(
+            Box::pin(completion_tracked_stream) as FlightDataStream
+        ))
+    }
+
+    /// Executes a parsed `CREATE [OR REPLACE] MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW`
+    /// statement: admin-gates it, validates/upserts or deletes its row inside one transaction
+    /// (serialized cluster-wide by an advisory lock), refuses a mutation that would break a
+    /// dependent, retires partitions on `DROP`, reloads this replica's registry inline after
+    /// commit, and returns a one-row `(view_set_name, status)` result through the same
+    /// `CompletionTrackedStream` every other query uses.
+    async fn execute_view_ddl(
+        &self,
+        ddl: ViewDdl,
+        caller: &CallerContext,
+        begin_request: i64,
+        audit_state: QueryAuditState,
+    ) -> Result<Response<FlightDataStream>, Status> {
+        authorize_view_ddl(caller).map_err(|status| audit_state.fail(status))?;
+
+        let pool = self.lakehouse.lake().db_pool.clone();
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| audit_state.fail(status!("error starting view DDL transaction", e)))?;
+        acquire_lock(&mut tx, VIEW_DDL_ADVISORY_LOCK_KEY)
+            .await
+            .map_err(|e| audit_state.fail(status!("error acquiring view DDL lock", e)))?;
+        let pre_rows = list_tx(&mut tx)
+            .await
+            .map_err(|e| audit_state.fail(status!("error reading view definitions", e)))?;
+
+        let (view_set_name, status_text) = match ddl {
+            ViewDdl::Create {
+                name,
+                or_replace,
+                definition,
+                sql,
+            } => {
+                let existing = pre_rows.iter().any(|r| r.view_set_name == name);
+                if existing && !or_replace {
+                    return Err(audit_state.fail(Status::already_exists(format!(
+                        "materialized view '{name}' already exists; use CREATE OR REPLACE to \
+                         redefine it"
+                    ))));
+                }
+                // Validated against the factory the loader would build for this row: the
+                // pre-mutation rows, this row's own name excluded (identical to the
+                // post-mutation set for this single-row mutation) -- so a definition reading
+                // another DDL view validates against the real thing, and a `CREATE OR REPLACE`
+                // that raises its own update_group cannot validate against a since-superseded
+                // copy of itself.
+                let validation_rows: Vec<_> = pre_rows
+                    .iter()
+                    .filter(|r| r.view_set_name != name)
+                    .cloned()
+                    .collect();
+                // A `Probe`: a row in `validation_rows` that no longer builds is a pre-existing
+                // breakage the live reload already reports on every tick -- re-logging it here
+                // would pin it on whoever happened to run the next DDL statement.
+                let (factory, _failed) = self
+                    .view_registry
+                    .build_from_rows(&validation_rows, BuildPurpose::Probe)
+                    .await
+                    .map_err(|e| {
+                        audit_state.fail(status!("error building validation factory", e))
+                    })?;
+                let view = build_sql_batch_view(
+                    &definition,
+                    self.lakehouse.runtime().clone(),
+                    self.lakehouse.lake().clone(),
+                    factory.clone(),
+                    self.session_configurator.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    audit_state.fail(client_input_error!("error building materialized view", e))
+                })?;
+                validate_view_definition(
+                    &definition,
+                    &view,
+                    &factory,
+                    self.lakehouse.runtime().clone(),
+                    self.lakehouse.lake().clone(),
+                    self.session_configurator.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    audit_state.fail(client_input_error!("view definition failed validation", e))
+                })?;
+                let updated_by = caller.identity.as_deref().unwrap_or("unknown");
+                upsert_tx(&mut tx, &definition, &sql, updated_by)
+                    .await
+                    .map_err(|e| audit_state.fail(status!("error upserting view definition", e)))?;
+                (name, if existing { "replaced" } else { "created" })
+            }
+            ViewDdl::Drop { name, if_exists } => {
+                let existing = pre_rows.iter().any(|r| r.view_set_name == name);
+                if !existing {
+                    if if_exists {
+                        (name, "not_found")
+                    } else {
+                        return Err(audit_state.fail(Status::not_found(format!(
+                            "materialized view '{name}' does not exist"
+                        ))));
+                    }
+                } else {
+                    let range = partition_insert_range(&mut tx, &name).await.map_err(|e| {
+                        audit_state.fail(status!("error reading partition insert range", e))
+                    })?;
+                    delete_tx(&mut tx, &name).await.map_err(|e| {
+                        audit_state.fail(status!("error deleting view definition", e))
+                    })?;
+                    if let Some((begin, end)) = range {
+                        let null_logger = Arc::new(ResponseWriter::new(None));
+                        retire_partitions(
+                            &mut tx,
+                            &name,
+                            "global",
+                            begin,
+                            end,
+                            RetireMatch::Containment,
+                            &[],
+                            null_logger,
+                        )
+                        .await
+                        .map_err(|e| audit_state.fail(status!("error retiring partitions", e)))?;
+                    }
+                    (name, "dropped")
+                }
+            }
+        };
+
+        // `DROP ... IF EXISTS` on an absent view writes nothing, so `post_rows` would be
+        // byte-identical to `pre_rows`; skip the probe rather than replanning every stored
+        // definition twice over for a statement that changed nothing, all while holding the
+        // advisory lock and this open transaction.
+        if status_text != "not_found" {
+            let post_rows = list_tx(&mut tx)
+                .await
+                .map_err(|e| audit_state.fail(status!("error reading view definitions", e)))?;
+            self.view_registry
+                .check_dependents_survive(&pre_rows, &post_rows)
+                .await
+                .map_err(|e| {
+                    // The inner error already says what would break and why; this prefix only has
+                    // to mark where the refusal came from.
+                    audit_state.fail(client_input_error!("view DDL refused", e))
+                })?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| audit_state.fail(status!("error committing view DDL transaction", e)))?;
+
+        // Run after the commit: `reload()` starts with a second, uncommitted-write-blind
+        // connection, so calling it any earlier would have it read the pre-mutation rows and
+        // swap in the old factory. `Err` is `warn!`-logged and discarded -- the row is already
+        // committed, and the next periodic refresh will pick it up regardless.
+        if let Err(e) = self.view_registry.reload().await {
+            warn!("view_ddl: inline reload after DDL failed: {e:#}");
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("view_set_name", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![view_set_name])),
+                Arc::new(StringArray::from(vec![status_text.to_string()])),
+            ],
+        )
+        .map_err(|e| audit_state.fail(status!("error building view DDL result batch", e)))?;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(futures::stream::once(async { Ok(batch) }))
+            .map_err(Status::from);
+        let completion_tracked_stream =
+            CompletionTrackedStream::new(stream.boxed(), begin_request, audit_state);
         Ok(Response::new(
             Box::pin(completion_tracked_stream) as FlightDataStream
         ))
@@ -1172,7 +1392,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let begin_request = now();
         info!("do_get_tables {query:?}");
         let mut builder = query.into_builder();
-        for view in self.view_factory.get_global_views() {
+        let view_factory = self.view_registry.current();
+        for view in view_factory.get_global_views() {
             let catalog_name = "";
             let schema_name = "";
             builder
@@ -1336,6 +1557,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
+        // DDL (`CREATE`/`DROP MATERIALIZED VIEW`) is never prepared: nothing in the repo
+        // prepares DDL, and planning it here via `ctx.sql` would fail with an opaque DataFusion
+        // error instead of this clear message.
+        if parse_view_ddl(&query.query)
+            .map_err(|e| client_input_error!("error parsing view DDL", e))?
+            .is_some()
+        {
+            return Err(Status::invalid_argument(
+                "CREATE/DROP MATERIALIZED VIEW must be executed directly, not prepared",
+            ));
+        }
+
         // Prepared statements resolve the same CallerContext as the do_get execute path.
         let caller = self
             .caller_context(request.extensions(), request.metadata())
@@ -1344,7 +1577,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             self.lakehouse.clone(),
             self.part_provider.clone(),
             None,
-            self.view_factory.clone(),
+            self.view_registry.current(),
             self.session_configurator.clone(),
             caller,
         )
