@@ -270,9 +270,8 @@ check 10 hold even though construction precedes validation. All three queries ar
 plain strings — they are option values, so none of them is pre-parsed by the DDL parse — and every
 check below that inspects a query's structure parses and plans each of the three uniformly, with the
 same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_allow_ddl(false)
-.with_allow_dml(false).with_allow_statements(false))` — never the unguarded `ctx.sql(q)`, which is
-`sql_with_options(sql, SQLOptions::new())` and so defaults every one of those three flags to `true`
-(§4 check 10). On top of that:
+.with_allow_dml(false).with_allow_statements(false))` — never the unguarded `ctx.sql(q)` (§4 check
+10). On top of that:
 
 1. **Name.** Matches `^[a-z_][a-z0-9_]{0,254}$` and does not start with `__`; not a code-driven view
    set (`get_global_view` / `get_view_sets` on the base factory, which after this change means
@@ -284,7 +283,7 @@ same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_a
    internal registration and hard-error `make_session_context` for every query in the deployment, not
    just ones touching that view. `source` is excluded for the same reason: `SqlBatchView::new`
    substitutes `{source}` for the literal name (`sql_batch_view.rs:117`, and `:178` in
-   `with_merge_sort_order`), and `QueryMerger::execute_merge_query` (`merge.rs:322-327`) registers
+   `with_merge_sort_order`), and `QueryMerger::execute_merge_query` (`merge.rs:312-317`) registers
    that literal name via `register_table` on a session context that
    `make_merge_session_context` (`merge.rs:49-73`) has already populated with every global view —
    DataFusion errors on a duplicate registration, so a view set named `source` would break every other
@@ -330,8 +329,9 @@ same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_a
    static tables, unlike the fuller admin/configured context checks 1-2 validate against — deliberately
    the narrowest context, since `merge_partitions_query` is planned after the caller's own functions
    are registered but before `configurator.configure` runs, and must still resolve for a non-admin
-   caller, not only an admin/maintenance one (see check 7's merge-query carve-out below), and require
-   its output schema to equal
+   caller, not only an admin/maintenance one — a merge query naming an admin-gated UDTF or a
+   `SessionConfigurator`-registered static table therefore fails to plan here and is rejected for
+   that reason, not via check 7 — and require its output schema to equal
    the extract query's over field names, data types and order only — nullability and field metadata
    are deliberately excluded from the comparison. `log_stats_view.rs` projects `count(*) as count` in
    the extract query (non-nullable) and `sum(count) as count` in the merge query (nullable), so a
@@ -358,8 +358,9 @@ same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_a
    silently either way; counting `blocks` instead couples a
    dependent's freshness to its upstream's ingestion rate, not its upstream's own materialization
    cadence, which is the accepted trade-off.
-6. **No volatile or stable functions.** Parse each of the three query texts with `ctx.sql(...)` and
-   walk the resulting pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) with
+6. **No volatile or stable functions.** Parse each of the three query texts with the guarded
+   `ctx.sql_with_options` call described in the preamble above and walk the resulting
+   pre-optimization `LogicalPlan`s (`DataFrame::logical_plan()`) with
    `LogicalPlan::apply_with_subqueries`, and at each visited node recurse into every expression
    `apply_expressions` hands back with `Expr::apply` — the same pairing `LogicalPlan::apply_subqueries`
    itself uses (`self.apply_expressions(|expr| expr.apply(...))`, logical_plan/tree_node.rs:831) —
@@ -409,16 +410,7 @@ same walk applied to each, via `ctx.sql_with_options(q, SQLOptions::new().with_a
    rejected: none calls `jit_update`/writes a partition, so each is a live, non-time-ranged metadata
    or decode source, and a scan against one is frozen into a partition as of materialization time
    rather than kept current, the same class of staleness check 7 otherwise polices, but with no
-   mutation and no error to force closing it here. In `merge_partitions_query` specifically, though,
-   even these read-only admin-gated UDTFs and any `SessionConfigurator`-registered static table are
-   rejected regardless of caller: `register_table` (`sql_batch_view.rs:312-335`) plans
-   `merge_partitions_query` after that caller's own function registration but before
-   `configurator.configure` runs, so a merge query resolving to one of those names would resolve fine
-   for an admin/maintenance caller (`CallerContext::maintenance()` is itself `is_admin: true`) but
-   would make `make_session_context` itself fail for every non-admin caller — breaking that caller's
-   every query, not just ones touching this view — unlike in `extract_query`/`count_src_query`, which
-   plan under the fuller per-caller context and so are merely subject to the staleness above. The
-   remaining three admin-gated items —
+   mutation and no error to force closing it here. The remaining three admin-gated items —
    `retire_partition_by_file`, `retire_partition_by_metadata`, `remove_query_denial` — are scalar UDFs
    and, being `Volatility::Volatile`, are already caught by check 6. For every other scan,
    collect the matched view's `get_update_group()`. A `TableScan` reached through the `ViewTable`
