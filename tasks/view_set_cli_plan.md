@@ -13,8 +13,7 @@ is a client-side diff/apply layer and no server change at all.
 `micromegas-screens` already implements this exact workflow for screens
 (`python/micromegas/micromegas/cli/screens.py`). So the second deliverable here is the extraction of
 the parts that are not screen-specific — the colorized unified diff, the apply confirmation gate,
-the `--color` flag wiring — into `cli/state_sync.py`, which both tools then use. The new tool is not
-a copy of the old one with the nouns changed.
+the `--color` flag wiring — into `cli/state_sync.py`, which both tools then use.
 
 ## Current State
 
@@ -238,9 +237,6 @@ used to manage and that was removed from the repo" from "a view set this repo ne
 Server-only definitions are therefore reported as `unmanaged` and **never dropped** unless `--prune`
 is passed. Two guards on top:
 
-- `--prune` only ever considers deletes in whole-repo mode: `--prune` alongside an explicit
-  `names` list drops nothing (§4). A named-subset run cannot tell a view set outside the subset
-  apart from one this repo never managed, so it cannot safely prune it either.
 - `--prune` refuses to run when the directory contains zero readable `.sql` files. A wrong `--dir`
   or a checkout at the wrong commit is the plausible way to ask a reconciler to drop production
   views, and an empty desired state is the signature of it.
@@ -269,10 +265,7 @@ Extracted from `screens.py`, used by both tools:
 `screens.py` keeps `format_screen_diff` as a thin wrapper (JSON-serialize both sides, call
 `unified_diff`), so `tests/test_screen_files.py`'s existing imports and assertions keep passing
 unchanged. Nothing screen-specific moves: `managed_by`, the untracked/ownership model, the
-`compute_plan` tuple shape, and `WebClient` construction all stay in `screens.py`. The shared module
-is the presentation and prompt layer only — that is the part that is genuinely identical, and
-generalizing the plan model itself across a `managed_by`-having and a `managed_by`-lacking resource
-would cost more than it saves.
+`compute_plan` tuple shape, and `WebClient` construction all stay in `screens.py`.
 
 ### 7. Output
 
@@ -322,7 +315,7 @@ Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
    output survives a non-UTF-8 locale.
 5. Wire the argparse surface of §1, with a `client_args` parent parser carrying `--profile` and
    `--dir` (defined exactly once — see `screens.py:665-676` for why), and call
-   `add_version_argument(parser)` so `--version` matches the other six console scripts.
+   `add_version_argument(parser)` so `--version` matches the other seven console scripts.
 6. Add `micromegas-views = "micromegas.cli.views:main"` to `[tool.poetry.scripts]` in
    `python/micromegas/pyproject.toml`.
 
@@ -451,7 +444,7 @@ inputs.
 - The diff shown for an update contains no `OR REPLACE` line.
 - `list` and `show` in both formats.
 - `test_views_version_flag`: `--version` prints the version, Python version, and interpreter path
-  (extending `tests/cli/test_version.py`, which already carries this test per tool).
+  (extending `tests/cli/test_version.py`).
 
 **Regression guard for the extraction:** `tests/test_screen_files.py` and
 `tests/cli/test_screens_auth.py` must pass with no edits after Phase 1.
@@ -484,5 +477,4 @@ tool generates are accepted by the real parser, validator, and registry.
 
 ## Open Questions
 
-None blocking. One deferred: whether a server-side validate-without-writing path is worth adding so
-`plan` can catch a bad definition before `apply` (see Trade-offs). It is a separate issue if wanted.
+None.
