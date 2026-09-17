@@ -159,10 +159,10 @@ pub fn encode_batch(
 ) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
-    let mut compression = IpcWriteContext::default();
+    let mut write_ctx = IpcWriteContext::default();
 
     let (encoded_dicts, encoded_batch) = data_gen
-        .encode(batch, tracker, options, &mut compression)
+        .encode(batch, tracker, options, &mut write_ctx)
         .context("encoding batch")?;
 
     // Write dictionary batches first (if any)

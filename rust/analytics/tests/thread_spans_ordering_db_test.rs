@@ -363,7 +363,7 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
     // DataFusion then felt free to insert a plain `RepartitionExec` -- `RoundRobinBatch`, with no
     // downstream requirement to reassemble a single order -- ahead of the two-file scan, and the
     // resulting row order depended on which partition's file read finished first, occasionally
-    // reordering the two partitions' rows. `EnforceSorting` only elides *redundant* sorts; it does
+    // reordering the two partitions' rows. `EnsureRequirements` only elides *redundant* sorts; it does
     // not make an omitted `ORDER BY` reappear.) So this checks the actual production shape: with
     // `ORDER BY begin` present, no `SortExec` should appear, since `DataSourceExec`'s declared
     // ordering already satisfies it.

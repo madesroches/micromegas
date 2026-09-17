@@ -294,7 +294,7 @@ pub fn assert_ordering_satisfied(
 /// - `Concatenated { columns, bounds }`: the file group is sorted by the leading column's bound
 ///   (read per `bounds`) and checked for non-overlap (erroring if violated), per-file min/max
 ///   statistics are attached so DataFusion accepts the declared ordering, and the ordering is
-///   attached to the resulting `FileScanConfig` so `EnforceSorting` can elide a redundant `Sort`
+///   attached to the resulting `FileScanConfig` so `EnsureRequirements` can elide a redundant `Sort`
 ///   node.
 /// - `PerFile { columns }`: gated by `Partition::certifies_sort_order` -- if every non-empty
 ///   partition's recorded `sort_order` certifies `columns`, each non-empty partition becomes its
