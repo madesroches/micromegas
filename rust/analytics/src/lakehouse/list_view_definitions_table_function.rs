@@ -107,7 +107,7 @@ impl TableProvider for ListViewDefinitionsTableProvider {
             let ts: chrono::DateTime<chrono::Utc> = row
                 .try_get("updated_at")
                 .map_err(|e| DataFusionError::External(e.into()))?;
-            updated_at.push(ts.timestamp_nanos_opt());
+            updated_at.push(ts.timestamp_nanos_opt().unwrap_or_default());
             updated_by.push(
                 row.try_get::<Option<String>, _>("updated_by")
                     .map_err(|e| DataFusionError::External(e.into()))?,

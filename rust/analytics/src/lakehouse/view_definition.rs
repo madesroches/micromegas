@@ -394,7 +394,8 @@ async fn build_narrow_validation_ctx(
 /// accepted at `CREATE` time in the first place. `view` must already be the result of
 /// [`build_sql_batch_view`] over `def` -- constructing it *is* most of the validation (it plans
 /// the extract query and yields the schema every check below inspects). `factory` is the factory
-/// `view` was built against (the base plus every definition in a strictly lower `update_group`),
+/// `view` was built against -- every other definition, for the DDL executor, or only the
+/// definitions in a strictly lower `update_group` processed so far, for the registry loader --
 /// which check 7's ordering check reads.
 pub async fn validate_view_definition(
     def: &ViewDefinition,

@@ -8,13 +8,18 @@ for that coverage). Relies on `start_services.py` exporting a low
 seconds rather than the 60s production default.
 """
 
+import datetime
 import uuid
 
 import pyarrow
 import pytest
 
 from .otlp_helpers import assert_eventually
-from .test_utils import begin, client, end
+from .test_utils import client, end
+
+# `begin` spans ~10000 days; materialize_partitions loops once per delta over that range, so
+# tests that only need a few partitions materialize a narrow window near `end` instead.
+mat_begin = end - datetime.timedelta(days=1)
 
 
 def _unique_name(prefix):
@@ -85,7 +90,7 @@ def test_create_or_replace_appears_in_listings_and_daemon_materializes():
         _drop(name)
 
 
-def test_a_ddl_view_may_read_another(begin_=begin, end_=end):
+def test_a_ddl_view_may_read_another(begin_=mat_begin, end_=end):
     a = _unique_name("ddl_e2e_a")
     b = _unique_name("ddl_e2e_b")
     try:
@@ -141,7 +146,7 @@ def test_replace_with_a_different_schema_stops_reading_old_partitions():
     try:
         _create_simple(name, 9000)
         client.query(
-            f"SELECT * FROM materialize_partitions('{name}', TIMESTAMP '{begin.isoformat()}', "
+            f"SELECT * FROM materialize_partitions('{name}', TIMESTAMP '{mat_begin.isoformat()}', "
             f"TIMESTAMP '{end.isoformat()}', 86400)"
         )
         before = client.query(f"SELECT * FROM {name}")
@@ -177,7 +182,9 @@ def test_replace_with_a_different_schema_stops_reading_old_partitions():
         # the new schema's rows -- since nothing has been re-materialized yet, that's zero rows.
         after = client.query(f"SELECT * FROM {name}")
         assert len(after) == 0
-        assert len(before) >= 0  # sanity: `before` was collected under the old schema
+        assert (
+            "audience" in before.columns
+        )  # sanity: `before` was collected under the old schema
         assert "process_id" in after.columns
         assert "audience" not in after.columns
     finally:
@@ -187,40 +194,44 @@ def test_replace_with_a_different_schema_stops_reading_old_partitions():
 def test_drop_removes_from_both_listings():
     a = _unique_name("ddl_e2e_drop_a")
     b = _unique_name("ddl_e2e_drop_b")
-    _create_simple(a, 9000)
-    sql = f"""
-    CREATE OR REPLACE MATERIALIZED VIEW {b} WITH (
-      extract_query = $$
-        SELECT time_bin, audience, count FROM {a}
-        WHERE time_bin >= '{{begin}}' AND time_bin < '{{end}}'
-      $$,
-      count_src_query = $$
-        SELECT sum(nb_objects) as count FROM blocks
-        WHERE insert_time >= '{{begin}}' AND insert_time < '{{end}}'
-      $$,
-      merge_partitions_query = $$
-        SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience,
-               sum(count) as count
-        FROM {{source}} GROUP BY time_bin
-      $$,
-      update_group = 9001,
-      time_column = 'time_bin'
-    )
-    """
-    client.query(sql)
+    try:
+        _create_simple(a, 9000)
+        sql = f"""
+        CREATE OR REPLACE MATERIALIZED VIEW {b} WITH (
+          extract_query = $$
+            SELECT time_bin, audience, count FROM {a}
+            WHERE time_bin >= '{{begin}}' AND time_bin < '{{end}}'
+          $$,
+          count_src_query = $$
+            SELECT sum(nb_objects) as count FROM blocks
+            WHERE insert_time >= '{{begin}}' AND insert_time < '{{end}}'
+          $$,
+          merge_partitions_query = $$
+            SELECT time_bin, arrow_cast(max(audience), 'Dictionary(Int32, Utf8)') as audience,
+                   sum(count) as count
+            FROM {{source}} GROUP BY time_bin
+          $$,
+          update_group = 9001,
+          time_column = 'time_bin'
+        )
+        """
+        client.query(sql)
 
-    # Dropping in dependency order: b before a, the reverse of their creation order.
-    df_b = client.query(f"DROP MATERIALIZED VIEW {b}")
-    assert df_b.iloc[0]["status"] == "dropped"
-    df_a = client.query(f"DROP MATERIALIZED VIEW {a}")
-    assert df_a.iloc[0]["status"] == "dropped"
+        # Dropping in dependency order: b before a, the reverse of their creation order.
+        df_b = client.query(f"DROP MATERIALIZED VIEW {b}")
+        assert df_b.iloc[0]["status"] == "dropped"
+        df_a = client.query(f"DROP MATERIALIZED VIEW {a}")
+        assert df_a.iloc[0]["status"] == "dropped"
 
-    view_sets = set(client.query("SELECT * FROM list_view_sets()")["view_set_name"])
-    definitions = set(
-        client.query("SELECT * FROM list_view_definitions()")["view_set_name"]
-    )
-    assert a not in view_sets and b not in view_sets
-    assert a not in definitions and b not in definitions
+        view_sets = set(client.query("SELECT * FROM list_view_sets()")["view_set_name"])
+        definitions = set(
+            client.query("SELECT * FROM list_view_definitions()")["view_set_name"]
+        )
+        assert a not in view_sets and b not in view_sets
+        assert a not in definitions and b not in definitions
+    finally:
+        _drop(b)
+        _drop(a)
 
 
 def test_dropping_a_view_another_reads_is_refused():

@@ -468,8 +468,8 @@ async fn scanning_view_instance_is_rejected() {
 }
 
 /// The validator's calibration case: the seeded `log_stats` definition must pass validation
-/// unmodified, over the exact same base factory `default_view_factory` builds it against in
-/// production.
+/// unmodified, over a fixture factory providing `log_entries` and `blocks` -- the only view sets
+/// `log_stats`'s three queries read.
 #[tokio::test]
 async fn seeded_log_stats_definition_passes_validation() {
     let lakehouse = make_offline_lakehouse_context().await;

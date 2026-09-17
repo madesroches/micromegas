@@ -830,24 +830,16 @@ impl FlightSqlServiceImpl {
             return Err(audit_state.fail_with_class(status, "denied"));
         }
 
-        // Build a `RuntimeEnv`/`LakehouseContext` scoped to this query's memory-pool
-        // wrapper, so every session context created from it (including nested ones,
-        // e.g. Perfetto trace queries and JIT materialization) attributes its memory
-        // to this query alone instead of the process-shared pool.
-        let scoped_env = scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone())
-            .map_err(|e| audit_state.fail(status!("error building scoped runtime", e)))?;
-        let lakehouse = self.lakehouse.with_runtime(scoped_env);
-
-        // Session context creation phase
-        let session_begin = now();
-        let session_begin_instant = Instant::now();
+        // Caller is resolved here, ahead of the scoped runtime, because the view-DDL intercept
+        // below needs it and returns before either the scoped runtime or a session context is
+        // ever built for a `CREATE`/`DROP MATERIALIZED VIEW` statement.
         let caller = self
             .caller_context(extensions, metadata)
             .await
             .map_err(|status| audit_state.fail(status))?;
 
-        // View DDL is intercepted here, ahead of `make_session_context`: a `CREATE`/`DROP
-        // MATERIALIZED VIEW` statement is never planned as an ordinary query.
+        // View DDL is intercepted here, ahead of the scoped runtime/`make_session_context`: a
+        // `CREATE`/`DROP MATERIALIZED VIEW` statement is never planned as an ordinary query.
         match parse_view_ddl(sql) {
             Ok(Some(ddl)) => {
                 return self
@@ -860,6 +852,17 @@ impl FlightSqlServiceImpl {
             }
         }
 
+        // Build a `RuntimeEnv`/`LakehouseContext` scoped to this query's memory-pool
+        // wrapper, so every session context created from it (including nested ones,
+        // e.g. Perfetto trace queries and JIT materialization) attributes its memory
+        // to this query alone instead of the process-shared pool.
+        let scoped_env = scoped_runtime(self.lakehouse.runtime(), scoped_pool.clone())
+            .map_err(|e| audit_state.fail(status!("error building scoped runtime", e)))?;
+        let lakehouse = self.lakehouse.with_runtime(scoped_env);
+
+        // Session context creation phase
+        let session_begin = now();
+        let session_begin_instant = Instant::now();
         let ctx = make_session_context(
             lakehouse,
             self.part_provider.clone(),
