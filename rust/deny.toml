@@ -99,6 +99,9 @@ skip = [
     "redox_syscall",
     "thiserror",
     "thiserror-impl",
+    # datafusion-macros (new in DataFusion 55) requires syn 3.x while the rest
+    # of the tree is still on syn 2.x
+    "syn",
 ]
 
 [sources]

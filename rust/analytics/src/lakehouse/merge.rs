@@ -19,10 +19,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::Schema,
+    common::TableReference,
     execution::SendableRecordBatchStream,
     physical_plan::{displayable, execute_stream},
     prelude::*,
-    sql::TableReference,
 };
 use futures::stream::StreamExt;
 use micromegas_tracing::prelude::*;
@@ -33,7 +33,7 @@ use xxhash_rust::xxh32::xxh32;
 
 /// A merge is a bounded, streaming rewrite of a fixed set of files whose consumer is a single
 /// writer task (`create_merged_partition` -> `write_partition_from_rows`), not a query that
-/// benefits from scan parallelism. Left at DataFusion's default (`true`), `EnforceDistribution`
+/// benefits from scan parallelism. Left at DataFusion's default (`true`), `EnsureRequirements`
 /// splits the source scan into `target_partitions` byte-range file groups and `execute_stream`
 /// coalesces them, so the reader working set is multiplied by the host's core count for no
 /// throughput the writer can absorb. Forcing one sequential file group here fixes that for the

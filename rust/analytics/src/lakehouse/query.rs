@@ -41,11 +41,11 @@ use crate::{
 use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
+    common::TableReference,
     datasource::DefaultTableSource,
     execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     logical_expr::{ScalarUDF, TableSource, async_udf::AsyncScalarUDF},
     prelude::*,
-    sql::TableReference,
 };
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;

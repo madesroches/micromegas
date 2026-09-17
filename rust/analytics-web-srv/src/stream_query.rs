@@ -6,7 +6,7 @@
 use crate::auth::AuthToken;
 use crate::data_source_cache::DataSourceCache;
 use anyhow::{Context, Result};
-use arrow_ipc::writer::{CompressionContext, IpcDataGenerator, IpcWriteOptions, write_message};
+use arrow_ipc::writer::{IpcDataGenerator, IpcWriteContext, IpcWriteOptions, write_message};
 use async_stream::stream;
 use axum::{
     Extension, Json,
@@ -159,10 +159,10 @@ pub fn encode_batch(
 ) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
-    let mut compression = CompressionContext::default();
+    let mut write_ctx = IpcWriteContext::default();
 
     let (encoded_dicts, encoded_batch) = data_gen
-        .encode(batch, tracker, options, &mut compression)
+        .encode(batch, tracker, options, &mut write_ctx)
         .context("encoding batch")?;
 
     // Write dictionary batches first (if any)

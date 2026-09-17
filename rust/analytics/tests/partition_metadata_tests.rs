@@ -67,6 +67,22 @@ async fn test_load_partition_metadata_matches_direct_parse() {
             from_footer.row_group(i).num_columns(),
             from_direct_parse.row_group(i).num_columns()
         );
+        for j in 0..from_footer.row_group(i).num_columns() {
+            let stripped = from_footer.row_group(i).column(j);
+            assert_eq!(stripped.column_index_offset(), None);
+            assert_eq!(stripped.column_index_length(), None);
+            assert_eq!(stripped.offset_index_offset(), None);
+            assert_eq!(stripped.offset_index_length(), None);
+
+            // If the direct-parse metadata stopped carrying column-index pointers (e.g. a
+            // parquet writer/default change), the strip above would have nothing left to
+            // remove and this test would pass vacuously.
+            let unstripped = from_direct_parse.row_group(i).column(j);
+            assert!(unstripped.column_index_offset().is_some());
+            assert!(unstripped.column_index_length().is_some());
+            assert!(unstripped.offset_index_offset().is_some());
+            assert!(unstripped.offset_index_length().is_some());
+        }
     }
 }
 

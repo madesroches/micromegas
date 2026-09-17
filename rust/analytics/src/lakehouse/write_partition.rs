@@ -547,7 +547,7 @@ async fn insert_partition_transaction(
         partition.file_path
     );
 
-    // Insert the new partition with format version 2 (Arrow 57.0). Explicit column list (rather
+    // Insert the new partition with format version 2. Explicit column list (rather
     // than a bare positional VALUES(...)) so the statement's dependency on the table's shape is
     // visible at the call site: Postgres's ALTER TABLE ... ADD COLUMN always appends, so a bare
     // positional list cannot mis-bind from an ordinary migration, but it also can't catch a

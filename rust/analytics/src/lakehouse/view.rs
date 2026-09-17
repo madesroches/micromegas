@@ -14,7 +14,9 @@ use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
+use datafusion::{
+    arrow::datatypes::Schema, common::TableReference, logical_expr::Expr, prelude::*,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
 use std::sync::Arc;
