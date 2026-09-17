@@ -89,11 +89,14 @@ One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 
 Bare `pull` (no names) refreshes only the files already present in `--dir` — the
 `screens.py:cmd_pull` default. A named `pull` also adopts a server-only name into a new file, which
-is the merged pull/import behavior §5 relies on.
+is the merged pull/import behavior §5 relies on. `pull` skips, with a warning, any target file that
+fails to decode or whose header does not parse, rather than overwriting it — mirroring
+`screens.py:cmd_pull`'s (`:337-352`) guard against clobbering a file that can't be safely read.
 
 ### 2. Local file model and parsing
 
-A `.sql` file is read as text and reduced to a `LocalDefinition`:
+A `.sql` file is read as text (`encoding="utf-8-sig"`, matching `screens.py:38,57`) and reduced to a
+`LocalDefinition`:
 
 ```python
 LocalDefinition = namedtuple("LocalDefinition", "name update_group text path")
@@ -127,6 +130,12 @@ mismatch suppresses pruning for both the filename stem and the name the header a
 since either could be the definition the author meant to manage; a header that yields no name at
 all suppresses pruning repo-wide, because there is no name to scope the suppression to.
 
+`list_local_definitions(dir)` returns the scan as one tuple, `(definitions, unparseable_stems,
+mismatched_names)`, mirroring `screens.py`'s `local, unreadable, invalid_names = local_scan or
+list_local_screens()`: `definitions` maps name to `LocalDefinition`, `unparseable_stems` is the
+repo-wide prune suppression set, and `mismatched_names` is the per-name prune suppression set. This
+is the tuple `compute_plan` (§4) takes as its `local_scan` argument.
+
 ### 3. Comparison: canonical statement text
 
 The server stores verbatim text, so the comparison is a text comparison over one canonical form
@@ -159,9 +168,14 @@ stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registr
 ### 4. The plan model
 
 ```python
-def compute_plan(client, local, names=None, prune=False):
+def compute_plan(client, local_scan, names=None, prune=False):
     """-> (creates, updates, deletes, unchanged, unmanaged)"""
 ```
+
+`local_scan` is the `(definitions, unparseable_stems, mismatched_names)` tuple `list_local_definitions`
+returns (§2), unpacked exactly as `screens.py:compute_plan` unpacks `local_scan` — `unparseable_stems`
+suppresses pruning repo-wide, `mismatched_names` suppresses it for those two names, and an empty
+`definitions` with `prune=True` is the "zero readable `.sql` files" case §5 refuses to run.
 
 `client` is anything with `.query(sql)` returning a DataFrame — the real FlightSQL client in
 production, a canned-DataFrame fake in tests. Current state is one call:
@@ -190,10 +204,13 @@ drops nothing (matching `screens.py:compute_plan`'s `if not names` fence around 
 subset is still managed elsewhere in the directory, so treating "not mentioned" as "delete" would
 be wrong.
 
-**Apply order.** Creates and updates run in ascending `update_group` (ties broken by name); drops
-run in descending server `update_group`. `update_group` must be strictly greater than that of every
-view a definition reads, so that ordering is a valid topological order in both directions — which
-matters because the server validates a `CREATE` against the definitions already stored
+**Apply order.** All creates and updates run first, then all drops — matching `screens.py:cmd_apply`
+(`:549-586`) — so that an update which removes a view's dependency on a to-be-pruned view lands
+before the drop, rather than having `check_dependents_survive` refuse it. Within the create/update
+phase, statements run in ascending `update_group` (ties broken by name); within the drop phase, in
+descending server `update_group`. `update_group` must be strictly greater than that of every view a
+definition reads, so that ordering is a valid topological order in both directions — which matters
+because the server validates a `CREATE` against the definitions already stored
 (`flight_sql_service_impl.rs:1032-1046`) and refuses a `DROP` whose dependent survives.
 
 **Statement sent.** For an update, the file text with `OR REPLACE` injected into the header when
@@ -299,7 +316,10 @@ Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
    `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` per statement; `main` catches
-   `ProfileError` at connect time (§4).
+   `ProfileError` at connect time (§4). `cmd_pull` writes with `encoding="utf-8"`, matching
+   `screens.py:89,256`; `main` calls `sys.stdout.reconfigure(encoding="utf-8",
+   errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
+   output survives a non-UTF-8 locale.
 5. Wire the argparse surface of §1, with a `client_args` parent parser carrying `--profile` and
    `--dir` (defined exactly once — see `screens.py:665-676` for why), and call
    `add_version_argument(parser)` so `--version` matches the other six console scripts.
@@ -403,6 +423,9 @@ inputs.
 - Filename/DDL-name mismatch is reported and skipped, and suppresses pruning for both the filename
   stem and the declared name.
 - An unparseable header is reported and skipped, and suppresses pruning repo-wide.
+- Regression guard, run under `LC_ALL=C PYTHONUTF8=0` (matching
+  `test_screen_files.py:880-975`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
+  colorized diff output prints without a `UnicodeEncodeError`.
 
 **Canonicalization**
 - `CREATE OR REPLACE ...` and `CREATE ...` of otherwise identical text canonicalize equal.
