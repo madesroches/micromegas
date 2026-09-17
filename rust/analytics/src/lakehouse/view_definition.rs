@@ -81,7 +81,7 @@ pub fn parse_time_delta(s: &str) -> Result<TimeDelta> {
     }
 }
 
-/// Fast, redundant, name-only pre-check -- also enforced, exhaustively, by check 1 of
+/// Fast, redundant, name-only pre-check -- also enforced, exhaustively, by
 /// [`validate_view_definition`], which remains the sole enforcement point since it is the only
 /// check that also runs on rows the registry loader reads back. `^[a-z_][a-z0-9_]{0,254}$`, not
 /// starting with `__` (which would collide with a view's own `__<name>__partitions` internal
@@ -156,7 +156,7 @@ fn is_stringy(dt: &DataType) -> bool {
         || matches!(dt, DataType::Dictionary(_, inner) if **inner == DataType::Utf8)
 }
 
-/// Check 2: mirrors `OwnershipRewrite::predicate_for`'s own precedence -- an `audience` field, if
+/// Mirrors `OwnershipRewrite::predicate_for`'s own precedence -- an `audience` field, if
 /// present, governs regardless of whether a correctly-typed `process_id` field sits beside it.
 fn check_audience_reachable(schema: &Schema) -> Result<()> {
     if let Ok(field) = schema.field_with_name("audience") {
@@ -185,7 +185,7 @@ fn check_audience_reachable(schema: &Schema) -> Result<()> {
     );
 }
 
-/// Check 9: the resolved time column must exist and be a nanosecond timestamp.
+/// The resolved time column must exist and be a nanosecond timestamp.
 fn check_time_column(schema: &Schema, column: &str) -> Result<()> {
     let field = schema
         .field_with_name(column)
@@ -202,7 +202,7 @@ fn check_time_column(schema: &Schema, column: &str) -> Result<()> {
     Ok(())
 }
 
-/// Check 4: `fetch_sql_partition_spec` requires a `count` field reachable as an `Int64Array`.
+/// `fetch_sql_partition_spec` requires a `count` field reachable as an `Int64Array`.
 fn check_count_query_schema(schema: &Schema) -> Result<()> {
     let field = schema
         .field_with_name("count")
@@ -216,7 +216,7 @@ fn check_count_query_schema(schema: &Schema) -> Result<()> {
     Ok(())
 }
 
-/// Check 3's schema-agreement half: field names, types and order must match -- nullability and
+/// Field names, types and order must match -- nullability and
 /// metadata are deliberately excluded (a `count(*)` extract column is non-nullable while its
 /// `sum(count)` merge counterpart is nullable, which the seeded `log_stats` calibration case
 /// exercises).
@@ -241,7 +241,7 @@ fn check_schema_agrees(extract_schema: &Schema, merge_schema: &Schema) -> Result
     Ok(())
 }
 
-/// Check 6: walks every `ScalarUDF` reachable from `plan` -- not just its top-level expressions,
+/// Walks every `ScalarUDF` reachable from `plan` -- not just its top-level expressions,
 /// so a call nested inside another expression (e.g. `now()` inside `date_bin('1 minute',
 /// now())`) is still found -- and rejects the first whose `signature().volatility` is not
 /// `Immutable`.
@@ -271,8 +271,8 @@ fn check_no_volatile_functions(plan: &LogicalPlan, label: &str) -> Result<()> {
 }
 
 /// The four mutating admin-gated table functions plus the three unconditionally-registered but
-/// still-mutating ones (see check 7's rationale) -- a stored scan against any of these would be
-/// re-executed under `CallerContext::maintenance()` on every daemon tick.
+/// still-mutating ones -- a stored scan against any of these would be re-executed under
+/// `CallerContext::maintenance()` on every daemon tick.
 const MUTATING_TABLE_FUNCTIONS: &[&str] = &[
     "retire_partitions",
     "materialize_partitions",
@@ -283,7 +283,7 @@ const MUTATING_TABLE_FUNCTIONS: &[&str] = &[
     "perfetto_trace_chunks",
 ];
 
-/// Check 7: walks every `TableScan` reachable from `plan`, resolving each to a view set (to
+/// Walks every `TableScan` reachable from `plan`, resolving each to a view set (to
 /// accumulate the highest `update_group` read) or to a banned table function name.
 ///
 /// Returns a `datafusion::error::Result` (rather than this module's usual `anyhow::Result`) since
@@ -367,7 +367,7 @@ async fn build_full_validation_ctx(
     .with_context(|| "make_session_context (full validation context)")
 }
 
-/// Builds the deliberately narrower session context check 3 plans `merge_partitions_query`
+/// Builds the deliberately narrower session context `merge_partitions_query` is planned
 /// against: a non-admin caller (`CallerContext::internal()`) and `NoOpSessionConfigurator`
 /// regardless of what real configurator the deployment uses -- so a merge query naming an
 /// admin-gated UDTF or a `SessionConfigurator`-registered static table fails to plan here, for
@@ -398,7 +398,7 @@ async fn build_narrow_validation_ctx(
 /// the extract query and yields the schema every check below inspects). `factory` is the factory
 /// `view` was built against -- every other definition, for the DDL executor, or only the
 /// definitions in a strictly lower `update_group` processed so far, for the registry loader --
-/// which check 7's ordering check reads.
+/// which the update-group ordering check below reads.
 pub async fn validate_view_definition(
     def: &ViewDefinition,
     view: &SqlBatchView,
@@ -409,7 +409,6 @@ pub async fn validate_view_definition(
 ) -> Result<()> {
     let schema = view.get_file_schema();
 
-    // Check 1: name.
     check_view_set_name_charset(&def.view_set_name)?;
     if factory.get_global_view(&def.view_set_name).is_some()
         || factory.get_view_sets().contains_key(&def.view_set_name)
@@ -420,7 +419,7 @@ pub async fn validate_view_definition(
         );
     }
 
-    // Check 5: placeholders (purely textual, checked early).
+    // Placeholders, checked early since they're purely textual.
     if !def.count_src_query.contains("{begin}") || !def.count_src_query.contains("{end}") {
         anyhow::bail!("count_src_query must contain both '{{begin}}' and '{{end}}'");
     }
@@ -428,11 +427,9 @@ pub async fn validate_view_definition(
         anyhow::bail!("merge_partitions_query must contain '{{source}}'");
     }
 
-    // Check 9: time columns.
     check_time_column(&schema, &def.options.min_time_column)?;
     check_time_column(&schema, &def.options.max_time_column)?;
 
-    // Check 2: audience reachability.
     check_audience_reachable(&schema)?;
 
     let full_ctx = build_full_validation_ctx(
@@ -452,7 +449,7 @@ pub async fn validate_view_definition(
         );
     }
 
-    // Check 3: merge query plans, and its output schema agrees with the extract schema.
+    // The merge query must plan, and its output schema must agree with the extract schema.
     let narrow_ctx =
         build_narrow_validation_ctx(runtime.clone(), lake.clone(), factory.clone()).await?;
     let empty_source = Arc::new(
@@ -479,7 +476,7 @@ pub async fn validate_view_definition(
         })?;
     check_schema_agrees(&schema, merge_df.schema().as_arrow())?;
 
-    // The `{begin}`/`{end}`-substituted extract/count query texts checks 4/6/7/8 all plan
+    // The `{begin}`/`{end}`-substituted extract/count query texts the checks below all plan
     // against. A zero-width range is enough -- these builds are never executed.
     let now = Utc::now();
     let now_str = now.to_rfc3339();
@@ -501,10 +498,10 @@ pub async fn validate_view_definition(
         .await
         .with_context(|| format!("planning count_src_query for '{}'", def.view_set_name))?;
 
-    // Check 4: count query shape.
     check_count_query_schema(count_df.schema().as_arrow())?;
 
-    // Checks 6 & 7, over the three plans already built above -- no extra planning cost.
+    // Volatile-function and mutating-scan checks, over the three plans already built above --
+    // no extra planning cost.
     let mut max_group: Option<i32> = None;
     let mut mutating_hit: Option<String> = None;
     for (label, plan) in [
@@ -533,7 +530,7 @@ pub async fn validate_view_definition(
         );
     }
 
-    // Check 8: merge_sort_order, if declared, applies and plans against extract_query.
+    // merge_sort_order, if declared, must apply and plan against extract_query.
     if let Some(columns) = &def.options.merge_sort_order {
         let scan_columns: Vec<ScanSortColumn> = columns
             .iter()
