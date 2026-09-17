@@ -62,6 +62,59 @@ fn digest_of(rows: &[ViewDefinitionRow]) -> u64 {
     hasher.finish()
 }
 
+/// What a [`build_factory`] call is for, which decides how a skipped definition is reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildPurpose {
+    /// The snapshot `current()` will serve: a skipped definition is real degradation -- something
+    /// that used to work no longer does, or never did -- so it is `warn!`-logged and metered.
+    LiveSnapshot,
+    /// A speculative build the DDL executor runs inside its own transaction, on row sets that may
+    /// deliberately be missing a view another one reads. A skip here is the expected signal, not
+    /// degradation: it is returned in [`BuildFailure`] for the caller to act on -- either to
+    /// refuse the statement, naming the definition and reason, or to ignore a row that was already
+    /// broken before the mutation. Logging it would report a rejected statement, or a pre-existing
+    /// breakage the live build already reports every tick, as a fresh registry failure.
+    Probe,
+}
+
+/// A definition [`build_factory`] skipped, with the reason it was skipped, so a [`BuildPurpose::
+/// Probe`] caller can name both in the error it raises.
+#[derive(Clone, Debug)]
+pub struct BuildFailure {
+    pub view_set_name: String,
+    /// The `{:#}` rendering of the parse/build/validation error, alternate-formatted to keep the
+    /// anyhow context chain.
+    pub error: String,
+}
+
+impl std::fmt::Display for BuildFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.view_set_name, self.error)
+    }
+}
+
+fn skip(
+    purpose: BuildPurpose,
+    view_set_name: String,
+    stage: &str,
+    e: anyhow::Error,
+) -> BuildFailure {
+    let error = format!("{e:#}");
+    if purpose == BuildPurpose::LiveSnapshot {
+        warn!("view_registry: '{view_set_name}' failed {stage}, skipping: {error}");
+        imetric!(
+            "view_definition_load_failure",
+            "count",
+            failure_tags(&view_set_name),
+            1_u64
+        );
+    }
+    BuildFailure {
+        view_set_name,
+        error,
+    }
+}
+
 /// Builds a factory from an explicit row set instead of `store.list()`, so a caller already
 /// holding rows inside an open transaction (the DDL executor's dependent-protection check) can
 /// validate against them without a second, pool-backed read that would not see its own
@@ -73,15 +126,17 @@ fn digest_of(rows: &[ViewDefinitionRow]) -> u64 {
 /// factory = (**base).clone();` then, per row, build and validate its `SqlBatchView` against
 /// `Arc::new(factory.clone())` -- the built-ins plus every already-folded-in row -- and only then
 /// `factory.add_global_view(...)`. A row that fails to parse, build, or validate is **skipped, not
-/// fatal**: logged and metered, and its name collected into the returned failed-set, so one broken
-/// definition cannot take out every other view set.
+/// fatal**: collected into the returned failed-set with its reason, so one broken definition
+/// cannot take out every other view set. Whether that skip is also logged and metered is
+/// `purpose`'s call.
 pub async fn build_factory(
     base: &Arc<ViewFactory>,
     rows: &[ViewDefinitionRow],
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     session_configurator: Arc<dyn SessionConfigurator>,
-) -> Result<(Arc<ViewFactory>, Vec<String>)> {
+    purpose: BuildPurpose,
+) -> Result<(Arc<ViewFactory>, Vec<BuildFailure>)> {
     let mut factory = (**base).clone();
     let mut failed = Vec::new();
     for row in rows {
@@ -89,14 +144,7 @@ pub async fn build_factory(
         let def = match row.clone().into_definition() {
             Ok(def) => def,
             Err(e) => {
-                warn!("view_registry: '{name}' failed to parse, skipping: {e:#}");
-                imetric!(
-                    "view_definition_load_failure",
-                    "count",
-                    failure_tags(&name),
-                    1_u64
-                );
-                failed.push(name);
+                failed.push(skip(purpose, name, "to parse", e));
                 continue;
             }
         };
@@ -112,14 +160,7 @@ pub async fn build_factory(
         {
             Ok(view) => view,
             Err(e) => {
-                warn!("view_registry: '{name}' failed to build, skipping: {e:#}");
-                imetric!(
-                    "view_definition_load_failure",
-                    "count",
-                    failure_tags(&name),
-                    1_u64
-                );
-                failed.push(name);
+                failed.push(skip(purpose, name, "to build", e));
                 continue;
             }
         };
@@ -133,14 +174,7 @@ pub async fn build_factory(
         )
         .await
         {
-            warn!("view_registry: '{name}' failed validation, skipping: {e:#}");
-            imetric!(
-                "view_definition_load_failure",
-                "count",
-                failure_tags(&name),
-                1_u64
-            );
-            failed.push(name);
+            failed.push(skip(purpose, name, "validation", e));
             continue;
         }
         factory.add_global_view(Arc::new(view));
@@ -220,13 +254,15 @@ impl ViewRegistry {
     pub async fn build_from_rows(
         &self,
         rows: &[ViewDefinitionRow],
-    ) -> Result<(Arc<ViewFactory>, Vec<String>)> {
+        purpose: BuildPurpose,
+    ) -> Result<(Arc<ViewFactory>, Vec<BuildFailure>)> {
         build_factory(
             &self.base,
             rows,
             self.runtime.clone(),
             self.lake.clone(),
             self.session_configurator.clone(),
+            purpose,
         )
         .await
     }
@@ -236,27 +272,31 @@ impl ViewRegistry {
     /// including the row just written -- both fails to build against `post_rows` and was not
     /// already in the pre-mutation failed set. Exact rather than textual: it uses the real
     /// planner, so it catches a removed column as readily as a removed view set.
+    ///
+    /// Both builds are [`BuildPurpose::Probe`]s: a skip is what this check is looking for, so it
+    /// belongs in the refusal the caller returns -- with the planner's own reason, the only place
+    /// the admin can now read it -- not in the service log as a registry failure.
     pub async fn check_dependents_survive(
         &self,
         pre_rows: &[ViewDefinitionRow],
         post_rows: &[ViewDefinitionRow],
     ) -> Result<()> {
-        let (_, pre_failed) = self.build_from_rows(pre_rows).await?;
-        let (_, post_failed) = self.build_from_rows(post_rows).await?;
-        let pre_failed_set: HashSet<&str> = pre_failed.iter().map(String::as_str).collect();
-        let newly_broken: Vec<&String> = post_failed
+        let (_, pre_failed) = self.build_from_rows(pre_rows, BuildPurpose::Probe).await?;
+        let (_, post_failed) = self.build_from_rows(post_rows, BuildPurpose::Probe).await?;
+        let pre_failed_set: HashSet<&str> = pre_failed
             .iter()
-            .filter(|name| !pre_failed_set.contains(name.as_str()))
+            .map(|f| f.view_set_name.as_str())
+            .collect();
+        let newly_broken: Vec<String> = post_failed
+            .iter()
+            .filter(|f| !pre_failed_set.contains(f.view_set_name.as_str()))
+            .map(BuildFailure::to_string)
             .collect();
         if !newly_broken.is_empty() {
             anyhow::bail!(
                 "this change would break the following view definition(s), which built \
                  successfully before it: {}",
-                newly_broken
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                newly_broken.join(", ")
             );
         }
         Ok(())
@@ -281,10 +321,15 @@ impl ViewRegistry {
         if previous_build_was_healthy && Some(digest) == *self.loaded_digest.read().expect("lock") {
             return Ok(());
         }
-        let (factory, failed) = self.build_from_rows(&rows).await?;
+        let (factory, failed) = self
+            .build_from_rows(&rows, BuildPurpose::LiveSnapshot)
+            .await?;
         *self.current.write().expect("lock") = factory;
         *self.loaded_digest.write().expect("lock") = Some(digest);
-        *self.failed_view_sets.write().expect("lock") = failed;
+        *self.failed_view_sets.write().expect("lock") = failed
+            .into_iter()
+            .map(|f| f.view_set_name)
+            .collect::<Vec<_>>();
         Ok(())
     }
 

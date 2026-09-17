@@ -511,8 +511,10 @@ handed to
 `ViewRegistry::check_dependents_survive(pre_rows, post_rows)` (§7, next to `build_from_rows`), which
 builds a factory from each via the same rows-in seam and refuses with a named error if any definition
 — including the row just written — that is *not* in the pre-mutation failed set fails to build against
-the post-mutation rows. The error names the broken definition, whether a downstream dependent or the
-mutated row itself. This is exact rather than textual — it uses the real planner, so it catches a
+the post-mutation rows. The error names the broken definition — whether a downstream dependent or the
+mutated row itself — and the reason it broke, since both builds are `Probe`s and therefore log
+nothing: a refused statement is not a registry failure, and the planner's reason has nowhere else to
+surface. This is exact rather than textual — it uses the real planner, so it catches a
 removed column as readily as a removed view set — and it reuses the loader wholesale. The baseline is computed transactionally, from the same rows the mutation is
 validated against, rather than from `reload()`'s last periodic snapshot: that snapshot is up to
 `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` stale and differs per replica, which would make the
@@ -642,7 +644,8 @@ impl ViewRegistry {
     /// Thin wrapper over `build_factory` supplying `self`'s `base`/`runtime`/`lake`/
     /// `session_configurator`, so a caller holding `Arc<ViewRegistry>` (§5 step 5) doesn't need those
     /// four pieces separately.
-    pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow]) -> Result<(Arc<ViewFactory>, Vec<String>)>;
+    pub async fn build_from_rows(&self, rows: &[ViewDefinitionRow], purpose: BuildPurpose)
+        -> Result<(Arc<ViewFactory>, Vec<BuildFailure>)>;
     /// §4b's dependent-protection refusal, factored out as a plain rows-in/rows-out function (no
     /// `sqlx::Transaction`) so it is a no-DB unit test target: builds a factory from `pre_rows` and
     /// one from `post_rows` via `build_from_rows`, then refuses with a named error if any definition
@@ -662,13 +665,23 @@ impl ViewRegistry {
 /// its own `store.list()`. `async` because building each row's `SqlBatchView` (`SqlBatchView::new`)
 /// is itself `async` and needs `runtime`, `lake` and `session_configurator` to plan the extract
 /// query.
+///
+/// `purpose` says what the build is for, which decides how a skipped row is reported:
+/// `LiveSnapshot` (`reload()`) is the snapshot `current()` will serve, so a skip is real
+/// degradation — `warn!` plus `view_definition_load_failure`. `Probe` (both of §4b's builds and §5
+/// step 5's validation build) runs inside the DDL transaction on row sets that may deliberately be
+/// missing a view another one reads, so a skip is the expected signal: it is returned in
+/// `BuildFailure { view_set_name, error }` for the caller to refuse the statement with, and logging
+/// it would report a rejected statement — or a pre-existing breakage the live build already reports
+/// every tick — as a fresh registry failure.
 async fn build_factory(
     base: &Arc<ViewFactory>,
     rows: &[ViewDefinitionRow],
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     session_configurator: Arc<dyn SessionConfigurator>,
-) -> Result<(Arc<ViewFactory>, Vec<String>)>;
+    purpose: BuildPurpose,
+) -> Result<(Arc<ViewFactory>, Vec<BuildFailure>)>;
 ```
 
 `reload()`:
@@ -696,9 +709,9 @@ async fn build_factory(
    rejects a name that resolves via `get_global_view`/`get_view_sets` on the base factory, so until
    step 15 removes `log_stats`'s compiled construction from `default_view_factory`, the seeded
    `log_stats` row simply fails validation and is skipped like any other invalid row.
-4. A row that fails to **build or validate** is **skipped**, not fatal: `warn!` plus
-   `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set name, and
-   `build_factory` collects its name into the returned failed-set. One broken definition must not take
+4. A row that fails to **build or validate** is **skipped**, not fatal: on this `LiveSnapshot` build,
+   `warn!` plus `imetric!("view_definition_load_failure", "count", tags, 1)` tagged with the view set
+   name, and `build_factory` collects its name and reason into the returned failed-set. One broken definition must not take
    out every other view set, or the whole lakehouse — and running validation here, not just
    construction, is what keeps a definition whose merge query cannot plan, whose audience column was
    lost to source drift, or whose `CREATE OR REPLACE` raised its own `update_group` past a dependent's

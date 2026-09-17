@@ -280,6 +280,30 @@ async fn dependent_protection_refuses_to_drop_a_definition_another_one_reads() {
 }
 
 #[tokio::test]
+async fn dependent_protection_refusal_carries_the_reason_the_dependent_broke() {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let now = Utc::now();
+    let registry = make_registry(&lakehouse, Arc::new(FakeStore::default()));
+    let pre_rows = vec![row_a(now, true), row_b(now)];
+    let post_rows = vec![row_b(now)];
+    let err = registry
+        .check_dependents_survive(&pre_rows, &post_rows)
+        .await
+        .expect_err("dropping a must be refused since b reads it");
+    let msg = format!("{err:#}");
+    // The probe builds are silent, so this message is the only place the admin gets to see *why*
+    // the dependent broke.
+    assert!(
+        msg.contains("b ("),
+        "must name the broken definition: {msg}"
+    );
+    assert!(
+        msg.contains("not found"),
+        "must carry the planner's reason: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn dependent_protection_accepts_a_replacement_that_still_projects_the_read_columns() {
     let lakehouse = make_offline_lakehouse_context().await;
     let now = Utc::now();

@@ -52,7 +52,7 @@ use micromegas_analytics::lakehouse::view_definition::{
 use micromegas_analytics::lakehouse::view_definition_store::{
     delete_tx, list_tx, partition_insert_range, upsert_tx,
 };
-use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
+use micromegas_analytics::lakehouse::view_registry::{BuildPurpose, ViewRegistry};
 use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_partitions};
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::response_writer::ResponseWriter;
@@ -1030,9 +1030,12 @@ impl FlightSqlServiceImpl {
                     .filter(|r| r.view_set_name != name)
                     .cloned()
                     .collect();
+                // A `Probe`: a row in `validation_rows` that no longer builds is a pre-existing
+                // breakage the live reload already reports on every tick -- re-logging it here
+                // would pin it on whoever happened to run the next DDL statement.
                 let (factory, _failed) = self
                     .view_registry
-                    .build_from_rows(&validation_rows)
+                    .build_from_rows(&validation_rows, BuildPurpose::Probe)
                     .await
                     .map_err(|e| {
                         audit_state.fail(status!("error building validation factory", e))
@@ -1110,10 +1113,9 @@ impl FlightSqlServiceImpl {
             .check_dependents_survive(&pre_rows, &post_rows)
             .await
             .map_err(|e| {
-                audit_state.fail(client_input_error!(
-                    "this change would break another view definition",
-                    e
-                ))
+                // The inner error already says what would break and why; this prefix only has to
+                // mark where the refusal came from.
+                audit_state.fail(client_input_error!("view DDL refused", e))
             })?;
 
         tx.commit()
