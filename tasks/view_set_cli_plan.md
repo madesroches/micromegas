@@ -91,6 +91,10 @@ Bare `pull` (no names) refreshes only the files already present in `--dir` — t
 is the merged pull/import behavior §5 relies on. `pull` skips, with a warning, any target file that
 fails to decode or whose header does not parse, rather than overwriting it — mirroring
 `screens.py:cmd_pull`'s (`:337-352`) guard against clobbering a file that can't be safely read.
+`pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
+text: a definition last touched by `apply` is stored as `CREATE OR REPLACE` (§4), and writing that
+raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull and disarm the
+create-race guard §4 relies on the file saying plain `CREATE`.
 
 ### 2. Local file model and parsing
 
@@ -116,12 +120,15 @@ From the stripped copy:
 - `name` — from `CREATE\s+(OR\s+REPLACE\s+)?MATERIALIZED\s+VIEW\s+(<ident>)`. Must equal the
   filename stem, or the file is rejected: the diff, the plan output, and `pull` all key on the
   filename, and a mismatch would silently apply a view under a name the repo doesn't show.
-- `update_group` — from `\bupdate_group\s*=\s*'?(\d+)'?`, matching both the plain-integer and
-  single-quoted-integer forms `value_to_i32` accepts (`view_ddl.rs:169-183`). Used **only** for
-  apply ordering and plan display; the server remains the authority on whether the value is legal.
-  A file with no extractable `update_group` is not rejected — it sorts last, and the resulting
-  ordering may be wrong for that file, which keeps this regex from becoming a second, weaker copy
-  of the Rust validator. That tolerance is also the forward-compatible behavior rather than an
+- `update_group` — from `\bupdate_group\s*=\s*(\d+)`, the plain-integer form only. `value_to_i32`
+  (`view_ddl.rs:169-183`) also accepts a single-quoted-integer form, but the header scan runs over
+  the `_strip_bodies` output, which blanks single-quoted literals along with everything else it
+  treats as string bodies — so a quoted `update_group = '3000'` is never extracted and sorts last,
+  same as any other unextractable value (see below). Used **only** for apply ordering and plan
+  display; the server remains the authority on whether the value is legal. A file with no
+  extractable `update_group` is not rejected — it sorts last, and the resulting ordering may be
+  wrong for that file, which keeps this regex from becoming a second, weaker copy of the Rust
+  validator. That tolerance is also the forward-compatible behavior rather than an
   accident: if a definition ever declares per-instance materialization (§8), `update_group` stops
   being meaningful for it — a just-in-time instance materializes on query, so it has no place in the
   daemon's update ordering at all — and the option plausibly becomes optional in the DDL.
@@ -246,6 +253,13 @@ as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-
 so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
 `apply`.
 
+**Current-state read.** The `SELECT ... FROM list_view_definitions()` call in `compute_plan` is the
+first FlightSQL round trip every subcommand makes, including read-only `list`/`show`/`plan`, and it
+is the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
+the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowInvalid` catch as `cmd_apply`'s
+per-statement calls, reporting the error and exiting non-zero with a pointer to the admin-identity
+requirement, rather than letting the planner's unknown-function error surface as a raw traceback.
+
 ### 5. Deletes are opt-in
 
 `lakehouse_view_set_definitions` has no `managed_by` column, so — unlike `micromegas-screens`, which
@@ -318,7 +332,8 @@ Unmanaged view sets on server (use 'pull' to adopt, '--prune' to drop):
 
 `list` prints name / status (`synced`, `modified`, `local-only`, `server-only`) / `update_group` /
 `updated_at` / `updated_by`, with `--format json`. `show <name>` prints the server's stored
-`definition_sql`; `--local` prints the file instead.
+`definition_sql` verbatim; `--local` prints the file instead. `pull` differs from `show`: it writes
+`canonical_ddl(definition_sql)`, not the verbatim stored text (§1).
 
 ### 8. Relationship to cached range functions
 
@@ -339,17 +354,6 @@ head.
   absorbs the new option without knowing it exists. What does change is reporting — `list` would
   want to show instance fan-out — and deletion blast radius (§5).
 
-**The gap this leaves.** The anonymous tier is the discovery path and the DDL tier is the
-destination, and nothing bridges them: having found a slice worth keeping, an author re-derives the
-three queries by hand. The bridge is mostly mechanical, since a cached definition already *is* a
-`SqlBatchView` with `extract_query` = the query, `merge_partitions_query` = `SELECT * FROM {source}`,
-and a derived `count_src_query` — so a `scaffold <name> --from-query` writing two of the three
-queries into a new file is the obvious next subcommand for this tool. It is deliberately not in this
-issue: the third query, the freshness probe, is derived server-side by walking the plan for
-materialized-view scans, and deriving it in Python would repeat exactly the mistake §3 and
-Trade-offs refuse — a second, weaker copy of a Rust component. Scaffolding therefore wants a
-server-side probe-derivation path first, and is a follow-up issue.
-
 ## Implementation Steps
 
 **Phase 1 — shared module**
@@ -367,8 +371,10 @@ server-side probe-derivation path first, and is a follow-up issue.
 4. Create `python/micromegas/micromegas/cli/views.py`: `_strip_bodies`, `parse_local_definition`,
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
    `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
-   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` per statement; `main` catches
-   `ProfileError` at connect time (§4). `cmd_pull` writes with `encoding="utf-8"`, matching
+   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowInvalid` per statement; `compute_plan`'s
+   current-state query catches the same two exceptions, reporting the error and exiting non-zero
+   with a pointer to the admin-identity requirement (§4); `main` catches `ProfileError` at connect
+   time (§4). `cmd_pull` writes with `encoding="utf-8"`, matching
    `screens.py:89,256`; `main` calls `sys.stdout.reconfigure(encoding="utf-8",
    errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
    output survives a non-UTF-8 locale.
@@ -485,6 +491,10 @@ inputs.
   and `update_group`.
 - `update_group` extracted from the header; **not** taken from an `update_group = 1` occurrence
   inside a `$$...$$` body, a single-quoted body, a `--` comment, or a `/* */` comment.
+- A quoted `update_group = '3000'` in the header itself is also not extracted and sorts last,
+  pinning that `_strip_bodies` blanks it the same as any other single-quoted literal.
+- A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
+  (pins that `pull` writes `canonical_ddl(definition_sql)`, not the verbatim stored text).
 - Filename/DDL-name mismatch is reported and skipped, and suppresses pruning for both the filename
   stem and the declared name.
 - An unparseable header is reported and skipped, and suppresses pruning repo-wide.
