@@ -93,8 +93,8 @@ fails to decode or whose header does not parse, rather than overwriting it — m
 `screens.py:cmd_pull`'s (`:337-352`) guard against clobbering a file that can't be safely read.
 `pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
 text: a definition last touched by `apply` is stored as `CREATE OR REPLACE` (§4), and writing that
-raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull and disarm the
-create-race guard §4 relies on the file saying plain `CREATE`.
+raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull, drifting the file away
+from the canonical form the comparison in §3 is built on.
 
 ### 2. Local file model and parsing
 
@@ -111,8 +111,8 @@ sitting inside an `extract_query` body cannot be mistaken for the option:
 
 ```python
 def _strip_bodies(text):
-    """Blank out $$...$$ bodies, single-quoted string literals (handling '' escapes),
-    /*...*/ and -- comments, for header scanning only."""
+    """Blank out $$...$$ and tagged $tag$...$tag$ bodies, single-quoted string literals
+    (handling '' escapes), /*...*/ and -- comments, for header scanning only."""
 ```
 
 From the stripped copy:
@@ -237,9 +237,10 @@ because the server validates a `CREATE` against the definitions already stored
 (`flight_sql_service_impl.rs:1032-1046`) and refuses a `DROP` whose dependent survives.
 
 **Statement sent.** For an update, the file text with `OR REPLACE` injected into the header when
-absent (the inverse of `canonical_ddl`'s step 4). For a create, the file text verbatim: if the file
-says plain `CREATE` and someone created that view between `plan` and `apply`, the server's
-`already_exists` error surfaces the race instead of silently clobbering it. For a drop, `DROP
+absent (the inverse of `canonical_ddl`'s step 4). For a create, `canonical_ddl(text)` — guaranteed
+plain `CREATE` regardless of how the file is written — so that if someone created that view between
+`plan` and `apply`, the server's `already_exists` error surfaces the race instead of silently
+clobbering it. For a drop, `DROP
 MATERIALIZED VIEW <name>` without `IF EXISTS` — the plan just established it exists, and a
 `not_found` status is worth an error rather than a shrug.
 
@@ -495,7 +496,8 @@ inputs.
 - Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name, text,
   and `update_group`.
 - `update_group` extracted from the header; **not** taken from an `update_group = 1` occurrence
-  inside a `$$...$$` body, a single-quoted body, a `--` comment, or a `/* */` comment.
+  inside a `$$...$$` body, a tagged `$tag$...$tag$` body, a single-quoted body, a `--` comment, or
+  a `/* */` comment.
 - A quoted `update_group = '3000'` in the header itself is also not extracted and sorts last,
   pinning that `_strip_bodies` blanks it the same as any other single-quoted literal.
 - A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
@@ -523,7 +525,8 @@ inputs.
 - Creates/updates are issued in ascending `update_group`, drops in descending server
   `update_group` — asserted over the fake client's recorded statement sequence, which is what pins
   the dependency ordering.
-- An update sends `OR REPLACE`; a create sends the file text verbatim.
+- An update sends `OR REPLACE`; a create sends `canonical_ddl(text)`, plain `CREATE` even when the
+  file itself says `CREATE OR REPLACE`.
 - A statement that raises `pyarrow.lib.ArrowKeyError` (the `not_found` case) and one that raises
   bare `pyarrow.lib.ArrowException` (the `already_exists` case) are each counted, do not abort the
   rest, and produce a non-zero exit — pinning the widened catch, not just `ArrowInvalid`.
