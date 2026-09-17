@@ -529,8 +529,8 @@ async fn bulk_ingest_denies_non_admin_caller() {
 /// Mirrors `bulk_ingest_denies_non_admin_caller`: covers the wiring that `execute_query` actually
 /// routes DDL through `authorize_view_ddl` before `make_session_context`, not just that the gate
 /// function itself is correct. An `ApiKeyAuthProvider` credential is always non-admin, so
-/// `authorize_view_ddl` must reject this before any parsing/validation of the view definition (or
-/// any DB/object-store access) happens.
+/// `authorize_view_ddl` must reject this before any DB or object-store access happens (the view
+/// definition is already parsed and validated by this point).
 #[tokio::test]
 async fn view_ddl_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");

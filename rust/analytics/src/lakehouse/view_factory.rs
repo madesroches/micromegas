@@ -343,11 +343,9 @@ pub async fn default_view_factory(
     factory.add_view_set(String::from("log_entries"), log_view_maker.clone());
     factory.add_view_set(String::from("measures"), metrics_view_maker);
 
-    // Create the factory as Arc to pass to other view makers. `log_stats` no longer joins it
-    // here -- it is seeded into `lakehouse_view_set_definitions` and folded in by `ViewRegistry`
-    // instead (see the module doc comment).
-    let factory_arc = Arc::new(factory);
-    let mut updated_factory = (*factory_arc).clone();
+    // `log_stats` no longer joins it here -- it is seeded into `lakehouse_view_set_definitions`
+    // and folded in by `ViewRegistry` instead (see the module doc comment).
+    let mut updated_factory = factory;
 
     // Add async_events view maker
     updated_factory.add_view_set(

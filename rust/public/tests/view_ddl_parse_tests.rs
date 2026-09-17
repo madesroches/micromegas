@@ -125,6 +125,30 @@ fn drop_materialized_view_if_exists_parses() {
 }
 
 #[test]
+fn line_comment_prefixed_create_parses() {
+    let sql = format!("-- comment from a BI front end\n{CREATE_SQL}");
+    let ddl = parse_view_ddl(&sql).unwrap().expect("should parse");
+    match ddl {
+        ViewDdl::Create { name, .. } => assert_eq!(name, "my_view"),
+        ViewDdl::Drop { .. } => panic!("expected Create"),
+    }
+}
+
+#[test]
+fn block_comment_prefixed_drop_parses() {
+    let ddl = parse_view_ddl("/* comment */ DROP MATERIALIZED VIEW my_view")
+        .unwrap()
+        .expect("should parse");
+    match ddl {
+        ViewDdl::Drop { name, if_exists } => {
+            assert_eq!(name, "my_view");
+            assert!(!if_exists);
+        }
+        ViewDdl::Create { .. } => panic!("expected Drop"),
+    }
+}
+
+#[test]
 fn drop_view_without_materialized_is_not_ddl() {
     assert!(parse_view_ddl("DROP VIEW my_view").unwrap().is_none());
 }

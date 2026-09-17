@@ -833,6 +833,12 @@ impl FlightSqlServiceImpl {
         // Caller is resolved here, ahead of the scoped runtime, because the view-DDL intercept
         // below needs it and returns before either the scoped runtime or a session context is
         // ever built for a `CREATE`/`DROP MATERIALIZED VIEW` statement.
+        //
+        // `context_init_ms` is measured starting here (not at `make_session_context`) because
+        // caller resolution can itself hit the read-policy store (e.g. a DB round trip to
+        // resolve audience grants), and that cost belongs in the same phase.
+        let session_begin = now();
+        let session_begin_instant = Instant::now();
         let caller = self
             .caller_context(extensions, metadata)
             .await
@@ -861,8 +867,6 @@ impl FlightSqlServiceImpl {
         let lakehouse = self.lakehouse.with_runtime(scoped_env);
 
         // Session context creation phase
-        let session_begin = now();
-        let session_begin_instant = Instant::now();
         let ctx = make_session_context(
             lakehouse,
             self.part_provider.clone(),
@@ -1106,17 +1110,23 @@ impl FlightSqlServiceImpl {
             }
         };
 
-        let post_rows = list_tx(&mut tx)
-            .await
-            .map_err(|e| audit_state.fail(status!("error reading view definitions", e)))?;
-        self.view_registry
-            .check_dependents_survive(&pre_rows, &post_rows)
-            .await
-            .map_err(|e| {
-                // The inner error already says what would break and why; this prefix only has to
-                // mark where the refusal came from.
-                audit_state.fail(client_input_error!("view DDL refused", e))
-            })?;
+        // `DROP ... IF EXISTS` on an absent view writes nothing, so `post_rows` would be
+        // byte-identical to `pre_rows`; skip the probe rather than replanning every stored
+        // definition twice over for a statement that changed nothing, all while holding the
+        // advisory lock and this open transaction.
+        if status_text != "not_found" {
+            let post_rows = list_tx(&mut tx)
+                .await
+                .map_err(|e| audit_state.fail(status!("error reading view definitions", e)))?;
+            self.view_registry
+                .check_dependents_survive(&pre_rows, &post_rows)
+                .await
+                .map_err(|e| {
+                    // The inner error already says what would break and why; this prefix only has
+                    // to mark where the refusal came from.
+                    audit_state.fail(client_input_error!("view DDL refused", e))
+                })?;
+        }
 
         tx.commit()
             .await

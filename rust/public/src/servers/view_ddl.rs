@@ -72,7 +72,14 @@ pub fn parse_view_ddl(sql: &str) -> Result<Option<ViewDdl>> {
         .next()
         .unwrap_or("")
         .to_lowercase();
-    if first_word != "create" && first_word != "drop" {
+    // A leading `--` or `/*` comment (routine from BI/notebook front ends) makes the naive
+    // first-word peek useless -- fall through to the real tokenizing parse below, which skips
+    // comments, instead of bailing out here.
+    if first_word != "create"
+        && first_word != "drop"
+        && !first_word.starts_with("--")
+        && !first_word.starts_with("/*")
+    {
         return Ok(None);
     }
 

@@ -124,22 +124,6 @@ pub async fn list_tx(
     rows.into_iter().map(row_from_sqlx).collect()
 }
 
-/// `true` when a row named `view_set_name` already exists -- what `CREATE` (without `OR REPLACE`)
-/// checks before refusing to overwrite it.
-pub async fn exists_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    view_set_name: &str,
-) -> Result<bool> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM lakehouse_view_set_definitions WHERE view_set_name = $1",
-    )
-    .bind(view_set_name)
-    .fetch_one(&mut **tx)
-    .await
-    .with_context(|| format!("checking existence of '{view_set_name}'"))?;
-    Ok(count > 0)
-}
-
 /// Inserts a new row, or -- on a name collision -- updates every column including `updated_at`/
 /// `updated_by` explicitly: the column defaults only fire on `INSERT`, and `reload()`'s digest is
 /// over `(view_set_name, updated_at)`, so a `REPLACE` that left it unset would go live only on the
