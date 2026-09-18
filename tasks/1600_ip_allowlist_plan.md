@@ -2,10 +2,14 @@
 
 ## Overview
 
-Let an API key (env/keyring-based or DB-backed, ingestion or analytics) be pinned to a set of
-source IP addresses/CIDR ranges. A request presenting a valid key from an IP outside its
-allowlist is rejected exactly like an invalid key. An empty/absent allowlist means "no
-restriction" — the backward-compatible default for every key that exists today.
+Let an API key be pinned to a set of source IP addresses/CIDR ranges. This covers both the
+DB-backed keys used by ingestion, flight-sql and analytics-web-srv (`DbApiKeyAuthProvider`), and
+the env/keyring-based keys used by `object-cache-srv` (`ApiKeyAuthProvider` — the only remaining
+non-test construction site of the env keyring; ingestion/flight-sql/analytics-web-srv compose only
+OIDC → `DbApiKeyAuthProvider`, per `rust/auth/src/default_provider.rs`). A request presenting a
+valid key from an IP outside its allowlist is rejected exactly like an invalid key. An
+empty/absent allowlist means "no restriction" — the backward-compatible default for every key
+that exists today.
 
 ## Current State
 
@@ -66,11 +70,13 @@ No crate in the workspace parses/matches IP CIDR ranges today (checked every `Ca
 
 ### 1. A typed, allowlist-only IP allowlist type (`rust/auth/src/ip_allowlist.rs`, new)
 
-Add the `ipnetwork` crate (`IpNetwork`, parses both `IpAddr` and `a.b.c.d/n` /
-`xxxx::/n` into a network+mask) as a `micromegas-auth` dependency.
+Add the `ipnet` crate (`IpNet`, parses `a.b.c.d/n` / `xxxx::/n` into a network+mask; already in
+`rust/Cargo.lock` at `2.12.0`, pulled in transitively by `hyper-util`, so this adds no new crate to
+the build graph) as a `micromegas-auth` dependency, pinned to `2.12` in the root `Cargo.toml` to
+match.
 
 ```rust
-pub struct IpAllowlist(Vec<IpNetwork>);
+pub struct IpAllowlist(Vec<IpNet>);
 
 impl IpAllowlist {
     /// Empty input -> empty allowlist -> "no restriction" (`allows` always true).
@@ -82,7 +88,9 @@ impl IpAllowlist {
 
 `allows` is the single decision point both providers call — no restriction when the stored list
 is empty, deny-if-unresolved once it isn't (an "unknown" client IP must never satisfy a
-restriction). Bare IPs (`"203.0.113.7"`) parse as `/32` or `/128` via `IpNetwork::from_str`.
+restriction). `IpNet::from_str` doesn't accept a bare IP without a prefix, so `parse` falls back
+to it explicitly: `s.parse::<IpNet>().or_else(|_| s.parse::<IpAddr>().map(IpNet::from))`, giving
+bare IPs like `"203.0.113.7"` a `/32` or `/128`.
 
 ### 2. Threading the client IP into `RequestParts`
 
@@ -94,8 +102,13 @@ else is built from:
 pub fn resolve_client_ip(headers: &http::HeaderMap, extensions: &http::Extensions) -> Option<IpAddr>;
 ```
 
-Same priority order (rightmost `X-Forwarded-For`, then `X-Real-IP`, then the `SocketAddr`
-extension) and the same parse-or-fall-through behavior as today's `get_client_ip` — copied
+`resolve_client_ip` returns `ip.to_canonical()` (stable since Rust 1.75) on whichever address it
+resolves, so an IPv4-mapped IPv6 form (`::ffff:a.b.c.d`) arriving from a dual-stack listener
+unmaps to `a.b.c.d` right here, the single normalization point — independent of listener
+configuration, and before `IpAllowlist::allows` ever sees the address, so an allowlist entry of
+`a.b.c.d/32` matches either arrival form. Same priority order (rightmost `X-Forwarded-For`, then
+`X-Real-IP`, then the `SocketAddr` extension) and the same parse-or-fall-through behavior as
+today's `get_client_ip` — copied
 verbatim, just returning `Option<IpAddr>` instead of formatting to `String`.
 `rust/public/src/servers/http_utils.rs::get_client_ip` becomes a thin wrapper:
 
@@ -144,7 +157,7 @@ Every other `HttpRequestParts { .. }` / `GrpcRequestParts { .. }` literal (mostl
 unrelated to IP, and `None` behaves exactly like today's untouched trait default. A handful of
 tests for the new allowlist behavior override it explicitly (see Testing Strategy).
 
-### 3. `ApiKeyAuthProvider` (env/keyring) — `rust/auth/src/api_key.rs`
+### 3. `ApiKeyAuthProvider` (env/keyring, `object-cache-srv`'s auth path) — `rust/auth/src/api_key.rs`
 
 `KeyRingEntry` gains an optional field:
 
@@ -182,7 +195,7 @@ and it runs after the loop, on `found` only, so the loop's constant-time propert
 ```rust
 let matched = found.ok_or_else(|| anyhow!("invalid API token"))?;
 if !matched.allowlist.allows(parts.client_ip()) {
-    anyhow::bail!("invalid API token"); // deliberately the same message as a wrong key
+    anyhow::bail!("invalid API token: source IP not permitted");
 }
 Ok(matched.context)
 ```
@@ -191,15 +204,10 @@ Ok(matched.context)
 looked up a second time from `stored_key`/`name` — implementation detail, either shape works;
 the point is the IP check happens once, after the scan, not inside the hot loop.)
 
-The rejection message is identical to a wrong-key rejection (`"invalid API token"`) — this only
-ever reaches server-side logs (`rust/auth/src/axum.rs`/`tower.rs` already collapse every non-
-`ProviderUnavailable` error to a generic `401`/`"Invalid token"` response body), so keeping the
-text distinguishable in logs (e.g. `"invalid API token: source IP not permitted"`) is safe and
-useful for operators; the *response* stays generic either way.
-
 ### 4. `DbApiKeyAuthProvider` — `rust/auth/src/db_api_key.rs`
 
-`KeyRow` (`:170-176`) gains an `allowed_cidrs: Vec<String>` field, parsed into an `IpAllowlist`
+`KeyRow` (`:170-176`) gains an `allowed_cidrs: Option<Vec<String>>` field (every pre-v11 row reads
+back `NULL`, which sqlx decodes as `None`, not an empty `Vec` — see §5), parsed into an `IpAllowlist`
 once per cache fill (not per request) — added alongside `audience` as part of the same
 `RETURNING` clause and the same `try_get_with` loader closure:
 
@@ -209,9 +217,10 @@ let returning = match (table.has_audience(), /* always true, both tables get thi
 };
 ```
 
-Store the parsed `IpAllowlist` (not the raw `Vec<String>`) in the cached `KeyRow` so a hot cache
-hit never re-parses CIDR strings. After a cache hit or a fresh load, before returning `Ok(AuthContext
-{ .. })`:
+Store the parsed `IpAllowlist` (not the raw `Option<Vec<String>>`) in the cached `KeyRow` so a hot
+cache hit never re-parses CIDR strings — `IpAllowlist::parse` is fed `&[]` when the column read
+back `None`, giving the same "no restriction" allowlist as an empty stored array. After a cache
+hit or a fresh load, before returning `Ok(AuthContext { .. })`:
 
 ```rust
 if !row.allowlist.allows(parts.client_ip()) {
@@ -245,10 +254,12 @@ No backfill needed (unlike `audience`, which had to become `NOT NULL`): `NULL`/a
 restriction", which is exactly the correct value for every pre-existing row. `LATEST_DATA_LAKE_SCHEMA_VERSION`
 becomes `11`.
 
-Reading the column back: `sqlx`'s `TEXT[]` support maps directly to `Option<Vec<String>>` /
-`Vec<String>` (already used for `blocks.tags`, `lakehouse_partitions.sort_order` elsewhere in the
-codebase) — no custom decode needed. `NULL` reads as an empty `Vec` (or `None` mapped to empty)
-before being handed to `IpAllowlist::parse`.
+Reading the column back: a nullable `TEXT[]` must decode into `Option<Vec<String>>`, not a bare
+`Vec<String>` — sqlx returns an `UnexpectedNull` decode error on a bare `Vec<String>` target when
+the column is `NULL`, which every pre-v11 row is. Decode as `Option<Vec<String>>` and treat `None`
+as an empty slice before handing it to `IpAllowlist::parse` (equivalently, `SELECT
+COALESCE(allowed_cidrs, '{}')` in the `RETURNING`/`SELECT` clauses and decode straight into
+`Vec<String>`) — either way, every existing row must parse without error.
 
 ### 6. Admin routes — `ingestion_keys.rs` / `analytics_keys.rs`
 
@@ -260,8 +271,10 @@ up front (same place `validate_name`/`resolve_audience` already run) and returns
 columns, in every branch that currently issues one (`insert_key`, both `INSERT`s inside
 `try_claim_and_mint`).
 
-`KeyListEntry` gains `allowed_cidrs: Vec<String>` so `list_keys` surfaces the restriction
-(empty = unrestricted, matching every other list-response convention in this API).
+`KeyListEntry` gains `allowed_cidrs: Vec<String>` (decoded via the same `Option`-to-empty mapping
+as §4/§5, since `KeyListEntry` derives `sqlx::FromRow` directly off the row) so `list_keys`
+surfaces the restriction (empty = unrestricted, matching every other list-response convention in
+this API).
 
 New route, one per table, admin-only (`AdminUser`, same gate as `revoke_key`/`list_keys` — this
 is not a self-service action, unlike `mint_key`):
@@ -294,13 +307,16 @@ scope.
 3. Add `client_ip()` to the `RequestParts` trait (`rust/auth/src/types.rs`), default `None`.
 4. Add the `client_ip` field to `HttpRequestParts`/`GrpcRequestParts`; update every construction
    site (`axum.rs`, `tower.rs`, `tonic_auth_interceptor.rs`, `firehose_common.rs`, and every test
-   literal — set `None` in tests unrelated to this feature).
+   literal — set `None` in tests unrelated to this feature), including the two compiled doctests in
+   `rust/auth/src/lib.rs` (the ```rust example at :10-33 and the ```rust,no_run example at :37-67),
+   both of which build a `HttpRequestParts { .. }` struct literal and must add `client_ip: None` to
+   keep compiling under `cargo test --doc`.
 5. `cargo build --workspace` — this phase changes no auth *decisions*, only threads data through;
    every existing test should pass unmodified except for the moved/renamed IP-resolution tests.
 
 ### Phase 2 — `IpAllowlist` and provider changes
-1. Add `ipnetwork` to `rust/auth/Cargo.toml` (alphabetical, per `rust/CLAUDE.md`) and the
-   workspace root.
+1. Add `ipnet = "2.12"` to `rust/auth/Cargo.toml` (alphabetical, per `rust/CLAUDE.md`) and the
+   workspace root, matching the version already resolved in `Cargo.lock`.
 2. Add `rust/auth/src/ip_allowlist.rs` (`IpAllowlist::parse`/`is_empty`/`allows`) with full unit
    coverage (Testing Strategy).
 3. Update `KeyRing`/`KeyRingEntry`/`parse_key_ring` and `ApiKeyAuthProvider::validate_request`
@@ -321,6 +337,10 @@ scope.
 1. `python/micromegas/micromegas/web_client.py`: new
    `set_ingestion_api_key_allowlist`/`set_analytics_api_key_allowlist` methods wrapping the new
    `PATCH` routes.
+2. Add `allowed_cidrs=None` to `mint_ingestion_api_key` (and its analytics counterpart), passed
+   through in the request body only when set — same omit-when-`None` convention already used for
+   `audience`. Without this, a non-admin caller minting their own key via `mint_ingestion_api_key`
+   would have no way to attach an allowlist at all, since the new `PATCH` route is `AdminUser`-gated.
 
 ### Phase 5 — analytics-web-app surfacing (see Open Questions on scope)
 1. `api-keys-shared.ts`: `allowed_cidrs?: string[]` on `ApiKeyListEntry`; `mint()` gains an
@@ -337,7 +357,7 @@ scope.
 - `rust/auth/src/api_key.rs` — `KeyRing`/`KeyRingEntry`/`parse_key_ring`/`validate_request`
 - `rust/auth/src/db_api_key.rs` — `KeyRow`/`validate_request`
 - `rust/auth/src/axum.rs`, `rust/auth/src/tower.rs` — resolve+pass `client_ip`
-- `rust/auth/Cargo.toml`, root `Cargo.toml` — `ipnetwork` dependency
+- `rust/auth/Cargo.toml`, root `Cargo.toml` — `ipnet` dependency
 - `rust/public/src/servers/http_utils.rs` — thin wrapper over `client_ip::resolve_client_ip`
 - `rust/public/src/servers/tonic_auth_interceptor.rs`, `firehose_common.rs` — resolve+pass `client_ip`
 - `rust/ingestion/src/sql_migration.rs` — migration v11
@@ -366,10 +386,13 @@ scope.
   (the keyring entry / DB row) — exactly where `bound_audience`/`read_audiences` already live
   inline in these same two providers — so a wrapper would need the same per-key data plumbed back
   out to it anyway, with no benefit.
-- **`ipnetwork` over hand-rolled CIDR parsing.** IPv6 mask arithmetic is easy to get subtly wrong
-  (off-by-one prefix lengths, mixed v4/v6 comparison); a small, widely-used crate is worth the one
-  new dependency. `ipnet`/`cidr-utils` are the alternatives — `ipnetwork` was picked for its
-  simpler, more ergonomic `IpNetwork::from_str`/`contains` API doing exactly what's needed here.
+- **`ipnet` over hand-rolled CIDR parsing.** IPv6 mask arithmetic is easy to get subtly wrong
+  (off-by-one prefix lengths, mixed v4/v6 comparison); a small, well-established crate is worth
+  using. `ipnet` is already resolved in `rust/Cargo.lock` (pulled in transitively by `hyper-util`),
+  so it adds no new crate to the build graph, unlike `ipnetwork`, which is not currently a
+  dependency of anything in this workspace. The one ergonomic gap versus `ipnetwork` — `IpNet::
+  from_str` doesn't accept a bare IP without a prefix — is a two-line fallback in `IpAllowlist::
+  parse` (see §1).
 - **Rejection is a generic `"invalid API token"`, not a distinguishable `403`/error code.** A
   distinct client-visible signal ("your key is valid but your IP isn't allowed") would help a
   legitimate caller debug faster, but also confirms to anyone holding a leaked key that it's
@@ -390,21 +413,30 @@ scope.
 
 ## Documentation
 
-- `rust/auth/src/lib.rs`'s module-level examples don't construct `HttpRequestParts`/`GrpcRequestParts`
-  with every field spelled out in a way that would go stale, but double check after Phase 1 that
-  the doctested examples still compile with the new `client_ip` field.
-- Any admin runbook/mkdocs page documenting `mint`/`revoke` for the API-key routes (check
-  `mkdocs/` for an existing page — grep for `ingestion-api-keys` or `analytics_api_keys`) needs the
-  new `allowed_cidrs` field and the new `PATCH .../allowlist` route added.
+- `rust/auth/src/lib.rs`'s two compiled doctests construct `HttpRequestParts` struct literals —
+  updating them is a required Phase 1 step 4 edit (see Implementation Steps), not a follow-up
+  check.
+- `mkdocs/docs/admin/api-keys.md`: its route/request-body table (`POST
+  {base_path}/api/ingestion-api-keys` etc.) needs the new `allowed_cidrs` field and the new
+  `PATCH .../allowlist` route added.
+- `mkdocs/docs/query-guide/python-api.md`: its `mint_ingestion_api_key(name, audience=None)`
+  signature and `WebClient` method list need the new `allowed_cidrs` mint parameter and the two
+  `set_*_allowlist` methods added.
+- `mkdocs/docs/admin/object-cache.md` and `object-cache-srv`'s `--api-keys` doc: need the new
+  `allowed_ips` keyring-entry field documented (see Overview/§3 on `object-cache-srv` being the
+  env-keyring's sole consumer).
 - `CHANGELOG.md`: new column + new provider-side behavior is additive at the SQL/API layer (no
   breaking change there), but `KeyRing`'s value type change (`String` -> `KeyRingValue`) is a
   **Minor breaking change** to the Rust API surface — record it per the Interface Stability policy.
 
 ## Testing Strategy
 
-All no-DB unit tests, per this repo's verification-tier rule — nothing here needs a live
-Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a different purpose
-(DB wiring/latency), not new-feature acceptance.
+Per this repo's verification-tier rule, most of this is covered by no-DB unit tests;
+`DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a different purpose (DB
+wiring/latency), not new-feature acceptance. The route-level round-trip through a real table
+(mint -> `list_keys` -> `PATCH .../allowlist`) does need a live Postgres and is covered under
+Manual Verification instead, per the same rule and this file's own module-doc precedent (see
+below).
 
 - `rust/auth/tests/ip_allowlist_tests.rs` (new): empty list allows any IP including `None`;
   single bare-IP entry matches only that exact address (v4 and v6); a `/24`/`/64` entry matches
@@ -413,7 +445,8 @@ Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a d
   length, empty string).
 - `rust/auth/tests/client_ip_tests.rs` (moved from `rust/public/tests/http_utils_tests.rs`): same
   cases as today, retargeted at `resolve_client_ip` and asserting `Option<IpAddr>` instead of a
-  formatted string.
+  formatted string; plus a new case that an IPv4-mapped IPv6 socket address (`::ffff:a.b.c.d`)
+  resolves to the canonical `a.b.c.d`.
 - `rust/auth/tests/api_key_tests.rs`: a keyring entry with a restrictive `allowed_ips` accepts a
   request whose `HttpRequestParts.client_ip` is inside it and rejects one outside it (including a
   `client_ip: None` request against a restricted key); an entry with no `allowed_ips` is
@@ -426,27 +459,40 @@ Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a d
   (both by constructing the scenario directly against a `DbApiKeyAuthProvider` backed by a lazy,
   never-queried pool wherever the existing tests already use that pattern — e.g.
   `missing_bearer_token_fails_before_any_db_access`).
-- `rust/analytics-web-srv` route tests (`ingestion_keys_tests.rs`/`analytics_keys_tests.rs`): a
-  mint with a malformed `allowed_cidrs` entry returns `400`; a well-formed one round-trips
-  through `list_keys`; the new `PATCH .../allowlist` route updates and clears the column, and
-  404s on an unknown `key_id`.
+- `rust/analytics-web-srv` route tests (`ingestion_keys_tests.rs`/`analytics_keys_tests.rs`): only
+  the malformed-`allowed_cidrs` -> `400` case is no-DB reachable (`IpAllowlist::parse` runs before
+  `require_pool`'s first query, so the existing `lazy_pool()` fixture — the same one
+  `missing_bearer_token_fails_before_any_db_access`-style tests already use — gets past mint
+  validation without ever connecting). The round-trip-through-`list_keys`, `PATCH .../allowlist`
+  update/clear, and 404-on-unknown-`key_id` cases all reach an `INSERT`/`UPDATE` and move to
+  Manual Verification instead, per this file's own module-doc rule that every route-level test
+  reaching an `INSERT` is `#[ignore]`d and run manually against a real DB.
+- `rust/auth/tests/axum_tests.rs` (extend): a restricted keyring entry, layered through the real
+  `Router`/`auth_middleware` stack this file already builds, accepts a request whose resolved
+  `SocketAddr`/header-derived IP is in range, and rejects one from an out-of-range IP and one with
+  no resolvable IP at all — a no-DB, no-network seam that directly exercises auth enforcement
+  end-to-end without needing Manual Verification for it.
+- `rust/public/tests/read_policy_threading_tests.rs`-style tonic test (new or extended): serve a
+  restricted key's `AuthService` over the real `ConnectedIncoming` listener this file already sets
+  up (see `rust/public/src/servers/connect_info_layer.rs`), and confirm a connection from an
+  in-range peer address is accepted and an out-of-range one is rejected.
 - Python: `python/micromegas/tests/test_web_client.py` — the two new `set_*_allowlist` methods
   build the expected `PATCH` URL and body, following `TestAudienceGrants`'s style.
 
 ## Manual Verification
 
 1. Start services (`python3 local_test_env/ai_scripts/start_services.py`), mint an ingestion key
-   with `allowed_cidrs: ["127.0.0.1/32"]` via the admin route, then send an ingestion request from
-   `127.0.0.1` (expect success) and confirm the same key is rejected once `X-Forwarded-For` is set
-   to a different address in the request (expect the same generic auth failure a wrong key would
-   get). This exercises the full HTTP `axum_middleware` -> `ApiKeyAuthProvider`/
-   `DbApiKeyAuthProvider` -> `IpAllowlist` path end-to-end, including the `X-Forwarded-For`
-   priority logic, which a unit test can approximate but not confirm against the real ALB-shaped
-   header handling in `get_client_ip`'s existing ingestion path.
-2. Repeat against `flight-sql-srv` (gRPC) with an analytics key, confirming the tonic
-   `ConnectedIncoming`/`AuthService` path also carries `client_ip` correctly — the one path where
-   IP resolution comes from a transport-level `Connected::connect_info()` rather than an axum
-   extension, which is worth eyeballing once since it's a different code path than step 1.
+   with `allowed_cidrs: ["127.0.0.1/32"]` via the admin route, then send an ingestion request
+   through a real ALB-shaped `X-Forwarded-For` header set to a different address (expect the same
+   generic auth failure a wrong key would get). The `axum_tests.rs` case already covers enforcement
+   itself; this step is only to eyeball the real `X-Forwarded-For` priority logic against actual
+   proxy header shapes, which that in-process test approximates but doesn't confirm.
+2. Repeat against `flight-sql-srv` (gRPC) with an analytics key and a real proxy in front of it, to
+   eyeball the real transport-level `Connected::connect_info()` header shape — the
+   `read_policy_threading_tests.rs`-style case already covers enforcement itself.
+3. Mint a key with `allowed_cidrs`, confirm it round-trips through `list_keys`, then exercise the
+   `PATCH .../allowlist` route: it updates the column, clears it back to unrestricted, and 404s on
+   an unknown `key_id` — the DB-backed coverage moved out of the automated route tests above.
 
 ## Open Questions
 
@@ -455,8 +501,3 @@ Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a d
    mentioned. Recommend shipping Phases 1-4 first (the full backend + client surface, independently
    useful and testable) and opening a small follow-up issue for the UI once the API shape is
    settled — but this plan includes Phase 5 in case the intent was to cover it in one PR.
-2. **IPv6-mapped IPv4 addresses (`::ffff:a.b.c.d`) arriving via a dual-stack listener**: should an
-   allowlist entry of `a.b.c.d/32` match a client IP that arrived as its IPv6-mapped form?
-   `ipnetwork`'s `IpNetwork::contains` does not normalize this by default. Needs a decision (and
-   a unit test either way) once the target deployment's listener configuration (dual-stack or
-   v4-only) is confirmed.
