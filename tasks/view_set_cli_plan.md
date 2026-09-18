@@ -97,7 +97,12 @@ fails to decode or whose header does not parse, rather than overwriting it — m
 `pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
 text: a definition last touched by `apply` is stored as `CREATE OR REPLACE` (§4), and writing that
 raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull, drifting the file away
-from the canonical form the comparison in §3 is built on.
+from the canonical form the comparison in §3 is built on. Before writing, `pull` compares that
+rendered text against the target file's current contents when the file already exists; if they
+match, the file is left byte-identical (no write, no mtime change) and the name is counted
+`unchanged` rather than `updated` — mirroring `screens.py:cmd_pull`'s (`:341-343`) no-op check.
+`pull` finishes with a summary line, `Pull complete: N updated, M unchanged.`, matching
+`screens.py:cmd_pull`'s report.
 
 ### 2. Local file model and parsing
 
@@ -166,17 +171,19 @@ stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registr
 def read_server_state(client):
     """-> DataFrame(view_set_name, definition_sql, update_group, updated_at, updated_by)"""
 
-def compute_plan(client, local_scan, names=None):
+def compute_plan(server_state, local_scan, names=None):
     """-> (creates, updates, unchanged, server_only)"""
 ```
 
-`read_server_state` issues the current-state `SELECT` below and is the one place the
-`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch described under "Current-state
-read" lives; `compute_plan`, `cmd_list`, and `cmd_show` each call it directly. `cmd_show` has no
-`local_scan` at all (§1 drops `--dir` from `show`), so it cannot go through `compute_plan`; `cmd_list`
-does call `compute_plan` for classification but still needs its own `read_server_state` call to get
-the `update_group`/`updated_at`/`updated_by` columns `compute_plan`'s return tuple does not carry —
-the same way `screens.py:cmd_list` (`:597-606`) fetches independently of `compute_plan`.
+`read_server_state` issues the current-state `SELECT` below; it does not catch
+`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` itself — that catch lives in `main`,
+around dispatch (see "Current-state read"). `compute_plan` takes the DataFrame `read_server_state`
+returns as an argument, the same way it already takes `local_scan`, rather than fetching it itself.
+`cmd_plan`, `cmd_apply`, and `cmd_list` each call `read_server_state` exactly once and pass the
+result to `compute_plan`. `cmd_show` has no `local_scan` at all (§1 drops `--dir` from `show`), so it
+cannot go through `compute_plan`; it calls `read_server_state` directly. `cmd_list` reads
+`update_group`/`updated_at`/`updated_by` off the same DataFrame it already fetched, since
+`compute_plan`'s return tuple does not carry those columns.
 
 `updates` elements are `(name, local_canonical, server_canonical)` triples — mirroring
 `screens.py:397`'s `(name, normalized_local, normalized_server)` — so the per-view diff in §3 and
@@ -189,8 +196,9 @@ skipped-file warning once — the reason `screens.py:compute_plan` takes a `loca
 empty `definitions` is the "zero readable `.sql` files" case that `--prune` refuses to run (§5),
 checked before drops are rendered.
 
-`client` is anything with `.query(sql)` returning a DataFrame — the real FlightSQL client in
-production, a canned-DataFrame fake in tests. Current state is one call:
+The `client` argument to `read_server_state` is anything with `.query(sql)` returning a DataFrame —
+the real FlightSQL client in production, a canned-DataFrame fake in tests. Current state is one
+call:
 
 ```sql
 SELECT view_set_name, definition_sql, update_group, updated_at, updated_by
@@ -265,10 +273,12 @@ so a partial apply is a real outcome; the workflow is idempotent, so the remedy 
 
 **Current-state read.** `read_server_state`'s `SELECT ... FROM list_view_set_definitions()` call is
 the first FlightSQL round trip every subcommand makes, read-only `list`/`show`/`plan` included, and
-the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
-the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch as `cmd_apply`'s
-per-statement calls, reporting the error and exiting non-zero with a pointer to the admin-identity
-requirement, rather than letting the planner's unknown-function error surface as a raw traceback.
+the anticipated failure point for a non-admin identity (Current State, "Auth"). `read_server_state`
+itself does not catch anything or exit; `main` wraps `args.func(args)` in a
+`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch around dispatch — the same pattern
+`screens.py:main` uses (`:736-740`) — reporting the error and exiting non-zero with a pointer to the
+admin-identity requirement, rather than letting the planner's unknown-function error surface as a
+raw traceback.
 
 ### 5. Deletes are opt-in
 
@@ -337,10 +347,10 @@ Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
   ? error_rollup
 ```
 
-`list` calls `compute_plan` and joins its own `read_server_state` call's rows for
-`update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`, `unchanged`,
-`server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a `create`
-row has no server row yet, so those last three columns are empty for it. `show <name>` calls
+`list` calls `read_server_state` once, passes the result to `compute_plan`, and joins the same
+DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`,
+`unchanged`, `server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a
+`create` row has no server row yet, so those last three columns are empty for it. `show <name>` calls
 `read_server_state` directly (it has no `local_scan` to give `compute_plan`) and prints the
 server's stored `definition_sql` verbatim — there is no `--local` counterpart, since reading the
 local file is `cat <name>.sql` and dropping it lets every subcommand connect unconditionally.
@@ -385,12 +395,13 @@ head.
    `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `read_server_state`,
    `compute_plan`, `format_plan`, `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`,
    `main`. `cmd_apply` catches
-   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `read_server_state`
-   catches the same two exceptions, reporting the error and exiting non-zero
-   with a pointer to the admin-identity requirement (§4); `main` connects once before dispatch and
-   catches `ProfileError` there (§4). `cmd_pull` writes with
-   `encoding="utf-8"`, matching
-   `screens.py:89,256`; `main` calls `sys.stdout.reconfigure(encoding="utf-8",
+   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `main` wraps
+   `args.func(args)` in the same catch around dispatch, reporting the error and exiting non-zero
+   with a pointer to the admin-identity requirement when it originates from `read_server_state`
+   (§4), and also catches `ProfileError` there, from the connect-once call before dispatch (§4).
+   `cmd_pull` skips the write and counts the file `unchanged` when `canonical_ddl(definition_sql)`
+   already matches the file's current contents; otherwise it writes with `encoding="utf-8"`,
+   matching `screens.py:89,256`. `main` calls `sys.stdout.reconfigure(encoding="utf-8",
    errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
    output survives a non-UTF-8 locale.
 5. Wire the argparse surface of §1 with two parent parsers — `client_args` carrying `--profile`
@@ -525,6 +536,8 @@ inputs.
   the view name, well before any body).
 - A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
   (pins that `pull` writes `canonical_ddl(definition_sql)`, not the verbatim stored text).
+- A `pull` over a file that already holds `canonical_ddl(definition_sql)` for that name leaves the
+  file byte-identical and counts it `unchanged` in the summary line, rather than rewriting it.
 - Filename/DDL-name mismatch is reported and skipped, and protects both the filename stem and the
   declared name from `--prune`.
 - An unparseable header is reported and skipped, and protects its filename stem from `--prune` —
@@ -550,9 +563,10 @@ inputs.
 - `drops` is empty unless the call site sets `prune and not names`, and equals `server_only` when it
   does — covers both the no-`--prune` and the `--prune`-plus-named-subset cases.
 - `--prune` against an empty directory errors instead of proposing drops.
-- A fake client whose `.query` raises `ArrowException` on the current-state read makes every
-  read-only subcommand (`plan`, `list`, `show`) report the error with the admin-identity pointer
-  and exit non-zero.
+- A fake client whose `.query` raises `ArrowException` on the current-state read lets the exception
+  propagate out of `read_server_state` through each read-only subcommand's `cmd_*` function
+  (`plan`, `list`, `show`); `main`'s dispatch-level catch is what reports the error with the
+  admin-identity pointer and exits non-zero.
 
 **Apply**
 - Every create/update is issued before any drop — asserted over the fake client's recorded
