@@ -102,7 +102,11 @@ if !is_valid_audience(aud) {
 
 Every caller now reaches the same selector check. The type doc's asymmetry paragraph
 ("mint is an integrity decision… the two axes are allowed to disagree") is deleted and replaced
-with the rule above — read and mint no longer disagree.
+with the rule above — read and mint no longer disagree. The type doc's opening sentence
+(`:499`, "The shipped `MintPolicy`. **Non-admin callers** may mint only an audience in their
+**mint** set") also goes stale — once the admin arm is gone, every caller, admin included, is
+bound by that sentence — so rewrite it to drop "Non-admin callers" in favor of describing every
+caller.
 
 ### 2. One mint-authorization helper, shared by mint and import
 
@@ -156,14 +160,18 @@ admin. All four become the non-admin error unconditionally: `409 CLAIM_CONTENDED
 contention, `403` on an over-long selector, `403` on an already-owned audience, `403` on a
 reserved name. `insert_key`'s doc comment loses its "every 'the in-lock recheck disagreed'
 branch falls through to this for an admin" paragraph; it becomes the ordinary-path insert only.
-`try_claim_and_mint`'s own doc comment loses its "**Admin mode never turns a claim attempt into a
-mint failure.**" paragraph (`:572-580`), and three inline/doc comments that assume an admin
+`try_claim_and_mint`'s own doc comment loses two paragraphs that go false once §3 routes every
+caller through the one shared claim path, leaving a single call site that is not non-admin-only:
+its lead paragraph (`:556-559`, "Reached only from `mint_key`, only for a **non-admin** caller
+who explicitly named `audience`…") and its "**Admin mode never turns a claim attempt into a
+mint failure.**" paragraph (`:572-580`). Four further inline/doc comments that assume an admin
 pre-check ran moments earlier are deleted or rewritten, since none of the claims they make hold
-once §3 removes the pre-check: the "an admin minted straight through `AudienceMintPolicy`'s
-`is_admin` arm" comment at `:662-667` loses that clause, the `EXISTS`-was-already-run note at
-`:675-681` (its "for an admin, `mint_key`'s own pre-check ran the identical `EXISTS` query"
-branch) is deleted, and the reserved-name-is-unreachable-for-an-admin note at `:696-701` is
-deleted.
+once §3 removes the pre-check: the "Both the admin and non-admin call sites only ever call this
+function when `caller.email` is `Some`" comment at `:591-592` (there is now one call site, not
+two), the "an admin minted straight through `AudienceMintPolicy`'s `is_admin` arm" comment at
+`:662-667` loses that clause, the `EXISTS`-was-already-run note at `:675-681` (its "for an admin,
+`mint_key`'s own pre-check ran the identical `EXISTS` query" branch) is deleted, and the
+reserved-name-is-unreachable-for-an-admin note at `:696-701` is deleted.
 
 Also update the two `IngestionKeyError` doc comments that go stale once `revoke_key` and
 `import_key` narrow (§6/§7): the enum doc (`:99-106`) drops "`list_keys`/`revoke_key`/`import_key`
@@ -297,7 +305,8 @@ best-effort diagnostic, not a startup precondition.
 **Phase 1 — the policy (no DB, self-contained)**
 
 1. `rust/auth/src/policy.rs`: delete `AudienceMintPolicy::resolve_audience`'s admin arm, hoist
-   `is_valid_audience` to run for every caller, rewrite the type doc's asymmetry paragraph.
+   `is_valid_audience` to run for every caller, rewrite the type doc's asymmetry paragraph and its
+   opening "Non-admin callers" sentence (`:499`).
 2. `rust/auth/tests/policy_tests.rs`: admin-with-no-grant is denied; admin-with-a-`mint`-grant is
    allowed; admin-via-`*` is allowed; malformed audience is rejected for admin and non-admin
    alike. Fold `mint_policy_admin_may_mint_any_valid_audience_including_public` (`:279-289`) into
@@ -311,9 +320,10 @@ best-effort diagnostic, not a startup precondition.
 3. `ingestion_keys.rs`: extract `authorize_mint`; rewrite `mint_key` to call it and delete the
    admin pre-check and the `Err(e) if caller.is_admin()` arm.
 4. `ingestion_keys.rs`: delete the four `try_claim_and_mint` admin fallbacks; trim `insert_key`'s
-   doc comment; rewrite `try_claim_and_mint`'s own doc comment and its three inline admin-pre-check
-   references (`:662-667`, `:675-681`, `:696-701`); rewrite `IngestionKeyError`'s enum doc
-   (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
+   doc comment; rewrite `try_claim_and_mint`'s own doc comment — its lead paragraph (`:556-559`)
+   and its "Admin mode never turns…" paragraph (`:572-580`) — and its four inline admin-pre-check
+   references (`:591-592`, `:662-667`, `:675-681`, `:696-701`); rewrite `IngestionKeyError`'s enum
+   doc (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
 5. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
    in `list_keys`; add `LIST_KEYS_VISIBILITY_SQL`, compose it into both `list_keys` branches.
 6. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
@@ -445,6 +455,9 @@ notification path.
   observe at boot, since `analytics-web-srv` starts with `analytics_keys_pool: None` when
   `MICROMEGAS_SQL_CONNECTION_STRING` is unset and migrates only the app DB, never the telemetry DB
   that owns `audience_grants`.
+- `import_key` authorizes the *requested* audience via `authorize_mint`, even on the
+  already-present-key path where the write itself keeps the original binding and discards the
+  request's audience: a repeat import can now 403 on an audience it will never write.
 
 ## Documentation
 
@@ -488,7 +501,8 @@ notification path.
   `AudienceGuard::global_rows_visible`; update §"Admin surface" to record that the blanket gate is
   now scoped to the control plane, leaving delegated ownership as the remaining follow-up.
 - **`CHANGELOG.md`** Unreleased, with a **Minor breaking change** clause for
-  `AudienceMintPolicy::resolve_audience`'s behavior change and the admin-visible route changes.
+  `AudienceMintPolicy::resolve_audience`'s behavior change, the admin-visible route changes, and
+  `import_key`'s new authorization check on a repeat import's requested audience.
 
 ## Testing Strategy
 
@@ -513,8 +527,11 @@ guard even though the tier is coarse:
 - `LIST_KEYS_VISIBILITY_SQL` contains `FROM audience_grants`, `k.created_by = $1`, and
   `g.audience = k.audience`
 - both `list_keys` branches reference `LIST_KEYS_VISIBILITY_SQL`, and, after collapsing runs of
-  whitespace in the module's source, the un-predicated `FROM ingestion_api_keys ORDER BY
-  created_at DESC` shape no longer occurs anywhere in it
+  whitespace in the module's source, the un-predicated aliased `FROM ingestion_api_keys k ORDER
+  BY created_at DESC` shape no longer occurs anywhere in it, and `LIST_KEYS_VISIBILITY_SQL`
+  occurs exactly twice in the module's source (once per branch) — the alias rename alone would
+  make the unaliased shape vanish, so the assertion must target the aliased shape to catch a
+  branch that drops the predicate
 - `revoke_key`'s authority predicate is hoisted into its own `pub const` (alongside
   `LIST_KEYS_VISIBILITY_SQL`/`CLAIM_COUNT_SQL`), and that constant — not the module source at
   large, since `CLAIM_COUNT_SQL` already contains the substring `axis = 'mint'` — carries
@@ -533,7 +550,10 @@ admin behavior; they must move with it:
 - `live_admin_mint_into_an_existing_audience_does_not_claim` → becomes "is denied with 403",
   renamed accordingly.
 - `live_admin_mint_of_the_default_audience_is_never_claimed` → 403 unless a `mint` row exists.
-- `live_import_is_idempotent` — needs a `mint` grant on the target audience in setup.
+- `live_import_is_idempotent` — needs a `mint` grant on `"team-alpha"` in setup: the first
+  request resolves to `public` (already covered by the seeded `('public','mint','*')` row), but
+  the second request names `"team-alpha"` and now hits `authorize_mint("team-alpha")` — see
+  Decisions.
 - `live_my_audiences_admin_gets_a_normal_response_regardless_of_knob` — `held_pairs` is now
   populated for an admin.
 - `live_visible_admin_sees_every_row` — unchanged; it is the regression guard that the control
