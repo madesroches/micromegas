@@ -129,12 +129,13 @@ export interface MyAudiences {
   mint_prefix: string | null
   email: string | null
   /** `"{audience}:{axis}"` for every pair the caller holds a grant on via an identity selector
-   *  (i.e. the pairs the server's own hold check would accept for a create/delete) -- always
-   *  empty for an admin, who doesn't need it (Share is offered everywhere on the client for an
-   *  admin regardless). Ground truth for `canShareRow`: the client has no group-membership info
-   *  of its own, so it can't otherwise tell "a pair I hold" apart from "a pair I can merely
+   *  (i.e. the pairs the server's own hold check would accept for a create/delete) -- populated
+   *  for an admin the same way as any other caller, since `is_admin` confers no mint/read
+   *  authority of its own. Ground truth for `canShareRow`: the client has no group-membership
+   *  info of its own, so it can't otherwise tell "a pair I hold" apart from "a pair I can merely
    *  see" via `/visible` (which is wider -- includes pairs visible only through a `*` row or a
-   *  `group:` row the caller isn't actually a member of). */
+   *  `group:` row the caller isn't actually a member of). Share/delete-anywhere for an admin is
+   *  still driven by `is_admin` directly, not by this field. */
   held_pairs: string[]
   /** The caller's resolved, transitive local-group membership -- lets the page explain why a
    *  `group:` grant applies to this caller. */

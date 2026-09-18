@@ -275,26 +275,81 @@ async fn mint_policy_wildcard_selector_grants_mint_to_any_caller() {
     );
 }
 
+/// `is_admin` confers no mint authority: an admin with no grant row on the requested audience is
+/// refused exactly like any other caller, `public` included.
 #[tokio::test]
-async fn mint_policy_admin_may_mint_any_valid_audience_including_public() {
+async fn mint_policy_admin_with_no_grant_is_denied() {
     let policy = AudienceMintPolicy::new(AudienceGrants::empty());
     let admin = caller(Some("admin@example.com"), vec![], vec![], true);
     for aud in [PUBLIC_AUDIENCE, "team-alpha", "anything-valid"] {
-        let resolved = policy
-            .resolve_audience(&admin, Some(aud))
-            .await
-            .unwrap_or_else(|e| panic!("expected admin to mint {aud:?}, got {e}"));
-        assert_eq!(resolved, aud);
+        let result = policy.resolve_audience(&admin, Some(aud)).await;
+        assert!(
+            result.is_err(),
+            "expected admin with no grant on {aud:?} to be refused"
+        );
     }
 }
 
+/// An admin who does hold a `mint`/`user:<their email>` grant on the audience is allowed, by the
+/// same selector check as any other caller.
 #[tokio::test]
-async fn mint_policy_admin_arm_rejects_a_malformed_audience() {
-    let policy = AudienceMintPolicy::new(AudienceGrants::empty());
+async fn mint_policy_admin_with_a_mint_grant_is_allowed() {
+    let policy = AudienceMintPolicy::new(grants(
+        r#"{"team-alpha": {"read": [], "mint": ["user:admin@example.com"]}}"#,
+    ));
     let admin = caller(Some("admin@example.com"), vec![], vec![], true);
-    for aud in ["not valid", "a:b"] {
-        let result = policy.resolve_audience(&admin, Some(aud)).await;
-        assert!(result.is_err(), "expected {aud:?} to be refused");
+    let resolved = policy
+        .resolve_audience(&admin, Some("team-alpha"))
+        .await
+        .expect("admin holding a mint grant should be allowed to mint");
+    assert_eq!(resolved, "team-alpha");
+}
+
+/// An admin matches a `"*"` mint selector the same way any other caller does.
+#[tokio::test]
+async fn mint_policy_admin_via_wildcard_is_allowed() {
+    let policy = AudienceMintPolicy::new(grants(r#"{"public": {"read": [], "mint": ["*"]}}"#));
+    let admin = caller(Some("admin@example.com"), vec![], vec![], true);
+    let resolved = policy
+        .resolve_audience(&admin, Some(PUBLIC_AUDIENCE))
+        .await
+        .expect("admin should match a wildcard mint selector like any other caller");
+    assert_eq!(resolved, PUBLIC_AUDIENCE);
+}
+
+/// A read-only grant confers no mint authority for an admin either -- the axis-independence
+/// property `mint_policy_a_read_only_grant_confers_no_mint_authority` pins for non-admins holds
+/// identically once `is_admin` stops bypassing the check.
+#[tokio::test]
+async fn mint_policy_admin_with_a_read_only_grant_is_denied() {
+    let policy = AudienceMintPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
+    let admin = caller(
+        Some("admin@example.com"),
+        vec!["eng".to_string()],
+        vec![],
+        true,
+    );
+    let result = policy.resolve_audience(&admin, Some("team-alpha")).await;
+    assert!(
+        result.is_err(),
+        "a read-only grant must not confer mint authority, even for an admin"
+    );
+}
+
+/// Malformed-audience rejection runs for every caller now, admin included -- the format check is
+/// hoisted out of any admin-specific arm.
+#[tokio::test]
+async fn mint_policy_rejects_a_malformed_audience_for_admin_and_non_admin_alike() {
+    let policy = AudienceMintPolicy::new(AudienceGrants::empty());
+    for is_admin in [false, true] {
+        let ctx = caller(Some("caller@example.com"), vec![], vec![], is_admin);
+        for aud in ["not valid", "a:b"] {
+            let result = policy.resolve_audience(&ctx, Some(aud)).await;
+            assert!(
+                result.is_err(),
+                "expected {aud:?} to be refused (is_admin={is_admin})"
+            );
+        }
     }
 }
 

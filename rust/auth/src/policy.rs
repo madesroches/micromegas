@@ -496,21 +496,18 @@ impl ReadPolicy for AudienceReadPolicy {
     }
 }
 
-/// The shipped `MintPolicy`. Non-admin callers may mint only an audience in their **mint** set --
-/// `grants[a].mint`, never `grants[a].read` (a read grant confers no mint authority, unchanged
-/// from `AudienceReadPolicy`'s split); being able to *read* `public` via its seeded read grant
-/// does not imply being able to *mint into* it -- that requires its own grant naming `public` in
-/// a `"mint"` list (in production, the seeded `('public', 'mint', '*')` row, schema v9).
+/// The shipped `MintPolicy`. Every caller, admin included, may mint only an audience in their
+/// **mint** set -- `grants[a].mint`, never `grants[a].read` (a read grant confers no mint
+/// authority, unchanged from `AudienceReadPolicy`'s split); being able to *read* `public` via its
+/// seeded read grant does not imply being able to *mint into* it -- that requires its own grant
+/// naming `public` in a `"mint"` list (in production, the seeded `('public', 'mint', '*')` row,
+/// schema v9).
 ///
-/// `is_admin` callers may mint **any** valid audience, `public` included -- `mint_key`
-/// (`analytics-web-srv/src/ingestion_keys.rs`) delegates authorization to this policy for every
-/// caller, admin included, rather than gating admin callers separately of its own accord (its own
-/// gate, `MintGate`, only enforces the self-service knob against non-admins); without this arm the
-/// only shipped `MintPolicy` could not express the admin mint flow that route depends on; the arm
-/// grants no power the route's gate does not already grant. This is deliberately **asymmetric** to
-/// the read path, where `is_admin` is never a bypass: mint is an integrity decision (who may
-/// stamp a credential), reads are a confidentiality decision (who may see data), and the two axes
-/// are allowed to disagree.
+/// A route's authorization is the authority that route's own effect requires: minting yields
+/// write access to an audience, so it requires a grant on that audience -- `is_admin` confers
+/// none. `mint_key` (`analytics-web-srv/src/ingestion_keys.rs`) delegates authorization to this
+/// policy for every caller, with no admin-specific arm of its own accord (its own gate,
+/// `MintGate`, only enforces the self-service knob against non-admins).
 #[derive(Debug, Clone, Default)]
 pub struct AudienceMintPolicy {
     grants: AudienceGrants,
@@ -550,14 +547,10 @@ impl MintPolicy for AudienceMintPolicy {
         let Some(aud) = requested else {
             return Err(anyhow!("no audience requested and none can be defaulted"));
         };
-        if caller.is_admin() {
-            return if is_valid_audience(aud) {
-                Ok(aud.to_string())
-            } else {
-                Err(anyhow!(
-                    "malformed audience {aud:?}: must match [A-Za-z0-9_-]{{1,255}}"
-                ))
-            };
+        if !is_valid_audience(aud) {
+            return Err(anyhow!(
+                "malformed audience {aud:?}: must match [A-Za-z0-9_-]{{1,255}}"
+            ));
         }
         // The static map and the store snapshot are checked as two separate sources -- a
         // selector present in either grants access -- rather than merged into one map, so

@@ -233,9 +233,10 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                         onChange={(e) => setMintAudience(e.target.value)}
                       />
                       <p className="mt-1 text-xs text-theme-text-muted">
-                        The write audience this key is scoped to. "public" carries a Read grant
-                        for every authenticated principal (see Audience Access); use a named
-                        audience to restrict it.
+                        The write audience this key is scoped to. Minting requires a mint grant
+                        on this audience (see Audience Access) — "public" carries one for every
+                        authenticated principal. Naming a brand-new audience claims it and grants
+                        you read + mint on it.
                       </p>
                     </div>
                   )}

@@ -13,7 +13,10 @@
 //! never a shared service credential. `list_keys`/`revoke_key`/`import_key`
 //! are gated via the [`AdminUser`] extractor; `mint_key` runs through
 //! `MintGate`/[`AuthenticatedUser`] instead, since minting is not purely
-//! admin-gated -- see that extractor's own doc comment.
+//! admin-gated -- see that extractor's own doc comment. `import_key` layers
+//! `authorize_mint` on top of its `AdminUser` gate: `AdminUser` alone answers "is this caller an
+//! administrator," not "may this caller write into this audience" -- see `authorize_mint`'s own
+//! doc comment.
 //!
 //! **Duplication, accepted.** This duplicates most of `analytics_keys.rs`'s
 //! validation/SQL/error shape — deliberately, per that module's own doc
@@ -98,12 +101,13 @@ impl ErrorResponse {
 
 /// Errors this API returns.
 ///
-/// `Forbidden`/`Unavailable`/`Unauthenticated`/`Conflict` all back the self-service mint path:
+/// `Forbidden`/`Unavailable`/`Unauthenticated`/`Conflict` all back the mint-authority path:
 /// `mint_key` is `MintGate`/[`AuthenticatedUser`]-gated, not [`AdminUser`]-gated, and its own
-/// denials (the off-by-default gate, a missing-grant/malformed-audience `MintPolicy` denial, a
-/// per-caller bound, and lock contention on a lazy claim) need their own status codes.
-/// `list_keys`/`revoke_key`/`import_key` stay `AdminUser`-gated and never construct any of the
-/// four.
+/// denials (the off-by-default gate, a missing-grant/malformed-audience `authorize_mint` denial,
+/// a per-caller bound, and lock contention on a lazy claim) need their own status codes.
+/// `import_key` is `AdminUser`-gated but also calls `authorize_mint`, so it too constructs
+/// `Forbidden` and `Unavailable`. `list_keys`/`revoke_key` stay `AdminUser`-gated and never
+/// construct any of the four.
 #[derive(Debug)]
 pub enum IngestionKeyError {
     /// Request body/query failed validation.
@@ -115,10 +119,10 @@ pub enum IngestionKeyError {
     /// `state.pool == None` — the telemetry-DB pool was never configured
     /// (`MICROMEGAS_SQL_CONNECTION_STRING` unset).
     NotConfigured,
-    /// Self-service mint denied: the `MICROMEGAS_SELF_SERVICE_MINT` gate is off for a non-admin
-    /// caller, `MintPolicy::resolve_audience` denied the request (no matching grant, or a
-    /// malformed audience from an admin), the audience is not eligible for a lazy claim, or a
-    /// per-caller bound (`max_claims_per_caller`/`max_keys_per_caller`) was reached.
+    /// Mint/import denied: the `MICROMEGAS_SELF_SERVICE_MINT` gate is off for a non-admin caller
+    /// minting, `authorize_mint` denied the request (no matching grant), the audience is not
+    /// eligible for a lazy claim, or a per-caller bound
+    /// (`max_claims_per_caller`/`max_keys_per_caller`) was reached.
     Forbidden(String),
     /// The audience-grant point query behind `resolve_audience`'s policy call (or the row parse
     /// immediately after it) failed -- a DB outage, not a denial, so it must not be
@@ -272,11 +276,10 @@ struct MintResponse {
     /// The cleartext key, returned exactly once. Never logged, never
     /// retrievable afterwards.
     key: String,
-    /// `true` only when this call actually created `audience`'s first grant rows -- i.e. an
-    /// admin caller minting into a brand-new audience, server-side-claiming it exactly as
-    /// `try_claim_and_mint` already does for a non-admin's lazy claim.
-    /// `false` on every other path. Appended last -- additive JSON, existing
-    /// consumers unaffected.
+    /// `true` only when this call actually created `audience`'s first grant rows via
+    /// [`try_claim_and_mint`]'s lazy claim -- the shared path every caller, admin or not, takes
+    /// when minting into a brand-new, never-granted audience. `false` on every other path.
+    /// Appended last -- additive JSON, existing consumers unaffected.
     claimed: bool,
 }
 
@@ -313,10 +316,60 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
     }
 }
 
+/// Resolves whether `caller` may mint into `audience`, by a fresh point query against
+/// `audience_grants` (never a cached snapshot). The single mint-authority seam: `mint_key` and
+/// `import_key` both go through it.
+///
+/// Mint authorization is a point query, not a cached snapshot: no `DbAudienceGrantsSource` is
+/// attached for mint at all. `audience` is the leading column of `audience_grants`'s `PRIMARY
+/// KEY (audience, axis, selector)`, so this is an index-only scan.
+async fn authorize_mint(
+    pool: &PgPool,
+    caller: &AuthContext,
+    audience: &str,
+) -> Result<(), IngestionKeyError> {
+    let mint_selectors: Vec<String> = sqlx::query_scalar(
+        "SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'",
+    )
+    .bind(audience)
+    .fetch_all(pool)
+    .await
+    // A failed query is a DB outage, not a denial -- must not be misattributed as "you have no
+    // grant," so it is mapped to `Unavailable` explicitly. Logs the real `sqlx::Error`
+    // server-side and renders a fixed, generic client message -- the raw error text (connection
+    // strings, table/column names) must not reach the client.
+    .map_err(|e| {
+        error!("ingestion_keys: audience grant point query failed: {e}");
+        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
+    })?;
+
+    let grants = AudienceGrants::from_rows(
+        mint_selectors
+            .into_iter()
+            .map(|selector| (audience.to_string(), GrantAxis::Mint, selector)),
+    )
+    // Every row read back out of `audience_grants` already passed its own `CHECK` constraints on
+    // write, so this arm is unreachable in practice; kept as a real status code rather than
+    // `.unwrap()`, for the same fail-closed reason `MintGate` gives its own `.ok_or(...)`.
+    .map_err(|e| {
+        error!("ingestion_keys: audience grant row parse failed: {e}");
+        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
+    })?;
+
+    // `store: None` (the `new` default) -- a mint policy here never attaches a
+    // `DbAudienceGrantsSource`.
+    let policy = AudienceMintPolicy::new(grants);
+    policy
+        .resolve_audience(caller, Some(audience))
+        .await
+        .map(|_| ())
+        .map_err(|e| IngestionKeyError::Forbidden(e.to_string()))
+}
+
 /// `POST {base_path}/api/ingestion-api-keys` — mints a new `ingestion_api_keys` row.
 ///
 /// Authorization is `MintGate` (the off-by-default self-service gate) plus
-/// `MintPolicy::resolve_audience` (a per-request point query against `audience_grants`)
+/// `authorize_mint` (a per-request point query against `audience_grants`)
 /// -- not a flat `AdminUser` gate. Format/defaulting validation still runs first,
 /// through the free `resolve_audience` function below, so existing 400s stay unchanged.
 async fn mint_key(
@@ -363,133 +416,55 @@ async fn mint_key(
         }
     }
 
-    // Mint authorization is a point query, not a cached snapshot: no
-    // `DbAudienceGrantsSource` is attached for mint at all. `audience` is the leading column of
-    // `audience_grants`'s `PRIMARY KEY (audience, axis, selector)`, so this is an index-only
-    // scan.
-    let mint_selectors: Vec<String> = sqlx::query_scalar(
-        "SELECT selector FROM audience_grants WHERE audience = $1 AND axis = 'mint'",
-    )
-    .bind(&candidate)
-    .fetch_all(&pool)
-    .await
-    // A failed query is a DB outage, not a denial -- must not be misattributed as "you have no
-    // grant," so it is mapped to `Unavailable` explicitly. Logs the real `sqlx::Error`
-    // server-side and renders a fixed, generic client message -- the raw error text (connection
-    // strings, table/column names) must not reach the client.
-    .map_err(|e| {
-        error!("ingestion_keys: audience grant point query failed: {e}");
-        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
-    })?;
-
-    let grants = AudienceGrants::from_rows(
-        mint_selectors
-            .into_iter()
-            .map(|selector| (candidate.clone(), GrantAxis::Mint, selector)),
-    )
-    // Every row read back out of `audience_grants` already passed its own `CHECK` constraints on
-    // write, so this arm is unreachable in practice; kept as a real status code rather than
-    // `.unwrap()`, for the same fail-closed reason `MintGate` gives its own `.ok_or(...)`.
-    .map_err(|e| {
-        error!("ingestion_keys: audience grant row parse failed: {e}");
-        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
-    })?;
-
-    // `store: None` (the `new` default) -- a mint policy here never attaches a
-    // `DbAudienceGrantsSource`.
-    let policy = AudienceMintPolicy::new(grants);
-
-    let audience = match policy.resolve_audience(&caller, Some(&candidate)).await {
-        Ok(aud) => {
-            // Admin server-side claim: `AudienceMintPolicy`'s
-            // admin arm always resolves `Ok`, so this route never reaches the non-admin lazy
-            // claim's `Err` arm below for an admin caller -- decided here, as a second, separate
-            // query, whether `aud` looks unclaimed (no grant row, no key row on any axis) before
-            // falling through to the ordinary insert. Skipped outright for a reserved name
-            // (`public`, `state.default_audience` -- never claimable) or when the admin has no
-            // email (an admin with no email can't be granted a `user:` row).
-            if caller.is_admin() {
-                let reserved = aud == PUBLIC_AUDIENCE || aud.as_str() == state.default_audience;
-                if !reserved && caller.email.is_some() {
-                    let already_owned: bool = sqlx::query_scalar(
-                        "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1)
-                            OR EXISTS(SELECT 1 FROM ingestion_api_keys WHERE audience = $1)",
-                    )
-                    .bind(&aud)
-                    .fetch_one(&pool)
-                    .await?;
-                    if !already_owned {
-                        // Commits its own grant + key rows and returns the finished response
-                        // directly, same as the non-admin lazy claim below.
-                        return try_claim_and_mint(
-                            &pool, &state, &aud, &caller, &body, key, key_id, &hash, created_at,
-                        )
-                        .await
-                        .map(|resp| (StatusCode::CREATED, Json(resp)));
-                    }
-                }
-            }
-            aud
+    match authorize_mint(&pool, &caller, &candidate).await {
+        Ok(()) => {
+            // Ordinary (non-claim) path: single INSERT, as today, using the
+            // `key`/`hash`/`key_id`/`created_at` generated above. This path never writes a grant
+            // row -- the caller already holds one.
+            let created_by = caller
+                .email
+                .clone()
+                .unwrap_or_else(|| caller.subject.clone());
+            let response = insert_key(
+                &pool,
+                &candidate,
+                &created_by,
+                &body,
+                key,
+                key_id,
+                &hash,
+                created_at,
+            )
+            .await?;
+            Ok((StatusCode::CREATED, Json(response)))
         }
-        // Malformed-audience arm; `candidate` is already valid-format (via `resolve_audience`
-        // above), so unreachable in practice.
-        Err(e) if caller.is_admin() => return Err(IngestionKeyError::Forbidden(e.to_string())),
-        Err(_) => {
-            // Non-admin, no matching `mint` grant for `candidate` among the rows the point query
-            // above just read -- try the lazy claim only when the caller explicitly
-            // named this audience (not merely `state.default_audience`), and has an email to
-            // claim with.
+        Err(IngestionKeyError::Forbidden(_)) => {
+            // No matching `mint` grant for `candidate` -- try the lazy claim only when the
+            // caller explicitly named this audience (not merely `state.default_audience`), and
+            // has an email to claim with. Admin or not: `authorize_mint` confers no special
+            // treatment to `is_admin`, so this is the one claim path every caller takes.
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
             match (explicit, caller.email.as_deref()) {
-                (true, Some(_email)) => {
-                    // Commits its own grant + key rows and returns the finished response
-                    // directly -- `mint_key` never reaches the ordinary `INSERT` below for this
-                    // path.
-                    return try_claim_and_mint(
-                        &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
-                    )
-                    .await
-                    .map(|resp| (StatusCode::CREATED, Json(resp)));
-                }
-                _ => {
-                    return Err(IngestionKeyError::Forbidden(format!(
-                        "audience {candidate:?} is not in the caller's mintable set"
-                    )));
-                }
+                (true, Some(_email)) => try_claim_and_mint(
+                    &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
+                )
+                .await
+                .map(|resp| (StatusCode::CREATED, Json(resp))),
+                _ => Err(IngestionKeyError::Forbidden(format!(
+                    "audience {candidate:?} is not in the caller's mintable set"
+                ))),
             }
         }
-    };
-
-    // Ordinary (non-claim) path: single INSERT, as today, using the `key`/`hash`/`key_id`/
-    // `created_at` generated above. `claimed: false` -- this path never writes a grant row (an
-    // admin minting into an *existing* audience, or any non-admin mint that didn't take the
-    // lazy-claim branch above).
-    let created_by = caller
-        .email
-        .clone()
-        .unwrap_or_else(|| caller.subject.clone());
-    let response = insert_key(
-        &pool,
-        &audience,
-        &created_by,
-        &body,
-        key,
-        key_id,
-        &hash,
-        created_at,
-        false,
-    )
-    .await?;
-
-    Ok((StatusCode::CREATED, Json(response)))
+        // Every other variant (e.g. `Unavailable` on a DB outage) propagates unchanged -- a
+        // store outage must never be misattributed as "you have no grant."
+        Err(e) => Err(e),
+    }
 }
 
-/// Plain, non-transactional `INSERT INTO ingestion_api_keys` -- what `mint_key`'s own ordinary
-/// (non-claim) path calls directly, and what every "the in-lock recheck disagreed with the
-/// pre-check" branch inside [`try_claim_and_mint`] falls through to for an admin caller instead
-/// of erroring (the claim is best-effort for an admin, never a
-/// mint failure). Table name is a literal, never derived from caller input: no route in this
-/// module ever writes to `analytics_api_keys`.
+/// Plain, non-transactional `INSERT INTO ingestion_api_keys` -- `mint_key`'s ordinary
+/// (non-claim) insert, for a caller who already holds a grant on `audience`. Table name is a
+/// literal, never derived from caller input: no route in this module ever writes to
+/// `analytics_api_keys`.
 #[allow(clippy::too_many_arguments)]
 async fn insert_key(
     pool: &PgPool,
@@ -500,7 +475,6 @@ async fn insert_key(
     key_id: Uuid,
     hash: &[u8],
     created_at: DateTime<Utc>,
-    claimed: bool,
 ) -> Result<MintResponse, IngestionKeyError> {
     sqlx::query(
         "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
@@ -526,7 +500,7 @@ async fn insert_key(
         created_at,
         audience: audience.to_string(),
         key,
-        claimed,
+        claimed: false,
     })
 }
 
@@ -553,10 +527,9 @@ async fn insert_key(
 pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience_grants \
      WHERE axis = 'mint' AND selector = $1 AND created_by = $2";
 
-/// The lazy audience claim. Reached only from `mint_key`, only
-/// for a non-admin caller who explicitly named `audience`, has a known `caller.email`, and whose
-/// `MintPolicy::resolve_audience` call was just denied because `audience` carried no matching
-/// `mint` grant.
+/// The lazy audience claim. Reached only from `mint_key`, for any caller (admin included) who
+/// explicitly named `audience`, has a known `caller.email`, and whose `authorize_mint` call was
+/// just denied because `audience` carried no matching `mint` grant.
 ///
 /// One transaction, on the same pool `mint_key` already has: takes a non-blocking, per-audience
 /// Postgres advisory lock to serialize concurrent claims for the *same* audience name (across
@@ -569,13 +542,9 @@ pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience
 /// back what their own new key uploads) plus the `ingestion_api_keys` row itself, all in the
 /// same transaction.
 ///
-/// **Admin mode never turns a claim attempt into a mint failure.**
-/// Called for an admin (`mint_key`'s own pre-check already found the audience looking
-/// unclaimed moments earlier, outside any lock), the in-lock recheck can still disagree -- lock
-/// contention, the row now existing, or the selector exceeding 255 bytes -- and for a non-admin
-/// each of those is a hard failure. For an admin, all three instead fall through to
-/// [`insert_key`]'s plain, non-transactional insert: the claim is best-effort, `claimed` comes
-/// back `false`, and the admin still gets their key.
+/// Every disagreement the in-lock recheck can find -- lock contention, the row now existing, or
+/// the selector exceeding 255 bytes -- is a hard failure for every caller, admin included: lock
+/// contention is `409 CLAIM_CONTENDED`, and every other case is `403`.
 #[allow(clippy::too_many_arguments)]
 async fn try_claim_and_mint(
     pool: &PgPool,
@@ -588,8 +557,7 @@ async fn try_claim_and_mint(
     hash: &[u8],
     created_at: DateTime<Utc>,
 ) -> Result<MintResponse, IngestionKeyError> {
-    // Both the admin and non-admin call sites only ever call this function when
-    // `caller.email` is `Some` (mint_key's own pre-checks).
+    // `mint_key`'s one call site only reaches this function when `caller.email` is `Some`.
     let caller_email = caller
         .email
         .as_deref()
@@ -611,20 +579,6 @@ async fn try_claim_and_mint(
             .await?;
     if !locked {
         tx.rollback().await?;
-        if caller.is_admin() {
-            return insert_key(
-                pool,
-                audience,
-                caller_email,
-                body,
-                key,
-                key_id,
-                hash,
-                created_at,
-                false,
-            )
-            .await;
-        }
         // `Conflict` (409, `CLAIM_CONTENDED`), not `Forbidden` (403): this is transient lock
         // contention, not a denial -- the caller should retry, not treat this as "you may not do
         // this."
@@ -640,29 +594,13 @@ async fn try_claim_and_mint(
     // failing cleanly.
     if selector.len() > 255 {
         tx.rollback().await?;
-        if caller.is_admin() {
-            return insert_key(
-                pool,
-                audience,
-                caller_email,
-                body,
-                key,
-                key_id,
-                hash,
-                created_at,
-                false,
-            )
-            .await;
-        }
         return Err(IngestionKeyError::Forbidden(
             "caller email is too long to form a valid grant selector".to_string(),
         ));
     }
 
     // "Does this audience already have an owner?" -- true for any grant row (any axis/selector)
-    // *or* any existing `ingestion_api_keys` row: `audience_grants` alone would miss an audience
-    // an admin minted straight through `AudienceMintPolicy`'s `is_admin` arm before any grant
-    // ever existed for it.
+    // *or* any existing `ingestion_api_keys` row.
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1)
             OR EXISTS(SELECT 1 FROM ingestion_api_keys WHERE audience = $1)",
@@ -672,28 +610,11 @@ async fn try_claim_and_mint(
     .await?;
 
     if exists {
-        // No recheck needed for a non-admin: reaching this function at all already means
-        // `resolve_audience` ran a fresh, uncached point query against exactly this audience's
-        // `mint` selectors moments earlier in this same request and found no match for the
-        // caller. For an admin, `mint_key`'s own pre-check ran the identical `EXISTS` query
-        // moments earlier and found it `false` -- a concurrent claim by someone else can still
-        // have landed in between, which is exactly the race this in-lock recheck exists to
-        // catch.
+        // Reaching this function at all already means `authorize_mint` ran a fresh, uncached
+        // point query against exactly this audience's `mint` selectors moments earlier in this
+        // same request and found no match for the caller -- this recheck, inside the lock, is
+        // what catches a concurrent claim by someone else landing in between.
         tx.rollback().await?;
-        if caller.is_admin() {
-            return insert_key(
-                pool,
-                audience,
-                caller_email,
-                body,
-                key,
-                key_id,
-                hash,
-                created_at,
-                false,
-            )
-            .await;
-        }
         return Err(IngestionKeyError::Forbidden(format!(
             "audience {audience:?} already exists and the caller has no grant for it"
         )));
@@ -701,26 +622,10 @@ async fn try_claim_and_mint(
         // Genuinely fresh audience -- no grant row and no key row for it at all, so this is a
         // real claim attempt. Reject the two reserved names here, not before the transaction
         // opened: a caller who already holds a genuine `mint` grant on either name never reaches
-        // this branch at all -- `resolve_audience`'s point query would already have found that
-        // grant and approved the mint directly. (`mint_key`'s own admin pre-check already skips
-        // calling this function at all for a reserved name, so this arm is unreachable for an
-        // admin in practice; the `caller.is_admin()` fallback stays for defense in depth.)
+        // this branch at all -- `authorize_mint`'s point query would already have found that
+        // grant and approved the mint directly.
         if audience == PUBLIC_AUDIENCE || audience == state.default_audience {
             tx.rollback().await?;
-            if caller.is_admin() {
-                return insert_key(
-                    pool,
-                    audience,
-                    caller_email,
-                    body,
-                    key,
-                    key_id,
-                    hash,
-                    created_at,
-                    false,
-                )
-                .await;
-            }
             return Err(IngestionKeyError::Forbidden(format!(
                 "audience {audience:?} cannot be claimed"
             )));
@@ -964,6 +869,7 @@ struct ImportedRow {
 async fn import_key(
     Extension(state): Extension<IngestionKeysState>,
     AdminUser(user): AdminUser,
+    AuthenticatedUser(caller): AuthenticatedUser,
     Json(body): Json<ImportRequest>,
 ) -> Result<(StatusCode, Json<ImportResponse>), IngestionKeyError> {
     let pool = require_pool(&state)?;
@@ -976,6 +882,12 @@ async fn import_key(
     // Falls back to the deployment default (`public` unless configured otherwise via
     // `MICROMEGAS_DEFAULT_AUDIENCE`) -- matching how already-ingested legacy data is stamped.
     let audience = resolve_audience(&state, body.audience.as_deref())?;
+    // Same authority as minting: importing binds a key to `audience`, so it needs a `mint`
+    // grant on it, admin membership included -- see `authorize_mint`'s own doc comment. Checked
+    // against the *requested* audience even on the already-present-key path below, where the
+    // write itself keeps the original binding and discards this request's audience: a repeat
+    // import can 403 on an audience it will never actually write.
+    authorize_mint(&pool, &caller, &audience).await?;
 
     let hash = hash_key(&body.key);
     let key_id = Uuid::new_v4();

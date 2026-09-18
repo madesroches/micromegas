@@ -82,6 +82,15 @@ describe('ApiKeysAdminPage mint dialog', () => {
     expect(mintButton).not.toBeDisabled()
   })
 
+  it('states that minting requires a mint grant and that a fresh audience claims itself (showAudience: true)', async () => {
+    const config = makeConfig({ showAudience: true })
+    renderPage(config)
+    await openMintDialog(config)
+
+    expect(screen.getByText(/Minting requires a mint grant on this audience/)).toBeInTheDocument()
+    expect(screen.getByText(/Naming a brand-new audience claims it and grants you read \+ mint on it\./)).toBeInTheDocument()
+  })
+
   it('has no audience field and enables Mint from just a name (showAudience: false)', async () => {
     const config = makeConfig({ showAudience: false })
     renderPage(config)

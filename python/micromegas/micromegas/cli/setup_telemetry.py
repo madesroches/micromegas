@@ -117,8 +117,10 @@ def _mint_denied_hint(url, audience, my_audiences):
     ]
     if email is not None:
         # `_fresh_audience_suggestion` already ends in "ask an admin for a grant"
-        # when there's no email -- don't repeat that lead-in here.
-        lines.append("  otherwise, ask an admin to grant it:")
+        # when there's no email -- don't repeat that lead-in here. "grant it (an
+        # admin, possibly you, runs)": an admin's own mint 403 reaches this same
+        # hint now, since is_admin confers no audience of its own any more.
+        lines.append("  otherwise, grant it (an admin, possibly you, runs):")
         lines.append(
             f"      micromegas-grants --url {url} create {audience} "
             f"mint 'user:{email}'"
@@ -150,16 +152,16 @@ def resolve_audience(args, parser, my_audiences):
       claimed server-side by the mint route itself; a name someone else already
       holds is refused there with an ordinary `403`, which `run()` enriches with a
       hint (see `_mint_denied_hint`).
-    - Both omitted, non-admin: resolved from the caller's *personally held* mint
-      audiences only (`my_audiences["held_pairs"]`), filtering out audiences the
-      caller can merely see via a `"*"` grant (e.g. the seeded `public` row) --
-      exactly one match is used silently; more than one is an error naming the
-      choices; none is an error pointing at the visible-but-unheld audiences (if
-      any), claiming a fresh name of the caller's own, or asking an admin.
-    - Both omitted, admin: an error asking for one explicitly -- `audiences` is
-      not a reliable "nothing mintable yet" signal for an admin, but an admin
-      resolves `mint_prefix` the same way anyone else does, so `--user-audience`
-      is offered too.
+    - Both omitted: resolved from the caller's *personally held* mint audiences
+      only (`my_audiences["held_pairs"]`), filtering out audiences the caller can
+      merely see via a `"*"` grant (e.g. the seeded `public` row) -- exactly one
+      match is used silently; more than one is an error naming the choices; none
+      is an error pointing at the visible-but-unheld audiences (if any), claiming
+      a fresh name of the caller's own, or asking an admin. Admin and non-admin
+      alike: `is_admin` grants no audience of its own any more, so an admin with
+      no held mint audience gets the same "none" error as anyone else, and one
+      with exactly one held mint audience resolves it silently just like a
+      non-admin would.
 
     Returns the resolved audience name. Neither this helper nor the mint route's
     caller decides or reports whether the name is brand-new: the mint route runs
@@ -197,15 +199,7 @@ def resolve_audience(args, parser, my_audiences):
             parser.error("--audience requires a non-empty name")
         return args.audience
 
-    is_admin = my_audiences["is_admin"]
     audiences = my_audiences["audiences"]
-
-    if is_admin:
-        parser.error(
-            "--audience or --user-audience is required for an admin caller (pick an "
-            "audience name explicitly; an empty mintable-audience list means "
-            "nothing for an admin)"
-        )
 
     # Both flags omitted: filter to the audiences this caller personally holds a
     # mint grant on, so a seeded wildcard row (e.g. the default `public` mint
@@ -432,11 +426,10 @@ def build_parser():
         help=(
             "Write audience to mint the key under, verbatim -- for an org/team/service "
             "audience that isn't namespaced under any one caller. Lazily claims the "
-            "audience if it doesn't already exist; for a non-admin caller, fails with "
-            "a 403 if it exists and this caller holds no grant for it (an admin caller "
-            "mints into any existing audience verbatim). Omitted entirely resolves one "
-            "via GET .../audience-grants/my-audiences. Mutually exclusive with "
-            "--user-audience."
+            "audience if it doesn't already exist; fails with a 403, admin included, "
+            "if it exists and this caller holds no grant for it. Omitted entirely "
+            "resolves one via GET .../audience-grants/my-audiences. Mutually exclusive "
+            "with --user-audience."
         ),
     )
     parser.add_argument(

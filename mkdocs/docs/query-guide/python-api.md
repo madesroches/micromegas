@@ -945,7 +945,9 @@ Pass `--version` to print the installed package and interpreter version and exit
 Walks a legacy env-keyring (or a file with the same shape) and imports each key into the DB-backed
 `ingestion_api_keys` / `analytics_api_keys` store via the HTTP import routes, so a client can keep
 presenting the same key string after migrating off the keyring. Requires OIDC admin access on the
-target service — no direct Postgres access needed.
+target service — no direct Postgres access needed. For `--table ingestion`, admin membership alone
+is not enough: the importing identity also needs a `mint` grant on every distinct audience the
+keyring entries carry (see [Migrating from the env keyring](../admin/api-keys.md#migrating-from-the-env-keyring)).
 
 ```bash
 micromegas-import-keys --table ingestion --source env --url https://analytics.example.com
@@ -1082,32 +1084,33 @@ different things:
   `mint_prefix` is derived server-side from the caller's own email and is composed identically for
   an admin and a non-admin caller (e.g. `alice@example.com` → `alice-`, so `--user-audience
   ci-runner` resolves to `alice-ci-runner`). Lazily claims the audience if it's genuinely fresh,
-  writing the caller's own `read`/`mint` grant in the same request; for a non-admin caller, if it
-  already exists and the caller holds no grant for it (someone else's namespace), the route's
-  ordinary 403 applies (an admin caller mints into any existing audience verbatim). Note
-  that `mint_prefix` is derived from the email's local part only and isn't guaranteed unique, so
-  two callers with the same local part on different domains can share a prefix and genuinely hit
-  this 403 under what looks like "your own" prefix. Requires a caller whose email yields a
-  `mint_prefix`; errors locally otherwise, with distinct messages for "no email at all" (ask an
-  admin for a grant) vs. "email sanitizes to empty" (use `--audience <name>` instead).
+  writing the caller's own `read`/`mint` grant in the same request; if it already exists and the
+  caller holds no grant for it (someone else's namespace), the route's ordinary 403 applies,
+  admin included. Note that `mint_prefix` is derived from the email's local part only and isn't
+  guaranteed unique, so two callers with the same local part on different domains can share a
+  prefix and genuinely hit this 403 under what looks like "your own" prefix. Requires a caller
+  whose email yields a `mint_prefix`; errors locally otherwise, with distinct messages for "no
+  email at all" (ask an admin for a grant) vs. "email sanitizes to empty" (use `--audience
+  <name>` instead).
 - **`--audience NAME`**: mints under `NAME` verbatim, unconditionally — no client-side check of
   the caller's mintable set. A genuinely fresh name is lazily claimed by the mint route itself,
   writing the caller's own `read`/`mint` grant in the same request (the printed mint line adds
-  `claimed audience <name>` when it did); for a non-admin caller, a name someone else already
-  holds is refused with the route's ordinary 403, which the CLI enriches with the caller's
-  mintable audiences, a `--user-audience` suggestion, and the exact `micromegas-grants` commands
-  an admin would run to grant this one (concretely, with the audience and the caller's email
-  already substituted). An admin caller mints into any existing audience verbatim. Use this for
-  an org/team/service audience that isn't namespaced under any one caller.
+  `claimed audience <name>` when it did); a name someone else already holds is refused with the
+  route's ordinary 403, admin included, which the CLI enriches with the caller's mintable
+  audiences, a `--user-audience` suggestion, and the exact `micromegas-grants` commands an admin
+  would run to grant this one (concretely, with the audience and the caller's email already
+  substituted). Use this for an org/team/service audience that isn't namespaced under any one
+  caller.
 - **Omitted entirely**: resolved via `GET .../audience-grants/my-audiences`, filtered to audiences
   the caller *personally holds* a mint grant on (the response's `held_pairs`) — a deployment-wide
   wildcard grant that puts an audience in every caller's `audiences` list (e.g. a seeded `public`
   mint row) is not enough on its own to be silently auto-selected here. Exactly one personally-held
   match is used silently; more than one prints the choices and asks for `--audience`; none prints
   the audiences the caller can see but does not personally hold (if any), plus a hint to
-  `--user-audience` a fresh name or ask an admin. An admin caller must always pass `--audience` or
-  `--user-audience` explicitly (an empty `audiences` list means nothing for an admin, whose mint
-  authority never depends on a grant row).
+  `--user-audience` a fresh name or ask an admin. Admin and non-admin alike: `is_admin` grants no
+  audience of its own, so an admin with no held mint audience gets the same "none" error as
+  anyone else, and one with exactly one held mint audience resolves it silently just like a
+  non-admin would.
 
 `--otlp-endpoint` defaults to `f"{MICROMEGAS_TELEMETRY_URL}/ingestion/otlp"` when that env var is
 set (the repo's established ingestion-endpoint convention — see [OTLP](../otlp/index.md)); it is a

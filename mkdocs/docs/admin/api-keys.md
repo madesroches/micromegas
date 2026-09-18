@@ -14,13 +14,15 @@ Both tables have an admin page in the web app (Admin → Ingestion API Keys /
 Analytics API Keys) that calls `analytics-web-srv`'s routes directly (see
 [Web app admin pages](#web-app-admin-pages)).
 
-Minting an ingestion key is not purely an admin operation: a non-admin caller
-with a matching `mint` grant — or naming a brand-new audience explicitly,
-which lazily claims it — can mint their own `ingestion_api_keys` row
-directly, once an operator turns on `MICROMEGAS_SELF_SERVICE_MINT` (off by
-default). See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
-for the full mechanism; every other route (list/revoke/import, and the
-analytics-key table entirely) stays admin-only.
+Minting an ingestion key is not purely an admin operation: a caller — admin or not — with a
+matching `mint` grant, or naming a brand-new audience explicitly (which lazily claims it), can
+mint an `ingestion_api_keys` row directly; a non-admin additionally needs an operator to have
+turned on `MICROMEGAS_SELF_SERVICE_MINT` (off by default), while an admin is exempt from that
+knob. See [Self-service mint](authorization.md#self-service-ingestion-key-mint) for the full
+mechanism. List and revoke stay admin-only and unconditional, unaffected by any of this — see
+[HTTP routes](#http-routes-key-management) below. Import stays admin-only too, but additionally
+needs the same `mint` grant as minting; see the Import paragraph in that same section. The
+analytics-key table's routes are admin-only throughout.
 
 The env-var keyring (`MICROMEGAS_API_KEYS` and its per-role forms) is no
 longer read by ingestion or flight-sql as of v0.31.0 — the DB-backed key store
@@ -89,14 +91,16 @@ that wasn't actually random.
 ## HTTP routes (key management)
 
 All key-management routes for **both** tables live on `analytics-web-srv`.
-Every route except ingestion's own mint is gated by the same admin check
+Every route except ingestion's own mint and import is gated by the same admin check
 every other `analytics-web-srv` admin route uses (`ValidatedUser.is_admin`,
 resolved from membership in the reserved `admins` local group; see
 [Groups](groups.md)). `POST {base_path}/api/ingestion-api-keys`
 (mint) runs through a `MintGate`/`AuthenticatedUser` extractor instead, so a
 non-admin caller with a matching grant (or a lazy claim) can reach it once
-`MICROMEGAS_SELF_SERVICE_MINT` is on. Ingestion itself exposes no
-key-management HTTP surface — consolidating both tables' admin surface onto
+`MICROMEGAS_SELF_SERVICE_MINT` is on. `POST .../ingestion-api-keys/import` keeps its
+`AdminUser` gate but *also* checks the same `mint`-grant authorization as mint, so admin
+membership alone is no longer sufficient to import into an arbitrary audience. Ingestion itself
+exposes no key-management HTTP surface — consolidating both tables' admin surface onto
 one service keeps a single admin list (see [Security](#security)).
 
 | Route | Body / result |
@@ -104,7 +108,7 @@ one service keeps a single admin list (see [Security](#security)).
 | `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience","claimed"}` |
 | `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience"}]` |
 | `DELETE {base_path}/api/ingestion-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
-| `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key","audience"?}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported","audience"}` |
+| `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key","audience"?}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported","audience"}`, or 403 with no `mint` grant on the resolved audience |
 | `POST {base_path}/api/analytics-api-keys` | `{"name"}` → 201 `{"key_id","name","created_at","key"}` |
 | `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]` |
 | `DELETE {base_path}/api/analytics-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
@@ -114,13 +118,15 @@ Both route groups share request/response shapes and validation for
 `name`/`key`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
 see [What audience does a key carry](#what-audience-does-a-key-carry).
 
-Ingestion's mint route has more error shapes than the rest of this table,
-since it is the one route here a non-admin caller can reach: `400
-BAD_REQUEST`, `503 NOT_CONFIGURED` (no DB pool), `403 FORBIDDEN`
+Ingestion's mint route has more error shapes than the rest of this table:
+`400 BAD_REQUEST`, `503 NOT_CONFIGURED` (no DB pool), `403 FORBIDDEN`
 (self-service off, no matching grant, or a per-caller bound reached), `503
 UNAVAILABLE` (the audience-grant query itself failed), `401 UNAUTHENTICATED`
 (no `AuthContext`, normally unreachable), and `409 CLAIM_CONTENDED` (two
-concurrent lazy claims raced for the same audience name; retry).
+concurrent lazy claims raced for the same audience name; retry). Import
+carries the `403`/`503` pair too, since it also goes through
+`authorize_mint`; mint remains the one route here a non-admin caller can
+reach at all.
 
 **Mint** (`POST .../{table}-api-keys`) — `{"name"}` (plus, for ingestion, an
 optional `"audience"`) → **201** `{"key_id","name","created_at","key"}` (plus
@@ -135,13 +141,17 @@ audience does a key carry](#what-audience-does-a-key-carry)).
 **List** (`GET .../{table}-api-keys?limit=&offset=&include_revoked=`) —
 **200**, newest first. `limit` defaults to `100`, clamps at `500`, and is
 **400** if `<= 0`. `offset` defaults to `0`. `include_revoked` defaults to
-`true`. Never returns `key_hash` or the key.
+`true`. Never returns `key_hash` or the key. Unchanged by this document's
+mint/import narrowing: still every row, every audience, `AdminUser`-gated and
+unconditional.
 
 **Revoke** (`DELETE .../{table}-api-keys/{key_id}`) — **200**
 `{"revoked_at"}`, idempotent (a second call returns the same value). **404**
 for an unknown `key_id`. The revocation latency is bounded by whichever
 ingestion/flight-sql process's cache TTL is validating the key — see [Cache
-and audit env vars](#cache-and-audit-env-vars).
+and audit env vars](#cache-and-audit-env-vars). Unchanged by this document's
+mint/import narrowing: still any key, any audience, `AdminUser`-gated and
+unconditional.
 
 **Import** (`POST .../{table}-api-keys/import`) — carries a *pre-existing*
 key string forward, for a client keeping the same key string after migrating
@@ -153,7 +163,14 @@ ingestion, the response also carries `audience`: on a fresh insert, whatever
 resolved from the request/knob; on an already-present row, the row's
 **existing** audience (the binding is immutable). `created_by` is the
 importing caller's own OIDC identity. **400** if `name` is empty/too long or
-`key` is empty; no other format validation. Never logs the key. The
+`key` is empty; no other format validation. For ingestion, **403** if the
+importing caller (an admin — `import_key` keeps its `AdminUser` gate) holds
+no `mint` grant on the resolved audience: admin membership alone is no longer
+sufficient. **503 UNAVAILABLE** if the underlying `authorize_mint`
+grant-store query itself fails. Checked against the *requested* audience even on the
+already-present-key path, where the write itself keeps the existing row's
+original binding and discards the request's audience — a repeat import can
+403 on an audience it will never actually write. Never logs the key. The
 `micromegas-import-keys` CLI (see [Migrating from the env
 keyring](#migrating-from-the-env-keyring)) is the recommended way to call
 this route in bulk.
@@ -209,25 +226,32 @@ publishing. An explicitly supplied but malformed `audience` is still a
 **400**. Minting for the resolved audience still requires a matching `mint`
 grant (or a lazy claim).
 
-**A non-admin caller naming a brand-new audience explicitly claims it**, once
-`MICROMEGAS_SELF_SERVICE_MINT` is on — a genuinely fresh, never-before-granted
-name is minted *and* granted in the same request. `micromegas-setup-telemetry`
-exposes this via `--user-audience SUFFIX`: the prefix is composed server-side
-from the caller's own email (e.g. `--user-audience ci-runner` resolves to
-`alice-ci-runner` for `alice@example.com`), so the identical command works for
-an admin and a non-admin caller alike — there is no separate admin recipe.
-`--audience NAME` mints under a name verbatim instead, for an org/team/service
-audience that isn't namespaced under any one caller; it also lazily claims a
-brand-new name. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
+**Any caller naming a brand-new audience explicitly claims it** — a genuinely
+fresh, never-before-granted name is minted *and* granted in the same
+request, writing `user:<email>` `mint`+`read` rows in the same transaction as
+the key insert. For a non-admin this additionally requires
+`MICROMEGAS_SELF_SERVICE_MINT` to be on; an admin is exempt from that knob but
+takes the identical claim path otherwise — `is_admin` confers no bypass of
+its own. `micromegas-setup-telemetry` exposes this via `--user-audience
+SUFFIX`: the prefix is composed server-side from the caller's own email (e.g.
+`--user-audience ci-runner` resolves to `alice-ci-runner` for
+`alice@example.com`), so the identical command works for an admin and a
+non-admin caller alike — there is no separate admin recipe. `--audience NAME`
+mints under a name verbatim instead, for an org/team/service audience that
+isn't namespaced under any one caller; it also lazily claims a brand-new
+name. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
 for the full mechanism.
 
-**An admin minting into a brand-new audience is also claimed server-side**:
-the mint route runs the same ownership check for an admin as a pre-check, and
-if the audience looks unclaimed, writes the admin's own `user:<email>`
-`mint`+`read` rows in the same transaction as the key insert — best-effort,
-never a mint failure if a concurrent claim wins the race. `MintResponse.claimed`
-is `true` only when this call actually created the audience's first grant
-rows. An admin with no email is unaffected — no `user:` row can be formed.
+`MintResponse.claimed` is `true` only when this call actually created the
+audience's first grant rows. Losing the claim race is never silently
+swallowed: losing the advisory lock itself is a **409 CLAIM_CONTENDED**
+(retry), and losing the in-lock existence recheck — another caller's grant
+or key row landing first — is a **403**. A caller with no email is unaffected
+by any of this — no `user:` row can be formed, so nothing is ever claimed for
+them; minting still requires a pre-existing grant. Minting into an *existing*
+audience the caller holds no grant on is a plain **403** for every caller,
+admin included — an admin can no longer mint silently into an audience they
+were never granted.
 
 **A hand-edited row takes effect within the key's cache TTL, not instantly**
 (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
@@ -311,8 +335,8 @@ a browser" exposure mint already avoids.
 
 **A third page, open to every authenticated user, not just admins**:
 **Audience Access** (`/audiences`) is the self-service counterpart of the
-ingestion-key mint flow — it drives the mint route's non-admin path
-(claim-and-mint) from a browser dialog, plus the audience-grant read/write
+ingestion-key mint flow — it drives the mint route's shared claim-and-mint
+path (every caller, admin included) from a browser dialog, plus the audience-grant read/write
 routes covered in [Authorization → the grant store](authorization.md#the-grant-store). See
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
@@ -322,12 +346,14 @@ the caller's identity (`user.email` or `user.subject`) and writes that
 directly — there is no service-credential hop, so no attribution gap to
 document.
 
-**Single admin group, for administration.** List/revoke/import for both
-tables, plus ingestion's own mint when the caller is an admin, gate on the
-same `analytics-web-srv` admin check (membership in the reserved `admins`
-local group — see [Groups](groups.md)). Ingestion's mint route additionally
-accepts a non-admin caller once `MICROMEGAS_SELF_SERVICE_MINT` is on,
-authorized by a `mint` grant instead of `admins` membership.
+**Single admin group, for administration.** List/revoke for both tables
+gate on the same `analytics-web-srv` admin check (membership in the
+reserved `admins` local group — see [Groups](groups.md)). Import gates on
+that same admin check **and** a `mint` grant on the target audience.
+Ingestion's own mint route is authorized by a `mint` grant for every
+caller, admin included; `admins` membership only waives the
+`MICROMEGAS_SELF_SERVICE_MINT` knob that otherwise blocks a non-admin
+caller from minting at all.
 
 **Under `--disable-auth` on `analytics-web-srv`, all three key/grant
 route groups are unavailable — not just gated.** With auth disabled, every
@@ -482,7 +508,22 @@ Postgres network access needed.
    the same OIDC setup as `micromegas-screens`/`-query`
    (`MICROMEGAS_OIDC_*` env vars for a service account, or an
    interactive/cached login via `--profile`); the OIDC identity used must be
-   in the target service's admin list. The tool prints one line per key
+   in the target service's admin list. For `--table ingestion`, admin
+   membership alone is no longer enough: the identity also needs a `mint`
+   grant on every distinct audience this run is about to write — enumerate
+   every distinct `"audience"` value in the keyring (or file) being
+   imported, plus any `--audience AUD` passed to the tool, plus
+   `MICROMEGAS_DEFAULT_AUDIENCE` for entries carrying none, and create a
+   `mint`-axis row for the importing principal on each before running the
+   import, e.g.:
+
+   ```bash
+   micromegas-grants --url https://analytics.example.com create team-alpha mint 'user:you@example.com'
+   ```
+
+   An entry whose audience has no such grant fails that entry with a `403`.
+
+   The tool prints one line per key
    (`imported` / `already present (key_id=...)` / `already present
    (revoked)` / the error message), continues past individual failures, and
    exits non-zero if any key failed to import or came back revoked. Route

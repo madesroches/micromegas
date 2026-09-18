@@ -569,6 +569,13 @@ page. Only add trusted principals to it.
 - Partition management functions
 - Schema migration operations
 - Administrative SQL functions
+- Administering audience grants and group/membership rows (create/delete a grant, manage groups)
+
+**What admin is not:** admin membership confers no implicit `read` or `mint` on any audience.
+Minting an ingestion key, importing one, or reading an audience's data is always a grant row
+naming the caller — for an admin exactly as for anyone else. An admin who needs data access
+grants it to themselves in one `create_grant` call; that self-grant is then a durable, visible,
+revocable row, not an invisible property of `admins` membership.
 
 An API-key caller normally carries no email, so it can never match a
 `user:`/`group:` member of `admins` and is never admin — except while

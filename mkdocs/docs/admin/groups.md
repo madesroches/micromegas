@@ -180,7 +180,6 @@ stores use.
    already had:
      - The web admin routes (`AdminUser`/`require_admin`, the
        audience-grant write gate, the ingestion-key mint gate).
-     - The mint-any-audience arm of the mint policy.
      - The FlightSQL `bulk_ingest` gate — now satisfiable by an
        API-key caller, not just OIDC (see
        [`bulk_ingest`](../query-guide/python-api.md#bulk_ingesttable_name-table)).

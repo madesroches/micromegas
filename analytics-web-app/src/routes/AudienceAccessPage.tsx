@@ -790,7 +790,9 @@ function AudienceAccessPageContent() {
                                 <Share2 className="w-3 h-3" />+ Share {axis} access
                               </button>
                             )}
-                            {axis === 'mint' && !isAdmin && showMintButton && (
+                            {axis === 'mint' &&
+                              (me?.audiences ?? []).includes(group.audience) &&
+                              showMintButton && (
                               <button
                                 onClick={() => openMintDialog(group.audience)}
                                 className="text-xs text-accent-link hover:underline inline-flex items-center gap-1"

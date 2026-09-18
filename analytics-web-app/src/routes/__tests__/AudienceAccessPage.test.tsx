@@ -258,7 +258,9 @@ describe('AudienceAccessPage — admin', () => {
     expect(screen.getAllByRole('button', { name: /Add grant/i }).length).toBeGreaterThan(0)
   })
 
-  it('does not show the public-readability help line in the Mint dialog for an admin', async () => {
+  it('shows the public-readability help line in the Mint dialog for an admin too', async () => {
+    // `is_admin` confers no mint bypass of its own any more -- an admin takes the same claim
+    // path as anyone else, so the help line applies to them too.
     installFetchMock({ grants: [] })
     renderPage()
 
@@ -271,7 +273,100 @@ describe('AudienceAccessPage — admin', () => {
     const dialogRoot = heading.closest('div.relative') as HTMLElement
     expect(
       within(dialogRoot).queryByText(/is readable by every authenticated user/)
-    ).not.toBeInTheDocument()
+    ).toBeInTheDocument()
+  })
+
+  it('shows the claim hint for a brand-new audience in the Mint dialog for an admin too', async () => {
+    installFetchMock({ grants: [] })
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Mint ingestion key/i }).length).toBeGreaterThan(0)
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint ingestion key/i })[0])
+
+    await screen.findByRole('heading', { name: 'Mint ingestion key' })
+    fireEvent.change(screen.getByPlaceholderText('myproj'), { target: { value: 'ci-runner' } })
+
+    expect(screen.getByText(/Will claim `ci-runner` and grant you read \+ mint on it\./)).toBeInTheDocument()
+  })
+
+  it("preselects the admin's personally held mint audience over audiences[0]", async () => {
+    // `held_pairs` is now populated for an admin the same way as for any other caller, so the
+    // dialog's default-audience preselect (which prefers a personally held mint audience over
+    // `audiences[0]`) now applies to an admin too.
+    installFetchMock({
+      grants: [],
+      myAudiences: {
+        is_admin: true,
+        audiences: ['public', 'team-alpha'],
+        mint_prefix: null,
+        email: 'admin@example.com',
+        held_pairs: ['team-alpha:mint'],
+      },
+    })
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /Mint ingestion key/i }).length).toBeGreaterThan(0)
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint ingestion key/i })[0])
+
+    await screen.findByRole('heading', { name: 'Mint ingestion key' })
+    const select = screen.getByRole('combobox') as HTMLSelectElement
+    expect(select.value).toBe('team-alpha')
+  })
+
+  it('shows the per-audience Mint button for an admin only on an audience in me.audiences', async () => {
+    // The Mint button now follows `me.audiences`, not `isAdmin` -- an admin with no mint
+    // authority on this audience does not get the button, and one who does, does.
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'mint',
+          selector: 'user:alice@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: true,
+        audiences: [],
+        mint_prefix: null,
+        email: 'admin@example.com',
+        held_pairs: [],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('team-alpha')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Mint into this audience/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the per-audience Mint button for an admin who holds team-alpha in me.audiences', async () => {
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'mint',
+          selector: 'user:admin@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: true,
+        audiences: ['team-alpha'],
+        mint_prefix: null,
+        email: 'admin@example.com',
+        held_pairs: ['team-alpha:mint'],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('team-alpha')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Mint into this audience/i })).toBeInTheDocument()
   })
 })
 
@@ -538,6 +633,60 @@ describe('AudienceAccessPage — non-admin', () => {
     const heading = await screen.findByRole('heading', { name: 'Mint ingestion key' })
     const dialogRoot = heading.closest('div.relative') as HTMLElement
     expect(within(dialogRoot).getByText(/is readable by every authenticated user/)).toBeInTheDocument()
+  })
+
+  it('hides the per-audience Mint button for a non-admin on an audience outside me.audiences', async () => {
+    // Accepted non-admin UI change: the per-audience Mint button used to show on every visible
+    // audience group for a non-admin regardless of grant (`!isAdmin && showMintButton`); it now
+    // follows `me.audiences`, the same rule an admin's button follows, and such a mint 403s
+    // server-side today either way.
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'mint',
+          selector: 'user:alice@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: [],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('team-alpha')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Mint into this audience/i })).not.toBeInTheDocument()
+  })
+
+  it('shows the per-audience Mint button for a non-admin on an audience in me.audiences', async () => {
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'mint',
+          selector: 'user:reader@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: ['team-alpha'],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:mint'],
+      },
+    })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('team-alpha')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /Mint into this audience/i })).toBeInTheDocument()
   })
 })
 

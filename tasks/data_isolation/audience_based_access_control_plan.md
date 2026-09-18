@@ -595,13 +595,25 @@ existing `process_id → audience` cache to reach the audience for the membershi
   `process_spans_table_function.rs:254`, `perfetto_trace_execution_plan.rs:232` — UDTFs that
   recursively build a context to run their inner query): these must **inherit the caller's
   `ReadScope`**, never `All`, or they become bypasses.
-- **No human-admin query-path bypass (decided).** `is_admin` does **not** map to `ReadScope::All`; an
+- **No human-admin data-plane bypass (decided).** `is_admin` does **not** map to `ReadScope::All`; an
   admin's FlightSQL session is filtered like any other. Rationale: an operator with lakehouse/object-
   store access can read the raw parquet directly, so a query-path bypass adds attack surface and audit
   burden for no confidentiality gain. Admins needing cross-principal reads use direct storage access,
   not the query path. (`is_admin` never feeds `ReadScope`; it does get threaded to the
   session for the mutating-function registration gate — §4 Prong B, issue #1377 — an
-  integrity/availability control, not a read bypass.)
+  integrity/availability control, not a read bypass.) `admin_capability_narrowing_plan.md` extends
+  this rule from the query path to minting/importing an ingestion key: those routes now also
+  require a grant on the target audience, `is_admin` conferring none. Three narrower carve-outs
+  remain, each accepted rather than closed by that plan: `bulk_ingest`
+  (`flight_sql_service_impl.rs`) writes the `audience` column verbatim under an `is_admin` gate,
+  since its purpose (cross-audience replication of a lake already stamped at origin) can't be
+  expressed by a per-audience grant and it grants no read; `authorize_view_ddl`
+  (`rust/public/src/servers/view_ddl.rs`) gates `CREATE`/`DROP MATERIALIZED VIEW`, and is the
+  strongest of the three, since the resulting view's queries run under `CallerContext::maintenance()`
+  (`ReadScope::All`); and `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm
+  (`rust/analytics/src/lakehouse/audience_guard.rs`) makes `'global'` partition rows visible to an
+  audience-scoped admin via `list_partitions()`, riding on the same boolean as the mutating-function
+  registration gate above.
 
 ### 5b. Public (audience-agnostic) views — optional, opt-in
 
@@ -886,6 +898,14 @@ over the *group*; granting an audience requires authority over the *audience*. W
 check, anyone who can edit a group's membership can add themselves to a group that reads everything.
 Today's blanket `is_admin` gate satisfies both trivially — the rule matters the moment group ownership
 is delegated, which is the natural next request once groups exist.
+
+**Update:** `admin_capability_narrowing_plan.md` has since scoped the blanket `is_admin` gate down
+to exactly this surface — administering the grant/membership store (create/delete a grant, group
+CRUD) — and off the data plane: minting or importing an ingestion key now needs its own grant row,
+`is_admin` conferring none. Delegated per-audience ownership (the two-sided-authorization design
+above) is deferred and remains the follow-up this section describes; the narrowing plan is a
+prerequisite for it, not a substitute — a delegated owner is meaningless while `is_admin` still
+implied everything.
 
 ### What Stage 1 must keep for this to stay reachable
 

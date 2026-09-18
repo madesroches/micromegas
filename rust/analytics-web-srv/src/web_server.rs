@@ -796,6 +796,42 @@ pub async fn run_web_server(
         max_claims_per_caller,
         max_keys_per_caller,
     };
+    // A custom `MICROMEGAS_DEFAULT_AUDIENCE` used to be reachable with no grant row at all, via
+    // `AudienceMintPolicy`'s now-removed admin arm -- a deployment that relied on that for its
+    // very first mint gets a `403` today instead, which reads as a bug rather than a missing
+    // one-time grant. Best-effort diagnostic only: skipped when there's no pool to check with
+    // (same as the `public` short-circuit), and any query error is logged and ignored rather
+    // than propagated, since the telemetry DB owning `audience_grants` is never migrated by this
+    // service's own startup.
+    if ingestion_keys_state.default_audience != micromegas::auth::policy::PUBLIC_AUDIENCE
+        && !config.disable_auth
+        && let Some(pool) = &analytics_keys_pool
+    {
+        match sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM audience_grants WHERE audience = $1 AND axis = 'mint')",
+        )
+        .bind(&ingestion_keys_state.default_audience)
+        .fetch_one(pool)
+        .await
+        {
+            Ok(has_mint_grant) => {
+                if !has_mint_grant {
+                    warn!(
+                        "MICROMEGAS_DEFAULT_AUDIENCE={:?} has no 'mint' grant row -- minting \
+                         with no explicit audience will 403 until one is created (see \
+                         micromegas-grants)",
+                        ingestion_keys_state.default_audience
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "could not check for a 'mint' grant on the default audience \
+                     (best-effort startup diagnostic, not fatal): {e}"
+                );
+            }
+        }
+    }
 
     // Same telemetry-DB pool as the two key-management states above --
     // `audience_grants` lives in the same database behind the same

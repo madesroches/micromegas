@@ -1256,12 +1256,9 @@ async fn live_my_audiences_admin_gets_a_normal_response_regardless_of_knob() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert_eq!(body["is_admin"], true);
-    // `held_pairs` is always empty for an admin -- `isAdmin` alone already grants Share
-    // everywhere on the client, so the field carries no information for this caller.
-    assert!(
-        body["held_pairs"]
-            .as_array()
-            .expect("held_pairs array")
-            .is_empty()
-    );
+    // `held_pairs` is populated for an admin the same way as any other caller now -- this
+    // fixture's `admin_user()` has no seeded grant row, so it stays `[]` here regardless, not
+    // because of any admin-specific shortcut. Not asserted further: seeding rows to make it
+    // non-empty belongs to a test that actually exercises the populated case.
+    assert!(body["held_pairs"].as_array().is_some());
 }

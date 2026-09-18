@@ -189,8 +189,9 @@ class WebClient:
         - `is_admin`: whether the caller is an admin (no other route
           reachable with a Bearer token exposes this).
         - `audiences`: the audiences whose `mint` selectors match this
-          caller today (meaningless for an admin, whose mint authority
-          never depends on a grant row at all -- see `is_admin` instead).
+          caller today -- `is_admin` confers no mint authority of its own,
+          so an admin's mint authority depends entirely on grant rows,
+          the same as any other caller's.
         - `mint_prefix`: the caller-derived namespace prefix a name is minted
           under via `--user-audience` (the web app's Mint dialog composes it
           live before commit for a non-admin caller; this CLI composes it
@@ -228,6 +229,14 @@ class WebClient:
         `None`, so the server applies its own deployment default
         (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) rather than
         receiving an explicit `null`.
+
+        Requires OIDC admin access *and* a `mint` grant on the resolved
+        audience, admin membership alone no longer being enough -- raises on
+        a `403` the same way any other denial does. Checked against the
+        resolved audience even on a repeat import of an already-present key,
+        where the write itself keeps that key's original binding and
+        discards this call's `audience`: such a repeat call can 403 on an
+        audience it will never actually write.
         """
         payload = {"name": name, "key": key}
         if audience is not None:
