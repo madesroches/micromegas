@@ -81,7 +81,6 @@ pub struct IpAllowlist(Vec<IpNet>);
 impl IpAllowlist {
     /// Empty input -> empty allowlist -> "no restriction" (`allows` always true).
     pub fn parse(entries: &[String]) -> Result<Self>; // fails on the first unparseable entry
-    pub fn is_empty(&self) -> bool;
     pub fn allows(&self, ip: Option<IpAddr>) -> bool; // empty -> true; ip == None && !empty -> false
 }
 ```
@@ -126,19 +125,21 @@ tests (`rust/public/tests/http_utils_tests.rs`) move to `rust/auth/tests/client_
 against `resolve_client_ip`, and `http_utils_tests.rs` shrinks to a couple of smoke tests that the
 wrapper still formats `None` as `"unknown"`.
 
-Extend `RequestParts` (`rust/auth/src/types.rs`) with a defaulted method:
+Extend `RequestParts` (`rust/auth/src/types.rs`) with a required method:
 
 ```rust
 pub trait RequestParts: Send + Sync {
     ...
-    /// The resolved client IP, `None` when nothing resolves. Default `None` so no existing
-    /// non-HTTP/gRPC implementer of this trait needs to change.
-    fn client_ip(&self) -> Option<std::net::IpAddr> { None }
+    /// The resolved client IP, `None` when nothing resolves.
+    fn client_ip(&self) -> Option<std::net::IpAddr>;
 }
 ```
 
 `HttpRequestParts`/`GrpcRequestParts` each gain a `pub client_ip: Option<IpAddr>` field and
-implement `client_ip()` by returning it. Every construction site computes it up front:
+implement `client_ip()` by returning it. `CookieTokenRequestParts`
+(`rust/analytics-web-srv/src/auth/claims.rs`), the one other implementer, implements `client_ip()`
+by returning `None`, matching every other method on that adapter. Every construction site
+computes it up front:
 
 - `rust/auth/src/axum.rs::auth_middleware` — `resolve_client_ip(req.headers(), req.extensions())`
   before building `HttpRequestParts` (axum's `ConnectInfo<SocketAddr>` extension is already on
@@ -154,8 +155,8 @@ implement `client_ip()` by returning it. Every construction site computes it up 
 
 Every other `HttpRequestParts { .. }` / `GrpcRequestParts { .. }` literal (mostly in
 `rust/auth/tests/*`) gains `client_ip: None` — deliberate: those tests exercise auth logic
-unrelated to IP, and `None` behaves exactly like today's untouched trait default. A handful of
-tests for the new allowlist behavior override it explicitly (see Testing Strategy).
+unrelated to IP, and `None` is a no-op for the allowlist check. A handful of tests for the new
+allowlist behavior override it explicitly (see Testing Strategy).
 
 ### 3. `ApiKeyAuthProvider` (env/keyring, `object-cache-srv`'s auth path) — `rust/auth/src/api_key.rs`
 
@@ -261,6 +262,15 @@ as an empty slice before handing it to `IpAllowlist::parse` (equivalently, `SELE
 COALESCE(allowed_cidrs, '{}')` in the `RETURNING`/`SELECT` clauses and decode straight into
 `Vec<String>`) — either way, every existing row must parse without error.
 
+**Deploy ordering**: `migrate_db` (which runs this migration) is only invoked by
+`telemetry-ingestion-srv` and `monolith`; `flight-sql-srv` and `analytics-web-srv` never run it, so
+a new build of either can start against a pre-v11 database. Its `RETURNING ... allowed_cidrs`
+query would then fail with "column allowed_cidrs does not exist" on every DB-API-key request. The
+service that runs the migration (`telemetry-ingestion-srv`/`monolith`) must therefore be deployed
+— and the migration must have completed — before any new `flight-sql-srv`/`analytics-web-srv`
+build reaches production, the same ordering constraint migration v6 already documents for
+`audience`.
+
 ### 6. Admin routes — `ingestion_keys.rs` / `analytics_keys.rs`
 
 `MintRequest` gains `allowed_cidrs: Option<Vec<String>>` (`#[serde(default)]`, additive field,
@@ -274,7 +284,8 @@ columns, in every branch that currently issues one (`insert_key`, both `INSERT`s
 `KeyListEntry` gains `allowed_cidrs: Vec<String>` (decoded via the same `Option`-to-empty mapping
 as §4/§5, since `KeyListEntry` derives `sqlx::FromRow` directly off the row) so `list_keys`
 surfaces the restriction (empty = unrestricted, matching every other list-response convention in
-this API).
+this API). `list_keys`'s `SELECT` statements enumerate columns explicitly, so each one must add
+`allowed_cidrs` too, or the `FromRow` decode fails at runtime (see Implementation Steps Phase 3).
 
 New route, one per table, admin-only (`AdminUser`, same gate as `revoke_key`/`list_keys` — this
 is not a self-service action, unlike `mint_key`):
@@ -304,20 +315,22 @@ scope.
    `rust/public/tests/http_utils_tests.rs`'s cases to `rust/auth/tests/client_ip_tests.rs` against it.
 2. Turn `rust/public/src/servers/http_utils.rs::get_client_ip` into the thin wrapper described
    above; trim its test file to the `None -> "unknown"` formatting case.
-3. Add `client_ip()` to the `RequestParts` trait (`rust/auth/src/types.rs`), default `None`.
+3. Add `client_ip()` as a required method on the `RequestParts` trait (`rust/auth/src/types.rs`).
 4. Add the `client_ip` field to `HttpRequestParts`/`GrpcRequestParts`; update every construction
    site (`axum.rs`, `tower.rs`, `tonic_auth_interceptor.rs`, `firehose_common.rs`, and every test
    literal — set `None` in tests unrelated to this feature), including the two compiled doctests in
    `rust/auth/src/lib.rs` (the ```rust example at :10-33 and the ```rust,no_run example at :37-67),
    both of which build a `HttpRequestParts { .. }` struct literal and must add `client_ip: None` to
-   keep compiling under `cargo test --doc`.
+   keep compiling under `cargo test --doc`. Add an explicit `client_ip()` returning `None` to
+   `CookieTokenRequestParts` (`rust/analytics-web-srv/src/auth/claims.rs`), the trait's one other
+   implementer, since the method is now required.
 5. `cargo build --workspace` — this phase changes no auth *decisions*, only threads data through;
    every existing test should pass unmodified except for the moved/renamed IP-resolution tests.
 
 ### Phase 2 — `IpAllowlist` and provider changes
 1. Add `ipnet = "2.12"` to `rust/auth/Cargo.toml` (alphabetical, per `rust/CLAUDE.md`) and the
    workspace root, matching the version already resolved in `Cargo.lock`.
-2. Add `rust/auth/src/ip_allowlist.rs` (`IpAllowlist::parse`/`is_empty`/`allows`) with full unit
+2. Add `rust/auth/src/ip_allowlist.rs` (`IpAllowlist::parse`/`allows`) with full unit
    coverage (Testing Strategy).
 3. Update `KeyRing`/`KeyRingEntry`/`parse_key_ring` and `ApiKeyAuthProvider::validate_request`
    (`rust/auth/src/api_key.rs`).
@@ -332,6 +345,10 @@ scope.
    route + handler.
 2. `analytics_keys.rs`: the same set of changes, mirroring `ingestion_keys.rs` (per that module's
    own "duplication, accepted" precedent — no shared helper introduced).
+3. `ingestion_keys.rs` and `analytics_keys.rs`: extend all four `list_keys` `SELECT` column lists
+   (the `include_revoked` on/off variant in each module) with
+   `COALESCE(allowed_cidrs, '{}') AS allowed_cidrs`, since each `SELECT` enumerates columns
+   explicitly and `KeyListEntry` decodes straight off the row.
 
 ### Phase 4 — Python client
 1. `python/micromegas/micromegas/web_client.py`: new
@@ -345,13 +362,17 @@ scope.
 ### Phase 5 — analytics-web-app surfacing (see Open Questions on scope)
 1. `api-keys-shared.ts`: `allowed_cidrs?: string[]` on `ApiKeyListEntry`; `mint()` gains an
    optional param.
-2. `MintIngestionKeyDialog.tsx` (+ the analytics equivalent): an optional CIDR-list input.
-3. `IngestionApiKeysPage.tsx` / `AnalyticsApiKeysPage.tsx`: show the restriction in the list, add
-   an edit action calling the new `PATCH` route.
+2. `components/MintIngestionKeyDialog.tsx`: an optional CIDR-list input (consumed by both
+   `IngestionApiKeysPage.tsx` and `routes/AudienceAccessPage.tsx`, so both pick up the field for
+   free).
+3. `components/ApiKeysAdminPage.tsx` (the shared list/edit UI both `IngestionApiKeysPage.tsx` and
+   `AnalyticsApiKeysPage.tsx` configure): show the restriction in the list, add an edit action
+   calling the new `PATCH` route.
 
 ## Files to Modify
 
 - `rust/auth/src/types.rs` — `RequestParts::client_ip()`, `HttpRequestParts`/`GrpcRequestParts` field
+- `rust/analytics-web-srv/src/auth/claims.rs` — `CookieTokenRequestParts::client_ip()` impl
 - `rust/auth/src/client_ip.rs` (new) — moved IP-resolution logic
 - `rust/auth/src/ip_allowlist.rs` (new) — `IpAllowlist`
 - `rust/auth/src/api_key.rs` — `KeyRing`/`KeyRingEntry`/`parse_key_ring`/`validate_request`
@@ -367,8 +388,8 @@ scope.
 - `rust/auth/tests/api_key_tests.rs`, `db_api_key_tests.rs`, new `client_ip_tests.rs`,
   `ip_allowlist_tests.rs`, and every other test constructing `HttpRequestParts`/`GrpcRequestParts`
 - (Phase 5, if in scope) `analytics-web-app/src/lib/api-keys-shared.ts`, `ingestion-api-keys-api.ts`,
-  `analytics-api-keys-api.ts`, `MintIngestionKeyDialog.tsx`, `IngestionApiKeysPage.tsx`,
-  `AnalyticsApiKeysPage.tsx`, plus their `__tests__`
+  `analytics-api-keys-api.ts`, `components/MintIngestionKeyDialog.tsx`,
+  `components/ApiKeysAdminPage.tsx`, `routes/AudienceAccessPage.tsx`, plus their `__tests__`
 
 ## Trade-offs
 
@@ -418,7 +439,10 @@ scope.
   check.
 - `mkdocs/docs/admin/api-keys.md`: its route/request-body table (`POST
   {base_path}/api/ingestion-api-keys` etc.) needs the new `allowed_cidrs` field and the new
-  `PATCH .../allowlist` route added.
+  `PATCH .../allowlist` route added; its existing "Deploy ordering matters in the other direction
+  too" paragraph needs a second case added for migration v11 — the migration-running service
+  (`telemetry-ingestion-srv`/`monolith`) must deploy, and the migration must complete, before any
+  new `flight-sql-srv`/`analytics-web-srv` build reaches production (see Design §5).
 - `mkdocs/docs/query-guide/python-api.md`: its `mint_ingestion_api_key(name, audience=None)`
   signature and `WebClient` method list need the new `allowed_cidrs` mint parameter and the two
   `set_*_allowlist` methods added.
@@ -472,10 +496,12 @@ below).
   `SocketAddr`/header-derived IP is in range, and rejects one from an out-of-range IP and one with
   no resolvable IP at all — a no-DB, no-network seam that directly exercises auth enforcement
   end-to-end without needing Manual Verification for it.
-- `rust/public/tests/read_policy_threading_tests.rs`-style tonic test (new or extended): serve a
-  restricted key's `AuthService` over the real `ConnectedIncoming` listener this file already sets
-  up (see `rust/public/src/servers/connect_info_layer.rs`), and confirm a connection from an
-  in-range peer address is accepted and an out-of-range one is rejected.
+- `rust/public/tests/read_policy_threading_tests.rs`-style tonic test (new or extended): unlike that
+  file's existing `start_server`, which serves raw `TcpStream`s and never attaches a `SocketAddr`
+  extension, this test must wrap its listener in `ConnectedIncoming::new(listener)` (see
+  `rust/public/src/servers/connect_info_layer.rs`) so the extension `resolve_client_ip` reads is
+  actually present; then serve a restricted key's `AuthService` over it and confirm a connection
+  from an in-range peer address is accepted and an out-of-range one is rejected.
 - Python: `python/micromegas/tests/test_web_client.py` — the two new `set_*_allowlist` methods
   build the expected `PATCH` URL and body, following `TestAudienceGrants`'s style.
 
