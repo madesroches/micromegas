@@ -38,11 +38,13 @@ that exists today.
   `flight_sql_service_impl.rs` (`:1187`, `:1357`) — all for audit/request logging
   (`query_audit.rs:87`), never for an authorization decision.
 - **Circular-dependency constraint**: `micromegas-auth` (the `auth` crate) does not depend on
-  `micromegas` (the `public` crate) — it's the other way around. The three places that turn a raw
+  `micromegas` (the `public` crate) — it's the other way around. The four places that turn a raw
   request into `RequestParts` — `auth_middleware` (`rust/auth/src/axum.rs:40-89`), `AuthService`
-  (`rust/auth/src/tower.rs:58-161`), and `check_auth` (`rust/public/src/servers/tonic_auth_interceptor.rs:10-44`,
-  the last one living in `public` but calling into `auth`) — live inside or are called by `auth`,
-  so `get_client_ip`'s logic can't be reused from `public` as-is; it has to move down.
+  (`rust/auth/src/tower.rs:58-161`), `check_auth` (`rust/public/src/servers/tonic_auth_interceptor.rs:10-44`,
+  living in `public` but calling into `auth` — currently uncalled anywhere in the workspace), and
+  `firehose_auth_middleware` (`rust/public/src/servers/firehose_common.rs:92`) — live inside or are
+  called by `auth`, so `get_client_ip`'s logic can't be reused from `public` as-is; it has to move
+  down.
 - For gRPC, the `SocketAddr` extension is already present on `req.extensions()` by the time
   `AuthService::call` runs — `ConnectedIncoming`/`ConnectedStream` (`connect_info_layer.rs:15-108`)
   attach it at TCP-accept time, below every custom tower layer, and `flight_sql_service_impl.rs`
@@ -107,8 +109,8 @@ unmaps to `a.b.c.d` right here, the single normalization point — independent o
 configuration, and before `IpAllowlist::allows` ever sees the address, so an allowlist entry of
 `a.b.c.d/32` matches either arrival form. Same priority order (rightmost `X-Forwarded-For`, then
 `X-Real-IP`, then the `SocketAddr` extension) and the same parse-or-fall-through behavior as
-today's `get_client_ip` — copied
-verbatim, just returning `Option<IpAddr>` instead of formatting to `String`.
+today's `get_client_ip`, plus the `to_canonical()` call above — a deliberate behavior change from
+today's code, not a verbatim copy, that also normalizes the form logged for audit purposes.
 `rust/public/src/servers/http_utils.rs::get_client_ip` becomes a thin wrapper:
 
 ```rust
@@ -170,7 +172,7 @@ pub struct KeyRingEntry {
     pub key: Key,
     /// CIDR ranges or bare IPs this key may be used from. Absent/empty = unrestricted.
     #[serde(default)]
-    pub allowed_ips: Vec<String>,
+    pub allowed_cidrs: Vec<String>,
 }
 ```
 
@@ -185,7 +187,7 @@ pub struct KeyRingValue {
 pub type KeyRing = HashMap<Key, KeyRingValue>;
 ```
 
-`parse_key_ring` calls `IpAllowlist::parse(&entry.allowed_ips)` per entry and fails the whole
+`parse_key_ring` calls `IpAllowlist::parse(&entry.allowed_cidrs)` per entry and fails the whole
 parse (fail-fast at startup, same as every other keyring-shape error today) on a malformed entry.
 
 `validate_request` keeps the same constant-time full-keyring scan (unchanged — the allowlist
@@ -207,14 +209,16 @@ the point is the IP check happens once, after the scan, not inside the hot loop.
 
 ### 4. `DbApiKeyAuthProvider` — `rust/auth/src/db_api_key.rs`
 
-`KeyRow` (`:170-176`) gains an `allowed_cidrs: Option<Vec<String>>` field (every pre-v11 row reads
-back `NULL`, which sqlx decodes as `None`, not an empty `Vec` — see §5), parsed into an `IpAllowlist`
-once per cache fill (not per request) — added alongside `audience` as part of the same
-`RETURNING` clause and the same `try_get_with` loader closure:
+`KeyRow` (`:170-176`) gains an `allowlist: IpAllowlist` field parsed from the `allowed_cidrs`
+column read (every pre-v11 row reads back `NULL`, which sqlx decodes as `None`, not an empty
+`Vec` — see §5) once per cache fill (not per request) — added alongside `audience` as part of the
+same `RETURNING` clause and the same `try_get_with` loader closure:
 
 ```rust
-let returning = match (table.has_audience(), /* always true, both tables get this column */) {
-    ... "key_id, name, audience, allowed_cidrs" | "key_id, name, allowed_cidrs" ...
+let returning = if table.has_audience() {
+    "key_id, name, audience, allowed_cidrs"
+} else {
+    "key_id, name, allowed_cidrs"
 };
 ```
 
@@ -229,9 +233,7 @@ if !row.allowlist.allows(parts.client_ip()) {
 }
 ```
 
-This inherits the same staleness bound the module's doc comment already documents for
-`revoked_at`: a changed allowlist takes up to `cache_ttl_secs` to take effect on a given process,
-exactly like revocation latency today — no new caveat, same one, restated for this field too.
+Allowlist changes take effect within `cache_ttl_secs`, same as revocation.
 
 An IP-allowlist rejection is **not** cached in `self.unknown` (that cache means "no such live
 key", not "this key exists but this caller may not use it from here") and must not increment
@@ -253,7 +255,11 @@ UPDATE migration SET version=11;
 
 No backfill needed (unlike `audience`, which had to become `NOT NULL`): `NULL`/absent means "no
 restriction", which is exactly the correct value for every pre-existing row. `LATEST_DATA_LAKE_SCHEMA_VERSION`
-becomes `11`.
+becomes `11`, which requires defining `upgrade_data_lake_schema_v11` (running the two `ALTER
+TABLE`s above) and adding its `if 10 == current_version { ... }` arm to `execute_migration`
+(`rust/ingestion/src/sql_migration.rs`), following the same per-version dispatch pattern as every
+prior version bump — otherwise `execute_migration`'s closing `assert_eq!` panics at startup for
+any service running the migration against a pre-v11 database.
 
 Reading the column back: a nullable `TEXT[]` must decode into `Option<Vec<String>>`, not a bare
 `Vec<String>` — sqlx returns an `UnexpectedNull` decode error on a bare `Vec<String>` target when
@@ -319,7 +325,7 @@ scope.
 4. Add the `client_ip` field to `HttpRequestParts`/`GrpcRequestParts`; update every construction
    site (`axum.rs`, `tower.rs`, `tonic_auth_interceptor.rs`, `firehose_common.rs`, and every test
    literal — set `None` in tests unrelated to this feature), including the two compiled doctests in
-   `rust/auth/src/lib.rs` (the ```rust example at :10-33 and the ```rust,no_run example at :37-67),
+   `rust/auth/src/lib.rs` (the ```rust example and the ```rust,no_run example),
    both of which build a `HttpRequestParts { .. }` struct literal and must add `client_ip: None` to
    keep compiling under `cargo test --doc`. Add an explicit `client_ip()` returning `None` to
    `CookieTokenRequestParts` (`rust/analytics-web-srv/src/auth/claims.rs`), the trait's one other
@@ -335,7 +341,8 @@ scope.
 3. Update `KeyRing`/`KeyRingEntry`/`parse_key_ring` and `ApiKeyAuthProvider::validate_request`
    (`rust/auth/src/api_key.rs`).
 4. Migration v11 (`rust/ingestion/src/sql_migration.rs`): add `allowed_cidrs TEXT[]` to both
-   tables, bump `LATEST_DATA_LAKE_SCHEMA_VERSION`.
+   tables, define `upgrade_data_lake_schema_v11`, add its `if 10 == current_version` arm to
+   `execute_migration`, and bump `LATEST_DATA_LAKE_SCHEMA_VERSION`.
 5. Update `KeyRow`/`DbApiKeyAuthProvider::validate_request` (`rust/auth/src/db_api_key.rs`) to load,
    cache, and check the new column.
 
@@ -409,11 +416,8 @@ scope.
   out to it anyway, with no benefit.
 - **`ipnet` over hand-rolled CIDR parsing.** IPv6 mask arithmetic is easy to get subtly wrong
   (off-by-one prefix lengths, mixed v4/v6 comparison); a small, well-established crate is worth
-  using. `ipnet` is already resolved in `rust/Cargo.lock` (pulled in transitively by `hyper-util`),
-  so it adds no new crate to the build graph, unlike `ipnetwork`, which is not currently a
-  dependency of anything in this workspace. The one ergonomic gap versus `ipnetwork` — `IpNet::
-  from_str` doesn't accept a bare IP without a prefix — is a two-line fallback in `IpAllowlist::
-  parse` (see §1).
+  using, and it's a better fit than `ipnetwork`, which is not currently a dependency of anything in
+  this workspace (see §1 for the build-graph and bare-IP-fallback detail).
 - **Rejection is a generic `"invalid API token"`, not a distinguishable `403`/error code.** A
   distinct client-visible signal ("your key is valid but your IP isn't allowed") would help a
   legitimate caller debug faster, but also confirms to anyone holding a leaked key that it's
@@ -428,9 +432,9 @@ scope.
 ## Decisions
 
 - The API-key import path (the `micromegas-import-keys` CLI and both
-  `POST .../{table}-api-keys/import` routes) is removed in a separate change, so this plan carries
-  no allowlist plumbing for it. That removal must land first — mint and the new `PATCH` route are
-  then the only two ways an allowlist reaches a row.
+  `POST .../{table}-api-keys/import` routes) was removed in a separate change, already on `main`
+  (#1609), so this plan carries no allowlist plumbing for it — mint and the new `PATCH` route are
+  the only two ways an allowlist reaches a row.
 
 ## Documentation
 
@@ -439,15 +443,17 @@ scope.
   check.
 - `mkdocs/docs/admin/api-keys.md`: its route/request-body table (`POST
   {base_path}/api/ingestion-api-keys` etc.) needs the new `allowed_cidrs` field and the new
-  `PATCH .../allowlist` route added; its existing "Deploy ordering matters in the other direction
-  too" paragraph needs a second case added for migration v11 — the migration-running service
-  (`telemetry-ingestion-srv`/`monolith`) must deploy, and the migration must complete, before any
-  new `flight-sql-srv`/`analytics-web-srv` build reaches production (see Design §5).
+  `PATCH .../allowlist` route added; its `## Schema` DDL blocks for both `ingestion_api_keys` and
+  `analytics_api_keys` need the new `allowed_cidrs TEXT[]` column added; its existing "Deploy
+  ordering matters in the other direction too" paragraph needs a second case added for migration
+  v11 — the migration-running service (`telemetry-ingestion-srv`/`monolith`) must deploy, and the
+  migration must complete, before any new `flight-sql-srv`/`analytics-web-srv` build reaches
+  production (see Design §5).
 - `mkdocs/docs/query-guide/python-api.md`: its `mint_ingestion_api_key(name, audience=None)`
   signature and `WebClient` method list need the new `allowed_cidrs` mint parameter and the two
   `set_*_allowlist` methods added.
 - `mkdocs/docs/admin/object-cache.md` and `object-cache-srv`'s `--api-keys` doc: need the new
-  `allowed_ips` keyring-entry field documented (see Overview/§3 on `object-cache-srv` being the
+  `allowed_cidrs` keyring-entry field documented (see Overview/§3 on `object-cache-srv` being the
   env-keyring's sole consumer).
 - `CHANGELOG.md`: new column + new provider-side behavior is additive at the SQL/API layer (no
   breaking change there), but `KeyRing`'s value type change (`String` -> `KeyRingValue`) is a
@@ -471,9 +477,9 @@ below).
   cases as today, retargeted at `resolve_client_ip` and asserting `Option<IpAddr>` instead of a
   formatted string; plus a new case that an IPv4-mapped IPv6 socket address (`::ffff:a.b.c.d`)
   resolves to the canonical `a.b.c.d`.
-- `rust/auth/tests/api_key_tests.rs`: a keyring entry with a restrictive `allowed_ips` accepts a
+- `rust/auth/tests/api_key_tests.rs`: a keyring entry with a restrictive `allowed_cidrs` accepts a
   request whose `HttpRequestParts.client_ip` is inside it and rejects one outside it (including a
-  `client_ip: None` request against a restricted key); an entry with no `allowed_ips` is
+  `client_ip: None` request against a restricted key); an entry with no `allowed_cidrs` is
   unaffected (regression check that the existing `test_valid_api_key`/`test_invalid_api_key` keep
   passing unchanged).
 - `rust/auth/tests/db_api_key_tests.rs`: extend the existing no-DB pattern — a canned `KeyRow`
