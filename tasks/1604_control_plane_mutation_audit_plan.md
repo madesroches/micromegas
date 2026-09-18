@@ -7,8 +7,9 @@
 Grant and group mutations are the ABAC control plane, but today's log trail can't serve as an
 access audit: denied mutations emit nothing at all, two of the four group-route lines carry no
 actor, and every successful line is free text under a module-path target. This adds one structured
-JSON audit record per attempted mutation — allowed *and* denied — always carrying the actor, the
-action, the target, the outcome and `client_ip`, emitted under a single dedicated log target
+JSON audit record for every mutation attempt that reaches a gate or handler — allowed *and*
+denied — carrying the actor, the action, the target, the outcome and `client_ip`, emitted under a
+single dedicated log target
 `control_plane_audit`, mirroring the existing `flightsql_query_audit` record
 (`rust/public/src/servers/query_audit.rs`). The record replaces the free-text mutation lines at
 those sites.
@@ -129,9 +130,10 @@ Implemented next to each error enum (same crate, no orphan issue):
   `GroupNotFound`/`BadRequest` → `denied`; `Database`/`Internal`/`NotConfigured` → `error`.
 - `GroupsError` (`groups.rs`): `BadRequest`/`NotFound`/`NestedGroupNotFound`/`Conflict` →
   `denied`; `Database`/`NotConfigured`/`Internal` → `error`.
-- `IngestionKeyError` (`ingestion_keys.rs`): `Forbidden`/`NotFound`/`BadRequest` → `denied`;
-  `Conflict` (claim contention) → `error` — it is transient lock contention, explicitly *not* a
-  denial per `try_claim_and_mint`'s own comment; everything else → `error`.
+- `IngestionKeyError` (`ingestion_keys.rs`): `Forbidden`/`Unauthenticated`/`NotFound`/`BadRequest` →
+  `denied`; `Conflict` (claim contention) → `error` — it is transient lock contention, explicitly
+  *not* a denial per `try_claim_and_mint`'s own comment; `Database`/`NotConfigured`/`Unavailable` →
+  `error`.
 
 `Database`'s message must not reach the record verbatim (`sqlx::Error` can carry SQL/connection
 detail); use a fixed `"database error"` string, matching what `IntoResponse` already returns to
@@ -245,14 +247,16 @@ struct GroupAdminGate(ValidatedUser);
 Its `from_request_parts` delegates to `AdminUser`; on rejection it emits a `denied` record
 (actor from the `ValidatedUser` extension when present, else `"unauthenticated"`) and returns
 `AdminRequired` unchanged, so the HTTP response is byte-identical to today. The action is derived
-from `parts.method` and whether `parts.uri.path()` ends in `/members`:
+from `parts.method` and the route template in `axum::extract::MatchedPath`, read out of
+`parts.extensions` — not the raw `parts.uri.path()`, which would misclassify a group literally
+named `members` (`is_valid_group_name` allows it):
 
-| method | path ends `/members` | action |
+| method | route template | action |
 |---|---|---|
-| POST | no | `create_group` |
-| DELETE | no | `delete_group` |
-| POST | yes | `add_member` |
-| DELETE | yes | `remove_member` |
+| POST | `.../{name}` | `create_group` |
+| DELETE | `.../{name}` | `delete_group` |
+| POST | `.../{name}/members` | `add_member` |
+| DELETE | `.../{name}/members` | `remove_member` |
 
 All four group mutation handlers swap `AdminUser(user)` for `GroupAdminGate(user)`. The three
 read routes (`list_groups`, `list_members`) keep plain `AdminUser` — reads are out of scope.
@@ -316,18 +320,9 @@ actor + `client_ip` + action. Emitting where the caller is known — the gate fo
 denials, the handler wrapper for everything else — touches far less and keeps the error enums as
 they are.
 
-**Wrapper + `_inner` split vs. an audit call at every `return Err`.** The split adds a function per
-handler but guarantees exactly one record per attempt: a new early return added later is audited
-without the author remembering to do anything. Sprinkling `audit.emit_denied(...)` at each of
-`create_grant`'s five denial returns is the shape that silently rots.
-
 **Replacing the free-text lines vs. keeping both.** `flightsql_query_audit` kept its start-of-query
 `info!` because that line carries in-flight visibility the completion record cannot. Here the free
 text is a strict subset of the record at the same instant, so keeping it is pure duplication.
-
-**Deriving `created` from the status code vs. widening the response.** The handlers already encode
-created-vs-existed as `201`/`200`; reading it back from the status avoids adding a field to a JSON
-body the web app consumes.
 
 ## Decisions
 
@@ -342,6 +337,8 @@ body the web app consumes.
   denial.
 - Read routes (`/visible`, `/my-audiences`, `list_groups`, `list_members`) are out of scope; this
   record is for mutations.
+- Extractor-level malformed-input rejections (`Json`/`Query` returning 400/422) after the gate
+  emit no record: no mutation target is parseable at that point.
 
 ## Documentation
 
@@ -375,6 +372,13 @@ witnessed in the wild, and every behavior is reachable without a pool.
 through `audit_outcome`, asserting the class and that `Database`'s reason is the fixed string
 rather than the `sqlx::Error` text.
 
+**`emit`'s `Ok` path** — `emit<T, E: AuditOutcome>(&Result<T, E>)` takes its input by reference and
+is generic over `T`, so it is callable with no pool: build a `MutationAudit`, call
+`.created(true)`, then `.emit(&Ok::<(), AudienceGrantError>(()))`, and assert the resulting
+`MutationAuditRecord` has `outcome: "allowed"`, `reason: None`, and `created: Some(true)`
+preserved. This is the only automated coverage of the `Ok` → `"allowed"` classification; everything
+else in Outcome classification walks `E`'s variants, never the `Ok` arm.
+
 **Emission, end to end in-process** — using `init_in_memory_tracing()` +
 `micromegas_tracing::event::in_memory_sink::InMemorySink`, the pattern
 `rust/public/tests/auth_observability_tests.rs` already uses, with a collector that filters on
@@ -389,7 +393,7 @@ The gate denials are fully covered this way with no DB, because both gates rejec
   response is still 403.
 - Same for `DELETE` → `action: "delete_grant"`.
 - Non-admin on each of the four group mutation routes → one record with the right action derived
-  from method + path, `outcome: "denied"`, actor present; the 403 body is unchanged from
+  from method + route template, `outcome: "denied"`, actor present; the 403 body is unchanged from
   `AdminRequired`'s.
 - No `AuthContext` extension → `actor: "unauthenticated"`.
 - A request with `X-Forwarded-For: 203.0.113.7, 198.51.100.1` records
