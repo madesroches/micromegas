@@ -4,7 +4,6 @@ Provides Terraform-inspired workflow: init, import, pull, plan, apply, list.
 """
 
 import argparse
-import difflib
 import json
 import subprocess
 import sys
@@ -14,6 +13,12 @@ import requests
 
 from micromegas.cli import web_auth
 from micromegas.cli.config import ProfileError
+from micromegas.cli.state_sync import (
+    add_color_arg,
+    confirm_apply,
+    unified_diff,
+    use_color,
+)
 from micromegas.cli.version import add_version_argument
 from micromegas.web_client import WebClient
 
@@ -443,24 +448,7 @@ def format_screen_diff(local_dict, server_dict, use_color):
     local_json = json.dumps(
         local_dict, indent=2, sort_keys=True, ensure_ascii=False
     ).splitlines()
-    diff_lines = list(
-        difflib.unified_diff(server_json, local_json, fromfile="server", tofile="local")
-    )
-    if not diff_lines:
-        return ""
-    result = []
-    for line in diff_lines:
-        if use_color:
-            if line.startswith("---") or line.startswith("+++"):
-                line = f"\033[1m{line}\033[0m"
-            elif line.startswith("@@"):
-                line = f"\033[36m{line}\033[0m"
-            elif line.startswith("-"):
-                line = f"\033[31m{line}\033[0m"
-            elif line.startswith("+"):
-                line = f"\033[32m{line}\033[0m"
-        result.append(f"    {line}")
-    return "\n".join(result)
+    return unified_diff(server_json, local_json, "server", "local", use_color)
 
 
 def format_plan(creates, updates, deletes, unchanged, untracked, use_color=False):
@@ -497,12 +485,12 @@ def cmd_plan(args):
     config = read_config()
     client = make_client(config, args)
     names = args.names if args.names else None
-    use_color = sys.stdout.isatty() and args.color
+    colorize = use_color(args)
 
     creates, updates, deletes, unchanged, untracked = compute_plan(
         config, client, names
     )
-    print(format_plan(creates, updates, deletes, unchanged, untracked, use_color))
+    print(format_plan(creates, updates, deletes, unchanged, untracked, colorize))
 
 
 def cmd_apply(args):
@@ -524,15 +512,12 @@ def cmd_apply(args):
         print(f"No changes. {len(unchanged)} screens unchanged.")
         return
 
-    use_color = sys.stdout.isatty() and args.color
-    print(format_plan(creates, updates, deletes, unchanged, untracked, use_color))
+    colorize = use_color(args)
+    print(format_plan(creates, updates, deletes, unchanged, untracked, colorize))
     print()
 
-    if not args.auto_approve:
-        answer = input("Do you want to apply these changes? [y/N]: ").strip().lower()
-        if answer != "y":
-            print("Apply cancelled.")
-            sys.exit(1)
+    if not confirm_apply(args.auto_approve):
+        sys.exit(1)
 
     print("Applying...\n")
 
@@ -699,12 +684,7 @@ def main():
         "plan", parents=[client_args], help="Preview changes"
     )
     p_plan.add_argument("names", nargs="*", help="Screen names (default: all)")
-    p_plan.add_argument(
-        "--color",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Colored diff output",
-    )
+    add_color_arg(p_plan)
     p_plan.set_defaults(func=cmd_plan)
 
     # apply
@@ -715,12 +695,7 @@ def main():
     p_apply.add_argument(
         "--auto-approve", action="store_true", help="Skip confirmation prompt"
     )
-    p_apply.add_argument(
-        "--color",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Colored diff output",
-    )
+    add_color_arg(p_apply)
     p_apply.set_defaults(func=cmd_apply)
 
     # list

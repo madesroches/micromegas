@@ -840,12 +840,12 @@ resolves; OIDC, when both an issuer and a client ID are resolved (from any sourc
 CLI connects without auth. A profile (or flat config) that resolves both `api_key_file` and a
 complete OIDC pair is a configuration error — see Named profiles below.
 
-`api_key_file` is a FlightSQL credential: only `micromegas-query` and `connect_with_profile()`
-honor it, because the analytics web API validates OIDC tokens only, not a static key. Every
-`WebClient`-based CLI (`micromegas-screens`, `micromegas-grants`, `-groups`, `-import-keys`,
-`-setup-telemetry`) resolves auth through the shared `web_auth.resolve_web_auth()` helper, which
-only ever branches on the OIDC fields. Of those, only `micromegas-screens` reports a profile that
-resolves `api_key_file` and nothing else as an error; `micromegas-grants`, `-groups`,
+`api_key_file` is a FlightSQL credential: only `micromegas-query`, `micromegas-views`, and
+`connect_with_profile()` honor it, because the analytics web API validates OIDC tokens only, not
+a static key. Every `WebClient`-based CLI (`micromegas-screens`, `micromegas-grants`, `-groups`,
+`-import-keys`, `-setup-telemetry`) resolves auth through the shared `web_auth.resolve_web_auth()`
+helper, which only ever branches on the OIDC fields. Of those, only `micromegas-screens` reports a
+profile that resolves `api_key_file` and nothing else as an error; `micromegas-grants`, `-groups`,
 `-import-keys`, and `-setup-telemetry` still silently connect unauthenticated on that path.
 
 **Named profiles:**
@@ -1234,6 +1234,8 @@ Flight client surfaces as a different Python exception type:
 | Unimplemented feature | `Unimplemented` | `pyarrow.lib.ArrowNotImplementedError` (a `NotImplementedError` subclass) |
 | Query exceeded a resource budget (e.g. memory) | `ResourceExhausted` | `pyarrow.lib.ArrowInvalid` (a `ValueError` subclass, message prefixed `gRPC returned resource exhausted error`) |
 | Query rejected by an admin-managed [query deny list](../admin/functions-reference.md#query-deny-list) rule | `ResourceExhausted` | Same as the row above: `pyarrow.lib.ArrowInvalid`, same `gRPC returned resource exhausted error` message prefix -- the message itself additionally names the rule id and reason and tells you the `remove_query_denial(...)` call that lifts it |
+| `CREATE MATERIALIZED VIEW` of a name that already exists (without `OR REPLACE`) | `AlreadyExists` | `pyarrow.lib.ArrowException` |
+| `DROP MATERIALIZED VIEW` (without `IF EXISTS`) of a name that doesn't exist | `NotFound` | `pyarrow.lib.ArrowKeyError` (an `ArrowException`/`KeyError` subclass) |
 | Genuine server-side bug | `Internal` | `pyarrow._flight.FlightInternalError` |
 
 This lets you distinguish "fix my query" from "something broke server-side" without parsing the
