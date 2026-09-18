@@ -407,7 +407,10 @@ DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`c
 renders through `df.to_json(orient="records", indent=2)` — the pattern `micromegas-query` already
 uses (`python/micromegas/micromegas/cli/query.py:160`) — rather than `json.dumps` of raw cell
 values, since `update_group` (`Int32`) and `updated_at` (`Timestamp(ns, "+00:00")`) are not
-`json.dumps`-serializable. `show <name>` calls
+`json.dumps`-serializable. A skipped local file (§2) is still reported as a warning, but unlike
+`plan`/`apply` it does not move `list`'s exit code: `list` exits 0 regardless, being an inventory
+command whose `--format json` output — the per-name `status` column, or the skip warning on stderr
+— is the CI signal, not the process exit status (Decisions). `show <name>` calls
 `read_server_state` directly (it has no `local_scan` to give `compute_plan`) and prints the
 server's stored `definition_sql` verbatim.
 `pull` differs from `show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored
@@ -527,6 +530,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   stopping at the first error.
 - A skipped local file makes `plan` and `apply` exit non-zero, unlike `screens.py`, which warns and
   exits 0: this tool is meant to run unattended in CI, where a warning on stderr is not read.
+- `list` does not follow that rule: a skipped local file leaves `list` exiting 0, matching
+  `screens.py:cmd_list`, since `list` is an inventory command read for its `--format json` output
+  rather than gated on for drift (§7).
 - `plan` exits 0 when creates/updates/drops are pending, matching `screens.py:cmd_plan`; a CI
   drift check must read `plan`'s output, not its exit status, to detect pending changes.
 - A skipped local file protects only the name(s) it could have been, not the whole directory:
@@ -678,9 +684,13 @@ tool generates are accepted by the real parser, validator, and registry.
 6. Break the file (a column the source doesn't have) and `apply`
    → the server's validation error is reported and the exit code is non-zero. This is the
    `plan`-can't-validate gap from Trade-offs, checked by hand once.
-7. `rm request_stats.sql && micromegas-views plan`
+7. Materialize `request_stats` so the drop below has something to retire:
+   `micromegas-query "SELECT * FROM materialize_partitions('request_stats', '$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)', '$(date -u +%Y-%m-%dT%H:%M:%SZ)', 86400)"`
+   → completes without error; `micromegas-query "SELECT * FROM list_partitions() WHERE view_set_name = 'request_stats'"`
+   shows at least one row. Then `rm request_stats.sql && micromegas-views plan`
    → `? request_stats` under server-only, no drop proposed. Then `micromegas-views apply --prune`
-   → `dropped`, and `list_partitions()` shows its partitions retired.
+   → `dropped`, and the same `list_partitions()` query now shows no rows for `request_stats` — its
+   partitions retired.
 
 ## Open Questions
 
