@@ -185,23 +185,9 @@ The two quota exemptions (`:733` `max_claims_per_caller`, `:350` `max_keys_per_c
 they bound self-service abuse, not access, and an administrator bulk-provisioning credentials is
 the case they were written to exempt.
 
-### 5. `list_keys`: unchanged
+### 5. `list_keys` and `revoke_key`: unchanged
 
-`list_keys` keeps today's behavior — `AdminUser`-gated, every row, every audience. Reading which
-credentials exist is the key-management surface an administrator is expected to operate, and
-scoping it to grant rows would hide keys from the only caller positioned to clean them up without
-withholding any authority the caller could not grant themselves in one call.
-
-### 6. `revoke_key`: unchanged
-
-`revoke_key` keeps today's behavior — `AdminUser`-gated, no per-audience authority check. Revoking
-a credential removes access and confers none, so the audit motive this plan is built on does not
-apply: there is no invisible access to make attributable. Narrowing it would instead create the
-one outcome worth avoiding, a key that no one can revoke.
-
-Together with §5 this leaves the key-management *views* whole and narrows only the two routes that
-**grant** write access, `mint_key` and `import_key`. Nothing an operator can see today goes dark,
-so this plan needs no visibility audit of existing `ingestion_api_keys` rows.
+Both stay `AdminUser`-gated and unconditional — see `## Decisions`.
 
 ### 7. `import_key`: same authority as minting
 
@@ -377,7 +363,7 @@ notification path.
 - Accepted behavior break: an admin can no longer mint into an existing audience they hold no
   grant on, nor into a custom `MICROMEGAS_DEFAULT_AUDIENCE` with no `mint` row. Both are one
   `create_grant` call away, and the second gets a startup warning. No pre-existing key changes
-  visibility or revocability, since §5/§6 leave both routes alone.
+  visibility or revocability, since §5 leaves both routes alone.
 - A client-credentials caller with no email cannot form a `user:` selector and so cannot claim an
   unclaimed audience; such a caller gets a `group:` mint row instead. There is no `group:`-selector
   claim path.
@@ -511,7 +497,11 @@ immediately — a 403 on a visible button, an empty table — rather than silent
 4. `micromegas-grants --url http://127.0.0.1:9000 create team-alpha mint user:<you>` as the
    admin, then mint into `team-alpha`. Expect `201` with `claimed: false`, and the key visible in
    the list.
-5. `micromegas-query "SELECT * FROM list_audience_grants()"` as the admin. Expect every row —
+5. `micromegas-import-keys` (or `POST .../ingestion-api-keys/import`) an existing key into an
+   audience you hold no grant on. Expect `403`. Then
+   `micromegas-grants --url http://127.0.0.1:9000 create <that audience> mint user:<you>` and
+   retry the same import. Expect `201` with `imported: true`.
+6. `micromegas-query "SELECT * FROM list_audience_grants()"` as the admin. Expect every row —
    the control plane did not narrow.
-6. Restart with `MICROMEGAS_DEFAULT_AUDIENCE=corp` and no grant on `corp`. Expect the startup
+7. Restart with `MICROMEGAS_DEFAULT_AUDIENCE=corp` and no grant on `corp`. Expect the startup
    `warn!` in `/tmp/monolith.log`, and a `403` from a mint with no explicit audience.
