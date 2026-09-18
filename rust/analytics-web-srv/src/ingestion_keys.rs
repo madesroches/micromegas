@@ -25,6 +25,7 @@
 //! `data_sources.rs`/`screens.rs`/`folders.rs` today.
 
 use crate::auth::{AdminUser, AuthenticatedUser, Unauthenticated};
+use crate::mutation_audit::{AuditOutcome, ClientIp, MutationAudit, action};
 use axum::extract::{Extension, FromRequestParts, Path, Query};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
@@ -207,6 +208,35 @@ impl From<Unauthenticated> for IngestionKeyError {
     }
 }
 
+impl AuditOutcome for IngestionKeyError {
+    fn audit_outcome(&self) -> (&'static str, Option<String>) {
+        match self {
+            IngestionKeyError::Forbidden(msg) => ("denied", Some(msg.clone())),
+            IngestionKeyError::Unauthenticated(msg) => ("denied", Some(msg.clone())),
+            IngestionKeyError::NotFound => ("denied", Some("key not found".to_string())),
+            IngestionKeyError::BadRequest(msg) => ("denied", Some(msg.clone())),
+            // Advisory-lock contention on the claim path, not a denial -- `try_claim_and_mint`'s
+            // own doc comment says the caller should retry, not treat this as "you may not do
+            // this."
+            IngestionKeyError::Conflict(msg) => ("error", Some(msg.clone())),
+            // The raw `sqlx::Error` text must not reach the record -- it can carry
+            // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
+            // returns to the client instead.
+            IngestionKeyError::Database(_) => {
+                ("error", Some("internal database error".to_string()))
+            }
+            IngestionKeyError::NotConfigured => (
+                "error",
+                Some(
+                    "ingestion key store not configured: set MICROMEGAS_SQL_CONNECTION_STRING"
+                        .to_string(),
+                ),
+            ),
+            IngestionKeyError::Unavailable(msg) => ("error", Some(msg.clone())),
+        }
+    }
+}
+
 fn require_pool(state: &IngestionKeysState) -> Result<PgPool, IngestionKeyError> {
     state.pool.clone().ok_or(IngestionKeyError::NotConfigured)
 }
@@ -371,6 +401,7 @@ async fn authorize_mint(
 async fn mint_key(
     Extension(state): Extension<IngestionKeysState>,
     MintGate(caller): MintGate,
+    client_ip: ClientIp,
     Json(body): Json<MintRequest>,
 ) -> Result<(StatusCode, Json<MintResponse>), IngestionKeyError> {
     let pool = require_pool(&state)?;
@@ -441,11 +472,22 @@ async fn mint_key(
             // treatment to `is_admin`, so this is the one claim path every caller takes.
             let explicit = body.audience.as_deref().filter(|s| !s.is_empty()).is_some();
             match (explicit, caller.email.as_deref()) {
-                (true, Some(_email)) => try_claim_and_mint(
-                    &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
-                )
-                .await
-                .map(|resp| (StatusCode::CREATED, Json(resp))),
+                (true, Some(email)) => {
+                    // `axis` is left absent: a claim always writes both `mint` and `read` axes
+                    // (`try_claim_and_mint`, below), which the `claim_audience` action already
+                    // implies.
+                    let selector = format!("user:{email}");
+                    let audit =
+                        MutationAudit::from_context(action::CLAIM_AUDIENCE, &caller, &client_ip)
+                            .audience(&candidate)
+                            .selector(&selector);
+                    let result = try_claim_and_mint(
+                        &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
+                    )
+                    .await;
+                    audit.emit(&result);
+                    result.map(|resp| (StatusCode::CREATED, Json(resp)))
+                }
                 _ => Err(IngestionKeyError::Forbidden(format!(
                     "audience {candidate:?} is not in the caller's mintable set"
                 ))),
@@ -675,15 +717,11 @@ async fn try_claim_and_mint(
     tx.commit().await?;
 
     // `mint_key`'s own mint audit line is never reached for this path -- it returns from here
-    // directly -- so log both the mint and the claim here instead. The `exists`-true branch above
-    // always returns early, so every call that reaches this point took the `else`
-    // (genuinely-fresh) branch and wrote both new grant rows -- the claim line is unconditional.
+    // directly -- so log the mint here instead. The claim itself is recorded by `mint_key`'s
+    // caller as a `control_plane_audit` record, not a free-text line.
     info!(
         "minted ingestion api key key_id={key_id} name={} created_by={caller_email} audience={audience}",
         body.name
-    );
-    info!(
-        "claimed audience via self-service mint audience={audience} selector={selector} created_by={caller_email} axes=mint,read"
     );
 
     Ok(MintResponse {

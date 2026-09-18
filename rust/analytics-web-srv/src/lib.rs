@@ -10,6 +10,7 @@ pub mod folders;
 pub mod groups;
 pub mod ingestion_keys;
 pub mod maps;
+pub mod mutation_audit;
 pub mod screen_types;
 pub mod screens;
 pub mod stream_query;

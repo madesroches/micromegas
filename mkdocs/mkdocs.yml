@@ -143,6 +143,7 @@ nav:
         - Authentication: admin/authentication.md
         - Authorization: admin/authorization.md
         - Groups: admin/groups.md
+        - Control-Plane Audit Log: admin/control-plane-audit-log.md
         - API Keys: admin/api-keys.md
         - Telemetry Ingestion Server: admin/ingestion.md
         - FlightSQL Server: admin/flight-sql.md

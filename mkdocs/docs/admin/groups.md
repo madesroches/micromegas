@@ -119,6 +119,9 @@ All routes are admin-gated (`AdminUser`) and live on `analytics-web-srv`.
 `group:<id>` value isn't restricted enough in charset to be a safe raw path
 segment (mirrors `audience_grants`' `DELETE ...?audience=&axis=&selector=`).
 
+The routes above show the *current* membership only. For who created/deleted a group or added/
+removed a member, and when, see the [control-plane audit log](control-plane-audit-log.md).
+
 Under `--disable-auth`, `/api/groups` and `/api/groups/{*rest}` answer a
 fixed 503 (`{"code": "AUTH_DISABLED", ...}`) — the real routers are never
 merged in that mode, the same shape the key-management/grant routes use.

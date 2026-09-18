@@ -1,14 +1,18 @@
 //! Group admin API for `analytics-web-srv`.
 //!
 //! Mirrors `analytics_keys.rs`/`audience_grants.rs`'s shape (`GroupsState { pool: Option<PgPool> }`,
-//! an `IntoResponse` error enum, `AdminUser`-gated) over the `groups`/`group_members` tables
-//! (migration v10, `rust/ingestion/src/sql_migration.rs`). Every write goes through the
-//! [`AdminUser`] extractor's gate, which is `caller.is_admin` today; delegating group ownership
-//! later means widening that one gate, not this module's routing or handler shapes.
+//! an `IntoResponse` error enum, admin-gated) over the `groups`/`group_members` tables
+//! (migration v10, `rust/ingestion/src/sql_migration.rs`). The two read routes stay
+//! [`AdminUser`]-gated directly; the four mutation routes go through `GroupAdminGate`, a thin
+//! wrapper around the same `caller.is_admin` check that additionally emits a control-plane audit
+//! record on rejection -- delegating group ownership later means widening that one gate, not
+//! this module's routing or handler shapes.
 
-use crate::auth::{AdminUser, ValidatedUser};
-use axum::extract::{Extension, Path, Query};
-use axum::http::StatusCode;
+use crate::auth::{AdminRequired, AdminUser, ValidatedUser};
+use crate::mutation_audit::{AuditOutcome, ClientIp, MutationAudit, action};
+use axum::extract::{Extension, FromRequestParts, MatchedPath, Path, Query};
+use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -130,6 +134,28 @@ impl From<sqlx::Error> for GroupsError {
     }
 }
 
+impl AuditOutcome for GroupsError {
+    fn audit_outcome(&self) -> (&'static str, Option<String>) {
+        match self {
+            GroupsError::BadRequest(msg) => ("denied", Some(msg.clone())),
+            GroupsError::NotFound => ("denied", Some("group not found".to_string())),
+            GroupsError::NestedGroupNotFound(msg) => ("denied", Some(msg.clone())),
+            GroupsError::Conflict(msg) => ("denied", Some(msg.clone())),
+            // The raw `sqlx::Error` text must not reach the record -- it can carry
+            // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
+            // returns to the client instead.
+            GroupsError::Database(_) => ("error", Some("internal database error".to_string())),
+            GroupsError::NotConfigured => (
+                "error",
+                Some(
+                    "group store not configured: set MICROMEGAS_SQL_CONNECTION_STRING".to_string(),
+                ),
+            ),
+            GroupsError::Internal(msg) => ("error", Some(msg.clone())),
+        }
+    }
+}
+
 fn require_pool(state: &GroupsState) -> Result<PgPool, GroupsError> {
     state.pool.clone().ok_or(GroupsError::NotConfigured)
 }
@@ -150,6 +176,57 @@ fn caller_identity(caller: &ValidatedUser) -> String {
         .email
         .clone()
         .unwrap_or_else(|| caller.subject.clone())
+}
+
+/// Derives the mutation-audit action from the request's method and route template
+/// (`axum::extract::MatchedPath`, read out of `parts.extensions` -- not `parts.uri.path()`,
+/// which would misclassify a group literally named `members`, a name `is_valid_group_name`
+/// allows). Every group mutation route matches one of the four pairs below, so an unmatched
+/// pair -- including a missing `MatchedPath` extension -- is unreachable through the router;
+/// mapped to `create_group` rather than adding an error path for that case, mirroring
+/// `GrantGate`'s identical fallback.
+fn group_gate_action(parts: &Parts) -> &'static str {
+    let matched_path = parts
+        .extensions
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str);
+    match (&parts.method, matched_path) {
+        (&Method::DELETE, Some(path)) if path.ends_with("/members") => action::REMOVE_MEMBER,
+        (&Method::POST, Some(path)) if path.ends_with("/members") => action::ADD_MEMBER,
+        (&Method::DELETE, Some(_)) => action::DELETE_GROUP,
+        _ => action::CREATE_GROUP,
+    }
+}
+
+/// `FromRequestParts` extractor for the four group-mutation routes: delegates to [`AdminUser`],
+/// and on rejection emits a `"denied"` mutation-audit record before returning `AdminRequired`
+/// unchanged, so the HTTP response stays byte-identical to today's. Deliberately not folded into
+/// `AdminUser` itself: that extractor gates every admin route in this crate (data sources,
+/// screens, folders, analytics keys, ingestion keys), and auditing all of them under the
+/// control-plane target is not what this record is for.
+struct GroupAdminGate(ValidatedUser);
+
+impl<S: Send + Sync> FromRequestParts<S> for GroupAdminGate {
+    type Rejection = AdminRequired;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let action = group_gate_action(parts);
+        let ClientIp(client_ip) = ClientIp::from_request_parts(parts, state)
+            .await
+            .expect("ClientIp is infallible");
+        match AdminUser::from_request_parts(parts, state).await {
+            Ok(AdminUser(user)) => Ok(GroupAdminGate(user)),
+            Err(rejection) => {
+                let (actor, is_admin) = match parts.extensions.get::<ValidatedUser>() {
+                    Some(user) => (caller_identity(user), user.is_admin),
+                    None => ("unauthenticated".to_string(), false),
+                };
+                MutationAudit::new(action, actor, is_admin, client_ip)
+                    .emit_gate_outcome("denied", "Admin access required");
+                Err(rejection)
+            }
+        }
+    }
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -190,8 +267,26 @@ struct CreateGroupRequest {
 /// if it already exists.
 async fn create_group(
     Extension(state): Extension<GroupsState>,
-    AdminUser(user): AdminUser,
+    GroupAdminGate(user): GroupAdminGate,
+    client_ip: ClientIp,
     Json(body): Json<CreateGroupRequest>,
+) -> Result<(StatusCode, Json<GroupSummary>), GroupsError> {
+    let audit = MutationAudit::new(
+        action::CREATE_GROUP,
+        caller_identity(&user),
+        user.is_admin,
+        client_ip.0,
+    )
+    .group(&body.name);
+    let result = create_group_inner(state, user, body).await;
+    audit.emit(&result);
+    result
+}
+
+async fn create_group_inner(
+    state: GroupsState,
+    user: ValidatedUser,
+    body: CreateGroupRequest,
 ) -> Result<(StatusCode, Json<GroupSummary>), GroupsError> {
     let pool = require_pool(&state)?;
     validate_group_name(&body.name)?;
@@ -210,7 +305,6 @@ async fn create_group(
     .await?
     .ok_or_else(|| GroupsError::Conflict(format!("group {:?} already exists", body.name)))?;
 
-    info!("created group name={} created_by={created_by}", row.name);
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -219,9 +313,23 @@ async fn create_group(
 /// row (the response lists the referrers).
 async fn delete_group(
     Extension(state): Extension<GroupsState>,
-    AdminUser(_user): AdminUser,
+    GroupAdminGate(user): GroupAdminGate,
+    client_ip: ClientIp,
     Path(name): Path<String>,
 ) -> Result<StatusCode, GroupsError> {
+    let audit = MutationAudit::new(
+        action::DELETE_GROUP,
+        caller_identity(&user),
+        user.is_admin,
+        client_ip.0,
+    )
+    .group(&name);
+    let result = delete_group_inner(state, name).await;
+    audit.emit(&result);
+    result
+}
+
+async fn delete_group_inner(state: GroupsState, name: String) -> Result<StatusCode, GroupsError> {
     let pool = require_pool(&state)?;
     if name == ADMINS_GROUP {
         return Err(GroupsError::Conflict(
@@ -282,7 +390,6 @@ async fn delete_group(
     tx.commit()
         .await
         .map_err(|e| GroupsError::Internal(format!("committing delete transaction: {e:#}")))?;
-    info!("deleted group name={name}");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -329,9 +436,33 @@ struct AddMemberRequest {
 /// uses (see that module's `insert_or_get` doc comment).
 async fn add_member(
     Extension(state): Extension<GroupsState>,
-    AdminUser(user): AdminUser,
+    GroupAdminGate(user): GroupAdminGate,
+    client_ip: ClientIp,
     Path(name): Path<String>,
     Json(body): Json<AddMemberRequest>,
+) -> Result<(StatusCode, Json<MemberRow>), GroupsError> {
+    let audit = MutationAudit::new(
+        action::ADD_MEMBER,
+        caller_identity(&user),
+        user.is_admin,
+        client_ip.0,
+    )
+    .group(&name)
+    .member(&body.member);
+    let result = add_member_inner(state, user, name, body).await;
+    let audit = match &result {
+        Ok((status, _)) => audit.created(*status == StatusCode::CREATED),
+        Err(_) => audit,
+    };
+    audit.emit(&result);
+    result
+}
+
+async fn add_member_inner(
+    state: GroupsState,
+    user: ValidatedUser,
+    name: String,
+    body: AddMemberRequest,
 ) -> Result<(StatusCode, Json<MemberRow>), GroupsError> {
     let pool = require_pool(&state)?;
     if !valid_selector(&body.member) {
@@ -450,10 +581,6 @@ async fn add_member(
             tx.commit().await.map_err(|e| {
                 GroupsError::Internal(format!("committing add-member transaction: {e:#}"))
             })?;
-            info!(
-                "group member added group={} member={} created={} created_by={created_by}",
-                row.group_name, row.member, row.created
-            );
             let status = if row.created {
                 StatusCode::CREATED
             } else {
@@ -500,9 +627,28 @@ struct RemoveMemberQuery {
 /// through `psql`).
 async fn remove_member(
     Extension(state): Extension<GroupsState>,
-    AdminUser(_user): AdminUser,
+    GroupAdminGate(user): GroupAdminGate,
+    client_ip: ClientIp,
     Path(name): Path<String>,
     Query(query): Query<RemoveMemberQuery>,
+) -> Result<StatusCode, GroupsError> {
+    let audit = MutationAudit::new(
+        action::REMOVE_MEMBER,
+        caller_identity(&user),
+        user.is_admin,
+        client_ip.0,
+    )
+    .group(&name)
+    .member(&query.member);
+    let result = remove_member_inner(state, name, query).await;
+    audit.emit(&result);
+    result
+}
+
+async fn remove_member_inner(
+    state: GroupsState,
+    name: String,
+    query: RemoveMemberQuery,
 ) -> Result<StatusCode, GroupsError> {
     let pool = require_pool(&state)?;
 
@@ -576,7 +722,6 @@ async fn remove_member(
     tx.commit().await.map_err(|e| {
         GroupsError::Internal(format!("committing remove-member transaction: {e:#}"))
     })?;
-    info!("group member removed group={name} member={}", query.member);
     Ok(StatusCode::NO_CONTENT)
 }
 
