@@ -148,6 +148,7 @@ nav:
         - FlightSQL Server: admin/flight-sql.md
         - Maintenance Daemon: admin/maintenance.md
         - Materialized Views: admin/materialized-views.md
+        - View Sets as Code: admin/views-as-code.md
         - Analytics Web App Deployment: admin/web-app.md
         - Monolith Deployment: admin/monolith.md
         - Object Cache Deployment: admin/object-cache.md

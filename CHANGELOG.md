@@ -4,6 +4,16 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Python:** New `micromegas-views` console script (#1603): a terraform-shaped `plan` /
+  `apply` / `pull` / `list` / `show` workflow that treats a directory of `<view_set_name>.sql`
+  files as the desired state of the deployment's [DDL-defined materialized view
+  sets](https://micromegas.info/docs/admin/views-as-code/), diffed against
+  `list_view_set_definitions()` and applied through the existing `CREATE [OR REPLACE]
+  MATERIALIZED VIEW` / `DROP MATERIALIZED VIEW` DDL over FlightSQL -- a client-side layer, no
+  server change. Deletes require an explicit `--prune`, which itself refuses to run against an
+  empty desired-state directory. The colorized-diff/apply-confirmation/`--color` plumbing
+  `micromegas-screens` already had is factored out into `micromegas.cli.state_sync`, shared by
+  both tools; `micromegas-screens`'s own behavior is unchanged.
 * **Dependencies:** Bump `datafusion` from `54.1` to `55.1` (and `arrow`/`arrow-flight`/`arrow-ipc`/`parquet` from `58.0` to `59.2`) in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace. **Minor breaking change:** `ExecutionPlan` gained a new required method, `apply_expressions`; the three in-tree implementations that own no physical expressions (`TaskLogExecPlan`, `PerfettoTraceExecutionPlan`, `ProcessSpansExecutionPlan`) now return `TreeNodeRecursion::Continue`. `datafusion::sql::TableReference` moved to `datafusion::common::TableReference`; `datafusion::physical_optimizer::enforce_sorting::EnforceSorting` was folded into `datafusion::physical_optimizer::ensure_requirements::EnsureRequirements`; `physical_expr::create_physical_expr` gained a trailing `&PhysicalPlanningContext` argument (`PhysicalPlanningContext::default()` for the non-subquery case already in use here). Parquet dropped its public `format`/`thrift` thrift modules in favor of an in-memory metadata builder API, so `partition_metadata::strip_column_index_info` (the legacy-file page-index workaround from the DataFusion 51 upgrade) now rebuilds `ParquetMetaData` via `ColumnChunkMetaData`/`RowGroupMetaData`/`ParquetMetaData` builders instead of round-tripping through hand-rolled thrift (de)serialization, dropping the now-unused `thrift` crate dependency entirely. `arrow_ipc::writer::CompressionContext` is renamed to `IpcWriteContext`. `cargo-deny`'s duplicate-version skip list gains `syn`, since the new `datafusion-macros` crate requires `syn` 3.x alongside the rest of the tree's 2.x. The datafusion-wasm bindings are regenerated for the shifted dependency tree (comment-only diff — no public TS API change).
 * **Analytics:** DDL-defined eagerly materialized views (#835): an admin can now define a new,
   eagerly materialized view set at runtime with `CREATE [OR REPLACE] MATERIALIZED VIEW <name>
@@ -17,7 +27,7 @@ This file documents the historical progress of the Micromegas project. For curre
   `MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS` (default 60s), so `telemetry-maintenance-srv`
   starts materializing a new view set and `flight-sql-srv` starts answering queries against it,
   both without a restart — a same-node DDL statement reloads its own replica inline, right after
-  commit. New admin-gated UDTF `list_view_definitions()` lists every stored definition, including
+  commit. New admin-gated UDTF `list_view_set_definitions()` lists every stored definition, including
   one that failed to load. `log_stats` is now one of these: the migration seeds it into
   `lakehouse_view_set_definitions` from the exact SQL it always shipped with (identical
   `file_schema_hash`, so no partition rebuild and no dashboard change), and

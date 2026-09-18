@@ -70,7 +70,7 @@ def test_create_or_replace_appears_in_listings_and_daemon_materializes():
         view_sets = client.query("SELECT * FROM list_view_sets()")
         assert name in set(view_sets["view_set_name"])
 
-        definitions = client.query("SELECT * FROM list_view_definitions()")
+        definitions = client.query("SELECT * FROM list_view_set_definitions()")
         assert name in set(definitions["view_set_name"])
 
         def has_partitions():
@@ -225,7 +225,7 @@ def test_drop_removes_from_both_listings():
 
         view_sets = set(client.query("SELECT * FROM list_view_sets()")["view_set_name"])
         definitions = set(
-            client.query("SELECT * FROM list_view_definitions()")["view_set_name"]
+            client.query("SELECT * FROM list_view_set_definitions()")["view_set_name"]
         )
         assert a not in view_sets and b not in view_sets
         assert a not in definitions and b not in definitions

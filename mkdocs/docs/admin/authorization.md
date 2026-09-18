@@ -176,7 +176,7 @@ Nine functions are gated on admin-ness rather than audience:
 `retire_partition_by_file`, `retire_partition_by_metadata`, the [query deny
 list](functions-reference.md#query-deny-list)'s `list_query_denials`,
 `deny_queries`, `remove_query_denial`, and
-[`list_view_definitions`](functions-reference.md#list_view_definitions). A
+[`list_view_set_definitions`](functions-reference.md#list_view_set_definitions). A
 non-admin does not get them registered at all, so a call reads as "function
 not found". `CREATE`/`DROP MATERIALIZED VIEW` (see [Materialized
 Views](materialized-views.md)) is gated by this same admin check, applied

@@ -6,7 +6,7 @@ use super::{
     list_audience_grants_table_function::{GrantVisibility, ListAudienceGrantsTableFunction},
     list_partitions_table_function::ListPartitionsTableFunction,
     list_query_denials_table_function::ListQueryDenialsTableFunction,
-    list_view_definitions_table_function::ListViewDefinitionsTableFunction,
+    list_view_set_definitions_table_function::ListViewSetDefinitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     parse_block_table_function::ParseBlockTableFunction,
@@ -248,8 +248,8 @@ pub fn register_lakehouse_functions(
         // `lakehouse_view_set_definitions` straight from Postgres, so an admin can see a
         // definition that exists on disk but failed to load.
         ctx.register_udtf(
-            "list_view_definitions",
-            Arc::new(ListViewDefinitionsTableFunction::new(
+            "list_view_set_definitions",
+            Arc::new(ListViewSetDefinitionsTableFunction::new(
                 lakehouse.lake().clone(),
             )),
         );
