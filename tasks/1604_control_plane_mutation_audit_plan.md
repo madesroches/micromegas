@@ -401,9 +401,16 @@ The gate denials are fully covered this way with no DB, because both gates rejec
   not the socket address.
 - An admin request with `pool: None` reaches the handler and emits `outcome: "error"` with reason
   `"audience grant store not configured…"` — proving the handler wrapper emits on the `Err` arm.
+- An admin request on each of the four group mutation routes with `GroupsState { pool: None }`
+  reaches the handler (`require_pool` is its first statement, the same seam as the grant case
+  above) and emits one record with `action: "create_group"`/`"delete_group"`/`"add_member"`/
+  `"remove_member"`, `outcome: "error"`, a present non-empty `actor`, and the `group`/`member`
+  target fields — the only automated coverage of these four wrappers, since every group case
+  above is a gate denial that never reaches them.
 
-**Regression guard on the actor gap** — the `delete_group`/`remove_member` records assert `actor`
-is present and non-empty, which is the defect this issue names.
+**Regression guard on the actor gap** — the four group-wrapper `pool: None` records above assert
+`actor` is present and non-empty, which is the defect this issue names; the gate-denial records
+short-circuit before the wrapper and so prove nothing about it.
 
 ## Manual Verification
 
