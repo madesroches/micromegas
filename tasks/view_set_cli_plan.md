@@ -58,11 +58,11 @@ functions directly against a fake client.
 falls back to unauthenticated — so no `--no-auth` flag is needed, and a static API key works in CI
 with no browser. `mkdocs/docs/query-guide/python-api.md:843-850` currently states that
 `micromegas-query` and `connect_with_profile()` are the only `api_key_file` honorers; the new tool
-joins that list. Every subcommand that touches the server needs an admin identity:
-`list_view_set_definitions` is registered only inside the `lakehouse_admin` block
-(`rust/analytics/src/lakehouse/query.rs:237-255`), so even read-only `list`/`show`/`plan` (but not
-`show --local`, which never connects) fail as an unknown-function planner error for a non-admin
-caller, and `authorize_view_ddl` (`view_ddl.rs:49-55`) gates the write path the same way.
+joins that list. Every subcommand needs an admin identity: `list_view_set_definitions` is
+registered only inside the `lakehouse_admin` block
+(`rust/analytics/src/lakehouse/query.rs:237-255`), so even read-only `list`/`show`/`plan` fail as
+an unknown-function planner error for a non-admin caller, and `authorize_view_ddl`
+(`view_ddl.rs:49-55`) gates the write path the same way.
 
 **Today's workflow.** Hand-write the statement and pipe it through `micromegas-query --file`. There
 is no preview, no desired-state file, and no way to tell whether the server matches the repo.
@@ -76,7 +76,7 @@ micromegas-views plan  [names...] [--dir D] [--profile P] [--prune] [--color/--n
 micromegas-views apply [names...] [--dir D] [--profile P] [--prune] [--auto-approve] [--color/--no-color]
 micromegas-views pull  [names...] [--dir D] [--profile P]
 micromegas-views list         [--dir D] [--profile P] [--format table|json]
-micromegas-views show  <name> [--dir D] [--profile P] [--local]
+micromegas-views show  <name> [--profile P]
 ```
 
 There is no `init` subcommand and no config file. `micromegas-screens` needs
@@ -105,39 +105,39 @@ A `.sql` file is read as text (`encoding="utf-8-sig"`, matching `screens.py:38,5
 `LocalDefinition`:
 
 ```python
-LocalDefinition = namedtuple("LocalDefinition", "name update_group text path")
+LocalDefinition = namedtuple("LocalDefinition", "name text path")
 ```
 
-Only the statement *header* is parsed locally — never the three queries. The header is read from
-`sqlglot.tokenize(text, read="postgres")`, walking tokens rather than regexes: a dollar-quoted body,
-tagged or untagged, is a single `TokenType.HEREDOC_STRING` token, and comments are never emitted as
-tokens at all (they attach to the following token's `.comments`), so an `update_group = 1` sitting
-inside an `extract_query` body, or behind a decoy comment, cannot be mistaken for the option.
+The only thing read out of the statement is its `name`, and it is read with a regex anchored at the
+head of the text: leading `--` and `/* */` comments are stripped, then
+`CREATE [OR REPLACE] MATERIALIZED VIEW <ident>` is matched, unwrapping a double-quoted identifier
+(`"my_view"` → `my_view`). This needs no SQL lexer and adds no dependency: the view name always
+precedes the `WITH (...)` options, so nothing but a comment can sit ahead of it and no string
+literal — dollar-quoted or otherwise — can reach the matched region. The three queries are never
+parsed, and neither are the options.
 
-- `name` — the `IDENTIFIER`/`VAR` token following the `VIEW` token. The header tokenizes as
-  `CREATE`, `OR`, `REPLACE`, `VAR('MATERIALIZED')`, `VIEW`, `IDENTIFIER(<name>)`; `MATERIALIZED`
-  comes back as `VAR`, not a dedicated keyword, so it's matched on `.text.upper()`, and a
-  double-quoted identifier is unwrapped (`"my_view"` → `IDENTIFIER` with text `my_view`). Must
-  equal the filename stem, or the file is rejected: the diff, the plan output, and `pull` all key
-  on the filename, and a mismatch would silently apply a view under a name the repo doesn't show.
-- `update_group` — the `NUMBER` or `STRING` token following an `update_group =` header token pair.
-  Both forms are extracted, matching what `value_to_i32` (`view_ddl.rs:164-178`) accepts. Used
-  **only** for apply ordering and plan display; the server remains the authority on whether the
-  value is legal. A file with no extractable `update_group` is not rejected — it sorts last, and
-  the resulting ordering may be wrong for that file, which keeps this from becoming a second,
-  weaker copy of the Rust validator.
+`name` must equal the filename stem, or the file is rejected: the diff, the plan output, and `pull`
+all key on the filename, and a mismatch would silently apply a view under a name the repo doesn't
+show.
+
+`update_group` is deliberately **not** read locally — see the apply-ordering note in §4.
 
 A file whose header does not parse at all, or whose name disagrees with its filename, is reported
-and skipped. Following `screens.py`'s two-tier handling (`:94-157`, `:396-425`): a name/filename
-mismatch suppresses pruning for both the filename stem and the name the header actually declares,
-since either could be the definition the author meant to manage; a header that yields no name at
-all suppresses pruning repo-wide, because there is no name to scope the suppression to.
+and skipped, and every skipped file contributes to a single `protected_names` set that `--prune`
+refuses to drop: its filename stem always, plus the name the header declares when that is what
+disagreed. The stem alone would nearly always do — a `.sql` file can only ever define the view its
+filename names, since a mismatch is rejected — and the declared name is added only because a
+mismatch leaves genuine doubt about which of the two the author meant to manage.
 
-`list_local_definitions(dir)` returns the scan as one tuple, `(definitions, unparseable_stems,
-mismatched_names)`, mirroring `screens.py`'s `local, unreadable, invalid_names = local_scan or
-list_local_screens()`: `definitions` maps name to `LocalDefinition`, `unparseable_stems` is the
-repo-wide prune suppression set, and `mismatched_names` is the per-name prune suppression set. This
-is the tuple `compute_plan` (§4) takes as its `local_scan` argument.
+This is deliberately *not* `screens.py`'s two-tier model (`:94-157`, `:396-425`), where an
+undecodable file suppresses deletes repo-wide. That tier exists because a screen's identity lives
+only inside its JSON, so a file that won't decode has unknowable identity. Here the filename stem
+is the key, so a broken file is never unknowable — it is a failed attempt at one specific name —
+and a stray unparseable `.sql` should not silently disable pruning for the whole directory.
+
+`list_local_definitions(dir)` therefore returns `(definitions, protected_names)`: `definitions` maps
+name to `LocalDefinition`, and `protected_names` is the prune suppression set. This is the tuple
+`compute_plan` (§4) takes as its `local_scan` argument.
 
 ### 3. Comparison: canonical statement text
 
@@ -155,7 +155,8 @@ def canonical_ddl(text):
 
 Step 4 is what makes the round trip stable: `apply` may send `OR REPLACE` where the file says plain
 `CREATE` (§4), and a definition created by hand before this tool existed may say either. Collapsing
-the keyword run also absorbs interior whitespace inside it.
+the keyword run also absorbs interior whitespace inside it, and it rewrites the same head-anchored
+region the name scan reads (§2), so it needs no lexer either.
 
 Interior whitespace is **not** normalized beyond that. Collapsing whitespace runs inside the
 statement would silence reformat-only diffs, but it would also equate two definitions whose string
@@ -175,11 +176,12 @@ def compute_plan(client, local_scan, names=None):
     """-> (creates, updates, unchanged, server_only)"""
 ```
 
-`local_scan` is the `(definitions, unparseable_stems, mismatched_names)` tuple `list_local_definitions`
-returns (§2), unpacked exactly as `screens.py:compute_plan` unpacks `local_scan` — `unparseable_stems`
-suppresses pruning repo-wide and `mismatched_names` suppresses it for those two names, both consulted
-by `cmd_plan`/`cmd_apply` when `--prune` is set. An empty `definitions` is the "zero readable `.sql`
-files" case that `--prune` refuses to run (§5), checked before drops are rendered.
+`local_scan` is the `(definitions, protected_names)` tuple `list_local_definitions` returns (§2),
+passed in by the caller so a single command invocation scans the directory once and prints each
+skipped-file warning once — the reason `screens.py:compute_plan` takes a `local_scan` argument
+(`:355-368`). `protected_names` is consulted by `cmd_plan`/`cmd_apply` when `--prune` is set. An
+empty `definitions` is the "zero readable `.sql` files" case that `--prune` refuses to run (§5),
+checked before drops are rendered.
 
 `client` is anything with `.query(sql)` returning a DataFrame — the real FlightSQL client in
 production, a canned-DataFrame fake in tests. Current state is one call:
@@ -207,7 +209,8 @@ Classification, per local file:
 so a locally-managed view outside the named subset is never misreported as server-only.
 
 Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
-and `cmd_apply` compute `drops = server_only if (prune and not names) else []` — the same fence as
+and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names] if (prune and
+not names) else []` — the same fence as
 `screens.py:compute_plan`'s `if not names` guard around its delete loop (`screens.py:396-425`), now
 applied at the call site instead of inside the plan function: a named-subset run has no way to know
 whether a view set outside the subset is still managed elsewhere in the directory, so treating "not
@@ -215,13 +218,21 @@ mentioned" as "delete" would be wrong.
 
 **Apply order.** All creates and updates run first, then all drops — matching `screens.py:cmd_apply`
 (`:549-586`) — so that an update which removes a view's dependency on a to-be-pruned view lands
-before the drop, rather than having `check_dependents_survive` refuse it. Within the create/update
-phase, statements run in ascending `update_group` (ties broken by name); within the drop phase, in
-descending server `update_group`. Ascending order is the right default for creates, but a breaking
-`CREATE OR REPLACE` is validated the same way a `DROP` is
-(`flight_sql_service_impl.rs:1032-1046`), so a replace that narrows a view ahead of its
-higher-`update_group` dependent's own update can still be refused; the idempotence remedy already
-stated above (re-running `apply`) covers that case too.
+before the drop, rather than having `check_dependents_survive` refuse it. Within each phase,
+statements run in name order.
+
+**Dependency order is not attempted.** Three statement-level refusals are order-sensitive: creating
+a view whose query reads a not-yet-created view (validation builds its factory from the rows stored
+at that moment, `flight_sql_service_impl.rs:1038-1067`); dropping a view another definition still
+reads; and a `CREATE OR REPLACE` that narrows a column a dependent uses (the last two both
+`check_dependents_survive`, `:1118-1128`). Each of them leaves the server unchanged and returns an
+error naming the view and the reason, so the tool reports it like any other failed statement and
+exits non-zero; running `apply` again — now that the statements it depended on have landed —
+resolves one level of a chain per run. That is preferred over a local ordering heuristic:
+`update_group` is only a proxy for the dependency graph and does not cover the narrowing-replace
+case at all, and reading it locally would mean parsing an option that can sit *after* a
+dollar-quoted body — the one part of the statement the head-anchored scan of §2 cannot reach, and
+the only reason a SQL lexer would be needed at all.
 
 **Statement sent.** For an update, the file text with `OR REPLACE` injected into the header when
 absent (the inverse of `canonical_ddl`'s step 4). For a create, `canonical_ddl(text)` — guaranteed
@@ -246,11 +257,9 @@ as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-
 so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
 `apply`.
 
-**Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is the
-first FlightSQL round trip every subcommand but `show --local` makes, including read-only
-`list`/`show`/`plan` — `show --local` skips both the connect and this read, since it only needs
-`list_local_definitions(dir)`. Where it runs, it is the anticipated failure point for a non-admin
-identity (Current State, "Auth"). It is wrapped in
+**Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is
+the first FlightSQL round trip every subcommand makes, read-only `list`/`show`/`plan` included, and
+the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
 the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch as `cmd_apply`'s
 per-statement calls, reporting the error and exiting non-zero with a pointer to the admin-identity
 requirement, rather than letting the planner's unknown-function error surface as a raw traceback.
@@ -286,8 +295,14 @@ Extracted from `screens.py`, used by both tools:
 - `unified_diff(before_lines, after_lines, from_label, to_label, use_color)` — `difflib` plus the
   `---`/`+++`/`@@`/`-`/`+` coloring and 4-space indent currently the back half of
   `format_screen_diff` (`screens.py:445-463`); returns `""` when there is no difference.
-- `confirm_apply(auto_approve)` — the `[y/N]` prompt, the `Apply cancelled.` message, and
-  `sys.exit(1)` (`screens.py:531-535`).
+- `confirm_apply(auto_approve)` — the `[y/N]` prompt and the `Apply cancelled.` message
+  (`screens.py:531-535`), returning `True` when approved and `True` immediately when
+  `auto_approve`. It does **not** exit: a shared helper that terminates the process hides control
+  flow from its caller and forces every test of a declined apply to go through `pytest.raises`.
+  Each `cmd_apply` writes `if not confirm_apply(args.auto_approve): sys.exit(1)`, which is the
+  exact behavior `screens.py` has today — same message, same exit code — so the extraction stays
+  behavior-preserving. The cancel message stays inside the helper because it belongs to the prompt
+  it just rendered, and both tools should word it identically.
 - `add_color_arg(parser)` — the `--color` `BooleanOptionalAction` default-`True` flag.
 - `use_color(args)` — `sys.stdout.isatty() and args.color`.
 
@@ -302,8 +317,8 @@ unchanged. Nothing screen-specific moves: `managed_by`, the untracked/ownership 
 $ micromegas-views plan
 micromegas-views will perform the following actions:
 
-  + create: request_stats (update_group 4000)
-  ~ update: log_stats (update_group 3000)
+  + create: request_stats
+  ~ update: log_stats
     --- server
     +++ local
     @@ -3,7 +3,7 @@
@@ -318,9 +333,11 @@ Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
 
 `list` renders `compute_plan`'s output directly, joining the server rows for
 `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`, `unchanged`,
-`server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`. `show <name>` prints the server's stored
-`definition_sql` verbatim; `--local` prints the file instead. `pull` differs from `show`: it writes
-`canonical_ddl(definition_sql)`, not the verbatim stored text (§1).
+`server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a `create`
+row has no server row yet, so those last three columns are empty for it. `show <name>` prints the server's stored
+`definition_sql` verbatim — there is no `--local` counterpart, since reading the local file is
+`cat <name>.sql` and dropping it lets every subcommand connect unconditionally. `pull` differs from
+`show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored text (§1).
 
 ### 8. Relationship to cached range functions
 
@@ -347,7 +364,8 @@ head.
 
 1. Create `python/micromegas/micromegas/cli/state_sync.py` with the four helpers in §6.
 2. Refactor `python/micromegas/micromegas/cli/screens.py` to use them: `format_screen_diff` becomes
-   a wrapper over `unified_diff`; `cmd_apply`'s inline prompt becomes `confirm_apply`; the two
+   a wrapper over `unified_diff`; `cmd_apply`'s inline prompt becomes
+   `if not confirm_apply(args.auto_approve): sys.exit(1)`; the two
    `--color` definitions and the two `sys.stdout.isatty() and args.color` expressions become
    `add_color_arg` / `use_color`.
 3. Run `python/micromegas/tests/test_screen_files.py` and `tests/cli/test_screens_auth.py` — they
@@ -360,15 +378,17 @@ head.
    `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `compute_plan`'s
    current-state query catches the same two exceptions, reporting the error and exiting non-zero
-   with a pointer to the admin-identity requirement (§4); `main` catches `ProfileError` at connect
-   time (§4), except for `show --local`, which never connects. `cmd_pull` writes with
+   with a pointer to the admin-identity requirement (§4); `main` connects once before dispatch and
+   catches `ProfileError` there (§4). `cmd_pull` writes with
    `encoding="utf-8"`, matching
    `screens.py:89,256`; `main` calls `sys.stdout.reconfigure(encoding="utf-8",
    errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
    output survives a non-UTF-8 locale.
-5. Wire the argparse surface of §1, with a `client_args` parent parser carrying `--profile` and
-   `--dir` (defined exactly once — see `screens.py:665-676` for why), and call
-   `add_version_argument(parser)` so `--version` matches the other seven console scripts.
+5. Wire the argparse surface of §1 with two parent parsers — `client_args` carrying `--profile`
+   (every subcommand) and `dir_args` carrying `--dir` (every subcommand but `show`, which has no
+   local side). Each flag is defined exactly once, which is the point — see `screens.py:665-676`
+   for the shared-Namespace trap this avoids. Call `add_version_argument(parser)` so `--version`
+   matches the other seven console scripts.
 6. Add `micromegas-views = "micromegas.cli.views:main"` to `[tool.poetry.scripts]` in
    `python/micromegas/pyproject.toml`.
 
@@ -390,7 +410,7 @@ head.
 | `python/micromegas/micromegas/cli/state_sync.py` | New — shared diff/prompt/color helpers |
 | `python/micromegas/micromegas/cli/views.py` | New — the tool |
 | `python/micromegas/micromegas/cli/screens.py` | Refactor onto `state_sync` |
-| `python/micromegas/pyproject.toml` | `micromegas-views` console script; add `sqlglot` dependency |
+| `python/micromegas/pyproject.toml` | `micromegas-views` console script |
 | `python/micromegas/tests/cli/test_views.py` | New — unit tests |
 | `python/micromegas/tests/cli/test_version.py` | Add `micromegas-views` `--version` case |
 | `mkdocs/docs/admin/views-as-code.md` | New — user documentation |
@@ -411,8 +431,12 @@ updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — a
 retention setting — diffs and round-trips correctly through a tool that never learned what it means,
 where a semantic comparison would need a new field and a new local parser branch per option.
 
-**New dependency: sqlglot.** It is the plan's only new third-party dependency, and it is pure
-Python (no binary wheel). It buys deleting a hand-rolled SQL lexer in favor of walking real tokens.
+**No dependency ordering on apply.** Statements go out in name order and an order-sensitive
+refusal is reported rather than worked around, which keeps the tool free of any local model of the
+dependency graph — and free of the SQL lexer that reading `update_group` out of the file would have
+required. The cost is that a fresh directory whose views build on each other takes one `apply` per
+level of the chain. Acceptable because the failure is loud, specific, and leaves the server
+unchanged, and because the alternative heuristic would not have been correct anyway (§4).
 
 **No Terraform provider.** A provider (Go, `terraform-plugin-framework`, reusing the in-tree
 FlightSQL client at `grafana/pkg/flightsql/`) would get a real state file, and with it safe deletes
@@ -433,16 +457,21 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - Python CLI sharing code with `micromegas-screens`, not a Terraform provider — user's call, after
   the comparison above.
 - The shared module carries presentation and prompts only; the plan model is not generalized across
-  the two tools.
+  the two tools. All four helpers move, including the two one-liners: they exist so the two tools
+  cannot disagree on the `--color` flag and the isatty rule, which `screens.py` already duplicates
+  four times between them. `confirm_apply` returns a bool instead of exiting, so the shared code
+  never terminates the process.
 - Interior whitespace is not normalized: a false `unchanged` on a differing string literal is worse
   than reformat churn in the plan output.
-- `update_group` is extracted from the local header for ordering and display only; the server
-  stays the authority, and an unextractable value sorts last rather than failing locally, accepting
-  that the apply ordering may be wrong for that one file rather than blocking the whole run.
-- Local header parsing uses sqlglot's tokenizer rather than a hand-rolled scanner: datafusion's
-  Python package exposes no parser and cannot parse this DDL form at all.
+- Nothing but the view name is read out of the local file, with a head-anchored regex — no SQL
+  lexer and no new dependency. `update_group` is not read locally and `apply` does not order by
+  dependency; an order-sensitive statement fails with a server-side error naming the view, and
+  re-running `apply` is the remedy (§4).
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
+- A skipped local file protects only the name(s) it could have been, not the whole directory:
+  unlike `screens.py`, the filename stem is the key here, so there is no unknowable-identity case
+  to justify a repo-wide suppression (§2).
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
   the table, `compute_plan` must filter on a tier discriminator before classifying `server-only`.
@@ -452,6 +481,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - The comparison depends on the server storing `definition_sql` verbatim and never rewriting it
   (§3). Stated as an invariant rather than assumed, because server-side column injection is being
   designed for the adjacent tier.
+- `show` reads the server only. A local-file mode would be `cat <name>.sql`, and dropping it makes
+  "every subcommand connects and needs an admin identity" a flat rule with no carve-out in `main`.
 - Instance fan-out is out of scope, and the file model is keyed on `view_set_name` because the
   definition table is (§8). A `scaffold --from-query` bridge to the anonymous tier is a follow-up,
   blocked on a server-side probe-derivation path.
@@ -462,9 +493,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as server-only on a
   fresh deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
-  every subcommand that touches the server (including read-only `list`/`show`/`plan`, but not
-  `show --local`) requires an admin identity because `list_view_set_definitions` and the DDL path
-  are both gated to `lakehouse_admin`, and a CI example
+  every subcommand, read-only `list`/`show`/`plan` included, requires an admin identity because
+  `list_view_set_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI
+  example
   using a profile with `api_key_file` — where that key must be an admin key. It should also say what
   this tool does *not* manage: built-in view sets, which have no stored definition, and on-demand
   cached queries, which have no name (§8) — so a user who misses `log_entries` from `list` knows
@@ -484,17 +515,20 @@ needs a live DB or service: every behavior being added is reachable by calling c
 inputs.
 
 **File parsing**
-- Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name, text,
-  and `update_group`.
-- `update_group` extracted from the header; **not** taken from an `update_group = 1` occurrence
-  inside a `$$...$$` body or a tagged `$tag$...$tag$` body (each tokenizes as one `HEREDOC_STRING`).
-- A header-level `update_group = '3000'` (quoted) IS read, same as the unquoted form.
-- A leading `--` comment before `CREATE` does not defeat the name scan.
+- Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name and
+  text.
+- A leading `--` comment, and a leading `/* */` comment, before `CREATE` do not defeat the name
+  scan.
+- A quoted header name (`CREATE MATERIALIZED VIEW "my_view"`) reads back unquoted.
+- An `update_group = 1` inside a `$$...$$` body does not disturb the name scan (the scan stops at
+  the view name, well before any body).
 - A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
   (pins that `pull` writes `canonical_ddl(definition_sql)`, not the verbatim stored text).
-- Filename/DDL-name mismatch is reported and skipped, and suppresses pruning for both the filename
-  stem and the declared name.
-- An unparseable header is reported and skipped, and suppresses pruning repo-wide.
+- Filename/DDL-name mismatch is reported and skipped, and protects both the filename stem and the
+  declared name from `--prune`.
+- An unparseable header is reported and skipped, and protects its filename stem from `--prune` —
+  and *only* its stem: an unrelated server-only view in the same directory is still proposed for
+  drop (pins that there is no repo-wide suppression).
 - Regression guard, run under `LC_ALL=C PYTHONUTF8=0` (matching
   `test_screen_files.py:880-975`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
   colorized diff output prints without a `UnicodeEncodeError`.
@@ -514,19 +548,20 @@ inputs.
 - `--prune` against an empty directory errors instead of proposing drops.
 
 **Apply**
-- Creates/updates are issued in ascending `update_group`, drops in descending server
-  `update_group` — asserted over the fake client's recorded statement sequence, which is what pins
-  the dependency ordering.
+- Every create/update is issued before any drop — asserted over the fake client's recorded
+  statement sequence, which is what pins the phase ordering.
 - An update sends `OR REPLACE`; a create sends `canonical_ddl(text)`, plain `CREATE` even when the
   file itself says `CREATE OR REPLACE`.
 - A statement that raises `pyarrow.lib.ArrowKeyError` (the `not_found` case) and one that raises
   bare `pyarrow.lib.ArrowException` (the `already_exists` case) are each counted, do not abort the
   rest, and produce a non-zero exit — pinning the widened catch, not just `ArrowInvalid`.
-- `--auto-approve` skips the prompt; a declined prompt applies nothing.
+- `--auto-approve` skips the prompt; a declined prompt applies nothing and exits 1.
+- `confirm_apply` returns `False` on a declined prompt rather than raising `SystemExit` — asserted
+  directly, without `pytest.raises`.
 
 **Output**
 - The diff shown for an update contains no `OR REPLACE` line.
-- `list` in both formats; `show` with and without `--local`.
+- `list` in both formats; `show` for a stored name, and its non-zero exit for an unknown one.
 - `test_views_version_flag`: `--version` prints the version, Python version, and interpreter path
   (extending `tests/cli/test_version.py`).
 
@@ -547,7 +582,7 @@ tool generates are accepted by the real parser, validator, and registry.
    between what the seeded row holds and what `pull` writes.
 3. Write a `request_stats.sql` (the `CREATE MATERIALIZED VIEW` from
    `mkdocs/docs/admin/materialized-views.md`, `update_group = 4000`), then `micromegas-views plan`
-   → `+ create: request_stats (update_group 4000)`.
+   → `+ create: request_stats`.
 4. `micromegas-views apply --auto-approve`
    → `created`; `micromegas-query "SELECT * FROM list_view_set_definitions()" --all` shows both rows.
 5. Widen the `WHERE` clause in `request_stats.sql`; `micromegas-views plan`
@@ -562,11 +597,3 @@ tool generates are accepted by the real parser, validator, and registry.
 ## Open Questions
 
 None.
-
-
-## possible simplifications
-
-· Drop local `update_group` extraction and the tokenizer-based header scan, ordering instead by the server's `update_group`? (Drop it, add a fixed-point retry / Drop it, no retry / Keep the header scan as-is)
-· Collapse the two-tier prune suppression (`unparseable_stems` + `mismatched_names`) into one boolean? (Collapse to one rule (Recommended) / Keep the two-tier model)
-· Narrow the shared `cli/state_sync.py` module? (Export unified_diff + confirm_apply / Export unified_diff only / Keep all four helpers)
-· Keep `show --local`? (Drop it / Keep it)
