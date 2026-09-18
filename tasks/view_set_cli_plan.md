@@ -123,11 +123,14 @@ LocalDefinition = namedtuple("LocalDefinition", "name text path")
 ```
 
 The only thing read out of the statement is its `name`, and it is read with a regex anchored at the
-head of the text: leading `--` and `/* */` comments are stripped, then
-`CREATE [OR REPLACE] MATERIALIZED VIEW <ident>` is matched. This needs no SQL lexer and adds no dependency: the view name always
-precedes the `WITH (...)` options, so nothing but a comment can sit ahead of it and no string
-literal — dollar-quoted or otherwise — can reach the matched region. The three queries are never
-parsed, and neither are the options.
+head of the text: any number of stacked leading `--` and `/* */` comments, in any mix and order,
+are stripped, then `CREATE [OR REPLACE] MATERIALIZED VIEW <ident>` is matched. This needs no SQL
+lexer and adds no dependency: the view name always precedes the `WITH (...)` options, so nothing
+but a comment can sit ahead of it and no string literal — dollar-quoted or otherwise — can reach
+the matched region. The three queries are never parsed, and neither are the options. A comment
+*inside* the keyword run itself (`CREATE /* x */ OR REPLACE MATERIALIZED VIEW`) is not
+accommodated: the regex simply fails to match, so the file falls into the "header does not parse"
+case below, even though the server's `sqlparser` accepts that statement (Decisions).
 
 `name` must equal the filename stem, or the file is rejected: the diff, the plan output, and `pull`
 all key on the filename, and a mismatch would silently apply a view under a name the repo doesn't
@@ -186,6 +189,11 @@ def read_server_state(client):
 
 def compute_plan(server_state, local_scan, names=None):
     """-> (creates, updates, unchanged, server_only)"""
+
+def format_plan(creates, updates, unchanged, server_only, drops, use_color=False):
+    """-> str; server_only and drops are computed at the call site (below), not by compute_plan,
+    so both are passed in separately: drops renders as '- drop:' actions, and server_only minus
+    drops renders under the server-only footer (§7)."""
 ```
 
 `read_server_state` issues the current-state `SELECT` below; it does not catch
@@ -249,7 +257,9 @@ Classification, per local file:
 `server_only` is always computed against the full `definitions` map from `list_local_definitions`,
 so a locally-managed view outside the named subset is never misreported as server-only. A name
 passed to `plan` or `apply` that is present on neither side is reported as an error and the command
-exits non-zero, matching `pull <name>` and `show <name>` (§1).
+exits non-zero, matching `pull <name>` and `show <name>` (§1). `apply` does not bail out before
+running anything: it still applies every other named view set that is present, the same rule as a
+skipped local file (§2) — it reports the unknown name and exits non-zero after applying the rest.
 
 **`plan`'s exit-code contract.** Non-zero only for a skipped local file (§2), an unknown name
 (above), a `--prune` run against zero readable `.sql` files (§5), or a dispatch-level error caught
@@ -263,12 +273,16 @@ A later `--detailed-exitcode` flag could offer terraform's convention (0 none / 
 pending) for jobs that would rather gate on status; not in scope here.
 
 Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
-and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names] if (prune and
-not names) else []` — the same fence as
-`screens.py:compute_plan`'s `if not names` guard around its delete loop (`screens.py:396-425`), now
-applied at the call site instead of inside the plan function: a named-subset run has no way to know
-whether a view set outside the subset is still managed elsewhere in the directory, so treating "not
-mentioned" as "delete" would be wrong.
+and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names and (not names
+or n in names)] if prune else []`. `names` and `--prune` compose: `names` narrows `server_only` down
+to the named subset when given, and `prune` alone is what allows a drop at all. So `apply --prune
+some_view` drops `some_view` when it is server-only and unprotected, `apply --prune` with no names
+drops every unprotected server-only definition, and `apply some_view` with no `--prune` drops
+nothing (see Decisions).
+
+**No changes.** When `creates`, `updates`, and `drops` are all empty, `apply` prints `No changes. N
+unchanged.` and returns before the confirmation prompt, without calling `confirm_apply` at all —
+matching `screens.py:cmd_apply` (`:523-525`).
 
 **Apply order.** All creates and updates run first, then all drops — matching `screens.py:cmd_apply`
 (`:549-586`) — so that an update which removes a view's dependency on a to-be-pruned view lands
@@ -294,7 +308,8 @@ MATERIALIZED VIEW <name>` without `IF EXISTS` — the plan just established it e
 
 `apply` reports each statement's returned `(view_set_name, status)` row, continues past a failure
 (counting it, as `screens.py:cmd_apply` does), and exits non-zero if any statement failed or the
-scan skipped any local file (§2). The exceptions caught per statement are
+scan skipped any local file (§2). Otherwise it finishes with `Apply complete! N created, N
+updated, N dropped.`, matching `screens.py:cmd_apply`'s (`:589-591`) completion line. The exceptions caught per statement are
 `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` — the latter because the gRPC statuses this design leans on, `already_exists` and `not_found`
 (`flight_sql_service_impl.rs:1021,1082`), surface from pyarrow as `ArrowException` and
 `ArrowKeyError` respectively, neither a `FlightError` nor an `ArrowInvalid`; `ArrowException` is
@@ -377,6 +392,13 @@ Plan: 1 to create, 1 to update, 0 to drop, 2 unchanged.
 Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
   ? error_rollup
 ```
+
+When `--prune` is passed, every name in `drops` is rendered as a `- drop:` action in the main list
+instead of appearing under this footer. The footer then lists only what this run's `--prune` did
+not drop — protected names, plus, when a name filter narrowed `drops`, server-only names outside
+that filter — and drops the now-redundant `'--prune' to drop` clause, reading `Server-only view sets
+on server (use 'pull' to adopt):` instead, since `--prune` is already in effect and would not add
+anything for what remains listed.
 
 `list` calls `read_server_state` once, passes the result to `compute_plan`, and joins the same
 DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`,
@@ -497,6 +519,10 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   lexer and no new dependency. `update_group` is not read locally and `apply` does not order by
   dependency; an order-sensitive statement fails with a server-side error naming the view, and
   re-running `apply` is the remedy (§4).
+- A comment interleaved inside the `CREATE ... MATERIALIZED VIEW` keyword run (rather than stacked
+  ahead of it) makes the head-anchored regex fail to match, so the file is skipped rather than
+  parsed, even though the server's `sqlparser` accepts that statement — an accepted limitation kept
+  in exchange for needing no SQL lexer (§2).
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
 - A skipped local file makes `plan` and `apply` exit non-zero, unlike `screens.py`, which warns and
@@ -512,6 +538,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
   the table, `compute_plan` must filter on a tier discriminator before classifying `server-only`.
+- `names` and `--prune` compose orthogonally: `names` narrows which view sets are considered,
+  `--prune` alone gates whether drops happen — a deliberate divergence from `screens.py`'s `if not
+  names` fence, which guards a default-on delete rather than an explicitly typed flag.
 - View sets get no `managed_by` column: creation has no UI path today, so there is no exploratory
   tier to distinguish from; if an admin-console create path lands, opt-in `--prune` plus the
   `server-only` report — not a `managed_by` marker — is what keeps a UI-born definition safe.
@@ -596,8 +625,10 @@ reachable by calling code with constructed inputs.
 - Each row of the §4 table.
 - A server-only definition lands in `compute_plan`'s `server_only` return value regardless of
   `--prune`.
-- `drops` is empty unless the call site sets `prune and not names`, and equals `server_only` when it
-  does — covers both the no-`--prune` and the `--prune`-plus-named-subset cases.
+- `drops` is empty whenever `prune` is unset, regardless of `names`; equals `server_only` (minus
+  `protected_names`) when `prune` is set with no `names`; and, when `prune` is set together with a
+  named subset, equals only the named server-only entries — pinning that `apply --prune some_view`
+  drops `some_view` rather than being a no-op.
 - `--prune` against an empty directory errors instead of proposing drops.
 - A fake client whose `.query` raises `ArrowException` on the current-state read lets the exception
   propagate out of `read_server_state` through each read-only subcommand's `cmd_*` function
