@@ -44,9 +44,9 @@ already has exactly one stored definition that nobody checked into a views direc
 
 **The sibling tool.** `micromegas-screens` (`python/micromegas/micromegas/cli/screens.py`, 744
 lines) is the precedent for everything structural here: `compute_plan` returning
-`(creates, updates, deletes, unchanged, untracked)` (`:360-450`), `format_screen_diff` producing a
-4-space-indented colorized `difflib.unified_diff` (`:438-463`), `format_plan` (`:466-505`),
-`cmd_apply`'s `[y/N]` gate plus `--auto-approve` (`:508-598`), and a `client_args` parent parser
+`(creates, updates, deletes, unchanged, untracked)` (`:360-435`), `format_screen_diff` producing a
+4-space-indented colorized `difflib.unified_diff` (`:438-463`), `format_plan` (`:466-492`),
+`cmd_apply`'s `[y/N]` gate plus `--auto-approve` (`:508-594`), and a `client_args` parent parser
 holding `--profile`/`--no-auth` defined exactly once to dodge the argparse shared-Namespace trap
 (`:665-676`). Its unit tests (`python/micromegas/tests/test_screen_files.py`) drive the `cmd_*`
 functions directly against a fake client.
@@ -82,7 +82,9 @@ micromegas-views show  <name> [--profile P]
 There is no `init` subcommand and no config file. `micromegas-screens` needs
 `micromegas-screens.json` for a server URL and a `managed_by` ownership marker; this tool gets its
 endpoint from the standard `--profile` resolution and has no ownership marker to record (see §5).
-`--dir` defaults to `.`.
+`--dir` defaults to `.`. `main` checks, before dispatching to any subcommand, that `--dir` exists
+and is a directory; if not, it reports the error and exits non-zero rather than letting a mistyped
+path scan as an empty desired state.
 
 One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 `CREATE [OR REPLACE] MATERIALIZED VIEW` statement. Nothing else in the directory is read.
@@ -91,7 +93,7 @@ Bare `pull` (no names) refreshes only the files already present in `--dir` — t
 `screens.py:cmd_pull` default. A local name absent from the server (the normal state between
 authoring a new `.sql` file and running `apply`) is warned about and skipped, counted neither
 `updated` nor `unchanged`, with no effect on the exit code — mirroring `screens.py:cmd_pull`
-(`:327-331`). A named `pull` also adopts a server-only name into a new file, which
+(`:329-333`). A named `pull` also adopts a server-only name into a new file, which
 is the merged pull/import behavior §5 relies on. A named `pull` (and `show <name>`) for a name
 present on neither side reports an error and exits non-zero, matching `screens.py:cmd_pull`
 (`:308-317`). `pull` skips, with a warning, any target file that
@@ -157,10 +159,7 @@ Step 4 is what makes the round trip stable: `apply` may send `OR REPLACE` where 
 the keyword run also absorbs interior whitespace inside it, and it rewrites the same head-anchored
 region the name scan reads (§2), so it needs no lexer either.
 
-Interior whitespace is **not** normalized beyond that. Collapsing whitespace runs inside the
-statement would silence reformat-only diffs, but it would also equate two definitions whose string
-literals genuinely differ (`'a  b'` vs `'a b'`) — reporting `unchanged` for a server that does not
-match the repo. A reformat-only edit therefore shows up as an update, and applying it is harmless:
+Interior whitespace is **not** normalized beyond that. A reformat-only edit therefore shows up as an update, and applying it is harmless:
 the schema hash is derived from the inferred Arrow schema, not the query text
 (`mkdocs/docs/admin/materialized-views.md`, "What a redefinition means"), so existing partitions
 stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registry reload.
@@ -182,8 +181,10 @@ def compute_plan(server_state, local_scan, names=None):
 `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` itself — that catch lives in `main`,
 around dispatch (see "Current-state read"). `compute_plan` takes the DataFrame `read_server_state`
 returns as an argument, the same way it already takes `local_scan`, rather than fetching it itself.
-`cmd_plan`, `cmd_apply`, `cmd_pull`, and `cmd_list` each call `read_server_state` exactly once and
-pass the result to `compute_plan`. `cmd_show` has no `local_scan` at all (§1 drops `--dir` from
+`cmd_plan`, `cmd_apply`, and `cmd_list` each call `read_server_state` exactly once and
+pass the result to `compute_plan`. `cmd_pull` also calls `read_server_state` exactly once, but
+decides per file on the byte comparison in §1 against the local scan, not on `compute_plan`'s
+`updates`/`unchanged` classification. `cmd_show` has no `local_scan` at all (§1 drops `--dir` from
 `show`), so it cannot go through `compute_plan`; it calls `read_server_state` directly. `cmd_list` reads
 `update_group`/`updated_at`/`updated_by` off the same DataFrame it already fetched, since
 `compute_plan`'s return tuple does not carry those columns.
@@ -257,11 +258,7 @@ reads; and a `CREATE OR REPLACE` that narrows a column a dependent uses (the las
 `check_dependents_survive`, `:1118-1128`). Each of them leaves the server unchanged and returns an
 error naming the view and the reason, so the tool reports it like any other failed statement and
 exits non-zero; running `apply` again — now that the statements it depended on have landed —
-resolves one level of a chain per run. That is preferred over a local ordering heuristic:
-`update_group` is only a proxy for the dependency graph and does not cover the narrowing-replace
-case at all, and reading it locally would mean parsing an option that can sit *after* a
-dollar-quoted body — the one part of the statement the head-anchored scan of §2 cannot reach, and
-the only reason a SQL lexer would be needed at all.
+resolves one level of a chain per run.
 
 **Statement sent.** For an update, the file text with `OR REPLACE` injected into the header when
 absent (the inverse of `canonical_ddl`'s step 4). For a create, `canonical_ddl(text)` — guaranteed
@@ -281,8 +278,7 @@ their common base (along with `ArrowInvalid`, used for `INVALID_ARGUMENT`), so i
 than the narrower subclasses. This is what
 `FlightSQLClient.query` actually raises (`flightsql/client.py:355-419`,
 `tests/test_ddl_materialized_view.py:263`), not the `RuntimeError` `screens.py`'s `WebClient`
-raises. `connect_with_profile`'s `ProfileError` (a `ValueError`) is caught once at connect time,
-as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-side transaction,
+raises. Each DDL statement is its own server-side transaction,
 so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
 `apply`.
 
@@ -290,20 +286,15 @@ so a partial apply is a real outcome; the workflow is idempotent, so the remedy 
 the first FlightSQL round trip every subcommand makes, read-only `list`/`show`/`plan` included, and
 the anticipated failure point for a non-admin identity (Current State, "Auth"). `read_server_state`
 itself does not catch anything or exit; `main` wraps `args.func(args)` in a
-`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` / `ProfileError` catch around dispatch —
-the same pattern `screens.py:main` uses (`:736-740`) — reporting the error and exiting non-zero with
-a pointer to the admin-identity requirement, rather than letting the planner's unknown-function error
-or a `make_client` failure surface as a raw traceback.
+`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` / `ProfileError` / `OSError` catch around
+dispatch — the same pattern `screens.py:main` uses (`:736-740`), extended with `OSError` for a
+`--dir` that stops existing or a target file that can't be written — reporting the error and exiting
+non-zero with a pointer to the admin-identity requirement, rather than letting the planner's
+unknown-function error, a `make_client` failure, or a filesystem error surface as a raw traceback.
 
 ### 5. Deletes are opt-in
 
-The directory is the desired state of the *entire* table: DDL creation has no UI path today, so —
-unlike `micromegas-screens`, which needs `managed_by` to tell its own screens from one born ad hoc
-in the web UI — a server-only row here is ordinarily plain drift, not an ownership question. An
-admin-console page that creates or edits view sets through this same DDL has been proposed
-separately; if it lands, a UI-born definition would show up here too, and what keeps it safe is
-opt-in `--prune` plus reporting it as `server-only` rather than dropping it silently — not a
-`managed_by` marker. `--prune` still gates dropping it, justified by blast radius (a `DROP` also
+`--prune` still gates dropping it, justified by blast radius (a `DROP` also
 retires partitions, below) plus the migration-seeded `log_stats` row. Server-only definitions are
 therefore reported as
 `server-only` and **never dropped** unless `--prune` is passed. Two guards on top:
@@ -332,12 +323,9 @@ Extracted from `screens.py`, used by both tools:
   `format_screen_diff` (`screens.py:445-463`); returns `""` when there is no difference.
 - `confirm_apply(auto_approve)` — the `[y/N]` prompt and the `Apply cancelled.` message
   (`screens.py:531-535`), returning `True` when approved and `True` immediately when
-  `auto_approve`. It does **not** exit: a shared helper that terminates the process hides control
-  flow from its caller and forces every test of a declined apply to go through `pytest.raises`.
-  Each `cmd_apply` writes `if not confirm_apply(args.auto_approve): sys.exit(1)`, which is the
+  `auto_approve`. Each `cmd_apply` writes `if not confirm_apply(args.auto_approve): sys.exit(1)`, which is the
   exact behavior `screens.py` has today — same message, same exit code — so the extraction stays
-  behavior-preserving. The cancel message stays inside the helper because it belongs to the prompt
-  it just rendered, and both tools should word it identically.
+  behavior-preserving.
 - `add_color_arg(parser)` — the `--color` `BooleanOptionalAction` default-`True` flag.
 - `use_color(args)` — `sys.stdout.isatty() and args.color`.
 
@@ -371,8 +359,7 @@ DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`c
 `unchanged`, `server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a
 `create` row has no server row yet, so those last three columns are empty for it. `show <name>` calls
 `read_server_state` directly (it has no `local_scan` to give `compute_plan`) and prints the
-server's stored `definition_sql` verbatim — there is no `--local` counterpart, since reading the
-local file is `cat <name>.sql` and dropping it lets every subcommand connect unconditionally.
+server's stored `definition_sql` verbatim.
 `pull` differs from `show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored
 text (§1).
 
@@ -398,10 +385,11 @@ text (§1).
    `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `main` wraps
    `args.func(args)` in the same catch around dispatch, plus `ProfileError` (raised by `make_client`
-   inside a `cmd_*`), reporting the error and exiting non-zero with a pointer to the admin-identity
-   requirement when it originates from `read_server_state` (§4).
-   `cmd_pull` skips the write and counts the file `unchanged` when `canonical_ddl(definition_sql)`
-   already matches the file's current contents; otherwise it writes with `encoding="utf-8"`,
+   inside a `cmd_*`) and `OSError` (a `--dir` that fails the existence/is-a-directory check, or an
+   unwritable target file), reporting the error and exiting non-zero with a pointer to the
+   admin-identity requirement when it originates from `read_server_state` (§4).
+   `cmd_pull` skips the write and counts the file `unchanged` when `canonical_ddl(definition_sql) +
+   "\n"` (the text `pull` writes) already matches the file's current contents; otherwise it writes with `encoding="utf-8"`,
    matching `screens.py:89,256`. `main` calls `sys.stdout.reconfigure(encoding="utf-8",
    errors="backslashreplace")` before dispatching, matching `screens.py:651`, so colorized diff
    output survives a non-UTF-8 locale.
