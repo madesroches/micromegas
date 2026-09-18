@@ -131,10 +131,14 @@ show.
 
 `update_group` is deliberately **not** read locally — see the apply-ordering note in §4.
 
-A file whose header does not parse at all, or whose name disagrees with its filename, is reported
-and skipped, and every skipped file contributes to a single `protected_names` set that `--prune`
-refuses to drop: its filename stem always, plus the name the header declares when that is what
-disagreed.
+A file that fails to decode, whose header does not parse at all, or whose name disagrees with its
+filename, is reported and skipped, and every skipped file contributes to a single `protected_names`
+set that `--prune` refuses to drop: its filename stem always, plus the name the header declares when
+that is what disagreed.
+
+A skipped file also makes `plan` and `apply` exit non-zero — `apply` after applying the files that
+did parse: the repo means to manage that view set and silently isn't, which an unattended
+`apply --auto-approve` or a `plan` used as a CI drift check would otherwise report as success.
 
 `list_local_definitions(dir)` therefore returns `(definitions, protected_names)`: `definitions` maps
 name to `LocalDefinition`, and `protected_names` is the prune suppression set. This is the tuple
@@ -269,9 +273,9 @@ MATERIALIZED VIEW <name>` without `IF EXISTS` — the plan just established it e
 `not_found` status is worth an error rather than a shrug.
 
 `apply` reports each statement's returned `(view_set_name, status)` row, continues past a failure
-(counting it, as `screens.py:cmd_apply` does), and exits non-zero if any failed. The exceptions
-caught per statement are `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` — the latter
-because the gRPC statuses this design leans on, `already_exists` and `not_found`
+(counting it, as `screens.py:cmd_apply` does), and exits non-zero if any statement failed or the
+scan skipped any local file (§2). The exceptions caught per statement are
+`pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` — the latter because the gRPC statuses this design leans on, `already_exists` and `not_found`
 (`flight_sql_service_impl.rs:1021,1082`), surface from pyarrow as `ArrowException` and
 `ArrowKeyError` respectively, neither a `FlightError` nor an `ArrowInvalid`; `ArrowException` is
 their common base (along with `ArrowInvalid`, used for `INVALID_ARGUMENT`), so it is caught rather
@@ -471,6 +475,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   re-running `apply` is the remedy (§4).
 - `apply` continues past a failed statement and exits non-zero, matching `screens.py`, rather than
   stopping at the first error.
+- A skipped local file makes `plan` and `apply` exit non-zero, unlike `screens.py`, which warns and
+  exits 0: this tool is meant to run unattended in CI, where a warning on stderr is not read.
 - A skipped local file protects only the name(s) it could have been, not the whole directory:
   unlike `screens.py`, the filename stem is the key here, so there is no unknowable-identity case
   to justify a repo-wide suppression (§2).
@@ -532,6 +538,10 @@ reachable by calling code with constructed inputs.
   file byte-identical and counts it `unchanged` in the summary line, rather than rewriting it.
 - Filename/DDL-name mismatch is reported and skipped, and protects both the filename stem and the
   declared name from `--prune`.
+- A `.sql` file that fails to decode is reported and skipped, and protects its filename stem from
+  `--prune`.
+- An `apply` whose scan skipped a file still applies every file that parsed, reports the skip, and
+  exits non-zero; `plan` reports the skip and exits non-zero too.
 - An unparseable header is reported and skipped, and protects its filename stem from `--prune` —
   and *only* its stem: an unrelated server-only view in the same directory is still proposed for
   drop (pins that there is no repo-wide suppression).
@@ -539,7 +549,7 @@ reachable by calling code with constructed inputs.
   parse warns and leaves the file byte-identical (mirrors `test_screen_files.py`'s coverage of
   `screens.py`'s no-clobber guard).
 - Regression guard, run under `LC_ALL=C PYTHONUTF8=0` (matching
-  `test_screen_files.py:880-975`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
+  `test_screen_files.py:876-992`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
   colorized diff output prints without a `UnicodeEncodeError`.
 
 **Canonicalization**
