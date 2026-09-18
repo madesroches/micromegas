@@ -14,7 +14,10 @@ diff/apply layer — there is no new server concept here.
 Every subcommand needs an admin identity, including the read-only `list`/`show`/`plan`:
 `list_view_set_definitions()` and the `CREATE`/`DROP MATERIALIZED VIEW` DDL path are both gated to
 `lakehouse_admin` (see [Authorization](authorization.md#admin-gated-lakehouse-functions)). A
-non-admin connection fails on the very first round trip with a permission-denied error.
+non-admin doesn't get `list_view_set_definitions()` registered at all, so the very first round
+trip fails with a "function not found" planner error, not a permission-denied status; a
+permission-denied error is specific to the `CREATE`/`DROP MATERIALIZED VIEW` DDL path used by
+`apply`.
 
 `micromegas-views` is FlightSQL-based (like `micromegas-query`), not the analytics-web-based
 `WebClient` `micromegas-screens` and its siblings use — so it honors `api_key_file` in
