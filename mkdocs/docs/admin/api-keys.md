@@ -240,8 +240,10 @@ name. See [Self-service mint](authorization.md#self-service-ingestion-key-mint)
 for the full mechanism.
 
 `MintResponse.claimed` is `true` only when this call actually created the
-audience's first grant rows — best-effort, never a mint failure if a
-concurrent claim wins the race instead. A caller with no email is unaffected
+audience's first grant rows. Losing the claim race is never silently
+swallowed: losing the advisory lock itself is a **409 CLAIM_CONTENDED**
+(retry), and losing the in-lock existence recheck — another caller's grant
+or key row landing first — is a **403**. A caller with no email is unaffected
 by any of this — no `user:` row can be formed, so nothing is ever claimed for
 them; minting still requires a pre-existing grant. Minting into an *existing*
 audience the caller holds no grant on is a plain **403** for every caller,
