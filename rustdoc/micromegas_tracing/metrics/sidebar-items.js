@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MetricsDepsQueueAny","MetricsMsgQueueAny"],"struct":["FloatMetricEvent","IntegerMetricEvent","MetricMetadataDependency","MetricsDepsQueue","MetricsMsgQueue","StaticMetricMetadata","TaggedFloatMetricEvent","TaggedIntegerMetricEvent"],"trait":["MetricsDepsQueueTypeIndex","MetricsMsgQueueTypeIndex"],"type":["MetricsBlock","MetricsStream"]};

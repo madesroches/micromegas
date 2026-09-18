@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_lerp_color_udf"],"struct":["LerpColorUdf"]};

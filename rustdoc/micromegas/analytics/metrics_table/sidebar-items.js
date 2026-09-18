@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["metrics_table_schema"],"struct":["MetricsRecordBuilder"]};
