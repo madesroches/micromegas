@@ -28,12 +28,7 @@ FlightSQL session is audience-filtered like any other caller's. `CallerContext.i
 mutating-function registration gate (an integrity control), `list_audience_grants`'s
 `GrantVisibility::All` branch, `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm
 (`rust/analytics/src/lakehouse/audience_guard.rs:463-469`), and `authorize_view_ddl`'s gate on
-`CREATE/DROP MATERIALIZED VIEW` (`rust/public/src/servers/view_ddl.rs:49-56`) — the last two of
-which *are* query-path bypasses: `global_rows_visible` lets an audience-scoped admin holding no
-grant see `'global'` (multi-audience) partition metadata through `list_partitions()`
-(`list_partitions_table_function.rs:261`), and a DDL view's queries are planned and materialized
-under `CallerContext::maintenance()` (`ReadScope::All`), so an author sees every audience
-regardless of their own read scope.
+`CREATE/DROP MATERIALIZED VIEW` (`rust/public/src/servers/view_ddl.rs:49-56`).
 
 ### The two bundles
 
@@ -89,17 +84,6 @@ self-service, not access.
 > Administering the grant/membership store requires `is_admin`. Anything that yields, exercises,
 > or exposes access to an audience's data requires a grant on that audience — `is_admin` confers
 > none.
-
-Applied to the wildcard question, which the two planes answer differently:
-
-- **Delegation** (create/delete a grant row) keeps `*` stripped: holding an audience only via a
-  wildcard row must not let you re-share it. Unchanged.
-- **Mint authority** (mint, import, revoke a credential) honors `*`, exactly as
-  `AudienceMintPolicy`/`selector_matches` already do. Stripping it here would make `public` —
-  seeded `('public','mint','*')` precisely so it ships mintable — unmintable and unimportable for
-  *everyone*, which contradicts the shipped seed rather than narrowing admin.
-- **Visibility** (list keys) honors `*` for the same reason: keys bound to `public` stay listed,
-  since `public` is readable by every authenticated caller by an explicit row.
 
 ### 1. `AudienceMintPolicy`: delete the admin arm
 
@@ -221,26 +205,28 @@ pub const LIST_KEYS_VISIBILITY_SQL: &str =
 
 Both branches (`include_revoked` on/off) compose it into their `WHERE`, binding identity and
 selectors first — `$1` is the caller's email-else-subject identity, via the same inline
-expression `revoke_key`/`import_key` already use for `created_by`/`revoked_by` (not the private
-`caller_identity` helpers in `audience_grants.rs` or `groups.rs`, which take incompatible types
-and aren't reachable from this module); `$2` is `caller_selectors(&caller)`. `list_keys` then
-takes `limit`/`offset` as `$3`/`$4`.
+expression `revoke_key`/`import_key` already use for `created_by`/`revoked_by` (not
+`audience_grants.rs`'s `caller_identity` helper, which takes the right type — `&AuthContext` —
+but, like `groups.rs`'s own version, is module-private and so not reachable from this module;
+prefer `pub(crate)`-ing `audience_grants.rs`'s version over inlining the expression a third time);
+`$2` is `caller_selectors(&caller)`. `list_keys` then takes `limit`/`offset` as `$3`/`$4`.
 
 ### 6. `revoke_key`: mint authority on the key's audience
 
 Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`, for the
 same reason as `list_keys`: `$2` below needs `caller_selectors(&AuthContext)`. `$1` stays the
-existing email-else-subject expression this handler already computes for `revoked_by`, bound
-again as `$4` — `LIST_KEYS_VISIBILITY_SQL`'s identity placeholder and this `UPDATE`'s own
-`revoked_by` value are the same expression, just needed in two places in the query.
+existing email-else-subject expression this handler already computes, bound once — Postgres
+allows a placeholder to be referenced any number of times in one statement, so it serves both
+`revoked_by` and the authority check's `created_by` comparison.
 
 Fold the authority into the existing single idempotent `UPDATE`, so a repeat call still preserves
-the original `revoked_at`:
+the original `revoked_at`. Hoist the `WHERE`'s authority predicate into its own `pub const`
+alongside `LIST_KEYS_VISIBILITY_SQL`/`CLAIM_COUNT_SQL`, so it is assertable on its own in tests:
 
 ```sql
 UPDATE ingestion_api_keys k
 SET revoked_at = COALESCE(revoked_at, now()),
-    revoked_by = COALESCE(revoked_by, $4)
+    revoked_by = COALESCE(revoked_by, $1)
 WHERE k.key_id = $3
   AND (k.created_by = $1
        OR EXISTS (SELECT 1 FROM audience_grants g
@@ -263,14 +249,18 @@ today mints without one whenever the admin pre-check's `already_owned` short-cir
 deploying §5/§6, run `SELECT DISTINCT k.audience FROM ingestion_api_keys k WHERE k.audience <>
 'public' AND NOT EXISTS (SELECT 1 FROM audience_grants g WHERE g.audience = k.audience)` and create
 a grant row on every audience it returns, so no pre-existing key becomes invisible or
-unrevocable to everyone but its creator.
+unrevocable to everyone but its creator. Also cover audiences that only exist in a keyring not yet
+run through `micromegas-import-keys`: every distinct `"audience"` value in that keyring, plus any
+`--audience AUD` passed to the tool, needs the same grant row before §7 ships, or the import fails.
 
 ### 7. `import_key`: same authority as minting
 
 Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`:
 `authorize_mint` takes `&AuthContext`, which `AdminUser`'s `ValidatedUser` does not carry. Call
 `authorize_mint` on the resolved audience before the `INSERT … ON CONFLICT`; `403` on denial. No
-lazy-claim path — see Decisions.
+lazy-claim path — see Decisions. This also binds `micromegas-import-keys`, the bulk env-keyring
+migration tool: it needs a `mint` grant per distinct audience in the keyring being imported, not
+just an admin OIDC identity — see §6's pre-deploy audit and Documentation.
 
 ### 8. `my_audiences`: populate `held_pairs` for admins
 
@@ -288,22 +278,14 @@ filter (step 12), and `MintIngestionKeyDialog`'s default-audience preselect
 `web_server.rs`, at `IngestionKeysState` construction: when `state.default_audience` is neither
 `public` nor covered by a `mint` grant row, log a `warn!`. A custom-default deployment previously
 relied on the admin bypass for its very first mint; without the warning the resulting `403`
-("audience cannot be claimed", since the default audience is reserved from claiming) reads as a
-bug rather than a missing one-time grant.
+("audience {candidate:?} is not in the caller's mintable set", since a mint with no explicit
+audience never reaches the claim path) reads as a bug rather than a missing one-time grant.
 
 The check is skipped entirely — same as the `public` short-circuit — when `analytics_keys_pool` is
 `None` (`MICROMEGAS_SQL_CONNECTION_STRING` unset); the service already starts in that case with
 the key routes degraded to 503. Any query error (the telemetry DB owning `audience_grants` is
 never migrated by this service's own startup) is logged and ignored, not propagated: this is a
 best-effort diagnostic, not a startup precondition.
-
-### Unchanged
-
-Every control-plane site listed in Current State stays exactly as it is. In particular
-`visible_grants` and `list_audience_grants()` keep showing an admin every row: grant listing *is*
-the administration surface named in the issue's own scope ("manage (create/revoke/list) audience
-grants and memberships"), and narrowing it would be circular — an admin would have to grant
-themselves access in order to read the table that records grants.
 
 ## Implementation Steps
 
@@ -339,15 +321,17 @@ themselves access in order to read the table that records grants.
 
 **Phase 4 — clients**
 
-10. `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`: drop the `isAdmin`
-    special-casing (`:70-71`, `:158`, `:179`) — every caller gets the `mint_prefix` composition
-    and the claim hint, since every caller now takes the same server path.
+10. `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`: drop the claim-hint
+    `isAdmin` guards (`:158`, `:179`) — every caller now takes the same server claim path, so the
+    hint applies to admins too. Keep the `!isAdmin` `mint_prefix` guard at `:70-71`: the prefix is
+    a client naming convention, not a server-enforced authority, and this plan does not change it.
 11. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: the Mint button (`:793`) switches from
     `!isAdmin && showMintButton` to `(me?.audiences ?? []).includes(group.audience) &&
     showMintButton` — honoring `*` the same way the server's mint rule does; the Share/delete
     checks (`:424`, `:430`, `:498`) keep `isAdmin`.
 12. `python/micromegas/micromegas/cli/setup_telemetry.py`: delete the admin special-case
-    `parser.error` (`:200-208`) so admins resolve through the shared `held_pairs` path; update
+    `parser.error` — `:200` and `:203-208`, keeping `:201`'s `audiences = my_audiences["audiences"]`
+    (still used below) — so admins resolve through the shared `held_pairs` path; update
     `resolve_audience`'s docstring (`:154-162`).
 
 **Phase 5 — tests and docs**
@@ -372,8 +356,9 @@ themselves access in order to read the table that records grants.
   `src/routes/__tests__/IngestionApiKeysPage.test.tsx`,
   `src/routes/__tests__/AudienceAccessPage.test.tsx` (as affected)
 - `python/micromegas/micromegas/cli/setup_telemetry.py` + its tests
+- `python/micromegas/micromegas/web_client.py`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/authorization.md`,
-  `mkdocs/docs/admin/api-keys.md`
+  `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/query-guide/python-api.md`
 - `tasks/data_isolation/audience_based_access_control_plan.md`
 - `CHANGELOG.md`
 
@@ -465,9 +450,18 @@ notification path.
     included" for an admin caller, since `global_rows_visible`'s `lakehouse_admin` arm makes
     `'global'` rows visible to an audience-scoped admin holding no grant.
 - **`mkdocs/docs/admin/api-keys.md`**: `:17-23` (what stays admin-only), `:92-100` (the gate
-  description), `:212-230` (the admin-claims story collapses into the shared path), `:275-300`
-  (the admin page now shows an audience-scoped list); add a note before deploying to run the §6
-  pre-deploy audit query and grant every audience it returns, so no pre-existing key goes dark.
+  description), `:102-158` (the routes table's `DELETE`/import rows and the List/Revoke/Import
+  paragraphs: revoke's new 403, import's new 403/503, and list's audience scoping), `:212-230`
+  (the admin-claims story collapses into the shared path), `:275-300` (the admin page now shows
+  an audience-scoped list); add a note before deploying to run the §6 pre-deploy audit query and
+  grant every audience it returns, so no pre-existing key goes dark. Extend the migration runbook
+  (`:444-490`) to state the new authorization: the OIDC identity used must hold a `mint` grant on
+  each target audience, not just admin membership, and the extended pre-deploy audit above covers
+  a keyring's audiences too.
+- **`mkdocs/docs/query-guide/python-api.md`**'s `micromegas-import-keys` section (`:943-952`) and
+  **`python/micromegas/micromegas/web_client.py`**'s `list_ingestion_api_keys`/
+  `import_ingestion_api_key` docstrings: replace "admin-only"/"Requires OIDC admin access" with
+  the grant-based authorization above.
 - **`tasks/data_isolation/audience_based_access_control_plan.md`**: generalize §5's "No
   human-admin query-path bypass" into "no human-admin data-plane bypass" and note the three
   accepted carve-outs, `bulk_ingest`, `authorize_view_ddl`, and
@@ -498,10 +492,13 @@ guard even though the tier is coarse:
 
 - `LIST_KEYS_VISIBILITY_SQL` contains `FROM audience_grants`, `k.created_by = $1`, and
   `g.audience = k.audience`
-- both `list_keys` branches reference `LIST_KEYS_VISIBILITY_SQL`, and the un-predicated
-  `FROM ingestion_api_keys\n ORDER BY created_at DESC` shape no longer occurs anywhere in the
-  module's source
-- `revoke_key`'s `UPDATE` carries `axis = 'mint'` and the `created_by` arm
+- both `list_keys` branches reference `LIST_KEYS_VISIBILITY_SQL`, and, after collapsing runs of
+  whitespace in the module's source, the un-predicated `FROM ingestion_api_keys ORDER BY
+  created_at DESC` shape no longer occurs anywhere in it
+- `revoke_key`'s authority predicate is hoisted into its own `pub const` (alongside
+  `LIST_KEYS_VISIBILITY_SQL`/`CLAIM_COUNT_SQL`), and that constant — not the module source at
+  large, since `CLAIM_COUNT_SQL` already contains the substring `axis = 'mint'` — carries
+  `axis = 'mint'` and the `created_by` arm
 - `import_key` calls `authorize_mint`
 
 **Unit, no DB — route rejections on `lazy_pool()`.** The existing 403/400/503 tests
@@ -521,6 +518,11 @@ admin behavior; they must move with it:
   populated for an admin.
 - `live_visible_admin_sees_every_row` — unchanged; it is the regression guard that the control
   plane did *not* narrow.
+- `live_mint_list_revoke_round_trip` — mints into `"team-alpha"` as an admin holding no grant
+  there, which after §3 becomes `Forbidden` → `try_claim_and_mint`, writing grant rows its
+  cleanup does not remove. Switch it to a per-run unique audience with the same
+  `cleanup_audience` helper `:922` already uses, so it stops sharing `"team-alpha"` with
+  `live_import_is_idempotent`.
 
 **Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the prefix composition and the
 claim hint, and — since `held_pairs` is now populated for admins — the default-audience preselect
@@ -548,8 +550,9 @@ immediately — a 403 on a visible button, an empty table — rather than silent
    first place.
 3. Mint naming a brand-new audience. Expect `201` with `claimed: true`, and two new
    `user:<you>`/`mint`+`read` rows on Audience Access.
-4. `micromegas-grants create team-alpha mint user:<you>` as the admin, then mint into
-   `team-alpha`. Expect `201` with `claimed: false`, and the key visible in the list.
+4. `micromegas-grants create team-alpha mint user:<you> --url http://127.0.0.1:9000` as the
+   admin, then mint into `team-alpha`. Expect `201` with `claimed: false`, and the key visible in
+   the list.
 5. `micromegas-query "SELECT * FROM list_audience_grants()"` as the admin. Expect every row —
    the control plane did not narrow.
 6. Restart with `MICROMEGAS_DEFAULT_AUDIENCE=corp` and no grant on `corp`. Expect the startup
