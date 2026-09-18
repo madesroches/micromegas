@@ -894,10 +894,8 @@ async fn live_admin_mint_into_an_existing_audience_is_denied_with_403() {
     cleanup_audience(&pool, &audience).await;
 }
 
-/// The reserved default-key audience (from `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) is never claimed
-/// for an admin caller either, matching the non-admin lazy-claim path's existing reserved-name
-/// rule -- a mint with no explicit audience and no `mint` grant on the default 403s, the same
-/// as any other caller with no matching grant.
+/// A mint with no explicit audience and no `mint` grant on the resolved default audience 403s
+/// for an admin caller too, the same as any other caller with no matching grant.
 #[ignore]
 #[tokio::test]
 async fn live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant() {
@@ -969,9 +967,9 @@ async fn cleanup_audience(pool: &sqlx::PgPool, audience: &str) {
 /// path at all. The audience must be named explicitly, not left to default: `mint_key` only calls
 /// `try_claim_and_mint` when the caller's request named the audience itself, so
 /// leaving `audience` out of the body (as
-/// `live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant` does for an admin
-/// hitting this same check) would instead hit the earlier, ordinary "not in the caller's
-/// mintable set" denial and never reach this branch at all. This reserved-name check is not
+/// `live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant` does for an admin)
+/// instead hits the earlier, ordinary "not in the caller's mintable set" denial and never
+/// reaches this branch at all. This reserved-name check is not
 /// non-admin-specific any more: `try_claim_and_mint` has one call site, taken by every caller.
 #[ignore]
 #[tokio::test]

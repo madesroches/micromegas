@@ -804,6 +804,7 @@ pub async fn run_web_server(
     // than propagated, since the telemetry DB owning `audience_grants` is never migrated by this
     // service's own startup.
     if ingestion_keys_state.default_audience != micromegas::auth::policy::PUBLIC_AUDIENCE
+        && !config.disable_auth
         && let Some(pool) = &analytics_keys_pool
     {
         match sqlx::query_scalar::<_, bool>(

@@ -205,7 +205,7 @@ covered by the narrowing below: `bulk_ingest` (`flight_sql_service_impl.rs`) wri
 of a lake already stamped at origin, which per-audience grants cannot express, and it grants no
 *read* — and `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm, noted above.
 
-`CREATE`/`DROP MATERIALIZED VIEW` is a **read** carve-out, and the stronger of the two admin-gated
+`CREATE`/`DROP MATERIALIZED VIEW` is a **read** carve-out, and the strongest of the three admin-gated
 DDL/lakehouse sites: the resulting view's own queries are planned and materialized under
 `CallerContext::maintenance()` (`ReadScope::All`), so its author sees every audience regardless of
 their own read scope, not merely the ability to issue the `CREATE`/`DROP` itself.

@@ -609,7 +609,7 @@ existing `process_id → audience` cache to reach the audience for the membershi
   since its purpose (cross-audience replication of a lake already stamped at origin) can't be
   expressed by a per-audience grant and it grants no read; `authorize_view_ddl`
   (`rust/public/src/servers/view_ddl.rs`) gates `CREATE`/`DROP MATERIALIZED VIEW`, and is the
-  stronger of the two, since the resulting view's queries run under `CallerContext::maintenance()`
+  strongest of the three, since the resulting view's queries run under `CallerContext::maintenance()`
   (`ReadScope::All`); and `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm
   (`rust/analytics/src/lakehouse/audience_guard.rs`) makes `'global'` partition rows visible to an
   audience-scoped admin via `list_partitions()`, riding on the same boolean as the mutating-function

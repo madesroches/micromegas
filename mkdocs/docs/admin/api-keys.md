@@ -118,13 +118,15 @@ Both route groups share request/response shapes and validation for
 `name`/`key`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
 see [What audience does a key carry](#what-audience-does-a-key-carry).
 
-Ingestion's mint route has more error shapes than the rest of this table,
-since it is the one route here a non-admin caller can reach: `400
-BAD_REQUEST`, `503 NOT_CONFIGURED` (no DB pool), `403 FORBIDDEN`
+Ingestion's mint route has more error shapes than the rest of this table:
+`400 BAD_REQUEST`, `503 NOT_CONFIGURED` (no DB pool), `403 FORBIDDEN`
 (self-service off, no matching grant, or a per-caller bound reached), `503
 UNAVAILABLE` (the audience-grant query itself failed), `401 UNAUTHENTICATED`
 (no `AuthContext`, normally unreachable), and `409 CLAIM_CONTENDED` (two
-concurrent lazy claims raced for the same audience name; retry).
+concurrent lazy claims raced for the same audience name; retry). Import
+carries the `403`/`503` pair too, since it also goes through
+`authorize_mint`; mint remains the one route here a non-admin caller can
+reach at all.
 
 **Mint** (`POST .../{table}-api-keys`) — `{"name"}` (plus, for ingestion, an
 optional `"audience"`) → **201** `{"key_id","name","created_at","key"}` (plus
@@ -164,7 +166,8 @@ importing caller's own OIDC identity. **400** if `name` is empty/too long or
 `key` is empty; no other format validation. For ingestion, **403** if the
 importing caller (an admin — `import_key` keeps its `AdminUser` gate) holds
 no `mint` grant on the resolved audience: admin membership alone is no longer
-sufficient. Checked against the *requested* audience even on the
+sufficient. **503 UNAVAILABLE** if the underlying `authorize_mint`
+grant-store query itself fails. Checked against the *requested* audience even on the
 already-present-key path, where the write itself keeps the existing row's
 original binding and discards the request's audience — a repeat import can
 403 on an audience it will never actually write. Never logs the key. The
@@ -332,8 +335,8 @@ a browser" exposure mint already avoids.
 
 **A third page, open to every authenticated user, not just admins**:
 **Audience Access** (`/audiences`) is the self-service counterpart of the
-ingestion-key mint flow — it drives the mint route's non-admin path
-(claim-and-mint) from a browser dialog, plus the audience-grant read/write
+ingestion-key mint flow — it drives the mint route's shared claim-and-mint
+path (every caller, admin included) from a browser dialog, plus the audience-grant read/write
 routes covered in [Authorization → the grant store](authorization.md#the-grant-store). See
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
