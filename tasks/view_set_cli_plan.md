@@ -90,16 +90,19 @@ scan as an empty desired state.
 One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 `CREATE [OR REPLACE] MATERIALIZED VIEW` statement. Nothing else in the directory is read.
 
-Bare `pull` (no names) refreshes only the files already present in `--dir` — the
+Bare `pull` (no names) refreshes only the parseable names in the local scan's `definitions` map
+(§2) — the files already present in `--dir` that decoded and whose header parsed — the
 `screens.py:cmd_pull` default. A local name absent from the server (the normal state between
 authoring a new `.sql` file and running `apply`) is warned about and skipped, counted neither
 `updated` nor `unchanged`, with no effect on the exit code — mirroring `screens.py:cmd_pull`
 (`:329-333`). A named `pull` also adopts a server-only name into a new file, which
 is the merged pull/import behavior §5 relies on. A named `pull` (and `show <name>`) for a name
 present on neither side reports an error and exits non-zero, matching `screens.py:cmd_pull`
-(`:308-317`). `pull` skips, with a warning, any target file that
-fails to decode or whose header does not parse, rather than overwriting it — mirroring
-`screens.py:cmd_pull`'s (`:337-352`) guard against clobbering a file that can't be safely read.
+(`:308-317`). A named `pull` whose target file exists but fails to decode or whose header does not
+parse — the reason it is absent from the local scan's `definitions` map — is warned about and then
+overwritten with the rendered text: the filename stem fixes the view set's identity regardless of
+what the broken file's contents say, so there is no unknowable-identity case to protect, unlike
+`screens.py:cmd_pull`'s (`:337-352`) no-clobber guard (Decisions).
 `pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
 text: a definition last touched by `apply` is stored as `CREATE OR REPLACE` (§4), and writing that
 raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull, drifting the file away
@@ -249,8 +252,9 @@ passed to `plan` or `apply` that is present on neither side is reported as an er
 exits non-zero, matching `pull <name>` and `show <name>` (§1).
 
 **`plan`'s exit-code contract.** Non-zero only for a skipped local file (§2), an unknown name
-(above), or a dispatch-level error caught by `main` (below) — never for pending changes: a plan
-with creates, updates, or drops still queued exits 0, matching `screens.py:cmd_plan`
+(above), a `--prune` run against zero readable `.sql` files (§5), or a dispatch-level error caught
+by `main` (below) — never for pending changes: a plan with creates, updates, or drops still queued
+exits 0, matching `screens.py:cmd_plan`
 (`:495-505`), which always exits 0 regardless of what the plan contains. A CI job that wants to
 fail on drift reads `plan`'s output — the `Plan: N to create, N to update, N to drop, N
 unchanged.` summary line, or `list --format json`'s per-name `status` column (§7) — rather than
@@ -377,7 +381,11 @@ Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
 `list` calls `read_server_state` once, passes the result to `compute_plan`, and joins the same
 DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`,
 `unchanged`, `server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a
-`create` row has no server row yet, so those last three columns are empty for it. `show <name>` calls
+`create` row has no server row yet, so those last three columns are empty for it. `--format json`
+renders through `df.to_json(orient="records", indent=2)` — the pattern `micromegas-query` already
+uses (`python/micromegas/micromegas/cli/query.py:160`) — rather than `json.dumps` of raw cell
+values, since `update_group` (`Int32`) and `updated_at` (`Timestamp(ns, "+00:00")`) are not
+`json.dumps`-serializable. `show <name>` calls
 `read_server_state` directly (it has no `local_scan` to give `compute_plan`) and prints the
 server's stored `definition_sql` verbatim.
 `pull` differs from `show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored
@@ -498,6 +506,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - A skipped local file protects only the name(s) it could have been, not the whole directory:
   unlike `screens.py`, the filename stem is the key here, so there is no unknowable-identity case
   to justify a repo-wide suppression (§2).
+- A named `pull` against a target file that fails to decode or parse overwrites it with the
+  rendered text instead of refusing, unlike `screens.py:cmd_pull`'s no-clobber guard: the filename
+  stem fixes identity here, so there is no unknowable-identity case to protect against (§1, §2).
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
   the table, `compute_plan` must filter on a tier discriminator before classifying `server-only`.
@@ -569,8 +580,8 @@ reachable by calling code with constructed inputs.
   and *only* its stem: an unrelated server-only view in the same directory is still proposed for
   drop (pins that there is no repo-wide suppression).
 - A named `pull` against an existing `.sql` file that fails to decode or whose header does not
-  parse warns and leaves the file byte-identical (mirrors `test_screen_files.py`'s coverage of
-  `screens.py`'s no-clobber guard).
+  parse warns and then overwrites it with the rendered text (diverges from
+  `test_screen_files.py`'s coverage of `screens.py`'s no-clobber guard — see Decisions).
 - Regression guard, run under `LC_ALL=C PYTHONUTF8=0` (matching
   `test_screen_files.py:876-992`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
   colorized diff output prints without a `UnicodeEncodeError`.
