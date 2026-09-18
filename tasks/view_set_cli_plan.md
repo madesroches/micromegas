@@ -110,8 +110,7 @@ LocalDefinition = namedtuple("LocalDefinition", "name text path")
 
 The only thing read out of the statement is its `name`, and it is read with a regex anchored at the
 head of the text: leading `--` and `/* */` comments are stripped, then
-`CREATE [OR REPLACE] MATERIALIZED VIEW <ident>` is matched, unwrapping a double-quoted identifier
-(`"my_view"` → `my_view`). This needs no SQL lexer and adds no dependency: the view name always
+`CREATE [OR REPLACE] MATERIALIZED VIEW <ident>` is matched. This needs no SQL lexer and adds no dependency: the view name always
 precedes the `WITH (...)` options, so nothing but a comment can sit ahead of it and no string
 literal — dollar-quoted or otherwise — can reach the matched region. The three queries are never
 parsed, and neither are the options.
@@ -125,15 +124,7 @@ show.
 A file whose header does not parse at all, or whose name disagrees with its filename, is reported
 and skipped, and every skipped file contributes to a single `protected_names` set that `--prune`
 refuses to drop: its filename stem always, plus the name the header declares when that is what
-disagreed. The stem alone would nearly always do — a `.sql` file can only ever define the view its
-filename names, since a mismatch is rejected — and the declared name is added only because a
-mismatch leaves genuine doubt about which of the two the author meant to manage.
-
-This is deliberately *not* `screens.py`'s two-tier model (`:94-157`, `:396-425`), where an
-undecodable file suppresses deletes repo-wide. That tier exists because a screen's identity lives
-only inside its JSON, so a file that won't decode has unknowable identity. Here the filename stem
-is the key, so a broken file is never unknowable — it is a failed attempt at one specific name —
-and a stray unparseable `.sql` should not silently disable pruning for the whole directory.
+disagreed.
 
 `list_local_definitions(dir)` therefore returns `(definitions, protected_names)`: `definitions` maps
 name to `LocalDefinition`, and `protected_names` is the prune suppression set. This is the tuple
@@ -172,9 +163,24 @@ stay valid and the only effect is a `CREATE OR REPLACE` round trip and a registr
 ### 4. The plan model
 
 ```python
+def read_server_state(client):
+    """-> DataFrame(view_set_name, definition_sql, update_group, updated_at, updated_by)"""
+
 def compute_plan(client, local_scan, names=None):
     """-> (creates, updates, unchanged, server_only)"""
 ```
+
+`read_server_state` issues the current-state `SELECT` below and is the one place the
+`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch described under "Current-state
+read" lives; `compute_plan`, `cmd_list`, and `cmd_show` each call it directly. `cmd_show` has no
+`local_scan` at all (§1 drops `--dir` from `show`), so it cannot go through `compute_plan`; `cmd_list`
+does call `compute_plan` for classification but still needs its own `read_server_state` call to get
+the `update_group`/`updated_at`/`updated_by` columns `compute_plan`'s return tuple does not carry —
+the same way `screens.py:cmd_list` (`:597-606`) fetches independently of `compute_plan`.
+
+`updates` elements are `(name, local_canonical, server_canonical)` triples — mirroring
+`screens.py:397`'s `(name, normalized_local, normalized_server)` — so the per-view diff in §3 and
+`list`'s output in §7 have both canonical texts without a second read.
 
 `local_scan` is the `(definitions, protected_names)` tuple `list_local_definitions` returns (§2),
 passed in by the caller so a single command invocation scans the directory once and prints each
@@ -257,7 +263,7 @@ as the other CLIs do (`query.py:141-144`). Each DDL statement is its own server-
 so a partial apply is a real outcome; the workflow is idempotent, so the remedy is re-running
 `apply`.
 
-**Current-state read.** The `SELECT ... FROM list_view_set_definitions()` call in `compute_plan` is
+**Current-state read.** `read_server_state`'s `SELECT ... FROM list_view_set_definitions()` call is
 the first FlightSQL round trip every subcommand makes, read-only `list`/`show`/`plan` included, and
 the anticipated failure point for a non-admin identity (Current State, "Auth"). It is wrapped in
 the same `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch as `cmd_apply`'s
@@ -331,13 +337,15 @@ Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
   ? error_rollup
 ```
 
-`list` renders `compute_plan`'s output directly, joining the server rows for
+`list` calls `compute_plan` and joins its own `read_server_state` call's rows for
 `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`, `unchanged`,
 `server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a `create`
-row has no server row yet, so those last three columns are empty for it. `show <name>` prints the server's stored
-`definition_sql` verbatim — there is no `--local` counterpart, since reading the local file is
-`cat <name>.sql` and dropping it lets every subcommand connect unconditionally. `pull` differs from
-`show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored text (§1).
+row has no server row yet, so those last three columns are empty for it. `show <name>` calls
+`read_server_state` directly (it has no `local_scan` to give `compute_plan`) and prints the
+server's stored `definition_sql` verbatim — there is no `--local` counterpart, since reading the
+local file is `cat <name>.sql` and dropping it lets every subcommand connect unconditionally.
+`pull` differs from `show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored
+text (§1).
 
 ### 8. Relationship to cached range functions
 
@@ -374,10 +382,11 @@ head.
 **Phase 2 — the new tool**
 
 4. Create `python/micromegas/micromegas/cli/views.py`: `parse_local_definition`,
-   `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `compute_plan`, `format_plan`,
-   `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`, `main`. `cmd_apply` catches
-   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `compute_plan`'s
-   current-state query catches the same two exceptions, reporting the error and exiting non-zero
+   `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `read_server_state`,
+   `compute_plan`, `format_plan`, `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`,
+   `main`. `cmd_apply` catches
+   `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `read_server_state`
+   catches the same two exceptions, reporting the error and exiting non-zero
    with a pointer to the admin-identity requirement (§4); `main` connects once before dispatch and
    catches `ProfileError` there (§4). `cmd_pull` writes with
    `encoding="utf-8"`, matching
@@ -430,13 +439,6 @@ source of truth for what a definition means, at the cost of reporting reformat-o
 updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — an instance key (§8), a
 retention setting — diffs and round-trips correctly through a tool that never learned what it means,
 where a semantic comparison would need a new field and a new local parser branch per option.
-
-**No dependency ordering on apply.** Statements go out in name order and an order-sensitive
-refusal is reported rather than worked around, which keeps the tool free of any local model of the
-dependency graph — and free of the SQL lexer that reading `update_group` out of the file would have
-required. The cost is that a fresh directory whose views build on each other takes one `apply` per
-level of the chain. Acceptable because the failure is loud, specific, and leaves the server
-unchanged, and because the alternative heuristic would not have been correct anyway (§4).
 
 **No Terraform provider.** A provider (Go, `terraform-plugin-framework`, reusing the in-tree
 FlightSQL client at `grafana/pkg/flightsql/`) would get a real state file, and with it safe deletes
@@ -519,7 +521,6 @@ inputs.
   text.
 - A leading `--` comment, and a leading `/* */` comment, before `CREATE` do not defeat the name
   scan.
-- A quoted header name (`CREATE MATERIALIZED VIEW "my_view"`) reads back unquoted.
 - An `update_group = 1` inside a `$$...$$` body does not disturb the name scan (the scan stops at
   the view name, well before any body).
 - A server row whose `definition_sql` begins `CREATE OR REPLACE` pulls down as plain `CREATE`
@@ -529,6 +530,9 @@ inputs.
 - An unparseable header is reported and skipped, and protects its filename stem from `--prune` —
   and *only* its stem: an unrelated server-only view in the same directory is still proposed for
   drop (pins that there is no repo-wide suppression).
+- A named `pull` against an existing `.sql` file that fails to decode or whose header does not
+  parse warns and leaves the file byte-identical (mirrors `test_screen_files.py`'s coverage of
+  `screens.py`'s no-clobber guard).
 - Regression guard, run under `LC_ALL=C PYTHONUTF8=0` (matching
   `test_screen_files.py:880-975`): a non-ASCII `.sql` file round-trips through `pull`/parse, and
   colorized diff output prints without a `UnicodeEncodeError`.
@@ -546,6 +550,9 @@ inputs.
 - `drops` is empty unless the call site sets `prune and not names`, and equals `server_only` when it
   does — covers both the no-`--prune` and the `--prune`-plus-named-subset cases.
 - `--prune` against an empty directory errors instead of proposing drops.
+- A fake client whose `.query` raises `ArrowException` on the current-state read makes every
+  read-only subcommand (`plan`, `list`, `show`) report the error with the admin-identity pointer
+  and exit non-zero.
 
 **Apply**
 - Every create/update is issued before any drop — asserted over the fake client's recorded
