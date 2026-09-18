@@ -266,10 +266,12 @@ best-effort diagnostic, not a startup precondition.
 
 **Phase 4 — clients**
 
-8. `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`: drop the claim-hint
-    `isAdmin` guards (`:158`, `:179`) — every caller now takes the same server claim path, so the
-    hint applies to admins too. Keep the `!isAdmin` `mint_prefix` guard at `:70-71`: the prefix is
-    a client naming convention, not a server-enforced authority, and this plan does not change it.
+8. `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`: drop the `isAdmin` guard
+    around the public-readability help line (`:158`, "`public` is readable by every authenticated
+    user…") and the `isAdmin` guard around the claim hint (`:179`) — every caller now takes the
+    same server claim path, so both apply to admins too. Keep the `!isAdmin` `mint_prefix` guard
+    at `:70-71`: the prefix is a client naming convention, not a server-enforced authority, and
+    this plan does not change it.
 9. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: the Mint button (`:793`) switches from
     `!isAdmin && showMintButton` to `(me?.audiences ?? []).includes(group.audience) &&
     showMintButton` — honoring `*` the same way the server's mint rule does; the Share/delete
@@ -388,8 +390,6 @@ notification path.
 - **`mkdocs/docs/admin/authorization.md`**:
   - §Self-service mint: replace the "An admin's mint claims too" bullet (`:228-230`) with the
     single shared rule; add the custom-default-audience one-time grant step.
-  - §Configuration: the `MAX_KEYS_PER_CALLER` row (`:24`) — `list_keys`/`revoke_key` stay
-    admin-only and unscoped; only minting and importing now need a grant.
   - §Routes table (`:293`): `held_pairs` is no longer "(empty for an admin)".
   - §Write gate (`:307`): unchanged, but state explicitly that it is unchanged *because* it is
     grant administration.
@@ -449,10 +449,11 @@ admin behavior; they must move with it:
 - `live_admin_mint_into_an_existing_audience_does_not_claim` → becomes "is denied with 403",
   renamed accordingly.
 - `live_admin_mint_of_the_default_audience_is_never_claimed` → 403 unless a `mint` row exists.
-- `live_import_is_idempotent` — needs a `mint` grant on `"team-alpha"` in setup: the first
-  request resolves to `public` (already covered by the seeded `('public','mint','*')` row), but
-  the second request names `"team-alpha"` and now hits `authorize_mint("team-alpha")` — see
-  Decisions.
+- `live_import_is_idempotent` — the first request resolves to `public` (already covered by the
+  seeded `('public','mint','*')` row), but the second request names `"team-alpha"` and now hits
+  `authorize_mint("team-alpha")` — see Decisions. Before seeding a `mint` grant on `"team-alpha"`,
+  assert that second request 403s with no such grant; then seed the grant and assert it succeeds,
+  covering the import denial inside this test rather than adding a new one.
 - `live_my_audiences_admin_gets_a_normal_response_regardless_of_knob` — delete the "always empty
   for an admin" comment and the `held_pairs.is_empty()` assertion (`:1259-1265`); this test's
   fixture (`admin_user()`, no seeded grant rows) leaves `held_pairs` at `[]` for this caller even
@@ -465,11 +466,13 @@ admin behavior; they must move with it:
   `cleanup_audience` helper `:922` already uses, so it stops sharing `"team-alpha"` with
   `live_import_is_idempotent`.
 
-**Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the claim hint, and — since
-`held_pairs` is now populated for admins — the default-audience preselect
-now prefers the admin's personally-held mint audience over `audiences[0]`; assert this in the
-admin path of `AudienceAccessPage.test.tsx`, the only place an admin reaches
-`MintIngestionKeyDialog` (via `showMintButton`). `AudienceAccessPage`:
+**Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the claim hint and the
+public-readability help line, and — since `held_pairs` is now populated for admins — the
+default-audience preselect now prefers the admin's personally-held mint audience over
+`audiences[0]`; assert this in the admin path of `AudienceAccessPage.test.tsx`, the only place an
+admin reaches `MintIngestionKeyDialog` (via `showMintButton`). This includes inverting/renaming
+`AudienceAccessPage.test.tsx:261`'s existing `it('does not show the public-readability help line
+in the Mint dialog for an admin', …)`, since that line is now shown for an admin. `AudienceAccessPage`:
 the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows `isAdmin`.
 `IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior.
 
