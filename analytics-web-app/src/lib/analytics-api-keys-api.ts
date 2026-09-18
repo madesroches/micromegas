@@ -3,11 +3,6 @@
 // hosts the analytics-key store itself). Thin wrapper around the shared
 // factory in `api-keys-shared.ts` — see that file for the common
 // list/mint/revoke/error-handling logic.
-//
-// No `importKey` here: the import route exists for the `micromegas-import-keys`
-// CLI tool only (see the design doc's §5) — a browser form for pasting a
-// legacy key string in would reintroduce the "key transits a browser"
-// exposure mint already avoids.
 
 import {
   createApiKeysApi,

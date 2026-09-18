@@ -5,7 +5,7 @@ import sys
 import pytest
 
 import micromegas
-from micromegas.cli import import_keys, logout, query, screens, views
+from micromegas.cli import logout, query, screens, views
 from micromegas.cli.version import package_version
 
 
@@ -65,17 +65,6 @@ def test_views_version_flag(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["micromegas-views", "--version"])
     with pytest.raises(SystemExit) as exc_info:
         views.main()
-    assert exc_info.value.code == 0
-    out = capsys.readouterr().out
-    assert importlib.metadata.version("micromegas") in out
-    assert platform.python_version() in out
-    assert sys.executable in out
-
-
-def test_import_keys_version_flag(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["micromegas-import-keys", "--version"])
-    with pytest.raises(SystemExit) as exc_info:
-        import_keys.main()
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert importlib.metadata.version("micromegas") in out

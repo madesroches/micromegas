@@ -99,9 +99,7 @@ class WebClient:
     def mint_ingestion_api_key(self, name, audience=None):
         """Mint a fresh ingestion API key via `POST /api/ingestion-api-keys`.
 
-        Unlike `import_ingestion_api_key`, this generates a brand-new key
-        server-side rather than carrying one forward -- the route is not
-        purely admin-gated: a non-admin caller with a matching
+        The route is not purely admin-gated: a non-admin caller with a matching
         `mint` grant (or naming a brand-new audience explicitly, which
         lazily claims it) can mint their own key once the deployment has
         `MICROMEGAS_SELF_SERVICE_MINT` enabled. `audience` is omitted from
@@ -214,42 +212,6 @@ class WebClient:
         self._check_response(resp)
         return resp.json()
 
-    def import_ingestion_api_key(self, name, key, audience=None):
-        """Import an existing ingestion API key string.
-
-        Hashes and stores `key` verbatim via
-        `POST /api/ingestion-api-keys/import` rather than minting a fresh one
-        -- this is what lets a legacy env-keyring key's own string carry
-        forward, since existing clients must keep presenting the same key.
-        Mirrors `mint_key`'s response shape minus the cleartext:
-        `{"key_id", "name", "created_at", "created_by", "revoked_at",
-        "imported", "audience"}`.
-
-        `audience` is omitted from the request body when
-        `None`, so the server applies its own deployment default
-        (`MICROMEGAS_DEFAULT_AUDIENCE`, `public` when unset) rather than
-        receiving an explicit `null`.
-
-        Requires OIDC admin access *and* a `mint` grant on the resolved
-        audience, admin membership alone no longer being enough -- raises on
-        a `403` the same way any other denial does. Checked against the
-        resolved audience even on a repeat import of an already-present key,
-        where the write itself keeps that key's original binding and
-        discards this call's `audience`: such a repeat call can 403 on an
-        audience it will never actually write.
-        """
-        payload = {"name": name, "key": key}
-        if audience is not None:
-            payload["audience"] = audience
-        resp = self.session.post(
-            self._api_url("ingestion-api-keys/import"),
-            headers=self._headers(),
-            json=payload,
-            timeout=self.timeout,
-        )
-        self._check_response(resp)
-        return resp.json()
-
     def create_audience_grant(self, audience, axis, selector):
         """Create (or report the pre-existing) audience grant row via
         `POST /api/audience-grants`.
@@ -260,7 +222,7 @@ class WebClient:
         response reports the pre-existing row's own fields when the grant
         already existed (the server answers `200` in that case, `201` for a
         fresh create -- `WebClient` doesn't surface the status code itself,
-        only the body, matching every other create/import method here).
+        only the body, matching every other create method here).
         """
         resp = self.session.post(
             self._api_url("audience-grants"),
@@ -381,22 +343,3 @@ class WebClient:
             timeout=self.timeout,
         )
         self._check_response(resp)
-
-    def import_analytics_api_key(self, name, key):
-        """Import an existing analytics API key string.
-
-        Hashes and stores `key` verbatim via `POST /api/analytics-api-keys/import`
-        rather than minting a fresh one -- this is what lets a legacy env-keyring
-        key's own string carry forward, since existing clients must keep
-        presenting the same key. Mirrors `mint_key`'s response shape minus the
-        cleartext: `{"key_id", "name", "created_at", "created_by", "revoked_at",
-        "imported"}`.
-        """
-        resp = self.session.post(
-            self._api_url("analytics-api-keys/import"),
-            headers=self._headers(),
-            json={"name": name, "key": key},
-            timeout=self.timeout,
-        )
-        self._check_response(resp)
-        return resp.json()

@@ -8,7 +8,7 @@ from micromegas.web_client import WebClient
 
 class FakeClient:
     """Records every call and returns a canned response, mirroring
-    `test_import_keys.py`'s `FakeClient` lightweight-mocking style."""
+    `test_setup_telemetry.py`'s `FakeClient` lightweight-mocking style."""
 
     def __init__(self):
         self.calls = []

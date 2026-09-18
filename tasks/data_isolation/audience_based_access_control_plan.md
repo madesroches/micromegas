@@ -1335,10 +1335,11 @@ Stage 7 activation. Needs its own epic issue.
     bound as loudly as the revoke docs do.
 
 9d. **Route/UI/client plumbing.** `POST {base_path}/api/analytics-api-keys` accepts `read_audiences`;
-    `/import` accepts it too; `GET` returns it (a grant is not secret — unlike `key_hash`, listing it is
-    the point); the Admin → Analytics API Keys page gains the input; `import_analytics_api_key` in
-    `python/micromegas/micromegas/web_client.py` and `cli/import_keys.py` pass it through. Audiences are
-    shape-checked (`user:`/`group:` prefix) at the route.
+    `GET` returns it (a grant is not secret — unlike `key_hash`, listing it is the point); the
+    Admin → Analytics API Keys page gains the input. Audiences are shape-checked (`user:`/`group:`
+    prefix) at the route. *(Status: the `/import` route and the `import_keys.py` CLI were removed
+    before this stage landed, so this plumbing is mint-route-only; there is no import path left to
+    thread `read_audiences` through.)*
 
 9e. **Grant vetting — minting an analytics key *is* a read grant.** So this route's authorization is a
     confidentiality control, not just an admin convenience. Admin-only (today's `AdminUser` gate) is
@@ -1520,14 +1521,15 @@ status update near the top of this document):
   **Not** `rust/object-cache-srv/` — it has no DB access and keeps the env keyring (Stage 0).
 - Analytics-key read grants (Stage 4b): `rust/ingestion/src/sql_telemetry_db.rs` (the
   `read_audiences TEXT[]` migration), `rust/auth/src/db_api_key.rs` (`KeyRow` + `AuthContext`
-  population), `rust/analytics-web-srv/src/analytics_keys.rs` (mint/import/list),
-  `analytics-web-app`'s Analytics API Keys page, `python/micromegas/micromegas/web_client.py` and
-  `cli/import_keys.py`.
+  population), `rust/analytics-web-srv/src/analytics_keys.rs` (mint/list), `analytics-web-app`'s
+  Analytics API Keys page, and `python/micromegas/micromegas/web_client.py`. *(Status: the
+  `/import` route and `cli/import_keys.py` were removed before this stage landed — there is no
+  import path left to touch.)*
 - Key-management routes — **`rust/analytics-web-srv/src/ingestion_keys.rs`** (`audience` on
-  `mint_key` and `import_key`, Stages 4/6) and its identity source
+  `mint_key`, Stages 4/6) and its identity source
   `rust/analytics-web-srv/src/auth/claims.rs` (`ValidatedUser`, Stage 1 — see the third identity
-  boundary), plus `python/micromegas/micromegas/cli/import_keys.py` and the
-  `analytics-web-app` ingestion-keys page if audience becomes a mint-time input.
+  boundary), plus the `analytics-web-app` ingestion-keys page if audience becomes a mint-time
+  input.
   **Not** `rust/public/src/servers/api_keys.rs` — deleted by #1458.
 
 ## Trade-offs

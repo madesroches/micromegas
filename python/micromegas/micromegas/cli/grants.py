@@ -3,8 +3,8 @@
 
 Talks to `analytics-web-srv`'s `/api/audience-grants` routes over HTTP via
 `WebClient` -- never direct Postgres access, the same convention every CLI in
-this codebase follows (`screens.py`, `import_keys.py`). Modeled on
-`import_keys.py`'s `--url`/`--profile` argument shape rather than
+this codebase follows (`screens.py`, `setup_telemetry.py`). Modeled on
+`setup_telemetry.py`'s `--url`/`--profile` argument shape rather than
 `screens.py`'s local-config-file shape: there is no local state to track here,
 just a thin wrapper over two HTTP calls (`create`/`delete`).
 

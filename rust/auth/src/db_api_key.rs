@@ -124,8 +124,7 @@ pub fn hash_key(key: &str) -> [u8; 32] {
 
 /// 256 bits of OS entropy, base64url-nopad, `mmk_`-prefixed. `mmk_` makes minted
 /// keys recognizable to secret scanners; it is cosmetic to validation, since
-/// [`hash_key`] covers the whole string (which is what lets imported legacy keys
-/// of any shape keep working).
+/// [`hash_key`] covers the whole string rather than parsing the prefix.
 pub fn generate_key() -> String {
     let mut rng = rand::rng();
     let bytes: [u8; 32] = rng.random();

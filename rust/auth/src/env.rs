@@ -34,8 +34,9 @@ fn removed_vars_that_are_set(removed: &[&'static str]) -> Vec<&'static str> {
 
 /// Warns when any of the three removed env-var API-keyrings --
 /// `MICROMEGAS_API_KEYS`, `MICROMEGAS_INGESTION_API_KEYS`, `MICROMEGAS_ANALYTICS_API_KEYS` -- is
-/// still set. `ingestion_api_keys` / `analytics_api_keys` are the only sources from here on;
-/// `micromegas-import-keys` migrates a still-set keyring into them. Unlike the earlier
+/// still set. `ingestion_api_keys` / `analytics_api_keys` are the only sources from here on, and
+/// the keys they hold are minted there -- a still-set keyring's own key strings cannot be carried
+/// over, so every client presenting one needs a freshly minted key. Unlike the earlier
 /// removed-var families, this removal warns rather than refusing startup.
 pub(crate) fn warn_removed_api_key_vars() {
     const REMOVED: [&str; 3] = [
@@ -51,8 +52,9 @@ pub(crate) fn warn_removed_api_key_vars() {
             ""
         };
         micromegas_tracing::warn!(
-            "{} {} set but no longer read -- import the keyring into ingestion_api_keys / \
-             analytics_api_keys with `micromegas-import-keys`, then unset {}{}",
+            "{} {} set but no longer read -- mint replacement keys into ingestion_api_keys / \
+             analytics_api_keys from the web app's admin pages, redistribute them to the \
+             clients still presenting the old ones, then unset {}{}",
             set.join(", "),
             if set.len() == 1 { "is" } else { "are" },
             if set.len() == 1 { "it" } else { "them" },

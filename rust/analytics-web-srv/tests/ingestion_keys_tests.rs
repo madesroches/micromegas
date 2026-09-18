@@ -21,10 +21,10 @@
 //! runs. The 400 cases fail validation before touching the pool, and the
 //! `NotConfigured` cases use `IngestionKeysState { pool: None, .. }`,
 //! which never touches `state.pool` at all. Live-DB round trips for
-//! mint/list/revoke/import are `#[ignore]`d, run manually against a real
+//! mint/list/revoke are `#[ignore]`d, run manually against a real
 //! Postgres per `folders_tests.rs`'s precedent.
 //!
-//! The resolution matrix (explicit / knob / `import`'s `PUBLIC_AUDIENCE`
+//! The resolution matrix (explicit / knob / the `PUBLIC_AUDIENCE`
 //! fallback / `mint`'s 400) is tested against `resolve_audience` directly,
 //! not through the routes: the helper is sync, takes no pool, and every
 //! route-level test in this file that reaches an `INSERT` is `#[ignore]`d, so
@@ -187,11 +187,11 @@ fn resolve_audience_falls_back_to_the_knob_when_no_explicit_value() {
     assert_eq!(resolved, "knob-audience");
 }
 
-/// The deployment default is `public` unless configured, on both routes: there is no
+/// The deployment default is `public` unless configured, on the mint route: there is no
 /// "neither explicit nor knob" case left to fail, so the only 400 this function still raises is
 /// for a malformed *explicit* audience.
 #[test]
-fn resolve_audience_falls_back_to_public_by_default_on_either_route() {
+fn resolve_audience_falls_back_to_public_by_default() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: PUBLIC_AUDIENCE.to_string(),
@@ -350,28 +350,6 @@ async fn revoke_403_for_non_admin() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-#[tokio::test]
-async fn import_403_for_non_admin() {
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(lazy_pool()),
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        non_admin_user(),
-    );
-    let response = app
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            r#"{"name": "legacy", "key": "legacy-secret"}"#,
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
 // ---------------------------------------------------------------------------
 // 400 validation — checked before any hashing/DB access.
 // ---------------------------------------------------------------------------
@@ -390,28 +368,6 @@ async fn mint_400_for_empty_name() {
     );
     let response = app
         .oneshot(post_request("/api/ingestion-api-keys", r#"{"name": ""}"#))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn import_400_for_empty_key() {
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(lazy_pool()),
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            r#"{"name": "legacy", "key": ""}"#,
-        ))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -529,28 +485,6 @@ async fn revoke_503_when_pool_unconfigured() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
-#[tokio::test]
-async fn import_503_when_pool_unconfigured() {
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: None,
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        admin_user(),
-    );
-    let response = app
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            r#"{"name": "legacy", "key": "legacy-secret"}"#,
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-}
-
 // ---------------------------------------------------------------------------
 // Source-scan regression guard
 // ---------------------------------------------------------------------------
@@ -647,8 +581,8 @@ async fn live_mint_list_revoke_round_trip() {
 
     // A per-run unique audience, cleaned up with `cleanup_audience` below -- an admin holding
     // no grant on this audience now mints via the shared claim path (`authorize_mint` denies,
-    // `try_claim_and_mint` claims it), which writes grant rows `"team-alpha"` used to share
-    // with `live_import_is_idempotent`, so a fixed name would leak grant rows across tests.
+    // `try_claim_and_mint` claims it), which writes grant rows, so a fixed name would leak them
+    // across tests.
     let audience = format!("ingestion-keys-round-trip-{}", uuid::Uuid::new_v4());
     let name = format!("ingestion-keys-test-{}", uuid::Uuid::new_v4());
     let response = app
@@ -700,94 +634,6 @@ async fn live_mint_list_revoke_round_trip() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json_body(response).await;
     assert!(body["revoked_at"].is_string());
-
-    sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
-        .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))
-        .execute(&pool)
-        .await
-        .expect("cleanup");
-    cleanup_audience(&pool, &audience).await;
-}
-
-#[ignore]
-#[tokio::test]
-async fn live_import_is_idempotent() {
-    let pool = live_pool().await;
-    let app = build_handler_router_with_user(
-        IngestionKeysState {
-            pool: Some(pool.clone()),
-            default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
-        },
-        admin_user(),
-    );
-
-    let name = format!("ingestion-keys-import-test-{}", uuid::Uuid::new_v4());
-    let key = format!("legacy-{}", uuid::Uuid::new_v4());
-    let audience = format!("team-alpha-{}", uuid::Uuid::new_v4());
-
-    // No explicit audience: resolves to `public`, already covered by the seeded
-    // `('public', 'mint', '*')` row, so `authorize_mint` allows it with no grant of the admin's
-    // own.
-    let response = app
-        .clone()
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            &format!(r#"{{"name": "{name}", "key": "{key}"}}"#),
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    assert_eq!(body["imported"], true);
-    assert_eq!(body["audience"].as_str(), Some(PUBLIC_AUDIENCE));
-    let key_id = body["key_id"].as_str().expect("key_id present").to_string();
-
-    // Same key, a different name AND a different audience this time: the binding is
-    // immutable, so the already-present row's original audience must survive, never the
-    // second request's. This second request names an audience the admin holds no grant on
-    // at all -- `import_key` now calls `authorize_mint` on the *requested* audience even
-    // though this path's write keeps the original binding, so it 403s before ever reaching
-    // the already-present-key branch.
-    let response = app
-        .clone()
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            &format!(r#"{{"name": "{name}-again", "key": "{key}", "audience": "{audience}"}}"#),
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(
-        response.status(),
-        StatusCode::FORBIDDEN,
-        "a repeat import naming an audience with no grant must be denied, even though the \
-         write itself would have kept the original binding"
-    );
-
-    // Seed a `mint` grant on the requested audience and retry: `authorize_mint` now allows it,
-    // and the already-present-key branch reports the original (`public`) audience, never the
-    // request's.
-    insert_mint_grant(&pool, &audience, "user:admin@example.com").await;
-    let response = app
-        .clone()
-        .oneshot(post_request(
-            "/api/ingestion-api-keys/import",
-            &format!(r#"{{"name": "{name}-again", "key": "{key}", "audience": "{audience}"}}"#),
-        ))
-        .await
-        .expect("call service");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = json_body(response).await;
-    assert_eq!(body["imported"], false);
-    assert_eq!(body["key_id"].as_str(), Some(key_id.as_str()));
-    assert_eq!(
-        body["audience"].as_str(),
-        Some(PUBLIC_AUDIENCE),
-        "an import of an already-present key must report the existing audience, never the \
-         request's"
-    );
 
     sqlx::query("DELETE FROM ingestion_api_keys WHERE key_id = $1")
         .bind(uuid::Uuid::parse_str(&key_id).expect("valid uuid"))

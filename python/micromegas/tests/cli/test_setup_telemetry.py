@@ -5,13 +5,13 @@ import sys
 
 import pytest
 
-from micromegas.cli import import_keys, setup_telemetry
+from micromegas.cli import setup_telemetry
 from micromegas.web_client import WebClient
 
 
 class FakeClient:
     """Records every call and returns canned responses, mirroring
-    `test_import_keys.py`/`test_grants.py`'s `FakeClient` lightweight-mocking style."""
+    `test_grants.py`'s `FakeClient` lightweight-mocking style."""
 
     def __init__(self, my_audiences=None, mint_result=None, mint_error=None):
         self.calls = []
@@ -104,12 +104,9 @@ def test_build_parser_accepts_the_minimal_required_args():
 
 
 def test_make_client_returns_web_client(monkeypatch):
-    # `make_client` is re-exported from `import_keys` and resolves
-    # `build_auth_provider` in *that* module's namespace (see the comment on
-    # the re-export in setup_telemetry.py), so it must be patched there --
-    # patching `setup_telemetry.build_auth_provider` would only rebind an
-    # unused name and let this test fall through to the real implementation.
-    monkeypatch.setattr(import_keys, "build_auth_provider", lambda args, parser: None)
+    monkeypatch.setattr(
+        setup_telemetry, "build_auth_provider", lambda args, parser: None
+    )
     args = make_args()
     client = setup_telemetry.make_client(args, FakeParser())
     assert isinstance(client, WebClient)

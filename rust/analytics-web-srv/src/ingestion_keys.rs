@@ -9,14 +9,13 @@
 //! service's own `/auth/*` routes (login/callback/refresh/logout/me) — a
 //! completely different concern (browser session lifecycle).
 //!
-//! Every mint/revoke/import records the acting caller's own OIDC identity,
-//! never a shared service credential. `list_keys`/`revoke_key`/`import_key`
+//! Every mint/revoke records the acting caller's own OIDC identity,
+//! never a shared service credential. `list_keys`/`revoke_key`
 //! are gated via the [`AdminUser`] extractor; `mint_key` runs through
 //! `MintGate`/[`AuthenticatedUser`] instead, since minting is not purely
-//! admin-gated -- see that extractor's own doc comment. `import_key` layers
-//! `authorize_mint` on top of its `AdminUser` gate: `AdminUser` alone answers "is this caller an
-//! administrator," not "may this caller write into this audience" -- see `authorize_mint`'s own
-//! doc comment.
+//! admin-gated -- see that extractor's own doc comment. Minting also runs
+//! `authorize_mint`: being an administrator answers "is this caller an administrator," not "may
+//! this caller write into this audience" -- see `authorize_mint`'s own doc comment.
 //!
 //! **Duplication, accepted.** This duplicates most of `analytics_keys.rs`'s
 //! validation/SQL/error shape — deliberately, per that module's own doc
@@ -61,8 +60,8 @@ pub struct IngestionKeysState {
     pub pool: Option<PgPool>,
     /// The deployment default audience, resolved once at startup from `{prefix}_DEFAULT_AUDIENCE`
     /// (`micromegas::auth::policy::default_audience_from_env`, `web_server.rs`), `public` when
-    /// unset. Always present: both `mint` and `import` fall back to it when a request names no
-    /// audience. See [`resolve_audience`].
+    /// unset. Always present: `mint` falls back to it when a request names no audience. See
+    /// [`resolve_audience`].
     pub default_audience: String,
     /// Off-by-default self-service mint gate. Resolved once at startup
     /// from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`), default `false`. Checked by
@@ -105,9 +104,7 @@ impl ErrorResponse {
 /// `mint_key` is `MintGate`/[`AuthenticatedUser`]-gated, not [`AdminUser`]-gated, and its own
 /// denials (the off-by-default gate, a missing-grant/malformed-audience `authorize_mint` denial,
 /// a per-caller bound, and lock contention on a lazy claim) need their own status codes.
-/// `import_key` is `AdminUser`-gated but also calls `authorize_mint`, so it too constructs
-/// `Forbidden` and `Unavailable`. `list_keys`/`revoke_key` stay `AdminUser`-gated and never
-/// construct any of the four.
+/// `list_keys`/`revoke_key` stay `AdminUser`-gated and never construct any of the four.
 #[derive(Debug)]
 pub enum IngestionKeyError {
     /// Request body/query failed validation.
@@ -119,7 +116,7 @@ pub enum IngestionKeyError {
     /// `state.pool == None` — the telemetry-DB pool was never configured
     /// (`MICROMEGAS_SQL_CONNECTION_STRING` unset).
     NotConfigured,
-    /// Mint/import denied: the `MICROMEGAS_SELF_SERVICE_MINT` gate is off for a non-admin caller
+    /// Mint denied: the `MICROMEGAS_SELF_SERVICE_MINT` gate is off for a non-admin caller
     /// minting, `authorize_mint` denied the request (no matching grant), the audience is not
     /// eligible for a lazy claim, or a per-caller bound
     /// (`max_claims_per_caller`/`max_keys_per_caller`) was reached.
@@ -228,7 +225,7 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
     Ok(())
 }
 
-/// Resolves the audience to stamp on a mint/import `INSERT`'s `NOT NULL` column. `pub`, not
+/// Resolves the audience to stamp on a mint `INSERT`'s `NOT NULL` column. `pub`, not
 /// module-private, and sync with no pool access, so the whole resolution matrix is
 /// unit-testable without a database.
 ///
@@ -317,8 +314,7 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
 }
 
 /// Resolves whether `caller` may mint into `audience`, by a fresh point query against
-/// `audience_grants` (never a cached snapshot). The single mint-authority seam: `mint_key` and
-/// `import_key` both go through it.
+/// `audience_grants` (never a cached snapshot). The single mint-authority seam.
 ///
 /// Mint authorization is a point query, not a cached snapshot: no `DbAudienceGrantsSource` is
 /// attached for mint at all. `audience` is the leading column of `audience_grants`'s `PRIMARY
@@ -818,135 +814,6 @@ async fn revoke_key(
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ImportRequest {
-    name: String,
-    key: String,
-    audience: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ImportResponse {
-    key_id: Uuid,
-    name: String,
-    created_at: DateTime<Utc>,
-    created_by: String,
-    /// `null` unless the already-present row (on the `imported: false` path)
-    /// was itself revoked.
-    revoked_at: Option<DateTime<Utc>>,
-    /// `true` on a fresh insert; `false` when `key_hash` already existed.
-    imported: bool,
-    /// The audience the row actually carries. On the already-present
-    /// (`imported: false`) path this is the **existing** row's audience, never the
-    /// request's -- the binding is immutable, so an import never rewrites it.
-    audience: String,
-}
-
-/// Row shape shared by both branches of `import_key`'s `INSERT ... ON
-/// CONFLICT` / fallback `SELECT`.
-#[derive(sqlx::FromRow)]
-struct ImportedRow {
-    key_id: Uuid,
-    name: String,
-    created_at: DateTime<Utc>,
-    created_by: String,
-    revoked_at: Option<DateTime<Utc>>,
-    audience: String,
-}
-
-/// `POST {base_path}/api/ingestion-api-keys/import` -- required because the CLI's
-/// `--table ingestion` path always targets `analytics-web-srv`, which is the only place
-/// that can mint or import ingestion keys.
-///
-/// Hashes and stores a caller-supplied key string verbatim, rather than
-/// generating a fresh one. `created_by` is the importing caller's own OIDC
-/// identity, never the literal string `"import"`.
-///
-/// No format validation on `key` beyond non-empty: `hash_key` covers the whole
-/// string regardless of shape, which is what lets an operator-chosen legacy
-/// key of any format import cleanly.
-async fn import_key(
-    Extension(state): Extension<IngestionKeysState>,
-    AdminUser(user): AdminUser,
-    AuthenticatedUser(caller): AuthenticatedUser,
-    Json(body): Json<ImportRequest>,
-) -> Result<(StatusCode, Json<ImportResponse>), IngestionKeyError> {
-    let pool = require_pool(&state)?;
-    validate_name(&body.name)?;
-    if body.key.is_empty() {
-        return Err(IngestionKeyError::BadRequest(
-            "key must not be empty".to_string(),
-        ));
-    }
-    // Falls back to the deployment default (`public` unless configured otherwise via
-    // `MICROMEGAS_DEFAULT_AUDIENCE`) -- matching how already-ingested legacy data is stamped.
-    let audience = resolve_audience(&state, body.audience.as_deref())?;
-    // Same authority as minting: importing binds a key to `audience`, so it needs a `mint`
-    // grant on it, admin membership included -- see `authorize_mint`'s own doc comment. Checked
-    // against the *requested* audience even on the already-present-key path below, where the
-    // write itself keeps the original binding and discards this request's audience: a repeat
-    // import can 403 on an audience it will never actually write.
-    authorize_mint(&pool, &caller, &audience).await?;
-
-    let hash = hash_key(&body.key);
-    let key_id = Uuid::new_v4();
-    let created_at = Utc::now();
-    let created_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
-
-    let inserted = sqlx::query_as::<_, ImportedRow>(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (key_hash) DO NOTHING
-         RETURNING key_id, name, created_at, created_by, revoked_at, audience",
-    )
-    .bind(key_id)
-    .bind(&hash[..])
-    .bind(&body.name)
-    .bind(created_at)
-    .bind(&created_by)
-    .bind(&audience)
-    .fetch_optional(&pool)
-    .await?;
-
-    let (row, imported, status) = match inserted {
-        Some(row) => (row, true, StatusCode::CREATED),
-        None => {
-            // The hash already exists: report the existing row (including
-            // whether it's revoked, and its actual, immutable audience) instead
-            // of the freshly-generated values above, which never made it into
-            // the table.
-            let row = sqlx::query_as::<_, ImportedRow>(
-                "SELECT key_id, name, created_at, created_by, revoked_at, audience
-                 FROM ingestion_api_keys
-                 WHERE key_hash = $1",
-            )
-            .bind(&hash[..])
-            .fetch_one(&pool)
-            .await?;
-            (row, false, StatusCode::OK)
-        }
-    };
-
-    info!(
-        "imported ingestion api key key_id={} name={} created_by={} imported={imported} audience={}",
-        row.key_id, row.name, row.created_by, row.audience
-    );
-
-    Ok((
-        status,
-        Json(ImportResponse {
-            key_id: row.key_id,
-            name: row.name,
-            created_at: row.created_at,
-            created_by: row.created_by,
-            revoked_at: row.revoked_at,
-            imported,
-            audience: row.audience,
-        }),
-    ))
-}
-
 /// Routes only — [`IngestionKeysState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `app_db_pool`/
 /// `maps_state`/`analytics_keys_state` are.
@@ -959,9 +826,5 @@ pub fn ingestion_keys_router(base_path: &str) -> Router {
         .route(
             &format!("{base_path}/api/ingestion-api-keys/{{key_id}}"),
             delete(revoke_key),
-        )
-        .route(
-            &format!("{base_path}/api/ingestion-api-keys/import"),
-            post(import_key),
         )
 }

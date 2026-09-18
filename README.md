@@ -79,7 +79,7 @@ Building from source or contributing code? See the [Build Guide](https://microme
 ## Recent Releases
 
 ### v0.31.0 (September 2026)
-* **Postgres is the sole source of API keys and audience grants** — the env keyrings are gone; manage both at runtime with `micromegas-import-keys`, `micromegas-grants`, and the admin routes
+* **Postgres is the sole source of API keys and audience grants** — the env keyrings are gone; manage both at runtime with `micromegas-grants` and the admin routes
 * **Access control is configured in one place** — one `MICROMEGAS_PUBLIC_VIEW_SETS`, resolved once on every auth path, and the audience model gets its own documentation page
 * **One auth interface across the Python CLIs** — every console script resolves credentials the same way, so `--profile` picks a named connection anywhere; `micromegas-setup-telemetry` gains `--user-audience`
 

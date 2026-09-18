@@ -321,113 +321,6 @@ async fn revoke_key(
     }
 }
 
-#[derive(Deserialize)]
-struct ImportRequest {
-    name: String,
-    key: String,
-}
-
-#[derive(Serialize)]
-struct ImportResponse {
-    key_id: Uuid,
-    name: String,
-    created_at: DateTime<Utc>,
-    created_by: String,
-    /// `null` unless the already-present row (on the `imported: false` path)
-    /// was itself revoked.
-    revoked_at: Option<DateTime<Utc>>,
-    /// `true` on a fresh insert; `false` when `key_hash` already existed.
-    imported: bool,
-}
-
-/// Row shape shared by both branches of `import_key`'s `INSERT ... ON
-/// CONFLICT` / fallback `SELECT`.
-#[derive(sqlx::FromRow)]
-struct ImportedRow {
-    key_id: Uuid,
-    name: String,
-    created_at: DateTime<Utc>,
-    created_by: String,
-    revoked_at: Option<DateTime<Utc>>,
-}
-
-/// `POST {base_path}/api/analytics-api-keys/import` — same shape as
-/// `ingestion_keys.rs`'s import route: hashes and stores a caller-supplied
-/// key string verbatim, rather than generating a fresh one. `created_by` is
-/// the importing caller's own OIDC identity, never the literal string
-/// `"import"`.
-///
-/// No format validation on `key` beyond non-empty: `hash_key` covers the whole
-/// string regardless of shape, which is what lets an operator-chosen legacy
-/// key of any format import cleanly.
-async fn import_key(
-    Extension(state): Extension<AnalyticsKeysState>,
-    AdminUser(user): AdminUser,
-    Json(body): Json<ImportRequest>,
-) -> Result<(StatusCode, Json<ImportResponse>), AnalyticsKeyError> {
-    let pool = require_pool(&state)?;
-    validate_name(&body.name)?;
-    if body.key.is_empty() {
-        return Err(AnalyticsKeyError::BadRequest(
-            "key must not be empty".to_string(),
-        ));
-    }
-
-    let hash = hash_key(&body.key);
-    let key_id = Uuid::new_v4();
-    let created_at = Utc::now();
-    let created_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
-
-    let inserted = sqlx::query_as::<_, ImportedRow>(
-        "INSERT INTO analytics_api_keys (key_id, key_hash, name, created_at, created_by)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (key_hash) DO NOTHING
-         RETURNING key_id, name, created_at, created_by, revoked_at",
-    )
-    .bind(key_id)
-    .bind(&hash[..])
-    .bind(&body.name)
-    .bind(created_at)
-    .bind(&created_by)
-    .fetch_optional(&pool)
-    .await?;
-
-    let (row, imported, status) = match inserted {
-        Some(row) => (row, true, StatusCode::CREATED),
-        None => {
-            // The hash already exists: report the existing row (including
-            // whether it's revoked) instead of the freshly-generated values
-            // above, which never made it into the table.
-            let row = sqlx::query_as::<_, ImportedRow>(
-                "SELECT key_id, name, created_at, created_by, revoked_at
-                 FROM analytics_api_keys
-                 WHERE key_hash = $1",
-            )
-            .bind(&hash[..])
-            .fetch_one(&pool)
-            .await?;
-            (row, false, StatusCode::OK)
-        }
-    };
-
-    info!(
-        "imported analytics api key key_id={} name={} created_by={} imported={imported}",
-        row.key_id, row.name, row.created_by
-    );
-
-    Ok((
-        status,
-        Json(ImportResponse {
-            key_id: row.key_id,
-            name: row.name,
-            created_at: row.created_at,
-            created_by: row.created_by,
-            revoked_at: row.revoked_at,
-            imported,
-        }),
-    ))
-}
-
 /// Routes only — [`AnalyticsKeysState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `app_db_pool`/
 /// `maps_state` are.
@@ -440,9 +333,5 @@ pub fn analytics_keys_router(base_path: &str) -> Router {
         .route(
             &format!("{base_path}/api/analytics-api-keys/{{key_id}}"),
             delete(revoke_key),
-        )
-        .route(
-            &format!("{base_path}/api/analytics-api-keys/import"),
-            post(import_key),
         )
 }

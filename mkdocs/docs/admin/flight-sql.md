@@ -65,7 +65,7 @@ precedence, see [Authentication](authentication.md).
 
 flight-sql validates `analytics_api_keys` (see [API Keys](api-keys.md)) but
 mints nothing over HTTP itself — it has no key-management routes of its own.
-Analytics keys are minted, listed, revoked, and imported through
+Analytics keys are minted, listed, and revoked through
 `analytics-web-srv`'s own HTTP routes instead — see
 [API Keys](api-keys.md#minting-an-analytics-key-over-http). This also covers
 the key-only deployment (no OIDC) some Grafana setups use — see

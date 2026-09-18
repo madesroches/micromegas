@@ -6,11 +6,6 @@
 // key tables (#1458). Thin wrapper around the shared factory in
 // `api-keys-shared.ts` — see that file for the common
 // list/mint/revoke/error-handling logic.
-//
-// No `importKey` here: the import route exists for the `micromegas-import-keys`
-// CLI tool only, which also calls `analytics-web-srv` (with the operator's own
-// bearer token) rather than showing a browser form for pasting a legacy key
-// in.
 
 import {
   createApiKeysApi,

@@ -65,11 +65,11 @@ pub fn is_valid_audience(aud: &str) -> bool {
 ///
 /// One knob, one meaning: the audience anything that arrives without one gets. There are three
 /// code readers today (not deployment roles -- a role can build more than one of these):
-/// this function (key mint/import), `micromegas_analytics::audience::default_audience_from_env`
+/// this function (key mint), `micromegas_analytics::audience::default_audience_from_env`
 /// (read once by `LakehouseContext::new` and handed to the three Postgres read sites), and the
 /// ingestion HTTP edge's own call in `serve_ingestion`, which resolves the default a credential
 /// with no bound audience is stamped with at write time. This is what
-/// `ingestion_keys.rs::resolve_audience` falls back to on both the `mint` and `import` routes.
+/// `ingestion_keys.rs::resolve_audience` falls back to on the `mint` route.
 pub fn default_audience_from_env(prefix: &str) -> Result<String> {
     let var = resolve_prefixed_var(prefix, "DEFAULT_AUDIENCE");
     let resolved = match std::env::var(&var) {

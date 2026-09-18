@@ -456,7 +456,12 @@ async fn disable_auth_analytics_keys_base_route_returns_503() {
 
 #[tokio::test]
 async fn disable_auth_analytics_keys_sub_path_returns_503() {
-    assert_key_management_disabled_503(disabled_auth_app(), "/api/analytics-api-keys/import").await;
+    let key_id = uuid::Uuid::new_v4();
+    assert_key_management_disabled_503(
+        disabled_auth_app(),
+        &format!("/api/analytics-api-keys/{key_id}"),
+    )
+    .await;
 }
 
 #[tokio::test]
