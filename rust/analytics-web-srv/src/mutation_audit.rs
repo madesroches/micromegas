@@ -23,6 +23,26 @@ use std::convert::Infallible;
 
 pub const CONTROL_PLANE_AUDIT_TARGET: &str = "control_plane_audit";
 
+/// Max bytes of any caller-controlled string embedded in an audit record. The record is built
+/// before `audience_grants.rs`/`groups.rs` validate their request bodies (see the module doc), so
+/// this is the only bound on a field before it reaches the log -- matching the precedent set by
+/// `MAX_SELECTOR_BYTES` rather than inventing a new budget.
+const MAX_AUDIT_FIELD_BYTES: usize = 255;
+
+/// Truncates `value` to at most [`MAX_AUDIT_FIELD_BYTES`] bytes, on a UTF-8 char boundary, and
+/// appends `"..."` when truncation happened, so a truncated value in the log is never mistaken
+/// for a complete one.
+fn truncate_for_audit(value: &str) -> String {
+    if value.len() <= MAX_AUDIT_FIELD_BYTES {
+        return value.to_string();
+    }
+    let mut end = MAX_AUDIT_FIELD_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
 /// Action constants stamped on [`MutationAuditRecord::action`]. `&'static str`, not an enum, so
 /// the record can be serialized without a custom `Serialize` impl and so a new call site can
 /// reuse an existing constant without matching on it.
@@ -117,17 +137,17 @@ impl MutationAudit {
     }
 
     pub fn audience(mut self, audience: &str) -> Self {
-        self.record.audience = Some(audience.to_string());
+        self.record.audience = Some(truncate_for_audit(audience));
         self
     }
 
     pub fn axis(mut self, axis: &str) -> Self {
-        self.record.axis = Some(axis.to_string());
+        self.record.axis = Some(truncate_for_audit(axis));
         self
     }
 
     pub fn selector(mut self, selector: &str) -> Self {
-        self.record.selector = Some(selector.to_string());
+        self.record.selector = Some(truncate_for_audit(selector));
         self
     }
 
@@ -137,12 +157,12 @@ impl MutationAudit {
     }
 
     pub fn group(mut self, group: &str) -> Self {
-        self.record.group = Some(group.to_string());
+        self.record.group = Some(truncate_for_audit(group));
         self
     }
 
     pub fn member(mut self, member: &str) -> Self {
-        self.record.member = Some(member.to_string());
+        self.record.member = Some(truncate_for_audit(member));
         self
     }
 
@@ -163,7 +183,7 @@ impl MutationAudit {
             Err(e) => {
                 let (outcome, reason) = e.audit_outcome();
                 self.record.outcome = outcome;
-                self.record.reason = reason;
+                self.record.reason = reason.map(|r| truncate_for_audit(&r));
             }
         }
         self.emit_record();
@@ -173,7 +193,7 @@ impl MutationAudit {
     /// `"error"`, chosen by the caller directly.
     pub fn emit_gate_outcome(mut self, outcome: &'static str, reason: impl Into<String>) {
         self.record.outcome = outcome;
-        self.record.reason = Some(reason.into());
+        self.record.reason = Some(truncate_for_audit(&reason.into()));
         self.emit_record();
     }
 

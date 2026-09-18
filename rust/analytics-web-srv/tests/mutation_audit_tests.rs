@@ -596,6 +596,83 @@ async fn group_mutation_routes_pool_unconfigured_emit_error_records_with_targets
     }
 }
 
+/// A field over the truncation budget (255 bytes, `MAX_SELECTOR_BYTES`'s precedent) is cut down
+/// and marked with a trailing `"..."`, so a truncated value in the log is never mistaken for a
+/// complete one -- this is what stands in for the validation the audit is built before.
+#[tokio::test]
+#[serial]
+async fn a_long_audience_value_is_truncated_with_a_marker() {
+    let guard = init_in_memory_tracing();
+    enable_info_logging();
+
+    let long_audience = "a".repeat(1000);
+    let audit = MutationAudit::new(
+        action::CREATE_GRANT,
+        "alice@example.com".to_string(),
+        false,
+        "203.0.113.7".to_string(),
+    )
+    .audience(&long_audience);
+    audit.emit_gate_outcome("denied", "too long");
+
+    micromegas::tracing::dispatch::flush_log_buffer();
+    let records = collect_audit_records(&guard.sink);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let audience = records[0]["audience"].as_str().expect("audience");
+    assert_eq!(audience, format!("{}...", "a".repeat(255)));
+}
+
+/// A multi-byte character straddling the truncation budget must not be split mid-codepoint: `"é"`
+/// (2 bytes) placed so it spans bytes 254-255 forces the truncation point back to the character
+/// boundary at 254 rather than slicing through it.
+#[tokio::test]
+#[serial]
+async fn a_value_that_would_split_a_codepoint_truncates_before_the_boundary() {
+    let guard = init_in_memory_tracing();
+    enable_info_logging();
+
+    let value = format!("{}{}{}", "a".repeat(254), "é", "b".repeat(10));
+    let audit = MutationAudit::new(
+        action::CREATE_GROUP,
+        "alice@example.com".to_string(),
+        false,
+        "203.0.113.7".to_string(),
+    )
+    .group(&value);
+    audit.emit_gate_outcome("denied", "too long");
+
+    micromegas::tracing::dispatch::flush_log_buffer();
+    let records = collect_audit_records(&guard.sink);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let group = records[0]["group"].as_str().expect("group");
+    assert_eq!(group, format!("{}...", "a".repeat(254)));
+}
+
+/// The `reason` field is bounded the same way, whether it comes from a gate denial's caller-chosen
+/// string (here) or `AuditOutcome::audit_outcome`'s formatted message -- both funnel through the
+/// same truncation so an oversized value can't land in the log via either path.
+#[tokio::test]
+#[serial]
+async fn a_long_gate_denial_reason_is_truncated_with_a_marker() {
+    let guard = init_in_memory_tracing();
+    enable_info_logging();
+
+    let long_reason = "x".repeat(1000);
+    let audit = MutationAudit::new(
+        action::CREATE_GRANT,
+        "alice@example.com".to_string(),
+        false,
+        "203.0.113.7".to_string(),
+    );
+    audit.emit_gate_outcome("denied", long_reason);
+
+    micromegas::tracing::dispatch::flush_log_buffer();
+    let records = collect_audit_records(&guard.sink);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let reason = records[0]["reason"].as_str().expect("reason");
+    assert_eq!(reason, format!("{}...", "x".repeat(255)));
+}
+
 /// The only automated coverage of the `Ok` -> `"allowed"` classification: `emit`'s `Err` arm is
 /// covered by every case above, walking `E`'s variants; this is the one test of its `Ok` arm.
 #[tokio::test]
