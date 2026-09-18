@@ -13,9 +13,12 @@ attributable, revocable row rather than an invisible property of their group mem
 
 This is an **audit** control, not a reduction of admin power: `create_grant` lets an admin grant
 themselves anything unconditionally (unchanged), so nothing here defends against a malicious
-admin. What changes is that every admin data access leaves a trace in `audience_grants`
+admin. What changes is that a *direct* admin self-grant leaves a trace in `audience_grants`
 (`created_by`, `created_at`), visible through `GET .../audience-grants/visible` and
-`list_audience_grants()`, and removable by anyone administering the store. Resolves #1598.
+`list_audience_grants()`, and removable by anyone administering the store. Access an admin
+obtains indirectly, by adding themselves to a group that already holds a grant, is instead traced
+in `group_members` (`created_by`, `created_at`) and surfaced through the Groups admin surface.
+Resolves #1598.
 
 ## Current State
 
@@ -171,7 +174,7 @@ two), the "an admin minted straight through `AudienceMintPolicy`'s `is_admin` ar
 reserved-name-is-unreachable-for-an-admin note at `:701-707` is deleted.
 
 Also update the two `IngestionKeyError` doc comments that go stale once `import_key` narrows
-(§7): the enum doc (`:99-106`) drops `import_key` from its "`list_keys`/`revoke_key`/`import_key`
+(§6): the enum doc (`:99-106`) drops `import_key` from its "`list_keys`/`revoke_key`/`import_key`
 stay `AdminUser`-gated and never construct any of the four" claim — `import_key` now constructs
 `Forbidden`, and `Unavailable` via `authorize_mint`, while `list_keys` and `revoke_key` still
 construct none — and the `Forbidden` variant doc
@@ -189,7 +192,7 @@ the case they were written to exempt.
 
 Both stay `AdminUser`-gated and unconditional — see `## Decisions`.
 
-### 7. `import_key`: same authority as minting
+### 6. `import_key`: same authority as minting
 
 Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`:
 `authorize_mint` takes `&AuthContext`, which `AdminUser`'s `ValidatedUser` does not carry. Call
@@ -198,23 +201,23 @@ lazy-claim path — see Decisions.
 
 **Pre-import grants.** This also binds `micromegas-import-keys`, the bulk env-keyring migration
 tool: it needs a `mint` grant per distinct audience it is about to write, not just an admin OIDC
-identity. Before §7 ships, enumerate every distinct `"audience"` value in the keyring being
+identity. Before §6 ships, enumerate every distinct `"audience"` value in the keyring being
 imported, plus any `--audience AUD` passed to the tool and the deployment default audience for
 entries carrying none, and create a `mint`-axis row for the importing principal on each — or the
 import fails per entry.
 
-### 8. `my_audiences`: populate `held_pairs` for admins
+### 7. `my_audiences`: populate `held_pairs` for admins
 
 `audience_grants.rs:881`. Drop the `if caller.is_admin() { Vec::new() }` shortcut and run the
 held-pairs query for every caller. `is_admin` stays on the response — the client still needs it
 for the grant-administration affordances (Share anywhere, delete any row), which are unchanged.
 `held_pairs` has two client consumers once it is populated for admins: the CLI's `personal`
-filter (step 10), and `MintIngestionKeyDialog`'s default-audience preselect
+filter (step 11), and `MintIngestionKeyDialog`'s default-audience preselect
 (`analytics-web-app/src/components/MintIngestionKeyDialog.tsx:57`), which already reads
 `held_pairs` to prefer an audience the caller personally holds a mint grant on over
 `audiences[0]` — an admin's preselected audience changes once this step ships.
 
-### 9. Startup warning for a custom default audience
+### 8. Startup warning for a custom default audience
 
 `web_server.rs`, at `IngestionKeysState` construction: when `state.default_audience` is neither
 `public` nor covered by a `mint` grant row, log a `warn!`. A custom-default deployment previously
@@ -248,10 +251,11 @@ best-effort diagnostic, not a startup precondition.
 3. `ingestion_keys.rs`: extract `authorize_mint`; rewrite `mint_key` to call it and delete the
    admin pre-check and the `Err(e) if caller.is_admin()` arm.
 4. `ingestion_keys.rs`: delete the four `try_claim_and_mint` admin fallbacks; trim `insert_key`'s
-   doc comment; rewrite `try_claim_and_mint`'s own doc comment — its lead paragraph (`:556-559`)
-   and its "Admin mode never turns…" paragraph (`:572-580`) — and its four inline admin-pre-check
-   references (`:591-592`, `:662-667`, `:675-681`, `:696-701`); rewrite `IngestionKeyError`'s enum
-   doc (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
+   doc comment; drop `insert_key`'s now-constant `claimed` parameter and hardcode `claimed: false`
+   in its `MintResponse`; rewrite `try_claim_and_mint`'s own doc comment — its lead paragraph
+   (`:556-559`) and its "Admin mode never turns…" paragraph (`:572-580`) — and its four inline
+   admin-pre-check references (`:591-592`, `:662-667`, `:675-681`, `:701-707`); rewrite
+   `IngestionKeyError`'s enum doc (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
 5. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
    in `import_key`; call `authorize_mint` from `import_key`.
 6. `web_server.rs`: the missing-`mint`-grant startup `warn!` for a non-`public` default audience.
@@ -276,17 +280,28 @@ best-effort diagnostic, not a startup precondition.
     `!isAdmin && showMintButton` to `(me?.audiences ?? []).includes(group.audience) &&
     showMintButton` — honoring `*` the same way the server's mint rule does; the Share/delete
     checks (`:424`, `:430`, `:498`) keep `isAdmin`.
-10. `python/micromegas/micromegas/cli/setup_telemetry.py`: delete the admin special-case
+10. `analytics-web-app/src/components/ApiKeysAdminPage.tsx`: rewrite the free-text Audience
+    field's help text (`:235-239`) — it currently only says `public` carries a Read grant for
+    every principal; state that minting requires a `mint` grant on the named audience, and that
+    naming a brand-new audience claims it and grants the caller read+mint on it. This is the mint
+    UI an admin actually reaches via Admin → Ingestion API Keys → Mint Key, distinct from the
+    `MintIngestionKeyDialog` picker `AudienceAccessPage.tsx` opens.
+11. `python/micromegas/micromegas/cli/setup_telemetry.py`: delete the admin special-case
     `parser.error` — `:200` and `:203-208`, keeping `:201`'s `audiences = my_audiences["audiences"]`
     (still used below) — so admins resolve through the shared `held_pairs` path; update
-    `resolve_audience`'s docstring (`:154-162`).
+    `resolve_audience`'s docstring (`:154-162`); reword `_mint_denied_hint`'s "otherwise, ask an
+    admin to grant it:" lead-in (`:98-125`), since an admin's own mint 403 now reaches this hint
+    too — something like "otherwise, grant it (an admin, possibly you, runs):".
 
 **Phase 5 — tests and docs**
 
-11. Rust unit tests (no DB) — see Testing Strategy.
-12. Update the existing live suites' admin expectations.
-13. Frontend and Python test updates.
-14. Documentation and `CHANGELOG.md`.
+12. Rust unit tests (no DB) — see Testing Strategy.
+13. Update the existing live suites' admin expectations, including the stale
+    non-admin-only/admin-arm claims in
+    `rust/analytics-web-srv/tests/ingestion_keys_tests.rs:935-943`'s doc comment for
+    `live_mint_rejects_a_non_admin_claim_of_the_default_audience`.
+14. Frontend and Python test updates.
+15. Documentation and `CHANGELOG.md`.
 
 ## Files to Modify
 
@@ -299,6 +314,7 @@ best-effort diagnostic, not a startup precondition.
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs`
 - `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`
 - `analytics-web-app/src/routes/AudienceAccessPage.tsx`
+- `analytics-web-app/src/components/ApiKeysAdminPage.tsx`
 - `analytics-web-app/src/lib/audience-grants-api.ts`
 - `analytics-web-app/src/components/__tests__/ApiKeysAdminPage.test.tsx`,
   `src/routes/__tests__/IngestionApiKeysPage.test.tsx`,
@@ -388,28 +404,34 @@ notification path.
   *not* — no implicit `read` or `mint` on any audience; data access is always a grant row, for
   admins too. Keep the existing capability list.
 - **`mkdocs/docs/admin/authorization.md`**:
-  - §Self-service mint: replace the "An admin's mint claims too" bullet (`:228-230`) with the
-    single shared rule; add the custom-default-audience one-time grant step.
+  - §Self-service mint: fold the "Audiences are claimed lazily" bullet (`:221-225`) and the "An
+    admin's mint claims too" bullet (`:228-230`) into one "every caller claims" bullet — `:221`'s
+    "A non-admin who names a brand-new, never-granted audience explicitly claims it" is otherwise
+    left as a published, factually wrong statement once minting shares one claim path; add the
+    custom-default-audience one-time grant step.
   - §Routes table (`:293`): `held_pairs` is no longer "(empty for an admin)".
   - §Write gate (`:307`): unchanged, but state explicitly that it is unchanged *because* it is
     grant administration.
   - §`list_audience_grants()` (`:332`): unchanged; note it is the grant-administration surface,
     not a data read.
-  - §Admin-gated lakehouse functions: add `bulk_ingest`, `authorize_view_ddl`, and
-    `AudienceGuard::global_rows_visible` as the remaining data-plane carve-outs; correct
-    `:150`'s "`list_partitions()` silently omits every row that isn't theirs, `'global'` rows
-    included" for an admin caller, since `global_rows_visible`'s `lakehouse_admin` arm makes
-    `'global'` rows visible to an audience-scoped admin holding no grant.
+  - §Admin-gated lakehouse functions: add `bulk_ingest` and `AudienceGuard::global_rows_visible`
+    as remaining data-plane carve-outs; characterize the existing `CREATE`/`DROP MATERIALIZED
+    VIEW` note (`:181-184`) as a read carve-out via `CallerContext::maintenance()` rather than
+    adding `authorize_view_ddl` as new; correct `:150`'s "`list_partitions()` silently omits every
+    row that isn't theirs, `'global'` rows included" for an admin caller, since
+    `global_rows_visible`'s `lakehouse_admin` arm makes `'global'` rows visible to an
+    audience-scoped admin holding no grant.
 - **`mkdocs/docs/admin/api-keys.md`**: `:17-23` (what stays admin-only), `:92-100` (the gate
   description), `:102-158` (the routes table's import row and the Import paragraph: import's new
   403/503 — List and Revoke are unchanged, and those paragraphs should say so explicitly now that
   minting narrowed around them), `:212-230` (the admin-claims story collapses into the shared
   path). Extend the migration runbook (`:444-490`) to state the new authorization: the OIDC
   identity used must hold a `mint` grant on each target audience, not just admin membership — see
-  §7's pre-import grants.
-- **`mkdocs/docs/query-guide/python-api.md`**'s `micromegas-import-keys` section (`:943-952`) and
-  **`python/micromegas/micromegas/web_client.py`**'s `import_ingestion_api_key` docstring: replace
-  "admin-only"/"Requires OIDC admin access" with the grant-based authorization above.
+  §6's pre-import grants.
+- **`mkdocs/docs/query-guide/python-api.md`**'s `micromegas-import-keys` section (`:943-952`):
+  replace `:947`'s "Requires OIDC admin access" with the grant-based authorization above. Add the
+  same grant-based authorization to **`python/micromegas/micromegas/web_client.py`**'s
+  `import_ingestion_api_key` docstring (`:216-231`), which today says nothing about authorization.
   `list_ingestion_api_keys`'s docstring stays as it is — that route did not change. Also `web_client.py`'s `my_audiences` docstring
   (`:191-193`): replace the "meaningless for an admin, whose mint authority never depends on a
   grant row at all" parenthetical, since after §1 an admin's mint authority depends entirely on
@@ -457,7 +479,7 @@ admin behavior; they must move with it:
 - `live_my_audiences_admin_gets_a_normal_response_regardless_of_knob` — delete the "always empty
   for an admin" comment and the `held_pairs.is_empty()` assertion (`:1259-1265`); this test's
   fixture (`admin_user()`, no seeded grant rows) leaves `held_pairs` at `[]` for this caller even
-  after §8, so drop the `held_pairs` assertion rather than seeding new rows to make it non-empty.
+  after §7, so drop the `held_pairs` assertion rather than seeding new rows to make it non-empty.
 - `live_visible_admin_sees_every_row` — unchanged; it is the regression guard that the control
   plane did *not* narrow.
 - `live_mint_list_revoke_round_trip` — mints into `"team-alpha"` as an admin holding no grant
@@ -474,7 +496,11 @@ admin reaches `MintIngestionKeyDialog` (via `showMintButton`). This includes inv
 `AudienceAccessPage.test.tsx:261`'s existing `it('does not show the public-readability help line
 in the Mint dialog for an admin', …)`, since that line is now shown for an admin. `AudienceAccessPage`:
 the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows `isAdmin`.
-`IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior.
+`IngestionApiKeysPage`: unchanged behavior — it only routes between `ApiKeysAdminPage` and
+`IngestionKeysSelfServicePanel` on `is_admin` and does not itself gate mint/import. `ApiKeysAdminPage`:
+update `ApiKeysAdminPage.test.tsx` to cover the reworded audience help text (step 10) and, since
+its mint form has no server-side change, a 403 rendered as `mintError` on an audience the admin
+holds no grant on.
 
 **Python.** `setup_telemetry`'s `resolve_audience`: the admin branch is gone, so an admin with
 exactly one held mint audience resolves it silently, and an admin with none gets the
@@ -500,11 +526,14 @@ immediately — a 403 on a visible button, an empty table — rather than silent
 4. `micromegas-grants --url http://127.0.0.1:9000 create team-alpha mint user:<you>` as the
    admin, then mint into `team-alpha`. Expect `201` with `claimed: false`, and the key visible in
    the list.
-5. `micromegas-import-keys` (or `POST .../ingestion-api-keys/import`) an existing key into an
+5. Admin → Ingestion API Keys → Mint Key (the `ApiKeysAdminPage` free-text Audience field, not
+   the picker-based dialog above). Type an audience you hold no grant on. Expect the help text to
+   state the mint-grant requirement, and the mint to fail with a 403 rendered as `mintError`. Then
+   type a brand-new audience name. Expect success and two new `user:<you>`/`mint`+`read` rows on
+   Audience Access, matching step 3's outcome.
+6. `micromegas-import-keys` (or `POST .../ingestion-api-keys/import`) an existing key into an
    audience you hold no grant on. Expect `403`. Then
    `micromegas-grants --url http://127.0.0.1:9000 create <that audience> mint user:<you>` and
    retry the same import. Expect `201` with `imported: true`.
-6. `micromegas-query "SELECT * FROM list_audience_grants()"` as the admin. Expect every row —
-   the control plane did not narrow.
 7. Restart with `MICROMEGAS_DEFAULT_AUDIENCE=corp` and no grant on `corp`. Expect the startup
    `warn!` in `/tmp/monolith.log`, and a `403` from a mint with no explicit audience.
