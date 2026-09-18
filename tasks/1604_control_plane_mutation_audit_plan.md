@@ -135,9 +135,13 @@ Implemented next to each error enum (same crate, no orphan issue):
   *not* a denial per `try_claim_and_mint`'s own comment; `Database`/`NotConfigured`/`Unavailable` →
   `error`.
 
+For a message-less variant (`NotFound`/`NotConfigured` in all three enums), `audit_outcome`
+returns that variant's own `IntoResponse` message text, copied verbatim, as the reason — there is
+no other text to draw from.
+
 `Database`'s message must not reach the record verbatim (`sqlx::Error` can carry SQL/connection
-detail); use a fixed `"database error"` string, matching what `IntoResponse` already returns to
-the client.
+detail); use a fixed `"internal database error"` string, matching what `IntoResponse` already
+returns to the client.
 
 **The builder.** Built as the handler's first statement, emitted exactly once at the end:
 
@@ -154,9 +158,9 @@ impl MutationAudit {
 
     /// Classifies `result` and emits one record.
     pub fn emit<T, E: AuditOutcome>(self, result: &Result<T, E>);
-    /// Emits an `allowed`/`denied`/`error` record directly -- for the gate paths, which have no
-    /// `Result` to classify.
-    pub fn emit_denied(self, reason: impl Into<String>);
+    /// Emits an outcome record directly, with `outcome` one of `"denied"`/`"error"` -- for the
+    /// gate paths, which have no `Result` to classify.
+    pub fn emit_gate_outcome(self, outcome: &'static str, reason: impl Into<String>);
 }
 ```
 
@@ -164,6 +168,14 @@ impl MutationAudit {
 `info!(target: CONTROL_PLANE_AUDIT_TARGET, "{json}")`, falling back to
 `warn!("failed to serialize control-plane audit record: {e}")` on a serialization failure —
 identical to `QueryAuditState::emit`.
+
+`new` builds directly from an actor string/`is_admin`/`client_ip`, for sites with no
+`AuthContext` in hand. The four group handlers and `GroupAdminGate` construct via
+`MutationAudit::new(action, caller_identity(&user), user.is_admin, client_ip.0)`, since
+`ValidatedUser` carries `is_admin` as a plain field (not `AuthContext`'s `is_admin()` method) and
+there is no conversion from `ValidatedUser` back to `AuthContext`. `from_context` serves the
+`AuthContext`-bearing grant and claim paths (`create_grant`/`delete_grant`/`claim_audience`)
+instead.
 
 **`ClientIp` extractor.** An infallible `FromRequestParts` in this module:
 
@@ -191,7 +203,7 @@ async fn create_grant(
     let result = create_grant_inner(state, caller, body).await;
     // `created` is known only on success; fold it in before emitting.
     let audit = match &result {
-        Ok((_, Json(resp))) => audit.created(/* from the response */),
+        Ok((status, _)) => audit.created(*status == StatusCode::CREATED),
         Err(_) => audit,
     };
     audit.emit(&result);
@@ -235,8 +247,11 @@ absent; the action comes from `parts.method` — `POST` → `create_grant`, `DEL
 — the only two methods routed through this gate. An unexpected method is unreachable through the
 router; map it to `create_grant` rather than adding an error path, and say so in a comment.
 
-It emits for both its rejections: the knob-off `Forbidden`, and the `AuthenticatedUser` fallback
-`Unauthenticated` (`actor: "unauthenticated"`).
+It emits for all three of its fallible exits: the `AuthenticatedUser` fallback `Unauthenticated`
+(`actor: "unauthenticated"`), the knob-off `Forbidden`, and the missing-`AudienceGrantsState`
+`NotConfigured` — the last as an `error`-outcome record, its reason taken verbatim from the
+`IntoResponse` text ("audience grant store not configured: set MICROMEGAS_SQL_CONNECTION_STRING").
+None of the three needs anything from `AudienceGrantsState` to build the record.
 
 **Group routes** get a new module-local gate in `groups.rs`, mirroring `GrantGate`'s shape:
 
@@ -244,9 +259,10 @@ It emits for both its rejections: the knob-off `Forbidden`, and the `Authenticat
 struct GroupAdminGate(ValidatedUser);
 ```
 
-Its `from_request_parts` delegates to `AdminUser`; on rejection it emits a `denied` record
-(actor from the `ValidatedUser` extension when present, else `"unauthenticated"`) and returns
-`AdminRequired` unchanged, so the HTTP response is byte-identical to today. The action is derived
+Its `from_request_parts` delegates to `AdminUser`; on rejection it builds via `MutationAudit::new`
+(actor from the `ValidatedUser` extension when present, else `"unauthenticated"`) and calls
+`emit_gate_outcome("denied", ...)`, then returns `AdminRequired` unchanged, so the HTTP response is
+byte-identical to today. The action is derived
 from `parts.method` and the route template in `axum::extract::MatchedPath`, read out of
 `parts.extensions` — not the raw `parts.uri.path()`, which would misclassify a group literally
 named `members` (`is_valid_group_name` allows it):
@@ -258,7 +274,11 @@ named `members` (`is_valid_group_name` allows it):
 | POST | `.../{name}/members` | `add_member` |
 | DELETE | `.../{name}/members` | `remove_member` |
 
-All four group mutation handlers swap `AdminUser(user)` for `GroupAdminGate(user)`. The three
+As with `GrantGate`, an unmatched (method, route template) pair — including a missing
+`MatchedPath` extension — is unreachable through the router; map it to `create_group` rather than
+adding an error path, and say so in a comment.
+
+All four group mutation handlers swap `AdminUser(user)` for `GroupAdminGate(user)`. The two
 read routes (`list_groups`, `list_members`) keep plain `AdminUser` — reads are out of scope.
 
 This gate deliberately does **not** live on `AdminUser` itself: that extractor gates every
@@ -268,9 +288,10 @@ auditing all of them under a control-plane target is not what this record is for
 ### Free-text lines replaced
 
 The seven `info!` lines in the table above are removed — the structured record carries strictly
-more (actor on all seven, `client_ip`, outcome) and is the whole point of defect 3. Two lines
-nearby are **kept**, because they are not grant/group mutations: `ingestion_keys.rs:685` (the
-mint line, `key_id`-bearing), `:814` (revoke) and `:931` (import).
+more (actor on all seven, `client_ip`, outcome) and is the whole point of defect 3. Four lines
+nearby are **kept**, because they are not grant/group mutations: `ingestion_keys.rs:492` (the
+ordinary, non-claim mint line in `insert_key`) and `:685` (the mint line in `try_claim_and_mint`),
+both `key_id`-bearing, plus `:814` (revoke) and `:931` (import).
 
 ## Implementation Steps
 
@@ -298,6 +319,7 @@ mint line, `key_id`-bearing), `:814` (revoke) and `:931` (import).
 - `rust/analytics-web-srv/src/audience_grants.rs`
 - `rust/analytics-web-srv/src/groups.rs`
 - `rust/analytics-web-srv/src/ingestion_keys.rs`
+- `rust/analytics-web-srv/Cargo.toml` (add `micromegas-transit` dev-dependency)
 - `rust/analytics-web-srv/tests/mutation_audit_tests.rs` (new)
 - `mkdocs/docs/admin/control-plane-audit-log.md` (new)
 - `mkdocs/mkdocs.yml`
@@ -331,7 +353,8 @@ text is a strict subset of the record at the same instant, so keeping it is pure
 - Gate-level denials carry no target fields. The body/path is unparsed at that point, and the
   generic middleware line (`axum_utils.rs:38`) already records method + URI + `client_ip` at the
   same instant, so the URI is recoverable by correlation.
-- `Database` errors record a fixed `"database error"` reason, never the `sqlx::Error` text.
+- `Database` errors record a fixed `"internal database error"` reason, never the `sqlx::Error`
+  text.
 - `IngestionKeyError::Conflict` on the claim path classifies as `error`, not `denied` — it is
   advisory-lock contention, which `try_claim_and_mint` already documents as explicitly not a
   denial.
@@ -372,19 +395,29 @@ witnessed in the wild, and every behavior is reachable without a pool.
 through `audit_outcome`, asserting the class and that `Database`'s reason is the fixed string
 rather than the `sqlx::Error` text.
 
-**`emit`'s `Ok` path** — `emit<T, E: AuditOutcome>(&Result<T, E>)` takes its input by reference and
-is generic over `T`, so it is callable with no pool: build a `MutationAudit`, call
-`.created(true)`, then `.emit(&Ok::<(), AudienceGrantError>(()))`, and assert the resulting
-`MutationAuditRecord` has `outcome: "allowed"`, `reason: None`, and `created: Some(true)`
-preserved. This is the only automated coverage of the `Ok` → `"allowed"` classification; everything
-else in Outcome classification walks `E`'s variants, never the `Ok` arm.
-
-**Emission, end to end in-process** — using `init_in_memory_tracing()` +
-`micromegas_tracing::event::in_memory_sink::InMemorySink`, the pattern
+**Emission, end to end in-process** — using
+`micromegas::tracing::test_utils::init_in_memory_tracing` +
+`micromegas::tracing::event::in_memory_sink::InMemorySink` (`micromegas` re-exports the
+`micromegas-tracing` crate under `tracing`; this crate has no direct dependency on it), the pattern
 `rust/public/tests/auth_observability_tests.rs` already uses, with a collector that filters on
 `evt.desc.target == "control_plane_audit"` (`LogStringEvent::desc` is the `&'static LogMetadata`).
-Drive a `Router` with `tower::ServiceExt::oneshot`, `AudienceGrantsState`/`GroupsState` carrying
-`pool: None`. Tests must be `#[serial]` — the dispatch is global.
+`init_in_memory_tracing()` does not raise the process-global max log level, so call
+`micromegas::tracing::levels::set_max_level(LevelFilter::Trace)` first — otherwise `info!`'s own
+level guard silently drops every call and the sink collects nothing, exactly as
+`auth_observability_tests.rs` documents. Iterating a collected log block's events also needs the
+`micromegas_transit::HeterogeneousQueue` trait in scope, exactly as that test file imports it;
+`micromegas` does not re-export `transit`, so add a `micromegas-transit` dev-dependency to
+`rust/analytics-web-srv/Cargo.toml`. Drive a `Router` with `tower::ServiceExt::oneshot`,
+`AudienceGrantsState`/`GroupsState` carrying `pool: None`. Tests must be `#[serial]` — the dispatch
+is global.
+
+- **`emit`'s `Ok` path** — `emit<T, E: AuditOutcome>(&Result<T, E>)` takes its input by reference
+  and is generic over `T`, but consumes `self` and returns `()`, so there is nothing to assert
+  against directly: build a `MutationAudit`, call `.created(true)`, then
+  `.emit(&Ok::<(), AudienceGrantError>(()))`, and assert on the parsed JSON of the one emitted
+  line -- `outcome: "allowed"`, no `reason` key, `created: true`. This is the only automated
+  coverage of the `Ok` → `"allowed"` classification; everything else in Outcome classification
+  walks `E`'s variants, never the `Ok` arm.
 
 The gate denials are fully covered this way with no DB, because both gates reject before
 `require_pool` ever runs:
@@ -407,10 +440,6 @@ The gate denials are fully covered this way with no DB, because both gates rejec
   `"remove_member"`, `outcome: "error"`, a present non-empty `actor`, and the `group`/`member`
   target fields — the only automated coverage of these four wrappers, since every group case
   above is a gate denial that never reaches them.
-
-**Regression guard on the actor gap** — the four group-wrapper `pool: None` records above assert
-`actor` is present and non-empty, which is the defect this issue names; the gate-denial records
-short-circuit before the wrapper and so prove nothing about it.
 
 ## Manual Verification
 
