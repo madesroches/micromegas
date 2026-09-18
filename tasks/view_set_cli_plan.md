@@ -103,6 +103,9 @@ parse — the reason it is absent from the local scan's `definitions` map — is
 overwritten with the rendered text: the filename stem fixes the view set's identity regardless of
 what the broken file's contents say, so there is no unknowable-identity case to protect, unlike
 `screens.py:cmd_pull`'s (`:337-352`) no-clobber guard (Decisions).
+A skipped local file (§2) has no effect on `pull`'s exit code, unlike `plan`/`apply`: `pull` exits 0
+regardless, matching `screens.py:cmd_pull` and the `list` rule (§7) — CI gates on `plan`/`apply`, not
+`pull` (Decisions).
 `pull` writes `canonical_ddl(definition_sql)` plus a trailing newline, not the server's raw stored
 text: a definition last touched by `apply` is stored as `CREATE OR REPLACE` (§4), and writing that
 raw would rewrite the file's `CREATE` to `CREATE OR REPLACE` on every pull, drifting the file away
@@ -196,9 +199,8 @@ def format_plan(creates, updates, unchanged, server_only, drops, use_color=False
     drops renders under the server-only footer (§7)."""
 ```
 
-`read_server_state` issues the current-state `SELECT` below; it does not catch
-`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` itself — that catch lives in `main`,
-around dispatch (see "Current-state read"). `compute_plan` takes the DataFrame `read_server_state`
+`read_server_state` issues the current-state `SELECT` below (see "Current-state read").
+`compute_plan` takes the DataFrame `read_server_state`
 returns as an argument, the same way it already takes `local_scan`, rather than fetching it itself.
 `cmd_plan`, `cmd_apply`, and `cmd_list` each call `read_server_state` exactly once and
 pass the result to `compute_plan`. `cmd_pull` also calls `read_server_state` exactly once, but
@@ -333,16 +335,16 @@ unknown-function error, a `make_client` failure, or a filesystem error surface a
 
 ### 5. Deletes are opt-in
 
-`--prune` still gates dropping it, justified by blast radius (a `DROP` also
-retires partitions, below) plus the migration-seeded `log_stats` row. Server-only definitions are
-therefore reported as
-`server-only` and **never dropped** unless `--prune` is passed. Two guards on top:
+Dropping a server-only definition requires an explicit `--prune`, justified by blast radius plus
+the migration-seeded `log_stats` row. Server-only definitions are therefore reported as
+`server-only` and **never dropped** unless `--prune` is passed. One guard on top:
 
 - `--prune` refuses to run when the directory contains zero readable `.sql` files. A wrong `--dir`
   or a checkout at the wrong commit is the plausible way to ask a reconciler to drop production
   views, and an empty desired state is the signature of it.
-- `--prune` still routes through the same confirmation gate, and `--auto-approve` still bypasses the
-  gate (CI needs it) — the explicitness lives in `--prune` itself.
+
+`--prune` still routes through the same confirmation gate, and `--auto-approve` still bypasses the
+gate (CI needs it) — the explicitness lives in `--prune` itself, not in a separate guard.
 
 A fresh deployment lists `log_stats` as `server-only`, since the migration seeds it. `pull log_stats`
 adopts it into the directory; leaving it unadopted means `--prune` will propose dropping it.
@@ -366,7 +368,10 @@ Extracted from `screens.py`, used by both tools:
   exact behavior `screens.py` has today — same message, same exit code — so the extraction stays
   behavior-preserving.
 - `add_color_arg(parser)` — the `--color` `BooleanOptionalAction` default-`True` flag.
-- `use_color(args)` — `sys.stdout.isatty() and args.color`.
+- `use_color(args)` — `sys.stdout.isatty() and args.color`. Each call site assigns its result to a
+  differently named local (e.g. `colorize = use_color(args)`), since the existing local at each call
+  site is itself named `use_color` — assigning back to that name would shadow the helper and raise
+  `UnboundLocalError`.
 
 `screens.py` keeps `format_screen_diff` as a thin wrapper (JSON-serialize both sides, call
 `unified_diff`), so `tests/test_screen_files.py`'s existing imports and assertions keep passing
@@ -389,7 +394,7 @@ micromegas-views will perform the following actions:
 
 Plan: 1 to create, 1 to update, 0 to drop, 2 unchanged.
 
-Server-only view sets on server (use 'pull' to adopt, '--prune' to drop):
+Server-only view sets (use 'pull' to adopt, '--prune' to drop):
   ? error_rollup
 ```
 
@@ -397,13 +402,15 @@ When `--prune` is passed, every name in `drops` is rendered as a `- drop:` actio
 instead of appearing under this footer. The footer then lists only what this run's `--prune` did
 not drop — protected names, plus, when a name filter narrowed `drops`, server-only names outside
 that filter — and drops the now-redundant `'--prune' to drop` clause, reading `Server-only view sets
-on server (use 'pull' to adopt):` instead, since `--prune` is already in effect and would not add
+(use 'pull' to adopt):` instead, since `--prune` is already in effect and would not add
 anything for what remains listed.
 
 `list` calls `read_server_state` once, passes the result to `compute_plan`, and joins the same
 DataFrame's rows for `update_group`/`updated_at`/`updated_by`: name / status (`create`, `update`,
 `unchanged`, `server-only`) / `update_group` / `updated_at` / `updated_by`, with `--format json`; a
-`create` row has no server row yet, so those last three columns are empty for it. `--format json`
+`create` row has no server row yet, so those last three columns are empty for it. `--format table`
+renders through `tabulate(df, headers="keys", showindex=False, tablefmt="simple")` — the pattern
+`micromegas-query` already uses (`python/micromegas/micromegas/cli/query.py:156`). `--format json`
 renders through `df.to_json(orient="records", indent=2)` — the pattern `micromegas-query` already
 uses (`python/micromegas/micromegas/cli/query.py:160`) — rather than `json.dumps` of raw cell
 values, since `update_group` (`Int32`) and `updated_at` (`Timestamp(ns, "+00:00")`) are not
@@ -424,8 +431,9 @@ text (§1).
 2. Refactor `python/micromegas/micromegas/cli/screens.py` to use them: `format_screen_diff` becomes
    a wrapper over `unified_diff`; `cmd_apply`'s inline prompt becomes
    `if not confirm_apply(args.auto_approve): sys.exit(1)`; the two
-   `--color` definitions and the two `sys.stdout.isatty() and args.color` expressions become
-   `add_color_arg` / `use_color`.
+   `--color` definitions become `add_color_arg`, and the two `sys.stdout.isatty() and args.color`
+   expressions become `colorize = use_color(args)` (the local is renamed from `use_color` to
+   `colorize` so the assignment does not shadow the helper it calls).
 3. Run `python/micromegas/tests/test_screen_files.py` and `tests/cli/test_screens_auth.py` — they
    must pass untouched. That is the check that the extraction changed no behavior.
 
@@ -438,8 +446,8 @@ text (§1).
    `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `main` wraps
    `args.func(args)` in the same catch around dispatch, plus `ProfileError` (raised by `make_client`
-   inside a `cmd_*`) and `OSError` (a `--dir` that fails the existence/is-a-directory check, or an
-   unwritable target file), reporting the error and exiting non-zero with a pointer to the
+   inside a `cmd_*`) and `OSError` (a `--dir` that stops existing mid-run, or an unwritable target
+   file), reporting the error and exiting non-zero with a pointer to the
    admin-identity requirement when it originates from `read_server_state` (§4).
    `cmd_pull` skips the write and counts the file `unchanged` when `canonical_ddl(definition_sql) +
    "\n"` (the text `pull` writes) already matches the file's current contents; otherwise it writes with `encoding="utf-8"`,
@@ -533,6 +541,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - `list` does not follow that rule: a skipped local file leaves `list` exiting 0, matching
   `screens.py:cmd_list`, since `list` is an inventory command read for its `--format json` output
   rather than gated on for drift (§7).
+- `pull` does not follow that rule either: a skipped local file leaves `pull` exiting 0, matching
+  `screens.py:cmd_pull`, since CI drift gating runs on `plan`/`apply`, not `pull` (§1).
 - `plan` exits 0 when creates/updates/drops are pending, matching `screens.py:cmd_plan`; a CI
   drift check must read `plan`'s output, not its exit status, to detect pending changes.
 - A skipped local file protects only the name(s) it could have been, not the whole directory:
@@ -685,8 +695,8 @@ tool generates are accepted by the real parser, validator, and registry.
    → the server's validation error is reported and the exit code is non-zero. This is the
    `plan`-can't-validate gap from Trade-offs, checked by hand once.
 7. Materialize `request_stats` so the drop below has something to retire:
-   `micromegas-query "SELECT * FROM materialize_partitions('request_stats', '$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)', '$(date -u +%Y-%m-%dT%H:%M:%SZ)', 86400)"`
-   → completes without error; `micromegas-query "SELECT * FROM list_partitions() WHERE view_set_name = 'request_stats'"`
+   `micromegas-query "SELECT * FROM materialize_partitions('request_stats', '$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)', '$(date -u +%Y-%m-%dT%H:%M:%SZ)', 86400)" --all`
+   → completes without error; `micromegas-query "SELECT * FROM list_partitions() WHERE view_set_name = 'request_stats'" --all`
    shows at least one row. Then `rm request_stats.sql && micromegas-views plan`
    → `? request_stats` under server-only, no drop proposed. Then `micromegas-views apply --prune`
    → `dropped`, and the same `list_partitions()` query now shows no rows for `request_stats` — its
