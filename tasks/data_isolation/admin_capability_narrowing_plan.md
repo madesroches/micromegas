@@ -170,7 +170,10 @@ Also update the two `IngestionKeyError` doc comments that go stale once `revoke_
 stay `AdminUser`-gated and never construct any of the four" (both now construct `Forbidden`, and
 `import_key` can construct `Unavailable` via `authorize_mint`), and the `Forbidden` variant doc
 (`:118-122`) drops "a malformed audience from an admin" from its enumerated causes, since §1
-deletes the admin arm that produced it.
+deletes the admin arm that produced it. `MintResponse::claimed`'s doc comment (`:276-281`) also
+goes stale here: it says `claimed` is `true` only for "an admin caller" minting into a brand-new
+audience, but once §3 removes the admin pre-check, admin and non-admin claim through the one
+shared path, so rewrite it to describe the shared claim path instead of singling out an admin.
 
 The two quota exemptions (`:733` `max_claims_per_caller`, `:350` `max_keys_per_caller`) stay —
 they bound self-service abuse, not access, and an administrator bulk-provisioning credentials is
@@ -203,12 +206,14 @@ pub const LIST_KEYS_VISIBILITY_SQL: &str =
       WHERE g.audience = k.audience AND g.selector = ANY($2)))";
 ```
 
-Both branches (`include_revoked` on/off) compose it into their `WHERE`, binding identity and
-selectors first — `$1` is the caller's email-else-subject identity, via the same inline
-expression `revoke_key`/`import_key` already use for `created_by`/`revoked_by` (not
-`audience_grants.rs`'s `caller_identity` helper, which takes the right type — `&AuthContext` —
-but, like `groups.rs`'s own version, is module-private and so not reachable from this module;
-prefer `pub(crate)`-ing `audience_grants.rs`'s version over inlining the expression a third time);
+Both `list_keys` branches change their `FROM ingestion_api_keys` to `FROM ingestion_api_keys k`,
+so `k.created_by`/`k.audience` resolve — composing `LIST_KEYS_VISIBILITY_SQL` into an unaliased
+query is invalid SQL (`missing FROM-clause entry for table "k"`). Both branches (`include_revoked`
+on/off) compose it into their `WHERE`, binding identity and selectors first — `$1` is the caller's
+email-else-subject identity, via `audience_grants.rs`'s `caller_identity` helper, which takes the
+right type (`&AuthContext`) but, like `groups.rs`'s own version, is module-private; `pub(crate)`-ing
+`audience_grants.rs`'s version and calling it from `list_keys`/`revoke_key`/`import_key` avoids
+inlining the expression a second and third time.
 `$2` is `caller_selectors(&caller)`. `list_keys` then takes `limit`/`offset` as `$3`/`$4`.
 
 ### 6. `revoke_key`: mint authority on the key's audience
@@ -238,8 +243,8 @@ RETURNING revoked_at
 On zero rows affected, disambiguate the way `delete_grant` already does, so the route is not an
 existence oracle for keys in audiences the caller cannot see:
 
-1. Not visible per `LIST_KEYS_VISIBILITY_SQL` (bound with `key_id` as its own `$3`, following
-   identity/selectors as `$1`/`$2`) → `404`.
+1. Not visible per `LIST_KEYS_VISIBILITY_SQL` — run against `FROM ingestion_api_keys k` (bound
+   with `key_id` as its own `$3`, following identity/selectors as `$1`/`$2`) → `404`.
 2. Visible but no `mint` authority → `403` ("you hold no mint grant on this key's audience").
 3. No such `key_id` → `404`.
 
@@ -295,7 +300,11 @@ best-effort diagnostic, not a startup precondition.
    `is_valid_audience` to run for every caller, rewrite the type doc's asymmetry paragraph.
 2. `rust/auth/tests/policy_tests.rs`: admin-with-no-grant is denied; admin-with-a-`mint`-grant is
    allowed; admin-via-`*` is allowed; malformed audience is rejected for admin and non-admin
-   alike.
+   alike. Fold `mint_policy_admin_may_mint_any_valid_audience_including_public` (`:279-289`) into
+   the new "admin, no grant → `Err`" case, deleting it — it asserts exactly the admin arm this
+   step removes and would otherwise fail. Rename `mint_policy_admin_arm_rejects_a_malformed_audience`
+   (`:291-299`) to drop "admin arm" from its name, since it keeps passing but the arm it names is
+   gone.
 
 **Phase 2 — ingestion keys**
 
@@ -317,7 +326,10 @@ best-effort diagnostic, not a startup precondition.
 **Phase 3 — grants surface**
 
 9. `audience_grants.rs`: populate `held_pairs` for admins; update `MyAudiencesResponse`'s field
-   doc and `my_audiences`'s own doc comment.
+   doc and `my_audiences`'s own doc comment. `analytics-web-app/src/lib/audience-grants-api.ts`:
+   rewrite `MyAudiences.held_pairs`'s JSDoc (`:131-137`), which says `held_pairs` is "always empty
+   for an admin" — false once this step populates it, and relied on by
+   `MintIngestionKeyDialog:57`'s admin preselect.
 
 **Phase 4 — clients**
 
@@ -352,6 +364,7 @@ best-effort diagnostic, not a startup precondition.
 - `rust/analytics-web-srv/tests/audience_grants_tests.rs`
 - `analytics-web-app/src/components/MintIngestionKeyDialog.tsx`
 - `analytics-web-app/src/routes/AudienceAccessPage.tsx`
+- `analytics-web-app/src/lib/audience-grants-api.ts`
 - `analytics-web-app/src/components/__tests__/ApiKeysAdminPage.test.tsx`,
   `src/routes/__tests__/IngestionApiKeysPage.test.tsx`,
   `src/routes/__tests__/AudienceAccessPage.test.tsx` (as affected)
@@ -423,6 +436,10 @@ notification path.
 - A client-credentials caller with no email cannot form a `user:` selector and so cannot claim an
   unclaimed audience; such a caller gets a `group:` mint row instead. There is no `group:`-selector
   claim path.
+- Step 11's new Mint-button condition also hides the per-audience Mint button for a non-admin on
+  audiences they hold no `mint` grant on (today's `!isAdmin && showMintButton` shows it on every
+  visible audience group regardless); such a mint 403s server-side today, so this is accepted as
+  a non-admin UI change, not just an admin one.
 - A missing `mint` grant on a custom default audience warns at startup, never fails startup: it is
   a runtime-fixable DB condition (one `create_grant` call) the service may not even be able to
   observe at boot, since `analytics-web-srv` starts with `analytics_keys_pool: None` when
@@ -461,7 +478,10 @@ notification path.
 - **`mkdocs/docs/query-guide/python-api.md`**'s `micromegas-import-keys` section (`:943-952`) and
   **`python/micromegas/micromegas/web_client.py`**'s `list_ingestion_api_keys`/
   `import_ingestion_api_key` docstrings: replace "admin-only"/"Requires OIDC admin access" with
-  the grant-based authorization above.
+  the grant-based authorization above. Also `web_client.py`'s `my_audiences` docstring
+  (`:191-193`): replace the "meaningless for an admin, whose mint authority never depends on a
+  grant row at all" parenthetical, since after §1 an admin's mint authority depends entirely on
+  grant rows like everyone else's.
 - **`tasks/data_isolation/audience_based_access_control_plan.md`**: generalize §5's "No
   human-admin query-path bypass" into "no human-admin data-plane bypass" and note the three
   accepted carve-outs, `bulk_ingest`, `authorize_view_ddl`, and
@@ -522,7 +542,11 @@ admin behavior; they must move with it:
   there, which after §3 becomes `Forbidden` → `try_claim_and_mint`, writing grant rows its
   cleanup does not remove. Switch it to a per-run unique audience with the same
   `cleanup_audience` helper `:922` already uses, so it stops sharing `"team-alpha"` with
-  `live_import_is_idempotent`.
+  `live_import_is_idempotent`. Also extend it to mint a second key into a second, unique audience
+  the caller holds no grant on, then assert that key is absent from `list_keys` and that
+  `revoke_key` on it returns `404` — this is the only behavioral coverage of the new list/revoke
+  authorization filter; the unit-test SQL-substring guards below would still pass if the
+  predicate were composed into the wrong branch or bound to the wrong placeholder.
 
 **Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the prefix composition and the
 claim hint, and — since `held_pairs` is now populated for admins — the default-audience preselect
