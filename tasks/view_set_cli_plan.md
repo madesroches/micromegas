@@ -88,7 +88,10 @@ One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 `CREATE [OR REPLACE] MATERIALIZED VIEW` statement. Nothing else in the directory is read.
 
 Bare `pull` (no names) refreshes only the files already present in `--dir` — the
-`screens.py:cmd_pull` default. A named `pull` also adopts a server-only name into a new file, which
+`screens.py:cmd_pull` default. A local name absent from the server (the normal state between
+authoring a new `.sql` file and running `apply`) is warned about and skipped, counted neither
+`updated` nor `unchanged`, with no effect on the exit code — mirroring `screens.py:cmd_pull`
+(`:327-331`). A named `pull` also adopts a server-only name into a new file, which
 is the merged pull/import behavior §5 relies on. A named `pull` (and `show <name>`) for a name
 present on neither side reports an error and exits non-zero, matching `screens.py:cmd_pull`
 (`:308-317`). `pull` skips, with a warning, any target file that
@@ -179,9 +182,9 @@ def compute_plan(server_state, local_scan, names=None):
 `pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` itself — that catch lives in `main`,
 around dispatch (see "Current-state read"). `compute_plan` takes the DataFrame `read_server_state`
 returns as an argument, the same way it already takes `local_scan`, rather than fetching it itself.
-`cmd_plan`, `cmd_apply`, and `cmd_list` each call `read_server_state` exactly once and pass the
-result to `compute_plan`. `cmd_show` has no `local_scan` at all (§1 drops `--dir` from `show`), so it
-cannot go through `compute_plan`; it calls `read_server_state` directly. `cmd_list` reads
+`cmd_plan`, `cmd_apply`, `cmd_pull`, and `cmd_list` each call `read_server_state` exactly once and
+pass the result to `compute_plan`. `cmd_show` has no `local_scan` at all (§1 drops `--dir` from
+`show`), so it cannot go through `compute_plan`; it calls `read_server_state` directly. `cmd_list` reads
 `update_group`/`updated_at`/`updated_by` off the same DataFrame it already fetched, since
 `compute_plan`'s return tuple does not carry those columns.
 
@@ -505,7 +508,10 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as server-only on a
-  fresh deployment, the fact that a drop also retires the view's partitions, reformat-only diffs, that
+  fresh deployment, the fact that a drop also retires the view's partitions, the fact that an
+  `apply`d content-changing update does **not** retire partitions materialized under the previous
+  definition — pointing at `materialized-views.md`'s "What a redefinition means" — reformat-only
+  diffs, that
   every subcommand, read-only `list`/`show`/`plan` included, requires an admin identity because
   `list_view_set_definitions` and the DDL path are both gated to `lakehouse_admin`, and a CI
   example
@@ -565,7 +571,7 @@ inputs.
 - `--prune` against an empty directory errors instead of proposing drops.
 - A fake client whose `.query` raises `ArrowException` on the current-state read lets the exception
   propagate out of `read_server_state` through each read-only subcommand's `cmd_*` function
-  (`plan`, `list`, `show`); `main`'s dispatch-level catch is what reports the error with the
+  (`plan`, `list`, `show`, `pull`); `main`'s dispatch-level catch is what reports the error with the
   admin-identity pointer and exits non-zero.
 
 **Apply**
