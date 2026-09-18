@@ -542,14 +542,10 @@ admin behavior; they must move with it:
   there, which after §3 becomes `Forbidden` → `try_claim_and_mint`, writing grant rows its
   cleanup does not remove. Switch it to a per-run unique audience with the same
   `cleanup_audience` helper `:922` already uses, so it stops sharing `"team-alpha"` with
-  `live_import_is_idempotent`. Also extend it to mint a second key into a second, unique audience
-  the caller holds no grant on, then assert that key is absent from `list_keys` and that
-  `revoke_key` on it returns `404` — this is the only behavioral coverage of the new list/revoke
-  authorization filter; the unit-test SQL-substring guards below would still pass if the
-  predicate were composed into the wrong branch or bound to the wrong placeholder.
+  `live_import_is_idempotent`.
 
-**Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the prefix composition and the
-claim hint, and — since `held_pairs` is now populated for admins — the default-audience preselect
+**Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the claim hint, and — since
+`held_pairs` is now populated for admins — the default-audience preselect
 now prefers the admin's personally-held mint audience over `audiences[0]`; assert this in the
 admin path of `IngestionApiKeysPage.test.tsx`/`AudienceAccessPage.test.tsx`. `AudienceAccessPage`:
 the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows `isAdmin`.
@@ -558,7 +554,9 @@ the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows
 
 **Python.** `setup_telemetry`'s `resolve_audience`: the admin branch is gone, so an admin with
 exactly one held mint audience resolves it silently, and an admin with none gets the
-same "no mintable audience" error as anyone else.
+same "no mintable audience" error as anyone else. Rewrite
+`test_omitted_audience_admin_is_always_an_error` (`test_setup_telemetry.py:194-208`) into "an
+admin with no held mint audience gets the same zero-match error as anyone else".
 
 ## Manual Verification
 
