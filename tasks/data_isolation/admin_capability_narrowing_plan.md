@@ -498,9 +498,10 @@ in the Mint dialog for an admin', …)`, since that line is now shown for an adm
 the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows `isAdmin`.
 `IngestionApiKeysPage`: unchanged behavior — it only routes between `ApiKeysAdminPage` and
 `IngestionKeysSelfServicePanel` on `is_admin` and does not itself gate mint/import. `ApiKeysAdminPage`:
-update `ApiKeysAdminPage.test.tsx` to cover the reworded audience help text (step 10) and, since
-its mint form has no server-side change, a 403 rendered as `mintError` on an audience the admin
-holds no grant on.
+the component is unchanged apart from step 10's help text, but the route behind its mint form is
+the one §1/§3 narrow — so update `ApiKeysAdminPage.test.tsx` to cover the reworded help text and
+nothing more. Its `mintError` catch is generic and untouched, so a mocked 403 there would exercise
+old code, not the new authorization; the live 403 is Manual Verification's job.
 
 **Python.** `setup_telemetry`'s `resolve_audience`: the admin branch is gone, so an admin with
 exactly one held mint audience resolves it silently, and an admin with none gets the
@@ -527,8 +528,8 @@ immediately — a 403 on a visible button, an empty table — rather than silent
    admin, then mint into `team-alpha`. Expect `201` with `claimed: false`, and the key visible in
    the list.
 5. Admin → Ingestion API Keys → Mint Key (the `ApiKeysAdminPage` free-text Audience field, not
-   the picker-based dialog above). Type an audience you hold no grant on. Expect the help text to
-   state the mint-grant requirement, and the mint to fail with a 403 rendered as `mintError`. Then
+   the picker-based dialog above). Type an audience you hold no grant on. Expect the mint to fail
+   with a 403 rendered as `mintError`. Then
    type a brand-new audience name. Expect success and two new `user:<you>`/`mint`+`read` rows on
    Audience Access, matching step 3's outcome.
 6. `micromegas-import-keys` (or `POST .../ingestion-api-keys/import`) an existing key into an
