@@ -62,7 +62,7 @@ migration, and that seeds the reserved `admins` group — see
 
 This service always attaches a DB-backed key store (`ingestion_api_keys`) built
 from its own data-lake connection for *validating* incoming API keys, but
-exposes no HTTP routes to mint, list, revoke, or import them — ingestion has
+exposes no HTTP routes to mint, list, or revoke them — ingestion has
 no key-management HTTP surface of its own. Those operations are handled
 exclusively by `analytics-web-srv`'s own `/api/ingestion-api-keys*` routes
 instead — see [API Keys](api-keys.md).
