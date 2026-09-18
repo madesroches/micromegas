@@ -118,8 +118,8 @@ editing a match in the audit module:
 
 ```rust
 pub trait AuditOutcome {
-    /// `("denied", Some(msg))` for a caller-attributable refusal, `("error", Some(msg))` for a
-    /// server-side failure.
+    /// `("denied", Some(msg))` for any caller-attributable refusal -- authorization or
+    /// validation alike -- `("error", Some(msg))` for a server-side failure.
     fn audit_outcome(&self) -> (&'static str, Option<String>);
 }
 ```
@@ -253,7 +253,7 @@ named `members` (`is_valid_group_name` allows it):
 
 | method | route template | action |
 |---|---|---|
-| POST | `.../{name}` | `create_group` |
+| POST | `.../api/groups` | `create_group` |
 | DELETE | `.../{name}` | `delete_group` |
 | POST | `.../{name}/members` | `add_member` |
 | DELETE | `.../{name}/members` | `remove_member` |
@@ -346,7 +346,7 @@ text is a strict subset of the record at the same instant, so keeping it is pure
   `query-guide/query-audit-log.md`: what the record is, the field table, the best-effort caveat,
   and worked `log_entries` queries —
   - every mutation by one actor in a window,
-  - all denials grouped by actor and `client_ip` (the privilege-probing query),
+  - all non-`allowed` outcomes grouped by actor and `client_ip`,
   - every mutation touching one audience or group.
   Each example filters `target = 'control_plane_audit'` with a bounded time range and parses `msg`
   with `jsonb_parse`/`jsonb_get`, as the query-audit page does.
