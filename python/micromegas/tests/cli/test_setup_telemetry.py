@@ -191,7 +191,10 @@ def test_omitted_audience_non_admin_no_matches_is_an_error():
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
 
 
-def test_omitted_audience_admin_is_always_an_error():
+def test_omitted_audience_admin_with_no_held_mint_audience_gets_the_same_zero_match_error():
+    """`is_admin` grants no audience of its own any more: an admin with no held mint
+    audience hits the same zero-match error as any other caller, not a distinct
+    admin-only "pick one explicitly" message."""
     my_audiences = {
         "is_admin": True,
         "audiences": [],
@@ -203,8 +206,24 @@ def test_omitted_audience_admin_is_always_an_error():
     with pytest.raises(SystemExit) as exc_info:
         setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
     message = str(exc_info.value)
-    assert "--audience" in message
+    assert "no mintable audience found for this caller" in message
     assert "--user-audience" in message
+
+
+def test_omitted_audience_admin_with_exactly_one_held_mint_audience_is_used_silently():
+    """An admin with exactly one personally held mint audience resolves it silently,
+    the same as a non-admin -- `is_admin` no longer forces `--audience`/`--user-audience`
+    to be passed explicitly."""
+    my_audiences = {
+        "is_admin": True,
+        "audiences": ["public", "team-alpha"],
+        "mint_prefix": "admin-",
+        "email": "admin@example.com",
+        "held_pairs": ["team-alpha:mint"],
+    }
+    args = make_args(audience=None)
+    audience = setup_telemetry.resolve_audience(args, FakeParser(), my_audiences)
+    assert audience == "team-alpha"
 
 
 def test_omitted_audience_non_admin_only_seeded_row_visible_is_a_zero_match_error():

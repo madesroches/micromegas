@@ -945,7 +945,9 @@ Pass `--version` to print the installed package and interpreter version and exit
 Walks a legacy env-keyring (or a file with the same shape) and imports each key into the DB-backed
 `ingestion_api_keys` / `analytics_api_keys` store via the HTTP import routes, so a client can keep
 presenting the same key string after migrating off the keyring. Requires OIDC admin access on the
-target service — no direct Postgres access needed.
+target service — no direct Postgres access needed. For `--table ingestion`, admin membership alone
+is not enough: the importing identity also needs a `mint` grant on every distinct audience the
+keyring entries carry (see [Migrating from the env keyring](../admin/api-keys.md#migrating-from-the-env-keyring)).
 
 ```bash
 micromegas-import-keys --table ingestion --source env --url https://analytics.example.com

@@ -645,12 +645,17 @@ async fn live_mint_list_revoke_round_trip() {
         admin_user(),
     );
 
+    // A per-run unique audience, cleaned up with `cleanup_audience` below -- an admin holding
+    // no grant on this audience now mints via the shared claim path (`authorize_mint` denies,
+    // `try_claim_and_mint` claims it), which writes grant rows `"team-alpha"` used to share
+    // with `live_import_is_idempotent`, so a fixed name would leak grant rows across tests.
+    let audience = format!("ingestion-keys-round-trip-{}", uuid::Uuid::new_v4());
     let name = format!("ingestion-keys-test-{}", uuid::Uuid::new_v4());
     let response = app
         .clone()
         .oneshot(post_request(
             "/api/ingestion-api-keys",
-            &format!(r#"{{"name": "{name}", "audience": "team-alpha"}}"#),
+            &format!(r#"{{"name": "{name}", "audience": "{audience}"}}"#),
         ))
         .await
         .expect("call service");
@@ -659,7 +664,7 @@ async fn live_mint_list_revoke_round_trip() {
     let key = body["key"].as_str().expect("key present").to_string();
     let key_id = body["key_id"].as_str().expect("key_id present").to_string();
     assert!(key.starts_with("mmk_"));
-    assert_eq!(body["audience"].as_str(), Some("team-alpha"));
+    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
 
     let response = app
         .clone()
@@ -683,7 +688,7 @@ async fn live_mint_list_revoke_round_trip() {
     );
     // The audience round-trips through `KeyListEntry`.
     assert!(
-        String::from_utf8_lossy(&raw).contains("team-alpha"),
+        String::from_utf8_lossy(&raw).contains(&audience),
         "listed row should carry the audience it was minted with"
     );
 
@@ -701,6 +706,7 @@ async fn live_mint_list_revoke_round_trip() {
         .execute(&pool)
         .await
         .expect("cleanup");
+    cleanup_audience(&pool, &audience).await;
 }
 
 #[ignore]
@@ -720,7 +726,11 @@ async fn live_import_is_idempotent() {
 
     let name = format!("ingestion-keys-import-test-{}", uuid::Uuid::new_v4());
     let key = format!("legacy-{}", uuid::Uuid::new_v4());
+    let audience = format!("team-alpha-{}", uuid::Uuid::new_v4());
 
+    // No explicit audience: resolves to `public`, already covered by the seeded
+    // `('public', 'mint', '*')` row, so `authorize_mint` allows it with no grant of the admin's
+    // own.
     let response = app
         .clone()
         .oneshot(post_request(
@@ -737,12 +747,34 @@ async fn live_import_is_idempotent() {
 
     // Same key, a different name AND a different audience this time: the binding is
     // immutable, so the already-present row's original audience must survive, never the
-    // second request's.
+    // second request's. This second request names an audience the admin holds no grant on
+    // at all -- `import_key` now calls `authorize_mint` on the *requested* audience even
+    // though this path's write keeps the original binding, so it 403s before ever reaching
+    // the already-present-key branch.
     let response = app
         .clone()
         .oneshot(post_request(
             "/api/ingestion-api-keys/import",
-            &format!(r#"{{"name": "{name}-again", "key": "{key}", "audience": "team-alpha"}}"#),
+            &format!(r#"{{"name": "{name}-again", "key": "{key}", "audience": "{audience}"}}"#),
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a repeat import naming an audience with no grant must be denied, even though the \
+         write itself would have kept the original binding"
+    );
+
+    // Seed a `mint` grant on the requested audience and retry: `authorize_mint` now allows it,
+    // and the already-present-key branch reports the original (`public`) audience, never the
+    // request's.
+    insert_mint_grant(&pool, &audience, "user:admin@example.com").await;
+    let response = app
+        .clone()
+        .oneshot(post_request(
+            "/api/ingestion-api-keys/import",
+            &format!(r#"{{"name": "{name}-again", "key": "{key}", "audience": "{audience}"}}"#),
         ))
         .await
         .expect("call service");
@@ -762,15 +794,17 @@ async fn live_import_is_idempotent() {
         .execute(&pool)
         .await
         .expect("cleanup");
+    cleanup_audience(&pool, &audience).await;
 }
 
 // ---------------------------------------------------------------------------
-// #[ignore], live DB -- admin server-side claim
+// #[ignore], live DB -- admin mint authorization
 // ---------------------------------------------------------------------------
 
-/// An admin minting into a brand-new, never-before-seen audience claims it server-side:
-/// both `mint` and `read` grant rows for `user:<admin email>` land in `audience_grants`,
-/// `claimed` comes back `true`, and the admin still gets a key.
+/// An admin minting into a brand-new, never-before-seen audience claims it -- via the same
+/// shared claim path every caller (admin or not) takes: both `mint` and `read` grant rows for
+/// `user:<admin email>` land in `audience_grants`, `claimed` comes back `true`, and the admin
+/// still gets a key.
 #[ignore]
 #[tokio::test]
 async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
@@ -813,12 +847,13 @@ async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
     cleanup_audience(&pool, &audience).await;
 }
 
-/// An admin minting into an audience that already has a grant row (created by someone else)
-/// does not claim it -- `claimed` comes back `false`, and no new grant row is written for the
-/// admin.
+/// An admin minting into an audience that already has a grant row (created by someone else,
+/// naming nobody the admin is) is denied with a 403 -- `authorize_mint` confers no admin
+/// bypass, and this audience is not eligible for a lazy claim (`try_claim_and_mint` only claims
+/// a genuinely unowned audience), so no new grant row is written for the admin either.
 #[ignore]
 #[tokio::test]
-async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
+async fn live_admin_mint_into_an_existing_audience_is_denied_with_403() {
     let pool = live_pool().await;
     let audience = format!("admin-existing-test-{}", uuid::Uuid::new_v4());
     insert_mint_grant(&pool, &audience, "group:eng").await;
@@ -841,9 +876,7 @@ async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
         ))
         .await
         .expect("call service");
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    assert_eq!(body["claimed"], false);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let admin_rows: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM audience_grants WHERE audience = $1 \
@@ -855,7 +888,7 @@ async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
     .expect("query grants");
     assert_eq!(
         admin_rows, 0,
-        "admin must not gain a grant on a pre-owned audience"
+        "a denied admin mint must not gain a grant on a pre-owned audience"
     );
 
     cleanup_audience(&pool, &audience).await;
@@ -863,10 +896,11 @@ async fn live_admin_mint_into_an_existing_audience_does_not_claim() {
 
 /// The reserved default-key audience (from `MICROMEGAS_DEFAULT_KEY_AUDIENCE`) is never claimed
 /// for an admin caller either, matching the non-admin lazy-claim path's existing reserved-name
-/// rule.
+/// rule -- a mint with no explicit audience and no `mint` grant on the default 403s, the same
+/// as any other caller with no matching grant.
 #[ignore]
 #[tokio::test]
-async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
+async fn live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant() {
     let pool = live_pool().await;
     let audience = format!("admin-reserved-test-{}", uuid::Uuid::new_v4());
     let app = build_handler_router_with_user(
@@ -887,10 +921,7 @@ async fn live_admin_mint_of_the_default_audience_is_never_claimed() {
         ))
         .await
         .expect("call service");
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body = json_body(response).await;
-    assert_eq!(body["audience"].as_str(), Some(audience.as_str()));
-    assert_eq!(body["claimed"], false);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let grant_rows: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM audience_grants WHERE audience = $1")
@@ -934,13 +965,14 @@ async fn cleanup_audience(pool: &sqlx::PgPool, audience: &str) {
 
 /// A non-admin explicitly naming a custom, unseeded `default_audience` hits
 /// `try_claim_and_mint`'s reserved-name check directly -- unlike `public`, which schema v9 seeds a
-/// `('public', 'mint', '*')` grant for, so a non-admin naming `public` never reaches the claim
+/// `('public', 'mint', '*')` grant for, so a caller naming `public` never reaches the claim
 /// path at all. The audience must be named explicitly, not left to default: `mint_key` only calls
-/// `try_claim_and_mint` for a non-admin when the caller's request named the audience itself, so
+/// `try_claim_and_mint` when the caller's request named the audience itself, so
 /// leaving `audience` out of the body (as
-/// `live_admin_mint_of_the_default_audience_is_never_claimed` does for the admin arm of this same
-/// check) would instead hit the earlier, ordinary "not in the caller's mintable set" denial and
-/// never reach this branch at all.
+/// `live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant` does for an admin
+/// hitting this same check) would instead hit the earlier, ordinary "not in the caller's
+/// mintable set" denial and never reach this branch at all. This reserved-name check is not
+/// non-admin-specific any more: `try_claim_and_mint` has one call site, taken by every caller.
 #[ignore]
 #[tokio::test]
 async fn live_mint_rejects_a_non_admin_claim_of_the_default_audience() {

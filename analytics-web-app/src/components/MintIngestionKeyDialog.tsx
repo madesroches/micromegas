@@ -155,13 +155,11 @@ export function MintIngestionKeyDialog({
                   ))}
                   <option value="__new__">New audience…</option>
                 </select>
-                {!isAdmin && (
-                  <p className="mt-1 text-xs text-theme-text-muted">
-                    <code className="font-mono">public</code> is readable by every authenticated
-                    user. Pick <em>New audience…</em> to give this key&apos;s data its own
-                    audience, with read access managed separately.
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-theme-text-muted">
+                  <code className="font-mono">public</code> is readable by every authenticated
+                  user. Pick <em>New audience…</em> to give this key&apos;s data its own
+                  audience, with read access managed separately.
+                </p>
                 {audienceChoice === '__new__' && (
                   <div className="mt-2">
                     <input
@@ -176,11 +174,9 @@ export function MintIngestionKeyDialog({
                         Must match <code>[A-Za-z0-9_-]</code>, up to 255 characters.
                       </p>
                     )}
-                    {!isAdmin && (
+                    {newAudienceValid && (
                       <p className="mt-1 text-xs font-mono text-theme-text-muted">
-                        {newAudienceValid
-                          ? `Will claim \`${composedNew}\` and grant you read + mint on it.`
-                          : ''}
+                        {`Will claim \`${composedNew}\` and grant you read + mint on it.`}
                       </p>
                     )}
                   </div>

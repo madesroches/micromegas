@@ -147,7 +147,11 @@ column resolves to one of their audiences — `processes`, `streams`, `blocks`,
 `view_instance`, `process_spans`, `perfetto_trace_chunks`, `parse_block`,
 `get_payload`. A call fails with a not-found-shaped error unless its id argument
 names a process or stream in one of the caller's audiences. `list_partitions()`
-silently omits every row that isn't theirs, `'global'` rows included.
+silently omits every row that isn't theirs — except `'global'` rows, which an audience-scoped
+admin holding no grant on anything still sees, via `AudienceGuard::global_rows_visible`'s
+`lakehouse_admin` arm (an accepted carve-out: it rides on the same `lakehouse_admin` boolean as
+the mutating-function registration gate below, so a caller who can already
+retire/regenerate a global file can also see it — no new authority, no new knob).
 
 For `net_spans`, `otel_spans`, `images`, `async_events`, and `thread_spans` —
 no `audience` column, reachable only through `view_instance(...)` — call-level
@@ -181,7 +185,8 @@ non-admin does not get them registered at all, so a call reads as "function
 not found". `CREATE`/`DROP MATERIALIZED VIEW` (see [Materialized
 Views](materialized-views.md)) is gated by this same admin check, applied
 directly rather than through function registration, since view DDL is
-intercepted ahead of the normal query path.
+intercepted ahead of the normal query path — and it is a *read* carve-out too, stronger than the
+other admin-gated sites; see below.
 
 Admin-ness is transitive membership in the reserved `admins` local group — see
 [Groups](groups.md) and [Authentication → Admin
@@ -193,6 +198,17 @@ Privileges](authentication.md#admin-privileges).
     a wildcard `('admins', '*')` member, which makes **every** authenticated
     caller admin until an operator takes over — `micromegas-groups add admins
     user:<you>`, then `remove admins '*'`.
+
+Two further `is_admin`-gated sites are accepted, narrower carve-outs on the data plane, not
+covered by the narrowing below: `bulk_ingest` (`flight_sql_service_impl.rs`) writes the
+`audience` column verbatim under an `is_admin` gate — its purpose is cross-audience replication
+of a lake already stamped at origin, which per-audience grants cannot express, and it grants no
+*read* — and `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm, noted above.
+
+`CREATE`/`DROP MATERIALIZED VIEW` is a **read** carve-out, and the stronger of the two admin-gated
+DDL/lakehouse sites: the resulting view's own queries are planned and materialized under
+`CallerContext::maintenance()` (`ReadScope::All`), so its author sees every audience regardless of
+their own read scope, not merely the ability to issue the `CREATE`/`DROP` itself.
 
 ## DDL-defined materialized views and audience
 
@@ -218,17 +234,19 @@ create/delete, and `GET .../audience-grants/visible`'s non-admin narrowing.
   is off. Remove it (`micromegas-grants delete public mint '*'`, or Audience
   Access → `public` → Mint → Remove) to require a per-caller grant. A
   deployment with a custom default still gets the literal `public` row.
-- **Audiences are claimed lazily.** A non-admin who names a brand-new,
+- **Every caller claims.** A caller — admin or not — who names a brand-new,
   never-granted audience *explicitly* claims it inside the same transaction
   that mints the key, writing `user:<email>` rows on **both** axes. Any
   existing grant row — admin-created, self-claimed, or another caller's
-  in-flight claim — makes a matching grant required instead.
+  in-flight claim — makes a matching grant required instead; `is_admin`
+  confers none. The response's `claimed` field reports whether this call is
+  what created it. An admin with no email is unaffected.
 - `public` and the deployment's `MICROMEGAS_DEFAULT_AUDIENCE` can never be
-  *claimed*, which is distinct from being *mintable*.
-- **An admin's mint claims too**: `mint_key` runs the same ownership pre-check
-  and writes the admin's own `mint`+`read` rows if the audience looks
-  unclaimed. The response's `claimed` field reports it. An admin with no email
-  is unaffected.
+  *claimed*, which is distinct from being *mintable*. A deployment running a
+  custom `MICROMEGAS_DEFAULT_AUDIENCE` needs a one-time `mint` grant on it —
+  `micromegas-grants create <audience> mint '*'` (or a narrower selector) —
+  before its first default-audience mint; the service logs a startup `warn!`
+  when that grant is missing.
 
 `micromegas-setup-telemetry` wraps login, mint, and printing the
 `OTEL_EXPORTER_OTLP_*` env vars:
@@ -290,7 +308,7 @@ that bypassed them fails the whole snapshot load loudly.
 | `POST {base_path}/api/audience-grants` | `{"audience","axis","selector"}` → 201 created or 200 already existed, returning the row |
 | `DELETE {base_path}/api/audience-grants?audience=&axis=&selector=` | 204, or 404/403. Query params, not path segments, since a `group:<id>` selector may contain `/` |
 | `GET {base_path}/api/audience-grants/visible` | The rows the caller may see — backs the Audience Access page's list |
-| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}` — audiences whose `mint` selector matches this caller, a namespace prefix a name is minted under via `micromegas-setup-telemetry --user-audience`, the `"{audience}:{axis}"` pairs held via an identity selector (empty for an admin), and the caller's transitive group closure |
+| `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}` — audiences whose `mint` selector matches this caller, a namespace prefix a name is minted under via `micromegas-setup-telemetry --user-audience`, the `"{audience}:{axis}"` pairs held via an identity selector (populated for an admin the same as anyone else), and the caller's transitive group closure |
 
 There is no paginated `GET` over the whole collection; arbitrary rows come from
 [`list_audience_grants()`](#list_audience_grants).
@@ -304,7 +322,9 @@ micromegas-grants --url https://analytics.example.com delete team-alpha read gro
 
 ### Write gate
 
-An admin acts unconditionally. A non-admin is admitted only with
+An admin acts unconditionally here — unchanged by the data-plane narrowing above, because this
+is grant *administration*: creating/deleting a row in the store, not exercising the access a row
+grants. A non-admin is admitted only with
 `MICROMEGAS_SELF_SERVICE_MINT` on, then constrained per call:
 
 - **Create**: `selector` must be `user:`/`group:`, never `*` — a caller who can
@@ -321,7 +341,8 @@ An admin acts unconditionally. A non-admin is admitted only with
 ### `list_audience_grants()`
 
 A caller-scoped table function over `audience_grants`, registered for **every**
-authenticated caller — a SQL auditing surface, not a REST route. No arguments;
+authenticated caller — a SQL auditing surface over grant *administration*, not a data read, and
+unchanged by the data-plane narrowing above. No arguments;
 filter with `WHERE`. Columns: `audience`, `axis`, `selector`, `created_at`,
 `created_by`.
 

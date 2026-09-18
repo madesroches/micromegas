@@ -821,9 +821,11 @@ struct MyAudiencesResponse {
     /// identity selector -- i.e. the pairs [`caller_holds_pair`] would return `true` for. Lets
     /// the Audience Access page tell "a pair I hold" apart from "a pair I can merely see" (e.g.
     /// visible only via a `*` row, or a `group:` row the caller isn't actually a member of --
-    /// the client has no group-membership info of its own to make that call). Always empty for
-    /// an admin: `isAdmin` already grants Share everywhere on the client, and every pair is a
-    /// held pair for an admin's own writes anyway.
+    /// the client has no group-membership info of its own to make that call). Populated for an
+    /// admin the same way as any other caller: `is_admin` confers no mint/read authority of its
+    /// own, so an admin's held pairs are exactly the grant rows naming their own identity, same
+    /// as everyone else's. `isAdmin` still separately grants Share/delete-anywhere on the
+    /// client -- that affordance is unrelated to this field.
     held_pairs: Vec<String>,
     /// The caller's resolved, transitive local-group membership -- straight off
     /// `AuthContext.memberships`, no query. Lets the CLI and the Audience Access page show why a
@@ -846,6 +848,10 @@ struct MyAudiencesResponse {
 /// enforce, for the same reason: this is new non-admin surface too, and must not widen on
 /// upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
 /// `!caller.is_admin()` condition.
+///
+/// `held_pairs` runs its own query for every caller, admin included -- unlike the gate above,
+/// there is no `is_admin` shortcut here: an admin's held pairs are exactly the grant rows naming
+/// their own identity, computed the same way as any other caller's.
 async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,
@@ -876,25 +882,22 @@ async fn my_audiences(
     // Ground truth for `canShareRow` on the client: the caller's own distinct held
     // `(audience, axis)` pairs, by the exact
     // same rule `caller_holds_pair` checks -- `*` filtered out of `caller_selectors`, matching
-    // that write-hold-check convention (a `*` row must not let a non-admin claim they "hold"
-    // every pair). An admin needs none of this on the client, so skip the query entirely.
-    let held_pairs = if caller.is_admin() {
-        Vec::new()
-    } else {
-        let identity_selectors: Vec<String> = caller_selectors(&caller)
-            .into_iter()
-            .filter(|s| s != "*")
-            .collect();
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT DISTINCT audience, axis FROM audience_grants WHERE selector = ANY($1)",
-        )
-        .bind(&identity_selectors)
-        .fetch_all(&pool)
-        .await?;
-        rows.into_iter()
-            .map(|(audience, axis)| format!("{audience}:{axis}"))
-            .collect()
-    };
+    // that write-hold-check convention (a `*` row must not let a caller claim they "hold" every
+    // pair). Run for every caller, admin included: `is_admin` confers no authority here.
+    let identity_selectors: Vec<String> = caller_selectors(&caller)
+        .into_iter()
+        .filter(|s| s != "*")
+        .collect();
+    let held_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT audience, axis FROM audience_grants WHERE selector = ANY($1)",
+    )
+    .bind(&identity_selectors)
+    .fetch_all(&pool)
+    .await?;
+    let held_pairs: Vec<String> = held_rows
+        .into_iter()
+        .map(|(audience, axis)| format!("{audience}:{axis}"))
+        .collect();
 
     let groups = caller.memberships.to_vec();
 
