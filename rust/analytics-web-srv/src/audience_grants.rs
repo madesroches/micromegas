@@ -203,7 +203,8 @@ impl AuditOutcome for AudienceGrantError {
             AudienceGrantError::BadRequest(msg) => ("denied", Some(msg.clone())),
             // The raw `sqlx::Error` text must not reach the record -- it can carry
             // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
-            // returns to the client instead.
+            // returns to the client instead. `Internal` gets the same treatment: it is built from
+            // `sqlx::Error` on several audited code paths and would otherwise leak the same detail.
             AudienceGrantError::Database(_) => {
                 ("error", Some("internal database error".to_string()))
             }
@@ -214,7 +215,7 @@ impl AuditOutcome for AudienceGrantError {
                         .to_string(),
                 ),
             ),
-            AudienceGrantError::Internal(msg) => ("error", Some(msg.clone())),
+            AudienceGrantError::Internal(_) => ("error", Some("internal error".to_string())),
         }
     }
 }
