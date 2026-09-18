@@ -48,7 +48,7 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_PORT` | No | Web server port (default: `3000`) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
-| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint/import routes fall back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint route falls back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authorization.md#self-service-ingestion-key-mint) |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Caps how many live keys one non-admin caller may hold at once (default `100`) |
@@ -91,8 +91,8 @@ micromegas-monolith --disable-auth
 
 ### Ingestion keys via the database, OIDC for analytics
 
-Ingestion keys live in the `ingestion_api_keys` table, populated with
-`micromegas-import-keys` or minted over HTTP — see [API Keys](api-keys.md).
+Ingestion keys live in the `ingestion_api_keys` table, minted over HTTP or
+from the web app's admin pages — see [API Keys](api-keys.md).
 There is no env-var alternative for ingestion or analytics keys.
 
 ```bash
@@ -120,9 +120,9 @@ store (see [API Keys](api-keys.md)).
 
 The ingestion role always attaches a DB-backed key store (`ingestion_api_keys`)
 built from the shared lake connection, for *validating* incoming API keys —
-but exposes no HTTP routes of its own to mint, list, revoke, or import them.
-FlightSQL validates `analytics_api_keys` the same way. Minting, listing,
-revoking, and importing keys for **both** tables happens exclusively through
+but exposes no HTTP routes of its own to mint, list, or revoke them.
+FlightSQL validates `analytics_api_keys` the same way. Minting, listing, and
+revoking keys for **both** tables happens exclusively through
 the `web` role's own `/api/ingestion-api-keys*` / `/api/analytics-api-keys*` /
 `/api/audience-grants*` HTTP routes instead (a separate `analytics-web-srv`
 process, or the monolith's own `web` role) — see

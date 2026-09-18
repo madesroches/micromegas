@@ -7,7 +7,7 @@ trail.
 
 **`analytics-web-srv`** is the sole HTTP surface for both tables — its
 `/api/ingestion-api-keys*` and `/api/analytics-api-keys*` routes let an
-operator mint, list, revoke, and import either table without a redeploy,
+operator mint, list, and revoke either table without a redeploy,
 writing directly to Postgres. **Ingestion exposes no key-management HTTP
 surface**: it only validates incoming keys against `ingestion_api_keys`.
 Both tables have an admin page in the web app (Admin → Ingestion API Keys /
@@ -20,22 +20,20 @@ mint an `ingestion_api_keys` row directly; a non-admin additionally needs an ope
 turned on `MICROMEGAS_SELF_SERVICE_MINT` (off by default), while an admin is exempt from that
 knob. See [Self-service mint](authorization.md#self-service-ingestion-key-mint) for the full
 mechanism. List and revoke stay admin-only and unconditional, unaffected by any of this — see
-[HTTP routes](#http-routes-key-management) below. Import stays admin-only too, but additionally
-needs the same `mint` grant as minting; see the Import paragraph in that same section. The
-analytics-key table's routes are admin-only throughout.
+[HTTP routes](#http-routes-key-management) below. The analytics-key table's routes are
+admin-only throughout.
 
 The env-var keyring (`MICROMEGAS_API_KEYS` and its per-role forms) is no
 longer read by ingestion or flight-sql as of v0.31.0 — the DB-backed key store
 is the only source, and migrating off the keyring is required, not optional.
 See [Migrating from the env keyring](#migrating-from-the-env-keyring).
 
-!!! warning "TLS is a prerequisite for minting and importing"
+!!! warning "TLS is a prerequisite for minting"
     Every mint route returns the cleartext key exactly once, over whatever
-    transport the request arrives on; every import route carries a legacy
-    key's cleartext **inbound** in the request body. Neither the ingestion
-    service nor `analytics-web-srv` binds TLS itself. **Put a TLS-terminating
-    ingress in front of both services before calling any of these routes in
-    anything but a fully trusted local network.**
+    transport the request arrives on. Neither the ingestion service nor
+    `analytics-web-srv` binds TLS itself. **Put a TLS-terminating ingress in
+    front of both services before calling any of these routes in anything but
+    a fully trusted local network.**
 
 ## Why two tables
 
@@ -54,7 +52,7 @@ CREATE TABLE ingestion_api_keys (
   key_hash     BYTEA NOT NULL,          -- sha256 of the full key string, 32 bytes
   name         VARCHAR(255) NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL,
-  created_by   VARCHAR(255) NOT NULL,   -- OIDC email/subject of the minting/importing caller
+  created_by   VARCHAR(255) NOT NULL,   -- OIDC email/subject of the minting caller
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ,
   revoked_by   VARCHAR(255),
@@ -85,21 +83,18 @@ stable name means two live rows can share a `name` while the old one is
 retired. **Every revoke path keys on `key_id`, never `name`.**
 
 There is no cleartext column. SHA-256 with no KDF is safe only because these
-are high-entropy random keys, not passwords — rotate any imported legacy key
-that wasn't actually random.
+are high-entropy random keys, not passwords.
 
 ## HTTP routes (key management)
 
 All key-management routes for **both** tables live on `analytics-web-srv`.
-Every route except ingestion's own mint and import is gated by the same admin check
+Every route except ingestion's own mint is gated by the same admin check
 every other `analytics-web-srv` admin route uses (`ValidatedUser.is_admin`,
 resolved from membership in the reserved `admins` local group; see
 [Groups](groups.md)). `POST {base_path}/api/ingestion-api-keys`
 (mint) runs through a `MintGate`/`AuthenticatedUser` extractor instead, so a
 non-admin caller with a matching grant (or a lazy claim) can reach it once
-`MICROMEGAS_SELF_SERVICE_MINT` is on. `POST .../ingestion-api-keys/import` keeps its
-`AdminUser` gate but *also* checks the same `mint`-grant authorization as mint, so admin
-membership alone is no longer sufficient to import into an arbitrary audience. Ingestion itself
+`MICROMEGAS_SELF_SERVICE_MINT` is on. Ingestion itself
 exposes no key-management HTTP surface — consolidating both tables' admin surface onto
 one service keeps a single admin list (see [Security](#security)).
 
@@ -108,14 +103,12 @@ one service keeps a single admin list (see [Security](#security)).
 | `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience","claimed"}` |
 | `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience"}]` |
 | `DELETE {base_path}/api/ingestion-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
-| `POST {base_path}/api/ingestion-api-keys/import` | `{"name","key","audience"?}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported","audience"}`, or 403 with no `mint` grant on the resolved audience |
 | `POST {base_path}/api/analytics-api-keys` | `{"name"}` → 201 `{"key_id","name","created_at","key"}` |
 | `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]` |
 | `DELETE {base_path}/api/analytics-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
-| `POST {base_path}/api/analytics-api-keys/import` | `{"name","key"}` → 201/200 `{"key_id","name","created_at","created_by","revoked_at","imported"}` |
 
 Both route groups share request/response shapes and validation for
-`name`/`key`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
+`name`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
 see [What audience does a key carry](#what-audience-does-a-key-carry).
 
 Ingestion's mint route has more error shapes than the rest of this table:
@@ -123,17 +116,15 @@ Ingestion's mint route has more error shapes than the rest of this table:
 (self-service off, no matching grant, or a per-caller bound reached), `503
 UNAVAILABLE` (the audience-grant query itself failed), `401 UNAUTHENTICATED`
 (no `AuthContext`, normally unreachable), and `409 CLAIM_CONTENDED` (two
-concurrent lazy claims raced for the same audience name; retry). Import
-carries the `403`/`503` pair too, since it also goes through
-`authorize_mint`; mint remains the one route here a non-admin caller can
-reach at all.
+concurrent lazy claims raced for the same audience name; retry). Mint
+remains the one route here a non-admin caller can reach at all.
 
 **Mint** (`POST .../{table}-api-keys`) — `{"name"}` (plus, for ingestion, an
 optional `"audience"`) → **201** `{"key_id","name","created_at","key"}` (plus
 `"audience"` for ingestion). `key` is the cleartext key, returned **exactly
 once** — never logged, never retrievable afterwards. `mmk_` marks the key as
-a Micromegas secret for scanners; validation hashes the whole string, so
-imported legacy keys of any shape keep working. **400** if `name` is empty or
+a Micromegas secret for scanners; validation hashes the whole string.
+**400** if `name` is empty or
 exceeds 255 bytes; for ingestion, also **400** if an explicit `audience` is
 invalid — an omitted one resolves to the deployment default (see [What
 audience does a key carry](#what-audience-does-a-key-carry)).
@@ -142,7 +133,7 @@ audience does a key carry](#what-audience-does-a-key-carry)).
 **200**, newest first. `limit` defaults to `100`, clamps at `500`, and is
 **400** if `<= 0`. `offset` defaults to `0`. `include_revoked` defaults to
 `true`. Never returns `key_hash` or the key. Unchanged by this document's
-mint/import narrowing: still every row, every audience, `AdminUser`-gated and
+mint narrowing: still every row, every audience, `AdminUser`-gated and
 unconditional.
 
 **Revoke** (`DELETE .../{table}-api-keys/{key_id}`) — **200**
@@ -150,30 +141,8 @@ unconditional.
 for an unknown `key_id`. The revocation latency is bounded by whichever
 ingestion/flight-sql process's cache TTL is validating the key — see [Cache
 and audit env vars](#cache-and-audit-env-vars). Unchanged by this document's
-mint/import narrowing: still any key, any audience, `AdminUser`-gated and
+mint narrowing: still any key, any audience, `AdminUser`-gated and
 unconditional.
-
-**Import** (`POST .../{table}-api-keys/import`) — carries a *pre-existing*
-key string forward, for a client keeping the same key string after migrating
-off the env keyring. `{"name","key"}` (plus, for ingestion, an optional
-`"audience"`) → `imported: true` and **201** on a fresh insert; `imported:
-false` and **200** when the hash already exists (idempotent). `revoked_at` is
-always present (`null` unless the existing row was itself revoked). For
-ingestion, the response also carries `audience`: on a fresh insert, whatever
-resolved from the request/knob; on an already-present row, the row's
-**existing** audience (the binding is immutable). `created_by` is the
-importing caller's own OIDC identity. **400** if `name` is empty/too long or
-`key` is empty; no other format validation. For ingestion, **403** if the
-importing caller (an admin — `import_key` keeps its `AdminUser` gate) holds
-no `mint` grant on the resolved audience: admin membership alone is no longer
-sufficient. **503 UNAVAILABLE** if the underlying `authorize_mint`
-grant-store query itself fails. Checked against the *requested* audience even on the
-already-present-key path, where the write itself keeps the existing row's
-original binding and discards the request's audience — a repeat import can
-403 on an audience it will never actually write. Never logs the key. The
-`micromegas-import-keys` CLI (see [Migrating from the env
-keyring](#migrating-from-the-env-keyring)) is the recommended way to call
-this route in bulk.
 
 **Precondition:** the telemetry DB must already have run the migration that
 creates `ingestion_api_keys.audience` (schema v6), which only ingestion or a
@@ -210,8 +179,8 @@ full model. A fresh deployment ships with a seeded `('public', 'read', '*')`
 row, which makes every authenticated principal able to read `public` with no
 further grant; delete that row to change it.
 
-**The binding is immutable by design.** Once a key is minted or imported with
-an audience, that audience never changes for that key. Re-sharing
+**The binding is immutable by design.** Once a key is minted with an
+audience, that audience never changes for that key. Re-sharing
 already-ingested data with a wider audience is a *grants* edit (add a `read`
 selector for that audience), never a restamp.
 
@@ -328,10 +297,10 @@ Screens, Maps, Analytics API Keys, Query Deny List — stays fully gated by
 
 Both ingestion/analytics pages stay visible even when the backing pool isn't
 configured; the page surfaces the 503 the route returns, same as `MapsPage`
-does for an unconfigured maps store. Neither page has an "import" button —
-the import routes exist for the `micromegas-import-keys` CLI only, since a
-browser form for pasting a legacy key in would reintroduce the "key transits
-a browser" exposure mint already avoids.
+does for an unconfigured maps store. There is no way to bring an
+externally-chosen key string into either table: every key is generated
+server-side by its mint route and returned exactly once, so a key never
+transits a browser form on its way in.
 
 **A third page, open to every authenticated user, not just admins**:
 **Audience Access** (`/audiences`) is the self-service counterpart of the
@@ -341,17 +310,16 @@ routes covered in [Authorization → the grant store](authorization.md#the-grant
 [`web-app.md`](web-app.md#audience-access) for the full page reference.
 
 **`created_by`/`revoked_by` always reflect the acting admin's own OIDC
-identity, for both key tables.** Every mint/revoke/import handler resolves
+identity, for both key tables.** Every mint/revoke handler resolves
 the caller's identity (`user.email` or `user.subject`) and writes that
 directly — there is no service-credential hop, so no attribution gap to
 document.
 
 **Single admin group, for administration.** List/revoke for both tables
 gate on the same `analytics-web-srv` admin check (membership in the
-reserved `admins` local group — see [Groups](groups.md)). Import gates on
-that same admin check **and** a `mint` grant on the target audience.
-Ingestion's own mint route is authorized by a `mint` grant for every
-caller, admin included; `admins` membership only waives the
+reserved `admins` local group — see [Groups](groups.md)). Ingestion's own
+mint route is authorized by a `mint` grant for every caller, admin
+included; `admins` membership only waives the
 `MICROMEGAS_SELF_SERVICE_MINT` knob that otherwise blocks a non-admin
 caller from minting at all.
 
@@ -397,7 +365,7 @@ window per table.
 
 By default every service shares one DB role via
 `MICROMEGAS_SQL_CONNECTION_STRING`. The table split is still enforced in
-code: `analytics-web-srv`'s mint/list/revoke/import routes each hardcode
+code: `analytics-web-srv`'s mint/list/revoke routes each hardcode
 which table they target, and the ingestion/analytics key-validation
 providers are each constructed bound to their own table. Operators who run
 separate DB roles per service can additionally enforce the split at the
@@ -405,7 +373,7 @@ grant level:
 
 ```sql
 -- ingestion role: read + touch only (key *validation*, not administration --
--- analytics-web-srv is the only role that mints/revokes/imports)
+-- analytics-web-srv is the only role that mints/revokes)
 GRANT SELECT ON ingestion_api_keys TO micromegas_ingestion;
 GRANT UPDATE (last_used_at) ON ingestion_api_keys TO micromegas_ingestion;
 -- and no grant of any kind on analytics_api_keys
@@ -448,7 +416,7 @@ rows are hard-deleted on revocation (`groups` rows too, on delete).
 plus read-only on `audience_grants`/`groups`/`group_members`. Neither service
 role has any grant on the other service's table. `analytics-web-srv`'s role
 does gain write access to `ingestion_api_keys` under this design, since every
-ingestion-key mint/revoke/import goes through it.
+ingestion-key mint/revoke goes through it.
 
 ## Migrating from the env keyring
 
@@ -456,8 +424,7 @@ ingestion-key mint/revoke/import goes through it.
 ingestion and flight-sql no longer read `MICROMEGAS_API_KEYS` (or its
 per-role/prefixed forms) at all — only `ingestion_api_keys` /
 `analytics_api_keys` and OIDC authenticate a caller. A still-set variable logs
-a `warn!` naming it and the replacement CLI, but does not stop startup or
-restore the old behavior.
+a `warn!` naming it, but does not stop startup or restore the old behavior.
 
 **The consequence of skipping this migration depends on what else is
 configured:** with OIDC also configured, the service starts normally and
@@ -467,10 +434,11 @@ only signal. Without OIDC and with an empty `ingestion_api_keys` /
 pre-existing "no auth providers configured" bail), since an env-only keyring
 no longer counts as configured auth.
 
-Carrying *existing* key strings forward is an HTTP-backed operation via the
-`import` route on `analytics-web-srv` for each table, and the
-`micromegas-import-keys` CLI tool that drives it — no `psql`, no direct
-Postgres network access needed.
+**A legacy key's own string cannot be carried forward.** Every key in the DB
+store is generated server-side by its mint route; there is no route, CLI, or
+admin page that accepts an externally-chosen key string. Migrating therefore
+means minting *replacement* keys and redistributing them to the clients still
+presenting the old ones.
 
 1. **Deploy the new binaries.** The migration creates the tables (schema v5).
    In a split deployment, start ingestion (or the monolith) before flight-sql
@@ -480,63 +448,24 @@ Postgres network access needed.
    these key-management routes specifically, `analytics-web-srv` never runs
    this migration itself — the target telemetry DB must already have had
    ingestion or a lakehouse-role monolith run against it at least once.
-2. **Populate the tables with `micromegas-import-keys`** — installed
-   alongside `micromegas-query`/`-screens`/`-logout` (`pip install
-   micromegas`, or via poetry in `python/micromegas`):
+2. **Mint a replacement for every key still in the keyring**, one per
+   keyring entry, from the web app's Admin → Ingestion API Keys /
+   Analytics API Keys pages (or the mint routes directly). Each mint returns
+   its cleartext key exactly once — capture it then, and configure the
+   client that used the corresponding legacy key with the new string.
+   `micromegas-setup-telemetry` covers the common case of an individual
+   minting their own ingestion key and printing the matching OTLP exporter
+   env vars.
 
-   ```bash
-   micromegas-import-keys --table ingestion --source env \
-     --url https://analytics.example.com
-   micromegas-import-keys --table analytics --source env \
-     --url https://analytics.example.com
-   ```
-
-   `--table` selects the import route; `--url` always points at
-   `analytics-web-srv`'s base URL, for both tables. With no explicit `--var`,
-   `--source env` tries the table's own prefixed legacy var first
-   (`MICROMEGAS_INGESTION_API_KEYS` / `MICROMEGAS_ANALYTICS_API_KEYS`) and
-   falls back to the unprefixed `MICROMEGAS_API_KEYS`. Pass `--var NAME`
-   explicitly to pin an exact source var, or `--source file --path ...` to
-   read the legacy keyring's shape — a JSON array of `{"name", "key"}`
-   objects, each optionally carrying an `"audience"` field too (ingestion
-   only) — from a file instead. `--audience AUD` sets the audience for every
-   ingestion key imported in this run (valid only with `--table ingestion`; a
-   per-entry `"audience"` in the keyring wins over it). This is a different
-   flag than `MICROMEGAS_OIDC_AUDIENCE` used for this same tool's token
-   validation — the name coincidence is unrelated. Neither given, the server
-   applies `MICROMEGAS_DEFAULT_AUDIENCE` (`public` when unset). Auth follows
-   the same OIDC setup as `micromegas-screens`/`-query`
-   (`MICROMEGAS_OIDC_*` env vars for a service account, or an
-   interactive/cached login via `--profile`); the OIDC identity used must be
-   in the target service's admin list. For `--table ingestion`, admin
-   membership alone is no longer enough: the identity also needs a `mint`
-   grant on every distinct audience this run is about to write — enumerate
-   every distinct `"audience"` value in the keyring (or file) being
-   imported, plus any `--audience AUD` passed to the tool, plus
-   `MICROMEGAS_DEFAULT_AUDIENCE` for entries carrying none, and create a
-   `mint`-axis row for the importing principal on each before running the
-   import, e.g.:
-
-   ```bash
-   micromegas-grants --url https://analytics.example.com create team-alpha mint 'user:you@example.com'
-   ```
-
-   An entry whose audience has no such grant fails that entry with a `403`.
-
-   The tool prints one line per key
-   (`imported` / `already present (key_id=...)` / `already present
-   (revoked)` / the error message), continues past individual failures, and
-   exits non-zero if any key failed to import or came back revoked. Route
-   each key explicitly with `--only NAME [NAME ...]` / `--exclude NAME [NAME
-   ...]` (mutually exclusive):
-   - An `object-cache-srv` client key stays env-only forever — never
-     imported.
+   Three cases need routing decisions:
+   - An `object-cache-srv` client key stays env-only forever — no
+     replacement needed, see [Object Cache](object-cache.md).
    - A key that is also a service's own ingestion self-telemetry credential
-     (`MICROMEGAS_INGESTION_API_KEY`) goes into `ingestion_api_keys`.
+     (`MICROMEGAS_INGESTION_API_KEY`) gets its replacement from
+     `ingestion_api_keys`.
    - **A key valid on both ingestion and flight-sql today must become two
-     distinct key strings, one per table** — split it first, then import
-     each half with `--only`/`--exclude` selecting disjoint entries per
-     table run.
+     distinct keys, one per table** — mint one from each page and configure
+     each client with whichever half it actually needs.
 3. **Unset `MICROMEGAS_API_KEYS`** (and prefixed variants) on ingestion and
    flight-sql once the tables are populated; leaving it set logs a warning
    and changes nothing, since neither service reads it anymore. A non-empty
@@ -550,7 +479,7 @@ Postgres network access needed.
 - **API keys can never manage keys**: `is_admin` is hardcoded `false` on
   every API-key auth context, and `analytics-web-srv`'s `AdminUser`
   extractor rejects any caller whose `is_admin` isn't `true` before a
-  list/revoke/import handler runs. There is no bearer-key authenticator on
+  list/revoke handler runs. There is no bearer-key authenticator on
   `analytics-web-srv`'s `/api/*` routes at all, so an ingestion API key has
   no code path to reach the mint route's extractors, admin or not.
   Self-service mint only ever widens *which browser-authenticated OIDC

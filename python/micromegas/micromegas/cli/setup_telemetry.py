@@ -17,9 +17,8 @@ isn't namespaced under any one caller. Neither flag ever silently rewrites
 the name it is given -- `--user-audience` only ever prepends the caller's own
 prefix, nothing more.
 
-Auth reuses `import_keys.py::build_auth_provider`/`make_client` verbatim,
-which in turn delegates to `web_auth.resolve_web_auth` -- see that
-function's doc comment for the resolution ladder. No new OIDC code here.
+Auth delegates to `web_auth.resolve_web_auth` -- see that function's doc
+comment for the resolution ladder. No new OIDC code here.
 """
 
 import argparse
@@ -32,11 +31,35 @@ from pathlib import Path
 import requests
 
 from micromegas.cli import config
-from micromegas.cli.import_keys import make_client
 from micromegas.cli.version import add_version_argument
+from micromegas.cli.web_auth import resolve_web_auth
+from micromegas.web_client import WebClient
 
-# Re-exported so tests can call `setup_telemetry.make_client` directly.
 __all__ = ["make_client", "main"]
+
+
+def build_auth_provider(args, parser):
+    """Delegates to `web_auth.resolve_web_auth`, discarding its diagnostic --
+    see that function's doc comment for the resolution ladder. Returns
+    `None` when no auth mechanism resolves at all (e.g. `--disable-auth`
+    targets), matching `WebClient`'s own "no auth provider" support.
+    Translates a `config.ProfileError` (e.g. an unresolvable `--profile`)
+    into `parser.error()`, this module's own convention for reporting a
+    bad argument.
+    """
+    try:
+        auth_provider, _diagnostic = resolve_web_auth(profile=args.profile)
+    except config.ProfileError as e:
+        parser.error(str(e))
+    return auth_provider
+
+
+def make_client(args, parser):
+    """`--url` points at `analytics-web-srv`'s base URL -- ingestion exposes
+    no key-management HTTP routes of its own.
+    """
+    auth_provider = build_auth_provider(args, parser)
+    return WebClient(args.url, auth_provider=auth_provider)
 
 
 def resolve_otlp_endpoint(args, parser):

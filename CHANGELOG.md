@@ -4,6 +4,22 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Auth:** Remove the API-key import path — the `micromegas-import-keys` console script, the
+  `POST /api/ingestion-api-keys/import` and `POST /api/analytics-api-keys/import` routes on
+  `analytics-web-srv`, and `WebClient.import_ingestion_api_key`/`import_analytics_api_key`. Its
+  only purpose was carrying a pre-existing env-keyring key *string* into the DB-backed store
+  during the v0.31.0 migration that made Postgres the sole source of API keys; that migration is
+  behind us, and every key is now minted server-side through the mint routes or the web app's
+  Admin → Ingestion API Keys / Analytics API Keys pages. **Operator-facing break:** a deployment
+  upgrading from v0.30.0 or earlier with an env keyring still set can no longer carry its
+  existing key strings over — mint a replacement key per keyring entry and reconfigure the
+  clients presenting the old ones. The startup `warn!` for a still-set
+  `MICROMEGAS_API_KEYS`/`MICROMEGAS_INGESTION_API_KEYS`/`MICROMEGAS_ANALYTICS_API_KEYS` now says
+  so instead of naming the removed CLI. Dropping the import routes also removes the only inbound
+  path that carried a cleartext key in a request body. `micromegas-setup-telemetry`, which
+  previously borrowed `import_keys.py::build_auth_provider`/`make_client`, now owns both.
+  **Minor breaking change:** the two `WebClient` import methods are gone, as are `import_key` and
+  its request/response/row structs in `ingestion_keys.rs`/`analytics_keys.rs`.
 * **Python:** New `micromegas-views` console script (#1603): a terraform-shaped `plan` /
   `apply` / `pull` / `list` / `show` workflow that treats a directory of `<view_set_name>.sql`
   files as the desired state of the deployment's [DDL-defined materialized view

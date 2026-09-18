@@ -137,7 +137,7 @@ pub fn register_routes(router: Router) -> Router {
 /// `ingestion_api_keys` and `analytics_api_keys` are administered exclusively through
 /// `analytics-web-srv`'s own routes. Ingestion still *validates* incoming API keys via
 /// whichever `auth_provider` it was built with (including a `DbApiKeyAuthProvider`), it just
-/// does not expose a way to mint/list/revoke/import them.
+/// does not expose a way to mint/list/revoke them.
 pub async fn serve_ingestion(
     listen_addr: SocketAddr,
     lake: DataLakeConnection,

@@ -27,7 +27,7 @@ binary as its entrypoint.
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
 | `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads (`file:///path`, `s3://…`, `gs://…`) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
-| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint/import routes fall back to ([API Keys](api-keys.md)). The ingestion role now reads it too: a process whose credential carries no audience is stamped with this value explicitly at write time, the same audience the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)) apply where a legacy or replicated row's audience is read. One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
+| `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint routes fall back to ([API Keys](api-keys.md)). The ingestion role now reads it too: a process whose credential carries no audience is stamped with this value explicitly at write time, the same audience the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)) apply where a legacy or replicated row's audience is read. One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 
 ## CLI flags

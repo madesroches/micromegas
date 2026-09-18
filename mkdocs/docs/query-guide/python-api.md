@@ -704,12 +704,12 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
 ### `WebClient` — self-service mint
 
 `micromegas.web_client.WebClient` is the HTTP client `micromegas-setup-telemetry` (and every other
-`analytics-web-srv`-facing CLI — `-import-keys`, `-grants`, `-screens`) is built on, talking to
+`analytics-web-srv`-facing CLI — `-grants`, `-groups`, `-screens`) is built on, talking to
 `analytics-web-srv`'s REST API over Bearer auth. Two methods back the setup script:
 
 - **`mint_ingestion_api_key(name, audience=None)`** — `POST {base_path}/api/ingestion-api-keys`.
-  Mints a fresh key (unlike `import_ingestion_api_key`, which carries an existing key string
-  forward). On a `409` with `{"code": "CLAIM_CONTENDED"}` — transient advisory-lock contention
+  Mints a fresh key, generated server-side. On a `409` with `{"code": "CLAIM_CONTENDED"}` —
+  transient advisory-lock contention
   with another concurrent claim of the same brand-new audience, not a denial — retries the same
   request exactly once before raising; any other non-OK status (including a second
   `CLAIM_CONTENDED`) raises `RuntimeError` the same way every other `WebClient` method does.
@@ -843,10 +843,10 @@ complete OIDC pair is a configuration error — see Named profiles below.
 `api_key_file` is a FlightSQL credential: only `micromegas-query`, `micromegas-views`, and
 `connect_with_profile()` honor it, because the analytics web API validates OIDC tokens only, not
 a static key. Every `WebClient`-based CLI (`micromegas-screens`, `micromegas-grants`, `-groups`,
-`-import-keys`, `-setup-telemetry`) resolves auth through the shared `web_auth.resolve_web_auth()`
+`-setup-telemetry`) resolves auth through the shared `web_auth.resolve_web_auth()`
 helper, which only ever branches on the OIDC fields. Of those, only `micromegas-screens` reports a
 profile that resolves `api_key_file` and nothing else as an error; `micromegas-grants`, `-groups`,
-`-import-keys`, and `-setup-telemetry` still silently connect unauthenticated on that path.
+and `-setup-telemetry` still silently connect unauthenticated on that path.
 
 **Named profiles:**
 
@@ -940,33 +940,6 @@ there's no `tokens-<profile>.json` to clear. Revoking such a key is a server-sid
 
 Pass `--version` to print the installed package and interpreter version and exit.
 
-### micromegas-import-keys
-
-Walks a legacy env-keyring (or a file with the same shape) and imports each key into the DB-backed
-`ingestion_api_keys` / `analytics_api_keys` store via the HTTP import routes, so a client can keep
-presenting the same key string after migrating off the keyring. Requires OIDC admin access on the
-target service — no direct Postgres access needed. For `--table ingestion`, admin membership alone
-is not enough: the importing identity also needs a `mint` grant on every distinct audience the
-keyring entries carry (see [Migrating from the env keyring](../admin/api-keys.md#migrating-from-the-env-keyring)).
-
-```bash
-micromegas-import-keys --table ingestion --source env --url https://analytics.example.com
-micromegas-import-keys --table analytics --source env --url https://analytics.example.com
-```
-
-`--table {ingestion,analytics}` selects the import route; `--url` always points at
-`analytics-web-srv`'s base URL for both tables — ingestion itself exposes no
-key-management route to point at. `--source env`
-(default `--var`, with a fallback — see below) or `--source file --path ...` supplies the keyring.
-`--only NAME [NAME ...]` / `--exclude NAME [NAME ...]` select which keyring entries to import on
-this run. Auth follows the same OIDC setup as `micromegas-query`/`-screens` (`MICROMEGAS_OIDC_*` for
-a non-interactive run, or `--profile` for an interactive/cached login).
-
-See [Migrating from the env keyring](../admin/api-keys.md#migrating-from-the-env-keyring) for the
-full recipe, including the exact keyring shape and the env var fallback convention.
-
-Pass `--version` to print the installed package and interpreter version and exit.
-
 ### micromegas-grants
 
 Creates and deletes DB-backed audience grants (`audience_grants` table) via
@@ -995,7 +968,7 @@ table:
 micromegas-query --all "SELECT * FROM list_audience_grants()" --profile analytics
 ```
 
-Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`
 (`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
 
 Pass `--version` to print the installed package and interpreter version and exit.
@@ -1034,7 +1007,7 @@ micromegas-groups --url https://analytics.example.com add admins user:<you>
 micromegas-groups --url https://analytics.example.com remove admins '*'
 ```
 
-Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-grants`
 (`MICROMEGAS_OIDC_*` for a non-interactive run, or `--profile` for an interactive/cached login).
 
 Pass `--version` to print the installed package and interpreter version and exit.
@@ -1118,7 +1091,7 @@ required flag only when that env var is unset. `--env-file PATH` writes the expo
 file instead of stdout (parent directory created `0o700` if needed) — useful for sourcing from a
 shell profile instead of `eval`-ing directly. On Windows, those POSIX mode bits aren't enforced;
 the file lands at its parent directory's inherited ACL instead. `--profile` selects a named
-connection profile, but (like `-grants`/`-import-keys`) only its OIDC fields are honored — an
+connection profile, but (like `-grants`) only its OIDC fields are honored — an
 `api_key_file`-only profile yields no auth here.
 
 `--format {posix,powershell,cmd,dotenv}` (default `posix`) picks the rendered syntax and applies
@@ -1144,7 +1117,7 @@ does not change `--format`'s own default to `dotenv` — the documented use of `
 sourcing it from a shell profile, and `dotenv` output is not a shell script, so `posix` stays the
 default for both output paths.
 
-Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-import-keys`/`-grants`.
+Auth follows the same OIDC setup as `micromegas-query`/`-screens`/`-grants`.
 
 Pass `--version` to print the installed package and interpreter version and exit.
 

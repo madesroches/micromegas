@@ -229,7 +229,7 @@ fn validate_selector(selector: &str) -> Result<(), AudienceGrantError> {
 }
 
 /// `caller`'s own identity for `created_by`/ownership purposes: email if present, else subject --
-/// the same resolution every mint/revoke/import handler in this crate uses.
+/// the same resolution every mint/revoke handler in this crate uses.
 fn caller_identity(caller: &AuthContext) -> String {
     caller
         .email
@@ -302,9 +302,7 @@ struct UpsertedRow {
 }
 
 /// One round trip: a CTE that unions the just-inserted row with the pre-existing one, so there is
-/// no window between a failed insert and a re-`SELECT` for a concurrent `DELETE` to invalidate --
-/// unlike `ingestion_keys.rs::import_key`'s insert-then-re-`SELECT`, safe there only because that
-/// table never physically deletes rows.
+/// no window between a failed insert and a re-`SELECT` for a concurrent `DELETE` to invalidate.
 ///
 /// This single statement can still return **zero rows**: Postgres data-modifying CTEs share one
 /// statement-level snapshot with the query around them, so when two callers race to create the

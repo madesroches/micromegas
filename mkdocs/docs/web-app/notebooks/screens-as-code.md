@@ -185,7 +185,7 @@ login works the same way it always has.
 ## Authentication
 
 `micromegas-screens` resolves auth the same way as every other `WebClient`-based CLI
-(`micromegas-grants`, `micromegas-groups`, `micromegas-import-keys`), in this order:
+(`micromegas-grants`, `micromegas-groups`, `micromegas-setup-telemetry`), in this order:
 
 1. All three of `MICROMEGAS_OIDC_ISSUER`/`MICROMEGAS_OIDC_CLIENT_ID`/`MICROMEGAS_OIDC_CLIENT_SECRET`
    set in the environment — non-interactive client-credentials login, for CI/service accounts (see

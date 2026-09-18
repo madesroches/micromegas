@@ -72,7 +72,7 @@ export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
 export MICROMEGAS_MAPS_OBJECT_STORE_URI="s3://my-bucket/maps/"
 export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 
-# The deployment's default audience: what a mint/import request that supplies
+# The deployment's default audience: what a mint request that supplies
 # no `audience` gets, and what the ingestion edge stamps onto a credential
 # with no bound audience of its own (see
 # mkdocs/docs/admin/authorization.md#audience-stamping).
@@ -291,8 +291,8 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET /api/data-sources/{name}`, `PUT`, `DELETE` — Get / update / delete data source
 - `GET /api/maps/catalog` — List map assets
 - `GET /api/maps/blob/{filename}`, `PUT`, `DELETE` — Fetch / upload / delete map GLB
-- `GET`/`POST /api/analytics-api-keys`, `POST /api/analytics-api-keys/import`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/import/revoke analytics API keys (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
-- `GET`/`POST /api/ingestion-api-keys`, `POST /api/ingestion-api-keys/import`, `DELETE /api/ingestion-api-keys/{key_id}` — List/mint/import/revoke ingestion API keys, written directly to Postgres (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
+- `GET`/`POST /api/analytics-api-keys`, `DELETE /api/analytics-api-keys/{key_id}` — List/mint/revoke analytics API keys (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
+- `GET`/`POST /api/ingestion-api-keys`, `DELETE /api/ingestion-api-keys/{key_id}` — List/mint/revoke ingestion API keys, written directly to Postgres (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
 - `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authorization](authorization.md#audiences-and-grants))
 - `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
 - `GET /auth/login` — Initiate OAuth login

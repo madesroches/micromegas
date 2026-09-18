@@ -1,6 +1,5 @@
 """Shared auth resolution for every `WebClient`-based CLI (`screens.py`,
-`grants.py`, `groups.py`, `import_keys.py`, and -- via `import_keys.make_client`
--- `setup_telemetry.py`).
+`grants.py`, `groups.py`, `setup_telemetry.py`).
 
 `analytics-web-srv` validates OIDC tokens only (no `ProviderBuilder`, no
 `DbApiKeyAuthProvider`, no `ApiKeyTable` in that crate) -- it never validates

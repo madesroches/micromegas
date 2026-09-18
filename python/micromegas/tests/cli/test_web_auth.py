@@ -190,7 +190,7 @@ def test_full_env_triple_with_unselected_profile_still_uses_client_credentials(
     """Pins step 1's ordering: the env-triple check runs before
     `resolve_connection`, so a `profiles` map with no profile selected never
     raises `ProfileError` when the full env triple is present -- this is
-    what keeps grants/groups/import-keys behavior-compatible."""
+    what keeps grants/groups behavior-compatible."""
     _patch_client_credentials(monkeypatch)
     cfg_file = _write_config(
         tmp_path,
