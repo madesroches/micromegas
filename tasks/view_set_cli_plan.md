@@ -138,8 +138,11 @@ set that `--prune` refuses to drop: its filename stem always, plus the name the 
 that is what disagreed.
 
 A skipped file also makes `plan` and `apply` exit non-zero — `apply` after applying the files that
-did parse: the repo means to manage that view set and silently isn't, which an unattended
-`apply --auto-approve` or a `plan` used as a CI drift check would otherwise report as success.
+did parse: the repo means to manage that view set and silently isn't, and an unattended
+`apply --auto-approve`, or a CI job gating only on `plan`'s exit code, would otherwise treat the
+skip as success even though the file's view set went unmanaged. Pending creates/updates/drops do
+not by themselves move `plan`'s exit code — see §4's exit-code contract; a CI drift check reads
+`plan`'s output for those.
 
 `list_local_definitions(dir)` therefore returns `(definitions, protected_names)`: `definitions` maps
 name to `LocalDefinition`, and `protected_names` is the prune suppression set. This is the tuple
@@ -244,6 +247,14 @@ Classification, per local file:
 so a locally-managed view outside the named subset is never misreported as server-only. A name
 passed to `plan` or `apply` that is present on neither side is reported as an error and the command
 exits non-zero, matching `pull <name>` and `show <name>` (§1).
+
+**`plan`'s exit-code contract.** Non-zero only for a skipped local file (§2), an unknown name
+(above), or a dispatch-level error caught by `main` (below) — never for pending changes: a plan
+with creates, updates, or drops still queued exits 0, matching `screens.py:cmd_plan`
+(`:495-505`), which always exits 0 regardless of what the plan contains. A CI job that wants to
+fail on drift reads `plan`'s output — the `Plan: N to create, N to update, N to drop, N
+unchanged.` summary line, or `list --format json`'s per-name `status` column (§7) — rather than
+the exit status.
 
 Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
 and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names] if (prune and
@@ -480,6 +491,8 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   stopping at the first error.
 - A skipped local file makes `plan` and `apply` exit non-zero, unlike `screens.py`, which warns and
   exits 0: this tool is meant to run unattended in CI, where a warning on stderr is not read.
+- `plan` exits 0 when creates/updates/drops are pending, matching `screens.py:cmd_plan`; a CI
+  drift check must read `plan`'s output, not its exit status, to detect pending changes.
 - A skipped local file protects only the name(s) it could have been, not the whole directory:
   unlike `screens.py`, the filename stem is the key here, so there is no unknowable-identity case
   to justify a repo-wide suppression (§2).
