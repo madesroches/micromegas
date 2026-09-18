@@ -173,10 +173,20 @@ contention, `403` on an over-long selector, `403` on an already-owned audience, 
 reserved name. `insert_key`'s doc comment loses its "every 'the in-lock recheck disagreed'
 branch falls through to this for an admin" paragraph; it becomes the ordinary-path insert only.
 `try_claim_and_mint`'s own doc comment loses its "**Admin mode never turns a claim attempt into a
-mint failure.**" paragraph (`:572-580`), and the two inline comments that assume an admin
-pre-check ran moments earlier — the `EXISTS`-was-already-run note at `:662-667` and the
-reserved-name-is-unreachable-for-an-admin note at `:696-701` — are deleted, since neither claim
-holds once §3 removes the pre-check.
+mint failure.**" paragraph (`:572-580`), and three inline/doc comments that assume an admin
+pre-check ran moments earlier are deleted or rewritten, since none of the claims they make hold
+once §3 removes the pre-check: the "an admin minted straight through `AudienceMintPolicy`'s
+`is_admin` arm" comment at `:662-667` loses that clause, the `EXISTS`-was-already-run note at
+`:675-681` (its "for an admin, `mint_key`'s own pre-check ran the identical `EXISTS` query"
+branch) is deleted, and the reserved-name-is-unreachable-for-an-admin note at `:696-701` is
+deleted.
+
+Also update the two `IngestionKeyError` doc comments that go stale once `revoke_key` and
+`import_key` narrow (§6/§7): the enum doc (`:99-106`) drops "`list_keys`/`revoke_key`/`import_key`
+stay `AdminUser`-gated and never construct any of the four" (both now construct `Forbidden`, and
+`import_key` can construct `Unavailable` via `authorize_mint`), and the `Forbidden` variant doc
+(`:118-122`) drops "a malformed audience from an admin" from its enumerated causes, since §1
+deletes the admin arm that produced it.
 
 The two quota exemptions (`:733` `max_claims_per_caller`, `:350` `max_keys_per_caller`) stay —
 they bound self-service abuse, not access, and an administrator bulk-provisioning credentials is
@@ -247,6 +257,14 @@ existence oracle for keys in audiences the caller cannot see:
 2. Visible but no `mint` authority → `403` ("you hold no mint grant on this key's audience").
 3. No such `key_id` → `404`.
 
+**Pre-deploy audit.** `LIST_KEYS_VISIBILITY_SQL` and this `UPDATE` both require a grant row on the
+key's audience, but `import_key` can write an arbitrary audience with no grant row, and `mint_key`
+today mints without one whenever the admin pre-check's `already_owned` short-circuit fires. Before
+deploying §5/§6, run `SELECT DISTINCT k.audience FROM ingestion_api_keys k WHERE k.audience <>
+'public' AND NOT EXISTS (SELECT 1 FROM audience_grants g WHERE g.audience = k.audience)` and create
+a grant row on every audience it returns, so no pre-existing key becomes invisible or
+unrevocable to everyone but its creator.
+
 ### 7. `import_key`: same authority as minting
 
 Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`:
@@ -259,8 +277,11 @@ lazy-claim path — see Decisions.
 `audience_grants.rs:881`. Drop the `if caller.is_admin() { Vec::new() }` shortcut and run the
 held-pairs query for every caller. `is_admin` stays on the response — the client still needs it
 for the grant-administration affordances (Share anywhere, delete any row), which are unchanged.
-`held_pairs` is still needed populated for admins, but for the CLI's `personal` filter (step 12),
-not the Mint button — the mint affordance reads `audiences`, which already honors `*`.
+`held_pairs` has two client consumers once it is populated for admins: the CLI's `personal`
+filter (step 12), and `MintIngestionKeyDialog`'s default-audience preselect
+(`analytics-web-app/src/components/MintIngestionKeyDialog.tsx:57`), which already reads
+`held_pairs` to prefer an audience the caller personally holds a mint grant on over
+`audiences[0]` — an admin's preselected audience changes once this step ships.
 
 ### 9. Startup warning for a custom default audience
 
@@ -299,8 +320,9 @@ themselves access in order to read the table that records grants.
 3. `ingestion_keys.rs`: extract `authorize_mint`; rewrite `mint_key` to call it and delete the
    admin pre-check and the `Err(e) if caller.is_admin()` arm.
 4. `ingestion_keys.rs`: delete the four `try_claim_and_mint` admin fallbacks; trim `insert_key`'s
-   doc comment; rewrite `try_claim_and_mint`'s own doc comment and its two inline admin-pre-check
-   references.
+   doc comment; rewrite `try_claim_and_mint`'s own doc comment and its three inline admin-pre-check
+   references (`:662-667`, `:675-681`, `:696-701`); rewrite `IngestionKeyError`'s enum doc
+   (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
 5. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
    in `list_keys`; add `LIST_KEYS_VISIBILITY_SQL`, compose it into both `list_keys` branches.
 6. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
@@ -409,7 +431,10 @@ notification path.
   audience authority to scope them by.
 - Accepted behavior break: an admin can no longer mint into an existing audience they hold no
   grant on, nor into a custom `MICROMEGAS_DEFAULT_AUDIENCE` with no `mint` row. Both are one
-  `create_grant` call away, and the second gets a startup warning.
+  `create_grant` call away, and the second gets a startup warning. Pre-existing keys in an
+  audience with no grant row also become invisible to `list_keys` and unrevocable via
+  `revoke_key` for every caller but the key's own `created_by`; the pre-deploy audit query in §6
+  is the mitigation, not a startup check.
 - A client-credentials caller with no email cannot form a `user:` selector and so cannot claim an
   unclaimed audience; such a caller gets a `group:` mint row instead. There is no `group:`-selector
   claim path.
@@ -434,15 +459,20 @@ notification path.
     grant administration.
   - §`list_audience_grants()` (`:332`): unchanged; note it is the grant-administration surface,
     not a data read.
-  - §Admin-gated lakehouse functions: add `bulk_ingest` as the remaining data-plane carve-out.
+  - §Admin-gated lakehouse functions: add `bulk_ingest`, `authorize_view_ddl`, and
+    `AudienceGuard::global_rows_visible` as the remaining data-plane carve-outs; correct
+    `:150`'s "`list_partitions()` silently omits every row that isn't theirs, `'global'` rows
+    included" for an admin caller, since `global_rows_visible`'s `lakehouse_admin` arm makes
+    `'global'` rows visible to an audience-scoped admin holding no grant.
 - **`mkdocs/docs/admin/api-keys.md`**: `:17-23` (what stays admin-only), `:92-100` (the gate
   description), `:212-230` (the admin-claims story collapses into the shared path), `:275-300`
-  (the admin page now shows an audience-scoped list).
+  (the admin page now shows an audience-scoped list); add a note before deploying to run the §6
+  pre-deploy audit query and grant every audience it returns, so no pre-existing key goes dark.
 - **`tasks/data_isolation/audience_based_access_control_plan.md`**: generalize §5's "No
-  human-admin query-path bypass" into "no human-admin data-plane bypass" and note the two accepted
-  carve-outs, `bulk_ingest` and `authorize_view_ddl`; update §"Admin surface" to record that the
-  blanket gate is now scoped to the control plane, leaving delegated ownership as the remaining
-  follow-up.
+  human-admin query-path bypass" into "no human-admin data-plane bypass" and note the three
+  accepted carve-outs, `bulk_ingest`, `authorize_view_ddl`, and
+  `AudienceGuard::global_rows_visible`; update §"Admin surface" to record that the blanket gate is
+  now scoped to the control plane, leaving delegated ownership as the remaining follow-up.
 - **`CHANGELOG.md`** Unreleased, with a **Minor breaking change** clause for
   `AudienceMintPolicy::resolve_audience`'s behavior change and the admin-visible route changes.
 
@@ -486,11 +516,6 @@ admin behavior; they must move with it:
 - `live_admin_mint_into_an_existing_audience_does_not_claim` → becomes "is denied with 403",
   renamed accordingly.
 - `live_admin_mint_of_the_default_audience_is_never_claimed` → 403 unless a `mint` row exists.
-- `live_mint_list_revoke_round_trip` — extend with a second key in an audience the caller holds no
-  grant on, asserting it is absent from `list_keys` and returns 404 from `revoke_key`. Extending
-  this existing test is what covers the narrowing end-to-end against a real Postgres: the scoping
-  is a correlated `EXISTS` across two tables, which the SQL-shape assertions above can confirm is
-  *present* but not that it *filters correctly*.
 - `live_import_is_idempotent` — needs a `mint` grant on the target audience in setup.
 - `live_my_audiences_admin_gets_a_normal_response_regardless_of_knob` — `held_pairs` is now
   populated for an admin.
@@ -498,9 +523,12 @@ admin behavior; they must move with it:
   plane did *not* narrow.
 
 **Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the prefix composition and the
-claim hint. `AudienceAccessPage`: the Mint button follows `me.audiences`, not `isAdmin`, while
-Share still follows `isAdmin`. `IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior, but
-their admin fixtures may need a `held_pairs` value (for the CLI, not this page).
+claim hint, and — since `held_pairs` is now populated for admins — the default-audience preselect
+now prefers the admin's personally-held mint audience over `audiences[0]`; assert this in the
+admin path of `IngestionApiKeysPage.test.tsx`/`AudienceAccessPage.test.tsx`. `AudienceAccessPage`:
+the Mint button follows `me.audiences`, not `isAdmin`, while Share still follows `isAdmin`.
+`IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior, but their admin fixtures may need a
+`held_pairs` value to exercise the preselect above.
 
 **Python.** `setup_telemetry`'s `resolve_audience`: the admin branch is gone, so an admin with
 exactly one held mint audience resolves it silently, and an admin with none gets the
