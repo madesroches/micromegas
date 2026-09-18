@@ -200,8 +200,20 @@ empty `definitions` is the "zero readable `.sql` files" case that `--prune` refu
 checked before drops are rendered.
 
 The `client` argument to `read_server_state` is anything with `.query(sql)` returning a DataFrame —
-the real FlightSQL client in production, a canned-DataFrame fake in tests. Current state is one
-call:
+the real FlightSQL client in production, a canned-DataFrame fake in tests. It reaches `read_server_state`
+through a module-level `make_client(args)` factory —
+
+```python
+def make_client(args):
+    return connect_with_profile(profile=args.profile, client_entrypoint="cli-views")
+```
+
+— which each `cmd_*` calls itself, exactly the monkeypatchable seam `screens.py:187`'s
+`make_client(config, args)` already is for `micromegas-screens`
+(monkeypatched in `tests/test_screen_files.py:673,704,745,771,789,808`). There is no connect-once
+call in `main`: `ProfileError` raised inside a `cmd_*`'s call to `make_client` propagates up through
+`args.func(args)` and is caught by the same dispatch-level catch described under "Current-state
+read" below. Current state is one call:
 
 ```sql
 SELECT view_set_name, definition_sql, update_group, updated_at, updated_by
@@ -278,18 +290,22 @@ so a partial apply is a real outcome; the workflow is idempotent, so the remedy 
 the first FlightSQL round trip every subcommand makes, read-only `list`/`show`/`plan` included, and
 the anticipated failure point for a non-admin identity (Current State, "Auth"). `read_server_state`
 itself does not catch anything or exit; `main` wraps `args.func(args)` in a
-`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` catch around dispatch — the same pattern
-`screens.py:main` uses (`:736-740`) — reporting the error and exiting non-zero with a pointer to the
-admin-identity requirement, rather than letting the planner's unknown-function error surface as a
-raw traceback.
+`pyarrow.flight.FlightError` / `pyarrow.lib.ArrowException` / `ProfileError` catch around dispatch —
+the same pattern `screens.py:main` uses (`:736-740`) — reporting the error and exiting non-zero with
+a pointer to the admin-identity requirement, rather than letting the planner's unknown-function error
+or a `make_client` failure surface as a raw traceback.
 
 ### 5. Deletes are opt-in
 
-The directory is the desired state of the *entire* table: DDL creation is admin-gated with no UI
-path, so — unlike `micromegas-screens`, which needs `managed_by` to tell its own screens from one
-born ad hoc in the web UI — a server-only row here is plain drift, not an ownership question.
-`--prune` still gates dropping it, justified by blast radius (a `DROP` also retires partitions,
-below) plus the migration-seeded `log_stats` row. Server-only definitions are therefore reported as
+The directory is the desired state of the *entire* table: DDL creation has no UI path today, so —
+unlike `micromegas-screens`, which needs `managed_by` to tell its own screens from one born ad hoc
+in the web UI — a server-only row here is ordinarily plain drift, not an ownership question. An
+admin-console page that creates or edits view sets through this same DDL has been proposed
+separately; if it lands, a UI-born definition would show up here too, and what keeps it safe is
+opt-in `--prune` plus reporting it as `server-only` rather than dropping it silently — not a
+`managed_by` marker. `--prune` still gates dropping it, justified by blast radius (a `DROP` also
+retires partitions, below) plus the migration-seeded `log_stats` row. Server-only definitions are
+therefore reported as
 `server-only` and **never dropped** unless `--prune` is passed. Two guards on top:
 
 - `--prune` refuses to run when the directory contains zero readable `.sql` files. A wrong `--dir`
@@ -305,7 +321,7 @@ A `DROP` also retires the view's partitions (`flight_sql_service_impl.rs:1092-11
 destructive beyond the definition row. Worth one line in the docs — phrased without promising how
 many instances' partitions go with it, since `partition_insert_range` keys on
 `view_instance_id = 'global'` today (`view_definition_store.rs:192`) and a per-instance definition
-(§8) would have to sweep every instance.
+would have to sweep every instance.
 
 ### 6. Shared module: `cli/state_sync.py`
 
@@ -360,25 +376,6 @@ local file is `cat <name>.sql` and dropping it lets every subcommand connect unc
 `pull` differs from `show`: it writes `canonical_ddl(definition_sql)`, not the verbatim stored
 text (§1).
 
-### 8. Relationship to cached range functions
-
-Two other materialization tiers are landing around this one, and neither is in scope — but the
-boundary is what keeps §5's `--prune` safe, so it belongs in the design rather than in a reviewer's
-head.
-
-- **The anonymous tier** — on-demand caching of a time-ranged query, identified by a hash of its
-  canonical `LogicalPlan`, created by *running a query* rather than by DDL. No file, no name, no
-  owner; it is not a candidate for desired-state management and never appears in
-  `list_view_set_definitions()`. The predicate sugar over it needs nothing from this tool either: it
-  desugars to the same path and produces no DDL row.
-- **Per-instance eager materialization** — today a DDL definition materializes exactly one instance,
-  `'global'` (`sql_batch_view.rs:145`). If a definition gains an instance dimension, it arrives as
-  another `WITH (...)` option, and the fan-out is one definition to many instances. That leaves this
-  tool's keying intact: `lakehouse_view_set_definitions` is keyed on `view_set_name`
-  (`migration.rs:585`), so the desired state stays one `.sql` file per view set and `canonical_ddl`
-  absorbs the new option without knowing it exists. What does change is reporting — `list` would
-  want to show instance fan-out — and deletion blast radius (§5).
-
 ## Implementation Steps
 
 **Phase 1 — shared module**
@@ -395,13 +392,14 @@ head.
 **Phase 2 — the new tool**
 
 4. Create `python/micromegas/micromegas/cli/views.py`: `parse_local_definition`,
-   `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `read_server_state`,
-   `compute_plan`, `format_plan`, `cmd_plan`, `cmd_apply`, `cmd_pull`, `cmd_list`, `cmd_show`,
-   `main`. `cmd_apply` catches
+   `list_local_definitions(dir)`, `canonical_ddl`, `with_or_replace`, `make_client`,
+   `read_server_state`, `compute_plan`, `format_plan`, `cmd_plan`, `cmd_apply`, `cmd_pull`,
+   `cmd_list`, `cmd_show`, `main`. Each `cmd_*` calls `make_client(args)` to get its client (§4).
+   `cmd_apply` catches
    `pyarrow.flight.FlightError` and `pyarrow.lib.ArrowException` per statement; `main` wraps
-   `args.func(args)` in the same catch around dispatch, reporting the error and exiting non-zero
-   with a pointer to the admin-identity requirement when it originates from `read_server_state`
-   (§4), and also catches `ProfileError` there, from the connect-once call before dispatch (§4).
+   `args.func(args)` in the same catch around dispatch, plus `ProfileError` (raised by `make_client`
+   inside a `cmd_*`), reporting the error and exiting non-zero with a pointer to the admin-identity
+   requirement when it originates from `read_server_state` (§4).
    `cmd_pull` skips the write and counts the file `unchanged` when `canonical_ddl(definition_sql)`
    already matches the file's current contents; otherwise it writes with `encoding="utf-8"`,
    matching `screens.py:89,256`. `main` calls `sys.stdout.reconfigure(encoding="utf-8",
@@ -450,7 +448,7 @@ reimplementation of `view_definition_from_options` (`view_ddl.rs:185`), a second
 a validator that already exists in Rust, or extending `list_view_set_definitions()` to expose the
 normalized columns and *still* parsing the local file. Text comparison gives a faithful diff and one
 source of truth for what a definition means, at the cost of reporting reformat-only edits as
-updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — an instance key (§8), a
+updates. It also costs nothing as the DDL grows: a new `WITH (...)` option — an instance key, a
 retention setting — diffs and round-trips correctly through a tool that never learned what it means,
 where a semantic comparison would need a new field and a new local parser branch per option.
 
@@ -491,16 +489,16 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 - Deletes require `--prune`, and `--prune` refuses an empty desired-state directory. Its safety also
   depends on `list_view_set_definitions()` exposing the DDL tier alone; if the anonymous tier ever shares
   the table, `compute_plan` must filter on a tier discriminator before classifying `server-only`.
-- View sets get no `managed_by` column: creation is admin-gated DDL with no UI path, so there is no
-  exploratory tier to distinguish from — that tier already exists separately, as §8's anonymous
-  cached-range functions.
+- View sets get no `managed_by` column: creation has no UI path today, so there is no exploratory
+  tier to distinguish from; if an admin-console create path lands, opt-in `--prune` plus the
+  `server-only` report — not a `managed_by` marker — is what keeps a UI-born definition safe.
 - The comparison depends on the server storing `definition_sql` verbatim and never rewriting it
   (§3). Stated as an invariant rather than assumed, because server-side column injection is being
   designed for the adjacent tier.
 - `show` reads the server only. A local-file mode would be `cat <name>.sql`, and dropping it makes
   "every subcommand connects and needs an admin identity" a flat rule with no carve-out in `main`.
 - Instance fan-out is out of scope, and the file model is keyed on `view_set_name` because the
-  definition table is (§8). A `scaffold --from-query` bridge to the anonymous tier is a follow-up,
+  definition table is. A `scaffold --from-query` bridge to the anonymous tier is a follow-up,
   blocked on a server-side probe-derivation path.
 - No live-DB or live-service test is added, per `CLAUDE.md` — no bug is being pinned here.
 
@@ -517,8 +515,7 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   example
   using a profile with `api_key_file` — where that key must be an admin key. It should also say what
   this tool does *not* manage: built-in view sets, which have no stored definition, and on-demand
-  cached queries, which have no name (§8) — so a user who misses `log_entries` from `list` knows
-  why.
+  cached queries, which have no name — so a user who misses `log_entries` from `list` knows why.
 - **Updated:** `mkdocs/docs/admin/materialized-views.md` — a pointer from "Introspection" to the new
   page.
 - **Updated:** `mkdocs/docs/query-guide/python-api.md` — `micromegas-views` is FlightSQL-based, so
@@ -529,9 +526,10 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 ## Testing Strategy
 
 All automated coverage is unit tests in `python/micromegas/tests/cli/test_views.py`, driving the
-`cmd_*` functions against a fake client whose `.query(sql)` returns a canned DataFrame. Nothing here
-needs a live DB or service: every behavior being added is reachable by calling code with constructed
-inputs.
+`cmd_*` functions against a fake client whose `.query(sql)` returns a canned DataFrame, substituted
+by monkeypatching module-level `make_client` — the same seam `test_screen_files.py` uses for
+`screens.py:make_client`. Nothing here needs a live DB or service: every behavior being added is
+reachable by calling code with constructed inputs.
 
 **File parsing**
 - Round trip: `pull` writes a file that `parse_local_definition` reads back to the same name and
