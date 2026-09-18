@@ -82,9 +82,10 @@ micromegas-views show  <name> [--profile P]
 There is no `init` subcommand and no config file. `micromegas-screens` needs
 `micromegas-screens.json` for a server URL and a `managed_by` ownership marker; this tool gets its
 endpoint from the standard `--profile` resolution and has no ownership marker to record (see §5).
-`--dir` defaults to `.`. `main` checks, before dispatching to any subcommand, that `--dir` exists
-and is a directory; if not, it reports the error and exits non-zero rather than letting a mistyped
-path scan as an empty desired state.
+`--dir` defaults to `.`. Before dispatching, `main` checks — only for a subcommand whose parsed
+`Namespace` carries a `dir` attribute, i.e. every subcommand but `show` — that `--dir` exists and
+is a directory; if not, it reports the error and exits non-zero rather than letting a mistyped path
+scan as an empty desired state.
 
 One desired-state file per view set: `<view_set_name>.sql`, holding exactly one
 `CREATE [OR REPLACE] MATERIALIZED VIEW` statement. Nothing else in the directory is read.
@@ -240,7 +241,9 @@ Classification, per local file:
 
 `names` narrows only the create/update/unchanged classification, which iterates the named subset;
 `server_only` is always computed against the full `definitions` map from `list_local_definitions`,
-so a locally-managed view outside the named subset is never misreported as server-only.
+so a locally-managed view outside the named subset is never misreported as server-only. A name
+passed to `plan` or `apply` that is present on neither side is reported as an error and the command
+exits non-zero, matching `pull <name>` and `show <name>` (§1).
 
 Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
 and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names] if (prune and
@@ -500,7 +503,10 @@ issue. `apply`'s per-statement error reporting is the mitigation.
 
 - **New:** `mkdocs/docs/admin/views-as-code.md` — the workflow, the file layout, the five
   subcommands, `--prune` and why deletes are opt-in, `log_stats` showing up as server-only on a
-  fresh deployment, the fact that a drop also retires the view's partitions, the fact that an
+  fresh deployment, that adopting it with `pull log_stats` means re-`pull`ing it again after a
+  micromegas upgrade — a release can re-seed its shipped definition, and otherwise `plan` reports
+  that as drift for an unattended `apply` to silently revert — the fact that a drop also retires
+  the view's partitions, the fact that an
   `apply`d content-changing update does **not** retire partitions materialized under the previous
   definition — pointing at `materialized-views.md`'s "What a redefinition means" — reformat-only
   diffs, that
@@ -514,7 +520,9 @@ issue. `apply`'s per-statement error reporting is the mitigation.
   page.
 - **Updated:** `mkdocs/docs/query-guide/python-api.md` — `micromegas-views` is FlightSQL-based, so
   it honors `api_key_file`; the paragraph at `:843-850` currently implies only `micromegas-query`
-  and `connect_with_profile()` do.
+  and `connect_with_profile()` do. Also add `AlreadyExists` → `pyarrow.lib.ArrowException` and
+  `NotFound` → `pyarrow.lib.ArrowKeyError` rows to the "Exception types" table at `:1226-1245`,
+  which `apply`'s per-statement catch (§4) relies on but which the table doesn't currently list.
 - **Updated:** `mkdocs/mkdocs.yml` — nav entry.
 
 ## Testing Strategy
