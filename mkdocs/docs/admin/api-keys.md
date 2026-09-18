@@ -343,12 +343,14 @@ the caller's identity (`user.email` or `user.subject`) and writes that
 directly — there is no service-credential hop, so no attribution gap to
 document.
 
-**Single admin group, for administration.** List/revoke/import for both
-tables, plus ingestion's own mint when the caller is an admin, gate on the
-same `analytics-web-srv` admin check (membership in the reserved `admins`
-local group — see [Groups](groups.md)). Ingestion's mint route additionally
-accepts a non-admin caller once `MICROMEGAS_SELF_SERVICE_MINT` is on,
-authorized by a `mint` grant instead of `admins` membership.
+**Single admin group, for administration.** List/revoke for both tables
+gate on the same `analytics-web-srv` admin check (membership in the
+reserved `admins` local group — see [Groups](groups.md)). Import gates on
+that same admin check **and** a `mint` grant on the target audience.
+Ingestion's own mint route is authorized by a `mint` grant for every
+caller, admin included; `admins` membership only waives the
+`MICROMEGAS_SELF_SERVICE_MINT` knob that otherwise blocks a non-admin
+caller from minting at all.
 
 **Under `--disable-auth` on `analytics-web-srv`, all three key/grant
 route groups are unavailable — not just gated.** With auth disabled, every

@@ -426,11 +426,10 @@ def build_parser():
         help=(
             "Write audience to mint the key under, verbatim -- for an org/team/service "
             "audience that isn't namespaced under any one caller. Lazily claims the "
-            "audience if it doesn't already exist; for a non-admin caller, fails with "
-            "a 403 if it exists and this caller holds no grant for it (an admin caller "
-            "mints into any existing audience verbatim). Omitted entirely resolves one "
-            "via GET .../audience-grants/my-audiences. Mutually exclusive with "
-            "--user-audience."
+            "audience if it doesn't already exist; fails with a 403, admin included, "
+            "if it exists and this caller holds no grant for it. Omitted entirely "
+            "resolves one via GET .../audience-grants/my-audiences. Mutually exclusive "
+            "with --user-audience."
         ),
     )
     parser.add_argument(
