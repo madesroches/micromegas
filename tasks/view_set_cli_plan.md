@@ -255,6 +255,8 @@ with creates, updates, or drops still queued exits 0, matching `screens.py:cmd_p
 fail on drift reads `plan`'s output — the `Plan: N to create, N to update, N to drop, N
 unchanged.` summary line, or `list --format json`'s per-name `status` column (§7) — rather than
 the exit status.
+A later `--detailed-exitcode` flag could offer terraform's convention (0 none / 1 error / 2
+pending) for jobs that would rather gate on status; not in scope here.
 
 Rendering `server_only` as drops is each command's decision, not `compute_plan`'s: both `cmd_plan`
 and `cmd_apply` compute `drops = [n for n in server_only if n not in protected_names] if (prune and
