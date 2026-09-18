@@ -324,8 +324,10 @@ best-effort diagnostic, not a startup precondition.
    and its "Admin mode never turns…" paragraph (`:572-580`) — and its four inline admin-pre-check
    references (`:591-592`, `:662-667`, `:675-681`, `:696-701`); rewrite `IngestionKeyError`'s enum
    doc (`:99-106`) and its `Forbidden` variant doc (`:118-122`).
-5. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
-   in `list_keys`; add `LIST_KEYS_VISIBILITY_SQL`, compose it into both `list_keys` branches.
+5. `audience_grants.rs`: make `caller_identity` `pub(crate)`. `ingestion_keys.rs`: add
+   `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser` in `list_keys`; add
+   `LIST_KEYS_VISIBILITY_SQL`, compose it into both `list_keys` branches, calling
+   `audience_grants::caller_identity` for `$1`.
 6. `ingestion_keys.rs`: add `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`
    in `revoke_key`; add the authority predicate to `revoke_key`'s `UPDATE` plus the 404/403/404
    disambiguation.
@@ -535,7 +537,10 @@ guard even though the tier is coarse:
 - `revoke_key`'s authority predicate is hoisted into its own `pub const` (alongside
   `LIST_KEYS_VISIBILITY_SQL`/`CLAIM_COUNT_SQL`), and that constant — not the module source at
   large, since `CLAIM_COUNT_SQL` already contains the substring `axis = 'mint'` — carries
-  `axis = 'mint'` and the `created_by` arm
+  `axis = 'mint'` and the `created_by` arm; `revoke_key`'s `UPDATE` references that constant, and
+  the un-predicated `UPDATE ingestion_api_keys` shape (unaliased, with a bare `WHERE key_id = $1`
+  and no authority clause) no longer occurs anywhere in the module's source — mirroring the
+  `list_keys` guard above
 - `import_key` calls `authorize_mint`
 
 **Unit, no DB — route rejections on `lazy_pool()`.** The existing 403/400/503 tests
