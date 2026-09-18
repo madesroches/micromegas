@@ -187,11 +187,11 @@ fn resolve_audience_falls_back_to_the_knob_when_no_explicit_value() {
     assert_eq!(resolved, "knob-audience");
 }
 
-/// The deployment default is `public` unless configured, on both routes: there is no
+/// The deployment default is `public` unless configured, on the mint route: there is no
 /// "neither explicit nor knob" case left to fail, so the only 400 this function still raises is
 /// for a malformed *explicit* audience.
 #[test]
-fn resolve_audience_falls_back_to_public_by_default_on_either_route() {
+fn resolve_audience_falls_back_to_public_by_default() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: PUBLIC_AUDIENCE.to_string(),

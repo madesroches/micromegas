@@ -123,11 +123,10 @@ remains the one route here a non-admin caller can reach at all.
 optional `"audience"`) → **201** `{"key_id","name","created_at","key"}` (plus
 `"audience"` for ingestion). `key` is the cleartext key, returned **exactly
 once** — never logged, never retrievable afterwards. `mmk_` marks the key as
-a Micromegas secret for scanners; validation hashes the whole string.
-**400** if `name` is empty or
-exceeds 255 bytes; for ingestion, also **400** if an explicit `audience` is
-invalid — an omitted one resolves to the deployment default (see [What
-audience does a key carry](#what-audience-does-a-key-carry)).
+a Micromegas secret for scanners; validation hashes the whole string. **400**
+if `name` is empty or exceeds 255 bytes; for ingestion, also **400** if an
+explicit `audience` is invalid — an omitted one resolves to the deployment
+default (see [What audience does a key carry](#what-audience-does-a-key-carry)).
 
 **List** (`GET .../{table}-api-keys?limit=&offset=&include_revoked=`) —
 **200**, newest first. `limit` defaults to `100`, clamps at `500`, and is

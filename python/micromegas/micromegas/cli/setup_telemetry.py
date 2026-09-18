@@ -35,8 +35,6 @@ from micromegas.cli.version import add_version_argument
 from micromegas.cli.web_auth import resolve_web_auth
 from micromegas.web_client import WebClient
 
-__all__ = ["make_client", "main"]
-
 
 def build_auth_provider(args, parser):
     """Delegates to `web_auth.resolve_web_auth`, discarding its diagnostic --

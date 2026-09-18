@@ -709,11 +709,11 @@ print(f"Retired {result['partitions_retired'].sum()} partitions")
 
 - **`mint_ingestion_api_key(name, audience=None)`** — `POST {base_path}/api/ingestion-api-keys`.
   Mints a fresh key, generated server-side. On a `409` with `{"code": "CLAIM_CONTENDED"}` —
-  transient advisory-lock contention
-  with another concurrent claim of the same brand-new audience, not a denial — retries the same
-  request exactly once before raising; any other non-OK status (including a second
-  `CLAIM_CONTENDED`) raises `RuntimeError` the same way every other `WebClient` method does.
-  Returns the mint response dict, including the one-time cleartext `key`.
+  transient advisory-lock contention with another concurrent claim of the same brand-new
+  audience, not a denial — retries the same request exactly once before raising; any other
+  non-OK status (including a second `CLAIM_CONTENDED`) raises `RuntimeError` the same way every
+  other `WebClient` method does. Returns the mint response dict, including the one-time
+  cleartext `key`.
 - **`my_audiences()`** — `GET {base_path}/api/audience-grants/my-audiences`. Caller-scoped, no
   admin access required. Returns
   `{"is_admin", "audiences", "mint_prefix", "email", "held_pairs"}` — the audiences whose `mint`

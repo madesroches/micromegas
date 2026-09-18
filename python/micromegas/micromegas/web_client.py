@@ -222,7 +222,7 @@ class WebClient:
         response reports the pre-existing row's own fields when the grant
         already existed (the server answers `200` in that case, `201` for a
         fresh create -- `WebClient` doesn't surface the status code itself,
-        only the body, matching every other create/import method here).
+        only the body, matching every other create method here).
         """
         resp = self.session.post(
             self._api_url("audience-grants"),
