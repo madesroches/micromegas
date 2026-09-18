@@ -3,9 +3,9 @@
 `analytics-web-srv` emits one structured JSON log line for every attempted mutation of the ABAC
 control plane -- creating or deleting an audience grant, creating or deleting a group, adding or
 removing a group member, and claiming a brand-new audience through self-service mint -- under the
-dedicated `control_plane_audit` log target. One record is emitted per attempt, whether it was
-allowed or denied, so a rejected mutation is just as visible as a successful one: unlike a plain
-`info!` line, a record exists even when the request never reached the database.
+dedicated `control_plane_audit` log target. A record is emitted for every attempt that reaches a
+grant/group gate or handler, whether it was allowed or denied, so a rejected mutation is just as
+visible as a successful one -- a record exists even when the request never reached the database.
 
 This is the access-audit trail for [grants](authorization.md#the-grant-store) and
 [groups](groups.md) administration -- the tables themselves only tell you the *current* state;
@@ -14,9 +14,7 @@ this log tells you who changed it, when, and whether the attempt succeeded.
 ## Best-effort, like every other log line
 
 The record rides the same tracing sink every other log line does: fire-and-forget, and shed
-under load like any other event. It is not a durable, guaranteed-delivery audit trail -- but it
-is a large improvement over the free-text lines it replaced, which recorded nothing at all for a
-denied mutation.
+under load like any other event. It is not a durable, guaranteed-delivery audit trail.
 
 ## Querying the audit log
 
@@ -104,6 +102,10 @@ ORDER BY time DESC;
 
 ## Fields
 
+Every caller-supplied field (`audience`, `axis`, `selector`, `group`, `member`, `reason`) is
+truncated to 255 bytes with a trailing `...` marker if it's longer; a value ending in `...` may
+be truncated rather than genuine data, and an equality filter on such a value can silently miss.
+
 | Field | Type | Present | Description |
 |-------|------|---------|--------------|
 | `actor` | string | always | Caller email, else subject, else `"unauthenticated"` when no identity was available at all (a missing/misconfigured auth extension -- normally unreachable) |
@@ -127,10 +129,11 @@ ORDER BY time DESC;
   to report -- only `actor`, `action`, `outcome`, and `client_ip`. The generic per-request
   observability log line records the method and URI at the same instant, so the two can be
   correlated by timestamp if the full request shape is needed.
-- **The free-text lines these records replace are gone.** Before this record existed, a
-  successful grant/group mutation logged a one-off `info!` line with no fixed target, and a
-  denied mutation logged nothing at all. Anything that used to `grep` those lines should switch
-  to querying `control_plane_audit` instead.
+- **Some denied attempts emit no record at all.** A self-service mint request rejected by the
+  `MICROMEGAS_SELF_SERVICE_MINT` gate, and any grant/group request rejected by body or query
+  deserialization (malformed JSON, an unknown field, a missing query parameter) before it reaches
+  a gate or handler, produce no `control_plane_audit` record. The generic per-request log line is
+  the only correlation point for that traffic.
 - **This is a durability-agnostic write-adjacent log, not a transactional record.** It is emitted
   from the same request that performs the write, but the log emission itself and the database
   write are two independent fire-and-forget operations -- an emitted `allowed` record is strong
