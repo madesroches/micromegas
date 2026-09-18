@@ -61,6 +61,18 @@ it runs; a failed statement is reported and counted, without aborting the rest �
 idempotent, so re-running `apply` is the remedy once the underlying issue (a validation error, an
 order-sensitive dependency) is fixed.
 
+### Exit codes
+
+`plan` and `apply` exit non-zero (aside from pending changes, which is exit 0 as noted above) when:
+
+- a local `.sql` file is skipped — it failed to decode, its header didn't parse, or its declared
+  name didn't match its filename stem,
+- a name passed as an argument isn't found either locally or on the server,
+- `--prune` is passed against a directory with zero readable `.sql` files, or
+- (`apply` only) any DDL statement fails.
+
+`list` and `pull` always exit 0 — they're inventory/sync commands, not CI gates.
+
 ### `pull`
 
 Writes the server's current definition into `<name>.sql` for each name, refreshing what's already
@@ -137,4 +149,7 @@ micromegas-views plan --profile ci --prune
 ```
 
 using a profile with `api_key_file` set to an **admin** key — a non-admin key fails on the first
-round trip, since even `plan` reads `list_view_set_definitions()`.
+round trip, since even `plan` reads `list_view_set_definitions()`. `plan`'s exit code alone gates
+this job on the non-zero cases listed under "Exit codes" above (a skipped file, an unknown name,
+`--prune` against an empty directory) — not on pending drift, which still needs a check on its
+output.

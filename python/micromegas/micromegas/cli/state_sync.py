@@ -25,7 +25,11 @@ def unified_diff(before_lines, after_lines, from_label, to_label, use_color):
     result = []
     for line in diff_lines:
         if use_color:
-            if line.startswith("---") or line.startswith("+++"):
+            # Exact prefixes, not `line.startswith("---")`: `difflib.unified_diff` always
+            # puts a space after the marker on its two header lines, so this doesn't
+            # misfire on a removed SQL line like "-- old comment" (which becomes
+            # "--- old comment" once the diff's own leading "-" is prepended).
+            if line[:4] in ("--- ", "+++ "):
                 line = f"\033[1m{line}\033[0m"
             elif line.startswith("@@"):
                 line = f"\033[36m{line}\033[0m"

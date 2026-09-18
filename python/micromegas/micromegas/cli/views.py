@@ -91,10 +91,10 @@ def _rewrite_header(text, replacement):
 
 
 def canonical_ddl(text):
-    """The canonical form both sides of the plan comparison are reduced to (see plan design
-    doc §3): CRLF/CR -> LF, strip leading/trailing whitespace, drop a single trailing `;`
-    and re-strip, then collapse the leading keyword run to exactly `CREATE MATERIALIZED
-    VIEW`. Interior whitespace elsewhere is deliberately left untouched.
+    """The canonical form both sides of the plan comparison are reduced to: CRLF/CR -> LF,
+    strip leading/trailing whitespace, drop a single trailing `;` and re-strip, then
+    collapse the leading keyword run to exactly `CREATE MATERIALIZED VIEW`. Interior
+    whitespace elsewhere is deliberately left untouched.
     """
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if text.endswith(";"):
@@ -306,8 +306,11 @@ def _refuse_prune_on_empty_dir(definitions, directory, prune):
 # ---------------------------------------------------------------------------
 
 
-def cmd_plan(args):
-    """Preview what apply would change."""
+def _gather(args):
+    """Shared `plan`/`apply` preamble: client construction, local scan, the
+    empty-directory `--prune` guard, the server-state read, `names` normalization, the
+    unknown-name check, `compute_plan`, and `_compute_drops`.
+    """
     client = make_client(args)
     local_scan = list_local_definitions(args.dir)
     definitions, protected_names = local_scan
@@ -323,6 +326,33 @@ def cmd_plan(args):
         server_state, local_scan, names
     )
     drops = _compute_drops(server_only, protected_names, names, args.prune)
+
+    return (
+        client,
+        definitions,
+        protected_names,
+        creates,
+        updates,
+        unchanged,
+        server_only,
+        drops,
+        unknown,
+    )
+
+
+def cmd_plan(args):
+    """Preview what apply would change."""
+    (
+        _client,
+        _definitions,
+        protected_names,
+        creates,
+        updates,
+        unchanged,
+        server_only,
+        drops,
+        unknown,
+    ) = _gather(args)
 
     colorize = use_color(args)
     print(format_plan(creates, updates, unchanged, server_only, drops, colorize))
@@ -333,21 +363,17 @@ def cmd_plan(args):
 
 def cmd_apply(args):
     """Apply local view set definitions to the server."""
-    client = make_client(args)
-    local_scan = list_local_definitions(args.dir)
-    definitions, protected_names = local_scan
-    _refuse_prune_on_empty_dir(definitions, args.dir, args.prune)
-
-    server_state = read_server_state(client)
-    server_names = set(server_state["view_set_name"])
-    names = args.names or None
-
-    unknown = _check_unknown_names(names, definitions, server_names) if names else False
-
-    creates, updates, unchanged, server_only = compute_plan(
-        server_state, local_scan, names
-    )
-    drops = _compute_drops(server_only, protected_names, names, args.prune)
+    (
+        client,
+        definitions,
+        protected_names,
+        creates,
+        updates,
+        unchanged,
+        server_only,
+        drops,
+        unknown,
+    ) = _gather(args)
 
     if not creates and not updates and not drops:
         print(f"No changes. {len(unchanged)} unchanged.")
@@ -381,7 +407,7 @@ def cmd_apply(args):
             return False
 
     # All creates and updates run first, then all drops, so an update that removes a
-    # dependency on a to-be-pruned view lands before the drop -- see design doc §4.
+    # dependency on a to-be-pruned view lands before the drop.
     for name in sorted(creates):
         if run_statement(name, canonical_ddl(definitions[name].text)):
             created += 1
@@ -497,12 +523,18 @@ def cmd_list(args):
         left_on="name",
         right_on="view_set_name",
     ).drop(columns="view_set_name")
+    # Nullable Int64 (rather than the plain int32 the query returns) keeps a create row's
+    # missing update_group an integer <NA> instead of upcasting the whole column to
+    # float64, which would render an existing row's update_group as e.g. 4000.0.
+    merged["update_group"] = merged["update_group"].astype("Int64")
     merged = merged.sort_values("name").reset_index(drop=True)
 
     if args.format == "json":
         print(merged.to_json(orient="records", indent=2))
     else:
-        print(tabulate(merged, headers="keys", showindex=False, tablefmt="simple"))
+        # For display only: render missing cells as empty rather than "<NA>"/"NaT"/"nan".
+        display = merged.astype(object).where(merged.notna(), "")
+        print(tabulate(display, headers="keys", showindex=False, tablefmt="simple"))
 
 
 def cmd_show(args):

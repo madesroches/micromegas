@@ -775,6 +775,38 @@ class TestCmdList:
             "bar": "server-only",
         }
 
+    def test_create_row_does_not_upcast_update_group_to_float(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # "new" is local-only (a create row): the left merge leaves its update_group null,
+        # which must not upcast the whole int column to float64 and turn "foo"'s
+        # update_group into e.g. 4000.0.
+        (tmp_path / "foo.sql").write_text(
+            "CREATE MATERIALIZED VIEW foo WITH (x=1)\n", encoding="utf-8"
+        )
+        (tmp_path / "new.sql").write_text(
+            "CREATE MATERIALIZED VIEW new WITH (x=1)\n", encoding="utf-8"
+        )
+        client = FakeClient(
+            server_rows=[
+                _server_row(
+                    "foo", "CREATE MATERIALIZED VIEW foo WITH (x=1)", update_group=4000
+                )
+            ]
+        )
+        monkeypatch.setattr(views_module, "make_client", lambda args: client)
+
+        cmd_list(make_args(dir=str(tmp_path), format="table"))
+        table_out = capsys.readouterr().out
+        assert "4000" in table_out
+        assert "4000.0" not in table_out
+
+        cmd_list(make_args(dir=str(tmp_path), format="json"))
+        rows = {row["name"]: row for row in json.loads(capsys.readouterr().out)}
+        assert rows["foo"]["update_group"] == 4000
+        assert isinstance(rows["foo"]["update_group"], int)
+        assert rows["new"]["update_group"] is None
+
     def test_skipped_local_file_does_not_move_the_exit_code(
         self, tmp_path, monkeypatch, capsys
     ):
