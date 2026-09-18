@@ -46,16 +46,14 @@ restriction" — the backward-compatible default for every key that exists today
   `into_make_service_with_connect_info::<SocketAddr>()` (`rust/public/src/servers/ingestion.rs:214`)
   does the same for `auth_middleware`.
 
-### Admin routes and CLI that mint/import keys
+### Admin routes that mint keys
 
 - `rust/analytics-web-srv/src/ingestion_keys.rs` and `analytics_keys.rs` are near-identical (by
   design — see that module's own "Duplication, accepted" doc comment) REST surfaces:
-  `mint_key`, `list_keys`, `revoke_key`, `import_key`, each with its own request/response struct
+  `mint_key`, `list_keys`, `revoke_key`, each with its own request/response struct
   and a single `INSERT`/`UPDATE`.
-- `python/micromegas/micromegas/cli/import_keys.py` reads a legacy JSON keyring (optionally
-  carrying a per-entry `"audience"` field for `--table ingestion`) and calls
-  `WebClient.import_ingestion_api_key`/`import_analytics_api_key`
-  (`python/micromegas/micromegas/web_client.py:216`, `:376`).
+- There is no import path: every key is generated server-side by its mint route, so an allowlist
+  can only arrive at mint time or through the new `PATCH` route below.
 - The analytics-web-app (`analytics-web-app/src/lib/api-keys-shared.ts`,
   `ingestion-api-keys-api.ts`, `MintIngestionKeyDialog.tsx`, `IngestionApiKeysPage.tsx`, and the
   analytics counterparts) is the browser admin UI for the same routes.
@@ -254,11 +252,10 @@ before being handed to `IpAllowlist::parse`.
 
 ### 6. Admin routes — `ingestion_keys.rs` / `analytics_keys.rs`
 
-Each of `MintRequest`/`ImportRequest` gains `allowed_cidrs: Option<Vec<String>>` (`#[serde(default)]`,
-additive field, existing callers omitting it keep working). Both `mint_key` and `import_key`
-validate with `IpAllowlist::parse(...)` up front (same place `validate_name`/`resolve_audience`
-already run) and return the existing `BadRequest` variant on a malformed entry — no new error
-variant needed. The validated (but not re-normalized — store what the caller wrote, same as
+`MintRequest` gains `allowed_cidrs: Option<Vec<String>>` (`#[serde(default)]`, additive field,
+existing callers omitting it keep working). `mint_key` validates with `IpAllowlist::parse(...)`
+up front (same place `validate_name`/`resolve_audience` already run) and returns the existing
+`BadRequest` variant on a malformed entry — no new error variant needed. The validated (but not re-normalized — store what the caller wrote, same as
 `audience`'s literal-string convention) list is bound into the `INSERT` alongside the existing
 columns, in every branch that currently issues one (`insert_key`, both `INSERT`s inside
 `try_claim_and_mint`).
@@ -277,21 +274,8 @@ Body: { "allowed_cidrs": [...] }   // [] clears the restriction
 
 `UPDATE {table} SET allowed_cidrs = $2 WHERE key_id = $1 RETURNING allowed_cidrs`, `NotFound` on
 no row — same shape as `revoke_key`. This is the only way to change an existing key's allowlist
-without revoking and re-minting it, and is what closes the "keys can be created/updated with an
-allowlist" half of the issue's rough idea that mint/import alone don't cover.
-
-### 7. CLI — `python/micromegas/micromegas/cli/import_keys.py`
-
-- `read_keyring` accepts an optional per-entry `"allowed_ips"` array (same shape/validation style
-  as the existing `"audience"` field — a list-of-strings check, no CIDR parsing client-side; the
-  server is the single source of truth for whether a CIDR string is valid).
-- New `--allowed-ips` CLI flag (`nargs="+"`), same precedence as `--audience`: a per-entry value
-  wins, the flag is the fallback, neither given means unrestricted (omit the field, server default
-  applies — which for a *new* row is "no restriction", not "inherit"). Valid for both `--table`
-  values (unlike `--audience`, which analytics rows don't carry).
-- `import_one`/`run_import` thread the resolved list through to
-  `WebClient.import_ingestion_api_key`/`import_analytics_api_key`, which both gain an
-  `allowed_ips=None` keyword parameter appended last (additive, existing call sites unaffected).
+without revoking and re-minting it, and is what closes the "keys can be updated with an
+allowlist" half of the issue's rough idea that mint alone doesn't cover.
 
 ## Mockups
 
@@ -327,19 +311,16 @@ scope.
    cache, and check the new column.
 
 ### Phase 3 — Admin HTTP routes
-1. `ingestion_keys.rs`: `MintRequest`/`ImportRequest`/`KeyListEntry` fields, validation, `INSERT`
+1. `ingestion_keys.rs`: `MintRequest`/`KeyListEntry` fields, validation, `INSERT`
    binds (`insert_key`, both `try_claim_and_mint` inserts), new `PATCH .../{key_id}/allowlist`
    route + handler.
 2. `analytics_keys.rs`: the same set of changes, mirroring `ingestion_keys.rs` (per that module's
    own "duplication, accepted" precedent — no shared helper introduced).
 
-### Phase 4 — CLI and Python client
-1. `python/micromegas/micromegas/web_client.py`: `allowed_ips` parameter on
-   `import_ingestion_api_key`/`import_analytics_api_key`, plus new
+### Phase 4 — Python client
+1. `python/micromegas/micromegas/web_client.py`: new
    `set_ingestion_api_key_allowlist`/`set_analytics_api_key_allowlist` methods wrapping the new
    `PATCH` routes.
-2. `python/micromegas/micromegas/cli/import_keys.py`: `"allowed_ips"` keyring field, `--allowed-ips`
-   flag, threaded through `read_keyright`/`import_one`/`run_import`.
 
 ### Phase 5 — analytics-web-app surfacing (see Open Questions on scope)
 1. `api-keys-shared.ts`: `allowed_cidrs?: string[]` on `ApiKeyListEntry`; `mint()` gains an
@@ -362,7 +343,7 @@ scope.
 - `rust/ingestion/src/sql_migration.rs` — migration v11
 - `rust/analytics-web-srv/src/ingestion_keys.rs`, `analytics_keys.rs` — request/response fields, new
   `PATCH` route
-- `python/micromegas/micromegas/web_client.py`, `cli/import_keys.py`
+- `python/micromegas/micromegas/web_client.py`
 - `rust/auth/tests/api_key_tests.rs`, `db_api_key_tests.rs`, new `client_ip_tests.rs`,
   `ip_allowlist_tests.rs`, and every other test constructing `HttpRequestParts`/`GrpcRequestParts`
 - (Phase 5, if in scope) `analytics-web-app/src/lib/api-keys-shared.ts`, `ingestion-api-keys-api.ts`,
@@ -402,14 +383,17 @@ scope.
 
 ## Decisions
 
-(none yet — open questions below are unresolved)
+- The API-key import path (the `micromegas-import-keys` CLI and both
+  `POST .../{table}-api-keys/import` routes) is removed in a separate change, so this plan carries
+  no allowlist plumbing for it. That removal must land first — mint and the new `PATCH` route are
+  then the only two ways an allowlist reaches a row.
 
 ## Documentation
 
 - `rust/auth/src/lib.rs`'s module-level examples don't construct `HttpRequestParts`/`GrpcRequestParts`
   with every field spelled out in a way that would go stale, but double check after Phase 1 that
   the doctested examples still compile with the new `client_ip` field.
-- Any admin runbook/mkdocs page documenting `mint`/`import`/`revoke` for the API-key routes (check
+- Any admin runbook/mkdocs page documenting `mint`/`revoke` for the API-key routes (check
   `mkdocs/` for an existing page — grep for `ingestion-api-keys` or `analytics_api_keys`) needs the
   new `allowed_cidrs` field and the new `PATCH .../allowlist` route added.
 - `CHANGELOG.md`: new column + new provider-side behavior is additive at the SQL/API layer (no
@@ -442,13 +426,12 @@ Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a d
   (both by constructing the scenario directly against a `DbApiKeyAuthProvider` backed by a lazy,
   never-queried pool wherever the existing tests already use that pattern — e.g.
   `missing_bearer_token_fails_before_any_db_access`).
-- `rust/analytics-web-srv` route tests (wherever `ingestion_keys.rs`/`analytics_keys.rs` are
-  already tested — check for an existing `mint_key`/`import_key` test module): a mint/import with
-  a malformed `allowed_cidrs` entry returns `400`; a well-formed one round-trips through
-  `list_keys`; the new `PATCH .../allowlist` route updates and clears the column, and 404s on an
-  unknown `key_id`.
-- Python: `python/micromegas/tests/` — `read_keyring` accepts/rejects `"allowed_ips"` shapes the
-  same way it already does for `"audience"`; `import_one` forwards the resolved list.
+- `rust/analytics-web-srv` route tests (`ingestion_keys_tests.rs`/`analytics_keys_tests.rs`): a
+  mint with a malformed `allowed_cidrs` entry returns `400`; a well-formed one round-trips
+  through `list_keys`; the new `PATCH .../allowlist` route updates and clears the column, and
+  404s on an unknown `key_id`.
+- Python: `python/micromegas/tests/test_web_client.py` — the two new `set_*_allowlist` methods
+  build the expected `PATCH` URL and body, following `TestAudienceGrants`'s style.
 
 ## Manual Verification
 
@@ -468,17 +451,11 @@ Postgres; `DbApiKeyAuthProvider`'s existing `#[ignore]`d live section is for a d
 ## Open Questions
 
 1. **Is the analytics-web-app UI (Phase 5) in scope for this PR, or a follow-up?** The GitHub
-   issue's "Rough idea" only calls out admin *routes* and `import_keys.py`; the browser UI is not
-   mentioned. Recommend shipping Phases 1-4 first (the full backend + CLI surface, independently
+   issue's "Rough idea" only calls out admin *routes*; the browser UI is not
+   mentioned. Recommend shipping Phases 1-4 first (the full backend + client surface, independently
    useful and testable) and opening a small follow-up issue for the UI once the API shape is
    settled — but this plan includes Phase 5 in case the intent was to cover it in one PR.
-2. **Should `allowed_cidrs` be inheritable/copyable when importing a key that already has one in
-   the source keyring's JSON, but the target row already exists (the `imported: false` path)?**
-   `audience` is immutable on that path (`import_key`'s doc comment: "the binding is immutable, so
-   an import never rewrites it"). Recommend the same rule for `allowed_cidrs` — an import never
-   changes an existing row's allowlist, only the new `PATCH` route does — for consistency, but
-   confirm this matches intent before implementing.
-3. **IPv6-mapped IPv4 addresses (`::ffff:a.b.c.d`) arriving via a dual-stack listener**: should an
+2. **IPv6-mapped IPv4 addresses (`::ffff:a.b.c.d`) arriving via a dual-stack listener**: should an
    allowlist entry of `a.b.c.d/32` match a client IP that arrived as its IPv6-mapped form?
    `ipnetwork`'s `IpNetwork::contains` does not normalize this by default. Needs a decision (and
    a unit test either way) once the target deployment's listener configuration (dual-stack or
