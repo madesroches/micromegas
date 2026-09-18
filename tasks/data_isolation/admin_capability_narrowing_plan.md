@@ -24,12 +24,16 @@ admin. What changes is that every admin data access leaves a trace in `audience_
 The ordinary query path has no admin bypass (`audience_based_access_control_plan.md` §5, "No
 human-admin query-path bypass"): `is_admin` never maps to `ReadScope::All`, and an admin's
 FlightSQL session is audience-filtered like any other caller's. `CallerContext.is_admin`
-(`rust/analytics/src/lakehouse/read_scope.rs:54`) is threaded at three call sites, not one: the
+(`rust/analytics/src/lakehouse/read_scope.rs:54`) is threaded at four call sites, not one: the
 mutating-function registration gate (an integrity control), `list_audience_grants`'s
-`GrantVisibility::All` branch, and `authorize_view_ddl`'s gate on `CREATE/DROP MATERIALIZED VIEW`
-(`rust/public/src/servers/view_ddl.rs:49-56`) — the last of which *is* a query-path bypass: a DDL
-view's queries are planned and materialized under `CallerContext::maintenance()`
-(`ReadScope::All`), so an author sees every audience regardless of their own read scope.
+`GrantVisibility::All` branch, `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm
+(`rust/analytics/src/lakehouse/audience_guard.rs:463-469`), and `authorize_view_ddl`'s gate on
+`CREATE/DROP MATERIALIZED VIEW` (`rust/public/src/servers/view_ddl.rs:49-56`) — the last two of
+which *are* query-path bypasses: `global_rows_visible` lets an audience-scoped admin holding no
+grant see `'global'` (multi-audience) partition metadata through `list_partitions()`
+(`list_partitions_table_function.rs:261`), and a DDL view's queries are planned and materialized
+under `CallerContext::maintenance()` (`ReadScope::All`), so an author sees every audience
+regardless of their own read scope.
 
 ### The two bundles
 
@@ -55,6 +59,7 @@ view's queries are planned and materialized under `CallerContext::maintenance()`
 | `ingestion_keys.rs:886` (`revoke_key`) | revokes any key in any audience |
 | `ingestion_keys.rs:964` (`import_key`) | imports a key bound to any audience |
 | `audience_grants.rs:881` (`my_audiences`) | `held_pairs` forced empty, because the client uses `isAdmin` as a blanket "you may mint/share here" |
+| `rust/analytics/src/lakehouse/audience_guard.rs:463-469` (`AudienceGuard::global_rows_visible`) | an audience-scoped admin with no grant sees `'global'` partition rows via `list_partitions()`, purely on `lakehouse_admin` |
 | `rust/public/src/servers/view_ddl.rs:49` (`authorize_view_ddl`) | gates `CREATE/DROP MATERIALIZED VIEW`; the resulting view's queries then run under `CallerContext::maintenance()` (`ReadScope::All`) — a read bypass, strictly stronger than any row above |
 
 Quota exemptions (`ingestion_keys.rs:350` `max_keys_per_caller`, `:733` `max_claims_per_caller`,
@@ -182,7 +187,7 @@ the case they were written to exempt.
 Keep the `AdminUser` extractor — this plan narrows admin, it does not open the route to
 non-admins. Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside it (the
 `AuthContext` extension is already present on protected routes, and the tests'
-`build_handler_router_with_user` already layers it): `$4` below needs
+`build_handler_router_with_user` already layers it): `$2` below needs
 `caller_selectors(&AuthContext)`'s group memberships, which `AdminUser`'s `ValidatedUser` does not
 carry. Narrow the query to keys the caller has authority over, as a named constant so the
 predicate is assertable without a database:
@@ -193,24 +198,31 @@ predicate is assertable without a database:
 /// `caller_holds_pair`'s delegation rule), so `public`-bound keys stay visible to every caller —
 /// `public` is readable by everyone by an explicit seeded row, not by an implicit bypass.
 ///
+/// Placeholder-relative, not absolute: `$1` is the caller's identity and `$2` is their
+/// selectors, so composability requires every query using this fragment to bind identity and
+/// selectors first, as its own `$1`/`$2`, before any of its own parameters.
+///
 /// `pub` so the shape a live database would otherwise be needed to observe can be asserted from
 /// the test crate.
 pub const LIST_KEYS_VISIBILITY_SQL: &str =
-    "(k.created_by = $3 OR EXISTS (SELECT 1 FROM audience_grants g \
-      WHERE g.audience = k.audience AND g.selector = ANY($4)))";
+    "(k.created_by = $1 OR EXISTS (SELECT 1 FROM audience_grants g \
+      WHERE g.audience = k.audience AND g.selector = ANY($2)))";
 ```
 
-Both branches (`include_revoked` on/off) compose it into their `WHERE`. `$3` is the caller's
-email-else-subject identity, via the same inline expression `revoke_key`/`import_key` already use
-for `created_by`/`revoked_by` (not the private `caller_identity` helpers in `audience_grants.rs`
-or `groups.rs`, which take incompatible types and aren't reachable from this module); `$4` is
-`caller_selectors(&caller)`.
+Both branches (`include_revoked` on/off) compose it into their `WHERE`, binding identity and
+selectors first — `$1` is the caller's email-else-subject identity, via the same inline
+expression `revoke_key`/`import_key` already use for `created_by`/`revoked_by` (not the private
+`caller_identity` helpers in `audience_grants.rs` or `groups.rs`, which take incompatible types
+and aren't reachable from this module); `$2` is `caller_selectors(&caller)`. `list_keys` then
+takes `limit`/`offset` as `$3`/`$4`.
 
 ### 6. `revoke_key`: mint authority on the key's audience
 
 Additionally extract `AuthenticatedUser(caller): AuthenticatedUser` alongside `AdminUser`, for the
-same reason as `list_keys`: `$4` below needs `caller_selectors(&AuthContext)`. `$3` stays the
-existing email-else-subject expression this handler already computes for `revoked_by`.
+same reason as `list_keys`: `$2` below needs `caller_selectors(&AuthContext)`. `$1` stays the
+existing email-else-subject expression this handler already computes for `revoked_by`, bound
+again as `$4` — `LIST_KEYS_VISIBILITY_SQL`'s identity placeholder and this `UPDATE`'s own
+`revoked_by` value are the same expression, just needed in two places in the query.
 
 Fold the authority into the existing single idempotent `UPDATE`, so a repeat call still preserves
 the original `revoked_at`:
@@ -218,19 +230,20 @@ the original `revoked_at`:
 ```sql
 UPDATE ingestion_api_keys k
 SET revoked_at = COALESCE(revoked_at, now()),
-    revoked_by = COALESCE(revoked_by, $2)
-WHERE k.key_id = $1
-  AND (k.created_by = $3
+    revoked_by = COALESCE(revoked_by, $4)
+WHERE k.key_id = $3
+  AND (k.created_by = $1
        OR EXISTS (SELECT 1 FROM audience_grants g
                   WHERE g.audience = k.audience AND g.axis = 'mint'
-                    AND g.selector = ANY($4)))
+                    AND g.selector = ANY($2)))
 RETURNING revoked_at
 ```
 
 On zero rows affected, disambiguate the way `delete_grant` already does, so the route is not an
 existence oracle for keys in audiences the caller cannot see:
 
-1. Not visible per `LIST_KEYS_VISIBILITY_SQL` → `404`.
+1. Not visible per `LIST_KEYS_VISIBILITY_SQL` (bound with `key_id` as its own `$3`, following
+   identity/selectors as `$1`/`$2`) → `404`.
 2. Visible but no `mint` authority → `403` ("you hold no mint grant on this key's audience").
 3. No such `key_id` → `404`.
 
@@ -246,7 +259,8 @@ lazy-claim path — see Decisions.
 `audience_grants.rs:881`. Drop the `if caller.is_admin() { Vec::new() }` shortcut and run the
 held-pairs query for every caller. `is_admin` stays on the response — the client still needs it
 for the grant-administration affordances (Share anywhere, delete any row), which are unchanged.
-`held_pairs` becomes what the client reads for the *mint* affordance.
+`held_pairs` is still needed populated for admins, but for the CLI's `personal` filter (step 12),
+not the Mint button — the mint affordance reads `audiences`, which already honors `*`.
 
 ### 9. Startup warning for a custom default audience
 
@@ -307,8 +321,9 @@ themselves access in order to read the table that records grants.
     special-casing (`:70-71`, `:158`, `:179`) — every caller gets the `mint_prefix` composition
     and the claim hint, since every caller now takes the same server path.
 11. `analytics-web-app/src/routes/AudienceAccessPage.tsx`: the Mint button (`:793`) switches from
-    `!isAdmin` to `heldPairs.has(`${audience}:mint`)`; the Share/delete checks (`:424`, `:430`,
-    `:498`) keep `isAdmin`.
+    `!isAdmin && showMintButton` to `(me?.audiences ?? []).includes(group.audience) &&
+    showMintButton` — honoring `*` the same way the server's mint rule does; the Share/delete
+    checks (`:424`, `:430`, `:498`) keep `isAdmin`.
 12. `python/micromegas/micromegas/cli/setup_telemetry.py`: delete the admin special-case
     `parser.error` (`:200-208`) so admins resolve through the shared `held_pairs` path; update
     `resolve_audience`'s docstring (`:154-162`).
@@ -385,6 +400,11 @@ notification path.
   materialized under `CallerContext::maintenance()` (`ReadScope::All`), so an author sees every
   audience regardless of their own read scope. Narrowing it to a per-audience grant is a separate
   change; left as-is here.
+- `AudienceGuard::global_rows_visible`'s `lakehouse_admin` arm
+  (`rust/analytics/src/lakehouse/audience_guard.rs:463-469`) is a third accepted carve-out: it
+  rides on the same `lakehouse_admin` boolean as the mutating-function registration gate, so a
+  caller who can already `retire_partitions`/`regenerate_partitions` a global file can also see
+  it — no new authority, no new knob. Left as-is here.
 - `analytics_keys.rs` is out of scope: analytics keys carry no audience binding, so there is no
   audience authority to scope them by.
 - Accepted behavior break: an admin can no longer mint into an existing audience they hold no
@@ -446,7 +466,7 @@ shape that would otherwise need a live database. Authorization predicates droppe
 fail silently — an over-broad list returns more rows, not an error — so they get an automated
 guard even though the tier is coarse:
 
-- `LIST_KEYS_VISIBILITY_SQL` contains `FROM audience_grants`, `k.created_by = $3`, and
+- `LIST_KEYS_VISIBILITY_SQL` contains `FROM audience_grants`, `k.created_by = $1`, and
   `g.audience = k.audience`
 - both `list_keys` branches reference `LIST_KEYS_VISIBILITY_SQL`, and the un-predicated
   `FROM ingestion_api_keys\n ORDER BY created_at DESC` shape no longer occurs anywhere in the
@@ -478,9 +498,9 @@ admin behavior; they must move with it:
   plane did *not* narrow.
 
 **Frontend (vitest).** `MintIngestionKeyDialog`: an admin now sees the prefix composition and the
-claim hint. `AudienceAccessPage`: the Mint button follows `held_pairs`, not `isAdmin`, while Share
-still follows `isAdmin`. `IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior, but their
-admin fixtures may need a `held_pairs` value.
+claim hint. `AudienceAccessPage`: the Mint button follows `me.audiences`, not `isAdmin`, while
+Share still follows `isAdmin`. `IngestionApiKeysPage`/`ApiKeysAdminPage`: unchanged behavior, but
+their admin fixtures may need a `held_pairs` value (for the CLI, not this page).
 
 **Python.** `setup_telemetry`'s `resolve_audience`: the admin branch is gone, so an admin with
 exactly one held mint audience resolves it silently, and an admin with none gets the
