@@ -887,11 +887,12 @@ struct SetAllowlistResponse {
 /// without revoking and re-minting it.
 async fn set_allowlist(
     Extension(state): Extension<IngestionKeysState>,
-    AdminUser(_user): AdminUser,
+    AdminUser(user): AdminUser,
     Path(key_id): Path<Uuid>,
     Json(body): Json<SetAllowlistRequest>,
 ) -> Result<Json<SetAllowlistResponse>, IngestionKeyError> {
     let pool = require_pool(&state)?;
+    let updated_by = user.email.clone().unwrap_or_else(|| user.subject.clone());
     IpAllowlist::parse(&body.allowed_cidrs)
         .map_err(|e| IngestionKeyError::BadRequest(format!("invalid allowed_cidrs: {e}")))?;
 
@@ -907,7 +908,9 @@ async fn set_allowlist(
     match row {
         Some(row) => {
             let allowed_cidrs: Vec<String> = row.try_get("allowed_cidrs")?;
-            info!("updated ingestion api key allowlist key_id={key_id}");
+            info!(
+                "updated ingestion api key allowlist key_id={key_id} updated_by={updated_by} allowed_cidrs={allowed_cidrs:?}"
+            );
             Ok(Json(SetAllowlistResponse { allowed_cidrs }))
         }
         None => Err(IngestionKeyError::NotFound),

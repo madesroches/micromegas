@@ -414,3 +414,147 @@ impl AuthProvider for DbApiKeyAuthProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! `KeyRow` and the `valid`/`unknown` caches are private, so the no-DB allowlist coverage
+    //! the plan called for lives here rather than in `tests/db_api_key_tests.rs` -- there is no
+    //! public seam from that integration-test crate to pre-populate a cache entry directly.
+    //! Mirrors that file's "no DB" pattern: a lazily-connected pool that is never actually
+    //! queried, since the cache is pre-populated and the loader closure never runs.
+
+    use super::*;
+    use crate::policy::PUBLIC_AUDIENCE;
+    use crate::types::{HttpRequestParts, RequestParts};
+    use micromegas_tracing::event::in_memory_sink::InMemorySink;
+    use micromegas_tracing::metrics::MetricsMsgQueueAny;
+    use micromegas_tracing::test_utils::init_in_memory_tracing;
+    use micromegas_transit::HeterogeneousQueue;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn unreachable_pool() -> PgPool {
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(50))
+            .connect_lazy("postgres://localhost/unused")
+            .expect("lazy pool creation is infallible")
+    }
+
+    fn test_config() -> DbApiKeyConfig {
+        DbApiKeyConfig {
+            cache_size: 100,
+            cache_ttl_secs: 60,
+            unknown_cache_ttl_secs: 10,
+            unknown_cache_size: 100,
+        }
+    }
+
+    fn bearer_parts(token: &str, client_ip: Option<IpAddr>) -> HttpRequestParts {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().expect("valid header"),
+        );
+        HttpRequestParts {
+            headers,
+            method: http::Method::GET,
+            uri: "/test".parse().expect("valid uri"),
+            client_ip,
+        }
+    }
+
+    fn count_integer_metric(sink: &InMemorySink, name: &str) -> u64 {
+        let state = sink.state.lock().expect("sink lock");
+        let mut count = 0u64;
+        for block in &state.metrics_blocks {
+            for evt in block.events.iter() {
+                match evt {
+                    MetricsMsgQueueAny::IntegerMetricEvent(e) if e.desc.name == name => count += 1,
+                    MetricsMsgQueueAny::TaggedIntegerMetricEvent(e) if e.desc.name == name => {
+                        count += 1
+                    }
+                    _ => {}
+                }
+            }
+        }
+        count
+    }
+
+    /// Pre-populates the `valid` cache with a canned `KeyRow` carrying a populated
+    /// `allowed_cidrs`-derived `IpAllowlist`, bypassing `try_get_with`'s loader (and therefore
+    /// the DB) entirely -- `validate_request` only ever reaches the DB on a cache miss.
+    async fn provider_with_cached_allowlisted_key(
+        token: &str,
+        allowed_cidrs: &[&str],
+    ) -> DbApiKeyAuthProvider {
+        let provider =
+            DbApiKeyAuthProvider::new(unreachable_pool(), ApiKeyTable::Ingestion, test_config());
+        let allowlist = IpAllowlist::parse(
+            &allowed_cidrs
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("valid CIDR");
+        provider
+            .valid
+            .insert(
+                hash_key(token),
+                Arc::new(KeyRow {
+                    key_id: uuid::Uuid::new_v4(),
+                    name: "allowlisted-test-key".to_string(),
+                    audience: Some(PUBLIC_AUDIENCE.to_string()),
+                    allowlist,
+                }),
+            )
+            .await;
+        provider
+    }
+
+    #[tokio::test]
+    async fn allowlisted_key_authenticates_from_in_range_ip_without_db_access() {
+        let token = "mmk_allowlist_in_range";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))));
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(result.is_ok(), "in-range IP must be permitted");
+    }
+
+    #[tokio::test]
+    async fn allowlisted_key_is_rejected_from_out_of_range_ip_without_db_access() {
+        let guard = init_in_memory_tracing();
+        let token = "mmk_allowlist_out_of_range";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(result.is_err(), "out-of-range IP must be rejected");
+
+        // Rejection on an allowlist mismatch is a distinct case from "no such live key" (which
+        // populates `unknown`) and from a DB outage (which increments the error metric) -- this
+        // is neither, so both must stay untouched.
+        assert!(
+            provider.unknown.get(&hash_key(token)).await.is_none(),
+            "an allowlist rejection must not poison the `unknown` cache for a key that exists"
+        );
+        micromegas_tracing::dispatch::flush_metrics_buffer();
+        assert_eq!(
+            count_integer_metric(&guard.sink, "db_api_key_error_count"),
+            0,
+            "an allowlist rejection is not a DB error and must not increment the error metric"
+        );
+    }
+
+    #[tokio::test]
+    async fn allowlisted_key_is_rejected_when_client_ip_is_unresolved() {
+        let token = "mmk_allowlist_no_ip";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, None);
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(
+            result.is_err(),
+            "an unresolved client IP must never satisfy a non-empty allowlist"
+        );
+    }
+}
