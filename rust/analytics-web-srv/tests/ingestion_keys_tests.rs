@@ -157,6 +157,15 @@ fn delete_request(uri: &str) -> Request<Body> {
         .expect("build request")
 }
 
+fn patch_request(uri: &str, body: &str) -> Request<Body> {
+    Request::builder()
+        .method("PATCH")
+        .uri(uri)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("build request")
+}
+
 // ---------------------------------------------------------------------------
 // resolve_audience -- the resolution matrix, unit-tested with no pool
 // ---------------------------------------------------------------------------
@@ -350,6 +359,28 @@ async fn revoke_403_for_non_admin() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn set_allowlist_403_for_non_admin() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(lazy_pool()),
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(patch_request(
+            &format!("/api/ingestion-api-keys/{}/allowlist", uuid::Uuid::new_v4()),
+            r#"{"allowed_cidrs": []}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 // ---------------------------------------------------------------------------
 // 400 validation — checked before any hashing/DB access.
 // ---------------------------------------------------------------------------
@@ -410,6 +441,54 @@ async fn mint_400_for_invalid_audience() {
         .oneshot(post_request(
             "/api/ingestion-api-keys",
             r#"{"name": "x", "audience": "not valid!"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A malformed `allowed_cidrs` entry in the mint body is a 400 raised before any DB access --
+/// `IpAllowlist::parse` runs before `insert_key`'s/`try_claim_and_mint`'s first query.
+#[tokio::test]
+async fn mint_400_for_invalid_allowed_cidrs() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(lazy_pool()),
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "x", "allowed_cidrs": ["not-a-cidr"]}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A malformed `allowed_cidrs` entry on `PATCH .../allowlist` is a 400 raised before any DB
+/// access, same as the mint-time check -- exercised with a merely-lazy pool.
+#[tokio::test]
+async fn set_allowlist_400_for_invalid_allowed_cidrs() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(lazy_pool()),
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(patch_request(
+            &format!("/api/ingestion-api-keys/{}/allowlist", uuid::Uuid::new_v4()),
+            r#"{"allowed_cidrs": ["not-a-cidr"]}"#,
         ))
         .await
         .expect("call service");
@@ -480,6 +559,28 @@ async fn revoke_503_when_pool_unconfigured() {
             "/api/ingestion-api-keys/{}",
             uuid::Uuid::new_v4()
         )))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn set_allowlist_503_when_pool_unconfigured() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: None,
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            self_service_mint_enabled: false,
+            max_claims_per_caller: 25,
+            max_keys_per_caller: 100,
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(patch_request(
+            &format!("/api/ingestion-api-keys/{}/allowlist", uuid::Uuid::new_v4()),
+            r#"{"allowed_cidrs": []}"#,
+        ))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

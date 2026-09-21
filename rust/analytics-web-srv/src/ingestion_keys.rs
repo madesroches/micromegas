@@ -30,10 +30,11 @@ use axum::extract::{Extension, FromRequestParts, Path, Query};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, post};
+use axum::routing::{delete, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::db_api_key::{generate_key, hash_key};
+use micromegas::auth::ip_allowlist::IpAllowlist;
 use micromegas::auth::policy::{
     AudienceGrants, AudienceMintPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE, is_valid_audience,
 };
@@ -292,6 +293,10 @@ pub fn resolve_audience(
 struct MintRequest {
     name: String,
     audience: Option<String>,
+    /// CIDR ranges or bare IPs this key may be used from. Absent/omitted = unrestricted.
+    /// Additive field -- existing callers omitting it keep working.
+    #[serde(default)]
+    allowed_cidrs: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -413,6 +418,11 @@ async fn mint_key(
     // gets asked about. `?` here still rejects a malformed explicit `audience` with the existing
     // 400, so `MintPolicy::resolve_audience`'s own malformed arm stays unreachable from this route.
     let candidate = resolve_audience(&state, body.audience.as_deref())?;
+    // Validated up front, alongside `validate_name`/`resolve_audience` -- fails before any DB
+    // access, same as those. The validated (not re-normalized) list is bound into the `INSERT`
+    // below verbatim, same as `audience`'s literal-string convention.
+    IpAllowlist::parse(body.allowed_cidrs.as_deref().unwrap_or_default())
+        .map_err(|e| IngestionKeyError::BadRequest(format!("invalid allowed_cidrs: {e}")))?;
 
     // Key material, generated here -- before the policy call, not after -- so both the
     // ordinary and the lazy-claim path share one value to insert.
@@ -515,8 +525,8 @@ async fn insert_key(
     created_at: DateTime<Utc>,
 ) -> Result<MintResponse, IngestionKeyError> {
     sqlx::query(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience, allowed_cidrs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(key_id)
     .bind(hash)
@@ -524,6 +534,7 @@ async fn insert_key(
     .bind(created_at)
     .bind(created_by)
     .bind(audience)
+    .bind(&body.allowed_cidrs)
     .execute(pool)
     .await?;
 
@@ -702,8 +713,8 @@ async fn try_claim_and_mint(
     }
 
     sqlx::query(
-        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO ingestion_api_keys (key_id, key_hash, name, created_at, created_by, audience, allowed_cidrs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(key_id)
     .bind(hash)
@@ -711,6 +722,7 @@ async fn try_claim_and_mint(
     .bind(created_at)
     .bind(caller_email)
     .bind(audience)
+    .bind(&body.allowed_cidrs)
     .execute(&mut *tx)
     .await?;
 
@@ -751,6 +763,10 @@ struct KeyListEntry {
     revoked_at: Option<DateTime<Utc>>,
     revoked_by: Option<String>,
     audience: String,
+    /// Empty = unrestricted, matching every other list-response convention in this API. Decoded
+    /// straight into `Vec<String>` since the `SELECT` reads it back as
+    /// `COALESCE(allowed_cidrs, '{}')`.
+    allowed_cidrs: Vec<String>,
 }
 
 /// `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` —
@@ -782,7 +798,8 @@ async fn list_keys(
 
     let rows = if include_revoked {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience,
+                    COALESCE(allowed_cidrs, '{}') AS allowed_cidrs
              FROM ingestion_api_keys
              ORDER BY created_at DESC
              LIMIT $1 OFFSET $2",
@@ -793,7 +810,8 @@ async fn list_keys(
         .await?
     } else {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by, audience,
+                    COALESCE(allowed_cidrs, '{}') AS allowed_cidrs
              FROM ingestion_api_keys
              WHERE revoked_at IS NULL
              ORDER BY created_at DESC
@@ -852,6 +870,50 @@ async fn revoke_key(
     }
 }
 
+#[derive(Deserialize)]
+struct SetAllowlistRequest {
+    /// `[]` clears the restriction.
+    allowed_cidrs: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SetAllowlistResponse {
+    allowed_cidrs: Vec<String>,
+}
+
+/// `PATCH {base_path}/api/ingestion-api-keys/{key_id}/allowlist` — admin-only (same gate as
+/// `revoke_key`/`list_keys`, unlike `mint_key`'s `MintGate`: changing an existing key's
+/// restriction is not a self-service action). The only way to change an existing key's allowlist
+/// without revoking and re-minting it.
+async fn set_allowlist(
+    Extension(state): Extension<IngestionKeysState>,
+    AdminUser(_user): AdminUser,
+    Path(key_id): Path<Uuid>,
+    Json(body): Json<SetAllowlistRequest>,
+) -> Result<Json<SetAllowlistResponse>, IngestionKeyError> {
+    let pool = require_pool(&state)?;
+    IpAllowlist::parse(&body.allowed_cidrs)
+        .map_err(|e| IngestionKeyError::BadRequest(format!("invalid allowed_cidrs: {e}")))?;
+
+    let row = sqlx::query(
+        "UPDATE ingestion_api_keys SET allowed_cidrs = $2 WHERE key_id = $1
+         RETURNING COALESCE(allowed_cidrs, '{}') AS allowed_cidrs",
+    )
+    .bind(key_id)
+    .bind(&body.allowed_cidrs)
+    .fetch_optional(&pool)
+    .await?;
+
+    match row {
+        Some(row) => {
+            let allowed_cidrs: Vec<String> = row.try_get("allowed_cidrs")?;
+            info!("updated ingestion api key allowlist key_id={key_id}");
+            Ok(Json(SetAllowlistResponse { allowed_cidrs }))
+        }
+        None => Err(IngestionKeyError::NotFound),
+    }
+}
+
 /// Routes only — [`IngestionKeysState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `app_db_pool`/
 /// `maps_state`/`analytics_keys_state` are.
@@ -864,5 +926,9 @@ pub fn ingestion_keys_router(base_path: &str) -> Router {
         .route(
             &format!("{base_path}/api/ingestion-api-keys/{{key_id}}"),
             delete(revoke_key),
+        )
+        .route(
+            &format!("{base_path}/api/ingestion-api-keys/{{key_id}}/allowlist"),
+            patch(set_allowlist),
         )
 }

@@ -27,6 +27,7 @@ fn any_bearer_parts() -> HttpRequestParts {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     }
 }
 
@@ -46,6 +47,7 @@ async fn test_multi_provider_api_key() {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     };
 
     let result = multi.validate_request(&parts as &dyn RequestParts).await;
@@ -67,6 +69,7 @@ async fn test_multi_provider_no_providers() {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     };
 
     let result = multi.validate_request(&parts as &dyn RequestParts).await;
@@ -108,6 +111,7 @@ async fn test_multi_provider_unavailable_plus_rejection() {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     };
 
     let result = multi.validate_request(&parts as &dyn RequestParts).await;
@@ -133,6 +137,7 @@ async fn test_multi_provider_all_reject_no_unavailable() {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     };
 
     let result = multi.validate_request(&parts as &dyn RequestParts).await;
@@ -160,6 +165,7 @@ async fn test_multi_provider_invalid_token() {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().unwrap(),
+        client_ip: None,
     };
 
     let result = multi.validate_request(&parts as &dyn RequestParts).await;

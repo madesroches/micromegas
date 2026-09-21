@@ -19,10 +19,11 @@ use crate::auth::AdminUser;
 use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, post};
+use axum::routing::{delete, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::db_api_key::{generate_key, hash_key};
+use micromegas::auth::ip_allowlist::IpAllowlist;
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -146,6 +147,10 @@ fn validate_name(name: &str) -> Result<(), AnalyticsKeyError> {
 #[derive(Deserialize)]
 struct MintRequest {
     name: String,
+    /// CIDR ranges or bare IPs this key may be used from. Absent/omitted = unrestricted.
+    /// Additive field -- existing callers omitting it keep working.
+    #[serde(default)]
+    allowed_cidrs: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -167,6 +172,10 @@ async fn mint_key(
 ) -> Result<(StatusCode, Json<MintResponse>), AnalyticsKeyError> {
     let pool = require_pool(&state)?;
     validate_name(&body.name)?;
+    // Validated up front, alongside `validate_name` -- fails before any DB access. The
+    // validated (not re-normalized) list is bound into the `INSERT` below verbatim.
+    IpAllowlist::parse(body.allowed_cidrs.as_deref().unwrap_or_default())
+        .map_err(|e| AnalyticsKeyError::BadRequest(format!("invalid allowed_cidrs: {e}")))?;
 
     let key = generate_key();
     let hash = hash_key(&key);
@@ -177,14 +186,15 @@ async fn mint_key(
     // Table name is a literal, never derived from caller input: no route in
     // this module ever writes to `ingestion_api_keys`.
     sqlx::query(
-        "INSERT INTO analytics_api_keys (key_id, key_hash, name, created_at, created_by)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO analytics_api_keys (key_id, key_hash, name, created_at, created_by, allowed_cidrs)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(key_id)
     .bind(&hash[..])
     .bind(&body.name)
     .bind(created_at)
     .bind(&created_by)
+    .bind(&body.allowed_cidrs)
     .execute(&pool)
     .await?;
 
@@ -220,6 +230,9 @@ struct KeyListEntry {
     last_used_at: Option<DateTime<Utc>>,
     revoked_at: Option<DateTime<Utc>>,
     revoked_by: Option<String>,
+    /// Empty = unrestricted. Decoded straight into `Vec<String>` since the `SELECT` reads it
+    /// back as `COALESCE(allowed_cidrs, '{}')`.
+    allowed_cidrs: Vec<String>,
 }
 
 /// `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` —
@@ -251,7 +264,8 @@ async fn list_keys(
 
     let rows = if include_revoked {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by,
+                    COALESCE(allowed_cidrs, '{}') AS allowed_cidrs
              FROM analytics_api_keys
              ORDER BY created_at DESC
              LIMIT $1 OFFSET $2",
@@ -262,7 +276,8 @@ async fn list_keys(
         .await?
     } else {
         sqlx::query_as::<_, KeyListEntry>(
-            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by
+            "SELECT key_id, name, created_at, created_by, last_used_at, revoked_at, revoked_by,
+                    COALESCE(allowed_cidrs, '{}') AS allowed_cidrs
              FROM analytics_api_keys
              WHERE revoked_at IS NULL
              ORDER BY created_at DESC
@@ -321,6 +336,49 @@ async fn revoke_key(
     }
 }
 
+#[derive(Deserialize)]
+struct SetAllowlistRequest {
+    /// `[]` clears the restriction.
+    allowed_cidrs: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SetAllowlistResponse {
+    allowed_cidrs: Vec<String>,
+}
+
+/// `PATCH {base_path}/api/analytics-api-keys/{key_id}/allowlist` — admin-only, same gate as
+/// `revoke_key`/`list_keys`. The only way to change an existing key's allowlist without revoking
+/// and re-minting it.
+async fn set_allowlist(
+    Extension(state): Extension<AnalyticsKeysState>,
+    AdminUser(_user): AdminUser,
+    Path(key_id): Path<Uuid>,
+    Json(body): Json<SetAllowlistRequest>,
+) -> Result<Json<SetAllowlistResponse>, AnalyticsKeyError> {
+    let pool = require_pool(&state)?;
+    IpAllowlist::parse(&body.allowed_cidrs)
+        .map_err(|e| AnalyticsKeyError::BadRequest(format!("invalid allowed_cidrs: {e}")))?;
+
+    let row = sqlx::query(
+        "UPDATE analytics_api_keys SET allowed_cidrs = $2 WHERE key_id = $1
+         RETURNING COALESCE(allowed_cidrs, '{}') AS allowed_cidrs",
+    )
+    .bind(key_id)
+    .bind(&body.allowed_cidrs)
+    .fetch_optional(&pool)
+    .await?;
+
+    match row {
+        Some(row) => {
+            let allowed_cidrs: Vec<String> = row.try_get("allowed_cidrs")?;
+            info!("updated analytics api key allowlist key_id={key_id}");
+            Ok(Json(SetAllowlistResponse { allowed_cidrs }))
+        }
+        None => Err(AnalyticsKeyError::NotFound),
+    }
+}
+
 /// Routes only — [`AnalyticsKeysState`] is layered separately in
 /// `web_server.rs::build_protected_routes`, the same way `app_db_pool`/
 /// `maps_state` are.
@@ -333,5 +391,9 @@ pub fn analytics_keys_router(base_path: &str) -> Router {
         .route(
             &format!("{base_path}/api/analytics-api-keys/{{key_id}}"),
             delete(revoke_key),
+        )
+        .route(
+            &format!("{base_path}/api/analytics-api-keys/{{key_id}}/allowlist"),
+            patch(set_allowlist),
         )
 }

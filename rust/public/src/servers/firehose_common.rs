@@ -15,6 +15,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
+use micromegas_auth::client_ip::resolve_client_ip;
 use micromegas_auth::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -85,6 +86,7 @@ pub async fn firehose_auth_middleware(
             Some("missing X-Amz-Firehose-Access-Key"),
         );
     };
+    let client_ip = resolve_client_ip(req.headers(), req.extensions());
     let mut headers = req.headers().clone();
     if let Ok(bearer) = HeaderValue::from_str(&format!("Bearer {access_key}")) {
         headers.insert(header::AUTHORIZATION, bearer);
@@ -93,6 +95,7 @@ pub async fn firehose_auth_middleware(
         headers,
         method: req.method().clone(),
         uri: req.uri().clone(),
+        client_ip,
     };
     match provider.validate_request(&parts as &dyn RequestParts).await {
         Ok(ctx) => {

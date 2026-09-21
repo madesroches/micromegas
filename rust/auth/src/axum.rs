@@ -7,6 +7,7 @@
 //! 4. Returns 401 Unauthorized on invalid credentials, 503 Service Unavailable
 //!    when a provider's backing store is unreachable
 
+use crate::client_ip::resolve_client_ip;
 use crate::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use axum::{
     extract::Request,
@@ -42,11 +43,17 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
+    // Resolved before building `HttpRequestParts`: axum's `ConnectInfo<SocketAddr>` extension is
+    // already on `req` for every service that enables it, same as `get_client_ip`'s existing
+    // HTTP callers rely on.
+    let client_ip = resolve_client_ip(req.headers(), req.extensions());
+
     // Extract request parts for authentication
     let parts = HttpRequestParts {
         headers: req.headers().clone(),
         method: req.method().clone(),
         uri: req.uri().clone(),
+        client_ip,
     };
 
     // Validate request using auth provider

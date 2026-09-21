@@ -96,7 +96,7 @@ class WebClient:
         )
         self._check_response(resp)
 
-    def mint_ingestion_api_key(self, name, audience=None):
+    def mint_ingestion_api_key(self, name, audience=None, allowed_cidrs=None):
         """Mint a fresh ingestion API key via `POST /api/ingestion-api-keys`.
 
         The route is not purely admin-gated: a non-admin caller with a matching
@@ -105,7 +105,12 @@ class WebClient:
         `MICROMEGAS_SELF_SERVICE_MINT` enabled. `audience` is omitted from
         the request body when `None`, so the server applies its own
         default/authorization rules rather than receiving an explicit
-        `null`.
+        `null`. `allowed_cidrs` (a list of CIDR ranges or bare IPs the key
+        may be presented from) is likewise omitted when `None`, so the key
+        mints unrestricted rather than receiving an explicit `null` --
+        without this, a non-admin caller minting their own key has no other
+        way to attach an allowlist at all, since `PATCH .../allowlist` is
+        admin-only.
 
         Returns the mint response dict, including the one-time cleartext
         `key` -- never retrievable again after this call returns.
@@ -124,6 +129,8 @@ class WebClient:
         payload = {"name": name}
         if audience is not None:
             payload["audience"] = audience
+        if allowed_cidrs is not None:
+            payload["allowed_cidrs"] = allowed_cidrs
 
         def post():
             return self.session.post(
@@ -169,6 +176,48 @@ class WebClient:
             self._api_url("ingestion-api-keys"),
             headers=self._headers(),
             params=params,
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def set_ingestion_api_key_allowlist(self, key_id, allowed_cidrs):
+        """Update an existing ingestion key's IP allowlist (admin-only) via
+        `PATCH /api/ingestion-api-keys/{key_id}/allowlist`.
+
+        `allowed_cidrs` is a list of CIDR ranges or bare IPs; pass `[]` to
+        clear the restriction back to unrestricted. Returns
+        `{"allowed_cidrs"}`. Raises `RuntimeError` (via `_check_response`)
+        with a 404 if `key_id` is unknown, or a 400 if any entry fails to
+        parse as a CIDR range or IP address.
+        """
+        resp = self.session.patch(
+            self._api_url(
+                f"ingestion-api-keys/{requests.utils.quote(str(key_id), safe='')}/allowlist"
+            ),
+            headers=self._headers(),
+            json={"allowed_cidrs": allowed_cidrs},
+            timeout=self.timeout,
+        )
+        self._check_response(resp)
+        return resp.json()
+
+    def set_analytics_api_key_allowlist(self, key_id, allowed_cidrs):
+        """Update an existing analytics key's IP allowlist (admin-only) via
+        `PATCH /api/analytics-api-keys/{key_id}/allowlist`.
+
+        Same shape as [`set_ingestion_api_key_allowlist`]: `allowed_cidrs`
+        is a list of CIDR ranges or bare IPs; pass `[]` to clear the
+        restriction. Returns `{"allowed_cidrs"}`. Raises `RuntimeError`
+        (via `_check_response`) with a 404 if `key_id` is unknown, or a 400
+        if any entry fails to parse.
+        """
+        resp = self.session.patch(
+            self._api_url(
+                f"analytics-api-keys/{requests.utils.quote(str(key_id), safe='')}/allowlist"
+            ),
+            headers=self._headers(),
+            json={"allowed_cidrs": allowed_cidrs},
             timeout=self.timeout,
         )
         self._check_response(resp)

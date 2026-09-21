@@ -44,6 +44,7 @@ fn bearer_parts(token: &str) -> HttpRequestParts {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().expect("valid uri"),
+        client_ip: None,
     }
 }
 
@@ -138,6 +139,7 @@ async fn missing_bearer_token_fails_before_any_db_access() {
         headers: http::HeaderMap::new(),
         method: http::Method::GET,
         uri: "/test".parse().expect("valid uri"),
+        client_ip: None,
     };
     let result = provider.validate_request(&parts as &dyn RequestParts).await;
     assert!(result.is_err());
@@ -281,6 +283,67 @@ async fn insert_live_key(
         .expect("inserting test key");
     }
     key_id
+}
+
+/// Same as [`insert_live_key`], but stamps `allowed_cidrs` (migration v11) too -- for the
+/// IP-allowlist enforcement tests below.
+async fn insert_live_key_with_allowlist(
+    pool: &sqlx::PgPool,
+    table: ApiKeyTable,
+    name: &str,
+    key: &str,
+    audience: &str,
+    allowed_cidrs: &[&str],
+) -> uuid::Uuid {
+    let key_id = uuid::Uuid::new_v4();
+    let hash = hash_key(key);
+    let cidrs: Vec<String> = allowed_cidrs.iter().map(|s| s.to_string()).collect();
+    if table.has_audience() {
+        sqlx::query(&format!(
+            "INSERT INTO {} (key_id, key_hash, name, created_at, created_by, audience, allowed_cidrs) \
+             VALUES ($1, $2, $3, now(), 'test', $4, $5)",
+            table.table_name()
+        ))
+        .bind(key_id)
+        .bind(&hash[..])
+        .bind(name)
+        .bind(audience)
+        .bind(&cidrs)
+        .execute(pool)
+        .await
+        .expect("inserting test key");
+    } else {
+        sqlx::query(&format!(
+            "INSERT INTO {} (key_id, key_hash, name, created_at, created_by, allowed_cidrs) \
+             VALUES ($1, $2, $3, now(), 'test', $4)",
+            table.table_name()
+        ))
+        .bind(key_id)
+        .bind(&hash[..])
+        .bind(name)
+        .bind(&cidrs)
+        .execute(pool)
+        .await
+        .expect("inserting test key");
+    }
+    key_id
+}
+
+/// Same as [`bearer_parts`], but with an explicit `client_ip` -- for the IP-allowlist
+/// enforcement tests below, which never need a real socket, only the resolved value
+/// `AuthProvider::validate_request` reads via `RequestParts::client_ip()`.
+fn bearer_parts_with_ip(token: &str, client_ip: Option<std::net::IpAddr>) -> HttpRequestParts {
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().expect("valid header"),
+    );
+    HttpRequestParts {
+        headers,
+        method: http::Method::GET,
+        uri: "/test".parse().expect("valid uri"),
+        client_ip,
+    }
 }
 
 async fn cleanup_key(pool: &sqlx::PgPool, table: ApiKeyTable, key_id: uuid::Uuid) {
@@ -635,6 +698,124 @@ async fn live_key_store_has_live_rows_reflects_state() {
         .await
         .expect("query should succeed against a migrated schema");
     assert!(has_rows);
+
+    cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// #[ignore], live Postgres (migrated to schema v11) -- IP allowlist enforcement
+// ---------------------------------------------------------------------------
+
+/// A key restricted to a CIDR range authenticates from an in-range `client_ip` and is rejected
+/// from an out-of-range one -- exercised against a real row (migration v11's `allowed_cidrs`
+/// column), which is what forces the loader's `RETURNING ... allowed_cidrs` query to actually
+/// run.
+#[ignore]
+#[tokio::test]
+async fn live_ip_allowlist_accepts_in_range_and_rejects_out_of_range() {
+    let pool = live_pool().await;
+    let key = format!("mmk_test_allowlist_{}", uuid::Uuid::new_v4());
+    let key_id = insert_live_key_with_allowlist(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-allowlist",
+        &key,
+        PUBLIC_AUDIENCE,
+        &["203.0.113.0/24"],
+    )
+    .await;
+
+    let provider = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
+
+    let in_range = bearer_parts_with_ip(&key, Some("203.0.113.42".parse().expect("valid ip")));
+    provider
+        .validate_request(&in_range as &dyn RequestParts)
+        .await
+        .expect("in-range client_ip should authenticate");
+
+    let out_of_range = bearer_parts_with_ip(&key, Some("198.51.100.7".parse().expect("valid ip")));
+    let result = provider
+        .validate_request(&out_of_range as &dyn RequestParts)
+        .await;
+    assert!(result.is_err(), "out-of-range client_ip must be rejected");
+
+    let unresolved = bearer_parts_with_ip(&key, None);
+    let result = provider
+        .validate_request(&unresolved as &dyn RequestParts)
+        .await;
+    assert!(
+        result.is_err(),
+        "an unresolved client_ip must never satisfy a restriction"
+    );
+
+    cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
+}
+
+/// An IP-allowlist rejection is a plain `Err`, never a `ProviderUnavailable` -- distinct from a
+/// key-store outage -- and must not increment `db_api_key_error_count` (that metric means "the
+/// DB was unreachable", not "a credential was rejected"), since the rejection happens after the
+/// `try_get_with` closure already returned successfully.
+#[ignore]
+#[tokio::test]
+#[serial]
+async fn live_ip_allowlist_rejection_is_not_a_provider_unavailable_and_does_not_increment_error_count()
+ {
+    let pool = live_pool().await;
+    let key = format!("mmk_test_allowlist_metric_{}", uuid::Uuid::new_v4());
+    let key_id = insert_live_key_with_allowlist(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-allowlist-metric",
+        &key,
+        PUBLIC_AUDIENCE,
+        &["203.0.113.0/24"],
+    )
+    .await;
+
+    let guard = init_in_memory_tracing();
+    let provider = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
+    let out_of_range = bearer_parts_with_ip(&key, Some("198.51.100.7".parse().expect("valid ip")));
+    let err = provider
+        .validate_request(&out_of_range as &dyn RequestParts)
+        .await
+        .expect_err("out-of-range client_ip must be rejected");
+    assert!(
+        err.downcast_ref::<ProviderUnavailable>().is_none(),
+        "an IP-allowlist rejection must not be a ProviderUnavailable"
+    );
+
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+    assert_eq!(
+        count_integer_metric(&guard.sink, "db_api_key_error_count"),
+        0,
+        "an IP-allowlist rejection must not increment db_api_key_error_count"
+    );
+
+    cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
+}
+
+/// A key with an empty/absent `allowed_cidrs` is unaffected -- the regression check that every
+/// pre-existing (unrestricted) key keeps authenticating from any `client_ip`, including `None`.
+#[ignore]
+#[tokio::test]
+async fn live_unrestricted_key_authenticates_regardless_of_client_ip() {
+    let pool = live_pool().await;
+    let key = format!("mmk_test_unrestricted_{}", uuid::Uuid::new_v4());
+    let key_id = insert_live_key(
+        &pool,
+        ApiKeyTable::Ingestion,
+        "db-api-key-test-unrestricted",
+        &key,
+        PUBLIC_AUDIENCE,
+    )
+    .await;
+
+    let provider = DbApiKeyAuthProvider::new(pool.clone(), ApiKeyTable::Ingestion, test_config());
+    let parts = bearer_parts_with_ip(&key, None);
+    provider
+        .validate_request(&parts as &dyn RequestParts)
+        .await
+        .expect("unrestricted key should authenticate with no resolved client_ip");
 
     cleanup_key(&pool, ApiKeyTable::Ingestion, key_id).await;
 }

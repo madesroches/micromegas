@@ -19,6 +19,7 @@ chrono.workspace = true
 futures.workspace = true
 hmac.workspace = true
 http.workspace = true
+ipnet.workspace = true
 jsonwebtoken.workspace = true
 micromegas-tracing.workspace = true
 moka.workspace = true

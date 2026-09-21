@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::Schema;
 use futures::TryStreamExt;
+use micromegas::servers::connect_info_layer::ConnectedIncoming;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -179,6 +180,79 @@ async fn start_server(
 
     wait_for_server_ready(addr, Duration::from_secs(2)).await;
     addr
+}
+
+/// Same server setup as [`start_server`], but wraps the listener in [`ConnectedIncoming`] so a
+/// `SocketAddr` extension (peer address, per `Connected::connect_info`) is present on every
+/// request -- unlike `start_server`'s own raw `TcpStream` incoming, which never attaches one.
+/// Needed only for the IP-allowlist enforcement test below, which relies on
+/// `resolve_client_ip`'s socket-address fallback (no `X-Forwarded-For` header involved).
+async fn start_server_with_connect_info(
+    auth_provider: Option<Arc<dyn AuthProvider>>,
+    read_policy: Arc<dyn ReadPolicy>,
+) -> SocketAddr {
+    let lakehouse = make_offline_lakehouse_context().await;
+    let part_provider = Arc::new(NullPartitionProvider {});
+    let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
+    let session_configurator = Arc::new(NoOpSessionConfigurator);
+    let view_registry = Arc::new(ViewRegistry::new(
+        view_factory,
+        Arc::new(PgViewDefinitionStore::new(lakehouse.lake().db_pool.clone())),
+        lakehouse.runtime().clone(),
+        lakehouse.lake().clone(),
+        session_configurator.clone(),
+    ));
+    let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
+        lakehouse,
+        part_provider,
+        view_registry,
+        session_configurator,
+        read_policy,
+        Arc::new(IsolationConfig::default()),
+    ));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binding listener");
+    let addr = listener.local_addr().expect("getting local addr");
+
+    tokio::spawn(async move {
+        let incoming = ConnectedIncoming::new(listener);
+        let layer = ServiceBuilder::new()
+            .layer(layer_fn(move |inner| AuthService {
+                inner,
+                auth_provider: auth_provider.clone(),
+            }))
+            .into_inner();
+        Server::builder()
+            .layer(layer)
+            .add_service(svc)
+            .serve_with_incoming(incoming)
+            .await
+            .expect("server failed");
+    });
+
+    wait_for_server_ready(addr, Duration::from_secs(2)).await;
+    addr
+}
+
+/// A restricted `ApiKeyAuthProvider` seeded with one key, named `name`, permitted only from
+/// `allowed_cidrs`.
+fn restricted_api_key_provider(
+    name: &str,
+    key: &str,
+    allowed_cidrs: &[&str],
+) -> Arc<dyn AuthProvider> {
+    let cidrs_json = allowed_cidrs
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let keyring = parse_key_ring(&format!(
+        r#"[{{"name": "{name}", "key": "{key}", "allowed_cidrs": [{cidrs_json}]}}]"#
+    ))
+    .expect("parsing keyring");
+    Arc::new(ApiKeyAuthProvider::new(keyring))
 }
 
 async fn connect(addr: SocketAddr) -> FlightSqlServiceClient<Channel> {
@@ -379,6 +453,53 @@ async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
     assert_ne!(
         auth_ctx.subject, "attacker@example.com",
         "ReadPolicy must never resolve from client-claimed attribution"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// IP allowlist enforcement over the real gRPC/tonic stack
+// ---------------------------------------------------------------------------
+
+/// A key restricted to a CIDR range containing the test client's own loopback peer address
+/// authenticates -- exercised through `ConnectedIncoming`, `AuthService`, and
+/// `resolve_client_ip`'s socket-address fallback, not a canned `RequestParts`.
+#[tokio::test]
+async fn ip_allowlist_accepts_connection_from_an_in_range_peer_address() {
+    let auth_provider = restricted_api_key_provider("test", "secret", &["127.0.0.1/8"]);
+    let policy = Arc::new(RecordingReadPolicy::default());
+    let addr = start_server_with_connect_info(Some(auth_provider), policy).await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+
+    let info = client
+        .execute("SELECT 1".to_string(), None)
+        .await
+        .expect("execute should succeed for an in-range peer address");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    client
+        .do_get(ticket)
+        .await
+        .expect("do_get should succeed for an in-range peer address");
+}
+
+/// A key restricted to a CIDR range that does not contain the test client's loopback peer
+/// address is rejected with `unauthenticated` -- the same status an outright wrong key gets.
+#[tokio::test]
+async fn ip_allowlist_rejects_connection_from_an_out_of_range_peer_address() {
+    let auth_provider = restricted_api_key_provider("test", "secret", &["203.0.113.0/24"]);
+    let policy = Arc::new(RecordingReadPolicy::default());
+    let addr = start_server_with_connect_info(Some(auth_provider), policy).await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+
+    // `AuthService` rejects the request before it ever reaches `FlightSqlServiceImpl`, so the
+    // very first RPC (`execute`, i.e. `get_flight_info_statement`) fails -- unlike the
+    // `ReadPolicy`-failure tests above, which succeed here and fail later at `do_get`.
+    let result = client.execute("SELECT 1".to_string(), None).await;
+    assert_eq!(
+        expect_status_code(result),
+        Code::Unauthenticated,
+        "an out-of-range peer address must be rejected the same way an invalid key is"
     );
 }
 

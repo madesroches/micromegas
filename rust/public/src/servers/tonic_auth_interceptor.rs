@@ -1,3 +1,4 @@
+use micromegas_auth::client_ip::resolve_client_ip;
 use micromegas_auth::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -12,9 +13,12 @@ pub async fn check_auth(
     auth_provider: &Arc<dyn AuthProvider>,
 ) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
+    // Mirrors `flight_sql_service_impl.rs`'s existing two `get_client_ip` call sites.
+    let client_ip = resolve_client_ip(metadata.as_ref(), req.extensions());
 
     let parts = GrpcRequestParts {
         metadata: metadata.clone(),
+        client_ip,
     };
 
     let auth_ctx = auth_provider

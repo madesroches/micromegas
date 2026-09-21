@@ -1,3 +1,4 @@
+use crate::ip_allowlist::IpAllowlist;
 use crate::types::{AuthContext, AuthProvider, AuthType};
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
@@ -47,19 +48,40 @@ pub struct KeyRingEntry {
     /// The key
     #[serde(deserialize_with = "key_from_string")]
     pub key: Key,
+    /// CIDR ranges or bare IPs this key may be used from. Absent/empty = unrestricted.
+    #[serde(default)]
+    pub allowed_cidrs: Vec<String>,
 }
 
-/// A map from `Key` to `String` (name).
-pub type KeyRing = HashMap<Key, String>;
+/// A keyring entry's name plus its parsed IP allowlist -- the parsed allowlist travels with the
+/// name so [`ApiKeyAuthProvider::validate_request`] never re-parses CIDR strings on the hot path.
+pub struct KeyRingValue {
+    /// The name associated with the key.
+    pub name: String,
+    /// The parsed IP allowlist -- empty means unrestricted.
+    pub allowlist: IpAllowlist,
+}
+
+/// A map from `Key` to [`KeyRingValue`] (name + parsed allowlist).
+pub type KeyRing = HashMap<Key, KeyRingValue>;
 
 /// Parses a JSON string into a `KeyRing`.
 ///
-/// The JSON string is expected to be an array of objects, each with a `name` and `key` field.
+/// The JSON string is expected to be an array of objects, each with a `name` and `key` field,
+/// and an optional `allowed_cidrs` array. Fails the whole parse (fail-fast at startup, same as
+/// every other keyring-shape error) on a malformed `allowed_cidrs` entry.
 pub fn parse_key_ring(json: &str) -> Result<KeyRing> {
     let entries: Vec<KeyRingEntry> = serde_json::from_str(json)?;
     let mut ring = KeyRing::new();
     for entry in entries {
-        ring.insert(entry.key, entry.name);
+        let allowlist = IpAllowlist::parse(&entry.allowed_cidrs)?;
+        ring.insert(
+            entry.key,
+            KeyRingValue {
+                name: entry.name,
+                allowlist,
+            },
+        );
     }
     Ok(ring)
 }
@@ -98,12 +120,12 @@ impl AuthProvider for ApiKeyAuthProvider {
             .ok_or_else(|| anyhow!("missing bearer token"))?;
 
         let token_bytes = token.as_bytes();
-        let mut found: Option<AuthContext> = None;
+        let mut found: Option<(AuthContext, &IpAllowlist)> = None;
 
         // Compare against all keys in constant time
         // IMPORTANT: We iterate through ALL keys, even if we find a match,
         // to ensure constant-time operation
-        for (stored_key, name) in &self.keyring {
+        for (stored_key, value) in &self.keyring {
             let stored_bytes = stored_key.value.as_bytes();
 
             // Constant-time comparison
@@ -113,27 +135,38 @@ impl AuthProvider for ApiKeyAuthProvider {
             // Conditionally set the result without branching on the match
             // If matches is true, we set found; if matches is false, found stays as-is
             if matches {
-                found = Some(AuthContext {
-                    subject: name.clone(),
-                    email: None,
-                    issuer: "api_key".to_string(),
-                    audience: None,
-                    expires_at: None,
-                    auth_type: AuthType::ApiKey,
-                    // SECURITY: API keys CAN delegate (act on behalf of users)
-                    allow_delegation: true,
-                    // Env-configured keys carry no Stage 4/4b grant.
-                    bound_audience: None,
-                    read_audiences: vec![],
-                    // API keys carry no email for a `user:` member to match, so only a
-                    // `MembershipProvider` wrapping this provider over a wildcard-admin group
-                    // could ever make one admin -- see the migration v10 module doc comment.
-                    memberships: std::sync::Arc::from([]),
-                });
+                found = Some((
+                    AuthContext {
+                        subject: value.name.clone(),
+                        email: None,
+                        issuer: "api_key".to_string(),
+                        audience: None,
+                        expires_at: None,
+                        auth_type: AuthType::ApiKey,
+                        // SECURITY: API keys CAN delegate (act on behalf of users)
+                        allow_delegation: true,
+                        // Env-configured keys carry no Stage 4/4b grant.
+                        bound_audience: None,
+                        read_audiences: vec![],
+                        // API keys carry no email for a `user:` member to match, so only a
+                        // `MembershipProvider` wrapping this provider over a wildcard-admin group
+                        // could ever make one admin -- see the migration v10 module doc comment.
+                        memberships: std::sync::Arc::from([]),
+                    },
+                    &value.allowlist,
+                ));
             }
             // Note: We do NOT break or return early - we continue checking all keys
         }
 
-        found.ok_or_else(|| anyhow!("invalid API token"))
+        // The allowlist check runs once, after the constant-time scan, on `found` only -- it
+        // checks public data (the request's own resolved IP), so there is no timing side-channel
+        // to protect for it specifically, and it leaves the loop's constant-time property over
+        // the *key comparison* untouched.
+        let (context, allowlist) = found.ok_or_else(|| anyhow!("invalid API token"))?;
+        if !allowlist.allows(parts.client_ip()) {
+            anyhow::bail!("invalid API token: source IP not permitted");
+        }
+        Ok(context)
     }
 }

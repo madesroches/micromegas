@@ -4,6 +4,7 @@
 //! into tonic gRPC services. It extracts request parts from gRPC metadata,
 //! validates them using an AuthProvider, and injects the AuthContext into request extensions.
 
+use crate::client_ip::resolve_client_ip;
 use crate::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
@@ -82,9 +83,17 @@ where
             if let Some(provider) = auth_provider {
                 let (mut parts, body) = req.into_parts();
 
+                // Resolved right after `req.into_parts()`, before headers are cloned into
+                // `GrpcRequestParts` -- for gRPC, the `SocketAddr` extension is already present
+                // on `parts.extensions` by the time `AuthService::call` runs
+                // (`ConnectedIncoming`/`ConnectedStream` attach it at TCP-accept time, below
+                // every custom tower layer).
+                let client_ip = resolve_client_ip(&parts.headers, &parts.extensions);
+
                 // Extract request parts for validation
                 let request_parts = GrpcRequestParts {
                     metadata: tonic::metadata::MetadataMap::from_headers(parts.headers.clone()),
+                    client_ip,
                 };
 
                 // Validate request

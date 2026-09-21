@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 10;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 11;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -412,6 +412,26 @@ pub async fn upgrade_data_lake_schema_v10(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 11.
+/// Adds a nullable `allowed_cidrs TEXT[]` column to both `ingestion_api_keys` and
+/// `analytics_api_keys`: the CIDR ranges/bare IPs a key may be presented from. No backfill
+/// needed (unlike `audience`, which had to become `NOT NULL`): `NULL`/absent means "no
+/// restriction", which is exactly the correct value for every pre-existing row.
+pub async fn upgrade_data_lake_schema_v11(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute("ALTER TABLE ingestion_api_keys ADD COLUMN allowed_cidrs TEXT[];")
+        .await
+        .with_context(|| "adding column allowed_cidrs to ingestion_api_keys table")?;
+    tr.execute("ALTER TABLE analytics_api_keys ADD COLUMN allowed_cidrs TEXT[];")
+        .await
+        .with_context(|| "adding column allowed_cidrs to analytics_api_keys table")?;
+    tr.execute("UPDATE migration SET version=11;")
+        .await
+        .with_context(|| "updating data lake schema version to 11")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -557,6 +577,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v10");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v10(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 10 == current_version {
+        info!("upgrading data_lake_schema to v11");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v11(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

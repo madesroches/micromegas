@@ -8,6 +8,7 @@
 //! `moka` cache.
 
 use crate::env::resolve_prefixed_var;
+use crate::ip_allowlist::IpAllowlist;
 use crate::types::{AuthContext, AuthProvider, AuthType, ProviderUnavailable, RequestParts};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -165,13 +166,17 @@ pub async fn key_store_has_live_rows(pool: &PgPool, table: ApiKeyTable) -> Resul
     Ok(has_rows)
 }
 
-/// hash -> (key_id, name, audience) for a key known to be live.
+/// hash -> (key_id, name, audience, allowlist) for a key known to be live.
 struct KeyRow {
     key_id: uuid::Uuid,
     name: String,
     /// `Some` for `Ingestion` (the column is `NOT NULL` as of migration v6), `None` for
     /// `Analytics` (which carries no `audience` column at all).
     audience: Option<String>,
+    /// Parsed once per cache fill (not per request) from the `allowed_cidrs` column --
+    /// `IpAllowlist::parse` is fed `&[]` when the column read back `None` (every pre-v11 row),
+    /// giving the same "no restriction" allowlist as an empty stored array.
+    allowlist: IpAllowlist,
 }
 
 /// Distinguishes "the DB answered: no such live key" from "the DB could not be
@@ -283,9 +288,9 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 // Built from `&'static str` literals alongside `table.table_name()`, so
                 // nothing caller-supplied ever reaches this SQL.
                 let returning = if table.has_audience() {
-                    "key_id, name, audience"
+                    "key_id, name, audience, allowed_cidrs"
                 } else {
-                    "key_id, name"
+                    "key_id, name, allowed_cidrs"
                 };
                 let row = sqlx::query(&format!(
                     "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
@@ -324,7 +329,27 @@ impl AuthProvider for DbApiKeyAuthProvider {
                         } else {
                             None
                         };
-                        Ok(Arc::new(KeyRow { key_id, name, audience }))
+                        // A nullable `TEXT[]` decodes into `Option<Vec<String>>`, not a bare
+                        // `Vec<String>` -- sqlx returns `UnexpectedNull` on a bare `Vec<String>`
+                        // target when the column is `NULL`, which every pre-v11 row is. `None`
+                        // is treated as an empty slice before handing it to `IpAllowlist::parse`.
+                        let allowed_cidrs: Option<Vec<String>> =
+                            row.try_get("allowed_cidrs").map_err(|e| {
+                                LookupError::Db(
+                                    anyhow::Error::from(e).context("reading allowed_cidrs"),
+                                )
+                            })?;
+                        let allowlist =
+                            IpAllowlist::parse(allowed_cidrs.as_deref().unwrap_or_default())
+                                .map_err(|e| {
+                                    LookupError::Db(e.context("parsing allowed_cidrs"))
+                                })?;
+                        Ok(Arc::new(KeyRow {
+                            key_id,
+                            name,
+                            audience,
+                            allowlist,
+                        }))
                     }
                     None => Err(LookupError::NotFound),
                 }
@@ -333,6 +358,15 @@ impl AuthProvider for DbApiKeyAuthProvider {
 
         match result {
             Ok(row) => {
+                // Checked after a cache hit or a fresh load, before returning `Ok(AuthContext)`.
+                // Deliberately not cached in `self.unknown` (that cache means "no such live
+                // key", not "this key exists but this caller may not use it from here") and
+                // must not increment `db_api_key_error_count` (that metric means "the DB was
+                // unreachable", not "a credential was rejected") -- both untouched, since this
+                // runs after the `try_get_with` closure above already returned successfully.
+                if !row.allowlist.allows(parts.client_ip()) {
+                    return Err(anyhow!("invalid API token: source IP not permitted"));
+                }
                 micromegas_tracing::trace!(
                     "db api key validated: table={} key_id={} name={}",
                     self.table.table_name(),

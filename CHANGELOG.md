@@ -8,6 +8,21 @@ This file documents the historical progress of the Micromegas project. For curre
   `otel/exporters/otlp/otlptrace`/`otlptracegrpc` exporters in the `grafana/` plugin from
   v1.44.0/v1.38.0 to v1.46.0, resolving three Dependabot alerts for the exporter
   config-logging endpoint-URL leak (fixed upstream in v1.45.0).
+* **Auth:** IP allowlisting for API keys (#1600): an `ingestion_api_keys`/`analytics_api_keys`
+  row (schema v11's new `allowed_cidrs TEXT[]` column) or an env-keyring entry
+  (`MICROMEGAS_API_KEYS`'s new optional `allowed_cidrs` field) can now be pinned to a set of
+  source IP addresses/CIDR ranges; a request presenting a valid key from an IP outside its
+  allowlist is rejected exactly like an invalid key. An empty/absent allowlist means no
+  restriction, the backward-compatible default for every key minted before this feature
+  existed. Set it at mint time or update it on an existing key via the new
+  `PATCH {base_path}/api/{ingestion,analytics}-api-keys/{key_id}/allowlist` route (admin-only).
+  Enforcement relies on the resolved client IP (`X-Forwarded-For`/`X-Real-IP`/socket peer, moved
+  from `micromegas::servers::http_utils::get_client_ip` into
+  `micromegas_auth::client_ip::resolve_client_ip` so every `AuthProvider` can consult it, not
+  just audit logging) — see [IP allowlisting](https://micromegas.info/docs/admin/api-keys/#ip-allowlisting)
+  for the load-balancer deployment requirement this implies. **Minor breaking change:**
+  `micromegas_auth::api_key::KeyRing`'s value type changes from `String` (the key's name) to a
+  new `KeyRingValue { name, allowlist }` struct.
 * **Auth:** Remove the API-key import path — the `micromegas-import-keys` console script, the
   `POST /api/ingestion-api-keys/import` and `POST /api/analytics-api-keys/import` routes on
   `analytics-web-srv`, and `WebClient.import_ingestion_api_key`/`import_analytics_api_key`. Its

@@ -30,6 +30,7 @@ fn parts() -> HttpRequestParts {
         headers: http::HeaderMap::new(),
         method: http::Method::GET,
         uri: "/".parse().expect("valid uri"),
+        client_ip: None,
     }
 }
 

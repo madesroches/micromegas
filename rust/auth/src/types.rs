@@ -105,6 +105,12 @@ pub trait RequestParts: Send + Sync {
 
     /// Get request URI (if applicable)
     fn uri(&self) -> Option<&str>;
+
+    /// The resolved client IP, `None` when nothing resolves (see
+    /// [`crate::client_ip::resolve_client_ip`]). This is what
+    /// [`crate::ip_allowlist::IpAllowlist::allows`] checks a restricted key's request against;
+    /// `None` never satisfies a non-empty allowlist.
+    fn client_ip(&self) -> Option<std::net::IpAddr>;
 }
 
 /// HTTP request validation input
@@ -115,6 +121,9 @@ pub struct HttpRequestParts {
     pub method: http::Method,
     /// Request URI
     pub uri: http::Uri,
+    /// The resolved client IP, computed once by the caller (see
+    /// [`crate::client_ip::resolve_client_ip`]) before this struct is built.
+    pub client_ip: Option<std::net::IpAddr>,
 }
 
 impl RequestParts for HttpRequestParts {
@@ -135,12 +144,19 @@ impl RequestParts for HttpRequestParts {
     fn uri(&self) -> Option<&str> {
         Some(self.uri.path())
     }
+
+    fn client_ip(&self) -> Option<std::net::IpAddr> {
+        self.client_ip
+    }
 }
 
 /// gRPC request validation input (tonic metadata)
 pub struct GrpcRequestParts {
     /// gRPC metadata map
     pub metadata: tonic::metadata::MetadataMap,
+    /// The resolved client IP, computed once by the caller (see
+    /// [`crate::client_ip::resolve_client_ip`]) before this struct is built.
+    pub client_ip: Option<std::net::IpAddr>,
 }
 
 impl RequestParts for GrpcRequestParts {
@@ -160,6 +176,10 @@ impl RequestParts for GrpcRequestParts {
 
     fn uri(&self) -> Option<&str> {
         None
+    }
+
+    fn client_ip(&self) -> Option<std::net::IpAddr> {
+        self.client_ip
     }
 }
 

@@ -3773,6 +3773,7 @@ dependencies = [
  "futures",
  "hmac",
  "http 1.4.2",
+ "ipnet",
  "jsonwebtoken",
  "micromegas-tracing",
  "micromegas-transit",
