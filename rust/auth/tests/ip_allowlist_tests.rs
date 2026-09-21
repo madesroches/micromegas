@@ -90,3 +90,13 @@ fn one_malformed_entry_fails_the_whole_parse_fail_fast() {
     let result = IpAllowlist::parse(&entries(&["10.0.0.0/8", "garbage", "203.0.113.7"]));
     assert!(result.is_err());
 }
+
+#[test]
+fn cidr_with_host_bits_set_returns_err_v4() {
+    assert!(IpAllowlist::parse(&entries(&["10.0.0.5/8"])).is_err());
+}
+
+#[test]
+fn cidr_with_host_bits_set_returns_err_v6() {
+    assert!(IpAllowlist::parse(&entries(&["2001:db8::1/64"])).is_err());
+}

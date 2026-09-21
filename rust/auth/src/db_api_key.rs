@@ -179,15 +179,22 @@ struct KeyRow {
     allowlist: IpAllowlist,
 }
 
-/// Distinguishes "the DB answered: no such live key" from "the DB could not be
-/// reached at all" — only the latter becomes a [`ProviderUnavailable`] and must
-/// never populate either cache.
+/// Distinguishes "the DB answered: no such live key" and "the row exists but is
+/// malformed" -- both credential rejections -- from "the DB could not be reached
+/// at all", which alone becomes a [`ProviderUnavailable`] and must never populate
+/// either cache.
 #[derive(thiserror::Error, Debug)]
 enum LookupError {
     #[error("no such live key")]
     NotFound,
     #[error("{0}")]
     Db(anyhow::Error),
+    /// A row was read successfully but its `allowed_cidrs` column could not be decoded or
+    /// parsed -- e.g. a hand-edited row (`mkdocs/docs/admin/api-keys.md` documents that as
+    /// supported) with a CIDR the column has no `CHECK` constraint to reject. Not a DB outage:
+    /// retrying the same query only reproduces the same malformed row.
+    #[error("{0}")]
+    Invalid(anyhow::Error),
 }
 
 fn table_tags(table: &'static str) -> &'static micromegas_tracing::property_set::PropertySet {
@@ -225,7 +232,9 @@ pub struct DbApiKeyAuthProvider {
     table: ApiKeyTable,
     /// hash -> (key_id, name) for keys known to be live.
     valid: Cache<[u8; 32], Arc<KeyRow>>,
-    /// hash -> () for tokens the DB answered "no such live key" for.
+    /// hash -> () for tokens the DB answered "no such live key" for, and for
+    /// tokens whose row exists but failed to decode/parse (`LookupError::Invalid`) --
+    /// both are credential rejections from the caller's point of view.
     unknown: Cache<[u8; 32], ()>,
     /// Rate-limit window for the outage `error!` log — mirrors `cache_ttl_secs`,
     /// floored so a zero or very low cache TTL doesn't also disable log
@@ -335,14 +344,28 @@ impl AuthProvider for DbApiKeyAuthProvider {
                         // is treated as an empty slice before handing it to `IpAllowlist::parse`.
                         let allowed_cidrs: Option<Vec<String>> =
                             row.try_get("allowed_cidrs").map_err(|e| {
-                                LookupError::Db(
-                                    anyhow::Error::from(e).context("reading allowed_cidrs"),
-                                )
+                                let err = anyhow::Error::from(e).context(format!(
+                                    "reading allowed_cidrs for key_id={key_id} in {}",
+                                    table.table_name()
+                                ));
+                                micromegas_tracing::error!(
+                                    "db_api_key store: malformed row (table={}): {err:#}",
+                                    table.table_name()
+                                );
+                                LookupError::Invalid(err)
                             })?;
                         let allowlist =
                             IpAllowlist::parse(allowed_cidrs.as_deref().unwrap_or_default())
                                 .map_err(|e| {
-                                    LookupError::Db(e.context("parsing allowed_cidrs"))
+                                    let err = e.context(format!(
+                                        "parsing allowed_cidrs for key_id={key_id} in {}",
+                                        table.table_name()
+                                    ));
+                                    micromegas_tracing::error!(
+                                        "db_api_key store: malformed row (table={}): {err:#}",
+                                        table.table_name()
+                                    );
+                                    LookupError::Invalid(err)
                                 })?;
                         Ok(Arc::new(KeyRow {
                             key_id,
@@ -401,7 +424,10 @@ impl AuthProvider for DbApiKeyAuthProvider {
             // outage as `unknown` would turn a transient failure into a
             // TTL-long outage for every affected key.
             Err(arc_err) => match arc_err.as_ref() {
-                LookupError::NotFound => {
+                // `Invalid` is already logged (with `key_id`) where it's raised, above --
+                // this arm only needs to render the generic client-facing rejection and stop
+                // the malformed row from being re-queried on every subsequent request.
+                LookupError::NotFound | LookupError::Invalid(_) => {
                     self.unknown.insert(hash, ()).await;
                     Err(anyhow!("invalid API token"))
                 }
