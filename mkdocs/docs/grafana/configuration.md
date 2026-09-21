@@ -1,5 +1,5 @@
 ---
-description: Configuration guide for the Micromegas Grafana datasource plugin, covering data source setup, host and connection settings, and authentication options in Grafana.
+description: Configuration guide for the Micromegas Grafana datasource plugin, covering data source setup, host and connection settings, and authentication.
 ---
 
 # Configuration

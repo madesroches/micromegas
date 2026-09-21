@@ -1,5 +1,5 @@
 ---
-description: Guide to building Micromegas from source, covering Rust and Python prerequisites, Docker-based PostgreSQL setup, and configuring a local development environment.
+description: Guide to building Micromegas from source, covering Rust and Python prerequisites, Docker-based PostgreSQL setup, and local development configuration.
 ---
 
 # Build Guide
