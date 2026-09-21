@@ -1,0 +1,14 @@
+# Some object-cache-srv integration tests drive real components (real disk
+# I/O through `FoyerBackend`, real background tasks) against a tight
+# wall-clock deadline. `cargo test` runs one test binary at a time, so those
+# deadlines never had to compete with anything; `cargo nextest run` runs many
+# binaries concurrently across the whole workspace, and right after a cold
+# build that contention alone can push a 5s deadline over the edge. Run this
+# group with reduced parallelism instead of widening the deadlines, which
+# would only mask a real regression.
+[test-groups.serial-integration]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'binary_id(micromegas-object-cache-srv::shutdown_sequence_tests)'
+test-group = 'serial-integration'
