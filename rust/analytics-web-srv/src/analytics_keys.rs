@@ -145,6 +145,7 @@ fn validate_name(name: &str) -> Result<(), AnalyticsKeyError> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MintRequest {
     name: String,
     /// CIDR ranges or bare IPs this key may be used from. Absent/omitted = unrestricted.

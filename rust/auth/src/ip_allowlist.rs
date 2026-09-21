@@ -33,6 +33,7 @@ impl IpAllowlist {
                 .parse::<IpNet>()
                 .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
                 .with_context(|| format!("invalid CIDR or IP address: {entry:?}"))?;
+            let net = canonicalize(net);
             if net.addr() != net.network() {
                 anyhow::bail!(
                     "CIDR entry {entry:?} has host bits set; did you mean {:?}?",
@@ -57,6 +58,21 @@ impl IpAllowlist {
             None => false,
         }
     }
+}
+
+/// Downgrades an IPv4-mapped IPv6 `/128` entry (e.g. `::ffff:203.0.113.7/128`, or a bare
+/// `::ffff:203.0.113.7`) to its IPv4 form. `resolve_client_ip` always canonicalizes the
+/// client IP it checks against (`to_canonical()`), so an unnormalized V6-mapped entry here
+/// would never match: `ipnet`'s `contains` treats a V6 net and a V4 address as different
+/// families regardless of value.
+fn canonicalize(net: IpNet) -> IpNet {
+    if net.prefix_len() == 128 {
+        let canonical = net.addr().to_canonical();
+        if canonical.is_ipv4() {
+            return IpNet::new(canonical, 32).expect("a v4 address always accepts prefix 32");
+        }
+    }
+    net
 }
 
 impl Default for IpAllowlist {

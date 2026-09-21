@@ -388,6 +388,13 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 // unreachable", not "a credential was rejected") -- both untouched, since this
                 // runs after the `try_get_with` closure above already returned successfully.
                 if !row.allowlist.allows(parts.client_ip()) {
+                    micromegas_tracing::warn!(
+                        "db api key rejected by allowlist: table={} key_id={} name={} client_ip={:?}",
+                        self.table.table_name(),
+                        row.key_id,
+                        row.name,
+                        parts.client_ip()
+                    );
                     return Err(anyhow!("invalid API token: source IP not permitted"));
                 }
                 micromegas_tracing::trace!(

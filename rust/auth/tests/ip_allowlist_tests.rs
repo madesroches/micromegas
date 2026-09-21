@@ -100,3 +100,17 @@ fn cidr_with_host_bits_set_returns_err_v4() {
 fn cidr_with_host_bits_set_returns_err_v6() {
     assert!(IpAllowlist::parse(&entries(&["2001:db8::1/64"])).is_err());
 }
+
+#[test]
+fn ipv4_mapped_v6_bare_entry_matches_the_canonical_v4_client_ip() {
+    let allowlist = IpAllowlist::parse(&entries(&["::ffff:203.0.113.7"])).expect("parses");
+    assert!(allowlist.allows(Some(ip("203.0.113.7"))));
+    assert!(!allowlist.allows(Some(ip("203.0.113.8"))));
+}
+
+#[test]
+fn ipv4_mapped_v6_slash_128_entry_matches_the_canonical_v4_client_ip() {
+    let allowlist = IpAllowlist::parse(&entries(&["::ffff:203.0.113.7/128"])).expect("parses");
+    assert!(allowlist.allows(Some(ip("203.0.113.7"))));
+    assert!(!allowlist.allows(Some(ip("203.0.113.8"))));
+}

@@ -165,6 +165,11 @@ impl AuthProvider for ApiKeyAuthProvider {
         // the *key comparison* untouched.
         let (context, allowlist) = found.ok_or_else(|| anyhow!("invalid API token"))?;
         if !allowlist.allows(parts.client_ip()) {
+            micromegas_tracing::warn!(
+                "env api key rejected by allowlist: name={} client_ip={:?}",
+                context.subject,
+                parts.client_ip()
+            );
             anyhow::bail!("invalid API token: source IP not permitted");
         }
         Ok(context)

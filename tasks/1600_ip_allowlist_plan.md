@@ -430,9 +430,9 @@ analytics-web-app surfacing is tracked separately in #1611.
   Python client), which are independently useful and testable without a browser surface.
 
 - The API-key import path (the `micromegas-import-keys` CLI and both
-  `POST .../{table}-api-keys/import` routes) was removed in a separate change, already on `main`
-  (#1609), so this plan carries no allowlist plumbing for it — mint and the new `PATCH` route are
-  the only two ways an allowlist reaches a row.
+  `POST .../{table}-api-keys/import` routes) was removed in a separate change earlier on this
+  branch (#1609), so this plan carries no allowlist plumbing for it — mint and the new `PATCH`
+  route are the only two ways an allowlist reaches a row.
 
 ## Documentation
 

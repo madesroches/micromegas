@@ -269,7 +269,7 @@ fn validate_name(name: &str) -> Result<(), IngestionKeyError> {
 /// the only failure left is a malformed explicit request.
 ///
 /// This is format/defaulting validation only -- it runs before `mint_key`'s
-/// `MintPolicy::resolve_audience` authorization decision, and is
+/// `authorize_mint` authorization decision, and is
 /// unaware of grants or claims. Defaulting is not a grant: the policy call is still what decides
 /// whether this caller may mint for the audience that came out of here.
 pub fn resolve_audience(
@@ -413,10 +413,10 @@ async fn mint_key(
     validate_name(&body.name)?;
     // A request naming no audience mints for the deployment default (`MICROMEGAS_DEFAULT_AUDIENCE`,
     // `public` when unset) -- the same value data written by a credential with no bound audience is
-    // stamped with. What still gates the mint is `MintPolicy::resolve_audience` below, which asks
+    // stamped with. What still gates the mint is `authorize_mint` below, which asks
     // whether *this caller* may mint for that audience; the default only decides which audience
     // gets asked about. `?` here still rejects a malformed explicit `audience` with the existing
-    // 400, so `MintPolicy::resolve_audience`'s own malformed arm stays unreachable from this route.
+    // 400, so `authorize_mint`'s own malformed arm stays unreachable from this route.
     let candidate = resolve_audience(&state, body.audience.as_deref())?;
     // Validated up front, alongside `validate_name`/`resolve_audience` -- fails before any DB
     // access, same as those. The validated (not re-normalized) list is bound into the `INSERT`
