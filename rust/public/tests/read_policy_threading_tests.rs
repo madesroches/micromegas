@@ -465,7 +465,7 @@ async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
 /// `resolve_client_ip`'s socket-address fallback, not a canned `RequestParts`.
 #[tokio::test]
 async fn ip_allowlist_accepts_connection_from_an_in_range_peer_address() {
-    let auth_provider = restricted_api_key_provider("test", "secret", &["127.0.0.1/8"]);
+    let auth_provider = restricted_api_key_provider("test", "secret", &["127.0.0.0/8"]);
     let policy = Arc::new(RecordingReadPolicy::default());
     let addr = start_server_with_connect_info(Some(auth_provider), policy).await;
     let mut client = connect(addr).await;

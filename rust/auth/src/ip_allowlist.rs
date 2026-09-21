@@ -22,6 +22,10 @@ impl IpAllowlist {
     ///
     /// `IpNet::from_str` doesn't accept a bare IP without a prefix, so this falls back to
     /// parsing a bare `IpAddr` and widening it to a `/32`/`/128` via `IpNet::from`.
+    ///
+    /// Also rejects a CIDR whose address has host bits set (e.g. `10.0.0.5/8`): `ipnet` parses
+    /// it successfully but silently widens the range to the whole `/8`, which is the opposite of
+    /// what an operator narrowing an allowlist intends.
     pub fn parse(entries: &[String]) -> Result<Self> {
         let mut nets = Vec::with_capacity(entries.len());
         for entry in entries {
@@ -29,6 +33,12 @@ impl IpAllowlist {
                 .parse::<IpNet>()
                 .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
                 .with_context(|| format!("invalid CIDR or IP address: {entry:?}"))?;
+            if net.addr() != net.network() {
+                anyhow::bail!(
+                    "CIDR entry {entry:?} has host bits set; did you mean {:?}?",
+                    net.trunc().to_string()
+                );
+            }
             nets.push(net);
         }
         Ok(Self(nets))
