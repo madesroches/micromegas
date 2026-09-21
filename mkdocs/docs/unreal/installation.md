@@ -1,3 +1,7 @@
+---
+description: Step-by-step guide to installing and configuring the Micromegas Unreal Engine integration, including prerequisites and connecting to an ingestion server.
+---
+
 # Installation Guide
 
 This guide walks through installing and configuring the Micromegas Unreal Engine integration.

@@ -1,3 +1,7 @@
+---
+description: Complete schema reference for Micromegas SQL views, including processes, streams, blocks, logs, and metrics, with field definitions for querying telemetry.
+---
+
 # Schema Reference
 
 Reference for all views, data types, and field definitions available in Micromegas SQL queries.

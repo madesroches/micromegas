@@ -1,3 +1,7 @@
+---
+description: Overview of the Micromegas Grafana datasource plugin, which queries telemetry via SQL over Apache Arrow FlightSQL, with dashboards and time series support.
+---
+
 # Grafana Datasource Plugin
 
 The Micromegas Grafana datasource plugin lets you query telemetry data directly in Grafana dashboards using SQL over the Apache Arrow FlightSQL protocol.

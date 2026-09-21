@@ -1,3 +1,7 @@
+---
+description: How Micromegas delivers enterprise-grade observability at a fraction of commercial SaaS cost by running on your own infrastructure with transparent pricing.
+---
+
 # Cost Effectiveness
 
 Micromegas is designed to provide enterprise-grade observability at a fraction of the cost of commercial SaaS platforms by leveraging direct infrastructure costs rather than abstracted pricing models.
