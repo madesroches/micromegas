@@ -256,7 +256,9 @@ the script doesn't exit until the sequential steps also finish.
 6. **`CONTRIBUTING.md`** — extend the **CI Tools** section: add `cargo install cargo-nextest
    --locked` to the local install list, and note that the pipeline runs `cargo nextest run` +
    `cargo test --doc` (not plain `cargo test`) and that the machete/audit/deny checks now run
-   concurrently with the build/test steps rather than before them.
+   concurrently with the build/test steps rather than before them. Also update the stale
+   `# Runs format check, clippy, and tests` comment on the `python3 build/rust_ci.py` line in the
+   **Rust Workspace (Primary)** section (line ~239) — see Decisions.
 
 ## Files to Modify
 
@@ -269,7 +271,8 @@ the script doesn't exit until the sequential steps also finish.
 - `.github/workflows/rust.yml` — guard `Install cargo-audit`/`Install cargo-deny` to
   `ubuntu-latest`; add a guarded `Install cargo-nextest` step; add a pytest step for
   `build/test_rust_ci.py`; add that file to the trigger `paths:` filters.
-- `CONTRIBUTING.md` — document the nextest switch and the new concurrent-checks behavior.
+- `CONTRIBUTING.md` — document the nextest switch and the new concurrent-checks behavior; correct
+  the stale `# Runs format check, clippy, and tests` comment in the Rust Workspace section.
 
 ## Trade-offs
 
@@ -308,13 +311,19 @@ the script doesn't exit until the sequential steps also finish.
   same-process mutex, so nothing breaks — see Current State.
 - The job-splitting proposal (issue's 4th checkbox) is out of scope for this plan; it needs the
   per-worker cache volume infra change the issue itself names as the blocker.
+- `CONTRIBUTING.md`'s `# Runs format check, clippy, and tests` comment is replaced with
+  `# Runs the full native CI pipeline` rather than an updated step enumeration, so it doesn't go
+  stale again the next time the pipeline's step list changes.
 
 ## Documentation
 
 - `CONTRIBUTING.md`'s **CI Tools** section — add `cargo-nextest` to the local install list and
   describe the nextest/doctest split and the now-concurrent independent checks (Implementation
-  Step 6). No `mkdocs/` page documents the pipeline's internal step list or ordering, so none needs
-  updating.
+  Step 6). The same file's **Rust Workspace (Primary)** section also carries a
+  `# Runs format check, clippy, and tests` comment next to the `python3 build/rust_ci.py` command
+  line (~239) that is already stale today (it omits machete/audit/deny) and would drift further
+  after this plan; Implementation Step 6 generalizes it instead (see Decisions). No `mkdocs/` page
+  documents the pipeline's internal step list or ordering, so none needs updating.
 
 ## Testing Strategy
 
