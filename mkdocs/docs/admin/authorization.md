@@ -311,7 +311,9 @@ that bypassed them fails the whole snapshot load loudly.
 | `GET {base_path}/api/audience-grants/my-audiences` | Any authenticated caller. `{"is_admin","audiences","mint_prefix","email","held_pairs","groups"}` — audiences whose `mint` selector matches this caller, a namespace prefix a name is minted under via `micromegas-setup-telemetry --user-audience`, the `"{audience}:{axis}"` pairs held via an identity selector (populated for an admin the same as anyone else), and the caller's transitive group closure |
 
 There is no paginated `GET` over the whole collection; arbitrary rows come from
-[`list_audience_grants()`](#list_audience_grants).
+[`list_audience_grants()`](#list_audience_grants) -- both of these show the *current* state only.
+For who changed a grant, and when, see the
+[control-plane audit log](control-plane-audit-log.md).
 
 `micromegas-grants` wraps the two write routes:
 

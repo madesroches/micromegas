@@ -20,6 +20,19 @@ This file documents the historical progress of the Micromegas project. For curre
   previously borrowed `import_keys.py::build_auth_provider`/`make_client`, now owns both.
   **Minor breaking change:** the two `WebClient` import methods are gone, as are `import_key` and
   its request/response/row structs in `ingestion_keys.rs`/`analytics_keys.rs`.
+* **Auth:** Control-plane mutation audit record (#1604): every audience-grant/group mutation
+  attempt on `analytics-web-srv` -- `create_grant`/`delete_grant`, `create_group`/`delete_group`,
+  `add_member`/`remove_member`, and a self-service audience claim -- now emits one structured
+  JSON record under the dedicated `control_plane_audit` log target, allowed or denied alike,
+  carrying the actor, `is_admin`, the action, the outcome (`allowed`/`denied`/`error`),
+  `client_ip`, the mutation's target fields, and a `reason` on anything short of `allowed`. This
+  closes the two gaps in the previous free-text lines: a denied mutation used to log nothing at
+  all, and `delete_group`/`remove_member` carried no actor. `GrantGate` and a new
+  `GroupAdminGate` (mirroring it for the four group routes) emit the record for a pre-handler
+  gate denial; each handler is now a thin wrapper around an `_inner` function that emits once on
+  both the success and failure arms. See `mkdocs/docs/admin/control-plane-audit-log.md`. The
+  seven prior free-text `info!` lines these records replace are removed; anything grepping them
+  should switch to querying `log_entries WHERE target = 'control_plane_audit'` instead.
 * **Python:** New `micromegas-views` console script (#1603): a terraform-shaped `plan` /
   `apply` / `pull` / `list` / `show` workflow that treats a directory of `<view_set_name>.sql`
   files as the desired state of the deployment's [DDL-defined materialized view

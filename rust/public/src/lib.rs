@@ -132,6 +132,11 @@ pub mod tracing {
     pub use micromegas_tracing::*;
 }
 
+/// binary heterogeneous queue serialization, used by the tracing event blocks
+pub mod transit {
+    pub use micromegas_transit::*;
+}
+
 // Re-export proc macros at the top level for easy access
 pub use micromegas_proc_macros::*;
 

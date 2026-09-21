@@ -52,6 +52,7 @@ micromegas-proc-macros.workspace = true
 micromegas-telemetry.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-tracing = { workspace = true, features = ["tokio"] }
+micromegas-transit.workspace = true
 serde.workspace = true
 uuid.workspace = true
 
@@ -87,7 +88,6 @@ tower-http = { workspace = true, optional = true }
 async-trait.workspace = true
 base64.workspace = true
 flate2.workspace = true
-micromegas-transit.workspace = true
 opentelemetry-proto.workspace = true
 reqwest.workspace = true
 serial_test = "3.2"

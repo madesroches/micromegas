@@ -27,9 +27,10 @@
 //! this route for the page's own display.
 
 use crate::auth::{AuthenticatedUser, Unauthenticated};
+use crate::mutation_audit::{AuditOutcome, ClientIp, MutationAudit, action};
 use axum::extract::{Extension, FromRequestParts, Query};
-use axum::http::StatusCode;
 use axum::http::request::Parts;
+use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -192,6 +193,33 @@ impl From<Unauthenticated> for AudienceGrantError {
     }
 }
 
+impl AuditOutcome for AudienceGrantError {
+    fn audit_outcome(&self) -> (&'static str, Option<String>) {
+        match self {
+            AudienceGrantError::Forbidden(msg) => ("denied", Some(msg.clone())),
+            AudienceGrantError::Unauthenticated(msg) => ("denied", Some(msg.clone())),
+            AudienceGrantError::NotFound => ("denied", Some("grant not found".to_string())),
+            AudienceGrantError::GroupNotFound(msg) => ("denied", Some(msg.clone())),
+            AudienceGrantError::BadRequest(msg) => ("denied", Some(msg.clone())),
+            // The raw `sqlx::Error` text must not reach the record -- it can carry
+            // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
+            // returns to the client instead. `Internal` gets the same treatment: it is built from
+            // `sqlx::Error` on several audited code paths and would otherwise leak the same detail.
+            AudienceGrantError::Database(_) => {
+                ("error", Some("internal database error".to_string()))
+            }
+            AudienceGrantError::NotConfigured => (
+                "error",
+                Some(
+                    "audience grant store not configured: set MICROMEGAS_SQL_CONNECTION_STRING"
+                        .to_string(),
+                ),
+            ),
+            AudienceGrantError::Internal(_) => ("error", Some("internal error".to_string())),
+        }
+    }
+}
+
 fn require_pool(state: &AudienceGrantsState) -> Result<PgPool, AudienceGrantError> {
     state.pool.clone().ok_or(AudienceGrantError::NotConfigured)
 }
@@ -254,17 +282,47 @@ impl<S: Send + Sync> FromRequestParts<S> for GrantGate {
     type Rejection = AudienceGrantError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let AuthenticatedUser(caller) = AuthenticatedUser::from_request_parts(parts, state).await?;
-        let grants_state = parts
-            .extensions
-            .get::<AudienceGrantsState>()
-            .cloned()
+        // The body hasn't parsed yet, so the only signal available is the method; `POST` and
+        // `DELETE` are the only two methods routed through this gate (`create_grant`/
+        // `delete_grant`), so an unmatched method is unreachable through the router. Mapped to
+        // `create_grant` rather than adding an error path for that unreachable case.
+        let action = if parts.method == Method::DELETE {
+            action::DELETE_GRANT
+        } else {
+            action::CREATE_GRANT
+        };
+        let ClientIp(client_ip) = ClientIp::from_request_parts(parts, state)
+            .await
+            .expect("ClientIp is infallible");
+
+        let caller = match AuthenticatedUser::from_request_parts(parts, state).await {
+            Ok(AuthenticatedUser(caller)) => caller,
+            Err(_) => {
+                MutationAudit::new(action, "unauthenticated".to_string(), false, client_ip)
+                    .emit_gate_outcome("denied", "authentication required");
+                return Err(AudienceGrantError::Unauthenticated(
+                    "authentication required".to_string(),
+                ));
+            }
+        };
+        let client_ip = ClientIp(client_ip);
+        let grants_state = match parts.extensions.get::<AudienceGrantsState>().cloned() {
+            Some(grants_state) => grants_state,
             // Reachable only if routing is misconfigured; the 503 body's wording doesn't
             // literally describe this cause, but a 503 fail-closed beats a panic for a case that
             // should never happen in a correctly wired router -- mirrors `MintGate`'s identical
             // `.ok_or(...)`.
-            .ok_or(AudienceGrantError::NotConfigured)?;
+            None => {
+                let reason =
+                    "audience grant store not configured: set MICROMEGAS_SQL_CONNECTION_STRING";
+                MutationAudit::from_context(action, &caller, &client_ip)
+                    .emit_gate_outcome("error", reason);
+                return Err(AudienceGrantError::NotConfigured);
+            }
+        };
         if !caller.is_admin() && !grants_state.self_service_mint_enabled {
+            MutationAudit::from_context(action, &caller, &client_ip)
+                .emit_gate_outcome("denied", "self-service grant management is disabled");
             return Err(AudienceGrantError::Forbidden(
                 "self-service grant management is disabled".to_string(),
             ));
@@ -403,7 +461,28 @@ async fn caller_holds_pair(
 async fn create_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
+    client_ip: ClientIp,
     Json(body): Json<CreateGrantRequest>,
+) -> Result<(StatusCode, Json<GrantResponse>), AudienceGrantError> {
+    let audit = MutationAudit::from_context(action::CREATE_GRANT, &caller, &client_ip).grant(
+        &body.audience,
+        &body.axis,
+        &body.selector,
+    );
+    let result = create_grant_inner(state, caller, body).await;
+    // `created` is known only on success -- fold it in before emitting.
+    let audit = match &result {
+        Ok((status, _)) => audit.created(*status == StatusCode::CREATED),
+        Err(_) => audit,
+    };
+    audit.emit(&result);
+    result
+}
+
+async fn create_grant_inner(
+    state: AudienceGrantsState,
+    caller: AuthContext,
+    body: CreateGrantRequest,
 ) -> Result<(StatusCode, Json<GrantResponse>), AudienceGrantError> {
     let pool = require_pool(&state)?;
     validate_audience(&body.audience)?;
@@ -519,10 +598,6 @@ async fn create_grant(
     } else {
         StatusCode::OK
     };
-    info!(
-        "audience grant audience={} axis={} selector={} created={} created_by={}",
-        row.audience, row.axis, row.selector, row.created, row.created_by
-    );
     Ok((
         status,
         Json(GrantResponse {
@@ -578,7 +653,23 @@ struct DeleteGrantQuery {
 async fn delete_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
+    client_ip: ClientIp,
     Query(query): Query<DeleteGrantQuery>,
+) -> Result<StatusCode, AudienceGrantError> {
+    let audit = MutationAudit::from_context(action::DELETE_GRANT, &caller, &client_ip).grant(
+        &query.audience,
+        &query.axis,
+        &query.selector,
+    );
+    let result = delete_grant_inner(state, caller, query).await;
+    audit.emit(&result);
+    result
+}
+
+async fn delete_grant_inner(
+    state: AudienceGrantsState,
+    caller: AuthContext,
+    query: DeleteGrantQuery,
 ) -> Result<StatusCode, AudienceGrantError> {
     let pool = require_pool(&state)?;
     validate_axis(&query.axis)?;
@@ -674,10 +765,6 @@ async fn delete_grant(
         });
     }
 
-    info!(
-        "deleted audience grant audience={} axis={} selector={} deleted_by={deleted_by}",
-        query.audience, query.axis, query.selector
-    );
     Ok(StatusCode::NO_CONTENT)
 }
 
