@@ -1,3 +1,7 @@
+---
+description: Reference for the Micromegas Python client, covering installation, connection options, query methods, and its bundled command-line tools.
+---
+
 # Python API Reference
 
 Reference for the Micromegas Python client: connection options, client methods, and the bundled CLI tools.

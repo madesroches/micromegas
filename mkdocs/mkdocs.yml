@@ -1,5 +1,5 @@
 site_name: Micromegas Documentation
-site_description: Unified observability platform with high-performance telemetry collection and analytics
+site_description: Micromegas is an open-source observability platform unifying telemetry instrumentation, ingestion, SQL analytics, and dashboards for high-performance systems.
 site_url: https://micromegas.info/docs/
 repo_url: https://github.com/madesroches/micromegas
 repo_name: madesroches/micromegas

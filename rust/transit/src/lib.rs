@@ -1,5 +1,5 @@
-//! transit library
-//! provides fast binary serialization for Plain Old Data structures
+//! Fast, zero-copy binary serialization library for Plain Old Data structures, used by
+//! Micromegas to encode telemetry events efficiently for high-throughput ingestion.
 
 // crate-specific lint exceptions:
 #![allow(

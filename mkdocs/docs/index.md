@@ -1,3 +1,7 @@
+---
+description: Micromegas is an open-source observability platform unifying telemetry instrumentation, ingestion, SQL analytics, and dashboards for high-performance systems.
+---
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/images/micromegas-primary-dark.svg">
