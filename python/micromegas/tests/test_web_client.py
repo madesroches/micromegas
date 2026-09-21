@@ -16,6 +16,8 @@ def _make_client():
     client.session.get.return_value.json.return_value = []
     client.session.delete.return_value.ok = True
     client.session.delete.return_value.json.return_value = {}
+    client.session.patch.return_value.ok = True
+    client.session.patch.return_value.json.return_value = {}
     return client
 
 
@@ -157,6 +159,20 @@ class TestMintIngestionApiKey:
         payload = client.session.post.call_args.kwargs["json"]
         assert payload == {"name": "laptop", "audience": "team-alpha"}
 
+    def test_omits_allowed_cidrs_when_none(self):
+        client = _make_client()
+        client.session.post.return_value.json.return_value = {"key": "mmk_x"}
+        client.mint_ingestion_api_key("laptop")
+        payload = client.session.post.call_args.kwargs["json"]
+        assert "allowed_cidrs" not in payload
+
+    def test_includes_allowed_cidrs_when_set(self):
+        client = _make_client()
+        client.session.post.return_value.json.return_value = {"key": "mmk_x"}
+        client.mint_ingestion_api_key("laptop", allowed_cidrs=["203.0.113.0/24"])
+        payload = client.session.post.call_args.kwargs["json"]
+        assert payload == {"name": "laptop", "allowed_cidrs": ["203.0.113.0/24"]}
+
     def test_posts_to_ingestion_api_keys(self):
         client = _make_client()
         client.session.post.return_value.json.return_value = {"key": "mmk_x"}
@@ -282,6 +298,46 @@ class TestListIngestionApiKeys:
         ]
         result = client.list_ingestion_api_keys()
         assert result == [{"key_id": "k1", "audience": "ci"}]
+
+
+class TestApiKeyAllowlist:
+    """`set_ingestion_api_key_allowlist`/`set_analytics_api_key_allowlist`: URL/payload
+    construction, mirroring `TestAudienceGrants`'s style."""
+
+    def test_set_ingestion_api_key_allowlist_builds_expected_url_and_body(self):
+        client = _make_client()
+        client.session.patch.return_value.json.return_value = {
+            "allowed_cidrs": ["203.0.113.0/24"]
+        }
+        result = client.set_ingestion_api_key_allowlist("abc-123", ["203.0.113.0/24"])
+        call = client.session.patch.call_args
+        assert (
+            call.args[0]
+            == "http://localhost:9999/api/ingestion-api-keys/abc-123/allowlist"
+        )
+        assert call.kwargs["json"] == {"allowed_cidrs": ["203.0.113.0/24"]}
+        assert result == {"allowed_cidrs": ["203.0.113.0/24"]}
+
+    def test_set_ingestion_api_key_allowlist_can_clear_with_empty_list(self):
+        client = _make_client()
+        client.session.patch.return_value.json.return_value = {"allowed_cidrs": []}
+        client.set_ingestion_api_key_allowlist("abc-123", [])
+        call = client.session.patch.call_args
+        assert call.kwargs["json"] == {"allowed_cidrs": []}
+
+    def test_set_analytics_api_key_allowlist_builds_expected_url_and_body(self):
+        client = _make_client()
+        client.session.patch.return_value.json.return_value = {
+            "allowed_cidrs": ["10.0.0.0/8"]
+        }
+        result = client.set_analytics_api_key_allowlist("def-456", ["10.0.0.0/8"])
+        call = client.session.patch.call_args
+        assert (
+            call.args[0]
+            == "http://localhost:9999/api/analytics-api-keys/def-456/allowlist"
+        )
+        assert call.kwargs["json"] == {"allowed_cidrs": ["10.0.0.0/8"]}
+        assert result == {"allowed_cidrs": ["10.0.0.0/8"]}
 
 
 class TestMyAudiences:

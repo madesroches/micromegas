@@ -121,6 +121,7 @@ fn bearer_request_parts(token: &str) -> HttpRequestParts {
         headers,
         method: http::Method::GET,
         uri: "/".parse().expect("valid uri"),
+        client_ip: None,
     }
 }
 

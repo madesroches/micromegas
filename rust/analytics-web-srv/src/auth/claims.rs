@@ -76,6 +76,10 @@ impl micromegas::auth::types::RequestParts for CookieTokenRequestParts {
     fn uri(&self) -> Option<&str> {
         None
     }
+
+    fn client_ip(&self) -> Option<std::net::IpAddr> {
+        None
+    }
 }
 
 /// Extract the 'name' claim from a JWT payload

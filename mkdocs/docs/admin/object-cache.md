@@ -38,7 +38,7 @@ docker run -d -p 8080:8080 \
 |---|---|---|
 | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier. The disk store carries an internal format version; on startup, a build whose format differs from the persisted store wipes the store directory once and rewarms from origin (no data loss). Same-format restarts reuse the store warm. |
-| `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"..."}` |
+| `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"...","allowed_cidrs":[...]?}`. `allowed_cidrs` (CIDR ranges or bare IPs) is optional and defaults to unrestricted when omitted/empty -- see [IP allowlisting](api-keys.md#ip-allowlisting) (that section otherwise covers the DB-backed key tables; this is the env-keyring equivalent, the sole construction site of this keyring shape outside tests) |
 | `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache tier size (default `512`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache tier size (default `50`) |

@@ -27,6 +27,7 @@
 //!     headers,
 //!     method: http::Method::GET,
 //!     uri: "/api/endpoint".parse().unwrap(),
+//!     client_ip: None,
 //! };
 //!
 //! let auth_ctx = provider.validate_request(&parts as &dyn RequestParts).await?;
@@ -64,6 +65,7 @@
 //!     headers,
 //!     method: http::Method::GET,
 //!     uri: "/api/endpoint".parse().unwrap(),
+//!     client_ip: None,
 //! };
 //!
 //! let auth_ctx = provider.validate_request(&parts as &dyn RequestParts).await?;
@@ -74,6 +76,14 @@
 
 /// Core authentication types and traits
 pub mod types;
+
+/// Client IP resolution (X-Forwarded-For / X-Real-IP / socket address), shared by every
+/// `RequestParts` construction site and by [`ip_allowlist`]'s allowlist check.
+pub mod client_ip;
+
+/// A typed, CIDR-based IP allowlist -- the decision point `ApiKeyAuthProvider` and
+/// `DbApiKeyAuthProvider` both call to enforce a per-key source-IP restriction.
+pub mod ip_allowlist;
 
 /// Shared prefixed-env-var resolution (`{prefix}_{suffix}` with `MICROMEGAS_{suffix}` fallback)
 pub mod env;

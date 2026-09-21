@@ -44,6 +44,7 @@ fn bearer_parts(token: &str) -> HttpRequestParts {
         headers,
         method: http::Method::GET,
         uri: "/test".parse().expect("valid uri"),
+        client_ip: None,
     }
 }
 
@@ -138,6 +139,7 @@ async fn missing_bearer_token_fails_before_any_db_access() {
         headers: http::HeaderMap::new(),
         method: http::Method::GET,
         uri: "/test".parse().expect("valid uri"),
+        client_ip: None,
     };
     let result = provider.validate_request(&parts as &dyn RequestParts).await;
     assert!(result.is_err());

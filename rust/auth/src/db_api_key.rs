@@ -8,6 +8,7 @@
 //! `moka` cache.
 
 use crate::env::resolve_prefixed_var;
+use crate::ip_allowlist::IpAllowlist;
 use crate::types::{AuthContext, AuthProvider, AuthType, ProviderUnavailable, RequestParts};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
@@ -165,24 +166,35 @@ pub async fn key_store_has_live_rows(pool: &PgPool, table: ApiKeyTable) -> Resul
     Ok(has_rows)
 }
 
-/// hash -> (key_id, name, audience) for a key known to be live.
+/// hash -> (key_id, name, audience, allowlist) for a key known to be live.
 struct KeyRow {
     key_id: uuid::Uuid,
     name: String,
     /// `Some` for `Ingestion` (the column is `NOT NULL` as of migration v6), `None` for
     /// `Analytics` (which carries no `audience` column at all).
     audience: Option<String>,
+    /// Parsed once per cache fill (not per request) from the `allowed_cidrs` column --
+    /// `IpAllowlist::parse` is fed `&[]` when the column read back `None` (every pre-v11 row),
+    /// giving the same "no restriction" allowlist as an empty stored array.
+    allowlist: IpAllowlist,
 }
 
-/// Distinguishes "the DB answered: no such live key" from "the DB could not be
-/// reached at all" — only the latter becomes a [`ProviderUnavailable`] and must
-/// never populate either cache.
+/// Distinguishes "the DB answered: no such live key" and "the row exists but is
+/// malformed" -- both credential rejections -- from "the DB could not be reached
+/// at all", which alone becomes a [`ProviderUnavailable`] and must never populate
+/// either cache.
 #[derive(thiserror::Error, Debug)]
 enum LookupError {
     #[error("no such live key")]
     NotFound,
     #[error("{0}")]
     Db(anyhow::Error),
+    /// A row was read successfully but its `allowed_cidrs` column could not be decoded or
+    /// parsed -- e.g. a hand-edited row (`mkdocs/docs/admin/api-keys.md` documents that as
+    /// supported) with a CIDR the column has no `CHECK` constraint to reject. Not a DB outage:
+    /// retrying the same query only reproduces the same malformed row.
+    #[error("{0}")]
+    Invalid(anyhow::Error),
 }
 
 fn table_tags(table: &'static str) -> &'static micromegas_tracing::property_set::PropertySet {
@@ -220,7 +232,9 @@ pub struct DbApiKeyAuthProvider {
     table: ApiKeyTable,
     /// hash -> (key_id, name) for keys known to be live.
     valid: Cache<[u8; 32], Arc<KeyRow>>,
-    /// hash -> () for tokens the DB answered "no such live key" for.
+    /// hash -> () for tokens the DB answered "no such live key" for, and for
+    /// tokens whose row exists but failed to decode/parse (`LookupError::Invalid`) --
+    /// both are credential rejections from the caller's point of view.
     unknown: Cache<[u8; 32], ()>,
     /// Rate-limit window for the outage `error!` log — mirrors `cache_ttl_secs`,
     /// floored so a zero or very low cache TTL doesn't also disable log
@@ -283,9 +297,9 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 // Built from `&'static str` literals alongside `table.table_name()`, so
                 // nothing caller-supplied ever reaches this SQL.
                 let returning = if table.has_audience() {
-                    "key_id, name, audience"
+                    "key_id, name, audience, allowed_cidrs"
                 } else {
-                    "key_id, name"
+                    "key_id, name, allowed_cidrs"
                 };
                 let row = sqlx::query(&format!(
                     "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
@@ -324,7 +338,41 @@ impl AuthProvider for DbApiKeyAuthProvider {
                         } else {
                             None
                         };
-                        Ok(Arc::new(KeyRow { key_id, name, audience }))
+                        // A nullable `TEXT[]` decodes into `Option<Vec<String>>`, not a bare
+                        // `Vec<String>` -- sqlx returns `UnexpectedNull` on a bare `Vec<String>`
+                        // target when the column is `NULL`, which every pre-v11 row is. `None`
+                        // is treated as an empty slice before handing it to `IpAllowlist::parse`.
+                        let allowed_cidrs: Option<Vec<String>> =
+                            row.try_get("allowed_cidrs").map_err(|e| {
+                                let err = anyhow::Error::from(e).context(format!(
+                                    "reading allowed_cidrs for key_id={key_id} in {}",
+                                    table.table_name()
+                                ));
+                                micromegas_tracing::error!(
+                                    "db_api_key store: malformed row (table={}): {err:#}",
+                                    table.table_name()
+                                );
+                                LookupError::Invalid(err)
+                            })?;
+                        let allowlist =
+                            IpAllowlist::parse(allowed_cidrs.as_deref().unwrap_or_default())
+                                .map_err(|e| {
+                                    let err = e.context(format!(
+                                        "parsing allowed_cidrs for key_id={key_id} in {}",
+                                        table.table_name()
+                                    ));
+                                    micromegas_tracing::error!(
+                                        "db_api_key store: malformed row (table={}): {err:#}",
+                                        table.table_name()
+                                    );
+                                    LookupError::Invalid(err)
+                                })?;
+                        Ok(Arc::new(KeyRow {
+                            key_id,
+                            name,
+                            audience,
+                            allowlist,
+                        }))
                     }
                     None => Err(LookupError::NotFound),
                 }
@@ -333,6 +381,22 @@ impl AuthProvider for DbApiKeyAuthProvider {
 
         match result {
             Ok(row) => {
+                // Checked after a cache hit or a fresh load, before returning `Ok(AuthContext)`.
+                // Deliberately not cached in `self.unknown` (that cache means "no such live
+                // key", not "this key exists but this caller may not use it from here") and
+                // must not increment `db_api_key_error_count` (that metric means "the DB was
+                // unreachable", not "a credential was rejected") -- both untouched, since this
+                // runs after the `try_get_with` closure above already returned successfully.
+                if !row.allowlist.allows(parts.client_ip()) {
+                    micromegas_tracing::warn!(
+                        "db api key rejected by allowlist: table={} key_id={} name={} client_ip={:?}",
+                        self.table.table_name(),
+                        row.key_id,
+                        row.name,
+                        parts.client_ip()
+                    );
+                    return Err(anyhow!("invalid API token: source IP not permitted"));
+                }
                 micromegas_tracing::trace!(
                     "db api key validated: table={} key_id={} name={}",
                     self.table.table_name(),
@@ -367,7 +431,10 @@ impl AuthProvider for DbApiKeyAuthProvider {
             // outage as `unknown` would turn a transient failure into a
             // TTL-long outage for every affected key.
             Err(arc_err) => match arc_err.as_ref() {
-                LookupError::NotFound => {
+                // `Invalid` is already logged (with `key_id`) where it's raised, above --
+                // this arm only needs to render the generic client-facing rejection and stop
+                // the malformed row from being re-queried on every subsequent request.
+                LookupError::NotFound | LookupError::Invalid(_) => {
                     self.unknown.insert(hash, ()).await;
                     Err(anyhow!("invalid API token"))
                 }
@@ -378,5 +445,153 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 .into()),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! `KeyRow` and the `valid`/`unknown` caches are private, so the no-DB allowlist coverage
+    //! the plan called for lives here rather than in `tests/db_api_key_tests.rs` -- there is no
+    //! public seam from that integration-test crate to pre-populate a cache entry directly.
+    //! Mirrors that file's "no DB" pattern: a lazily-connected pool that is never actually
+    //! queried, since the cache is pre-populated and the loader closure never runs.
+
+    use super::*;
+    use crate::policy::PUBLIC_AUDIENCE;
+    use crate::types::{HttpRequestParts, RequestParts};
+    use micromegas_tracing::event::in_memory_sink::InMemorySink;
+    use micromegas_tracing::metrics::MetricsMsgQueueAny;
+    use micromegas_tracing::test_utils::init_in_memory_tracing;
+    use micromegas_transit::HeterogeneousQueue;
+    use serial_test::serial;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn unreachable_pool() -> PgPool {
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(50))
+            .connect_lazy("postgres://localhost/unused")
+            .expect("lazy pool creation is infallible")
+    }
+
+    fn test_config() -> DbApiKeyConfig {
+        DbApiKeyConfig {
+            cache_size: 100,
+            cache_ttl_secs: 60,
+            unknown_cache_ttl_secs: 10,
+            unknown_cache_size: 100,
+        }
+    }
+
+    fn bearer_parts(token: &str, client_ip: Option<IpAddr>) -> HttpRequestParts {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().expect("valid header"),
+        );
+        HttpRequestParts {
+            headers,
+            method: http::Method::GET,
+            uri: "/test".parse().expect("valid uri"),
+            client_ip,
+        }
+    }
+
+    fn count_integer_metric(sink: &InMemorySink, name: &str) -> u64 {
+        let state = sink.state.lock().expect("sink lock");
+        let mut count = 0u64;
+        for block in &state.metrics_blocks {
+            for evt in block.events.iter() {
+                match evt {
+                    MetricsMsgQueueAny::IntegerMetricEvent(e) if e.desc.name == name => count += 1,
+                    MetricsMsgQueueAny::TaggedIntegerMetricEvent(e) if e.desc.name == name => {
+                        count += 1
+                    }
+                    _ => {}
+                }
+            }
+        }
+        count
+    }
+
+    /// Pre-populates the `valid` cache with a canned `KeyRow` carrying a populated
+    /// `allowed_cidrs`-derived `IpAllowlist`, bypassing `try_get_with`'s loader (and therefore
+    /// the DB) entirely -- `validate_request` only ever reaches the DB on a cache miss.
+    async fn provider_with_cached_allowlisted_key(
+        token: &str,
+        allowed_cidrs: &[&str],
+    ) -> DbApiKeyAuthProvider {
+        let provider =
+            DbApiKeyAuthProvider::new(unreachable_pool(), ApiKeyTable::Ingestion, test_config());
+        let allowlist = IpAllowlist::parse(
+            &allowed_cidrs
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .expect("valid CIDR");
+        provider
+            .valid
+            .insert(
+                hash_key(token),
+                Arc::new(KeyRow {
+                    key_id: uuid::Uuid::new_v4(),
+                    name: "allowlisted-test-key".to_string(),
+                    audience: Some(PUBLIC_AUDIENCE.to_string()),
+                    allowlist,
+                }),
+            )
+            .await;
+        provider
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn allowlisted_key_authenticates_from_in_range_ip_without_db_access() {
+        let token = "mmk_allowlist_in_range";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))));
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(result.is_ok(), "in-range IP must be permitted");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn allowlisted_key_is_rejected_from_out_of_range_ip_without_db_access() {
+        let guard = init_in_memory_tracing();
+        let token = "mmk_allowlist_out_of_range";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(result.is_err(), "out-of-range IP must be rejected");
+
+        // Rejection on an allowlist mismatch is a distinct case from "no such live key" (which
+        // populates `unknown`) and from a DB outage (which increments the error metric) -- this
+        // is neither, so both must stay untouched.
+        assert!(
+            provider.unknown.get(&hash_key(token)).await.is_none(),
+            "an allowlist rejection must not poison the `unknown` cache for a key that exists"
+        );
+        micromegas_tracing::dispatch::flush_metrics_buffer();
+        assert_eq!(
+            count_integer_metric(&guard.sink, "db_api_key_error_count"),
+            0,
+            "an allowlist rejection is not a DB error and must not increment the error metric"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn allowlisted_key_is_rejected_when_client_ip_is_unresolved() {
+        let token = "mmk_allowlist_no_ip";
+        let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
+        let parts = bearer_parts(token, None);
+
+        let result = provider.validate_request(&parts as &dyn RequestParts).await;
+        assert!(
+            result.is_err(),
+            "an unresolved client IP must never satisfy a non-empty allowlist"
+        );
     }
 }

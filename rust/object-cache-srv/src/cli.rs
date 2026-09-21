@@ -56,6 +56,10 @@ pub struct Cli {
     #[clap(long)]
     pub allow_all_prefixes: bool,
 
+    /// JSON array of keyring entries: `{"name","key","allowed_cidrs"?}`. `allowed_cidrs`
+    /// (CIDR ranges or bare IPs this key may be presented from) is optional; absent/empty means
+    /// unrestricted, the backward-compatible default for every entry written before this field
+    /// existed.
     #[clap(long, env = "MICROMEGAS_API_KEYS", default_value = "")]
     pub api_keys: String,
 

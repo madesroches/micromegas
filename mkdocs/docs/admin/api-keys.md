@@ -56,8 +56,10 @@ CREATE TABLE ingestion_api_keys (
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ,
   revoked_by   VARCHAR(255),
-  audience     VARCHAR(255) NOT NULL    -- immutable write audience
-    CONSTRAINT ingestion_api_keys_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$')
+  audience     VARCHAR(255) NOT NULL,   -- immutable write audience
+    CONSTRAINT ingestion_api_keys_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$'),
+  allowed_cidrs TEXT[]                  -- CIDR ranges/bare IPs this key may be used from;
+                                        -- NULL/empty = unrestricted (schema v11)
 );
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 
@@ -71,7 +73,8 @@ CREATE TABLE analytics_api_keys (
   created_by   VARCHAR(255) NOT NULL,
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ,
-  revoked_by   VARCHAR(255)
+  revoked_by   VARCHAR(255),
+  allowed_cidrs TEXT[]                  -- same as above (schema v11)
 );
 CREATE UNIQUE INDEX analytics_api_keys_key_hash ON analytics_api_keys(key_hash);
 ```
@@ -100,12 +103,14 @@ one service keeps a single admin list (see [Security](#security)).
 
 | Route | Body / result |
 |---|---|
-| `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?}` → 201 `{"key_id","name","created_at","key","audience","claimed"}` |
-| `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience"}]` |
+| `POST {base_path}/api/ingestion-api-keys` | `{"name","audience"?,"allowed_cidrs"?}` → 201 `{"key_id","name","created_at","key","audience","claimed"}` |
+| `GET {base_path}/api/ingestion-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","audience","allowed_cidrs"}]` |
 | `DELETE {base_path}/api/ingestion-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
-| `POST {base_path}/api/analytics-api-keys` | `{"name"}` → 201 `{"key_id","name","created_at","key"}` |
-| `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by"}]` |
+| `PATCH {base_path}/api/ingestion-api-keys/{key_id}/allowlist` | `{"allowed_cidrs"}` → 200 `{"allowed_cidrs"}` or 404 (admin-only; `[]` clears the restriction) |
+| `POST {base_path}/api/analytics-api-keys` | `{"name","allowed_cidrs"?}` → 201 `{"key_id","name","created_at","key"}` |
+| `GET {base_path}/api/analytics-api-keys?limit=&offset=&include_revoked=` | 200 `[{"key_id","name","created_at","created_by","last_used_at","revoked_at","revoked_by","allowed_cidrs"}]` |
 | `DELETE {base_path}/api/analytics-api-keys/{key_id}` | 200 `{"revoked_at"}` or 404 |
+| `PATCH {base_path}/api/analytics-api-keys/{key_id}/allowlist` | `{"allowed_cidrs"}` → 200 `{"allowed_cidrs"}` or 404 (admin-only; `[]` clears the restriction) |
 
 Both route groups share request/response shapes and validation for
 `name`/list/revoke; `audience` is an `ingestion_api_keys`-only field —
@@ -154,6 +159,15 @@ once before relying on these routes, or every call fails with an opaque
 `analytics-web-srv` whose `INSERT`s omit `audience` starts failing with a
 `NOT NULL` violation (**500**). Upgrade `analytics-web-srv` to a version that
 writes `audience` in the same deploy that runs the v6 migration.
+
+**Deploy ordering also matters for the `allowed_cidrs` column (schema v11).**
+`migrate_db` (which runs this migration) is only invoked by
+`telemetry-ingestion-srv`/`monolith`; `flight-sql-srv` and `analytics-web-srv`
+never run it. A new build of either service that queries `allowed_cidrs`
+against a pre-v11 database fails with "column allowed_cidrs does not exist."
+The service that runs the migration must be deployed — and the migration must
+have completed — before any new `flight-sql-srv`/`analytics-web-srv` build
+reaches production.
 
 **One env var backs both route groups:**
 
@@ -263,6 +277,40 @@ unset).
 **Revoke** — `DELETE {base_path}/api/{ingestion,analytics}-api-keys/{key_id}`,
 keyed only on `key_id`. `GET {base_path}/api/{ingestion,analytics}-api-keys`
 is the way to discover a `key_id` to revoke.
+
+## IP allowlisting
+
+Either key table can additionally pin a key to a set of source IP addresses
+or CIDR ranges (`allowed_cidrs`, schema v11). A request presenting a valid
+key from an IP outside its allowlist is rejected exactly like an invalid
+key — a generic auth failure, not a distinguishable status, so a caller
+holding a leaked but IP-restricted key can't tell "wrong key" apart from
+"right key, wrong network." An empty/absent allowlist means no
+restriction — the backward-compatible default for every key minted before
+this feature existed.
+
+Set it at mint time (`"allowed_cidrs": ["10.0.0.0/8", "203.0.113.7"]` in the
+`POST` body — CIDR ranges and bare IPs, the latter treated as a `/32`/`/128`)
+or afterwards via `PATCH {base_path}/api/{ingestion,analytics}-api-keys/{key_id}/allowlist`
+(admin-only, `{"allowed_cidrs": [...]}`, `[]` clears the restriction). A
+hand-edited or `PATCH`-ed allowlist takes effect within the key's cache TTL,
+same as revocation (see [Cache and audit env vars](#cache-and-audit-env-vars)).
+
+`last_used_at` records that the credential was presented on a cache miss, not
+that the request was authorized from an allowed IP — a key rejected for
+being outside its allowlist can still refresh `last_used_at`.
+
+**An IP allowlist is only enforceable when every request reaches the service
+through a load balancer that sets or overwrites `X-Forwarded-For`.** The
+resolved client IP is read from `X-Forwarded-For` (rightmost entry), then
+`X-Real-IP`, then the raw socket peer address — header sources take priority
+over the socket peer specifically so the load balancer's own observation
+(appended to, not replaceable within, the header) wins over anything a
+direct caller sends. A deployment where a client can connect to the service
+directly, bypassing the load balancer, can present any source IP by simply
+sending that header itself — the allowlist restricts nothing in that
+topology. This feature targets deployments behind a load balancer; no
+trusted-proxy configuration is added to change that.
 
 ## Web app admin pages
 
