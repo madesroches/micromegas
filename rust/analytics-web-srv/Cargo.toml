@@ -52,7 +52,6 @@ path = "src/main.rs"
 [dev-dependencies]
 axum-test = "16.4"
 jsonwebtoken.workspace = true
-micromegas-transit.workspace = true
 rsa.workspace = true
 serial_test = "3.2"
 tempfile = "3.14"

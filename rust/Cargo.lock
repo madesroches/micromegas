@@ -72,7 +72,6 @@ dependencies = [
  "http 1.4.2",
  "jsonwebtoken",
  "micromegas",
- "micromegas-transit",
  "moka",
  "object_store",
  "openidconnect",

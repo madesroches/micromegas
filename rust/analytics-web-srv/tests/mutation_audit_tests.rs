@@ -30,7 +30,7 @@ use micromegas::tracing::event::in_memory_sink::InMemorySink;
 use micromegas::tracing::levels::{LevelFilter, set_max_level};
 use micromegas::tracing::logs::LogMsgQueueAny;
 use micromegas::tracing::test_utils::init_in_memory_tracing;
-use micromegas_transit::HeterogeneousQueue;
+use micromegas::transit::HeterogeneousQueue;
 use serde_json::Value;
 use serial_test::serial;
 use tower::ServiceExt;
