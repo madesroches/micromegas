@@ -17,3 +17,8 @@ def run_command(cmd, cwd=rust_root):
     print("cmd=", cmd, "cwd=", cwd)
     subprocess.run(cmd, shell=True, cwd=cwd, check=True)
     show_disk_space()
+
+def run_captured(cmd, cwd=rust_root):
+    """Like run_command, but captures output and returns the result instead of raising."""
+    print("cmd=", cmd, "cwd=", cwd)
+    return subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)

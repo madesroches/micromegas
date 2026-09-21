@@ -25,6 +25,14 @@ This file documents the historical progress of the Micromegas project. For curre
   matching the ingestion mint route's existing behavior. **Minor breaking change:**
   `micromegas_auth::api_key::KeyRing`'s value type changes from `String` (the key's name) to a
   new `KeyRingValue { name, allowlist }` struct.
+* **Build:** Speed up Rust CI on the self-hosted worker (#1610): the native pipeline now runs
+  `cargo nextest run` plus a separate `cargo test --doc` step instead of plain `cargo test`
+  (`cargo nextest run` doesn't execute doctests), so `python3 build/rust_ci.py` now requires
+  `cargo-nextest` locally alongside the existing cargo-machete/cargo-audit/cargo-deny
+  prerequisites. `cargo-nextest`, `cargo-audit`, and `cargo-deny` are now baked into the
+  self-hosted dev-worker runner image instead of being installed from crates.io on every job, and
+  the machete/audit/deny checks now run concurrently with the format/clippy/test steps instead of
+  after them.
 * **Auth:** Remove the API-key import path — the `micromegas-import-keys` console script, the
   `POST /api/ingestion-api-keys/import` and `POST /api/analytics-api-keys/import` routes on
   `analytics-web-srv`, and `WebClient.import_ingestion_api_key`/`import_analytics_api_key`. Its

@@ -58,8 +58,8 @@ RUN GOARCH=$([ "$(uname -m)" = "x86_64" ] && echo "amd64" || echo "arm64") \
     && curl -fsSL "https://go.dev/dl/go1.25.10.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Poetry
-RUN pip3 install --no-cache-dir poetry
+# Poetry, pytest (the latter for `build/test_rust_ci.py`, run on every rust.yml CI pass)
+RUN pip3 install --no-cache-dir poetry pytest
 
 # Playwright system dependencies (for Grafana E2E tests)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -120,6 +120,9 @@ ENV PATH="/home/runner/.cargo/bin:${PATH}"
 RUN rustup target add wasm32-unknown-unknown \
     && rustup target add x86_64-pc-windows-gnu \
     && cargo install cargo-machete \
+    && cargo install cargo-nextest --locked \
+    && cargo install cargo-audit --locked --version '^0.22' \
+    && cargo install cargo-deny --locked \
     && cargo install wasm-pack
 
 # wasm-bindgen-cli — version must match workspace Cargo.lock
