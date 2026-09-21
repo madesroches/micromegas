@@ -105,6 +105,13 @@ workspace, so they don't contend with `cargo fmt --check` / `cargo clippy` / `ca
 concurrently with the four build-dependent steps overlaps their wall time instead of paying for
 both in sequence.
 
+One thing the concurrent steps *do* contend on: when the pinned toolchain from
+`rust/rust-toolchain.toml` isn't installed yet, every cargo invocation triggers a rustup
+auto-install, and six of those at once clobber each other's partial downloads in
+`~/.rustup/downloads` (`could not rename 'downloaded' file`). `_run_steps` therefore runs
+`cargo --version` once per distinct cargo working directory, serially, before dispatching the
+pool.
+
 Split `run_native()`'s step list into two groups and run them with a small parallel harness:
 
 ```python

@@ -44,6 +44,29 @@ def run_wasm():
     _run_steps("WASM", steps)
 
 
+def _toolchain_warmup_cwds(steps):
+    """Distinct working directories of the cargo steps, in first-seen order."""
+    return list(dict.fromkeys(cwd for _, cmd, cwd in steps if cmd.startswith("cargo")))
+
+
+def _warm_toolchain(steps):
+    """Install the pinned toolchain before any concurrent cargo runs.
+
+    rustup auto-installs a missing pinned toolchain on the first cargo
+    invocation. Several of those at once race on ~/.rustup/downloads and all but
+    one fail with "could not rename 'downloaded' file", so resolve it serially.
+    """
+    cwds = _toolchain_warmup_cwds(steps)
+    if not cwds:
+        return
+    print(f"\n{'=' * 60}")
+    print("Toolchain warm-up")
+    print("=" * 60)
+    for cwd in cwds:
+        kwargs = {"cwd": cwd} if cwd else {}
+        run_command("cargo --version", **kwargs)
+
+
 def _run_parallel_step(name, cmd, cwd):
     kwargs = {"cwd": cwd} if cwd else {}
     result = run_captured(cmd, **kwargs)
@@ -58,6 +81,7 @@ def _run_steps(label, sequential_steps, parallel_steps=None):
     print(f"Starting {label} CI Pipeline")
     print("=" * 60)
     show_disk_space()
+    _warm_toolchain(sequential_steps + parallel_steps)
 
     with ThreadPoolExecutor(max_workers=max(len(parallel_steps), 1)) as pool:
         futures = [pool.submit(_run_parallel_step, *step) for step in parallel_steps]

@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from rust_ci import _run_steps
+from rust_ci import _run_steps, _toolchain_warmup_cwds
 
 PASS_CMD = f'{sys.executable} -c "import sys; sys.exit(0)"'
 FAIL_CMD = f'{sys.executable} -c "import sys; sys.exit(1)"'
@@ -77,6 +77,21 @@ def test_single_list_call_shape_runs_everything_sequentially(tmp_path):
     ]
     _run_steps("Test", steps)
     assert read_order(order_file) == ["A", "B", "C"]
+
+
+def test_toolchain_warmup_dedupes_cargo_cwds_and_skips_non_cargo_steps():
+    steps = [
+        ("Non-cargo", PASS_CMD, None),
+        ("Cargo root", "cargo fmt --check", None),
+        ("Cargo root again", "cargo clippy", None),
+        ("Cargo subcrate", "cargo audit", "/some/wasm/crate"),
+        ("Cargo subcrate again", "cargo deny check", "/some/wasm/crate"),
+    ]
+    assert _toolchain_warmup_cwds(steps) == [None, "/some/wasm/crate"]
+
+
+def test_toolchain_warmup_is_empty_without_cargo_steps():
+    assert _toolchain_warmup_cwds([("Non-cargo", PASS_CMD, None)]) == []
 
 
 if __name__ == "__main__":
