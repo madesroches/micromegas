@@ -79,10 +79,12 @@ jobs:
       if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: cargo install cargo-nextest --locked
 
+    - name: Install pytest
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
+      run: python3 -m pip install --quiet pytest
+
     - name: Test rust_ci.py orchestration
-      run: |
-        python3 -m pip install --quiet pytest
-        python3 -m pytest build/test_rust_ci.py
+      run: python3 -m pytest build/test_rust_ci.py
 
     - name: Run native CI
       run: |

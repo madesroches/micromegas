@@ -54,7 +54,6 @@ def _run_parallel_step(name, cmd, cwd):
 
 def _run_steps(label, sequential_steps, parallel_steps=None):
     parallel_steps = parallel_steps or []
-    total = len(sequential_steps) + len(parallel_steps)
     print("=" * 60)
     print(f"Starting {label} CI Pipeline")
     print("=" * 60)
@@ -65,7 +64,7 @@ def _run_steps(label, sequential_steps, parallel_steps=None):
 
         for i, (name, cmd, cwd) in enumerate(sequential_steps, 1):
             print(f"\n{'=' * 60}")
-            print(f"Step {i}/{total}: {name}")
+            print(f"Step {i}/{len(sequential_steps)}: {name}")
             print("=" * 60)
             kwargs = {"cwd": cwd} if cwd else {}
             run_command(cmd, **kwargs)

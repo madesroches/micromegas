@@ -592,7 +592,7 @@ data) and manual verification instead.
 
 Before submitting a PR, test all affected components:
 
-- [ ] **Rust** (primary): Run `python3 build/rust_ci.py` from repo root (format, clippy, tests)
+- [ ] **Rust** (primary): Run `python3 build/rust_ci.py` from repo root (runs the full native CI pipeline)
 - [ ] **Python**: Run `poetry run pytest` and `poetry run black .` from `python/micromegas/`, and `python3 build/python_ci.py` from repo root
 - [ ] **Grafana plugin**: Run `python3 build/grafana_ci.py` from repo root (typecheck, lint, test, build)
 - [ ] All builds pass without errors
