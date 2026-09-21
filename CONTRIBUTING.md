@@ -61,12 +61,18 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 ### CI Tools
 
 To run the full CI pipeline locally (`python3 build/rust_ci.py`), install cargo-machete,
-cargo-audit, and cargo-deny:
+cargo-nextest, cargo-audit, and cargo-deny:
 ```bash
 cargo install cargo-machete
+cargo install cargo-nextest --locked
 cargo install cargo-audit --locked --version '^0.22'
 cargo install cargo-deny --locked
 ```
+
+The pipeline runs `cargo nextest run` plus a separate `cargo test --doc` step (`cargo
+nextest run` doesn't execute doctests) rather than plain `cargo test`, and runs the
+machete/audit/deny checks concurrently with the format/clippy/test steps instead of
+serially before them.
 
 The pipeline runs two supply-chain gates, each from both `rust/` (the main workspace)
 and `rust/datafusion-wasm/` (excluded from the main workspace, so it has its own
@@ -236,7 +242,7 @@ cargo clippy --workspace -- -D warnings  # Lint
 
 **CI validation script:**
 ```bash
-python3 build/rust_ci.py    # Runs format check, clippy, and tests (from repo root)
+python3 build/rust_ci.py    # Runs the full native CI pipeline (from repo root)
 ```
 
 ### Python Package

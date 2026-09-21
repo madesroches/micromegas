@@ -120,6 +120,9 @@ ENV PATH="/home/runner/.cargo/bin:${PATH}"
 RUN rustup target add wasm32-unknown-unknown \
     && rustup target add x86_64-pc-windows-gnu \
     && cargo install cargo-machete \
+    && cargo install cargo-nextest --locked \
+    && cargo install cargo-audit --locked --version '^0.22' \
+    && cargo install cargo-deny --locked \
     && cargo install wasm-pack
 
 # wasm-bindgen-cli — version must match workspace Cargo.lock

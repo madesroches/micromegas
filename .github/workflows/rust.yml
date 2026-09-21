@@ -7,6 +7,7 @@ on:
       - 'rust/**'
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
+      - 'build/test_rust_ci.py'
       - '.github/workflows/rust.yml'
   pull_request:
     branches: [ "main" ]
@@ -14,6 +15,7 @@ on:
       - 'rust/**'
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
+      - 'build/test_rust_ci.py'
       - '.github/workflows/rust.yml'
   workflow_dispatch:  # Allow manual runs from the Actions UI
 
@@ -62,14 +64,25 @@ jobs:
       run: cargo install cargo-machete
 
     - name: Install cargo-audit
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
         cargo install cargo-audit --locked --version '^0.22'
 
     - name: Install cargo-deny
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
       run: |
         if [ -z "$CARGO_BUILD_JOBS" ]; then unset CARGO_BUILD_JOBS; fi
         cargo install cargo-deny --locked
+
+    - name: Install cargo-nextest
+      if: needs.check-runner.outputs.runner == 'ubuntu-latest'
+      run: cargo install cargo-nextest --locked
+
+    - name: Test rust_ci.py orchestration
+      run: |
+        python3 -m pip install --quiet pytest
+        python3 -m pytest build/test_rust_ci.py
 
     - name: Run native CI
       run: |

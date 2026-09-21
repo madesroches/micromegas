@@ -1,16 +1,21 @@
 #!/bin/python3
 import sys
 import pathlib
-from rust_command import run_command, show_disk_space
+from concurrent.futures import ThreadPoolExecutor
+from rust_command import run_command, run_captured, show_disk_space
 
 repo_root = pathlib.Path(__file__).parent.parent.absolute()
 wasm_crate = repo_root / "rust" / "datafusion-wasm"
 
 
 def run_native():
-    steps = [
+    sequential_steps = [
         ("Formatting Check", "cargo fmt --check", None),
         ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
+        ("Running Tests", "cargo nextest run", None),
+        ("Doc Tests", "cargo test --doc", None),
+    ]
+    parallel_steps = [
         ("Unused Dependencies Check", "cargo machete", None),
         ("Advisory Audit", "cargo audit", None),
         ("License & Supply-Chain (deny)", "cargo deny check licenses bans sources", None),
@@ -24,9 +29,8 @@ def run_native():
             "cargo deny --config ../deny.toml check licenses bans sources --allow unnecessary-skip",
             wasm_crate,
         ),
-        ("Running Tests", "cargo test", None),
     ]
-    _run_steps("Native", steps)
+    _run_steps("Native", sequential_steps, parallel_steps)
 
 
 def run_wasm():
@@ -40,18 +44,39 @@ def run_wasm():
     _run_steps("WASM", steps)
 
 
-def _run_steps(label, steps):
-    total = len(steps)
+def _run_parallel_step(name, cmd, cwd):
+    kwargs = {"cwd": cwd} if cwd else {}
+    result = run_captured(cmd, **kwargs)
+    status = "PASSED" if result.returncode == 0 else "FAILED"
+    print(f"\n{'=' * 60}\n[parallel] {status}: {name}\n{'=' * 60}\n{result.stdout}{result.stderr}")
+    return name, result.returncode == 0
+
+
+def _run_steps(label, sequential_steps, parallel_steps=None):
+    parallel_steps = parallel_steps or []
+    total = len(sequential_steps) + len(parallel_steps)
     print("=" * 60)
     print(f"Starting {label} CI Pipeline")
     print("=" * 60)
     show_disk_space()
-    for i, (name, cmd, cwd) in enumerate(steps, 1):
-        print(f"\n{'=' * 60}")
-        print(f"Step {i}/{total}: {name}")
-        print("=" * 60)
-        kwargs = {"cwd": cwd} if cwd else {}
-        run_command(cmd, **kwargs)
+
+    with ThreadPoolExecutor(max_workers=max(len(parallel_steps), 1)) as pool:
+        futures = [pool.submit(_run_parallel_step, *step) for step in parallel_steps]
+
+        for i, (name, cmd, cwd) in enumerate(sequential_steps, 1):
+            print(f"\n{'=' * 60}")
+            print(f"Step {i}/{total}: {name}")
+            print("=" * 60)
+            kwargs = {"cwd": cwd} if cwd else {}
+            run_command(cmd, **kwargs)
+
+        results = [f.result() for f in futures]
+
+    failed = [name for name, ok in results if not ok]
+    if failed:
+        print(f"\nParallel steps failed: {', '.join(failed)}")
+        sys.exit(1)
+
     print(f"\n{'=' * 60}")
     print(f"{label} CI steps completed successfully!")
     print("=" * 60)
