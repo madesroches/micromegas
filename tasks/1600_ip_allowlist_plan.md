@@ -111,6 +111,10 @@ configuration, and before `IpAllowlist::allows` ever sees the address, so an all
 `X-Real-IP`, then the `SocketAddr` extension) and the same parse-or-fall-through behavior as
 today's `get_client_ip`, plus the `to_canonical()` call above — a deliberate behavior change from
 today's code, not a verbatim copy, that also normalizes the form logged for audit purposes.
+Because header sources take priority over the socket peer, the resolved IP is only
+trustworthy for a request that actually traversed the load balancer — which is the deployment
+shape this feature targets (see `## Decisions`). No trusted-proxy configuration is added.
+
 `rust/public/src/servers/http_utils.rs::get_client_ip` becomes a thin wrapper:
 
 ```rust
@@ -310,9 +314,7 @@ allowlist" half of the issue's rough idea that mint alone doesn't cover.
 ## Mockups
 
 None — this is a backend/API/CLI feature with no new screens or layout changes. The
-analytics-web-app surfacing (Implementation Steps, Phase 5) reuses existing list/dialog
-components with one new field each; see Open Questions for why that phase is left flexible on
-scope.
+analytics-web-app surfacing is tracked separately in #1611.
 
 ## Implementation Steps
 
@@ -366,16 +368,6 @@ scope.
    `audience`. Without this, a non-admin caller minting their own key via `mint_ingestion_api_key`
    would have no way to attach an allowlist at all, since the new `PATCH` route is `AdminUser`-gated.
 
-### Phase 5 — analytics-web-app surfacing (see Open Questions on scope)
-1. `api-keys-shared.ts`: `allowed_cidrs?: string[]` on `ApiKeyListEntry`; `mint()` gains an
-   optional param.
-2. `components/MintIngestionKeyDialog.tsx`: an optional CIDR-list input (consumed by both
-   `IngestionApiKeysPage.tsx` and `routes/AudienceAccessPage.tsx`, so both pick up the field for
-   free).
-3. `components/ApiKeysAdminPage.tsx` (the shared list/edit UI both `IngestionApiKeysPage.tsx` and
-   `AnalyticsApiKeysPage.tsx` configure): show the restriction in the list, add an edit action
-   calling the new `PATCH` route.
-
 ## Files to Modify
 
 - `rust/auth/src/types.rs` — `RequestParts::client_ip()`, `HttpRequestParts`/`GrpcRequestParts` field
@@ -394,9 +386,6 @@ scope.
 - `python/micromegas/micromegas/web_client.py`
 - `rust/auth/tests/api_key_tests.rs`, `db_api_key_tests.rs`, new `client_ip_tests.rs`,
   `ip_allowlist_tests.rs`, and every other test constructing `HttpRequestParts`/`GrpcRequestParts`
-- (Phase 5, if in scope) `analytics-web-app/src/lib/api-keys-shared.ts`, `ingestion-api-keys-api.ts`,
-  `analytics-api-keys-api.ts`, `components/MintIngestionKeyDialog.tsx`,
-  `components/ApiKeysAdminPage.tsx`, `routes/AudienceAccessPage.tsx`, plus their `__tests__`
 
 ## Trade-offs
 
@@ -431,6 +420,15 @@ scope.
 
 ## Decisions
 
+- IP allowlisting is for deployments behind a load balancer. `resolve_client_ip` keeps
+  `get_client_ip`'s header-first priority order, so a caller that reaches a service directly,
+  bypassing the load balancer, can name any source IP via `X-Forwarded-For`. This is documented as
+  a deployment requirement rather than enforced with a trusted-proxy setting.
+
+- The analytics-web-app UI is out of scope here and tracked in #1611. This plan covers Phases 1-4
+  (client-IP plumbing, the `IpAllowlist` type and provider enforcement, the admin routes, and the
+  Python client), which are independently useful and testable without a browser surface.
+
 - The API-key import path (the `micromegas-import-keys` CLI and both
   `POST .../{table}-api-keys/import` routes) was removed in a separate change, already on `main`
   (#1609), so this plan carries no allowlist plumbing for it — mint and the new `PATCH` route are
@@ -449,6 +447,10 @@ scope.
   v11 — the migration-running service (`telemetry-ingestion-srv`/`monolith`) must deploy, and the
   migration must complete, before any new `flight-sql-srv`/`analytics-web-srv` build reaches
   production (see Design §5).
+- `mkdocs/docs/admin/api-keys.md` (allowlist section): must state that an IP allowlist is only
+  enforceable when every request reaches the service through a load balancer that sets or
+  overwrites `X-Forwarded-For`. A deployment where a client can connect to the service directly
+  can present any source IP by sending that header, so the allowlist restricts nothing there.
 - `mkdocs/docs/query-guide/python-api.md`: its `mint_ingestion_api_key(name, audience=None)`
   signature and `WebClient` method list need the new `allowed_cidrs` mint parameter and the two
   `set_*_allowlist` methods added.
@@ -525,11 +527,3 @@ below).
 3. Mint a key with `allowed_cidrs`, confirm it round-trips through `list_keys`, then exercise the
    `PATCH .../allowlist` route: it updates the column, clears it back to unrestricted, and 404s on
    an unknown `key_id` — the DB-backed coverage moved out of the automated route tests above.
-
-## Open Questions
-
-1. **Is the analytics-web-app UI (Phase 5) in scope for this PR, or a follow-up?** The GitHub
-   issue's "Rough idea" only calls out admin *routes*; the browser UI is not
-   mentioned. Recommend shipping Phases 1-4 first (the full backend + client surface, independently
-   useful and testable) and opening a small follow-up issue for the UI once the API shape is
-   settled — but this plan includes Phase 5 in case the intent was to cover it in one PR.
