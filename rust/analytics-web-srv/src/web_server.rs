@@ -633,6 +633,7 @@ fn build_cors_layer(cors_origin: &str) -> Result<CorsLayer> {
             Method::GET,
             Method::POST,
             Method::PUT,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])

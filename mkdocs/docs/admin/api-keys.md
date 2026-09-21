@@ -59,7 +59,7 @@ CREATE TABLE ingestion_api_keys (
   audience     VARCHAR(255) NOT NULL,   -- immutable write audience
     CONSTRAINT ingestion_api_keys_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$'),
   allowed_cidrs TEXT[]                  -- CIDR ranges/bare IPs this key may be used from;
-                                         -- NULL/empty = unrestricted (schema v11)
+                                        -- NULL/empty = unrestricted (schema v11)
 );
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 
@@ -295,6 +295,10 @@ or afterwards via `PATCH {base_path}/api/{ingestion,analytics}-api-keys/{key_id}
 (admin-only, `{"allowed_cidrs": [...]}`, `[]` clears the restriction). A
 hand-edited or `PATCH`-ed allowlist takes effect within the key's cache TTL,
 same as revocation (see [Cache and audit env vars](#cache-and-audit-env-vars)).
+
+`last_used_at` records that the credential was presented on a cache miss, not
+that the request was authorized from an allowed IP — a key rejected for
+being outside its allowlist can still refresh `last_used_at`.
 
 **An IP allowlist is only enforceable when every request reaches the service
 through a load balancer that sets or overwrites `X-Forwarded-For`.** The

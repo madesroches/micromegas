@@ -430,6 +430,7 @@ mod tests {
     use micromegas_tracing::metrics::MetricsMsgQueueAny;
     use micromegas_tracing::test_utils::init_in_memory_tracing;
     use micromegas_transit::HeterogeneousQueue;
+    use serial_test::serial;
     use std::net::{IpAddr, Ipv4Addr};
 
     fn unreachable_pool() -> PgPool {
@@ -511,6 +512,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn allowlisted_key_authenticates_from_in_range_ip_without_db_access() {
         let token = "mmk_allowlist_in_range";
         let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
@@ -521,6 +523,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn allowlisted_key_is_rejected_from_out_of_range_ip_without_db_access() {
         let guard = init_in_memory_tracing();
         let token = "mmk_allowlist_out_of_range";
@@ -546,6 +549,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn allowlisted_key_is_rejected_when_client_ip_is_unresolved() {
         let token = "mmk_allowlist_no_ip";
         let provider = provider_with_cached_allowlisted_key(token, &["10.0.0.0/24"]).await;
