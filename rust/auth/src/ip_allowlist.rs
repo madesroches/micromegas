@@ -60,16 +60,19 @@ impl IpAllowlist {
     }
 }
 
-/// Downgrades an IPv4-mapped IPv6 `/128` entry (e.g. `::ffff:203.0.113.7/128`, or a bare
-/// `::ffff:203.0.113.7`) to its IPv4 form. `resolve_client_ip` always canonicalizes the
+/// Downgrades an IPv4-mapped IPv6 entry (e.g. `::ffff:203.0.113.7/128`, `::ffff:203.0.113.0/120`,
+/// or a bare `::ffff:203.0.113.7`) to its IPv4 form. `resolve_client_ip` always canonicalizes the
 /// client IP it checks against (`to_canonical()`), so an unnormalized V6-mapped entry here
 /// would never match: `ipnet`'s `contains` treats a V6 net and a V4 address as different
-/// families regardless of value.
+/// families regardless of value. The mapped prefix `::ffff:0:0/96` is exactly the fixed 96 bits
+/// ahead of the embedded v4 address, so any prefix `>= 96` has a well-defined v4 equivalent at
+/// `prefix_len - 96`.
 fn canonicalize(net: IpNet) -> IpNet {
-    if net.prefix_len() == 128 {
+    if net.prefix_len() >= 96 {
         let canonical = net.addr().to_canonical();
         if canonical.is_ipv4() {
-            return IpNet::new(canonical, 32).expect("a v4 address always accepts prefix 32");
+            return IpNet::new(canonical, net.prefix_len() - 96)
+                .expect("a v4 address always accepts a prefix in 0..=32");
         }
     }
     net

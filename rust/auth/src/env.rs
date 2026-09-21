@@ -23,7 +23,9 @@ pub fn resolve_prefixed_var(prefix: &str, suffix: &str) -> String {
 
 /// Returns the subset of `removed` that is set to any value, empty string included. Pure
 /// detection, split out from the `warn_removed_*` wrappers so it is unit-testable without
-/// capturing a log sink.
+/// capturing a log sink. Not part of this crate's public API; `pub` only so the tests in
+/// `tests/env_tests.rs` can reach it.
+#[doc(hidden)]
 pub fn removed_vars_that_are_set(removed: &[&'static str]) -> Vec<&'static str> {
     removed
         .iter()

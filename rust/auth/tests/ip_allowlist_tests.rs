@@ -114,3 +114,11 @@ fn ipv4_mapped_v6_slash_128_entry_matches_the_canonical_v4_client_ip() {
     assert!(allowlist.allows(Some(ip("203.0.113.7"))));
     assert!(!allowlist.allows(Some(ip("203.0.113.8"))));
 }
+
+#[test]
+fn ipv4_mapped_v6_slash_120_prefix_entry_matches_the_canonical_v4_range() {
+    let allowlist = IpAllowlist::parse(&entries(&["::ffff:203.0.113.0/120"])).expect("parses");
+    assert!(allowlist.allows(Some(ip("203.0.113.0"))));
+    assert!(allowlist.allows(Some(ip("203.0.113.255"))));
+    assert!(!allowlist.allows(Some(ip("203.0.114.1"))));
+}

@@ -20,7 +20,9 @@ This file documents the historical progress of the Micromegas project. For curre
   from `micromegas::servers::http_utils::get_client_ip` into
   `micromegas_auth::client_ip::resolve_client_ip` so every `AuthProvider` can consult it, not
   just audit logging) — see [IP allowlisting](https://micromegas.info/docs/admin/api-keys/#ip-allowlisting)
-  for the load-balancer deployment requirement this implies. **Minor breaking change:**
+  for the load-balancer deployment requirement this implies. `POST
+  {base_path}/api/analytics-api-keys` now rejects a body with an unknown field with `400`,
+  matching the ingestion mint route's existing behavior. **Minor breaking change:**
   `micromegas_auth::api_key::KeyRing`'s value type changes from `String` (the key's name) to a
   new `KeyRingValue { name, allowlist }` struct.
 * **Auth:** Remove the API-key import path — the `micromegas-import-keys` console script, the
