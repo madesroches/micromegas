@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Dependencies:** Bump `go.opentelemetry.io/otel`, `otel/sdk`, and the
+  `otel/exporters/otlp/otlptrace`/`otlptracegrpc` exporters in the `grafana/` plugin from
+  v1.44.0/v1.38.0 to v1.46.0, resolving three Dependabot alerts for the exporter
+  config-logging endpoint-URL leak (fixed upstream in v1.45.0).
 * **Auth:** Remove the API-key import path — the `micromegas-import-keys` console script, the
   `POST /api/ingestion-api-keys/import` and `POST /api/analytics-api-keys/import` routes on
   `analytics-web-srv`, and `WebClient.import_ingestion_api_key`/`import_analytics_api_key`. Its
