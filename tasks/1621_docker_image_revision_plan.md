@@ -93,12 +93,7 @@ pushes, so the sha tag is pushed as well. The arm64 path is unchanged apart from
 arguments: `--push` still sets both `built` and `pushed`.
 
 The label is applied through `--label` on the command line, which sets it on the final image
-config. That means:
-
-- no Dockerfile needs changing
-- all nine images, `all` and the multi-stage monolith included, get the label identically
-- the label is written only into the final image config, so the layer build cache still hits
-  across commits
+config.
 
 A consumer reads the label with:
 
@@ -162,9 +157,6 @@ docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.
 
 ## Documentation
 
-- `docker/README.md`: the tag scheme table gets the `<sha12>[-dirty]` /
-  `<sha12>[-dirty]-arm64` row entries, plus a "Source revision" note with the inspect command.
-- `CHANGELOG.md`: an Unreleased entry.
 - `mkdocs/docs/development/build.md` only mentions `--arm64`. It needs no change.
 
 ## Testing Strategy
@@ -173,17 +165,14 @@ docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.
 the same way `test_rust_ci.py` imports from `rust_ci`.
 
 - `image_tags`: clean amd64 → `[v, "latest", sha12]`, clean arm64 → all three with `-arm64`,
-  dirty amd64 → `sha12-dirty`, dirty arm64 → `sha12-dirty-arm64`. Also assert that the existing
-  two tags are unchanged, which pins the "existing tags don't change" requirement.
+  dirty amd64 → `sha12-dirty`, dirty arm64 → `sha12-dirty-arm64`.
 - `build_command`, for each of the three paths (amd64, arm64 `--load`, arm64 `--push`): exactly
   one `--label org.opencontainers.image.revision=<full revision>`, one `-t` per tag, the correct
   prefix/`--load`/`--push`, and `.` last.
 - `get_revision` against a `git init` repo in `tmp_path`, with one commit and a local
   `user.name`/`user.email`: clean → equals `git rev-parse HEAD`; after modifying a tracked file →
   ends with `-dirty`; with only an untracked file → ends with `-dirty`; in a non-repo directory →
-  raises `CalledProcessError`. This runs the real `git` binary, which the tests' environment has
-  in any case. It stays fast and local, and it checks the actual porcelain/rev-parse behavior
-  rather than a mock of it.
+  raises `CalledProcessError`.
 - The push loop in `build_image`: monkeypatch `run_command` to record calls, then assert that an
   amd64 `push=True` build issues one `docker push` for each of the three tags.
 
