@@ -42,7 +42,6 @@ describe('TableFrame', () => {
     )
 
     const frame = container.firstChild as HTMLElement
-    // Only the scroller div is a child of the frame; no extra footer node.
     expect(frame.children.length).toBe(1)
   })
 })
