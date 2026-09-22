@@ -7,6 +7,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
+import { TableFrame } from '@/components/TableFrame'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { DocumentationLink, QUERY_AUDIT_LOG_URL, QUERY_DENY_LIST_FUNCTIONS_URL } from '@/components/DocumentationLink'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -364,9 +365,9 @@ function QueryDenyListPageContent() {
               <DocumentationLink url={QUERY_AUDIT_LOG_URL} label="query audit log" />
             </div>
           ) : (
-            <div className="border border-theme-border rounded-lg overflow-hidden overflow-x-auto">
+            <TableFrame>
               <table className="w-full border-collapse">
-                <thead className="bg-app-panel">
+                <thead className="bg-app-panel sticky top-0">
                   <tr>
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Match expression
@@ -416,7 +417,7 @@ function QueryDenyListPageContent() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           )}
         </div>
       </PageLayout>

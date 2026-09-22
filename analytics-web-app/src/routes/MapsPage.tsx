@@ -7,6 +7,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { TableFrame } from '@/components/TableFrame'
 import { getConfig } from '@/lib/config'
 import {
   MapCatalogEntry,
@@ -261,9 +262,9 @@ function MapsPageContent() {
               <p className="text-theme-text-muted mb-4">No maps uploaded yet.</p>
             </div>
           ) : (
-            <div className="border border-theme-border rounded-lg overflow-hidden">
+            <TableFrame>
               <table className="w-full border-collapse">
-                <thead className="bg-app-panel">
+                <thead className="bg-app-panel sticky top-0">
                   <tr>
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Name
@@ -311,7 +312,7 @@ function MapsPageContent() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           )}
         </div>
       </PageLayout>
