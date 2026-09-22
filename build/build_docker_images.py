@@ -2,6 +2,11 @@
 """
 Build and push Docker images for micromegas services.
 
+Every image is tagged `<version>`, `latest`, and `<sha12>` (the first 12 characters of the
+HEAD commit sha, with `-dirty` appended if the worktree has uncommitted changes), each with
+`-arm64` appended under `--arm64`. Every image also carries the OCI label
+`org.opencontainers.image.revision=<full-sha>[-dirty]`.
+
 Usage:
     python build_docker_images.py                         # Build all services (amd64)
     python build_docker_images.py ingestion flight-sql    # Build specific services
@@ -62,6 +67,77 @@ def get_version() -> str:
     raise ValueError("Could not find version in Cargo.toml")
 
 
+def get_revision(cwd: Path = REPO_ROOT) -> str:
+    """`<full-sha>` of HEAD, with `-dirty` appended when the worktree has changes.
+
+    Untracked files count as changes: unless `.dockerignore` excludes them, they're part of
+    the build context.
+    """
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if status.strip():
+        sha += "-dirty"
+    return sha
+
+
+def image_tags(version: str, revision: str, arm64: bool) -> list[str]:
+    """Tags to apply to an image: `[version, "latest", revision_tag]`.
+
+    `-arm64` is appended to each when `arm64` is set. The revision tag is the first 12
+    characters of `revision`, plus `-dirty` when `revision` ends with `-dirty`.
+    """
+    if revision.endswith("-dirty"):
+        sha_tag = f"{revision[:-len('-dirty')][:12]}-dirty"
+    else:
+        sha_tag = revision[:12]
+
+    tags = [version, "latest", sha_tag]
+    if arm64:
+        tags = [f"{tag}-arm64" for tag in tags]
+    return tags
+
+
+def build_command(
+    dockerfile: str,
+    image_name: str,
+    tags: list[str],
+    revision: str,
+    arm64: bool,
+    push: bool,
+) -> list[str]:
+    """Assemble the `docker build`/`docker buildx build` command for one image."""
+    if arm64:
+        cmd = [
+            "docker",
+            "buildx",
+            "build",
+            "--platform",
+            "linux/arm64",
+            "--push" if push else "--load",
+        ]
+    else:
+        cmd = ["docker", "build"]
+
+    cmd += ["-f", str(DOCKER_DIR / dockerfile)]
+    for tag in tags:
+        cmd += ["-t", f"{image_name}:{tag}"]
+    cmd += ["--label", f"org.opencontainers.image.revision={revision}"]
+    cmd += ["."]
+    return cmd
+
+
 def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
     """Run a command and return success status"""
     print(f">>> {' '.join(cmd)}")
@@ -70,7 +146,11 @@ def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
 
 
 def build_image(
-    service: str, version: str, push: bool = False, arm64: bool = False
+    service: str,
+    version: str,
+    revision: str,
+    push: bool = False,
+    arm64: bool = False,
 ) -> dict:
     """Build a Docker image for a service.
 
@@ -97,89 +177,33 @@ def build_image(
     image_name = f"{DOCKERHUB_USER}/{DOCKERHUB_REPO}-{service}"
     result["image"] = image_name
 
-    if arm64:
-        version_tag = f"{version}-arm64"
-        latest_tag = "latest-arm64"
-    else:
-        version_tag = version
-        latest_tag = "latest"
-
-    result["tags"] = [version_tag, latest_tag]
+    tags = image_tags(version, revision, arm64)
+    result["tags"] = tags
 
     print(f"\n{'='*60}")
     print(f"Building {service}: {description}")
-    print(f"Image: {image_name}:{version_tag}")
+    print(f"Image: {image_name}:{tags[0]}")
     print(f"{'='*60}\n")
 
+    cmd = build_command(dockerfile, image_name, tags, revision, arm64, push)
+    arch_suffix = " (arm64)" if arm64 else ""
+
+    if not run_command(cmd):
+        action = "build/push" if arm64 and push else "build"
+        print(f"Failed to {action} {service}{arch_suffix}")
+        return result
+
+    result["built"] = True
+
     if arm64:
-        if push:
-            # Build and push directly via buildx (no separate docker push step needed)
-            cmd = [
-                "docker",
-                "buildx",
-                "build",
-                "--platform",
-                "linux/arm64",
-                "--push",
-                "-f",
-                str(DOCKER_DIR / dockerfile),
-                "-t",
-                f"{image_name}:{version_tag}",
-                "-t",
-                f"{image_name}:{latest_tag}",
-                ".",
-            ]
-            if not run_command(cmd):
-                print(f"Failed to build/push {service} (arm64)")
+        # buildx already pushed (or loaded) the image as part of the build above.
+        result["pushed"] = push
+    elif push:
+        print(f"\nPushing {image_name}...")
+        for tag in tags:
+            if not run_command(["docker", "push", f"{image_name}:{tag}"]):
                 return result
-            result["built"] = True
-            result["pushed"] = True
-        else:
-            cmd = [
-                "docker",
-                "buildx",
-                "build",
-                "--platform",
-                "linux/arm64",
-                "--load",
-                "-f",
-                str(DOCKER_DIR / dockerfile),
-                "-t",
-                f"{image_name}:{version_tag}",
-                "-t",
-                f"{image_name}:{latest_tag}",
-                ".",
-            ]
-            if not run_command(cmd):
-                print(f"Failed to build {service} (arm64)")
-                return result
-            result["built"] = True
-    else:
-        cmd = [
-            "docker",
-            "build",
-            "-f",
-            str(DOCKER_DIR / dockerfile),
-            "-t",
-            f"{image_name}:{version_tag}",
-            "-t",
-            f"{image_name}:{latest_tag}",
-            ".",
-        ]
-
-        if not run_command(cmd):
-            print(f"Failed to build {service}")
-            return result
-
-        result["built"] = True
-
-        if push:
-            print(f"\nPushing {image_name}...")
-            if not run_command(["docker", "push", f"{image_name}:{version_tag}"]):
-                return result
-            if not run_command(["docker", "push", f"{image_name}:{latest_tag}"]):
-                return result
-            result["pushed"] = True
+        result["pushed"] = True
 
     return result
 
@@ -222,6 +246,13 @@ def main():
     version = args.version or get_version()
     print(f"Version: {version}")
 
+    try:
+        revision = get_revision()
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"error: could not determine git revision: {e}")
+        return 1
+    print(f"Revision: {revision}")
+
     # Default: build all individual services but not 'all' (dev/test only, not published)
     services = args.services or [s for s in SERVICES.keys() if s != "all"]
 
@@ -238,13 +269,14 @@ def main():
     results = []
     for service in services:
         for arm64 in arches:
-            results.append(build_image(service, version, args.push, arm64))
+            results.append(build_image(service, version, revision, args.push, arm64))
 
     # Print summary
     print(f"\n{'='*60}")
     print("BUILD SUMMARY")
     print(f"{'='*60}")
     print(f"Version: {version}")
+    print(f"Revision: {revision}")
     print()
 
     built = [r for r in results if r["built"]]
