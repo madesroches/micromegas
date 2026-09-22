@@ -38,7 +38,7 @@ Affected wrappers (direct children of the `h-full` column, no inner scroller):
 | `src/routes/MapsPage.tsx` | 264 | |
 | `src/routes/DataSourcesPage.tsx` | 283 | |
 | `src/routes/QueryDenyListPage.tsx` | 367 | `overflow-hidden overflow-x-auto`: horizontal scroll works, but vertical clipping is identical |
-| `src/routes/ImportScreensPage.tsx` | 288 | `renderStep2()` returns a fragment, so the wrapper is a direct child of the page column; the Back/Import footer after it stays visible, but the table rows are clipped |
+| `src/routes/ImportScreensPage.tsx` | 288 | `renderStep2()` returns a fragment, so the wrapper is a direct child of the page column; the Back/Continue footer after it stays visible, but the table rows are clipped |
 
 Pages that already work, for reference:
 - `ExportScreensPage.tsx:178`: `border ... rounded-lg overflow-hidden flex-1 overflow-y-auto` with
@@ -64,8 +64,8 @@ interface TableFrameProps {
 
 export function TableFrame({ children, footer }: TableFrameProps) {
   return (
-    <div className="min-h-0 flex flex-col border border-theme-border rounded-lg overflow-hidden">
-      <div className="min-h-0 overflow-auto">{children}</div>
+    <div className="flex flex-col border border-theme-border rounded-lg overflow-hidden">
+      <div className="overflow-auto">{children}</div>
       {footer}
     </div>
   )
@@ -75,7 +75,8 @@ export function TableFrame({ children, footer }: TableFrameProps) {
 Layout behaviour:
 - **No `flex-1`**, on purpose: a short table keeps its content height, so the bordered box doesn't
   stretch to the bottom of the page (unlike `ProcessesPage`). When the rows exceed the space left
-  in the `h-full` column, the frame shrinks (`min-h-0`) and the inner div scrolls.
+  in the `h-full` column, the frame's `overflow-hidden` gives it an automatic minimum height of 0,
+  so it shrinks and the inner div scrolls.
 - The inner scroller handles both axes (`overflow-auto`), which covers
   `QueryDenyListPage`'s existing horizontal-scroll need.
 - `footer` is a sibling of the scroller. Its min-height stays `auto`, so it never shrinks and
@@ -105,8 +106,7 @@ the same, including the `border-t` separator.
    `sticky top-0` to each `<thead>`. For `QueryDenyListPage`, drop the now-redundant
    `overflow-x-auto`, since the frame's inner scroller covers it.
 4. Add `src/components/__tests__/TableFrame.test.tsx` (see Testing Strategy).
-5. Run `yarn test`, `yarn lint`, and `yarn type-check` (or the project's equivalents) in
-   `analytics-web-app/`.
+5. Run `yarn test`, `yarn lint`, and `yarn type-check` in `analytics-web-app/`.
 
 ## Files to Modify
 
@@ -129,8 +129,6 @@ the same, including the `border-t` separator.
   gives future admin tables a correct default. The working pages (`ExportScreensPage`,
   `ProcessesPage`) aren't migrated. They already scroll correctly, and `ExportScreensPage`'s
   `flex-1` stretch is a deliberate layout choice for its selection list.
-- **`flex-1` on the frame** was rejected: it would stretch a two-row table's border to the bottom
-  of the viewport.
 
 ## Documentation
 
@@ -142,8 +140,8 @@ jsdom does no layout, so a unit test can't observe whether rows are clipped. Aut
 pins the structure that produces correct layout:
 
 - `TableFrame.test.tsx`:
-  - The `children` render inside an element carrying `overflow-auto` and `min-h-0`, and the outer
-    frame carries `min-h-0` and does **not** carry `flex-1`.
+  - The `children` render inside an element carrying `overflow-auto`, and the outer frame carries
+    `overflow-hidden` and does **not** carry `flex-1`.
   - When `footer` is given, it renders as a sibling of the scroll container, not inside it. This
     guards against the footer scrolling away. When omitted, nothing extra renders.
 - The existing `ApiKeysAdminPage.test.tsx` pagination tests (Previous/Next buttons found by role)
