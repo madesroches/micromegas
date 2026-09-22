@@ -7,8 +7,9 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Build:** `build/build_docker_images.py` now tags every image with a third tag,
   `<sha12>[-dirty][-arm64]` (the first 12 characters of the HEAD commit sha, `-dirty`-suffixed
   when the worktree has uncommitted changes), and sets the OCI label
-  `org.opencontainers.image.revision` to the full commit sha on every build, so a running image
-  can always be traced back to the commit it was built from (#1621).
+  `org.opencontainers.image.revision` to the full commit sha (`-dirty`-suffixed when the
+  worktree has uncommitted changes) on every build, so a running image can always be traced back
+  to the commit it was built from (#1621).
 * **Web App:** Fix admin list pages (ingestion/analytics API keys, maps, data sources, query deny
   list, screen import) clipping their table instead of scrolling when the rows exceed the
   viewport (#1618). A shared `TableFrame` component now scrolls the table in place with a sticky

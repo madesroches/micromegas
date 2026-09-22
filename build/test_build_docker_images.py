@@ -17,7 +17,7 @@ from build_docker_images import (
     image_tags,
 )
 
-FULL_SHA = "6a6822cb3f1ecba1234567890abcdef12345678"
+FULL_SHA = "6a6822cb3f1ecba1234567890abcdef123456789"
 
 
 def init_git_repo(path):
@@ -73,9 +73,9 @@ class TestBuildCommand:
             push=False,
         )
         assert cmd[:2] == ["docker", "build"]
-        assert "--buildx" not in cmd
+        assert "buildx" not in cmd
         assert cmd.count("-t") == 3
-        assert "-t" in cmd and "user/repo-ingestion:1.2.3" in cmd
+        assert "user/repo-ingestion:1.2.3" in cmd
         assert "user/repo-ingestion:latest" in cmd
         assert "user/repo-ingestion:6a6822cb3f1e" in cmd
         assert "--label" in cmd
