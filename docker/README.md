@@ -23,8 +23,17 @@ Eight services are published to Docker Hub under `marcantoinedesroches/`:
 
 | Arch | Tags |
 |------|------|
-| amd64 | `…:<version>`, `…:latest` |
-| arm64 | `…:<version>-arm64`, `…:latest-arm64` |
+| amd64 | `…:<version>`, `…:latest`, `…:<sha12>` |
+| arm64 | `…:<version>-arm64`, `…:latest-arm64`, `…:<sha12>-arm64` |
+
+`<sha12>` is the first 12 characters of the commit the image was built from, with `-dirty`
+appended if the worktree had uncommitted changes at build time. Every image also carries the
+OCI label `org.opencontainers.image.revision` set to the full commit sha (also `-dirty`-suffixed
+when applicable), so the exact source commit of a running image can always be recovered:
+
+```bash
+docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>
+```
 
 ## Building
 
