@@ -8,6 +8,9 @@ This file documents the historical progress of the Micromegas project. For curre
   list, screen import) clipping their table instead of scrolling when the rows exceed the
   viewport (#1618). A shared `TableFrame` component now scrolls the table in place with a sticky
   header and keeps the API-key pagination footer pinned.
+* **Build:** `local_test_env/ai_scripts/start_services.py --monolith` gains `--disable-auth`, so
+  a monolith run can skip OIDC auth for local testing even when `MICROMEGAS_OIDC_CONFIG`/
+  `MICROMEGAS_ANALYTICS_OIDC_CONFIG` is set.
 * **Dependencies:** Bump `go.opentelemetry.io/otel`, `otel/sdk`, and the
   `otel/exporters/otlp/otlptrace`/`otlptracegrpc` exporters in the `grafana/` plugin from
   v1.44.0/v1.38.0 to v1.46.0, resolving three Dependabot alerts for the exporter
