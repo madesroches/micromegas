@@ -2,7 +2,7 @@
 
 """
 Simple script to start micromegas services for testing
-Usage: python3 start_services.py [--release] [--monolith] [--help]
+Usage: python3 start_services.py [--release] [--monolith [--disable-auth]] [--help]
 """
 
 import argparse
@@ -243,7 +243,7 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
     return pids
 
 
-def start_monolith_mode(rust_dir, target_dir, postgres_pid):
+def start_monolith_mode(rust_dir, target_dir, postgres_pid, disable_auth=False):
     """Start a single micromegas-monolith process (all roles)."""
     print("🚀 Starting Monolith (all roles)...")
     env = os.environ.copy()
@@ -272,7 +272,7 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid):
                 "⚠️  MICROMEGAS_APP_SQL_CONNECTION_STRING not set (screens feature disabled)"
             )
 
-    has_oidc = (
+    has_oidc = not disable_auth and (
         "MICROMEGAS_OIDC_CONFIG" in env or "MICROMEGAS_ANALYTICS_OIDC_CONFIG" in env
     )
     if has_oidc and "MICROMEGAS_STATE_SECRET" not in env:
@@ -348,6 +348,11 @@ def main():
         "--no-object-cache",
         action="store_true",
         help="Don't start the shared object cache in split mode (reads go directly to S3)",
+    )
+    parser.add_argument(
+        "--disable-auth",
+        action="store_true",
+        help="With --monolith, disable auth on every role even when OIDC is configured",
     )
     args = parser.parse_args()
 
@@ -443,7 +448,9 @@ def main():
         target_dir = rust_dir / "target" / mode
 
     if args.monolith:
-        pids = start_monolith_mode(rust_dir, target_dir, postgres_pid)
+        pids = start_monolith_mode(
+            rust_dir, target_dir, postgres_pid, disable_auth=args.disable_auth
+        )
     else:
         pids = start_split_mode(
             rust_dir,
