@@ -18,6 +18,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { MintedKeyBanner } from '@/components/MintedKeyBanner'
+import { TableFrame } from '@/components/TableFrame'
 import type {
   ApiKeyErrorConstructor,
   ApiKeyListEntry,
@@ -303,9 +304,30 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
               </Button>
             </div>
           ) : (
-            <div className="border border-theme-border rounded-lg overflow-hidden">
+            <TableFrame
+              footer={
+                (offset > 0 || keys.length === pageSize) && (
+                  <div className="flex items-center justify-between border-t border-theme-border bg-app-panel px-4 py-2.5">
+                    {offset > 0 ? (
+                      <Button variant="outline" size="sm" onClick={goToPreviousPage}>
+                        Previous
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                    {keys.length === pageSize ? (
+                      <Button variant="outline" size="sm" onClick={goToNextPage}>
+                        Next
+                      </Button>
+                    ) : (
+                      <span />
+                    )}
+                  </div>
+                )
+              }
+            >
               <table className="w-full border-collapse">
-                <thead className="bg-app-panel">
+                <thead className="bg-app-panel sticky top-0">
                   <tr>
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Name
@@ -374,25 +396,7 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                   ))}
                 </tbody>
               </table>
-              {(offset > 0 || keys.length === pageSize) && (
-                <div className="flex items-center justify-between border-t border-theme-border bg-app-panel px-4 py-2.5">
-                  {offset > 0 ? (
-                    <Button variant="outline" size="sm" onClick={goToPreviousPage}>
-                      Previous
-                    </Button>
-                  ) : (
-                    <span />
-                  )}
-                  {keys.length === pageSize ? (
-                    <Button variant="outline" size="sm" onClick={goToNextPage}>
-                      Next
-                    </Button>
-                  ) : (
-                    <span />
-                  )}
-                </div>
-              )}
-            </div>
+            </TableFrame>
           )}
         </div>
       </PageLayout>

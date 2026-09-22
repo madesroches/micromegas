@@ -7,6 +7,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { TableFrame } from '@/components/TableFrame'
 import {
   listDataSources,
   invalidateDataSourceList,
@@ -280,9 +281,9 @@ function DataSourcesPageContent() {
               </Button>
             </div>
           ) : (
-            <div className="border border-theme-border rounded-lg overflow-hidden">
+            <TableFrame>
               <table className="w-full border-collapse">
-                <thead className="bg-app-panel">
+                <thead className="bg-app-panel sticky top-0">
                   <tr>
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Name
@@ -343,7 +344,7 @@ function DataSourcesPageContent() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           )}
         </div>
       </PageLayout>
