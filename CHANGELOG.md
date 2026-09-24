@@ -21,6 +21,7 @@ This file documents the historical progress of the Micromegas project. For curre
   `otel/exporters/otlp/otlptrace`/`otlptracegrpc` exporters in the `grafana/` plugin from
   v1.44.0/v1.38.0 to v1.46.0, resolving three Dependabot alerts for the exporter
   config-logging endpoint-URL leak (fixed upstream in v1.45.0).
+* **Dependencies:** Bump `jsonwebtoken` from 10.4 to 11.1.
 * **Auth:** IP allowlisting for API keys (#1600): an `ingestion_api_keys`/`analytics_api_keys`
   row (schema v11's new `allowed_cidrs TEXT[]` column) or an env-keyring entry
   (`MICROMEGAS_API_KEYS`'s new optional `allowed_cidrs` field) can now be pinned to a set of
