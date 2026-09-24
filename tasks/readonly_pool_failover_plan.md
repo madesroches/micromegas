@@ -9,10 +9,12 @@ as a reader) for ~40s after RDS reported the failover complete. Every insert fai
 SQLSTATE `25006` (`cannot execute INSERT in a read-only transaction`), and the API-key store
 returned `503` because its lookup runs `UPDATE ... SET last_used_at`. The pools accept and keep
 connections to a read-only instance because nothing checks for it. This plan makes every
-write-capable pool refuse read-only connections, both when a connection is opened and before a
-pooled connection is handed out. During the stale-DNS window writes wait in `acquire` (failing
-only on acquire timeout) instead of failing against the demoted writer until the pool recycles
-its connections.
+strict (`WritablePolicy::Require`) pool refuse read-only connections, both when a connection is
+opened and before a pooled connection is handed out. During the stale-DNS window writes wait in
+`acquire` (failing only on acquire timeout) instead of failing against the demoted writer until
+the pool recycles its connections. Standalone FlightSQL instead uses `WritablePolicy::Prefer`:
+it keeps trying for a writable connection but falls back to a read-only one after a 10s window
+(see "FlightSQL: prefer a writable primary, fall back to read-only" below).
 
 ## Current State
 
@@ -145,9 +147,7 @@ policy: under `Require` a `25006` only arises from a connection that turned read
 
 - **JIT partitions.** Today a failed insert (after the Parquet upload, cleaned up by
   `delete_if_orphan`) propagates out of `jit_update` and fails the scan
-  (`materialized_view.rs:107`) with the raw sqlx error. That failure stays: returning the
-  partitions already written would silently serve a partial result for a range that isn't fully
-  materialized, which is a wrong answer, not a degraded one. On an `is_read_only_violation`
+  (`materialized_view.rs:107`) with the raw sqlx error. On an `is_read_only_violation`
   error, `MaterializedView::scan` instead emits `warn!` +
   `imetric!("jit_update_failed_read_only", "count", 1)` and fails the scan with a clear error:
   the lakehouse is on a read-only connection, and the requested range needs partitions that
@@ -190,12 +190,14 @@ failover drops conns ──▶ reconnect (DNS → old writer, now reader)
                           ...until DNS → new writer (Aurora TTL 5s) → connect OK
 ```
 
-A write that arrives during the stale-DNS window waits in `acquire` instead of failing
-immediately. It succeeds if DNS flips before `acquire_timeout` (30s default for the lake pool,
-2s for the key-store pool), and otherwise fails with `PoolTimedOut`, which is still a 5xx that
-senders retry. Readiness probes now also fail while only read-only connections are reachable,
-because their `acquire` can't complete. That correctly drains the task instead of reporting it
-ready while every write fails.
+This is the strict (`Require`) behavior. A write that arrives during the stale-DNS window waits
+in `acquire` instead of failing immediately. It succeeds if DNS flips before `acquire_timeout`
+(30s default for the lake pool, 2s for the key-store pool), and otherwise fails with
+`PoolTimedOut`, which is still a 5xx that senders retry. Readiness probes now also fail while
+only read-only connections are reachable, because their `acquire` can't complete. That correctly
+drains the task instead of reporting it ready while every write fails. Standalone FlightSQL
+(`Prefer`) instead accepts a read-only connection once the 10s fallback window elapses, and its
+readiness recovers once it does.
 
 ## Implementation Steps
 
@@ -291,11 +293,11 @@ ready while every write fails.
   `is_read_only_violation`. **Minor breaking change**:
   `connect_to_data_lake` and `LakehouseContext::from_env` take a new leading `WritablePolicy`
   argument. `dedicated_key_store_pool`'s signature is unchanged.
-  Also note that Postgres pools now require a writable primary, except flight-sql's. A service
-  other than flight-sql that is pointed at a read replica now fails at startup with `PoolTimedOut`
-  (the eager `PoolOptions::connect` does an initial acquire) instead of at its first write.
-  Standalone flight-sql prefers a writable primary and falls back to a replica, as documented in
-  `flight-sql.md`.
+  Also note that Postgres pools now require a writable primary, except standalone flight-sql's. A
+  service other than flight-sql that is pointed at a read replica now fails at startup with
+  `PoolTimedOut` (the eager `PoolOptions::connect` does an initial acquire) instead of at its
+  first write. Standalone flight-sql prefers a writable primary and falls back to a replica, as
+  documented in `high-availability.md`.
 
 ## Testing Strategy
 
