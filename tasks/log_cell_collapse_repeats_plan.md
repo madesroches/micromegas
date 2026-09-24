@@ -79,7 +79,7 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
 
 - **Footer toggle** "Collapse repeats", placed before "Wrap text" and styled the same way (`aria-pressed`, accent when on). Icon: `ChevronsDownUp` from `lucide-react`. Persisted as `options.collapseRepeats: boolean`; unset means **on** (same default convention as `wrapText`).
 - **Editor section** in `LogCellEditor`, below the SQL editor: "Ignore when collapsing repeats". It renders one toggle chip per name in `availableColumns`. `time`-kind columns are shown checked and disabled with the hint "always ignored". Toggling a chip writes `onChange({ ...logConfig, options: { ...logConfig.options, collapseIgnoreColumns } })`. Names in `collapseIgnoreColumns` that no longer exist in the result are kept as-is and simply don't match. If `availableColumns` is empty (cell not run yet), the section shows "Run the query to choose columns".
-- `HgEditorPanel` gains an `availableColumns` prop, sourced the same way as the top-level case: `cellStates[selectedChildName]?.data[0]?.schema.fields.map((f) => f.name)`, and passes it through to `HorizontalGroupCellEditor` so a Log cell inside a horizontal group gets a working ignore-columns editor too.
+- `HgEditorPanel` gains an `availableColumns` prop, sourced the same way as the top-level case: `selectedChildName ? cellStates[selectedChildName]?.data[0]?.schema.fields.map((f) => f.name) : undefined`, and passes it through to `HorizontalGroupCellEditor` so a Log cell inside a horizontal group gets a working ignore-columns editor too.
 
 ## Mockups
 
@@ -98,7 +98,7 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
    - Add `RepeatBadge` (local component in `LogCell.tsx`) and the "Collapse repeats" footer toggle.
 3. **`LogCell.tsx` editor**
    - Destructure `availableColumns` in `LogCellEditor`; add the ignore-columns chip section writing `options.collapseIgnoreColumns`.
-   - `NotebookRenderer.tsx`: add `availableColumns` to `HgEditorPanel`, sourced from `cellStates[selectedChildName]?.data[0]?.schema.fields`, and pass it through to `HorizontalGroupCellEditor` so Log cells nested in a horizontal group get it too.
+   - `NotebookRenderer.tsx`: add `availableColumns` to `HgEditorPanel`, sourced from `selectedChildName ? cellStates[selectedChildName]?.data[0]?.schema.fields : undefined`, and pass it through to `HorizontalGroupCellEditor` so Log cells nested in a horizontal group get it too.
 4. **Tests** (see Testing Strategy).
 5. **Docs** (see Documentation), plus a `CHANGELOG.md` Unreleased entry.
 
