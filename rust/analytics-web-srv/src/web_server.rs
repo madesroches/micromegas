@@ -675,6 +675,7 @@ struct NoAuthUserInfo {
     email: Option<String>,
     name: Option<String>,
     is_admin: bool,
+    auth_disabled: bool,
 }
 
 async fn auth_me_no_auth() -> impl IntoResponse {
@@ -683,6 +684,7 @@ async fn auth_me_no_auth() -> impl IntoResponse {
         email: Some("anonymous@localhost".to_string()),
         name: Some("Anonymous (No Auth)".to_string()),
         is_admin: true,
+        auth_disabled: true,
     })
 }
 

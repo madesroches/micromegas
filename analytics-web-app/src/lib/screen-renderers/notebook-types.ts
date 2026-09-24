@@ -12,6 +12,11 @@ import type { TimeRange } from '@/lib/time-range'
  */
 export type VariableValue = string | Record<string, string>
 
+/** Reserved variable name for the signed-in viewer's identity ($me.email, $me.name, $me.sub).
+ *  Lives here (not notebook-utils.ts) so macro-substitution.ts can reference it without a
+ *  circular import — notebook-utils.ts re-exports it for callers. */
+export const VIEWER_VARIABLE_NAME = 'me'
+
 /**
  * Gets the string representation of a variable value.
  * For multi-column values, returns the JSON representation with sorted keys.

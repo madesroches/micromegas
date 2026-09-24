@@ -5,9 +5,12 @@ import { navigateTo } from './navigation'
 
 export interface User {
   sub: string
-  email?: string
-  name?: string
+  // The IdP claim comes back from /auth/me as JSON null, not an absent key,
+  // when the provider doesn't supply it.
+  email?: string | null
+  name?: string | null
   is_admin?: boolean
+  auth_disabled?: boolean
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated' | 'error'
@@ -164,4 +167,12 @@ export function useAuth() {
     throw new Error('useAuth must be used within an AuthProvider')
   }
   return context
+}
+
+/** Like `useAuth().user`, but returns null outside an `AuthProvider` instead of
+ *  throwing — lets components (e.g. NotebookRenderer) work in tests and in any
+ *  embedding without an AuthProvider. */
+export function useOptionalAuthUser(): User | null {
+  const context = useContext(AuthContext)
+  return context?.user ?? null
 }

@@ -17,6 +17,7 @@ import type { Table, DataType, StructRowProxy } from 'apache-arrow'
 import { isTimeType, timestampToDate, isHistogramStructType } from '@/lib/arrow-utils'
 import { toHistogramValue } from '@/lib/histogram-utils'
 import type { VariableValue } from './notebook-types'
+import { VIEWER_VARIABLE_NAME } from './notebook-types'
 import type { ResolveCtx, ResolvedMacro } from './macro-resolve'
 import { resolveMacro } from './macro-resolve'
 
@@ -212,7 +213,11 @@ export function validateMacros(
     if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const value = variables[varName]
     if (value === undefined) {
-      errors.push(`Unknown variable: ${varName}`)
+      errors.push(
+        varName === VIEWER_VARIABLE_NAME
+          ? `$${VIEWER_VARIABLE_NAME} is unavailable: no signed-in viewer`
+          : `Unknown variable: ${varName}`,
+      )
     } else if (typeof value === 'string') {
       errors.push(`Variable '${varName}' is not a multi-column variable, cannot access '${colName}'`)
     } else if (value[colName] === undefined) {
@@ -228,7 +233,11 @@ export function validateMacros(
     const [, varName] = match
     if (varName === 'from' || varName === 'to' || varName === 'order_by') continue
     if (variables[varName] === undefined) {
-      errors.push(`Unknown variable: ${varName}`)
+      errors.push(
+        varName === VIEWER_VARIABLE_NAME
+          ? `$${VIEWER_VARIABLE_NAME} is unavailable: no signed-in viewer`
+          : `Unknown variable: ${varName}`,
+      )
     }
   }
 
@@ -251,5 +260,33 @@ export function findUnresolvedSelectionMacro(
       return cellName
     }
   }
+  return null
+}
+
+/**
+ * Checks if a SQL string contains an unresolved $me.col or bare $me macro
+ * (no viewer entry in `variables`, or the entry lacks the referenced claim).
+ * Returns the macro's source text if found, null otherwise.
+ */
+export function findUnresolvedViewerMacro(sql: string, variables: Record<string, VariableValue>): string | null {
+  const dottedPattern = dottedVarRegex()
+  let match
+  while ((match = dottedPattern.exec(sql)) !== null) {
+    const [, varName, colName] = match
+    if (varName !== VIEWER_VARIABLE_NAME) continue
+    const viewer = variables[varName]
+    if (viewer === undefined || typeof viewer === 'string' || viewer[colName] === undefined) {
+      return `$${varName}.${colName}`
+    }
+  }
+
+  const simplePattern = simpleVarRegex()
+  while ((match = simplePattern.exec(sql)) !== null) {
+    const [, varName] = match
+    if (varName === VIEWER_VARIABLE_NAME && variables[varName] === undefined) {
+      return `$${varName}`
+    }
+  }
+
   return null
 }

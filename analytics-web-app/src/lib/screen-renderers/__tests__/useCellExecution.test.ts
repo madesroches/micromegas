@@ -468,6 +468,62 @@ describe('useCellExecution', () => {
         const callArgs = mockStreamQuery.mock.calls[0][0]
         expect(callArgs.sql).toContain('memory')
       })
+
+      it('should substitute $me.email and send the query when a viewer is supplied', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Results', sql: "SELECT * FROM logs WHERE email = '$me.email'", layout: { height: 'auto' } },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: vi.fn(),
+            refreshTrigger: 0,
+            viewer: { sub: 'idp-123', email: 'viewer@example.com' },
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(mockStreamQuery).toHaveBeenCalled()
+        const callArgs = mockStreamQuery.mock.calls[0][0]
+        expect(callArgs.sql).toContain('viewer@example.com')
+        expect(result.current.cellStates['Results'].status).toBe('success')
+      })
+
+      it('should block the cell and send no query when $me.email has no viewer', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          { type: 'table', name: 'Results', sql: "SELECT * FROM logs WHERE email = '$me.email'", layout: { height: 'auto' } },
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: vi.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(mockStreamQuery).not.toHaveBeenCalled()
+        expect(result.current.cellStates['Results'].status).toBe('blocked')
+        expect(result.current.cellStates['Results'].error).toContain('$me.email is unavailable: no signed-in viewer')
+      })
     })
 
     describe('error handling', () => {

@@ -20,9 +20,23 @@ vi.mock('../cell-registry', async () => {
 })
 
 import { tableFromArrays, vectorFromArray, Table, Timestamp, TimeUnit } from 'apache-arrow'
-import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros, evaluateTemplate, resolveQueryTimeRange, shouldShowTimeRange } from '../notebook-utils'
+import {
+  substituteMacros,
+  DEFAULT_SQL,
+  sanitizeCellName,
+  validateCellName,
+  validateMacros,
+  evaluateTemplate,
+  resolveQueryTimeRange,
+  shouldShowTimeRange,
+  viewerVariable,
+  collectAvailableVariables,
+  findUnresolvedViewerMacro,
+  VIEWER_VARIABLE_NAME,
+} from '../notebook-utils'
 import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import type { CellConfig } from '../notebook-types'
+import type { User } from '@/lib/auth'
 import { createDefaultCell } from '../cell-registry'
 import { resolveMacro } from '../macro-resolve'
 import type { ResolveCtx } from '../macro-resolve'
@@ -306,6 +320,23 @@ describe('validateMacros', () => {
     )
     expect(result.valid).toBe(true)
     expect(result.errors).toHaveLength(0)
+  })
+
+  it('should report the me-unavailable message for a bare $me with no viewer', () => {
+    const result = validateMacros('SELECT $me', {}, {}, {})
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('$me is unavailable: no signed-in viewer')
+  })
+
+  it('should report the me-unavailable message for $me.email with no viewer', () => {
+    const result = validateMacros("SELECT '$me.email'", {}, {}, {})
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('$me is unavailable: no signed-in viewer')
+  })
+
+  it('should validate $me.email normally once a viewer variable is present', () => {
+    const result = validateMacros("SELECT '$me.email'", { me: { email: 'a@b.com', sub: '123' } }, {}, {})
+    expect(result.valid).toBe(true)
   })
 })
 
@@ -618,6 +649,92 @@ describe('validateCellName', () => {
     expect(validateCellName('ValidName', new Set())).toBeNull()
     expect(validateCellName('Valid Name', new Set())).toBeNull()
     expect(validateCellName('Valid_Name_2', new Set())).toBeNull()
+  })
+
+  it('should reject "me" for variable cells, reserved for the signed-in viewer', () => {
+    expect(validateCellName('me', new Set(), undefined, true)).toBe(
+      '"me" is reserved for the signed-in viewer',
+    )
+  })
+
+  it('should allow "me" for non-variable cells', () => {
+    expect(validateCellName('me', new Set(), undefined, false)).toBeNull()
+    expect(validateCellName('me', new Set())).toBeNull()
+  })
+})
+
+describe('viewerVariable', () => {
+  const fullUser: User = { sub: 'idp-123', email: 'a@b.com', name: 'A B' }
+
+  it('returns email, name, and sub for a full user', () => {
+    expect(viewerVariable(fullUser)).toEqual({ sub: 'idp-123', email: 'a@b.com', name: 'A B' })
+  })
+
+  it('omits email/name when the IdP claim is JSON null', () => {
+    const user: User = { sub: 'idp-123', email: null, name: null }
+    expect(viewerVariable(user)).toEqual({ sub: 'idp-123' })
+  })
+
+  it('returns undefined when auth_disabled is true', () => {
+    const user: User = { sub: 'anonymous', email: 'anonymous@localhost', auth_disabled: true }
+    expect(viewerVariable(user)).toBeUndefined()
+  })
+
+  it('returns undefined for a null user', () => {
+    expect(viewerVariable(null)).toBeUndefined()
+  })
+})
+
+describe('collectAvailableVariables', () => {
+  const viewer = { sub: 'idp-123', email: 'a@b.com' }
+
+  it('includes the viewer entry under VIEWER_VARIABLE_NAME', () => {
+    const result = collectAvailableVariables([], {}, viewer)
+    expect(result[VIEWER_VARIABLE_NAME]).toEqual(viewer)
+  })
+
+  it('omits the viewer entry when viewer is undefined', () => {
+    const result = collectAvailableVariables([], {}, undefined)
+    expect(result[VIEWER_VARIABLE_NAME]).toBeUndefined()
+  })
+
+  it('only includes upstream variable cells, not other cell types', () => {
+    const cells: CellConfig[] = [
+      { type: 'variable', name: 'metric', variableType: 'text', layout: { height: 'auto' } },
+      { type: 'table', name: 'results', sql: 'SELECT 1', layout: { height: 'auto' } },
+    ]
+    const result = collectAvailableVariables(cells, { metric: 'cpu' }, viewer)
+    expect(result).toEqual({ me: viewer, metric: 'cpu' })
+  })
+
+  it('lets a legacy "me" variable cell override the built-in viewer entry', () => {
+    const cells: CellConfig[] = [
+      { type: 'variable', name: 'me', variableType: 'text', layout: { height: 'auto' } },
+    ]
+    const result = collectAvailableVariables(cells, { me: 'legacy-value' }, viewer)
+    expect(result.me).toBe('legacy-value')
+  })
+})
+
+describe('findUnresolvedViewerMacro', () => {
+  it('returns $me.email when there is no me variable', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.email'", {})).toBe('$me.email')
+  })
+
+  it('returns $me.email when me is present but lacks the email claim', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.email'", { me: { sub: '123' } })).toBe('$me.email')
+  })
+
+  it('returns null when me has the referenced claim', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.email'", { me: { sub: '123', email: 'a@b.com' } })).toBeNull()
+  })
+
+  it('returns null for SQL without $me', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$from'", {})).toBeNull()
+  })
+
+  it('returns bare $me when unresolved', () => {
+    expect(findUnresolvedViewerMacro('SELECT $me', {})).toBe('$me')
   })
 })
 

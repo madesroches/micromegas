@@ -49,6 +49,9 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 | `$from` | Start of the current time range (ISO 8601 timestamp) |
 | `$to` | End of the current time range (ISO 8601 timestamp) |
 | `$order_by` | Current sort column (table cells only) |
+| `$me.email` | Signed-in viewer's email |
+| `$me.name` | Signed-in viewer's display name |
+| `$me.sub` | Signed-in viewer's IdP subject id (stable, always present) |
 
 ### Matching Rules
 
@@ -89,6 +92,24 @@ FROM view_instance('log_entries', '$processes.selected.process_id')
 ORDER BY time DESC
 LIMIT 100
 ```
+
+### Viewer Identity
+
+`$me` is a built-in, reserved variable set to the person currently viewing the screen — no variable cell needed:
+
+```sql
+-- Scope a shared "my usage" notebook to the viewer
+SELECT time, msg FROM log_entries
+WHERE username = '$me.email'
+ORDER BY time DESC
+LIMIT 100
+```
+
+- `$me.email` and `$me.name` come from the identity provider and may be absent for a given account.
+- `$me.sub` is the identity provider's stable subject id and is always present for a signed-in viewer.
+- `me` is a reserved variable name — a variable cell can't be named `me`.
+- A cell referencing `$me.*` is blocked (not executed) on a server started with `--disable-auth`, and when the identity provider doesn't supply the referenced claim.
+- **`$me` is not an authorization mechanism.** Anyone who can edit a notebook's SQL can change or remove a `$me.*` reference, so it only scopes what a shared screen shows by default — it does not restrict what data a viewer can query. Audience-based read filtering is the actual enforcement boundary.
 
 ### Row Selection
 
@@ -228,6 +249,7 @@ A cell can only reference variables and cell results from cells that appear **ab
 - Variables in the main cell list are visible to all cells below.
 - Variables inside a horizontal group (HG) are visible to cells below the group.
 - A variable cell cannot reference other variable cells at the same level.
+- `$me` (see [Viewer Identity](#viewer-identity)) is always available, regardless of cell position, and appears in the Available Variables panel like any other variable.
 
 The editor panel shows an **Available Variables** panel listing all variables accessible to the currently selected cell, including `$from`, `$to`, upstream user-defined variables with their current values, and upstream cell results with their column schemas. Multi-column variables show both the full object and individual `.column` accessors. Cell results show `$cellName[0].column` entries for each column in the result schema.
 
@@ -261,3 +283,5 @@ The following URL parameter names are reserved and cannot be used as variable na
 - `type` — screen type
 
 Variable names that conflict with reserved parameters are rejected during cell name validation.
+
+`me` is also rejected as a variable name — it's reserved for the signed-in viewer (see [Viewer Identity](#viewer-identity)), not a URL parameter.
