@@ -11,7 +11,8 @@ use syn::{Expr, ExprLit, ItemFn, Lit, Meta};
 ///
 /// This is a drop-in replacement for `#[tokio::main]` that automatically configures:
 /// - Tokio runtime with proper micromegas tracing thread lifecycle callbacks
-/// - Telemetry guard with sensible defaults (ctrl-c handling, debug level)
+/// - Telemetry guard with sensible defaults (ctrl-c handling, info console level,
+///   overridable via `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`)
 /// - Automatic authentication configuration from environment variables
 ///
 /// # Authentication
@@ -34,8 +35,9 @@ use syn::{Expr, ExprLit, ItemFn, Lit, Meta};
 /// - `ctrlc_handling`: bool (default: `true`) — enable Ctrl-C graceful shutdown
 /// - `install_log_capture`: bool (default: `false`) — capture `log` crate output
 /// - `interop_max_level`: string (e.g., `"info"`) — interop max level override
-/// - `local_sink_enabled`: bool (default: `true`) — enable local stderr sink
-/// - `local_sink_max_level`: string (default: `"debug"`) — max level for local sink
+/// - `local_sink_enabled`: bool (default: `true`) — enable local stdout sink
+/// - `local_sink_max_level`: string (default: `"info"`) — max level for local sink;
+///   overridable at runtime via `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` when the attribute is absent
 /// - `max_level_override`: string (e.g., `"warn"`) — global max level override
 /// - `system_metrics`: bool (default: `true`) — collect system metrics
 /// - `telemetry_url`: string — override the telemetry ingestion URL
@@ -286,11 +288,12 @@ fn expand_micromegas_main(
         builder_calls.push(quote! { .with_local_sink_enabled(false) });
     }
 
-    {
-        let level_filter = match &local_sink_max_level {
-            Some(lit) => level_to_filter(lit)?,
-            None => quote! { micromegas::tracing::levels::LevelFilter::Debug },
-        };
+    // Emitted only when the attribute is present: with no attribute, the
+    // builder's own default applies, and `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` can
+    // still override it. An explicit attribute is a deliberate pin in code, so
+    // it takes precedence over the environment, same as any other builder call.
+    if let Some(lit) = &local_sink_max_level {
+        let level_filter = level_to_filter(lit)?;
         builder_calls.push(quote! { .with_local_sink_max_level(#level_filter) });
     }
 
@@ -383,7 +386,9 @@ mod tests {
         let out = expand(quote! {});
         assert!(out.contains("with_auth_from_env"));
         assert!(out.contains("with_ctrlc_handling"));
-        assert!(out.contains("with_local_sink_max_level"));
+        // No attribute means no call: the builder's own default (and
+        // `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`) applies instead.
+        assert!(!out.contains("with_local_sink_max_level"));
     }
 
     /// `build()` returns a `Result`; binding it without unwrapping would swallow a
