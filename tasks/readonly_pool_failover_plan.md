@@ -99,7 +99,6 @@ best available. Every other service stays strict.
 pub enum WritablePolicy { Require, Prefer }
 pub fn pool_options(policy: WritablePolicy) -> PgPoolOptions
 pub fn read_write_pool_options() -> PgPoolOptions        // pool_options(Require)
-pub fn prefer_read_write_pool_options() -> PgPoolOptions // pool_options(Prefer)
 ```
 
 `connect_to_data_lake` and `LakehouseContext::from_env` both take a `WritablePolicy` as a new
@@ -122,12 +121,14 @@ decisions are pure methods that take `now`, so they can be unit-tested:
   `warn!` + `imetric!("pg_read_only_connection_accepted", "count", 1)`. Because the streak is
   pool-wide, only the first connect of an outage waits. A replica-only deployment pays the 10s
   once, at startup, and never again.
-- `on_acquire(read_only, now) -> bool` (keep?): writable connections are kept. A read-only
-  connection is evicted (`Ok(false)`) immediately when `streak_start` is `None`, because a
-  writable connect has succeeded since the fallback. Otherwise it is evicted at most once per
-  `PROBE_INTERVAL` (30s) pool-wide, as a re-probe, and kept in between. The replacement connect
-  goes through `on_connect`. The streak is past the window, so it lands at once on either the
-  writer (which clears the streak) or the replica (accepted without waiting).
+- `on_acquire(read_only, now) -> bool` (keep?): a writable connection clears `streak_start` (the
+  same as `on_connect`, so a pooled connection that turns writable again without a reconnect still
+  resets the streak) and is kept. A read-only connection is evicted (`Ok(false)`) immediately when
+  `streak_start` is `None`, because a writable connect has succeeded since the fallback. Otherwise
+  it is evicted at most once per `PROBE_INTERVAL` (30s) pool-wide, as a re-probe, and kept in
+  between. The replacement connect goes through `on_connect`. The streak is past the window, so it
+  lands at once on either the writer (which clears the streak) or the replica (accepted without
+  waiting).
 
 The hot path stays at the one `SHOW transaction_read_only` round trip. The worst case is one
 extra connect per 30s while on a replica. The window (10s) is shorter than the lake pool's 30s
@@ -136,13 +137,6 @@ key-store pools (2s timeout) can return `PoolTimedOut` during those first 10s, t
 strict mode. After that they share the elapsed streak. Rejections still emit
 `pg_read_only_connection_rejected`, and `on_connect` logs `info!` when a writable connect ends a
 streak.
-
-This beats a strict pool with a short `acquire_timeout` plus a read-only fallback pool. Every
-lake query takes `&PgPool` (about 160 `.db_pool` uses across 34 source files), so a two-pool
-wrapper would have to thread an explicit acquire through all of them. To avoid paying the short
-timeout on every acquire against a replica, it would also need the same cached state and
-rate-limited re-probe. The hook version is that short timeout, applied once per outage inside a
-single pool.
 
 **Degradation on a read-only connection.** A new helper,
 `is_read_only_violation(&anyhow::Error) -> bool` in `data_lake_connection.rs`, finds a
@@ -203,16 +197,11 @@ senders retry. Readiness probes now also fail while only read-only connections a
 because their `acquire` can't complete. That correctly drains the task instead of reporting it
 ready while every write fails.
 
-The lake pool keeps the sqlx default 30s `acquire_timeout`: the stale-DNS window is bounded by
-the Aurora DNS TTL (~5s), which the default comfortably covers, and readiness already bounds its
-own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_service.rs:217`).
-
 ## Implementation Steps
 
-1. Add `WritablePolicy`, `pool_options()`, `read_write_pool_options()`,
-   `prefer_read_write_pool_options()`, `ReadOnlyFallback`, `is_read_only()`, and
-   `is_read_only_violation()` to `rust/ingestion/src/data_lake_connection.rs`. Add the `policy`
-   parameter to `connect_to_data_lake`, and use `read_write_pool_options()` in
+1. Add `WritablePolicy`, `pool_options()`, `read_write_pool_options()`, `ReadOnlyFallback`,
+   `is_read_only()`, and `is_read_only_violation()` to `rust/ingestion/src/data_lake_connection.rs`.
+   Add the `policy` parameter to `connect_to_data_lake`, and use `read_write_pool_options()` in
    `rust/ingestion/src/remote_data_lake.rs::connect_to_remote_data_lake`.
 2. Add the `policy` parameter to `LakehouseContext::from_env`
    (`rust/analytics/src/lakehouse/lakehouse_context.rs`). Pass `Prefer` from
@@ -232,7 +221,9 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 5. Switch `rust/analytics-web-srv/src/web_server.rs:707,746` and
    `rust/monolith/src/main.rs:426` to `read_write_pool_options()`.
 6. Tests (see Testing Strategy).
-7. Docs and CHANGELOG.
+7. Add `mkdocs/docs/admin/high-availability.md` with its "Database failover" section, link it
+   into `mkdocs/mkdocs.yml`'s admin nav after "Service Lifecycle & Shutdown", make the minimal
+   `flight-sql.md` "Scaling" correction with a link to the new page, and update the CHANGELOG.
 
 ## Files to Modify
 
@@ -249,52 +240,55 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 - `rust/public/src/servers/flight_sql_server.rs`
 - `rust/ingestion/tests/read_write_pool_tests.rs` (new)
 - `rust/auth/tests/db_api_key_tests.rs`
-- `mkdocs/docs/admin/service-lifecycle.md`
+- `mkdocs/docs/admin/high-availability.md` (new)
+- `mkdocs/mkdocs.yml`
 - `mkdocs/docs/admin/flight-sql.md`
 - `CHANGELOG.md`
-
-## Trade-offs
-
-- **Evict on SQLSTATE `25006` instead of checking up front.** Rejected. Queries run against
-  `&PgPool`, so the failing connection is never visible to the caller and can't be marked for
-  closing, and sqlx has no "flush idle connections" call (`Pool::close` is permanent). Handling
-  it would mean wrapping every write in an explicit `acquire()`. It would also still fail one
-  write per bad connection. The `before_acquire` check prevents those failures instead.
-- **Check only in `after_connect`.** That would cover the Aurora case, where demotion restarts the
-  instance and drops every connection. But it leaves the pool exposed when an instance turns
-  read-only without dropping connections (`default_transaction_read_only` reloaded,
-  another managed-PG flavor). The `before_acquire` check costs nothing extra because it replaces
-  the ping, so do both.
-- **Lower `max_lifetime`/`idle_timeout`.** This only bounds the damage and churns connections all the time.
-- **Upgrade sqlx.** Rejected: 0.9.0 adds no failover or session-attribute feature, and it brings a
-  large breaking change (`query*()` takes `impl SqlSafeStr`, touching every `format!`-built query,
-  including `db_api_key.rs`). Keep 0.8.6 for this fix and track the upgrade separately.
 
 ## Decisions
 
 - FlightSQL prefers a writable connection but falls back to read-only; other services stay strict.
 - On a read-only fallback, a query that needs un-materialized JIT partitions fails with a clear
   error rather than returning partial data.
+- Declined a two-pool (strict pool + short-timeout read-only fallback pool) design: it would need
+  an explicit `acquire()` threaded through every lake query, plus the same cached state and
+  rate-limited re-probe as the hook version.
+- The lake pool keeps the sqlx default 30s `acquire_timeout`: the stale-DNS window is bounded by
+  the Aurora DNS TTL (~5s).
+- Rejected evicting on SQLSTATE `25006` instead of checking up front: queries run against
+  `&PgPool`, so a failing connection can't be marked for closing without wrapping every write in
+  an explicit `acquire()`, and it would still fail one write per bad connection.
+- Rejected checking only in `after_connect`: it misses an instance that turns read-only without
+  dropping connections, and `before_acquire` costs nothing extra since it replaces the ping.
+- Rejected lowering `max_lifetime`/`idle_timeout`: it only bounds the damage and churns
+  connections all the time.
+- Deferred the sqlx 0.9.0 upgrade: it adds no failover/session-attribute feature and brings an
+  unrelated breaking change (`query*()` takes `impl SqlSafeStr`).
+- Failover/read-only docs live on a dedicated "Operating in a High-Availability Environment" page
+  (`admin/high-availability.md`), not in the main admin pages, since this is a niche corner case
+  that only matters to HA-focused operators.
 
 ## Documentation
 
-- `mkdocs/docs/admin/service-lifecycle.md`: add an operational note under "Operational notes"
-  saying pools reject connections to a read-only instance, so during a failover writes wait (up to the
-  acquire timeout) instead of failing against the demoted writer, and readiness goes unhealthy
-  while only a reader is reachable. Mention the `pg_read_only_connection_rejected` metric.
-- `mkdocs/docs/admin/flight-sql.md`: reword the "Scaling" section's "Queries are read-only
-  against object storage and PostgreSQL" sentence. FlightSQL prefers a writable primary, because
-  it writes JIT partitions and API-key `last_used_at` through its pools. When only a read-only
-  instance is reachable for 10s, it falls back to it and re-probes for a writable one every 30s.
-  On a read replica, queries against global views (materialized by the maintenance daemon) keep
-  working, since flight-sql never writes for those; a query that needs new JIT partitions --
-  process-scoped data not yet materialized -- fails with a clear error instead of returning
-  partial data. API-key auth works without updating `last_used_at`, and admin writes and
-  lakehouse schema migrations fail. Mention the `pg_read_only_connection_accepted` and
-  `jit_update_failed_read_only` metrics.
+- `mkdocs/docs/admin/high-availability.md` (new): "Operating in a High-Availability Environment".
+  A "Database failover" section holds: strict pools reject read-only connections and writes wait
+  up to the acquire timeout during a failover; readiness goes unhealthy for strict services while
+  only a reader is reachable, while standalone flight-sql recovers readiness after it falls back
+  (link to `service-lifecycle.md` for the readiness/ALB mechanics instead of repeating them);
+  flight-sql's prefer/fallback timings (10s fallback window, 30s re-probe); what works and fails
+  on a replica (global views work; un-materialized JIT queries fail clearly; API-key auth works
+  without `last_used_at`; admin writes, view-set definition changes, and migrations fail); and the
+  `pg_read_only_connection_rejected`, `pg_read_only_connection_accepted`, and
+  `jit_update_failed_read_only` metrics. Scope this plan's content to database failover only; leave
+  room for other HA topics as separate future sections.
+- `mkdocs/mkdocs.yml`: add the new page to the admin nav, right after "Service Lifecycle &
+  Shutdown".
+- `mkdocs/docs/admin/flight-sql.md`: minimal correction only. Reword the "Scaling" section's
+  "Queries are read-only against object storage and PostgreSQL" sentence, since JIT partitions
+  write to both, with a short link to `high-availability.md` for the failover details.
 - `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. Additive Rust API:
-  `read_write_pool_options`, `prefer_read_write_pool_options`, `pool_options`, `WritablePolicy`,
-  `ReadOnlyFallback`, `is_read_only`, `is_read_only_violation`. **Minor breaking change**:
+  `read_write_pool_options`, `pool_options`, `WritablePolicy`, `ReadOnlyFallback`, `is_read_only`,
+  `is_read_only_violation`. **Minor breaking change**:
   `connect_to_data_lake` and `LakehouseContext::from_env` take a new leading `WritablePolicy`
   argument. `dedicated_key_store_pool`'s signature is unchanged.
   Also note that Postgres pools now require a writable primary, except flight-sql's. A service
@@ -322,9 +316,11 @@ No-DB unit tests:
 - `ReadOnlyFallback` (driven with explicit `Instant`s, no sleeps): `on_connect` rejects
   read-only before `FALLBACK_AFTER` and accepts it at or after the window, and a writable connect
   clears the streak so the next read-only connect is rejected again. `on_acquire` keeps writable
-  connections. For read-only ones, it evicts once per `PROBE_INTERVAL` (a second call inside the
-  interval keeps) and evicts immediately once the streak is cleared.
-- `prefer_read_write_pool_options().get_test_before_acquire() == false`.
+  connections and also clears the streak, so a writable acquire on an already-pooled connection
+  makes the next read-only connect rejected again too. For read-only ones, it evicts once per
+  `PROBE_INTERVAL` (a second call inside the interval keeps) and evicts immediately once the
+  streak is cleared.
+- `pool_options(WritablePolicy::Prefer).get_test_before_acquire() == false`.
 - `is_read_only_violation`: true for a `sqlx::Error::Database` carrying SQLSTATE `25006` wrapped
   in `anyhow` context layers, and false for another code or a non-database error. The test
   implements `sqlx::error::DatabaseError` on a small fake type, since `PgDatabaseError` has no
