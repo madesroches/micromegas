@@ -141,6 +141,26 @@ describe('LogCell — collapse repeats', () => {
     expect(screen.getByLabelText('Show 3 repeated rows')).toBeInTheDocument()
   })
 
+  it('groups rows that differ only in an ignored column whose name contains a comma', () => {
+    const table = new Table({
+      time: vectorFromArray([1000, 2000, 3000], new Timestamp(TimeUnit.MILLISECOND, null)),
+      level: vectorFromArray([4, 4, 4], new Int32()),
+      target: vectorFromArray(['app::mod', 'app::mod', 'app::mod'], new Utf8()),
+      msg: vectorFromArray(['retrying', 'retrying', 'retrying'], new Utf8()),
+      'concat(log_entries.msg,log_entries.target)': vectorFromArray(['a', 'b', 'c'], new Utf8()),
+    })
+    render(
+      <LogCell
+        {...createMockProps({
+          data: [table],
+          options: { collapseIgnoreColumns: ['concat(log_entries.msg,log_entries.target)'] },
+        })}
+      />,
+    )
+    expect(screen.getAllByLabelText('Copy row')).toHaveLength(1)
+    expect(screen.getByLabelText('Show 3 repeated rows')).toBeInTheDocument()
+  })
+
   it('paginates over groups, not raw rows: 60 rows forming 2 groups show no pagination bar', () => {
     const rows: LogRowInput[] = []
     for (let i = 0; i < 30; i++) rows.push({ time: i, msg: 'first-run' })

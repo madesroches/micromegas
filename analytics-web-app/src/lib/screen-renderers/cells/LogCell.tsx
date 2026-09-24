@@ -60,13 +60,13 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   )
 
   const collapseIgnoreColumns = (options?.collapseIgnoreColumns as string[] | undefined) ?? []
-  // Joined-string dep so a fresh array from `options` doesn't invalidate the
+  // Serialized dep so a fresh array from `options` doesn't invalidate the
   // memo (and therefore the grouping below) on every render.
-  const ignoreColumnsKey = collapseIgnoreColumns.join(',')
+  const ignoreColumnsKey = JSON.stringify(collapseIgnoreColumns)
   const ignoreSet = useMemo(() => {
     const set = new Set<string>()
     for (const col of columns) if (col.kind === 'time') set.add(col.name)
-    if (ignoreColumnsKey) for (const name of ignoreColumnsKey.split(',')) set.add(name)
+    for (const name of JSON.parse(ignoreColumnsKey) as string[]) set.add(name)
     return set
   }, [columns, ignoreColumnsKey])
 
