@@ -340,7 +340,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       return (
         <div
           key={rowIdx}
-          className={`relative group flex items-start px-2 py-0.5 hover:bg-app-card/50 transition-colors${stripeIndex % 2 === 0 ? '' : ' bg-app-card/30'}${tinted ? ' bg-accent-link/5' : ''}`}
+          className={`relative group flex items-start px-2 py-0.5 hover:bg-app-card/50 transition-colors${tinted ? ' bg-accent-link/5' : stripeIndex % 2 === 0 ? '' : ' bg-app-card/30'}`}
         >
           <button
             className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-theme-text-muted hover:text-theme-text-primary"
