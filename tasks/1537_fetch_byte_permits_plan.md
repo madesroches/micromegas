@@ -85,7 +85,11 @@ pub struct FetchBudgetStats { pub count: BudgetStats, pub bytes: BudgetStats }
   defaults: 8 × 8 MiB = 64 MiB reserved, 192 MiB prefetch cap — identical to today's effective
   bound.
 - **New knob:** `--fetch-memory-budget-mb` / `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`,
-  default `256` (= 32 × 8 MiB, today's default worst case, so defaults change nothing).
+  default `256` (= 32 × 8 MiB, today's default worst case, so defaults change nothing *when every
+  other fetch knob is also at its default*). A deployment that raised `DEMAND_RESERVED_FETCHES` or
+  `MAX_COALESCED_GET_BYTES` past what the 256 MiB floor allows will fail `Cli::validate` at
+  startup; a deployment that raised `MAX_CONCURRENT_FETCHES` no longer gets more fetch memory for
+  it and must set the new knob explicitly. See the CHANGELOG/admin-doc upgrade note.
 
 ### Acquisition in `acquire_run_permit`
 ```rust
@@ -139,7 +143,8 @@ agree with what `coalesce_runs` actually produces.
 - `Cli::validate` adds the fatal-at-startup counterparts: `fetch_memory_budget_mb > 0`,
   `max_run_bytes(block_size, max_coalesced_get_bytes) <= u32::MAX`, and
   `fetch_memory_budget_mb * MiB >= (demand_reserved_fetches + 1) * max_run_bytes`, with error
-  messages naming the env vars involved and the computed floor.
+  messages naming the env vars involved and the computed floor. `fetch_memory_budget_mb` is `u64`
+  (unlike the sibling `memory_budget_mb: u32`), so this multiplication cannot overflow.
 - New `pub const DEFAULT_FETCH_MEMORY_BUDGET_BYTES: u64 = DEFAULT_TOTAL_FETCH_PERMITS as u64 *
   DEFAULT_MAX_COALESCED_GET_BYTES;` in `range_cache/mod.rs`; the CLI default derives its MiB value
   from it.
@@ -171,10 +176,11 @@ agree with what `coalesce_runs` actually produces.
    Update the `fetch_blocks` doc's "`prefetch_concurrency * max_coalesced_get_bytes`" bound (and
    the matching sentence on `join_prefetch`) to name the prefetch byte pool.
 5. `l1_store.rs`: add `L1_FETCH_MEMORY_BUDGET_BYTES`, pass it, update the const docs.
-6. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb`; reword
+6. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb: u64`; reword
    `max_concurrent_fetches` help ("parallelism cap; transient fetch memory is bounded separately by
    `--fetch-memory-budget-mb`"); extend `Cli::validate`.
-7. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024`.
+7. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024` (`u64`
+   arithmetic; does not overflow like the `u32` `memory_budget_mb` would).
 8. `object-cache-srv/src/saturation_monitor.rs`: consume `FetchBudgetStats`, emit the four new
    gauges.
 9. Update every test call site of `RangeCache::new` (pass `DEFAULT_FETCH_MEMORY_BUDGET_BYTES`
@@ -223,12 +229,18 @@ agree with what `coalesce_runs` actually produces.
   scheduling & memory bounds" with the two-budget model (fetch budget bounds origin-GET buffers
   through backend admission; `--memory-budget-mb` bounds response streaming windows; peak transient
   ≈ their sum) and the startup floor; add the four `object_cache_fetch_mem_*_mb` gauges to the
-  Saturation table.
+  Saturation table; add an upgrade note that a config with `DEMAND_RESERVED_FETCHES` or
+  `MAX_COALESCED_GET_BYTES` raised past the new 256 MiB floor will now fail to start, and that
+  raising `MAX_CONCURRENT_FETCHES` no longer buys more fetch memory — such deployments must also
+  set `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`.
 - `mkdocs/docs/architecture/caching.md:96-99`: one sentence that the shared fetch budget is bounded
   in both concurrency and bytes.
 - `rust/object-cache-srv/README.md`: new flag row; reworded `--max-concurrent-fetches` row.
 - `CHANGELOG.md` (Unreleased): bug fix entry for #1537, with a **Minor breaking change** clause for
-  `RangeCache::new`'s new parameter and `fetch_budget_stats()` returning `FetchBudgetStats`.
+  `RangeCache::new`'s new parameter and `fetch_budget_stats()` returning `FetchBudgetStats`, plus an
+  operator-facing upgrade note (mirroring the admin-doc note above) that non-default
+  `DEMAND_RESERVED_FETCHES`/`MAX_COALESCED_GET_BYTES` configs may now fail validation at startup and
+  that `MAX_CONCURRENT_FETCHES` no longer implies more fetch memory.
 
 ## Testing Strategy
 All no-DB unit/integration tests using the existing `CountingStore` gate and `MemoryBackend`.
