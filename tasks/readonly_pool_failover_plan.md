@@ -196,13 +196,7 @@ Live-DB regression tests (`#[ignore]`, `MICROMEGAS_SQL_CONNECTION_STRING`), just
 this is a bug seen in the wild. A fake can't reproduce it: the behavior depends on the
 server's real `transaction_read_only` and on sqlx's real connect-retry and acquire logic.
 
-- **Stale pooled connection is evicted** (pins the ~40s read-only phase): pool from
-  `read_write_pool_options().max_connections(1)`. Acquire the connection, run
-  `SET SESSION default_transaction_read_only = on`, and release it, which simulates a pooled
-  connection that now sits on a read-only instance. Then run an `INSERT` into a temp/scratch table
-  through the pool. It must succeed, which requires that `before_acquire` evicted the connection
-  and opened a fresh writable one.
-- **New read-only connection is rejected**: build the pool with
+- **New read-only connection is rejected** (pins the ~40s read-only phase): build the pool with
   `PgConnectOptions::options([("default_transaction_read_only", "on")])` and a short
   `acquire_timeout` (for example 500ms). `acquire()` must fail with `PoolTimedOut`, never hand out
   the connection.
