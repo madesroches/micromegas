@@ -10,9 +10,9 @@ SQLSTATE `25006` (`cannot execute INSERT in a read-only transaction`), and the A
 returned `503` because its lookup runs `UPDATE ... SET last_used_at`. The pools accept and keep
 connections to a read-only instance because nothing checks for it. This plan makes every
 write-capable pool refuse read-only connections, both when a connection is opened and before a
-pooled connection is handed out. Once a write reaches the database it then fails only while the
-cluster endpoint's DNS still points at the old writer, not until the pool recycles its
-connections.
+pooled connection is handed out. During the stale-DNS window writes wait in `acquire` (failing
+only on acquire timeout) instead of failing against the demoted writer until the pool recycles
+its connections.
 
 ## Current State
 
@@ -48,15 +48,12 @@ connections.
     exponential backoff, and **retries the connect** until the acquire deadline. It doesn't
     propagate the error. Each retry calls `connect_options.connect()` again, which runs a new DNS
     lookup.
-  - When `before_acquire` returns `Ok(false)`, the idle connection is closed and acquire moves on
-    to the next idle connection or opens a new one. `Err` does the same with `close_hard()`.
+  - When `before_acquire` returns `Ok(false)`, the idle connection is closed and acquire opens a
+    new connection in its place (which goes through `after_connect`). `Err` does the same with
+    `close_hard()`.
 - `Pool::options()` returns `&PoolOptions`, and `PoolOptions: Clone` clones the hook `Arc`s. A
   pool derived from `lake_pool.options().clone()` therefore inherits the hooks without the
   deriving crate knowing about them.
-- **Upgrading to sqlx 0.9.0 doesn't help.** It adds no failover or session-attribute feature, and
-  it brings a large breaking change: `query*()` takes `impl SqlSafeStr`, which touches every
-  `format!`-built query, including `db_api_key.rs`. Keep 0.8.6 for this fix and track the upgrade
-  separately.
 
 ## Design
 
@@ -87,15 +84,16 @@ It returns `PgPoolOptions::new()` with:
 
 The check matches libpq's `target_session_attrs=read-write` on pre-14 servers:
 `transaction_read_only` is `on` on hot standbys and Aurora replicas, and also when
-`default_transaction_read_only` is set. A small pure helper `fn is_read_only(setting: &str) -> bool`
-holds the decision, so it can be unit-tested and both hooks share it.
+`default_transaction_read_only` is set. A small pure helper `pub fn is_read_only(setting: &str) -> bool`
+holds the decision, so it can be unit-tested from
+`rust/ingestion/tests/read_write_pool_tests.rs` and both hooks share it.
 
 ### Applying it
 
 | Site | Change |
 |---|---|
 | `connect_to_data_lake`, `connect_to_remote_data_lake` | `read_write_pool_options().connect(db_uri)` |
-| `dedicated_key_store_pool` | `lake_pool.options().clone().max_connections(4).acquire_timeout(2s).connect_lazy_with(options)`, so it inherits the hooks from the lake pool with no dependency on `ingestion` |
+| `dedicated_key_store_pool` | `lake_pool.options().clone().max_connections(4).acquire_timeout(2s).connect_lazy_with(options)` |
 | `analytics-web-srv` app DB pool, analytics-keys pool | `read_write_pool_options()` (+ existing `max_connections`/`acquire_timeout` for the keys pool) |
 | monolith `seed_local_data_source` | `read_write_pool_options()` |
 
@@ -125,6 +123,10 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
    `rust/ingestion/src/remote_data_lake.rs::connect_to_remote_data_lake`.
 2. Change `rust/auth/src/db_api_key.rs::dedicated_key_store_pool` to derive from
    `lake_pool.options().clone()`, and update its doc comment to say it inherits the lake pool's
+   options. Reword the two call-site comments that describe this as using only the lake pool's
+   "connect options" — `rust/monolith/src/main.rs:200-203` and
+   `rust/public/src/servers/flight_sql_server.rs:271-273` — to say "pool options" (hooks
+   included), since after this change the full pool options are cloned, not just the connect
    options.
 3. Switch `rust/analytics-web-srv/src/web_server.rs:707,746` and
    `rust/monolith/src/main.rs:426` to `read_write_pool_options()`.
@@ -138,6 +140,7 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 - `rust/auth/src/db_api_key.rs`
 - `rust/analytics-web-srv/src/web_server.rs`
 - `rust/monolith/src/main.rs`
+- `rust/public/src/servers/flight_sql_server.rs`
 - `rust/ingestion/tests/read_write_pool_tests.rs` (new)
 - `rust/auth/tests/db_api_key_tests.rs`
 - `mkdocs/docs/admin/service-lifecycle.md`
@@ -156,10 +159,9 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   another managed-PG flavor). The `before_acquire` check costs nothing extra because it replaces
   the ping, so do both.
 - **Lower `max_lifetime`/`idle_timeout`.** This only bounds the damage and churns connections all the time.
-- **Shared helper crate vs `ingestion`.** `auth` can't depend on `ingestion`, but it doesn't have to:
-  `Pool::options().clone()` carries the hooks, so a single definition in `ingestion` covers every
-  derived pool without a new crate.
-- **Upgrade sqlx.** It doesn't help (see Current State).
+- **Upgrade sqlx.** Rejected: 0.9.0 adds no failover or session-attribute feature, and it brings a
+  large breaking change (`query*()` takes `impl SqlSafeStr`, touching every `format!`-built query,
+  including `db_api_key.rs`). Keep 0.8.6 for this fix and track the upgrade separately.
 
 ## Documentation
 
@@ -167,8 +169,9 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   saying pools reject connections to a read-only instance, so during a failover writes wait (up to the
   acquire timeout) instead of failing against the demoted writer, and readiness goes unhealthy
   while only a reader is reachable. Mention the `pg_read_only_connection_rejected` metric.
-- `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. The only Rust API change is
-  additive (`read_write_pool_options`); `dedicated_key_store_pool`'s signature is unchanged.
+- `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. The only Rust API changes are
+  additive (`read_write_pool_options`, `is_read_only`); `dedicated_key_store_pool`'s signature is
+  unchanged.
   Also note that every service's Postgres pools now require a writable primary: a service pointed
   at a read replica (for example flight-sql, which writes JIT partitions through its lake pool via
   `LakehouseContext::from_env` → `connect_to_data_lake` → `migrate_lakehouse`) now fails at
