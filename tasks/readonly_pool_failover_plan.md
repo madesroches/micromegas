@@ -151,14 +151,18 @@ policy: under `Require` a `25006` only arises from a connection that turned read
 
 - **JIT partitions.** Today a failed insert (after the Parquet upload, cleaned up by
   `delete_if_orphan`) propagates out of `jit_update` and fails the scan
-  (`materialized_view.rs:107`). On an `is_read_only_violation` error, `MaterializedView::scan`
-  instead emits `warn!` + `imetric!("jit_update_skipped_read_only", "count", 1)` and continues
-  with the partitions already in `lakehouse_partitions`. Results are then limited to what is
-  already materialized: global views written by the maintenance daemon, plus earlier JIT
-  partitions. Process-scoped data not yet materialized is missing. Serving it without persisting
-  would need an in-memory partition path, which is out of scope. Each scan still spends one
-  partition's decode and upload before the insert fails, because the `jit_update` loop stops at
-  the first error.
+  (`materialized_view.rs:107`) with the raw sqlx error. That failure stays: returning the
+  partitions already written would silently serve a partial result for a range that isn't fully
+  materialized, which is a wrong answer, not a degraded one. On an `is_read_only_violation`
+  error, `MaterializedView::scan` instead emits `warn!` +
+  `imetric!("jit_update_failed_read_only", "count", 1)` and fails the scan with a clear error:
+  the lakehouse is on a read-only connection, and the requested range needs partitions that
+  aren't materialized yet. Every view's `jit_update` no-ops for the `'global'` instance --
+  global partitions come only from the maintenance daemon -- so a query against a global view
+  never reaches the write path and always succeeds on a replica; only a process-scoped instance
+  needing new JIT partitions can hit this error. A query whose partitions are already
+  materialized also still succeeds, since `jit_update` only writes what's missing. Serving
+  un-materialized data from memory without persisting it stays out of scope.
 - **API-key auth.** Today the `UPDATE ... SET last_used_at ... RETURNING` failure becomes
   `LookupError::Db`, which returns 503 (`db_api_key.rs:303-323`). On `25006`, the loader instead
   runs `SELECT <same columns> FROM <table> WHERE key_hash = $1 AND revoked_at IS NULL` and
@@ -181,7 +185,7 @@ current.
 | `dedicated_key_store_pool` | `lake_pool.options().clone().max_connections(4).acquire_timeout(2s).connect_lazy_with(options)` (inherits the lake pool's policy and shared fallback state) |
 | `analytics-web-srv` app DB pool, analytics-keys pool | `read_write_pool_options()` (+ existing `max_connections`/`acquire_timeout` for the keys pool) |
 | monolith `seed_local_data_source` | `read_write_pool_options()` |
-| `MaterializedView::scan` | on `is_read_only_violation`, log, count, and serve existing partitions |
+| `MaterializedView::scan` | on `is_read_only_violation`, log, count, and fail with a clear error |
 | `DbApiKeyAuthProvider` lookup | on `25006`, fall back to a `SELECT` without the `last_used_at` bump |
 
 ### Resulting behavior during a failover
@@ -215,8 +219,8 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
    `rust/public/src/servers/flight_sql_server.rs:242`. Pass `Require` from
    `rust/telemetry-maintenance-srv/src/main.rs:40`, `rust/ingestion/src/web_ingestion_service.rs:277`,
    and every test caller the compiler flags.
-3. In `rust/analytics/src/lakehouse/materialized_view.rs::scan`, tolerate an
-   `is_read_only_violation` error from `jit_update` as designed. In
+3. In `rust/analytics/src/lakehouse/materialized_view.rs::scan`, map an
+   `is_read_only_violation` error from `jit_update` to a clear error, as designed. In
    `rust/auth/src/db_api_key.rs`, add the `SELECT` fallback on `25006`.
 4. Change `rust/auth/src/db_api_key.rs::dedicated_key_store_pool` to derive from
    `lake_pool.options().clone()`, and update its doc comment to say it inherits the lake pool's
@@ -269,6 +273,8 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 ## Decisions
 
 - FlightSQL prefers a writable connection but falls back to read-only; other services stay strict.
+- On a read-only fallback, a query that needs un-materialized JIT partitions fails with a clear
+  error rather than returning partial data.
 
 ## Documentation
 
@@ -280,10 +286,12 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   against object storage and PostgreSQL" sentence. FlightSQL prefers a writable primary, because
   it writes JIT partitions and API-key `last_used_at` through its pools. When only a read-only
   instance is reachable for 10s, it falls back to it and re-probes for a writable one every 30s.
-  On a read replica, queries return only already-materialized partitions (recent process-scoped
-  data may be missing), API-key auth works without updating `last_used_at`, and admin writes and
+  On a read replica, queries against global views (materialized by the maintenance daemon) keep
+  working, since flight-sql never writes for those; a query that needs new JIT partitions --
+  process-scoped data not yet materialized -- fails with a clear error instead of returning
+  partial data. API-key auth works without updating `last_used_at`, and admin writes and
   lakehouse schema migrations fail. Mention the `pg_read_only_connection_accepted` and
-  `jit_update_skipped_read_only` metrics.
+  `jit_update_failed_read_only` metrics.
 - `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. Additive Rust API:
   `read_write_pool_options`, `prefer_read_write_pool_options`, `pool_options`, `WritablePolicy`,
   `ReadOnlyFallback`, `is_read_only`, `is_read_only_violation`. **Minor breaking change**:
