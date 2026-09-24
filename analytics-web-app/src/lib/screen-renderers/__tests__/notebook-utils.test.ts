@@ -736,6 +736,10 @@ describe('findUnresolvedViewerMacro', () => {
   it('returns bare $me when unresolved', () => {
     expect(findUnresolvedViewerMacro('SELECT $me', {})).toBe('$me')
   })
+
+  it('returns null for $me.selected.email (row selection from a cell named me, not the viewer macro)', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.selected.email'", {})).toBeNull()
+  })
 })
 
 describe('createDefaultCell', () => {

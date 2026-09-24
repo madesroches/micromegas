@@ -269,11 +269,21 @@ export function findUnresolvedSelectionMacro(
  * Returns the macro's source text if found, null otherwise.
  */
 export function findUnresolvedViewerMacro(sql: string, variables: Record<string, VariableValue>): string | null {
+  // Collect selected-ref cell names so the dotted-var pass can skip $me.selected.* (a row
+  // selection from a cell named `me`, not the viewer macro), mirroring validateMacros.
+  const selectedRefCellNames = new Set<string>()
+  const selectedRefScan = selectedRefRegex()
+  let selectedRefMatch
+  while ((selectedRefMatch = selectedRefScan.exec(sql)) !== null) {
+    selectedRefCellNames.add(selectedRefMatch[1])
+  }
+
   const dottedPattern = dottedVarRegex()
   let match
   while ((match = dottedPattern.exec(sql)) !== null) {
     const [, varName, colName] = match
     if (varName !== VIEWER_VARIABLE_NAME) continue
+    if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const viewer = variables[varName]
     if (viewer === undefined || typeof viewer === 'string' || viewer[colName] === undefined) {
       return `$${varName}.${colName}`
