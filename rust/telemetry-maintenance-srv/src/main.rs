@@ -12,6 +12,7 @@ use micromegas::analytics::lakehouse::static_tables_configurator::StaticTablesCo
 use micromegas::analytics::lakehouse::view_definition_store::PgViewDefinitionStore;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::analytics::lakehouse::view_registry::ViewRegistry;
+use micromegas::ingestion::data_lake_connection::WritablePolicy;
 use micromegas::micromegas_main;
 use micromegas::servers::maintenance::daemon;
 use micromegas::servers::shutdown::wait_for_sigterm;
@@ -37,7 +38,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    let lakehouse = LakehouseContext::from_env().await?;
+    let lakehouse = LakehouseContext::from_env(WritablePolicy::Require).await?;
     let data_lake = lakehouse.lake().clone();
     let base_view_factory = default_view_factory(
         lakehouse.runtime().clone(),

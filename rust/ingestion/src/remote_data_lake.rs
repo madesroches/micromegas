@@ -1,5 +1,6 @@
 use crate::data_lake_connection::DataLakeConnection;
 use crate::data_lake_connection::make_cache;
+use crate::data_lake_connection::read_write_pool_options;
 use crate::sql_migration::LATEST_DATA_LAKE_SCHEMA_VERSION;
 use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_data_lake_schema_version;
@@ -53,7 +54,7 @@ pub async fn connect_to_remote_data_lake(
     let blob_storage = Arc::new(BlobStorage::new(layered, root.clone()));
     let prefetch =
         prefetch_client.map(|p| Arc::new(PrefixPrefetch::new(p, root)) as Arc<dyn ObjectPrefetch>);
-    let pool = sqlx::postgres::PgPoolOptions::new()
+    let pool = read_write_pool_options()
         .connect(db_uri)
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;

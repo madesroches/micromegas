@@ -8,7 +8,7 @@
 //! `imetric!` counters themselves.
 
 use anyhow::{Context, Result};
-use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas_ingestion::data_lake_connection::{WritablePolicy, connect_to_data_lake};
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::block_wire_format::{Block, BlockPayload};
@@ -62,7 +62,12 @@ async fn same_block_twice_yields_one_object_one_row_with_first_writes_bytes() ->
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -120,7 +125,12 @@ async fn orphaned_object_is_healed_by_insert_block_typed() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -180,7 +190,12 @@ async fn row_without_object_gets_object_written_but_row_left_untouched() -> Resu
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -253,7 +268,12 @@ async fn distinct_blocks_yield_distinct_objects_and_rows() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 

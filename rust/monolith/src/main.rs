@@ -32,6 +32,7 @@ use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGra
 use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
+use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::micromegas_main;
@@ -199,7 +200,7 @@ async fn main() -> Result<()> {
 
     // Taken while `lakehouse` is still borrowed, before the role join_set spawns
     // below — each dedicated key-store pool is built from this shared lake pool's
-    // connect options, not a clone of the lake pool itself (see
+    // pool options, not a clone of the lake pool itself (see
     // `db_api_key::dedicated_key_store_pool`).
     let lake_pool = lakehouse.as_ref().map(|lh| lh.lake().db_pool.clone());
 
@@ -423,7 +424,8 @@ async fn main() -> Result<()> {
 /// Idempotent first-run seed: insert a "local" FlightSQL data source pointing
 /// at the in-process loopback listener when the app DB has no data sources.
 async fn seed_local_data_source(app_db_string: &str) -> Result<()> {
-    let pool = sqlx::PgPool::connect(app_db_string)
+    let pool = read_write_pool_options()
+        .connect(app_db_string)
         .await
         .with_context(|| "seed_local_data_source: connecting to app DB")?;
     // Ensure the schema exists before querying (idempotent)

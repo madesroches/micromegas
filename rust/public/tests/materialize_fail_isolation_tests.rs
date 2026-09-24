@@ -13,7 +13,9 @@ use micromegas::analytics::lakehouse::view::View;
 use micromegas::analytics::lakehouse::view_factory::{ViewFactory, default_view_factory};
 use micromegas::analytics::time::TimeRange;
 use micromegas::datafusion::execution::runtime_env::RuntimeEnv;
-use micromegas::ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use micromegas::ingestion::data_lake_connection::{
+    DataLakeConnection, WritablePolicy, connect_to_data_lake,
+};
 use micromegas::servers::maintenance::materialize_all_views;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
@@ -77,7 +79,14 @@ async fn materialize_all_views_isolates_same_group_failures() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
-    let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let lake = Arc::new(
+        connect_to_data_lake(
+            WritablePolicy::Require,
+            &connection_string,
+            &object_store_uri,
+        )
+        .await?,
+    );
     let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
 
     let update_group = 4242;

@@ -11,7 +11,7 @@ mod test_utils;
 use base64::Engine;
 use micromegas_auth::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, dedicated_key_store_pool, generate_key,
-    hash_key, key_store_has_live_rows,
+    hash_key, is_read_only_error, key_store_has_live_rows,
 };
 use micromegas_auth::multi::MultiAuthProvider;
 use micromegas_auth::policy::PUBLIC_AUDIENCE;
@@ -214,6 +214,82 @@ async fn dedicated_key_store_pool_is_small_and_lazy() {
     // pool is unreachable.
     let key_pool = dedicated_key_store_pool(&lake_pool);
     assert_eq!(key_pool.options().get_max_connections(), 4);
+}
+
+/// `dedicated_key_store_pool` derives from `lake_pool.options().clone()`, not just its connect
+/// options -- `auth` doesn't depend on `ingestion`, so this can't call
+/// `read_write_pool_options()` directly to prove it. Instead it builds a lake pool with one
+/// non-default `PoolOptions` flag (`test_before_acquire(false)`, sqlx's default is `true`) and
+/// checks it survives into the derived pool, standing in for "options were cloned" -- sqlx's
+/// `PoolOptions::clone` copies `test_before_acquire` along with the hook `Arc`s together.
+#[tokio::test]
+async fn dedicated_key_store_pool_inherits_lake_pool_options() {
+    let lake_pool = sqlx::postgres::PgPoolOptions::new()
+        .test_before_acquire(false)
+        .acquire_timeout(std::time::Duration::from_millis(50))
+        .connect_lazy("postgres://localhost/unused")
+        .expect("lazy pool creation is infallible");
+
+    let key_pool = dedicated_key_store_pool(&lake_pool);
+
+    assert!(!key_pool.options().get_test_before_acquire());
+    assert_eq!(key_pool.options().get_max_connections(), 4);
+    assert_eq!(
+        key_pool.options().get_acquire_timeout(),
+        std::time::Duration::from_secs(2)
+    );
+}
+
+/// A minimal `sqlx::error::DatabaseError` carrying a chosen SQLSTATE -- `PgDatabaseError` has no
+/// public constructor, so this stands in for one in `is_read_only_error`'s no-DB tests.
+#[derive(Debug)]
+struct FakeDatabaseError {
+    code: &'static str,
+}
+
+impl std::fmt::Display for FakeDatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "fake database error (code={})", self.code)
+    }
+}
+
+impl std::error::Error for FakeDatabaseError {}
+
+impl sqlx::error::DatabaseError for FakeDatabaseError {
+    fn message(&self) -> &str {
+        "fake database error"
+    }
+
+    fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+        Some(std::borrow::Cow::Borrowed(self.code))
+    }
+
+    fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self
+    }
+
+    fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+        self
+    }
+
+    fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+        self
+    }
+
+    fn kind(&self) -> sqlx::error::ErrorKind {
+        sqlx::error::ErrorKind::Other
+    }
+}
+
+fn fake_db_error(code: &'static str) -> sqlx::Error {
+    sqlx::Error::Database(Box::new(FakeDatabaseError { code }))
+}
+
+#[test]
+fn is_read_only_error_matches_sqlstate_25006_only() {
+    assert!(is_read_only_error(&fake_db_error("25006")));
+    assert!(!is_read_only_error(&fake_db_error("42P01")));
+    assert!(!is_read_only_error(&sqlx::Error::PoolClosed));
 }
 
 #[tokio::test]

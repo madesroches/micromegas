@@ -20,12 +20,13 @@ use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_ingestion::data_lake_connection::WritablePolicy;
 use std::sync::Arc;
 use uuid::Uuid;
 
 async fn lakehouse() -> Result<Arc<LakehouseContext>> {
     ensure_telemetry_guard();
-    LakehouseContext::from_env().await
+    LakehouseContext::from_env(WritablePolicy::Require).await
 }
 
 fn caller(is_admin: bool, grant_selectors: &[&str]) -> CallerContext {

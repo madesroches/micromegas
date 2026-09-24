@@ -24,7 +24,9 @@ use micromegas_analytics::lakehouse::view::ViewMetadata;
 use micromegas_analytics::lakehouse::write_partition::{RetireMatch, insert_partition};
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
-use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use micromegas_ingestion::data_lake_connection::{
+    DataLakeConnection, WritablePolicy, connect_to_data_lake,
+};
 use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "thread_spans";
@@ -34,7 +36,12 @@ async fn connect() -> Result<DataLakeConnection> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    connect_to_data_lake(&connection_string, &object_store_uri).await
+    connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await
 }
 
 /// A fresh, random `view_instance_id` per test, so the retire predicate run by `insert_partition`

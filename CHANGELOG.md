@@ -4,6 +4,27 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Bug fix:** Reject read-only Postgres connections instead of writing to a demoted instance
+  after a failover (#1625). After an Aurora failover, ingestion kept writing to the old primary
+  (restarted as a reader) for tens of seconds after RDS reported the failover complete, failing
+  every insert with SQLSTATE `25006`; the API-key store returned `503` for the same reason. Every
+  strict pool now checks `SHOW transaction_read_only` when a connection is opened and again
+  before it is handed out, rejecting/evicting a read-only connection so sqlx retries with a fresh
+  DNS lookup instead; a write that arrives during the stale-DNS window now waits in `acquire`
+  (failing only on `acquire_timeout`) rather than failing against the demoted writer. Standalone
+  `flight-sql-srv` instead prefers a writable primary but falls back to a read-only connection
+  after a 10s window, re-probing for a writable primary every 30s — see
+  [Operating in a High-Availability Environment](https://micromegas.info/docs/admin/high-availability/)
+  for the full behavior, including what does and doesn't work on a replica and the new
+  `pg_read_only_connection_rejected`/`pg_read_only_connection_accepted`/`jit_update_failed_read_only`
+  metrics. A service other than flight-sql pointed at a read replica now fails at startup with
+  `PoolTimedOut` instead of at its first write. Additive Rust API:
+  `micromegas_ingestion::data_lake_connection::{read_write_pool_options, pool_options,
+  WritablePolicy, ReadOnlyFallback, is_read_only, is_read_only_violation, FALLBACK_AFTER,
+  PROBE_INTERVAL}`, `micromegas_auth::db_api_key::is_read_only_error`. **Minor breaking
+  change:** `connect_to_data_lake` and `LakehouseContext::from_env` take a new leading
+  `WritablePolicy` argument; `dedicated_key_store_pool`'s signature is unchanged, but it now
+  derives from the lake pool's full options rather than just its connect options.
 * **Build:** `build/build_docker_images.py` now tags every image with a third tag,
   `<sha12>[-dirty][-arm64]` (the first 12 characters of the HEAD commit sha, `-dirty`-suffixed
   when the worktree has uncommitted changes), and sets the OCI label

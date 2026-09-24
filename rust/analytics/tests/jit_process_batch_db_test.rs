@@ -36,7 +36,7 @@ use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::metadata::{StreamMetadata, find_process};
 use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_analytics::time::TimeRange;
-use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas_ingestion::data_lake_connection::{WritablePolicy, connect_to_data_lake};
 use micromegas_ingestion::web_ingestion_service::{FORMAT_TRANSIT, WebIngestionService};
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
@@ -180,7 +180,12 @@ async fn generate_process_jit_partitions_batched_matches_fetch_and_group() -> Re
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 

@@ -155,6 +155,7 @@ nav:
         - Object Cache Deployment: admin/object-cache.md
         - Redis Exporter: admin/redis-exporter.md
         - Service Lifecycle & Shutdown: admin/service-lifecycle.md
+        - Operating in a High-Availability Environment: admin/high-availability.md
         - Telemetry Sink Configuration: admin/telemetry-sink-tuning.md
         - Memory Allocator Configuration: admin/memory-allocator.md
         - Admin SQL Functions: admin/functions-reference.md
