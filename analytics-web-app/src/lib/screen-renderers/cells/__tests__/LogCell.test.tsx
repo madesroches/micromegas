@@ -87,10 +87,10 @@ describe('LogCell — collapse repeats', () => {
     expect(badge).toHaveAttribute('aria-expanded', 'false')
 
     fireEvent.click(badge)
-    expect(screen.getByLabelText('Show 5 repeated rows')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByLabelText('Hide 5 repeated rows')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getAllByLabelText('Copy row')).toHaveLength(6)
 
-    fireEvent.click(screen.getByLabelText('Show 5 repeated rows'))
+    fireEvent.click(screen.getByLabelText('Hide 5 repeated rows'))
     expect(screen.getByLabelText('Show 5 repeated rows')).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getAllByLabelText('Copy row')).toHaveLength(2)
   })

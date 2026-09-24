@@ -494,7 +494,7 @@ function RepeatBadge({ count, expanded, title, onClick }: RepeatBadgeProps) {
       onClick={onClick}
       title={title}
       aria-expanded={expanded}
-      aria-label={`Show ${count} repeated rows`}
+      aria-label={expanded ? `Hide ${count} repeated rows` : `Show ${count} repeated rows`}
       className="flex-none ml-2 self-start px-1.5 rounded-full text-[10px] font-medium leading-[18px] text-accent-link bg-accent-link/10 hover:bg-accent-link/20 transition-colors"
     >
       &times;{count}

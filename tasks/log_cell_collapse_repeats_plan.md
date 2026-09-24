@@ -65,7 +65,7 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
 - `usePagination` / `PaginationBar` need no change: they just receive a smaller total. The "1–100 of N" label then reads in lines.
 - A group never straddles a page boundary, so a run always shows its full count on one line.
 - `computeFlexWidths` takes the explicit list of raw row indices actually rendered (representative rows plus members of any expanded group on the page), not a `[rawStart, rawEnd)` range. The deprecated `LogRenderer.tsx` call site (`:353`, which calls `computeFlexWidths(resultTable, columns, 0, numRows)` over the whole result) is updated to pass `range(0, numRows)`.
-- `ignoreSet` is built with `useMemo` from `columns` + `collapseIgnoreColumns`, keyed on a joined string of the configured names so a fresh array from `options` does not invalidate the grouping memo on every render.
+- `ignoreSet` is built with `useMemo` from `columns` + `collapseIgnoreColumns`, keyed on a `JSON.stringify` of the configured names (comma-joining would conflate a column name containing a comma with a different set of names) so a fresh array from `options` does not invalidate the grouping memo on every render.
 
 ### Rendering
 
