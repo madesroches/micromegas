@@ -20,8 +20,10 @@ screen, not an authorization boundary. Audience-based read filtering stays the e
   handles markdown/templates. Both send every value lookup through `resolveMacro` in
   `macro-resolve.ts`. `$variable.col` (`kind: 'varCol'`) resolves against
   `ctx.variables[name][col]` and returns `UNRESOLVED` when the variable or column is missing.
-  An unresolved `$var.col` stays in the SQL as source text, so the query fails loudly. It does
-  not silently become an empty string.
+  An unresolved `$var.col` stays in the SQL as source text. Inside quotes that is a valid string
+  literal (`'$me.email'`), so the query runs against the literal. Execution only blocks on
+  unresolved `$cell.selected.col` (`findUnresolvedSelectionMacro`, `useCellExecution.ts:164-178`,
+  status `blocked`); `validateMacros` errors are editor-only.
 - **Where the variables map comes from.** Cells only ever see a `Record<string, VariableValue>`.
   Two sites build it from the variable cells above the current cell:
   - `NotebookRenderer.tsx:526` `getAvailableVariables(index)`: rendering, editor panels, and
@@ -109,8 +111,14 @@ Conflicts).
 This is an additive JSON field on an internal web endpoint and not part of the SQL surface.
 The existing header display ("Anonymous (No Auth)") keeps working unchanged.
 
-With no viewer entry, `$me.email` is unresolved: it stays in the SQL (the query errors), and the
-editor's validation reports it. `validateMacros` gets one targeted message: when the dotted or
+With no viewer entry, or when the referenced claim is absent, `$me.*` is unresolved and the cell
+does **not** run. A new `findUnresolvedViewerMacro(text, variables): string | null` in
+`macro-substitution.ts` returns the first `$me.col` (via `dottedVarRegex`) or bare `$me` that
+would not resolve against `variables`. `useCellExecution` checks it on the cell SQL and the
+`timeRange` override, next to the existing `findUnresolvedSelectionMacro` check, and completes the
+cell with `status: 'blocked'` and error `<macro> is unavailable: no signed-in viewer`, returning
+`false` so downstream cells wait, the same way an unresolved selection does. In the editor,
+`validateMacros` gets one targeted message: when the dotted or
 simple pass hits `me` and `variables.me` is undefined, it emits
 `$me is unavailable: no signed-in viewer` instead of
 `Unknown variable: me`.
@@ -151,9 +159,9 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
    `collectAvailableVariables`.
 5. **Execution path.** `useCellExecution.ts`: accept `viewer`, keep it in a ref, and build
    `availableVariables` with `collectAvailableVariables` (results/selections stay in the existing
-   loop).
-6. **Validation message.** `macro-substitution.ts` `validateMacros`: add the `me`-unavailable
-   message in the dotted and simple passes.
+   loop). Block execution on `findUnresolvedViewerMacro` next to the selection check.
+6. **Unresolved `$me`.** `macro-substitution.ts`: add `findUnresolvedViewerMacro`, and the
+   `me`-unavailable message in `validateMacros`'s dotted and simple passes.
 7. **Conflict warning.** `cells/VariableCell.tsx` editor: add the reserved-name warning when
    `varConfig.name` sanitizes to `me`.
 8. **Docs.** See Documentation.
@@ -184,12 +192,17 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
   the server state the fact directly.
 - **Omitting missing claims vs. substituting `''`.** An empty email in `WHERE email = '$me.email'`
   silently returns no rows, and with `LIKE`/`<>` it can return everyone's rows. Leaving the macro
-  unresolved fails loudly, which matches the issue's reasoning for the auth-disabled case.
+  unresolved and blocking the cell never runs a mis-scoped query, which matches the issue's
+  reasoning for the auth-disabled case.
 - **Legacy `me` cell wins vs. built-in wins.** Letting the built-in win would silently change
   results for any saved notebook that already has a `me` variable. Letting the cell win and
   warning keeps those notebooks working and still tells the author to rename.
 - **Server-side UDF (`current_user_email()`).** Out of scope, per the issue's follow-up note. It
   would cover CLI/Python clients but needs Flight SQL caller plumbing.
+
+## Decisions
+
+- Unresolved `$me.*` blocks cell execution rather than sending the literal (user decision).
 
 ## Documentation
 
@@ -199,7 +212,7 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
   - an example (`WHERE username = '$me.email'`);
   - that `sub` is the IdP's stable subject id;
   - that `me` is a reserved variable name;
-  - that `$me.*` is unresolved on auth-disabled servers and when the IdP omits a claim;
+  - that a cell using `$me.*` is blocked on auth-disabled servers and when the IdP omits the claim;
   - that it is **not an authorization mechanism**, since viewers can edit a notebook's SQL, and
     audience-based read filtering is the enforcement boundary.
 - Variable Scope: note that `$me` is always available regardless of cell position, and appears
@@ -212,16 +225,18 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
 All unit tests (vitest / cargo test), with no DB:
 
 - `notebook-utils.test.ts`:
-  - `viewerVariable`: full user → three keys in `email, name, sub` order; `email: null`/`name: null`
+  - `viewerVariable`: full user → `email`, `name`, `sub` keys; `email: null`/`name: null`
     (the missing-claim shape `/auth/me` actually sends) → those keys absent;
     `auth_disabled: true` → `undefined`; `null` → `undefined`.
   - `collectAvailableVariables`: viewer present; only upstream variable cells included; a legacy
     `me` cell overrides the viewer.
   - `validateCellName`: `me` rejected for variables and allowed for non-variable cells.
-  - `validateMacros` → the auth-disabled message when `me` is absent.
+  - `validateMacros` → the `me`-unavailable message when `me` is absent.
+  - `findUnresolvedViewerMacro`: `$me.email` with no `me` → `$me.email`; with `me` lacking
+    `email` → `$me.email`; with a full `me` → `null`; SQL without `$me` → `null`.
 - `useCellExecution.test.ts`: executing a cell whose SQL contains `$me.email` with a `viewer`
-  option sends the substituted SQL. This is the execution-path wiring that a render-only test
-  wouldn't reach.
+  option sends the substituted SQL; without a `viewer` the cell ends `blocked` and no query is
+  sent. This is the execution-path wiring that a render-only test wouldn't reach.
 - `NotebookRenderer.test.tsx`: renders without an `AuthProvider` (existing tests keep passing,
   which covers `useOptionalAuthUser`'s no-provider branch).
 - `routing_tests.rs`: `--disable-auth` `/auth/me` body includes `auth_disabled: true`.
@@ -233,6 +248,5 @@ Checked by hand because it needs a real OIDC login, which a unit test can't reac
 1. Start the monolith with auth enabled and open a notebook with a table cell
    `SELECT '$me.email' AS email, '$me.name' AS name, '$me.sub' AS sub`. Expected: one row with the
    signed-in account's values, matching the header's user menu.
-2. Restart with `--disable-auth` and reload the same notebook. Expected: the cell shows the
-   `$me is unavailable` validation message, and the query fails instead of returning
-   `anonymous@localhost`.
+2. Restart with `--disable-auth` and reload the same notebook. Expected: the cell is blocked with
+   `$me.email is unavailable: no signed-in viewer`, and no query is sent.
