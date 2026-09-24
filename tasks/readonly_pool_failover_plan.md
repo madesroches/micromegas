@@ -114,6 +114,10 @@ senders retry. Readiness probes now also fail while only read-only connections a
 because their `acquire` can't complete. That correctly drains the task instead of reporting it
 ready while every write fails.
 
+The lake pool keeps the sqlx default 30s `acquire_timeout`: the stale-DNS window is bounded by
+the Aurora DNS TTL (~5s), which the default comfortably covers, and readiness already bounds its
+own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_service.rs:217`).
+
 ## Implementation Steps
 
 1. Add `read_write_pool_options()` and `is_read_only()` to
@@ -165,6 +169,11 @@ ready while every write fails.
   while only a reader is reachable. Mention the `pg_read_only_connection_rejected` metric.
 - `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. The only Rust API change is
   additive (`read_write_pool_options`); `dedicated_key_store_pool`'s signature is unchanged.
+  Also note that every service's Postgres pools now require a writable primary: a service pointed
+  at a read replica (for example flight-sql, which writes JIT partitions through its lake pool via
+  `LakehouseContext::from_env` → `connect_to_data_lake` → `migrate_lakehouse`) now fails at
+  startup with `PoolTimedOut` (the eager `PoolOptions::connect` does an initial acquire) instead of
+  failing at its first write.
 
 ## Testing Strategy
 
@@ -174,11 +183,14 @@ No-DB unit tests:
   anything that isn't `"on"` counts as writable. This matches libpq, and an unexpected value
   shouldn't take the service down.
 - `read_write_pool_options().get_test_before_acquire() == false`.
-- `dedicated_key_store_pool` inherits the lake pool's options. Build a `connect_lazy` lake pool from
-  `read_write_pool_options()`, derive from it, and assert that `get_test_before_acquire()` is
-  `false` and that `max_connections`/`acquire_timeout` still hold 4 / 2s. The hook closures have
-  no getter, so the inherited `test_before_acquire` flag stands in for "options were cloned"
-  (the existing `dedicated_key_store_pool_is_small_and_lazy` test is the neighbor to extend).
+- `dedicated_key_store_pool` inherits the lake pool's options. `auth` doesn't depend on
+  `ingestion`, so the test can't call `read_write_pool_options()` directly; instead build the lake
+  pool with `PgPoolOptions::new().test_before_acquire(false).acquire_timeout(Duration::from_millis(50)).connect_lazy(...)`
+  (the existing `unreachable_pool` pattern plus the one non-default option), derive from it, and
+  assert that `get_test_before_acquire()` is `false` and that `max_connections`/`acquire_timeout`
+  still hold 4 / 2s. sqlx's `PoolOptions::clone` copies `test_before_acquire` along with the hook
+  Arcs, so the inherited flag stands in for "options were cloned" (the existing
+  `dedicated_key_store_pool_is_small_and_lazy` test is the neighbor to extend).
 
 Live-DB regression tests (`#[ignore]`, `MICROMEGAS_SQL_CONNECTION_STRING`), justified because
 this is a bug seen in the wild. A fake can't reproduce it: the behavior depends on the
@@ -204,12 +216,3 @@ seconds of `Completed failover`. This isn't automated because it needs a real Au
 its DNS behavior. The incident was triggered by a maintenance-driven failover, and a manual
 failover didn't reproduce the read-only phase, so a clean run here is necessary but not
 conclusive.
-
-## Open Questions
-
-- Should the lake pool's `acquire_timeout` (sqlx default 30s) be set explicitly, maybe shorter
-  so a sender sees its 5xx sooner, or longer to ride out the stale-DNS window? This plan leaves
-  the default.
-- Is any deployment intentionally pointing flight-sql at a read replica for read-only querying?
-  flight-sql writes JIT partitions, so that isn't supported today, and this change would make such a
-  setup fail at acquire instead of at the first write.
