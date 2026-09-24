@@ -113,8 +113,9 @@ monolith, which injects its shared lake pool into the flight-sql role, on `Requi
 `ReadOnlyFallback` state that the closures capture by `Arc`. That state is shared by every
 connection of the pool and by every pool cloned from its options. It holds `streak_start:
 Option<Instant>` (the first read-only rejection since the last writable connect) and
-`last_probe: Instant`, behind a `std::sync::Mutex` that is never held across an await. The
-decisions are pure methods that take `now`, so they can be unit-tested:
+`last_probe: Option<Instant>` (the last time a pooled connection was evicted for a re-probe,
+`None` until the current streak's first one), behind a `std::sync::Mutex` that is never held
+across an await. The decisions are pure methods that take `now`, so they can be unit-tested:
 
 - `on_connect(read_only, now) -> bool` (accept?): a writable connection clears `streak_start`
   and is accepted. A read-only connection starts the streak if none is running and is rejected
@@ -126,11 +127,14 @@ decisions are pure methods that take `now`, so they can be unit-tested:
 - `on_acquire(read_only, now) -> bool` (keep?): a writable connection clears `streak_start` (the
   same as `on_connect`, so a pooled connection that turns writable again without a reconnect still
   resets the streak) and is kept. A read-only connection is evicted (`Ok(false)`) immediately when
-  `streak_start` is `None`, because a writable connect has succeeded since the fallback. Otherwise
-  it is evicted at most once per `PROBE_INTERVAL` (30s) pool-wide, as a re-probe, and kept in
-  between. The replacement connect goes through `on_connect`. The streak is past the window, so it
-  lands at once on either the writer (which clears the streak) or the replica (accepted without
-  waiting).
+  `streak_start` is `None` (a writable connect has succeeded since the fallback) or when
+  `now - streak_start < FALLBACK_AFTER` (a connection turned read-only mid-pool, but the pool
+  hasn't actually fallen back yet -- `on_connect`'s window check never sees an already-pooled
+  connection, so this is the only place that can reject it). Only once the window has elapsed does
+  the once-per-`PROBE_INTERVAL` (30s) re-probe rule apply: evicted at most once per interval,
+  pool-wide, and kept in between. The replacement connect goes through `on_connect`. The streak is
+  past the window, so it lands at once on either the writer (which clears the streak) or the
+  replica (accepted without waiting).
 
 The hot path stays at the one `SHOW transaction_read_only` round trip. The worst case is one
 extra connect per 30s while on a replica. The window (10s) is shorter than the lake pool's 30s
@@ -319,9 +323,10 @@ No-DB unit tests:
   read-only before `FALLBACK_AFTER` and accepts it at or after the window, and a writable connect
   clears the streak so the next read-only connect is rejected again. `on_acquire` keeps writable
   connections and also clears the streak, so a writable acquire on an already-pooled connection
-  makes the next read-only connect rejected again too. For read-only ones, it evicts once per
-  `PROBE_INTERVAL` (a second call inside the interval keeps) and evicts immediately once the
-  streak is cleared.
+  makes the next read-only connect rejected again too. For read-only ones, it evicts every pooled
+  connection while `now - streak_start < FALLBACK_AFTER`; only past that window does the
+  once-per-`PROBE_INTERVAL` re-probe rule apply (a second call inside the interval keeps), and it
+  evicts immediately once the streak is cleared.
 - `pool_options(WritablePolicy::Prefer).get_test_before_acquire() == false`.
 - `is_read_only_violation`: true for a `sqlx::Error::Database` carrying SQLSTATE `25006` wrapped
   in `anyhow` context layers, and false for another code or a non-database error. The test

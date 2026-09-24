@@ -20,7 +20,8 @@ This file documents the historical progress of the Micromegas project. For curre
   metrics. A service other than flight-sql pointed at a read replica now fails at startup with
   `PoolTimedOut` instead of at its first write. Additive Rust API:
   `micromegas_ingestion::data_lake_connection::{read_write_pool_options, pool_options,
-  WritablePolicy, ReadOnlyFallback, is_read_only, is_read_only_violation}`. **Minor breaking
+  WritablePolicy, ReadOnlyFallback, is_read_only, is_read_only_violation, FALLBACK_AFTER,
+  PROBE_INTERVAL}`, `micromegas_auth::db_api_key::is_read_only_error`. **Minor breaking
   change:** `connect_to_data_lake` and `LakehouseContext::from_env` take a new leading
   `WritablePolicy` argument; `dedicated_key_store_pool`'s signature is unchanged, but it now
   derives from the lake pool's full options rather than just its connect options.

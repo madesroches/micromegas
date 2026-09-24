@@ -155,10 +155,11 @@ details.
 ## Scaling
 
 FlightSQL is stateless with respect to the lake — every instance reads the same
-partitions — so it scales horizontally behind a gRPC-aware load balancer. Queries
-are read-only against object storage, but can still write to PostgreSQL (JIT
-partition materialization); add instances to serve more concurrent queries. Heavy
-or slow-object-store deployments benefit from the [object cache](object-cache.md),
-which fronts the object store with a shared read-through cache. See
+partitions — so it scales horizontally behind a gRPC-aware load balancer. JIT
+partition materialization writes to both object storage (the new partition's
+Parquet file) and PostgreSQL (its metadata row); add instances to serve more
+concurrent queries. Heavy or slow-object-store deployments benefit from the
+[object cache](object-cache.md), which fronts the object store with a shared
+read-through cache. See
 [Operating in a High-Availability Environment](high-availability.md) for how
 FlightSQL behaves during a database failover.

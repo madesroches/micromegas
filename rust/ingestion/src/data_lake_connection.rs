@@ -129,11 +129,11 @@ pub enum WritablePolicy {
 /// How long a [`WritablePolicy::Prefer`] pool keeps rejecting read-only connections before
 /// falling back, once no writable connection has succeeded since the last one (or since
 /// startup).
-const FALLBACK_AFTER: Duration = Duration::from_secs(10);
+pub const FALLBACK_AFTER: Duration = Duration::from_secs(10);
 
 /// How often a [`WritablePolicy::Prefer`] pool that has fallen back to a read-only connection
 /// evicts a pooled one to re-probe for a writable primary.
-const PROBE_INTERVAL: Duration = Duration::from_secs(30);
+pub const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// True when `setting` (a Postgres `transaction_read_only` value, as read by `SHOW
 /// transaction_read_only`) marks the session as read-only. Anything other than `"on"` counts as
@@ -215,7 +215,9 @@ impl ReadOnlyFallback {
     pub fn on_acquire(&self, read_only: bool, now: Instant) -> bool {
         let mut state = self.0.lock().expect("ReadOnlyFallback mutex poisoned");
         if !read_only {
-            state.streak_start = None;
+            if state.streak_start.take().is_some() {
+                info!("writable postgres connection succeeded, ending read-only fallback");
+            }
             state.last_probe = None;
             return true;
         }
@@ -297,7 +299,7 @@ pub fn pool_options(policy: WritablePolicy) -> PgPoolOptions {
                         if fallback.on_acquire(read_only, Instant::now()) {
                             Ok(true)
                         } else {
-                            warn!("evicting pooled read-only postgres connection to re-probe for a writable primary");
+                            warn!("evicting pooled read-only postgres connection");
                             imetric!("pg_read_only_connection_rejected", "count", 1_u64);
                             Ok(false)
                         }

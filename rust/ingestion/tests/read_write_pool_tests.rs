@@ -4,13 +4,10 @@
 //! sleeps).
 
 use micromegas_ingestion::data_lake_connection::{
-    ReadOnlyFallback, WritablePolicy, is_read_only, is_read_only_violation, pool_options,
-    read_write_pool_options,
+    FALLBACK_AFTER, PROBE_INTERVAL, ReadOnlyFallback, WritablePolicy, is_read_only,
+    is_read_only_violation, pool_options, read_write_pool_options,
 };
 use std::time::{Duration, Instant};
-
-const FALLBACK_AFTER: Duration = Duration::from_secs(10);
-const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
 #[test]
 fn is_read_only_matches_libpq_target_session_attrs_semantics() {
@@ -95,19 +92,33 @@ fn on_acquire_keeps_writable_and_clears_the_streak() {
 #[test]
 fn on_acquire_evicts_read_only_immediately_once_the_streak_is_cleared() {
     let fallback = ReadOnlyFallback::new();
-    let now = Instant::now();
+    let start = Instant::now();
 
-    // No streak has ever run: a read-only connection surfacing here is unexpected and evicted
-    // at once, exactly like the `Require` policy.
-    assert!(!fallback.on_acquire(true, now));
+    // Start a streak and fall back to read-only.
+    assert!(!fallback.on_connect(true, start));
+    assert!(fallback.on_connect(true, start + FALLBACK_AFTER));
+
+    // A re-probe past the window sets `last_probe`, and the acquire right after it is kept --
+    // still inside `PROBE_INTERVAL`.
+    let fallback_accepted_at = start + FALLBACK_AFTER;
+    assert!(!fallback.on_acquire(true, fallback_accepted_at));
+    let probed_at = fallback_accepted_at + Duration::from_secs(1);
+    assert!(fallback.on_acquire(true, probed_at));
+
+    // A writable connect clears the streak...
+    let cleared_at = probed_at + Duration::from_secs(1);
+    assert!(fallback.on_connect(false, cleared_at));
+
+    // ...so a read-only acquire is evicted at once, even though it's still within
+    // `PROBE_INTERVAL` of the last probe.
+    assert!(!fallback.on_acquire(true, cleared_at + Duration::from_millis(1)));
 }
 
 #[test]
 fn on_acquire_evicts_read_only_repeatedly_while_inside_the_fallback_window() {
     let fallback = ReadOnlyFallback::new();
     let start = Instant::now();
-    // Start a streak without going through `on_connect`: a connection already sitting in the
-    // pool turned read-only, which `on_connect`'s window check never sees.
+    // Start the streak with a rejected read-only connect.
     assert!(!fallback.on_connect(true, start));
 
     // Every pooled read-only connection must be evicted while still inside the window, not just

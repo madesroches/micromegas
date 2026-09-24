@@ -8,10 +8,10 @@ covers database failover only; other HA topics may be added here later.
 
 ### Strict pools reject read-only connections
 
-Every service's lake connection pool — ingestion, the maintenance daemon, and the
-analytics web app's own pools — requires a writable primary. Each connection is
-checked with `SHOW transaction_read_only` both when it is opened and again before
-it is handed out of the pool:
+Every service's Postgres pools (ingestion, the maintenance daemon, the monolith,
+and the analytics web app's app-DB and key pools) require a writable primary. Each
+connection is checked with `SHOW transaction_read_only` both when it is opened and
+again before it is handed out of the pool:
 
 - A connection that turns out to be read-only is rejected and closed; sqlx retries
   with backoff and a fresh DNS lookup.
