@@ -263,12 +263,25 @@ export function findUnresolvedSelectionMacro(
   return null
 }
 
+/** Result of `findUnresolvedViewerMacro`: which macro was unresolved and why. */
+export interface UnresolvedViewerMacro {
+  /** The macro's source text, e.g. `$me.email` or `$me`. */
+  macro: string
+  /** True when there is no signed-in viewer at all (`variables.me` is undefined).
+   *  False when a viewer is signed in but the referenced claim is missing or
+   *  `me` is a legacy string-valued variable. */
+  noViewer: boolean
+}
+
 /**
  * Checks if a SQL string contains an unresolved $me.col or bare $me macro
  * (no viewer entry in `variables`, or the entry lacks the referenced claim).
- * Returns the macro's source text if found, null otherwise.
+ * Returns details of the first unresolved macro if found, null otherwise.
  */
-export function findUnresolvedViewerMacro(sql: string, variables: Record<string, VariableValue>): string | null {
+export function findUnresolvedViewerMacro(
+  sql: string,
+  variables: Record<string, VariableValue>,
+): UnresolvedViewerMacro | null {
   // Collect selected-ref cell names so the dotted-var pass can skip $me.selected.* (a row
   // selection from a cell named `me`, not the viewer macro), mirroring validateMacros.
   const selectedRefCellNames = new Set<string>()
@@ -286,7 +299,7 @@ export function findUnresolvedViewerMacro(sql: string, variables: Record<string,
     if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const viewer = variables[varName]
     if (viewer === undefined || typeof viewer === 'string' || viewer[colName] === undefined) {
-      return `$${varName}.${colName}`
+      return { macro: `$${varName}.${colName}`, noViewer: viewer === undefined }
     }
   }
 
@@ -294,7 +307,7 @@ export function findUnresolvedViewerMacro(sql: string, variables: Record<string,
   while ((match = simplePattern.exec(sql)) !== null) {
     const [, varName] = match
     if (varName === VIEWER_VARIABLE_NAME && variables[varName] === undefined) {
-      return `$${varName}`
+      return { macro: `$${varName}`, noViewer: true }
     }
   }
 

@@ -204,7 +204,9 @@ export function useCellExecution({
         completeCellExecution(cell.name, {
           status: 'blocked',
           data: [],
-          error: `${unresolvedViewerMacro} is unavailable: no signed-in viewer`,
+          error: unresolvedViewerMacro.noViewer
+            ? `${unresolvedViewerMacro.macro} is unavailable: no signed-in viewer`
+            : `${unresolvedViewerMacro.macro} is not available for the signed-in viewer`,
         })
         return false // halt execution — downstream cells should wait
       }

@@ -717,12 +717,15 @@ describe('collectAvailableVariables', () => {
 })
 
 describe('findUnresolvedViewerMacro', () => {
-  it('returns $me.email when there is no me variable', () => {
-    expect(findUnresolvedViewerMacro("SELECT '$me.email'", {})).toBe('$me.email')
+  it('returns $me.email with noViewer=true when there is no me variable', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.email'", {})).toEqual({ macro: '$me.email', noViewer: true })
   })
 
-  it('returns $me.email when me is present but lacks the email claim', () => {
-    expect(findUnresolvedViewerMacro("SELECT '$me.email'", { me: { sub: '123' } })).toBe('$me.email')
+  it('returns $me.email with noViewer=false when me is present but lacks the email claim', () => {
+    expect(findUnresolvedViewerMacro("SELECT '$me.email'", { me: { sub: '123' } })).toEqual({
+      macro: '$me.email',
+      noViewer: false,
+    })
   })
 
   it('returns null when me has the referenced claim', () => {
@@ -733,8 +736,8 @@ describe('findUnresolvedViewerMacro', () => {
     expect(findUnresolvedViewerMacro("SELECT '$from'", {})).toBeNull()
   })
 
-  it('returns bare $me when unresolved', () => {
-    expect(findUnresolvedViewerMacro('SELECT $me', {})).toBe('$me')
+  it('returns bare $me with noViewer=true when unresolved', () => {
+    expect(findUnresolvedViewerMacro('SELECT $me', {})).toEqual({ macro: '$me', noViewer: true })
   })
 
   it('returns null for $me.selected.email (row selection from a cell named me, not the viewer macro)', () => {
