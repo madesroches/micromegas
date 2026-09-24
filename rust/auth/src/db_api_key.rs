@@ -299,9 +299,10 @@ impl DbApiKeyAuthProvider {
 /// a `WritablePolicy::Prefer` FlightSQL pool that fell back to a replica), falls back to a plain
 /// `SELECT` of the same columns and skips the bump rather than failing the whole lookup --
 /// `last_used_at` is best-effort telemetry, not something a caller's auth should depend on.
-/// Unlike valid keys (cached in `self.valid`), an unknown token hits this fallback on every
-/// request, so the `warn!` is throttled via `last_read_only_warn_at`/`window_secs` rather than
-/// logged unconditionally.
+/// Unlike valid keys (cached in `self.valid`), an unknown token reaches this fallback each time
+/// it's a distinct token missing `self.unknown`, and again each time the same token is retried
+/// after `self.unknown`'s TTL (`unknown_cache_ttl_secs`) has expired -- so the `warn!` is
+/// throttled via `last_read_only_warn_at`/`window_secs` rather than logged unconditionally.
 async fn lookup_key_row(
     pool: &PgPool,
     table: ApiKeyTable,

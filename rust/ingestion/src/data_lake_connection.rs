@@ -169,8 +169,8 @@ struct ReadOnlyFallbackState {
     last_probe: Option<Instant>,
 }
 
-/// Shared handle to a [`WritablePolicy::Prefer`] pool's fallback state. See [`pool_options`]'s
-/// doc comment for the decisions [`Self::on_connect`] and [`Self::on_acquire`] drive.
+/// Shared handle to a [`WritablePolicy::Prefer`] pool's fallback state. See [`Self::on_connect`]
+/// and [`Self::on_acquire`] for the decisions it drives.
 #[derive(Debug, Clone)]
 pub struct ReadOnlyFallback(Arc<Mutex<ReadOnlyFallbackState>>);
 
@@ -178,6 +178,15 @@ impl Default for ReadOnlyFallback {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Clears an in-progress fallback streak on a writable connect/acquire (shared by
+/// [`ReadOnlyFallback::on_connect`] and [`ReadOnlyFallback::on_acquire`]).
+fn clear_streak(state: &mut ReadOnlyFallbackState) {
+    if state.streak_start.take().is_some() {
+        info!("writable postgres connection succeeded, ending read-only fallback");
+    }
+    state.last_probe = None;
 }
 
 impl ReadOnlyFallback {
@@ -194,10 +203,7 @@ impl ReadOnlyFallback {
     pub fn on_connect(&self, read_only: bool, now: Instant) -> bool {
         let mut state = self.0.lock().expect("ReadOnlyFallback mutex poisoned");
         if !read_only {
-            if state.streak_start.take().is_some() {
-                info!("writable postgres connection succeeded, ending read-only fallback");
-            }
-            state.last_probe = None;
+            clear_streak(&mut state);
             return true;
         }
         let streak_start = *state.streak_start.get_or_insert(now);
@@ -215,10 +221,7 @@ impl ReadOnlyFallback {
     pub fn on_acquire(&self, read_only: bool, now: Instant) -> bool {
         let mut state = self.0.lock().expect("ReadOnlyFallback mutex poisoned");
         if !read_only {
-            if state.streak_start.take().is_some() {
-                info!("writable postgres connection succeeded, ending read-only fallback");
-            }
-            state.last_probe = None;
+            clear_streak(&mut state);
             return true;
         }
         let Some(streak_start) = state.streak_start else {
