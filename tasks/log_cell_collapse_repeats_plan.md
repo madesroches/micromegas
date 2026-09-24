@@ -14,7 +14,7 @@ The notebook Log cell renders one line per result row. A source that logs the sa
 - The same "format a log value to its display string" switch appears twice, in `formatRowForCopy` (`log-utils.tsx:190-209`) and `computeFlexWidths` (`:220-236`), with a third copy inside `renderLogColumn`.
 - `LogCellEditor` (`LogCell.tsx:342`) only exposes the SQL editor. `CellEditorProps.availableColumns` (`cell-registry.ts:90`) already carries the cell's own result column names (populated in `NotebookRenderer.tsx:846`), but the Log editor doesn't use it yet. For a Log cell nested in a horizontal group, `HgEditorPanel` (`NotebookRenderer.tsx:145-179`, render at ~249) doesn't take or forward `availableColumns` to `HorizontalGroupCellEditor`, even though that editor already accepts and forwards the prop to `ChildEditorView` / `meta.EditorComponent` (`HorizontalGroupCell.tsx:425-471`, 393).
 - `usePagination` / `PaginationBar` (`pagination.tsx`) are generic over a `totalRows` count. They know nothing about Arrow and are shared with `TableCell`.
-- The deprecated standalone `LogRenderer.tsx` is out of scope, as in previous log-cell plans.
+- The deprecated standalone `LogRenderer.tsx` is out of scope except for the `computeFlexWidths` call-site update, as in previous log-cell plans.
 
 ## Design
 
@@ -40,9 +40,11 @@ export function groupConsecutiveRows(
   columns: LogColumn[],
   ignore: ReadonlySet<string>,
 ): LogRowGroup[]
+export function range(start: number, end: number): number[]
+export function singletonGroups(n: number): LogRowGroup[]
 ```
 
-- `formatLogValue` holds the existing `time`/`level`/`target`/default switch. `formatRowForCopy` and `computeFlexWidths` are rewritten to call it (DRY; behavior unchanged).
+- `formatLogValue` holds the existing `time`/`level`/`target`/default switch. `formatRowForCopy` and `computeFlexWidths` are rewritten to call it (DRY; behavior unchanged). `renderLogColumn`'s third copy of the switch (`log-utils.tsx:142-187`) also collapses to a call to `formatLogValue` for the display string, keeping its per-kind JSX styling (className/title/color) around that string.
 - `groupConsecutiveRows` reads values through `table.getChild(col.name)?.get(i)` for compared columns only. Going through column vectors avoids building a row proxy per row. It is O(rows × compared columns) with early exit on the first mismatching column. Row counts are capped by the cell's SQL `LIMIT`, so one linear pass per result is cheap, and it is memoized (below).
 
 ### Pagination over groups
@@ -60,9 +62,9 @@ displayedRows = pageGroups.flatMap((g) => expandedGroups.has(g.start)
 autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signature: explicit row indices
 ```
 
-- `usePagination` / `PaginationBar` need no change: they just receive a smaller total. The "1–100 of N" label then reads in lines. That is accurate for what the page shows. The raw row count is not surfaced in v1.
+- `usePagination` / `PaginationBar` need no change: they just receive a smaller total. The "1–100 of N" label then reads in lines.
 - A group never straddles a page boundary, so a run always shows its full count on one line.
-- `computeFlexWidths` takes the explicit list of raw row indices actually rendered (representative rows plus members of any expanded group on the page), not a `[rawStart, rawEnd)` range. Measuring a whole collapsed run would cost one proxy build and full formatting per hidden row for no visual benefit, since only the representative line is shown; keeping the argument to "rows on screen" keeps width measurement page-bounded, matching what pagination is for. The deprecated `LogRenderer.tsx` call site is updated to pass `range(startRow, endRow)`.
+- `computeFlexWidths` takes the explicit list of raw row indices actually rendered (representative rows plus members of any expanded group on the page), not a `[rawStart, rawEnd)` range. The deprecated `LogRenderer.tsx` call site (`:353`, which calls `computeFlexWidths(resultTable, columns, 0, numRows)` over the whole result) is updated to pass `range(0, numRows)`.
 - `ignoreSet` is built with `useMemo` from `columns` + `collapseIgnoreColumns`, keyed on a joined string of the configured names so a fresh array from `options` does not invalidate the grouping memo on every render.
 
 ### Rendering
@@ -84,13 +86,15 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
 ## Mockups
 
 - `tasks/log_cell_collapse_repeats_mockups/option-a-trailing-badge.html`: **chosen**. `×N` pill at the end of the collapsed line; rows without repeats are pixel-identical to today. Interactive: click a pill to expand, toggle "Collapse repeats" in the footer.
-- `tasks/log_cell_collapse_repeats_mockups/option-b-leading-gutter.html`: Grafana-style count gutter before the timestamp. Counts line up for scanning, but it costs ~44px on every row and shifts every column when the toggle flips.
+- `tasks/log_cell_collapse_repeats_mockups/option-b-leading-gutter.html`: Grafana-style count gutter before the timestamp.
 
 ## Implementation Steps
 
 1. **`log-utils.tsx`**
-   - Add `formatLogValue(col, value)`; rewrite `formatRowForCopy` and `computeFlexWidths` to use it.
+   - Add `formatLogValue(col, value)`; rewrite `formatRowForCopy` and `computeFlexWidths` to use it. `renderLogColumn`'s per-kind switch also collapses to a call to `formatLogValue` for the display string, keeping its per-kind styling (className/title/color).
    - Add `LogRowGroup` and `groupConsecutiveRows(table, columns, ignore)`, including the "everything ignored → singleton groups" guard.
+   - Add `range(start, end): number[]` and `singletonGroups(n): LogRowGroup[]` helpers, used by the pagination logic below.
+   - **`LogRenderer.tsx`**: update the `computeFlexWidths(resultTable, columns, 0, numRows)` call site (`:353`) to pass `range(0, numRows)` instead of the raw start/end pair.
 2. **`LogCell.tsx` renderer**
    - Read `collapseRepeats` (default `true`) and `collapseIgnoreColumns` (default `[]`) from `options`; build `ignoreSet` and `groups`.
    - Paginate over `groups.length`; derive `displayedRows` (representative rows plus expanded members) for `computeFlexWidths`.
@@ -98,7 +102,7 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
    - Add `RepeatBadge` (local component in `LogCell.tsx`) and the "Collapse repeats" footer toggle.
 3. **`LogCell.tsx` editor**
    - Destructure `availableColumns` in `LogCellEditor`; add the ignore-columns chip section writing `options.collapseIgnoreColumns`.
-   - `NotebookRenderer.tsx`: add `availableColumns` to `HgEditorPanel`, sourced from `selectedChildName ? cellStates[selectedChildName]?.data[0]?.schema.fields : undefined`, and pass it through to `HorizontalGroupCellEditor` so Log cells nested in a horizontal group get it too.
+   - `NotebookRenderer.tsx`: add `availableColumns` to `HgEditorPanel`, sourced from `selectedChildName ? cellStates[selectedChildName]?.data[0]?.schema.fields.map((f) => f.name) : undefined`, and pass it through to `HorizontalGroupCellEditor` so Log cells nested in a horizontal group get it too.
 4. **Tests** (see Testing Strategy).
 5. **Docs** (see Documentation), plus a `CHANGELOG.md` Unreleased entry.
 
@@ -106,6 +110,7 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
 
 - `analytics-web-app/src/lib/screen-renderers/log-utils.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/LogCell.tsx`
+- `analytics-web-app/src/lib/screen-renderers/LogRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/__tests__/log-utils.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/LogCell.test.tsx` (new)
@@ -167,3 +172,4 @@ Visual placement and feel only. The logic is covered above, and a misplaced badg
 - Value equality uses `===` with a formatted-string fallback only for object-valued columns.
 - The ignore list lives in the `LogCellEditor` panel, not the `LogDivider` context menu.
 - Pagination's "1–100 of N" label counts lines (groups), not raw rows.
+- Auto widths measure only rows on screen, not hidden members of collapsed runs.
