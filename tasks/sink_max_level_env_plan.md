@@ -4,8 +4,8 @@ Issue: #1626
 
 ## Overview
 
-`#[micromegas_main]` hardcodes the local (stderr) sink at DEBUG, and no binary can change that
-without a rebuild. Where stderr is shipped to a log service billed per GB, that DEBUG console
+`#[micromegas_main]` hardcodes the local (stdout) sink at DEBUG, and no binary can change that
+without a rebuild. Where stdout is shipped to a log service billed per GB, that DEBUG console
 copy is costly and redundant: the same events already reach micromegas through the telemetry
 sink. This plan makes each built-in sink's max level configurable at startup through
 environment variables read once by `TelemetryGuardBuilder::build()`. Changing a level while the
@@ -40,7 +40,11 @@ env-override helper.
   near-free.
 - `LevelFilter::from_str` (`rust/tracing/src/levels.rs:302`) already parses `off`, `fatal`,
   `error`, `warn`, `info`, `debug` and `trace`, case-insensitively.
-- `rust/capi/src/lib.rs:98` disables the local sink entirely, so it is unaffected.
+- `rust/capi/src/lib.rs:98` disables the local sink, so only `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`
+  doesn't apply there. `mm_init` still calls `TelemetryGuardBuilder::build()`
+  (`rust/capi/src/lib.rs:137-142`), so the new `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` var and the
+  now-strict transport parsing both reach it: on `Err`, `mm_init` `eprintln!`s and returns null,
+  turning telemetry off, rather than panicking.
 - `monolith` and `flight-sql-srv` pass `max_level_override = "debug"`, which pins the global
   level. Per-sink filtering in `on_log` still applies, so they honor the new cap too.
 
@@ -48,14 +52,36 @@ env-override helper.
 
 ### 1. One env-override helper (generalization)
 
-Add a private module `rust/telemetry-sink/src/env_config.rs` with two functions:
+Add a private module `rust/telemetry-sink/src/env_config.rs` with the full surface used by
+`build()`:
 
 ```rust
 /// Pure core, unit-testable without touching the process environment.
-fn parse_env_value<T: FromStr>(name: &str, raw: Option<OsString>) -> anyhow::Result<Option<T>>;
+fn parse_env_value<T: FromStr>(
+    name: &str,
+    raw: Option<OsString>,
+    expected: &str,
+) -> anyhow::Result<Option<T>>;
 
-/// `parse_env_value(name, std::env::var_os(name))`
-pub(crate) fn env_override<T: FromStr>(name: &str) -> anyhow::Result<Option<T>>;
+/// `parse_env_value(name, std::env::var_os(name), expected)`
+pub(crate) fn env_override<T: FromStr>(name: &str, expected: &str) -> anyhow::Result<Option<T>>;
+
+/// Pure core of `resolve`, unit-testable without touching the process environment.
+fn resolve_from<T: FromStr>(
+    explicit: Option<T>,
+    name: &str,
+    raw: Option<OsString>,
+    default: T,
+    expected: &str,
+) -> anyhow::Result<T>;
+
+/// `resolve_from(explicit, name, std::env::var_os(name), default, expected)`
+pub(crate) fn resolve<T: FromStr>(
+    explicit: Option<T>,
+    name: &str,
+    default: T,
+    expected: &str,
+) -> anyhow::Result<T>;
 ```
 
 Semantics, matching `MICROMEGAS_PROCESS_PROPERTIES`:
@@ -65,12 +91,16 @@ Semantics, matching `MICROMEGAS_PROCESS_PROPERTIES`:
 - A non-UTF-8 value is an error.
 - A value that fails `T::from_str` on the trimmed string is an error naming the variable and
   the value, e.g. `invalid MICROMEGAS_LOCAL_SINK_MAX_LEVEL "verbose": expected one of off,
-  fatal, error, warn, info, debug, trace`. The expected-values hint comes from a `&str` argument
-  or a small wrapper for levels. A generic helper cannot know the valid values of `T`.
+  fatal, error, warn, info, debug, trace`. A generic helper cannot know the valid values of `T`,
+  so `parse_env_value`, `env_override`, and `resolve` (and `resolve`'s pure core) each take an
+  `expected: &str` parameter used only in that error message. Level call sites pass
+  `"one of off, fatal, error, warn, info, debug, trace"`; `usize`/`u64` call sites pass e.g.
+  `"a non-negative integer"`.
 
 `build()` propagates these errors through `?`. The macro's `.expect(...)` already turns a
 guard-build failure into a loud startup panic, so a typo fails at startup instead of being
-silently ignored.
+silently ignored. `mm_init` (capi) doesn't panic on the same error: it `eprintln!`s and returns
+null, turning telemetry off instead of crashing the host process (Current State).
 
 ### 2. Level env vars
 
@@ -78,7 +108,7 @@ Add public consts next to `PROCESS_PROPERTIES_ENV_VAR`:
 
 | Env var | Sink | Default |
 |---|---|---|
-| `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` | local (stderr) | `info` |
+| `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` | local (stdout) | `info` |
 | `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` | HTTP telemetry | `debug` |
 
 The telemetry-sink variable is the generalization. Both built-in sinks get the same knob, so an
@@ -96,21 +126,26 @@ Telling "explicitly set" apart from "default" needs the two level fields to beco
 mirrors the existing `telemetry_max_queue_bytes: Option<usize>` fields. Resolution in `build()`:
 
 ```rust
-let local_sink_max_level = match self.local_sink_max_level {
-    Some(level) => level,
-    None => env_override(LOCAL_SINK_MAX_LEVEL_ENV_VAR)?.unwrap_or(DEFAULT_LOCAL_SINK_MAX_LEVEL),
-};
+let local_sink_max_level = resolve(
+    self.local_sink_max_level,
+    LOCAL_SINK_MAX_LEVEL_ENV_VAR,
+    DEFAULT_LOCAL_SINK_MAX_LEVEL,
+    "one of off, fatal, error, warn, info, debug, trace",
+)?;
 ```
 
-The same `explicit / env / default` shape then appears six times, for two levels and four
-transport knobs. So the helper module also gets
-`resolve<T: FromStr>(explicit: Option<T>, var: &str, default: T) -> anyhow::Result<T>`, which
-every call site uses.
+The same `explicit / env / default` shape then appears five times: two levels and three of the
+four transport knobs (`telemetry_max_queue_bytes`, `telemetry_hard_queue_bytes`,
+`telemetry_max_in_flight_requests`, all `Option<usize>`). `resolve` covers those five. The
+fourth transport knob, the request timeout, is `Option<Duration>`, and `Duration` isn't
+`FromStr`, so it stays a direct `env_override::<u64>` call mapped to a `Duration` (§4).
 
-Resolve both levels at the top of `build()`, next to the process-properties merge. That way a
-bad value fails before the global guard is created. It also fails even when that sink ends up
-unused, for example `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` without a URL. A typo should not hide
-until the URL is set.
+Resolve both levels and all four transport knobs at the top of `build()`, next to the
+process-properties merge, and use the resolved values inside the `if let Some(url)` branch (§4).
+That way a bad value fails before the global guard is created. It also fails even when that sink
+ends up unused, for example `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` or
+`MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES` without a URL. A typo should not hide until the URL is
+set.
 
 `add_sink` extra sinks, `max_level_override`, and `interop_max_level` are not given env vars.
 Extra sinks are caller-owned. The other two knobs are about capture cost, not output volume, and
@@ -126,13 +161,19 @@ overrides it.
 
 ### 4. Migrate the transport env fallbacks to the helper
 
-Replace the four inline `or_else(|| std::env::var(...))` blocks with the shared `resolve`
-helper from §2, e.g.
-`resolve(self.telemetry_max_queue_bytes, MAX_QUEUE_BYTES_ENV_VAR, HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES)?`.
+Replace three of the four inline `or_else(|| std::env::var(...))` blocks with the shared
+`resolve` helper from §2, e.g.
+`resolve(self.telemetry_max_queue_bytes, MAX_QUEUE_BYTES_ENV_VAR, HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES, "a non-negative integer")?`.
+The fourth, the request timeout, can't use `resolve` because `telemetry_request_timeout` is
+`Option<Duration>` and `Duration` isn't `FromStr`; it stays a `match` on `env_override::<u64>`:
+`match self.telemetry_request_timeout { Some(d) => d, None =>
+env_override::<u64>(REQUEST_TIMEOUT_SECS_ENV_VAR, "a non-negative integer")?.map(Duration::from_secs).unwrap_or(HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT) }`.
 Their precedence (explicit > env) is unchanged. The only behavior change is that an unparseable
 value such as `MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES=128MiB` now fails startup instead of being
-silently replaced by the default. `REQUEST_TIMEOUT_SECS` parses as `u64` and is then mapped to
-a `Duration`.
+silently replaced by the default.
+
+Resolve all four transport knobs at the top of `build()`, next to the two levels (§2), and use
+the resolved values inside the `if let Some(url)` branch where the sinks are pushed.
 
 `MICROMEGAS_ENABLE_CPU_TRACING` stays as is. It uses `== "true"` semantics, where `"1"` means
 off, and moving it to `bool::from_str` would turn today's silent-false values into startup
@@ -140,20 +181,25 @@ failures, with no request driving that change.
 
 ## Implementation Steps
 
-1. Create `rust/telemetry-sink/src/env_config.rs` with `parse_env_value` / `env_override`
-   and unit tests. Register it in `lib.rs` as a native-only private module.
+1. Create `rust/telemetry-sink/src/env_config.rs` with `parse_env_value` / `env_override` /
+   `resolve` (and `resolve`'s pure `Option<OsString>` core) and unit tests. Register it in
+   `lib.rs` as a native-only private module.
 2. In `rust/telemetry-sink/src/lib.rs`:
    - add `LOCAL_SINK_MAX_LEVEL_ENV_VAR` / `TELEMETRY_SINK_MAX_LEVEL_ENV_VAR` consts (doc
      comments state the precedence and accepted values);
    - change `local_sink_max_level` / `telemetry_sink_max_level` to `Option<LevelFilter>` with
      `DEFAULT_*_MAX_LEVEL` consts;
    - add `with_telemetry_sink_max_level`;
-   - resolve both levels at the top of `build()` through `env_override`, and use the
-     resolved values where the sinks are pushed (lines ~566 and ~580);
-   - move the four transport fallbacks onto `env_override`, promoting their env var
-     names to consts, and update the setter doc comments to say invalid values fail `build()`.
+   - resolve both levels and the four transport knobs at the top of `build()` through
+     `resolve` (the request timeout through a direct `env_override::<u64>` call, mapped to a
+     `Duration`), and use the resolved values where the sinks are pushed (lines ~566 and ~580);
+   - move the transport fallbacks onto `resolve` (and `env_override` for the timeout),
+     promoting their env var names to consts, and update the setter doc comments to say invalid
+     values fail `build()`.
 3. In `rust/micromegas-proc-macros/src/lib.rs`: emit `with_local_sink_max_level` only when the
-   attribute is present, update the doc comment, and update the tests (see Testing).
+   attribute is present, update the doc comment (also fixing the existing `local_sink_enabled`
+   doc line, which says "enable local stderr sink" but the sink writes to stdout), and update
+   the tests (see Testing).
 4. Update the docs and `CHANGELOG.md` (see Documentation).
 
 ## Files to Modify
@@ -203,12 +249,16 @@ failures, with no request driving that change.
   variables, accepted values, defaults, precedence (a level set in code or through the macro
   attribute cannot be overridden), and the cost motivation: capping
   the console to `info` while keeping `debug` in telemetry. Note that invalid transport values
-  now fail startup.
+  now fail startup, and that C ABI users (`mm_init`) don't panic on an invalid value: `mm_init`
+  returns null instead, since `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` is the only one of the new/changed
+  vars that doesn't reach it (the local sink is always disabled there).
 - `rust/micromegas-proc-macros/src/lib.rs`: the macro doc comment (default and env override).
 - `CHANGELOG.md` Unreleased entry: the new env vars and setter, the default console level for
   `#[micromegas_main]` binaries dropping from DEBUG to INFO (a visible behavior change;
-  set `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=debug` to restore it), and strict parsing of the
-  `MICROMEGAS_TELEMETRY_*` transport vars.
+  set `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=debug` to restore it), strict parsing of the
+  `MICROMEGAS_TELEMETRY_*` transport vars, and that `mm_init` now returns null instead of
+  initializing telemetry when `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` or a transport var is
+  invalid.
 
 ## Testing Strategy
 
@@ -235,7 +285,7 @@ Unit tests only. No live DB is involved.
 
 ## Manual Verification
 
-These steps check the wiring from env var through `build()` to real stderr output, which unit
+These steps check the wiring from env var through `build()` to real stdout output, which unit
 tests cannot reach, and a breakage would be obvious on the next run.
 
 1. `python3 local_test_env/ai_scripts/start_services.py`, then
