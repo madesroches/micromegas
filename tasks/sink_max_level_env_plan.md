@@ -1,0 +1,250 @@
+# Sink Max Level from the Environment Plan
+
+Issue: #1626
+
+## Overview
+
+`#[micromegas_main]` hardcodes the local (stderr) sink at DEBUG, and no binary can change that
+without a rebuild. Where stderr is shipped to a log service billed per GB, that DEBUG console
+copy is costly and redundant: the same events already reach micromegas through the telemetry
+sink. This plan makes each built-in sink's max level configurable at startup through
+environment variables read once by `TelemetryGuardBuilder::build()`. Changing a level while the
+process is running is out of scope. That covers every
+`#[micromegas_main]` binary and every direct builder user, including binaries built outside
+this repo. It also lowers the macro's local-sink default from DEBUG to INFO. Along the way it
+replaces the four copy-pasted `MICROMEGAS_TELEMETRY_*` env fallbacks with one shared
+env-override helper.
+
+## Current State
+
+- `rust/micromegas-proc-macros/src/lib.rs:288-295`: the macro always emits
+  `.with_local_sink_max_level(...)`, set to `LevelFilter::Debug` when the
+  `local_sink_max_level` attribute is absent. The doc comment at line 38 says
+  `(default: "debug")`. No binary in the repo sets the attribute, so every service's console
+  runs at DEBUG.
+- `rust/telemetry-sink/src/lib.rs:137-190`: the `TelemetryGuardBuilder` fields and their
+  `Default`. `local_sink_max_level` already defaults to `LevelFilter::Info`, so only macro users
+  get DEBUG. `telemetry_sink_max_level` is hardcoded to `LevelFilter::Debug` and has **no
+  setter**.
+- `rust/telemetry-sink/src/lib.rs:486-583`: `build()`. The env var pattern is repeated four
+  times (lines 527-560):
+  `self.x.or_else(|| std::env::var(VAR).ok().and_then(|v| v.parse().ok())).unwrap_or(DEFAULT)`.
+  Precedence is explicit setter > env > default, and an unparseable value is **silently
+  ignored**. `MICROMEGAS_PROCESS_PROPERTIES` (lines 492-494), by contrast, reads the variable
+  with `var_os` and fails `build()` loudly on bad input.
+- `rust/telemetry-sink/src/composite_event_sink.rs:28-39`: the global
+  `micromegas_tracing::levels::set_max_level` is the max over all sink levels, unless
+  `max_level_override` is set. `on_log` (lines 111-119) then filters each sink by its own
+  level. So capping the local sink leaves the telemetry sink's DEBUG untouched. And when no
+  telemetry URL is configured, it also lowers the global level, which makes `debug!` call sites
+  near-free.
+- `LevelFilter::from_str` (`rust/tracing/src/levels.rs:302`) already parses `off`, `fatal`,
+  `error`, `warn`, `info`, `debug` and `trace`, case-insensitively.
+- `rust/capi/src/lib.rs:98` disables the local sink entirely, so it is unaffected.
+- `monolith` and `flight-sql-srv` pass `max_level_override = "debug"`, which pins the global
+  level. Per-sink filtering in `on_log` still applies, so they honor the new cap too.
+
+## Design
+
+### 1. One env-override helper (generalization)
+
+Add a private module `rust/telemetry-sink/src/env_config.rs` with two functions:
+
+```rust
+/// Pure core, unit-testable without touching the process environment.
+fn parse_env_value<T: FromStr>(name: &str, raw: Option<OsString>) -> anyhow::Result<Option<T>>;
+
+/// `parse_env_value(name, std::env::var_os(name))`
+pub(crate) fn env_override<T: FromStr>(name: &str) -> anyhow::Result<Option<T>>;
+```
+
+Semantics, matching `MICROMEGAS_PROCESS_PROPERTIES`:
+
+- If the variable is unset, or blank after trimming, the result is `Ok(None)`. A k8s manifest
+  that renders an unset optional var produces `""`.
+- A non-UTF-8 value is an error.
+- A value that fails `T::from_str` on the trimmed string is an error naming the variable and
+  the value, e.g. `invalid MICROMEGAS_LOCAL_SINK_MAX_LEVEL "verbose": expected one of off,
+  fatal, error, warn, info, debug, trace`. The expected-values hint comes from a `&str` argument
+  or a small wrapper for levels. A generic helper cannot know the valid values of `T`.
+
+`build()` propagates these errors through `?`. The macro's `.expect(...)` already turns a
+guard-build failure into a loud startup panic, so a typo fails at startup instead of being
+silently ignored.
+
+### 2. Level env vars
+
+Add public consts next to `PROCESS_PROPERTIES_ENV_VAR`:
+
+| Env var | Sink | Default |
+|---|---|---|
+| `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` | local (stderr) | `info` |
+| `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` | HTTP telemetry | `debug` |
+
+The telemetry-sink variable is the generalization. Both built-in sinks get the same knob, so an
+operator can also trim what gets shipped to micromegas. The builder gains the missing
+`with_telemetry_sink_max_level(LevelFilter)` setter to match `with_local_sink_max_level`.
+
+**Precedence for levels: explicit builder call > env > default**, the same as the transport
+knobs and process properties. A level set in code is a deliberate pin that the environment
+cannot override. That includes the `local_sink_max_level` macro attribute, which is why the
+macro must stop emitting the setter when the attribute is absent (§3).
+
+Telling "explicitly set" apart from "default" needs the two level fields to become
+`Option<LevelFilter>` (`None` in `Default`), with the defaults moved to consts
+(`DEFAULT_LOCAL_SINK_MAX_LEVEL = Info`, `DEFAULT_TELEMETRY_SINK_MAX_LEVEL = Debug`). This
+mirrors the existing `telemetry_max_queue_bytes: Option<usize>` fields. Resolution in `build()`:
+
+```rust
+let local_sink_max_level = match self.local_sink_max_level {
+    Some(level) => level,
+    None => env_override(LOCAL_SINK_MAX_LEVEL_ENV_VAR)?.unwrap_or(DEFAULT_LOCAL_SINK_MAX_LEVEL),
+};
+```
+
+The same `explicit / env / default` shape then appears six times, for two levels and four
+transport knobs. So the helper module also gets
+`resolve<T: FromStr>(explicit: Option<T>, var: &str, default: T) -> anyhow::Result<T>`, which
+every call site uses.
+
+Resolve both levels at the top of `build()`, next to the process-properties merge. That way a
+bad value fails before the global guard is created. It also fails even when that sink ends up
+unused, for example `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` without a URL. A typo should not hide
+until the URL is set.
+
+`add_sink` extra sinks, `max_level_override`, and `interop_max_level` are not given env vars.
+Extra sinks are caller-owned. The other two knobs are about capture cost, not output volume, and
+nobody has asked for them.
+
+### 3. Macro default: INFO
+
+In `expand_micromegas_main`, emit `.with_local_sink_max_level(...)` **only when the attribute
+is present**. With no attribute, the builder's own `Info` default applies. This removes the
+macro's second copy of the default, so the builder is the single source of truth. Update the
+doc comment to `(default: "info")` and mention that `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`
+overrides it.
+
+### 4. Migrate the transport env fallbacks to the helper
+
+Replace the four inline `or_else(|| std::env::var(...))` blocks with the shared `resolve`
+helper from §2, e.g.
+`resolve(self.telemetry_max_queue_bytes, MAX_QUEUE_BYTES_ENV_VAR, HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES)?`.
+Their precedence (explicit > env) is unchanged. The only behavior change is that an unparseable
+value such as `MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES=128MiB` now fails startup instead of being
+silently replaced by the default. `REQUEST_TIMEOUT_SECS` parses as `u64` and is then mapped to
+a `Duration`.
+
+`MICROMEGAS_ENABLE_CPU_TRACING` stays as is. It uses `== "true"` semantics, where `"1"` means
+off, and moving it to `bool::from_str` would turn today's silent-false values into startup
+failures, with no request driving that change.
+
+## Implementation Steps
+
+1. Create `rust/telemetry-sink/src/env_config.rs` with `parse_env_value` / `env_override`
+   and unit tests. Register it in `lib.rs` as a native-only private module.
+2. In `rust/telemetry-sink/src/lib.rs`:
+   - add `LOCAL_SINK_MAX_LEVEL_ENV_VAR` / `TELEMETRY_SINK_MAX_LEVEL_ENV_VAR` consts (doc
+     comments state the precedence and accepted values);
+   - change `local_sink_max_level` / `telemetry_sink_max_level` to `Option<LevelFilter>` with
+     `DEFAULT_*_MAX_LEVEL` consts;
+   - add `with_telemetry_sink_max_level`;
+   - resolve both levels at the top of `build()` through `env_override`, and use the
+     resolved values where the sinks are pushed (lines ~566 and ~580);
+   - move the four transport fallbacks onto `env_override`, promoting their env var
+     names to consts, and update the setter doc comments to say invalid values fail `build()`.
+3. In `rust/micromegas-proc-macros/src/lib.rs`: emit `with_local_sink_max_level` only when the
+   attribute is present, update the doc comment, and update the tests (see Testing).
+4. Update the docs and `CHANGELOG.md` (see Documentation).
+
+## Files to Modify
+
+- `rust/telemetry-sink/src/env_config.rs` (new)
+- `rust/telemetry-sink/src/lib.rs`
+- `rust/micromegas-proc-macros/src/lib.rs`
+- `mkdocs/docs/admin/telemetry-sink-tuning.md`
+- `CHANGELOG.md`
+
+## Trade-offs
+
+- **Explicit wins vs. env wins for levels.** Letting env win would let an operator turn down a
+  binary that pins its level in code. Explicit-wins keeps one precedence rule across every
+  builder env var, and a level pinned in code is taken as intentional. Binaries that don't pin
+  a level, which includes every in-repo service after §3, remain fully operator-controlled.
+- **Per-sink vars vs. one `MICROMEGAS_CONSOLE_LEVEL`.** Naming the vars after the builder
+  fields generalizes to both built-in sinks with one pattern, and makes the mapping to the
+  Rust API obvious.
+- **Reusing the dead `target_max_levels` for per-target levels (e.g. silence
+  `lakehouse::write_partition`).** Rejected. `CompositeSink` applies a target level
+  *instead of* each sink's level (`target_max_level.unwrap_or(max_level)`), so a target rule
+  would override the local cap rather than narrow it. A per-sink cap solves the issue without
+  reworking that filter. The field has never been populated since the initial import and could
+  be removed separately.
+- **Strict parsing of the existing transport vars.** It is a behavior change, but a
+  silently ignored queue cap is a worse failure than a loud startup error, and one helper
+  should have one semantics.
+- **Parsing levels in the proc macro with `LevelFilter::from_str`.** Not done. The macro's
+  `level_to_filter` must emit tokens and report compile-time errors with spans, so sharing
+  code with the runtime parser buys little.
+
+## Decisions
+
+- Levels are set once at startup through env vars, and are not reloaded while the process runs
+  (user call).
+- The macro's default local-sink level becomes INFO. The issue asked for unset to keep DEBUG;
+  the user overrode that.
+- The existing `MICROMEGAS_TELEMETRY_*` transport vars move to strict parsing (Design §4). An
+  invalid value fails startup instead of being silently ignored (user call).
+- Precedence for every builder env var, levels included, is default < env < explicit call in
+  code (user call).
+
+## Documentation
+
+- `mkdocs/docs/admin/telemetry-sink-tuning.md`: new "Log levels" section documenting both
+  variables, accepted values, defaults, precedence (a level set in code or through the macro
+  attribute cannot be overridden), and the cost motivation: capping
+  the console to `info` while keeping `debug` in telemetry. Note that invalid transport values
+  now fail startup.
+- `rust/micromegas-proc-macros/src/lib.rs`: the macro doc comment (default and env override).
+- `CHANGELOG.md` Unreleased entry: the new env vars and setter, the default console level for
+  `#[micromegas_main]` binaries dropping from DEBUG to INFO (a visible behavior change;
+  set `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=debug` to restore it), and strict parsing of the
+  `MICROMEGAS_TELEMETRY_*` transport vars.
+
+## Testing Strategy
+
+Unit tests only. No live DB is involved.
+
+- `env_config.rs`, on `parse_env_value`, so the tests never mutate the process env:
+  - unset → `None`;
+  - `""` and `"  "` → `None`;
+  - `"INFO"`, `" debug "` → parsed `LevelFilter`;
+  - `"verbose"` → error whose message contains the variable name and the value;
+  - non-UTF-8 `OsString` (Unix `OsStringExt::from_vec`, `#[cfg(unix)]`) → error;
+  - `"123"` / `"12x"` as `usize` → `Some(123)` / error.
+- Precedence: give `resolve` the same pure core as `parse_env_value`, taking the raw
+  `Option<OsString>` instead of reading the env. Assert that explicit beats a set env value,
+  that env beats the default, that the default is used when both are absent, and that an
+  invalid env value is an error only when nothing explicit is set. An explicit value means the
+  env var is never read. `build()` itself installs a process-global guard and is not unit-testable
+  in isolation.
+- `micromegas-proc-macros` tests:
+  - change the existing assertion at line 386, so that no attribute →
+    `with_local_sink_max_level` is **absent** from the expansion;
+  - keep `local_sink_max_level_custom_emits_correct_filter` (attribute → call emitted with the
+    right filter).
+
+## Manual Verification
+
+These steps check the wiring from env var through `build()` to real stderr output, which unit
+tests cannot reach, and a breakage would be obvious on the next run.
+
+1. `python3 local_test_env/ai_scripts/start_services.py`, then
+   `grep -c " DEBUG " /tmp/daemon.log`. Expect `0`: no DEBUG lines on the maintenance daemon
+   console at the default.
+2. `micromegas-query "SELECT count(*) FROM log_entries WHERE level = 5" --begin 10m`.
+   Expect a non-zero count, which shows the telemetry sink still receives DEBUG.
+3. Stop the services, restart with `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=debug` exported, and
+   check `/tmp/daemon.log`. Expect DEBUG lines again.
+4. Restart with `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=verbose`. Expect the daemon to exit at
+   startup with `failed to initialize micromegas telemetry` and the variable named in the error
+   chain.
