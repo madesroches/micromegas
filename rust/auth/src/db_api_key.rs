@@ -18,7 +18,6 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::Row;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
@@ -134,17 +133,33 @@ pub fn generate_key() -> String {
 }
 
 /// Builds a small, dedicated connection pool for key-store lookups from an
-/// existing pool's connect options — rather than sharing the caller's lake pool
-/// directly. `max_connections(4)`, `acquire_timeout(2s)`: a credential flood or a
+/// existing pool's options — rather than sharing the caller's lake pool
+/// directly. Inherits the lake pool's options wholesale (including any
+/// `after_connect`/`before_acquire` hooks, e.g. the read-only-connection checks in
+/// `micromegas_ingestion::data_lake_connection`), not just its connect options, so a strict or
+/// prefer-fallback lake pool's write-session guarantee carries over to the key store.
+/// `max_connections(4)`, `acquire_timeout(2s)`: a credential flood or a
 /// DB outage on the key-lookup path can therefore never starve the write path of
 /// connections, and a lookup fails fast into its 503 rather than blocking up to
 /// sqlx's default 30s `acquire_timeout`.
 pub fn dedicated_key_store_pool(lake_pool: &PgPool) -> PgPool {
-    let options = (*lake_pool.connect_options()).clone();
-    PgPoolOptions::new()
+    let connect_options = (*lake_pool.connect_options()).clone();
+    lake_pool
+        .options()
+        .clone()
         .max_connections(4)
         .acquire_timeout(Duration::from_secs(2))
-        .connect_lazy_with(options)
+        .connect_lazy_with(connect_options)
+}
+
+/// True when `err`'s SQLSTATE is `25006` (`cannot execute ... in a read-only transaction`) --
+/// the code the `last_used_at` update raises when its connection turned read-only mid-query.
+/// A local copy of `micromegas_ingestion::data_lake_connection::is_read_only_violation`'s check:
+/// `auth` doesn't depend on `ingestion`.
+pub fn is_read_only_error(err: &sqlx::Error) -> bool {
+    err.as_database_error()
+        .and_then(|db_err| db_err.code())
+        .is_some_and(|code| code == "25006")
 }
 
 /// `SELECT EXISTS(SELECT 1 FROM <table> WHERE revoked_at IS NULL)` — used by
@@ -267,6 +282,43 @@ impl DbApiKeyAuthProvider {
     }
 }
 
+/// Looks up a live key's row, bumping `last_used_at` on the way when possible.
+///
+/// Tries the `UPDATE ... RETURNING` first. On a `25006` (the connection turned read-only, e.g.
+/// a `WritablePolicy::Prefer` FlightSQL pool that fell back to a replica), falls back to a plain
+/// `SELECT` of the same columns and skips the bump rather than failing the whole lookup --
+/// `last_used_at` is best-effort telemetry, not something a caller's auth should depend on.
+async fn lookup_key_row(
+    pool: &PgPool,
+    table: ApiKeyTable,
+    hash: &[u8; 32],
+    returning: &str,
+) -> Result<Option<sqlx::postgres::PgRow>, sqlx::Error> {
+    let update_result = sqlx::query(&format!(
+        "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
+        table.table_name()
+    ))
+    .bind(&hash[..])
+    .fetch_optional(pool)
+    .await;
+    match update_result {
+        Err(e) if is_read_only_error(&e) => {
+            micromegas_tracing::warn!(
+                "db_api_key lookup on a read-only connection (table={}): skipping last_used_at bump",
+                table.table_name()
+            );
+            sqlx::query(&format!(
+                "SELECT {returning} FROM {} WHERE key_hash = $1 AND revoked_at IS NULL",
+                table.table_name()
+            ))
+            .bind(&hash[..])
+            .fetch_optional(pool)
+            .await
+        }
+        other => other,
+    }
+}
+
 #[async_trait::async_trait]
 impl AuthProvider for DbApiKeyAuthProvider {
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext> {
@@ -301,36 +353,31 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 } else {
                     "key_id, name, allowed_cidrs"
                 };
-                let row = sqlx::query(&format!(
-                    "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
-                    table.table_name()
-                ))
-                .bind(&hash[..])
-                .fetch_optional(&pool)
-                .await
-                .map_err(|e| {
-                    let err = anyhow::Error::from(e)
-                        .context(format!("looking up key in {}", table.table_name()));
-                    // Unconditional: fires on every DB error, independent of the
-                    // rate-limited `error!` line below.
-                    micromegas_tracing::imetric!(
-                        "db_api_key_error_count",
-                        "count",
-                        table_tags(table.table_name()),
-                        1_u64
-                    );
-                    maybe_log_error(&last_logged_at, window_secs, table.table_name(), &err);
-                    LookupError::Db(err)
-                })?;
+                let row = lookup_key_row(&pool, table, &hash, returning)
+                    .await
+                    .map_err(|e| {
+                        let err = anyhow::Error::from(e)
+                            .context(format!("looking up key in {}", table.table_name()));
+                        // Unconditional: fires on every DB error, independent of the
+                        // rate-limited `error!` line below.
+                        micromegas_tracing::imetric!(
+                            "db_api_key_error_count",
+                            "count",
+                            table_tags(table.table_name()),
+                            1_u64
+                        );
+                        maybe_log_error(&last_logged_at, window_secs, table.table_name(), &err);
+                        LookupError::Db(err)
+                    })?;
 
                 match row {
                     Some(row) => {
-                        let key_id: uuid::Uuid = row
-                            .try_get("key_id")
-                            .map_err(|e| LookupError::Db(anyhow::Error::from(e).context("reading key_id")))?;
-                        let name: String = row
-                            .try_get("name")
-                            .map_err(|e| LookupError::Db(anyhow::Error::from(e).context("reading name")))?;
+                        let key_id: uuid::Uuid = row.try_get("key_id").map_err(|e| {
+                            LookupError::Db(anyhow::Error::from(e).context("reading key_id"))
+                        })?;
+                        let name: String = row.try_get("name").map_err(|e| {
+                            LookupError::Db(anyhow::Error::from(e).context("reading name"))
+                        })?;
                         let audience: Option<String> = if table.has_audience() {
                             Some(row.try_get("audience").map_err(|e| {
                                 LookupError::Db(anyhow::Error::from(e).context("reading audience"))
@@ -464,6 +511,7 @@ mod tests {
     use micromegas_tracing::test_utils::init_in_memory_tracing;
     use micromegas_transit::HeterogeneousQueue;
     use serial_test::serial;
+    use sqlx::postgres::PgPoolOptions;
     use std::net::{IpAddr, Ipv4Addr};
 
     fn unreachable_pool() -> PgPool {

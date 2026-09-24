@@ -11,7 +11,9 @@ use anyhow::Context;
 use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_config::DataLakeConfig;
-use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use micromegas_ingestion::data_lake_connection::{
+    DataLakeConnection, WritablePolicy, connect_to_data_lake,
+};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -64,12 +66,12 @@ impl LakehouseContext {
     }
 
     /// Reads MICROMEGAS_SQL_CONNECTION_STRING and MICROMEGAS_OBJECT_STORE_URI,
-    /// connects to the data lake, runs lakehouse migrations, and creates the
+    /// connects to the data lake under `policy`, runs lakehouse migrations, and creates the
     /// runtime environment.
-    pub async fn from_env() -> Result<Arc<Self>> {
+    pub async fn from_env(policy: WritablePolicy) -> Result<Arc<Self>> {
         let cfg = DataLakeConfig::from_env()?;
         let data_lake = Arc::new(
-            connect_to_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?,
+            connect_to_data_lake(policy, &cfg.sql_connection_string, &cfg.object_store_uri).await?,
         );
         migrate_lakehouse(data_lake.db_pool.clone())
             .await

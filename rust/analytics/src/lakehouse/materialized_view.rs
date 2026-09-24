@@ -14,6 +14,7 @@ use datafusion::{
     logical_expr::{Expr, TableProviderFilterPushDown},
     physical_plan::ExecutionPlan,
 };
+use micromegas_ingestion::data_lake_connection::is_read_only_violation;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -104,10 +105,30 @@ impl TableProvider for MaterializedView {
                 .await?;
         }
 
-        self.view
+        if let Err(e) = self
+            .view
             .jit_update(self.lakehouse.clone(), self.query_range)
             .await
-            .map_err(|e| DataFusionError::External(format!("{e:#}").into()))?;
+        {
+            if is_read_only_violation(&e) {
+                warn!(
+                    "jit_update failed on a read-only connection for {}/{}: {e:#}",
+                    self.view.get_view_set_name(),
+                    self.view.get_view_instance_id()
+                );
+                imetric!("jit_update_failed_read_only", "count", 1_u64);
+                return Err(DataFusionError::External(
+                    format!(
+                        "the lakehouse is on a read-only connection and the requested range needs \
+                         partitions that aren't materialized yet for {}/{}",
+                        self.view.get_view_set_name(),
+                        self.view.get_view_instance_id()
+                    )
+                    .into(),
+                ));
+            }
+            return Err(DataFusionError::External(format!("{e:#}").into()));
+        }
 
         let partitions = self
             .part_provider

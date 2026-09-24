@@ -1,5 +1,5 @@
 use crate::data_lake_config::DataLakeConfig;
-use crate::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use crate::data_lake_connection::{DataLakeConnection, WritablePolicy, connect_to_data_lake};
 use crate::remote_data_lake::migrate_db;
 use crate::write_audience::WriteAudience;
 use anyhow::Context;
@@ -274,7 +274,12 @@ impl WebIngestionService {
     /// (typically via `micromegas_auth::policy::default_audience_from_env`) and passes it in.
     pub async fn from_env(default_audience: WriteAudience) -> anyhow::Result<Arc<Self>> {
         let cfg = DataLakeConfig::from_env()?;
-        let lake = connect_to_data_lake(&cfg.sql_connection_string, &cfg.object_store_uri).await?;
+        let lake = connect_to_data_lake(
+            WritablePolicy::Require,
+            &cfg.sql_connection_string,
+            &cfg.object_store_uri,
+        )
+        .await?;
         migrate_db(lake.db_pool.clone())
             .await
             .with_context(|| "migrate_db")?;

@@ -10,7 +10,7 @@
 //! conflict guard runs, and that the stamp actually reads back out of the `audience` column.
 
 use anyhow::{Context, Result};
-use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas_ingestion::data_lake_connection::{WritablePolicy, connect_to_data_lake};
 use micromegas_ingestion::web_ingestion_service::{IngestionServiceError, WebIngestionService};
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::stream_info::StreamInfo;
@@ -24,7 +24,12 @@ async fn connect() -> Result<micromegas_ingestion::data_lake_connection::DataLak
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    connect_to_data_lake(&connection_string, &object_store_uri).await
+    connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await
 }
 
 fn process_body(process_id: Uuid) -> Result<bytes::Bytes> {

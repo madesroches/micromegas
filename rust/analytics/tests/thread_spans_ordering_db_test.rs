@@ -36,7 +36,7 @@ use micromegas_analytics::lakehouse::view_factory::{ViewFactory, default_view_fa
 use micromegas_analytics::metadata::{find_process_with_latest_timing, find_stream_from_view};
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::{TimeRange, make_time_converter_from_latest_timing};
-use micromegas_ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas_ingestion::data_lake_connection::{WritablePolicy, connect_to_data_lake};
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::wire_format::encode_cbor;
@@ -133,7 +133,12 @@ async fn thread_spans_ordering_across_partitions() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -445,7 +450,12 @@ async fn thread_spans_reversed_registration_survives_jit_update() -> Result<()> 
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -691,7 +701,12 @@ async fn thread_spans_degenerate_range_retires_stale_partition() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -908,7 +923,12 @@ async fn thread_spans_same_run_left_boundary_survives() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -1125,7 +1145,12 @@ async fn thread_spans_interrupted_run_reconverges() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -1381,7 +1406,12 @@ async fn thread_spans_cross_run_regrouping_replaces_stale_partition() -> Result<
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -1670,7 +1700,12 @@ async fn thread_spans_cross_run_degenerate_predecessor_retired_by_growing_partit
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -1922,7 +1957,12 @@ async fn thread_spans_same_run_consecutive_degenerate_siblings_survive() -> Resu
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 
@@ -2139,7 +2179,12 @@ async fn thread_spans_batched_generation_matches_per_segment() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let lake = connect_to_data_lake(
+        WritablePolicy::Require,
+        &connection_string,
+        &object_store_uri,
+    )
+    .await?;
     let ingestion = WebIngestionService::new(lake.clone(), WriteAudience::new("public")?);
     let audience = WriteAudience::new("public")?;
 

@@ -22,13 +22,13 @@ use chrono::{DateTime, Utc};
 use http::{HeaderValue, Method, header};
 use micromegas::auth::groups::{ADMINS_GROUP, DbGroupsConfig, DbGroupsSource};
 use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
 use micromegas::tracing::prelude::*;
 use serde::Serialize;
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -704,7 +704,8 @@ pub async fn run_web_server(
     shutdown: impl Future<Output = ()> + Send + 'static,
     grace: Duration,
 ) -> Result<()> {
-    let app_db_pool = sqlx::PgPool::connect(&config.app_db_string)
+    let app_db_pool = read_write_pool_options()
+        .connect(&config.app_db_string)
         .await
         .context("Failed to connect to micromegas_app database")?;
     app_db::execute_migration(app_db_pool.clone()).await?;
@@ -743,7 +744,7 @@ pub async fn run_web_server(
     }
     let analytics_keys_pool = match &config.analytics_keys_db_string {
         Some(conn_str) => Some(
-            PgPoolOptions::new()
+            read_write_pool_options()
                 .max_connections(2)
                 .acquire_timeout(Duration::from_secs(2))
                 .connect_lazy(conn_str)

@@ -19,7 +19,9 @@ use micromegas_analytics::{
     response_writer::{Logger, ResponseWriter},
     time::TimeRange,
 };
-use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
+use micromegas_ingestion::data_lake_connection::{
+    DataLakeConnection, WritablePolicy, connect_to_data_lake,
+};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::levels::LevelFilter;
 use std::sync::Arc;
@@ -230,7 +232,14 @@ async fn histo_view_test() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let runtime = Arc::new(make_runtime_env()?);
-    let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let lake = Arc::new(
+        connect_to_data_lake(
+            WritablePolicy::Require,
+            &connection_string,
+            &object_store_uri,
+        )
+        .await?,
+    );
     let default_audience_lakehouse =
         Arc::new(LakehouseContext::new(lake.clone(), runtime.clone())?);
     let cpu_usage_view = Arc::new(

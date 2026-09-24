@@ -13,7 +13,7 @@ use micromegas_auth::default_provider::ProviderBuilder;
 use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::AuthProvider;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_ingestion::data_lake_connection::{DataLakeConnection, WritablePolicy};
 use micromegas_ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas_tracing::prelude::*;
 use std::future::Future;
@@ -235,11 +235,15 @@ impl FlightSqlServerBuilder {
         // `MICROMEGAS_PUBLIC_VIEW_SETS` fails fast at no cost.
         let isolation_config = resolve_isolation_config(self.isolation_config)?;
 
-        // Use injected lakehouse or build one from environment
+        // Use injected lakehouse or build one from environment. The non-injected path is
+        // standalone FlightSQL, the one role that prefers a writable primary but falls back to
+        // a read-only replica rather than refuse to start (see `high-availability.md`); an
+        // injected lakehouse (the monolith) shares its lake pool with the ingestion role, which
+        // stays strict, so it is never `Prefer` here.
         let lakehouse = if let Some(lh) = self.injected_lakehouse {
             lh
         } else {
-            LakehouseContext::from_env().await?
+            LakehouseContext::from_env(WritablePolicy::Prefer).await?
         };
         let data_lake = lakehouse.lake().clone();
         let probe_lake = lakehouse.lake().clone();
@@ -269,7 +273,7 @@ impl FlightSqlServerBuilder {
         let partition_provider =
             Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
         // Cloned here, before `lakehouse` is moved into `FlightSqlServiceImpl::new`
-        // below, so `dedicated_key_store_pool` has a pool to read connect options
+        // below, so `dedicated_key_store_pool` has a pool to read pool options
         // from.
         let lake_pool_for_keys = lakehouse.lake().db_pool.clone();
 
