@@ -67,8 +67,9 @@ export function viewerVariable(user: User | null): Record<string, string> | unde
 ```
 
 - Returns `undefined` when `user` is null or `user.auth_disabled` is true.
-- Only includes the claims that are present. A missing `email` or `name` leaves that key out,
-  so `$me.email` stays unresolved and `validateMacros` reports
+- Only includes the claims that are present and non-null (`user.email != null`). The IdP claims
+  come back from `/auth/me` as JSON `null`, not absent keys, so a missing `email` or `name` leaves
+  that key out, so `$me.email` stays unresolved and `validateMacros` reports
   `Column 'email' not found in variable 'me'` instead of substituting `''` into a `WHERE`.
   `sub` is always present.
 
@@ -83,12 +84,17 @@ export function collectAvailableVariables(
 
 `NotebookRenderer.getAvailableVariables` and the variables part of the `useCellExecution` loop
 both call this, so the render path and the execution path can't disagree about what `$me` means.
+Internally it walks `cells` via `forEachCell`, not a plain top-level loop, so it also picks up
+variable cells nested inside a horizontal group; that matters because the two callers pass
+different shapes (`NotebookRenderer` passes the raw top-level `cells.slice(0, index)`, while
+`useCellExecution` passes its already-flattened `executionCells`), and `forEachCell` handles both.
 The viewer entry goes in **first**, so a legacy variable cell named `me` overwrites it (see
 Conflicts).
 
 ### Supplying the viewer
 
-- `auth.tsx`: add `auth_disabled?: boolean` to `User`, and add
+- `auth.tsx`: add `auth_disabled?: boolean` to `User`, type `email`/`name` as
+  `string | null | undefined` (the IdP claim can come back as JSON `null`), and add
   `export function useOptionalAuthUser(): User | null`, which reads the context directly and returns
   `null` outside a provider instead of throwing. That keeps `NotebookRenderer` usable in tests and in
   any embedding without an `AuthProvider`.
@@ -114,7 +120,11 @@ simple pass hits `me` and `variables.me` is undefined, it emits
 ### Conflicts with a variable cell named `me`
 
 - **New or renamed cells:** `validateCellName(..., isVariable=true)` rejects
-  `VIEWER_VARIABLE_NAME` with `"me" is reserved for the signed-in viewer`.
+  `VIEWER_VARIABLE_NAME` with `"me" is reserved for the signed-in viewer`. Both call sites need the
+  `isVariable` flag: `components/CellEditor.tsx:69` already passes it, and the horizontal-group
+  child rename path (`cells/HorizontalGroupCell.tsx:312`) must pass
+  `child.type === 'variable'` for it, since a variable cell renamed inside a group currently
+  bypasses the check.
 - **Saved notebooks that already have a `me` variable cell:** the cell keeps precedence, so
   existing screens keep working, and the variable cell's editor (`VariableCell.tsx`, next to its
   validation errors) shows a warning:
@@ -135,7 +145,10 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
 2. **Auth context.** `analytics-web-app/src/lib/auth.tsx`: add `auth_disabled?: boolean` to `User`,
    and add `useOptionalAuthUser()`.
 3. **Helpers.** `notebook-utils.ts`: add `VIEWER_VARIABLE_NAME`, `viewerVariable`,
-   `collectAvailableVariables`, and the reserved-name check in `validateCellName`.
+   `collectAvailableVariables`, and the reserved-name check in `validateCellName`. Pass
+   `child.type === 'variable'` as `isVariable` at the `validateCellName` call in
+   `cells/HorizontalGroupCell.tsx:312`, so a variable cell renamed inside a horizontal group is
+   also rejected.
 4. **Render path.** `NotebookRenderer.tsx`: compute `viewer` and switch `getAvailableVariables` to
    `collectAvailableVariables`.
 5. **Execution path.** `useCellExecution.ts`: accept `viewer`, keep it in a ref, and build
@@ -157,6 +170,7 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
 - `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`
 - `analytics-web-app/src/lib/screen-renderers/macro-substitution.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/VariableCell.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
 - tests under `analytics-web-app/src/lib/screen-renderers/__tests__/`
 - `mkdocs/docs/web-app/notebooks/variables.md`
 
@@ -196,19 +210,13 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
 All unit tests (vitest / cargo test), with no DB:
 
 - `notebook-utils.test.ts`:
-  - `viewerVariable`: full user → three keys in `email, name, sub` order; missing email/name →
-    those keys absent; `auth_disabled: true` → `undefined`; `null` → `undefined`.
+  - `viewerVariable`: full user → three keys in `email, name, sub` order; `email: null`/`name: null`
+    (the missing-claim shape `/auth/me` actually sends) → those keys absent;
+    `auth_disabled: true` → `undefined`; `null` → `undefined`.
   - `collectAvailableVariables`: viewer present; only upstream variable cells included; a legacy
     `me` cell overrides the viewer.
   - `validateCellName`: `me` rejected for variables and allowed for non-variable cells.
-- `macro-substitution.test.ts`:
-  - `substituteMacros` with `variables.me` → `$me.email` substituted with quotes doubled
-    (`o'brien@x` → `o''brien@x`);
-  - without `me` → source left in place;
-  - `validateMacros` → the auth-disabled message when `me` is absent, and the column-not-found
-    message when a claim is missing.
-- `template-evaluator` test: `$me.name` in markdown resolves (guards the shared-map claim for the
-  second engine).
+  - `validateMacros` → the auth-disabled message when `me` is absent.
 - `useCellExecution.test.ts`: executing a cell whose SQL contains `$me.email` with a `viewer`
   option sends the substituted SQL. This is the execution-path wiring that a render-only test
   wouldn't reach.
