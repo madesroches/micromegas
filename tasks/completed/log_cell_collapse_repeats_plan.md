@@ -85,8 +85,8 @@ autoWidths    = computeFlexWidths(table, columns, displayedRows)   // new signat
 
 ## Mockups
 
-- `tasks/log_cell_collapse_repeats_mockups/option-a-trailing-badge.html`: **chosen**. `×N` pill at the end of the collapsed line; rows without repeats are pixel-identical to today. Interactive: click a pill to expand, toggle "Collapse repeats" in the footer.
-- `tasks/log_cell_collapse_repeats_mockups/option-b-leading-gutter.html`: Grafana-style count gutter before the timestamp.
+- `tasks/completed/log_cell_collapse_repeats_mockups/option-a-trailing-badge.html`: **chosen**. `×N` pill at the end of the collapsed line; rows without repeats are pixel-identical to today. Interactive: click a pill to expand, toggle "Collapse repeats" in the footer.
+- `tasks/completed/log_cell_collapse_repeats_mockups/option-b-leading-gutter.html`: Grafana-style count gutter before the timestamp.
 
 ## Implementation Steps
 
