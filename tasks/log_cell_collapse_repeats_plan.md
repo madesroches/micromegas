@@ -1,6 +1,6 @@
 # Log Cell: Collapse Consecutive Repeated Lines Plan
 
-Issue: https://github.com/madesroches/micromegas/issues/1557
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1557
 
 ## Overview
 
