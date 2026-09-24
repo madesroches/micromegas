@@ -84,11 +84,13 @@ pub(crate) fn resolve<T: FromStr>(
 ) -> anyhow::Result<T>;
 ```
 
-Semantics, matching `MICROMEGAS_PROCESS_PROPERTIES`:
+Semantics:
 
-- If the variable is unset, or blank after trimming, the result is `Ok(None)`. A k8s manifest
-  that renders an unset optional var produces `""`.
-- A non-UTF-8 value is an error.
+- Like `MICROMEGAS_PROCESS_PROPERTIES`, blank means unset and bad input fails loudly: if the
+  variable is unset, or blank after trimming, the result is `Ok(None)`. A k8s manifest that
+  renders an unset optional var produces `""`.
+- Unlike `MICROMEGAS_PROCESS_PROPERTIES`, which lossily converts non-UTF-8 input, a non-UTF-8
+  value here is an error.
 - A value that fails `T::from_str` on the trimmed string is an error naming the variable and
   the value, e.g. `invalid MICROMEGAS_LOCAL_SINK_MAX_LEVEL "verbose": expected one of off,
   fatal, error, warn, info, debug, trace`. A generic helper cannot know the valid values of `T`,
@@ -99,8 +101,7 @@ Semantics, matching `MICROMEGAS_PROCESS_PROPERTIES`:
 
 `build()` propagates these errors through `?`. The macro's `.expect(...)` already turns a
 guard-build failure into a loud startup panic, so a typo fails at startup instead of being
-silently ignored. `mm_init` (capi) doesn't panic on the same error: it `eprintln!`s and returns
-null, turning telemetry off instead of crashing the host process (Current State).
+silently ignored.
 
 ### 2. Level env vars
 
@@ -136,9 +137,7 @@ let local_sink_max_level = resolve(
 
 The same `explicit / env / default` shape then appears five times: two levels and three of the
 four transport knobs (`telemetry_max_queue_bytes`, `telemetry_hard_queue_bytes`,
-`telemetry_max_in_flight_requests`, all `Option<usize>`). `resolve` covers those five. The
-fourth transport knob, the request timeout, is `Option<Duration>`, and `Duration` isn't
-`FromStr`, so it stays a direct `env_override::<u64>` call mapped to a `Duration` (§4).
+`telemetry_max_in_flight_requests`, all `Option<usize>`). `resolve` covers those five.
 
 Resolve both levels and all four transport knobs at the top of `build()`, next to the
 process-properties merge, and use the resolved values inside the `if let Some(url)` branch (§4).
@@ -172,9 +171,6 @@ Their precedence (explicit > env) is unchanged. The only behavior change is that
 value such as `MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES=128MiB` now fails startup instead of being
 silently replaced by the default.
 
-Resolve all four transport knobs at the top of `build()`, next to the two levels (§2), and use
-the resolved values inside the `if let Some(url)` branch where the sinks are pushed.
-
 `MICROMEGAS_ENABLE_CPU_TRACING` stays as is. It uses `== "true"` semantics, where `"1"` means
 off, and moving it to `bool::from_str` would turn today's silent-false values into startup
 failures, with no request driving that change.
@@ -192,14 +188,15 @@ failures, with no request driving that change.
    - add `with_telemetry_sink_max_level`;
    - resolve both levels and the four transport knobs at the top of `build()` through
      `resolve` (the request timeout through a direct `env_override::<u64>` call, mapped to a
-     `Duration`), and use the resolved values where the sinks are pushed (lines ~566 and ~580);
-   - move the transport fallbacks onto `resolve` (and `env_override` for the timeout),
-     promoting their env var names to consts, and update the setter doc comments to say invalid
-     values fail `build()`.
+     `Duration`), promoting the transport env var names to consts, and use the resolved values
+     where the sinks are pushed (lines ~566 and ~580); update the setter doc comments to say
+     invalid values fail `build()`.
 3. In `rust/micromegas-proc-macros/src/lib.rs`: emit `with_local_sink_max_level` only when the
    attribute is present, update the doc comment (also fixing the existing `local_sink_enabled`
-   doc line, which says "enable local stderr sink" but the sink writes to stdout), and update
-   the tests (see Testing).
+   doc line, which says "enable local stderr sink" but the sink writes to stdout), update line
+   14's "Telemetry guard with sensible defaults (ctrl-c handling, debug level)" so "debug level"
+   no longer goes stale (e.g. "info console level, overridable via
+   `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`"), and update the tests (see Testing).
 4. Update the docs and `CHANGELOG.md` (see Documentation).
 
 ## Files to Modify
@@ -212,10 +209,6 @@ failures, with no request driving that change.
 
 ## Trade-offs
 
-- **Explicit wins vs. env wins for levels.** Letting env win would let an operator turn down a
-  binary that pins its level in code. Explicit-wins keeps one precedence rule across every
-  builder env var, and a level pinned in code is taken as intentional. Binaries that don't pin
-  a level, which includes every in-repo service after §3, remain fully operator-controlled.
 - **Per-sink vars vs. one `MICROMEGAS_CONSOLE_LEVEL`.** Naming the vars after the builder
   fields generalizes to both built-in sinks with one pattern, and makes the mapping to the
   Rust API obvious.
@@ -225,9 +218,6 @@ failures, with no request driving that change.
   would override the local cap rather than narrow it. A per-sink cap solves the issue without
   reworking that filter. The field has never been populated since the initial import and could
   be removed separately.
-- **Strict parsing of the existing transport vars.** It is a behavior change, but a
-  silently ignored queue cap is a worse failure than a loud startup error, and one helper
-  should have one semantics.
 - **Parsing levels in the proc macro with `LevelFilter::from_str`.** Not done. The macro's
   `level_to_filter` must emit tokens and report compile-time errors with spans, so sharing
   code with the runtime parser buys little.
@@ -249,9 +239,9 @@ failures, with no request driving that change.
   variables, accepted values, defaults, precedence (a level set in code or through the macro
   attribute cannot be overridden), and the cost motivation: capping
   the console to `info` while keeping `debug` in telemetry. Note that invalid transport values
-  now fail startup, and that C ABI users (`mm_init`) don't panic on an invalid value: `mm_init`
-  returns null instead, since `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` is the only one of the new/changed
-  vars that doesn't reach it (the local sink is always disabled there).
+  now fail startup, and that the C ABI (`mm_init`) returns null instead of panicking on an
+  invalid `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` or transport var; `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`
+  doesn't apply there because its local sink is always disabled.
 - `rust/micromegas-proc-macros/src/lib.rs`: the macro doc comment (default and env override).
 - `CHANGELOG.md` Unreleased entry: the new env vars and setter, the default console level for
   `#[micromegas_main]` binaries dropping from DEBUG to INFO (a visible behavior change;
@@ -275,8 +265,8 @@ Unit tests only. No live DB is involved.
   `Option<OsString>` instead of reading the env. Assert that explicit beats a set env value,
   that env beats the default, that the default is used when both are absent, and that an
   invalid env value is an error only when nothing explicit is set. An explicit value means the
-  env var is never read. `build()` itself installs a process-global guard and is not unit-testable
-  in isolation.
+  env value is never parsed. `build()` itself installs a process-global guard and is not
+  unit-testable in isolation.
 - `micromegas-proc-macros` tests:
   - change the existing assertion at line 386, so that no attribute →
     `with_local_sink_max_level` is **absent** from the expansion;
