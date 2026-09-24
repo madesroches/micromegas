@@ -4,6 +4,20 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Telemetry:** Each built-in sink's max level is now configurable at startup through an
+  environment variable, read once by `TelemetryGuardBuilder::build()`:
+  `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` (default `info`) for the local (stdout) sink and the new
+  `MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL` (default `debug`) for the HTTP telemetry sink, with a
+  matching new `with_telemetry_sink_max_level` builder setter. Precedence is explicit builder
+  call (including the `#[micromegas_main]` macro's `local_sink_max_level` attribute) > env >
+  default. **Minor breaking change:** the `#[micromegas_main]` macro's default console level
+  drops from `debug` to `info`; set `MICROMEGAS_LOCAL_SINK_MAX_LEVEL=debug` to restore the old
+  behavior (#1626). The four `MICROMEGAS_TELEMETRY_*` transport variables
+  (`MAX_QUEUE_BYTES`/`HARD_QUEUE_BYTES`/`MAX_IN_FLIGHT_REQUESTS`/`REQUEST_TIMEOUT_SECS`) also
+  move to strict parsing as part of this change: an unparseable value now fails startup instead
+  of being silently replaced by the default. A `#[micromegas_main]` binary panics on any of
+  these failures at startup; the C ABI's `mm_init` returns null instead of initializing
+  telemetry.
 * **Bug fix:** Reject read-only Postgres connections instead of writing to a demoted instance
   after a failover (#1625). After an Aurora failover, ingestion kept writing to the old primary
   (restarted as a reader) for tens of seconds after RDS reported the failover complete, failing

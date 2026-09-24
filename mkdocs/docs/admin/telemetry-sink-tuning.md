@@ -4,6 +4,35 @@ Environment variables honored by every process built on the Rust telemetry sink
 (`micromegas-telemetry-sink`) — the services, the monolith, the Redis exporter,
 and any instrumented application, including native ones through the C ABI.
 
+## Log levels
+
+Each built-in sink has its own max level, read once at startup:
+
+```bash
+# Max level for the local (stdout) sink. Default "info".
+export MICROMEGAS_LOCAL_SINK_MAX_LEVEL=info
+
+# Max level for the HTTP telemetry sink. Default "debug".
+export MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL=debug
+```
+
+Accepted values are `off`, `fatal`, `error`, `warn`, `info`, `debug`, and
+`trace`, case-insensitively. This is the knob for a deployment where console
+output is shipped to a log service billed per GB: capping the console to
+`info` while leaving `debug` in the telemetry sink keeps the same detail
+queryable through micromegas without paying to duplicate it on stdout.
+
+Precedence is *explicit builder call (including the `#[micromegas_main]`
+macro's `local_sink_max_level` attribute) > environment variable > default*.
+A level pinned in code cannot be overridden by the environment. An invalid
+value — for either variable, or for any of the transport variables below —
+fails `build()` rather than being silently ignored; a `#[micromegas_main]`
+binary panics at startup with the variable and value named in the error, and
+the C ABI's `mm_init` returns null instead of panicking, leaving telemetry
+off rather than crashing the host process. `MICROMEGAS_LOCAL_SINK_MAX_LEVEL`
+doesn't apply through the C ABI, since `mm_init` always disables the local
+sink.
+
 ## Transport tuning
 
 The sink queues process/stream

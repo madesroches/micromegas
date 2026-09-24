@@ -16,6 +16,8 @@ pub mod api_key_decorator;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod composite_event_sink;
 #[cfg(not(target_arch = "wasm32"))]
+mod env_config;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http_event_sink;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod local_event_sink;
@@ -55,6 +57,7 @@ mod native {
     use std::str::FromStr;
     use std::sync::{Arc, Mutex, Weak};
 
+    use crate::env_config::{env_override, resolve};
     use crate::log_interop::install_log_interop;
     use crate::request_decorator::RequestDecorator;
     use crate::tracing_interop::install_tracing_interop;
@@ -84,6 +87,36 @@ mod native {
     /// comma-separated `key=value` list, e.g. `cluster=prod,role=cache`. Read by
     /// [`TelemetryGuardBuilder::build`], so every micromegas process honors it.
     pub const PROCESS_PROPERTIES_ENV_VAR: &str = "MICROMEGAS_PROCESS_PROPERTIES";
+
+    /// Environment variable capping the local (stdout) sink's max level.
+    /// Read once by [`TelemetryGuardBuilder::build`]. Precedence is
+    /// *[`TelemetryGuardBuilder::with_local_sink_max_level`] (including the
+    /// `#[micromegas_main]` macro's `local_sink_max_level` attribute) > this
+    /// variable > the [`DEFAULT_LOCAL_SINK_MAX_LEVEL`] default*. Accepts `off`,
+    /// `fatal`, `error`, `warn`, `info`, `debug`, or `trace`, case-insensitively;
+    /// an unparseable value fails `build()`.
+    pub const LOCAL_SINK_MAX_LEVEL_ENV_VAR: &str = "MICROMEGAS_LOCAL_SINK_MAX_LEVEL";
+
+    /// Environment variable capping the HTTP telemetry sink's max level.
+    /// Read once by [`TelemetryGuardBuilder::build`]. Precedence is
+    /// *[`TelemetryGuardBuilder::with_telemetry_sink_max_level`] > this
+    /// variable > the [`DEFAULT_TELEMETRY_SINK_MAX_LEVEL`] default*. Accepts
+    /// the same values as [`LOCAL_SINK_MAX_LEVEL_ENV_VAR`]; an unparseable
+    /// value fails `build()`, even if no telemetry URL ends up configured.
+    pub const TELEMETRY_SINK_MAX_LEVEL_ENV_VAR: &str = "MICROMEGAS_TELEMETRY_SINK_MAX_LEVEL";
+
+    /// Default max level for the local (stdout) sink, applied when neither an
+    /// explicit builder call nor [`LOCAL_SINK_MAX_LEVEL_ENV_VAR`] sets one.
+    pub const DEFAULT_LOCAL_SINK_MAX_LEVEL: LevelFilter = LevelFilter::Info;
+
+    /// Default max level for the HTTP telemetry sink, applied when neither an
+    /// explicit builder call nor [`TELEMETRY_SINK_MAX_LEVEL_ENV_VAR`] sets one.
+    pub const DEFAULT_TELEMETRY_SINK_MAX_LEVEL: LevelFilter = LevelFilter::Debug;
+
+    const MAX_QUEUE_BYTES_ENV_VAR: &str = "MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES";
+    const HARD_QUEUE_BYTES_ENV_VAR: &str = "MICROMEGAS_TELEMETRY_HARD_QUEUE_BYTES";
+    const MAX_IN_FLIGHT_REQUESTS_ENV_VAR: &str = "MICROMEGAS_TELEMETRY_MAX_IN_FLIGHT_REQUESTS";
+    const REQUEST_TIMEOUT_SECS_ENV_VAR: &str = "MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS";
 
     /// Merges a [`PROCESS_PROPERTIES_ENV_VAR`]-formatted list into `properties`,
     /// leaving keys already present untouched. Precedence is therefore
@@ -144,9 +177,9 @@ mod native {
         install_log_capture: bool,
         install_tracing_capture: bool,
         local_sink_enabled: bool,
-        local_sink_max_level: LevelFilter,
+        local_sink_max_level: Option<LevelFilter>,
         telemetry_sink_url: Option<String>,
-        telemetry_sink_max_level: LevelFilter,
+        telemetry_sink_max_level: Option<LevelFilter>,
         telemetry_max_queue_bytes: Option<usize>,
         telemetry_hard_queue_bytes: Option<usize>,
         telemetry_max_in_flight_requests: Option<usize>,
@@ -167,9 +200,9 @@ mod native {
                 metrics_buffer_size: 1024 * 1024,
                 threads_buffer_size: 10 * 1024 * 1024,
                 local_sink_enabled: true,
-                local_sink_max_level: LevelFilter::Info,
+                local_sink_max_level: None,
                 telemetry_sink_url: None,
-                telemetry_sink_max_level: LevelFilter::Debug,
+                telemetry_sink_max_level: None,
                 telemetry_max_queue_bytes: None,
                 telemetry_hard_queue_bytes: None,
                 telemetry_max_in_flight_requests: None,
@@ -238,9 +271,23 @@ mod native {
             self
         }
 
+        /// Max level for the local (stdout) sink. Pins the value in code, so
+        /// [`LOCAL_SINK_MAX_LEVEL_ENV_VAR`] no longer applies. Falls back to
+        /// that variable, then [`DEFAULT_LOCAL_SINK_MAX_LEVEL`]; an
+        /// unparseable value for the variable fails `build()`.
         #[must_use]
         pub fn with_local_sink_max_level(mut self, level_filter: LevelFilter) -> Self {
-            self.local_sink_max_level = level_filter;
+            self.local_sink_max_level = Some(level_filter);
+            self
+        }
+
+        /// Max level for the HTTP telemetry sink. Pins the value in code, so
+        /// [`TELEMETRY_SINK_MAX_LEVEL_ENV_VAR`] no longer applies. Falls back
+        /// to that variable, then [`DEFAULT_TELEMETRY_SINK_MAX_LEVEL`]; an
+        /// unparseable value for the variable fails `build()`.
+        #[must_use]
+        pub fn with_telemetry_sink_max_level(mut self, level_filter: LevelFilter) -> Self {
+            self.telemetry_sink_max_level = Some(level_filter);
             self
         }
 
@@ -258,7 +305,8 @@ mod native {
         /// Soft byte cap for the telemetry upload queue: once reached, new
         /// `Traces` items (thread and image blocks) are dropped first.
         /// Falls back to `MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES`, then
-        /// [`HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES`].
+        /// [`HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES`]. An unparseable value
+        /// for that variable fails `build()`.
         #[must_use]
         pub fn with_max_queue_bytes(mut self, bytes: usize) -> Self {
             self.telemetry_max_queue_bytes = Some(bytes);
@@ -268,7 +316,8 @@ mod native {
         /// Hard byte cap for the telemetry upload queue: once reached, `Logs`
         /// and `Metrics` items are dropped too (`Metadata` is never
         /// dropped). Falls back to `MICROMEGAS_TELEMETRY_HARD_QUEUE_BYTES`,
-        /// then [`HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES`].
+        /// then [`HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES`]. An unparseable
+        /// value for that variable fails `build()`.
         #[must_use]
         pub fn with_hard_queue_bytes(mut self, bytes: usize) -> Self {
             self.telemetry_hard_queue_bytes = Some(bytes);
@@ -277,7 +326,8 @@ mod native {
 
         /// Maximum number of `insert_*` HTTP requests in flight at once.
         /// Falls back to `MICROMEGAS_TELEMETRY_MAX_IN_FLIGHT_REQUESTS`, then
-        /// [`HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS`].
+        /// [`HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS`]. An unparseable
+        /// value for that variable fails `build()`.
         #[must_use]
         pub fn with_max_in_flight_requests(mut self, max_in_flight_requests: usize) -> Self {
             self.telemetry_max_in_flight_requests = Some(max_in_flight_requests);
@@ -290,7 +340,8 @@ mod native {
         /// which otherwise would make shutdown block indefinitely (`Drop for
         /// HttpEventSink` joins the worker thread). Falls back to
         /// `MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS`, then
-        /// [`HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT`].
+        /// [`HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT`]. An unparseable value
+        /// for that variable fails `build()`.
         #[must_use]
         pub fn with_request_timeout(mut self, timeout: std::time::Duration) -> Self {
             self.telemetry_request_timeout = Some(timeout);
@@ -495,6 +546,49 @@ mod native {
             if self.default_system_properties_enabled {
                 self.populate_default_system_properties();
             }
+            // Resolved up front, before the global guard is created below, so a
+            // bad value fails `build()` even when the sink it feeds ends up
+            // unused (e.g. a telemetry knob set with no telemetry URL
+            // configured). A typo should not hide until the URL is set.
+            const LEVEL_EXPECTED: &str = "one of off, fatal, error, warn, info, debug, trace";
+            let local_sink_max_level = resolve(
+                self.local_sink_max_level,
+                LOCAL_SINK_MAX_LEVEL_ENV_VAR,
+                DEFAULT_LOCAL_SINK_MAX_LEVEL,
+                LEVEL_EXPECTED,
+            )?;
+            let telemetry_sink_max_level = resolve(
+                self.telemetry_sink_max_level,
+                TELEMETRY_SINK_MAX_LEVEL_ENV_VAR,
+                DEFAULT_TELEMETRY_SINK_MAX_LEVEL,
+                LEVEL_EXPECTED,
+            )?;
+            const NON_NEGATIVE_INTEGER: &str = "a non-negative integer";
+            let max_queue_bytes = resolve(
+                self.telemetry_max_queue_bytes,
+                MAX_QUEUE_BYTES_ENV_VAR,
+                HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES,
+                NON_NEGATIVE_INTEGER,
+            )?;
+            let hard_queue_bytes = resolve(
+                self.telemetry_hard_queue_bytes,
+                HARD_QUEUE_BYTES_ENV_VAR,
+                HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES,
+                NON_NEGATIVE_INTEGER,
+            )?;
+            let max_in_flight_requests = resolve(
+                self.telemetry_max_in_flight_requests,
+                MAX_IN_FLIGHT_REQUESTS_ENV_VAR,
+                HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS,
+                NON_NEGATIVE_INTEGER,
+            )?;
+            // `Duration` isn't `FromStr`, so this can't go through `resolve`.
+            let request_timeout = match self.telemetry_request_timeout {
+                Some(timeout) => timeout,
+                None => env_override::<u64>(REQUEST_TIMEOUT_SECS_ENV_VAR, NON_NEGATIVE_INTEGER)?
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or(HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT),
+            };
             let target_max_level: Vec<_> = self
                 .target_max_levels
                 .into_iter()
@@ -524,39 +618,6 @@ mod native {
                         .filter(|url| !url.trim().is_empty());
 
                     if let Some(url) = telemetry_sink_url {
-                        let max_queue_bytes = self
-                            .telemetry_max_queue_bytes
-                            .or_else(|| {
-                                std::env::var("MICROMEGAS_TELEMETRY_MAX_QUEUE_BYTES")
-                                    .ok()
-                                    .and_then(|v| v.parse().ok())
-                            })
-                            .unwrap_or(HttpSinkConfig::DEFAULT_MAX_QUEUE_BYTES);
-                        let hard_queue_bytes = self
-                            .telemetry_hard_queue_bytes
-                            .or_else(|| {
-                                std::env::var("MICROMEGAS_TELEMETRY_HARD_QUEUE_BYTES")
-                                    .ok()
-                                    .and_then(|v| v.parse().ok())
-                            })
-                            .unwrap_or(HttpSinkConfig::DEFAULT_HARD_QUEUE_BYTES);
-                        let max_in_flight_requests = self
-                            .telemetry_max_in_flight_requests
-                            .or_else(|| {
-                                std::env::var("MICROMEGAS_TELEMETRY_MAX_IN_FLIGHT_REQUESTS")
-                                    .ok()
-                                    .and_then(|v| v.parse().ok())
-                            })
-                            .unwrap_or(HttpSinkConfig::DEFAULT_MAX_IN_FLIGHT_REQUESTS);
-                        let request_timeout = self
-                            .telemetry_request_timeout
-                            .or_else(|| {
-                                std::env::var("MICROMEGAS_TELEMETRY_REQUEST_TIMEOUT_SECS")
-                                    .ok()
-                                    .and_then(|v| v.parse().ok())
-                                    .map(std::time::Duration::from_secs)
-                            })
-                            .unwrap_or(HttpSinkConfig::DEFAULT_REQUEST_TIMEOUT);
                         let retry_by_priority = self
                             .telemetry_retry_by_priority
                             .unwrap_or_else(HttpSinkConfig::default_retry_by_priority);
@@ -568,7 +629,7 @@ mod native {
                             retry_by_priority,
                         };
                         sinks.push((
-                            self.telemetry_sink_max_level,
+                            telemetry_sink_max_level,
                             Box::new(HttpEventSink::new(
                                 &url,
                                 config,
@@ -577,7 +638,7 @@ mod native {
                         ));
                     }
                     if self.local_sink_enabled {
-                        sinks.push((self.local_sink_max_level, Box::new(LocalEventSink::new())));
+                        sinks.push((local_sink_max_level, Box::new(LocalEventSink::new())));
                     }
                     let mut extra_sinks = self.extra_sinks.into_values().collect();
                     sinks.append(&mut extra_sinks);
