@@ -144,6 +144,7 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 - `rust/ingestion/tests/read_write_pool_tests.rs` (new)
 - `rust/auth/tests/db_api_key_tests.rs`
 - `mkdocs/docs/admin/service-lifecycle.md`
+- `mkdocs/docs/admin/flight-sql.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -169,6 +170,10 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   saying pools reject connections to a read-only instance, so during a failover writes wait (up to the
   acquire timeout) instead of failing against the demoted writer, and readiness goes unhealthy
   while only a reader is reachable. Mention the `pg_read_only_connection_rejected` metric.
+- `mkdocs/docs/admin/flight-sql.md`: reword the "Scaling" section's "Queries are read-only
+  against object storage and PostgreSQL" sentence to say FlightSQL needs a writable primary (it
+  writes JIT partitions and runs migrations through its lake pool) and must not be pointed at a
+  read replica.
 - `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. The only Rust API changes are
   additive (`read_write_pool_options`, `is_read_only`); `dedicated_key_store_pool`'s signature is
   unchanged.
