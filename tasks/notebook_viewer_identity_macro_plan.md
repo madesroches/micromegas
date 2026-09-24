@@ -69,9 +69,7 @@ export function viewerVariable(user: User | null): Record<string, string> | unde
 - Returns `undefined` when `user` is null or `user.auth_disabled` is true.
 - Only includes the claims that are present and non-null (`user.email != null`). The IdP claims
   come back from `/auth/me` as JSON `null`, not absent keys, so a missing `email` or `name` leaves
-  that key out, so `$me.email` stays unresolved and `validateMacros` reports
-  `Column 'email' not found in variable 'me'` instead of substituting `''` into a `WHERE`.
-  `sub` is always present.
+  that key out. `sub` is always present.
 
 ```ts
 /** Variables visible to a cell: the viewer entry, then upstream variable cells. */
@@ -114,7 +112,7 @@ The existing header display ("Anonymous (No Auth)") keeps working unchanged.
 With no viewer entry, `$me.email` is unresolved: it stays in the SQL (the query errors), and the
 editor's validation reports it. `validateMacros` gets one targeted message: when the dotted or
 simple pass hits `me` and `variables.me` is undefined, it emits
-`$me is unavailable: no signed-in viewer (authentication is disabled)` instead of
+`$me is unavailable: no signed-in viewer` instead of
 `Unknown variable: me`.
 
 ### Conflicts with a variable cell named `me`
@@ -125,8 +123,8 @@ simple pass hits `me` and `variables.me` is undefined, it emits
   child rename path (`cells/HorizontalGroupCell.tsx:312`) must pass
   `child.type === 'variable'` for it, since a variable cell renamed inside a group currently
   bypasses the check.
-- **Saved notebooks that already have a `me` variable cell:** the cell keeps precedence, so
-  existing screens keep working, and the variable cell's editor (`VariableCell.tsx`, next to its
+- **Saved notebooks that already have a `me` variable cell:** the cell keeps precedence, and
+  the variable cell's editor (`VariableCell.tsx`, next to its
   validation errors) shows a warning:
   `"me" is reserved for the signed-in viewer; this variable hides $me.email / $me.name / $me.sub. Rename it.`
 
@@ -143,7 +141,7 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
    `rust/analytics-web-srv/tests/routing_tests.rs` (or add a sibling test) to assert that the
    body has `auth_disabled: true`.
 2. **Auth context.** `analytics-web-app/src/lib/auth.tsx`: add `auth_disabled?: boolean` to `User`,
-   and add `useOptionalAuthUser()`.
+   retype `email`/`name` as `string | null | undefined`, and add `useOptionalAuthUser()`.
 3. **Helpers.** `notebook-utils.ts`: add `VIEWER_VARIABLE_NAME`, `viewerVariable`,
    `collectAvailableVariables`, and the reserved-name check in `validateCellName`. Pass
    `child.type === 'variable'` as `isVariable` at the `validateCellName` call in
@@ -204,6 +202,10 @@ A bare `$me` resolves like any multi-column variable (the sorted-key JSON dump f
   - that `$me.*` is unresolved on auth-disabled servers and when the IdP omits a claim;
   - that it is **not an authorization mechanism**, since viewers can edit a notebook's SQL, and
     audience-based read filtering is the enforcement boundary.
+- Variable Scope: note that `$me` is always available regardless of cell position, and appears
+  in the Available Variables panel like any other variable.
+- Reserved Parameters: note that `me` is also rejected as a variable name, reserved for the
+  viewer rather than a URL param.
 
 ## Testing Strategy
 
