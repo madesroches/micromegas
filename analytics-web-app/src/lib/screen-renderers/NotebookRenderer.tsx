@@ -152,6 +152,7 @@ interface HgEditorPanelProps {
   cellResults: Record<string, import('apache-arrow').Table>
   cellSelections: Record<string, Record<string, unknown>>
   allCellNames: Set<string>
+  availableColumns?: string[]
   defaultDataSource?: string
   datasourceVariables?: string[]
   showNotebookOption?: boolean
@@ -170,6 +171,7 @@ function HgEditorPanel({
   cellResults,
   cellSelections,
   allCellNames,
+  availableColumns,
   defaultDataSource,
   datasourceVariables,
   showNotebookOption,
@@ -257,6 +259,7 @@ function HgEditorPanel({
           cellResults={cellResults}
           cellSelections={cellSelections}
           allCellNames={allCellNames}
+          availableColumns={availableColumns}
           defaultDataSource={defaultDataSource}
           datasourceVariables={datasourceVariables}
           showNotebookOption={showNotebookOption}
@@ -827,6 +830,7 @@ export function NotebookRenderer({
                 // eslint-disable-next-line react-hooks/refs -- reads cellSelectionsRef via getAvailableCellSelections, synchronous-access ref (see comment above)
                 cellSelections={getAvailableCellSelections(selectedCellIndex!)}
                 allCellNames={existingNames}
+                availableColumns={selectedChildName ? cellStates[selectedChildName]?.data[0]?.schema.fields.map((f) => f.name) : undefined}
                 defaultDataSource={dataSource}
                 showNotebookOption
                 datasourceVariables={datasourceVariables}

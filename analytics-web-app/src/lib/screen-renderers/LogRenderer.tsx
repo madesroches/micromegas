@@ -18,7 +18,7 @@ import {
   DEFAULT_LOG_LIMIT,
 } from '@/lib/screen-defaults'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { classifyLogColumns, renderLogColumn, computeFlexWidths } from './log-utils'
+import { classifyLogColumns, renderLogColumn, computeFlexWidths, range } from './log-utils'
 
 // Variables available for log queries
 const VARIABLES = [
@@ -350,7 +350,7 @@ export function LogRenderer({
   const numRows = resultTable?.numRows ?? 0
 
   const columnWidths = useMemo(
-    () => computeFlexWidths(resultTable, columns, 0, numRows),
+    () => computeFlexWidths(resultTable, columns, range(0, numRows)),
     [resultTable, columns, numRows],
   )
 
