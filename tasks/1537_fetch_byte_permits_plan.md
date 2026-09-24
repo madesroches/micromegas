@@ -141,10 +141,13 @@ agree with what `coalesce_runs` actually produces.
   run larger than the prefetch pool never completes and never errors — the same hang the
   `memory_budget_mb` floor in `cli.rs:216-231` guards against.
 - `Cli::validate` adds the fatal-at-startup counterparts: `fetch_memory_budget_mb > 0`,
-  `max_run_bytes(block_size, max_coalesced_get_bytes) <= u32::MAX`, and
-  `fetch_memory_budget_mb * MiB >= (demand_reserved_fetches + 1) * max_run_bytes`, with error
-  messages naming the env vars involved and the computed floor. `fetch_memory_budget_mb` is `u64`
-  (unlike the sibling `memory_budget_mb: u32`), so this multiplication cannot overflow.
+  `max_run_bytes(block_size, max_coalesced_get_bytes) <= u32::MAX`, and (via `checked_mul` on both
+  the `fetch_memory_budget_mb * MiB` and `(demand_reserved_fetches + 1) * max_run_bytes` products,
+  rejecting overflow as a validation error) `fetch_memory_budget_mb * MiB >=
+  (demand_reserved_fetches + 1) * max_run_bytes`, with error messages naming the env vars involved
+  and the computed floor. It also rejects any `fetch_memory_budget_mb` whose byte value exceeds
+  `usize::MAX >> 3` (tokio's `Semaphore::MAX_PERMITS`), since `FetchScheduler::new` hands out one
+  permit per byte and `Semaphore::new` panics above that limit.
 - New `pub const DEFAULT_FETCH_MEMORY_BUDGET_BYTES: u64 = DEFAULT_TOTAL_FETCH_PERMITS as u64 *
   DEFAULT_MAX_COALESCED_GET_BYTES;` in `range_cache/mod.rs`; the CLI default derives its MiB value
   from it.
@@ -179,8 +182,9 @@ agree with what `coalesce_runs` actually produces.
 6. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb: u64`; reword
    `max_concurrent_fetches` help ("parallelism cap; transient fetch memory is bounded separately by
    `--fetch-memory-budget-mb`"); extend `Cli::validate`.
-7. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024` (`u64`
-   arithmetic; does not overflow like the `u32` `memory_budget_mb` would).
+7. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024`; safe
+   because `Cli::validate` has already rejected values that would overflow `u64` or exceed the
+   semaphore's permit limit.
 8. `object-cache-srv/src/saturation_monitor.rs`: consume `FetchBudgetStats`, emit the four new
    gauges.
 9. Update every test call site of `RangeCache::new` (pass `DEFAULT_FETCH_MEMORY_BUDGET_BYTES`
