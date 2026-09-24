@@ -218,20 +218,26 @@ fn table_tags(table: &'static str) -> &'static micromegas_tracing::property_set:
     ])
 }
 
-/// Rate-limits the outage `error!` log to at most once per `window_secs` (per
-/// table), checked-and-set via a single `AtomicI64` "last logged at" timestamp —
-/// not once per rejected request. `DbApiKeyAuthProvider` sits last in the auth
-/// chain, so during an outage every non-env-key, non-JWT request reaches it; an
-/// unconditional `error!` would flood `log_entries` with the outage's own noise
-/// on the highest-volume service in the deployment.
-fn maybe_log_error(last_logged_at: &AtomicI64, window_secs: i64, table: &str, err: &anyhow::Error) {
+/// Shared throttle primitive: true at most once per `window_secs`, checked-and-set
+/// via a single `AtomicI64` "last logged at" timestamp. Backs both `maybe_log_error`
+/// and the read-only-fallback `warn!` in `lookup_key_row` -- each keeps its own
+/// `AtomicI64` so a burst of one kind of event can never suppress the other's log.
+fn should_log(last_logged_at: &AtomicI64, window_secs: i64) -> bool {
     let now = Utc::now().timestamp();
     let prev = last_logged_at.load(Ordering::Relaxed);
-    if now.saturating_sub(prev) >= window_secs
+    now.saturating_sub(prev) >= window_secs
         && last_logged_at
             .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
-    {
+}
+
+/// Rate-limits the outage `error!` log to at most once per `window_secs` (per
+/// table) -- not once per rejected request. `DbApiKeyAuthProvider` sits last in the
+/// auth chain, so during an outage every non-env-key, non-JWT request reaches it; an
+/// unconditional `error!` would flood `log_entries` with the outage's own noise
+/// on the highest-volume service in the deployment.
+fn maybe_log_error(last_logged_at: &AtomicI64, window_secs: i64, table: &str, err: &anyhow::Error) {
+    if should_log(last_logged_at, window_secs) {
         micromegas_tracing::error!("db_api_key store error (table={table}): {err:#}");
     }
 }
@@ -256,6 +262,10 @@ pub struct DbApiKeyAuthProvider {
     /// rate-limiting.
     error_log_window_secs: i64,
     last_logged_at: Arc<AtomicI64>,
+    /// Separate throttle state for the read-only-fallback `warn!` in `lookup_key_row` --
+    /// its own `AtomicI64` so a flood of unknown tokens against a read-only connection can
+    /// never suppress `last_logged_at`'s genuine DB-error log, or vice versa.
+    last_read_only_warn_at: Arc<AtomicI64>,
 }
 
 impl DbApiKeyAuthProvider {
@@ -278,6 +288,7 @@ impl DbApiKeyAuthProvider {
             unknown,
             error_log_window_secs: config.cache_ttl_secs.max(60) as i64,
             last_logged_at: Arc::new(AtomicI64::new(0)),
+            last_read_only_warn_at: Arc::new(AtomicI64::new(0)),
         }
     }
 }
@@ -288,11 +299,16 @@ impl DbApiKeyAuthProvider {
 /// a `WritablePolicy::Prefer` FlightSQL pool that fell back to a replica), falls back to a plain
 /// `SELECT` of the same columns and skips the bump rather than failing the whole lookup --
 /// `last_used_at` is best-effort telemetry, not something a caller's auth should depend on.
+/// Unlike valid keys (cached in `self.valid`), an unknown token hits this fallback on every
+/// request, so the `warn!` is throttled via `last_read_only_warn_at`/`window_secs` rather than
+/// logged unconditionally.
 async fn lookup_key_row(
     pool: &PgPool,
     table: ApiKeyTable,
     hash: &[u8; 32],
     returning: &str,
+    last_read_only_warn_at: &AtomicI64,
+    window_secs: i64,
 ) -> Result<Option<sqlx::postgres::PgRow>, sqlx::Error> {
     let update_result = sqlx::query(&format!(
         "UPDATE {} SET last_used_at = now() WHERE key_hash = $1 AND revoked_at IS NULL RETURNING {returning}",
@@ -303,10 +319,12 @@ async fn lookup_key_row(
     .await;
     match update_result {
         Err(e) if is_read_only_error(&e) => {
-            micromegas_tracing::warn!(
-                "db_api_key lookup on a read-only connection (table={}): skipping last_used_at bump",
-                table.table_name()
-            );
+            if should_log(last_read_only_warn_at, window_secs) {
+                micromegas_tracing::warn!(
+                    "db_api_key lookup on a read-only connection (table={}): skipping last_used_at bump",
+                    table.table_name()
+                );
+            }
             sqlx::query(&format!(
                 "SELECT {returning} FROM {} WHERE key_hash = $1 AND revoked_at IS NULL",
                 table.table_name()
@@ -337,6 +355,7 @@ impl AuthProvider for DbApiKeyAuthProvider {
         let pool = self.pool.clone();
         let table = self.table;
         let last_logged_at = self.last_logged_at.clone();
+        let last_read_only_warn_at = self.last_read_only_warn_at.clone();
         let window_secs = self.error_log_window_secs;
 
         // `try_get_with`, not a plain `get`/`insert` pair: among concurrent
@@ -353,22 +372,29 @@ impl AuthProvider for DbApiKeyAuthProvider {
                 } else {
                     "key_id, name, allowed_cidrs"
                 };
-                let row = lookup_key_row(&pool, table, &hash, returning)
-                    .await
-                    .map_err(|e| {
-                        let err = anyhow::Error::from(e)
-                            .context(format!("looking up key in {}", table.table_name()));
-                        // Unconditional: fires on every DB error, independent of the
-                        // rate-limited `error!` line below.
-                        micromegas_tracing::imetric!(
-                            "db_api_key_error_count",
-                            "count",
-                            table_tags(table.table_name()),
-                            1_u64
-                        );
-                        maybe_log_error(&last_logged_at, window_secs, table.table_name(), &err);
-                        LookupError::Db(err)
-                    })?;
+                let row = lookup_key_row(
+                    &pool,
+                    table,
+                    &hash,
+                    returning,
+                    &last_read_only_warn_at,
+                    window_secs,
+                )
+                .await
+                .map_err(|e| {
+                    let err = anyhow::Error::from(e)
+                        .context(format!("looking up key in {}", table.table_name()));
+                    // Unconditional: fires on every DB error, independent of the
+                    // rate-limited `error!` line below.
+                    micromegas_tracing::imetric!(
+                        "db_api_key_error_count",
+                        "count",
+                        table_tags(table.table_name()),
+                        1_u64
+                    );
+                    maybe_log_error(&last_logged_at, window_secs, table.table_name(), &err);
+                    LookupError::Db(err)
+                })?;
 
                 match row {
                     Some(row) => {
