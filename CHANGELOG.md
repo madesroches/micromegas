@@ -18,6 +18,14 @@ This file documents the historical progress of the Micromegas project. For curre
   of being silently replaced by the default. A `#[micromegas_main]` binary panics on any of
   these failures at startup; the C ABI's `mm_init` returns null instead of initializing
   telemetry.
+* **Notebooks:** Add built-in `$me.email`, `$me.name`, and `$me.sub` macros resolved from the
+  signed-in viewer's identity, so one shared notebook can show each viewer their own rows (#1617).
+  Values get the same single-quote escaping as other SQL macros. `me` is now a reserved variable
+  name (an existing `me` variable cell keeps precedence and shows a rename warning). A cell whose
+  SQL references an unresolved `$me.*` — on a server started with `--disable-auth`, or when the
+  identity provider omits the claim — is blocked instead of running against the literal text.
+  `$me` is a convenience for scoping a screen, not an authorization mechanism. The no-auth
+  `/auth/me` response now includes `auth_disabled: true`.
 * **Bug fix:** Reject read-only Postgres connections instead of writing to a demoted instance
   after a failover (#1625). After an Aurora failover, ingestion kept writing to the old primary
   (restarted as a reader) for tens of seconds after RDS reported the failover complete, failing
