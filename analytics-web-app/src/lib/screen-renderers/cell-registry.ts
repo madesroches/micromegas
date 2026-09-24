@@ -181,6 +181,14 @@ export interface CellTypeMetadata {
 
   /** Extracts props for the renderer from config and state */
   readonly getRendererProps: (config: CellConfig, state: CellState) => Partial<CellRendererProps>
+
+  /**
+   * Returns every SQL string this cell will execute, for macro-resolution checks
+   * (e.g. unresolved `$me.*`/selection macros) run ahead of execution. Defaults to
+   * `config.sql` (single-query cells) when omitted; cells that persist more than one
+   * query (e.g. chart's v2 `queries[]`) must override this so none of them are missed.
+   */
+  readonly getSqlSources?: (config: CellConfig) => string[]
 }
 
 // Import metadata from each cell file

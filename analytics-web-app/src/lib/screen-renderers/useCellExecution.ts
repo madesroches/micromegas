@@ -169,13 +169,19 @@ export function useCellExecution({
       const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
       const isNotebookSource = cellDataSource === 'notebook'
 
-      // Check for unresolved $cell.selected.column macros — if the SQL or the
-      // cell's timeRange override contains a selection reference but no row is
-      // selected, show a waiting placeholder
-      const cellSql = (cell as QueryCellConfig).sql
+      // Check for unresolved $cell.selected.column macros — if any SQL query the cell
+      // will execute, or the cell's timeRange override, contains a selection reference
+      // but no row is selected, show a waiting placeholder. Multi-query cell types
+      // (e.g. chart's v2 `queries[]`) provide every SQL string via getSqlSources;
+      // other cells fall back to their single top-level `sql`.
+      const cellSqlSources = meta.getSqlSources
+        ? meta.getSqlSources(cell)
+        : (cell as QueryCellConfig).sql
+          ? [(cell as QueryCellConfig).sql]
+          : []
       const cellTimeRange = 'timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined
       const unresolvedCell =
-        (cellSql && findUnresolvedSelectionMacro(cellSql, availableCellSelections)) ||
+        cellSqlSources.map((sql) => findUnresolvedSelectionMacro(sql, availableCellSelections)).find(Boolean) ||
         (!isNotebookSource && cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
         (!isNotebookSource && cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
       if (unresolvedCell) {
@@ -191,7 +197,7 @@ export function useCellExecution({
       // omitted the referenced claim) blocks the cell instead of running against the
       // literal source text.
       const unresolvedViewerMacro =
-        (cellSql && findUnresolvedViewerMacro(cellSql, availableVariables)) ||
+        cellSqlSources.map((sql) => findUnresolvedViewerMacro(sql, availableVariables)).find(Boolean) ||
         (!isNotebookSource && cellTimeRange?.from && findUnresolvedViewerMacro(cellTimeRange.from, availableVariables)) ||
         (!isNotebookSource && cellTimeRange?.to && findUnresolvedViewerMacro(cellTimeRange.to, availableVariables))
       if (unresolvedViewerMacro) {

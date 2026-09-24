@@ -239,6 +239,14 @@ export function createCellRegistryMock(options: MockOptions = {}) {
         ? (config: { content?: string }) => ({ content: config.content })
         : () => ({})
 
+    // Chart mirrors the real chartMetadata.getSqlSources: a v2 config carries its SQL in
+    // `queries[]` (no top-level `sql`), so the unresolved-macro checks in useCellExecution
+    // need every query's SQL, not just `config.sql`.
+    if (type === 'chart') {
+      meta.getSqlSources = (config: { sql?: string; queries?: { sql: string }[] }) =>
+        config.queries ? config.queries.map((q) => q.sql) : config.sql ? [config.sql] : []
+    }
+
     // Add renderer component if requested (mirrors getCellRenderer's return value,
     // since consumers now read metadata.renderer directly instead of calling
     // getCellRenderer)

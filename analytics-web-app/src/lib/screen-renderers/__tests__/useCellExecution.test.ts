@@ -524,6 +524,39 @@ describe('useCellExecution', () => {
         expect(result.current.cellStates['Results'].status).toBe('blocked')
         expect(result.current.cellStates['Results'].error).toContain('$me.email is unavailable: no signed-in viewer')
       })
+
+      it('should block a v2 chart cell (SQL in queries[], no top-level sql) and send no query when $me.email has no viewer', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          {
+            type: 'chart',
+            name: 'Results',
+            version: 2,
+            queries: [{ sql: "SELECT * FROM logs WHERE email = '$me.email'" }],
+            layout: { height: 'auto' },
+          } as unknown as CellConfig,
+        ]
+        const variableValuesRef = createVariableValuesRef()
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            rawTimeRange: defaultRawTimeRange,
+            variableValuesRef,
+            setVariableValue: vi.fn(),
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        expect(mockStreamQuery).not.toHaveBeenCalled()
+        expect(result.current.cellStates['Results'].status).toBe('blocked')
+        expect(result.current.cellStates['Results'].error).toContain('$me.email is unavailable: no signed-in viewer')
+      })
     })
 
     describe('error handling', () => {

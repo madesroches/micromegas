@@ -655,4 +655,6 @@ export const chartMetadata: CellTypeMetadata = {
       options: { ...v2.options, _queryMeta: queryMeta },
     }
   },
+
+  getSqlSources: (config: CellConfig) => migrateChartConfig(config).queries.map((q) => q.sql),
 }
