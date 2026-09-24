@@ -88,14 +88,101 @@ The check matches libpq's `target_session_attrs=read-write` on pre-14 servers:
 holds the decision, so it can be unit-tested from
 `rust/ingestion/tests/read_write_pool_tests.rs` and both hooks share it.
 
+### FlightSQL: prefer a writable primary, fall back to read-only
+
+FlightSQL keeps trying for a writable connection but accepts a read-only one when that is the
+best available. Every other service stays strict.
+
+**Selection.** A new enum in `data_lake_connection.rs` picks the policy:
+
+```rust
+pub enum WritablePolicy { Require, Prefer }
+pub fn pool_options(policy: WritablePolicy) -> PgPoolOptions
+pub fn read_write_pool_options() -> PgPoolOptions        // pool_options(Require)
+pub fn prefer_read_write_pool_options() -> PgPoolOptions // pool_options(Prefer)
+```
+
+`connect_to_data_lake` and `LakehouseContext::from_env` both take a `WritablePolicy` as a new
+first parameter, so the compiler lists every caller. The FlightSQL builder's non-injected path
+passes `Prefer`. The maintenance daemon, `web_ingestion_service.rs:277`, and the tests pass
+`Require`. `connect_to_remote_data_lake` stays strict and takes no policy. That keeps the
+monolith, which injects its shared lake pool into the flight-sql role, on `Require`.
+
+**Mechanism.** `Prefer` installs the same three settings as `Require`, but both hooks consult a
+`ReadOnlyFallback` state that the closures capture by `Arc`. That state is shared by every
+connection of the pool and by every pool cloned from its options. It holds `streak_start:
+Option<Instant>` (the first read-only rejection since the last writable connect) and
+`last_probe: Instant`, behind a `std::sync::Mutex` that is never held across an await. The
+decisions are pure methods that take `now`, so they can be unit-tested:
+
+- `on_connect(read_only, now) -> bool` (accept?): a writable connection clears `streak_start`
+  and is accepted. A read-only connection starts the streak if none is running and is rejected
+  until `now - streak_start >= FALLBACK_AFTER` (10s). Each rejection is an `after_connect` `Err`,
+  so sqlx retries with a fresh DNS lookup. After the window it is accepted with
+  `warn!` + `imetric!("pg_read_only_connection_accepted", "count", 1)`. Because the streak is
+  pool-wide, only the first connect of an outage waits. A replica-only deployment pays the 10s
+  once, at startup, and never again.
+- `on_acquire(read_only, now) -> bool` (keep?): writable connections are kept. A read-only
+  connection is evicted (`Ok(false)`) immediately when `streak_start` is `None`, because a
+  writable connect has succeeded since the fallback. Otherwise it is evicted at most once per
+  `PROBE_INTERVAL` (30s) pool-wide, as a re-probe, and kept in between. The replacement connect
+  goes through `on_connect`. The streak is past the window, so it lands at once on either the
+  writer (which clears the streak) or the replica (accepted without waiting).
+
+The hot path stays at the one `SHOW transaction_read_only` round trip. The worst case is one
+extra connect per 30s while on a replica. The window (10s) is shorter than the lake pool's 30s
+`acquire_timeout`, so the first acquire of an outage succeeds rather than timing out. The derived
+key-store pools (2s timeout) can return `PoolTimedOut` during those first 10s, the same as
+strict mode. After that they share the elapsed streak. Rejections still emit
+`pg_read_only_connection_rejected`, and `on_connect` logs `info!` when a writable connect ends a
+streak.
+
+This beats a strict pool with a short `acquire_timeout` plus a read-only fallback pool. Every
+lake query takes `&PgPool` (about 160 `.db_pool` uses across 34 source files), so a two-pool
+wrapper would have to thread an explicit acquire through all of them. To avoid paying the short
+timeout on every acquire against a replica, it would also need the same cached state and
+rate-limited re-probe. The hook version is that short timeout, applied once per outage inside a
+single pool.
+
+**Degradation on a read-only connection.** A new helper,
+`is_read_only_violation(&anyhow::Error) -> bool` in `data_lake_connection.rs`, finds a
+`sqlx::Error` with SQLSTATE `25006` in the error chain. Neither change below is gated on the
+policy: under `Require` a `25006` only arises from a connection that turned read-only mid-query.
+
+- **JIT partitions.** Today a failed insert (after the Parquet upload, cleaned up by
+  `delete_if_orphan`) propagates out of `jit_update` and fails the scan
+  (`materialized_view.rs:107`). On an `is_read_only_violation` error, `MaterializedView::scan`
+  instead emits `warn!` + `imetric!("jit_update_skipped_read_only", "count", 1)` and continues
+  with the partitions already in `lakehouse_partitions`. Results are then limited to what is
+  already materialized: global views written by the maintenance daemon, plus earlier JIT
+  partitions. Process-scoped data not yet materialized is missing. Serving it without persisting
+  would need an in-memory partition path, which is out of scope. Each scan still spends one
+  partition's decode and upload before the insert fails, because the `jit_update` loop stops at
+  the first error.
+- **API-key auth.** Today the `UPDATE ... SET last_used_at ... RETURNING` failure becomes
+  `LookupError::Db`, which returns 503 (`db_api_key.rs:303-323`). On `25006`, the loader instead
+  runs `SELECT <same columns> FROM <table> WHERE key_hash = $1 AND revoked_at IS NULL` and
+  proceeds, skipping the `last_used_at` bump. A `pub fn is_read_only_error(&sqlx::Error)` in
+  `db_api_key.rs` checks the code (`auth` doesn't depend on `ingestion`).
+
+Admin writes (deny-list, materialize, and retire UDFs) and a lakehouse schema migration still
+fail on a replica. FlightSQL on a replica therefore requires a lakehouse schema that is already
+current.
+
 ### Applying it
 
 | Site | Change |
 |---|---|
-| `connect_to_data_lake`, `connect_to_remote_data_lake` | `read_write_pool_options().connect(db_uri)` |
-| `dedicated_key_store_pool` | `lake_pool.options().clone().max_connections(4).acquire_timeout(2s).connect_lazy_with(options)` |
+| `connect_to_data_lake(policy, ..)` | `pool_options(policy).connect(db_uri)` |
+| `connect_to_remote_data_lake` | `read_write_pool_options().connect(db_uri)` |
+| `LakehouseContext::from_env(policy)` | forwards `policy` to `connect_to_data_lake` |
+| FlightSQL builder (non-injected lakehouse) | `LakehouseContext::from_env(WritablePolicy::Prefer)` |
+| maintenance daemon, `web_ingestion_service`, tests | `WritablePolicy::Require` |
+| `dedicated_key_store_pool` | `lake_pool.options().clone().max_connections(4).acquire_timeout(2s).connect_lazy_with(options)` (inherits the lake pool's policy and shared fallback state) |
 | `analytics-web-srv` app DB pool, analytics-keys pool | `read_write_pool_options()` (+ existing `max_connections`/`acquire_timeout` for the keys pool) |
 | monolith `seed_local_data_source` | `read_write_pool_options()` |
+| `MaterializedView::scan` | on `is_read_only_violation`, log, count, and serve existing partitions |
+| `DbApiKeyAuthProvider` lookup | on `25006`, fall back to a `SELECT` without the `last_used_at` bump |
 
 ### Resulting behavior during a failover
 
@@ -118,25 +205,40 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
 
 ## Implementation Steps
 
-1. Add `read_write_pool_options()` and `is_read_only()` to
-   `rust/ingestion/src/data_lake_connection.rs`, and use the new function in `connect_to_data_lake` and
+1. Add `WritablePolicy`, `pool_options()`, `read_write_pool_options()`,
+   `prefer_read_write_pool_options()`, `ReadOnlyFallback`, `is_read_only()`, and
+   `is_read_only_violation()` to `rust/ingestion/src/data_lake_connection.rs`. Add the `policy`
+   parameter to `connect_to_data_lake`, and use `read_write_pool_options()` in
    `rust/ingestion/src/remote_data_lake.rs::connect_to_remote_data_lake`.
-2. Change `rust/auth/src/db_api_key.rs::dedicated_key_store_pool` to derive from
+2. Add the `policy` parameter to `LakehouseContext::from_env`
+   (`rust/analytics/src/lakehouse/lakehouse_context.rs`). Pass `Prefer` from
+   `rust/public/src/servers/flight_sql_server.rs:242`. Pass `Require` from
+   `rust/telemetry-maintenance-srv/src/main.rs:40`, `rust/ingestion/src/web_ingestion_service.rs:277`,
+   and every test caller the compiler flags.
+3. In `rust/analytics/src/lakehouse/materialized_view.rs::scan`, tolerate an
+   `is_read_only_violation` error from `jit_update` as designed. In
+   `rust/auth/src/db_api_key.rs`, add the `SELECT` fallback on `25006`.
+4. Change `rust/auth/src/db_api_key.rs::dedicated_key_store_pool` to derive from
    `lake_pool.options().clone()`, and update its doc comment to say it inherits the lake pool's
    options. Reword the two call-site comments that describe this as using only the lake pool's
    "connect options" — `rust/monolith/src/main.rs:200-203` and
    `rust/public/src/servers/flight_sql_server.rs:271-273` — to say "pool options" (hooks
    included), since after this change the full pool options are cloned, not just the connect
    options.
-3. Switch `rust/analytics-web-srv/src/web_server.rs:707,746` and
+5. Switch `rust/analytics-web-srv/src/web_server.rs:707,746` and
    `rust/monolith/src/main.rs:426` to `read_write_pool_options()`.
-4. Tests (see Testing Strategy).
-5. Docs and CHANGELOG.
+6. Tests (see Testing Strategy).
+7. Docs and CHANGELOG.
 
 ## Files to Modify
 
 - `rust/ingestion/src/data_lake_connection.rs`
 - `rust/ingestion/src/remote_data_lake.rs`
+- `rust/ingestion/src/web_ingestion_service.rs`
+- `rust/analytics/src/lakehouse/lakehouse_context.rs`
+- `rust/analytics/src/lakehouse/materialized_view.rs`
+- `rust/telemetry-maintenance-srv/src/main.rs`
+- test callers of `connect_to_data_lake` / `LakehouseContext::from_env` under `rust/*/tests/`
 - `rust/auth/src/db_api_key.rs`
 - `rust/analytics-web-srv/src/web_server.rs`
 - `rust/monolith/src/main.rs`
@@ -164,6 +266,10 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   large breaking change (`query*()` takes `impl SqlSafeStr`, touching every `format!`-built query,
   including `db_api_key.rs`). Keep 0.8.6 for this fix and track the upgrade separately.
 
+## Decisions
+
+- FlightSQL prefers a writable connection but falls back to read-only; other services stay strict.
+
 ## Documentation
 
 - `mkdocs/docs/admin/service-lifecycle.md`: add an operational note under "Operational notes"
@@ -171,17 +277,23 @@ own probe with a 2s `tokio::time::timeout` (`rust/ingestion/src/web_ingestion_se
   acquire timeout) instead of failing against the demoted writer, and readiness goes unhealthy
   while only a reader is reachable. Mention the `pg_read_only_connection_rejected` metric.
 - `mkdocs/docs/admin/flight-sql.md`: reword the "Scaling" section's "Queries are read-only
-  against object storage and PostgreSQL" sentence to say FlightSQL needs a writable primary (it
-  writes JIT partitions and runs migrations through its lake pool) and must not be pointed at a
-  read replica.
-- `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. The only Rust API changes are
-  additive (`read_write_pool_options`, `is_read_only`); `dedicated_key_store_pool`'s signature is
-  unchanged.
-  Also note that every service's Postgres pools now require a writable primary: a service pointed
-  at a read replica (for example flight-sql, which writes JIT partitions through its lake pool via
-  `LakehouseContext::from_env` → `connect_to_data_lake` → `migrate_lakehouse`) now fails at
-  startup with `PoolTimedOut` (the eager `PoolOptions::connect` does an initial acquire) instead of
-  failing at its first write.
+  against object storage and PostgreSQL" sentence. FlightSQL prefers a writable primary, because
+  it writes JIT partitions and API-key `last_used_at` through its pools. When only a read-only
+  instance is reachable for 10s, it falls back to it and re-probes for a writable one every 30s.
+  On a read replica, queries return only already-materialized partitions (recent process-scoped
+  data may be missing), API-key auth works without updating `last_used_at`, and admin writes and
+  lakehouse schema migrations fail. Mention the `pg_read_only_connection_accepted` and
+  `jit_update_skipped_read_only` metrics.
+- `CHANGELOG.md` (Unreleased): a bug-fix entry referencing #1625. Additive Rust API:
+  `read_write_pool_options`, `prefer_read_write_pool_options`, `pool_options`, `WritablePolicy`,
+  `ReadOnlyFallback`, `is_read_only`, `is_read_only_violation`. **Minor breaking change**:
+  `connect_to_data_lake` and `LakehouseContext::from_env` take a new leading `WritablePolicy`
+  argument. `dedicated_key_store_pool`'s signature is unchanged.
+  Also note that Postgres pools now require a writable primary, except flight-sql's. A service
+  other than flight-sql that is pointed at a read replica now fails at startup with `PoolTimedOut`
+  (the eager `PoolOptions::connect` does an initial acquire) instead of at its first write.
+  Standalone flight-sql prefers a writable primary and falls back to a replica, as documented in
+  `flight-sql.md`.
 
 ## Testing Strategy
 
@@ -199,6 +311,17 @@ No-DB unit tests:
   still hold 4 / 2s. sqlx's `PoolOptions::clone` copies `test_before_acquire` along with the hook
   Arcs, so the inherited flag stands in for "options were cloned" (the existing
   `dedicated_key_store_pool_is_small_and_lazy` test is the neighbor to extend).
+- `ReadOnlyFallback` (driven with explicit `Instant`s, no sleeps): `on_connect` rejects
+  read-only before `FALLBACK_AFTER` and accepts it at or after the window, and a writable connect
+  clears the streak so the next read-only connect is rejected again. `on_acquire` keeps writable
+  connections. For read-only ones, it evicts once per `PROBE_INTERVAL` (a second call inside the
+  interval keeps) and evicts immediately once the streak is cleared.
+- `prefer_read_write_pool_options().get_test_before_acquire() == false`.
+- `is_read_only_violation`: true for a `sqlx::Error::Database` carrying SQLSTATE `25006` wrapped
+  in `anyhow` context layers, and false for another code or a non-database error. The test
+  implements `sqlx::error::DatabaseError` on a small fake type, since `PgDatabaseError` has no
+  public constructor. `auth`'s `is_read_only_error` gets the same cases in
+  `rust/auth/tests/db_api_key_tests.rs` (made `pub` for the external test crate).
 
 Live-DB regression tests (`#[ignore]`, `MICROMEGAS_SQL_CONNECTION_STRING`), justified because
 this is a bug seen in the wild. A fake can't reproduce it: the behavior depends on the
