@@ -17,6 +17,7 @@ import type { Table, DataType, StructRowProxy } from 'apache-arrow'
 import { isTimeType, timestampToDate, isHistogramStructType } from '@/lib/arrow-utils'
 import { toHistogramValue } from '@/lib/histogram-utils'
 import type { VariableValue } from './notebook-types'
+import { VIEWER_VARIABLE_NAME } from './notebook-types'
 import type { ResolveCtx, ResolvedMacro } from './macro-resolve'
 import { resolveMacro } from './macro-resolve'
 
@@ -212,7 +213,11 @@ export function validateMacros(
     if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
     const value = variables[varName]
     if (value === undefined) {
-      errors.push(`Unknown variable: ${varName}`)
+      errors.push(
+        varName === VIEWER_VARIABLE_NAME
+          ? `$${VIEWER_VARIABLE_NAME} is unavailable: no signed-in viewer`
+          : `Unknown variable: ${varName}`,
+      )
     } else if (typeof value === 'string') {
       errors.push(`Variable '${varName}' is not a multi-column variable, cannot access '${colName}'`)
     } else if (value[colName] === undefined) {
@@ -228,7 +233,11 @@ export function validateMacros(
     const [, varName] = match
     if (varName === 'from' || varName === 'to' || varName === 'order_by') continue
     if (variables[varName] === undefined) {
-      errors.push(`Unknown variable: ${varName}`)
+      errors.push(
+        varName === VIEWER_VARIABLE_NAME
+          ? `$${VIEWER_VARIABLE_NAME} is unavailable: no signed-in viewer`
+          : `Unknown variable: ${varName}`,
+      )
     }
   }
 
@@ -251,5 +260,56 @@ export function findUnresolvedSelectionMacro(
       return cellName
     }
   }
+  return null
+}
+
+/** Result of `findUnresolvedViewerMacro`: which macro was unresolved and why. */
+export interface UnresolvedViewerMacro {
+  /** The macro's source text, e.g. `$me.email` or `$me`. */
+  macro: string
+  /** True when there is no signed-in viewer at all (`variables.me` is undefined).
+   *  False when a viewer is signed in but the referenced claim is missing or
+   *  `me` is a legacy string-valued variable. */
+  noViewer: boolean
+}
+
+/**
+ * Checks if a SQL string contains an unresolved $me.col or bare $me macro
+ * (no viewer entry in `variables`, or the entry lacks the referenced claim).
+ * Returns details of the first unresolved macro if found, null otherwise.
+ */
+export function findUnresolvedViewerMacro(
+  sql: string,
+  variables: Record<string, VariableValue>,
+): UnresolvedViewerMacro | null {
+  // Collect selected-ref cell names so the dotted-var pass can skip $me.selected.* (a row
+  // selection from a cell named `me`, not the viewer macro), mirroring validateMacros.
+  const selectedRefCellNames = new Set<string>()
+  const selectedRefScan = selectedRefRegex()
+  let selectedRefMatch
+  while ((selectedRefMatch = selectedRefScan.exec(sql)) !== null) {
+    selectedRefCellNames.add(selectedRefMatch[1])
+  }
+
+  const dottedPattern = dottedVarRegex()
+  let match
+  while ((match = dottedPattern.exec(sql)) !== null) {
+    const [, varName, colName] = match
+    if (varName !== VIEWER_VARIABLE_NAME) continue
+    if (colName === 'selected' && selectedRefCellNames.has(varName)) continue
+    const viewer = variables[varName]
+    if (viewer === undefined || typeof viewer === 'string' || viewer[colName] === undefined) {
+      return { macro: `$${varName}.${colName}`, noViewer: viewer === undefined }
+    }
+  }
+
+  const simplePattern = simpleVarRegex()
+  while ((match = simplePattern.exec(sql)) !== null) {
+    const [, varName] = match
+    if (varName === VIEWER_VARIABLE_NAME && variables[varName] === undefined) {
+      return { macro: `$${varName}`, noViewer: true }
+    }
+  }
+
   return null
 }

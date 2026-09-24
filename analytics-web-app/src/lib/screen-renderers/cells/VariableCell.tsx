@@ -13,7 +13,7 @@ import {
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, validateMacros, DEFAULT_SQL, sanitizeCellName, VIEWER_VARIABLE_NAME } from '../notebook-utils'
 import { evaluateVariableExpression } from '../notebook-expression-eval'
 import { getDataSourceList } from '@/lib/data-sources-api'
 import { DataSourceField } from '@/components/DataSourceSelector'
@@ -243,8 +243,22 @@ function VariableCellEditor({ config, onChange, variables, timeRange, datasource
     return result.errors
   }, [isCombobox, varConfig.sql, variables, cellResults, cellSelections])
 
+  // A saved notebook can already have a `me` variable cell (created before `me` became
+  // reserved, or renamed via a path that skips validateCellName). It keeps precedence over
+  // the built-in viewer entry rather than silently changing that notebook's results — warn
+  // the author here instead.
+  const nameWarning =
+    sanitizeCellName(varConfig.name) === VIEWER_VARIABLE_NAME
+      ? `"${VIEWER_VARIABLE_NAME}" is reserved for the signed-in viewer; this variable hides $me.email / $me.name / $me.sub. Rename it.`
+      : null
+
   return (
     <>
+      {nameWarning && (
+        <div className="px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-sm text-amber-400 text-xs">
+          {nameWarning}
+        </div>
+      )}
       <div>
         <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
           Variable Type

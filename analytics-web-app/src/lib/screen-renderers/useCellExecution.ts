@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Table, tableFromIPC } from 'apache-arrow'
+import { useLatestRef } from '@/hooks/useLatestRef'
 import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery, fetchQueryIPC } from '@/lib/arrow-stream'
 import { getTimeRangeForApi } from '@/lib/time-range'
-import { resolveCellDataSource, findUnresolvedSelectionMacro, resolveQueryTimeRange } from './notebook-utils'
+import { resolveCellDataSource, findUnresolvedSelectionMacro, findUnresolvedViewerMacro, resolveQueryTimeRange, collectAvailableVariables } from './notebook-utils'
 import type { QueryCellConfig, QueryBackedCellConfig } from './notebook-types'
 
 /** Minimal interface for the WASM query engine (decoupled from WASM module type) */
@@ -32,6 +33,8 @@ interface UseCellExecutionParams {
   engine: NotebookQueryEngine | null
   /** Originating notebook name, for query attribution. Undefined for an unsaved new screen. */
   notebookName?: string
+  /** Signed-in viewer, injected as the `me` variable. Undefined when there's no real viewer. */
+  viewer?: Record<string, string>
 }
 
 export interface UseCellExecutionResult {
@@ -105,11 +108,15 @@ export function useCellExecution({
   dataSource,
   engine,
   notebookName,
+  viewer,
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
   const cellResultsRef = useRef<Record<string, Table>>({})
   const cellSelectionsRef = useRef<Record<string, Record<string, unknown>>>({})
+  // Ref for synchronous access during execution, so a mid-session auth refresh
+  // doesn't change executeCell's identity (same pattern as variableValuesRef).
+  const viewerRef = useLatestRef(viewer)
 
   // Helper: update both the ref (for synchronous access) and React state atomically
   const completeCellExecution = useCallback((name: string, state: CellState) => {
@@ -139,19 +146,20 @@ export function useCellExecution({
 
       // Gather variables, cell results, and selections from cells above
       // (use refs for synchronous access during execution)
-      const availableVariables: Record<string, VariableValue> = {}
       const availableCellResults: Record<string, Table> = {}
       const availableCellSelections: Record<string, Record<string, unknown>> = {}
       for (let i = 0; i < cellIndex; i++) {
         const prevCell = cells[i]
-        if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
-          availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
-        }
         const table = cellResultsRef.current[prevCell.name]
         if (table) availableCellResults[prevCell.name] = table
         const selection = cellSelectionsRef.current[prevCell.name]
         if (selection) availableCellSelections[prevCell.name] = selection
       }
+      const availableVariables: Record<string, VariableValue> = collectAvailableVariables(
+        cells.slice(0, cellIndex),
+        variableValuesRef.current,
+        viewerRef.current,
+      )
 
       // Resolve the cell's effective data source before the unresolved-selection check:
       // a `notebook`-source cell's timeRange override has no effect (resolveQueryTimeRange
@@ -161,13 +169,19 @@ export function useCellExecution({
       const cellDataSource = resolveCellDataSource(cell, availableVariables, dataSource)
       const isNotebookSource = cellDataSource === 'notebook'
 
-      // Check for unresolved $cell.selected.column macros — if the SQL or the
-      // cell's timeRange override contains a selection reference but no row is
-      // selected, show a waiting placeholder
-      const cellSql = (cell as QueryCellConfig).sql
+      // Check for unresolved $cell.selected.column macros — if any SQL query the cell
+      // will execute, or the cell's timeRange override, contains a selection reference
+      // but no row is selected, show a waiting placeholder. Multi-query cell types
+      // (e.g. chart's v2 `queries[]`) provide every SQL string via getSqlSources;
+      // other cells fall back to their single top-level `sql`.
+      const cellSqlSources = meta.getSqlSources
+        ? meta.getSqlSources(cell)
+        : (cell as QueryCellConfig).sql
+          ? [(cell as QueryCellConfig).sql]
+          : []
       const cellTimeRange = 'timeRange' in cell ? (cell as QueryBackedCellConfig).timeRange : undefined
       const unresolvedCell =
-        (cellSql && findUnresolvedSelectionMacro(cellSql, availableCellSelections)) ||
+        cellSqlSources.map((sql) => findUnresolvedSelectionMacro(sql, availableCellSelections)).find(Boolean) ||
         (!isNotebookSource && cellTimeRange?.from && findUnresolvedSelectionMacro(cellTimeRange.from, availableCellSelections)) ||
         (!isNotebookSource && cellTimeRange?.to && findUnresolvedSelectionMacro(cellTimeRange.to, availableCellSelections))
       if (unresolvedCell) {
@@ -177,6 +191,24 @@ export function useCellExecution({
           error: `Select a row in "${unresolvedCell}" to view results`,
         })
         return false // halt execution — downstream cells should wait for selection
+      }
+
+      // Check for an unresolved $me.* viewer macro — no signed-in viewer (or the IdP
+      // omitted the referenced claim) blocks the cell instead of running against the
+      // literal source text.
+      const unresolvedViewerMacro =
+        cellSqlSources.map((sql) => findUnresolvedViewerMacro(sql, availableVariables)).find(Boolean) ||
+        (!isNotebookSource && cellTimeRange?.from && findUnresolvedViewerMacro(cellTimeRange.from, availableVariables)) ||
+        (!isNotebookSource && cellTimeRange?.to && findUnresolvedViewerMacro(cellTimeRange.to, availableVariables))
+      if (unresolvedViewerMacro) {
+        completeCellExecution(cell.name, {
+          status: 'blocked',
+          data: [],
+          error: unresolvedViewerMacro.noViewer
+            ? `${unresolvedViewerMacro.macro} is unavailable: no signed-in viewer`
+            : `${unresolvedViewerMacro.macro} is not available for the signed-in viewer`,
+        })
+        return false // halt execution — downstream cells should wait
       }
 
       // Mark cell as loading (preserve previous data for re-renders during loading)
@@ -330,7 +362,7 @@ export function useCellExecution({
         return false
       }
     },
-    [cells, rawTimeRange, variableValuesRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
+    [cells, rawTimeRange, variableValuesRef, viewerRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
   )
 
   // Execute from a cell index (that cell and all below)

@@ -309,7 +309,7 @@ function ChildEditorView({
   const handleNameChange = useCallback(
     (value: string) => {
       setEditedName(value)
-      const error = validateCellName(value, allCellNames, child.name)
+      const error = validateCellName(value, allCellNames, child.name, child.type === 'variable')
       if (error) {
         setNameError(error)
         return
@@ -322,7 +322,7 @@ function ChildEditorView({
       onChange({ ...config, children: newChildren })
       onChildSelect(sanitized)
     },
-    [child.name, allCellNames, config, onChange, onChildSelect],
+    [child.name, child.type, allCellNames, config, onChange, onChildSelect],
   )
 
   return (

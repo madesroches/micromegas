@@ -30,6 +30,7 @@ export {
   serializeVariableValue,
   deserializeVariableValue,
   variableValuesEqual,
+  VIEWER_VARIABLE_NAME,
 } from './notebook-types'
 
 // Re-export the macro substitution + validation surface (legacy SQL path).
@@ -39,6 +40,7 @@ export {
   substituteMacrosRaw,
   validateMacros,
   findUnresolvedSelectionMacro,
+  findUnresolvedViewerMacro,
 } from './macro-substitution'
 export type { MacroValidationResult } from './macro-substitution'
 
@@ -48,9 +50,11 @@ export type { EvaluateTemplateCtx, EvaluateTemplateResult } from './template-eva
 
 import type { Table } from 'apache-arrow'
 import type { CellConfig, CellType, HorizontalGroupCellConfig, QueryBackedCellConfig, VariableValue } from './notebook-types'
+import { VIEWER_VARIABLE_NAME } from './notebook-types'
 import { substituteMacrosRaw } from './macro-substitution'
 
 import type { ScreenConfig } from '@/lib/screens-api'
+import type { User } from '@/lib/auth'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import { parseRelativeTime } from '@/lib/time-range'
 
@@ -115,6 +119,47 @@ export function collectAllCellNames(cells: CellConfig[]): Set<string> {
     }
   }
   return names
+}
+
+/**
+ * Viewer identity as a multi-column variable; undefined when there is no real viewer
+ * (no signed-in user, or a server started with `--disable-auth`).
+ *
+ * Only claims that are present are included — the IdP sends missing claims back from
+ * `/auth/me` as JSON `null`, not an absent key, so `email`/`name` are omitted rather
+ * than substituted as empty strings (an empty `$me.email` in a `WHERE` clause would
+ * silently mis-scope a query instead of leaving the macro visibly unresolved).
+ */
+export function viewerVariable(user: User | null): Record<string, string> | undefined {
+  if (!user || user.auth_disabled) return undefined
+  const viewer: Record<string, string> = { sub: user.sub }
+  if (user.email != null) viewer.email = user.email
+  if (user.name != null) viewer.name = user.name
+  return viewer
+}
+
+/**
+ * Variables visible to a cell: the viewer entry, then upstream variable cells.
+ * Shared by the render path (`NotebookRenderer.getAvailableVariables`) and the
+ * execution path (`useCellExecution`) so they can't disagree about what `$me` means.
+ *
+ * The viewer entry goes in first, so a legacy variable cell named `me` overwrites it.
+ */
+export function collectAvailableVariables(
+  cells: CellConfig[],
+  values: Record<string, VariableValue>,
+  viewer: Record<string, string> | undefined,
+): Record<string, VariableValue> {
+  const available: Record<string, VariableValue> = {}
+  if (viewer !== undefined) {
+    available[VIEWER_VARIABLE_NAME] = viewer
+  }
+  forEachCell(cells, (cell) => {
+    if (cell.type === 'variable' && values[cell.name] !== undefined) {
+      available[cell.name] = values[cell.name]
+    }
+  })
+  return available
 }
 
 /**
@@ -244,6 +289,10 @@ export function validateCellName(
 
   if (isVariable && RESERVED_URL_PARAMS.has(normalizedName)) {
     return `"${normalizedName}" is reserved and cannot be used for variables`
+  }
+
+  if (isVariable && normalizedName === VIEWER_VARIABLE_NAME) {
+    return `"${VIEWER_VARIABLE_NAME}" is reserved for the signed-in viewer`
   }
 
   return null

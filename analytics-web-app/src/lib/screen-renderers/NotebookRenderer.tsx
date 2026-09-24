@@ -22,9 +22,10 @@ import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
+import { useOptionalAuthUser } from '@/lib/auth'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, forEachCell, collectAllCellNames, validateCellName, sanitizeCellName } from './notebook-utils'
+import { cleanupVariableParams, resolveCellDataSource, flattenCellsForExecution, forEachCell, collectAllCellNames, validateCellName, sanitizeCellName, viewerVariable, collectAvailableVariables } from './notebook-utils'
 import { HorizontalGroupCell, HorizontalGroupCellEditor } from './cells/HorizontalGroupCell'
 import { arrowTableToCsv, triggerCsvDownload } from './cells/arrow-to-csv'
 import { cleanupTimeParams, useExposeSaveRef } from '@/lib/url-cleanup-utils'
@@ -337,6 +338,11 @@ export function NotebookRenderer({
       savedNotebookConfig?.cells ?? null,
     )
 
+  // Signed-in viewer, injected as the reserved `me` variable — undefined when there's
+  // no real viewer (no AuthProvider, not signed in, or --disable-auth).
+  const user = useOptionalAuthUser()
+  const viewer = useMemo(() => viewerVariable(user), [user])
+
   // WASM engine for notebook-local queries
   const { engine, engineError } = useWasmEngine()
 
@@ -353,6 +359,7 @@ export function NotebookRenderer({
     dataSource,
     engine,
     notebookName: screenName,
+    viewer,
   })
 
   // Report execution state to parent
@@ -523,15 +530,8 @@ export function NotebookRenderer({
   }
 
   // Collect available variables for a cell at a given top-level index
-  const getAvailableVariables = (index: number): Record<string, VariableValue> => {
-    const available: Record<string, VariableValue> = {}
-    forEachCell(cells.slice(0, index), (cell) => {
-      if (cell.type === 'variable' && variableValues[cell.name] !== undefined) {
-        available[cell.name] = variableValues[cell.name]
-      }
-    })
-    return available
-  }
+  const getAvailableVariables = (index: number): Record<string, VariableValue> =>
+    collectAvailableVariables(cells.slice(0, index), variableValues, viewer)
 
   const renderCell = (cell: CellConfig, index: number) => {
     const availableVariables = getAvailableVariables(index)
