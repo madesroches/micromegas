@@ -207,8 +207,11 @@ impl ReadOnlyFallback {
     /// `before_acquire` decision for a pooled connection: keep it? A writable connection clears
     /// the streak (the same as [`Self::on_connect`]) and is kept. A read-only connection is
     /// evicted immediately if no fallback streak is running (a writable connect has succeeded
-    /// since the fallback, so this connection is stale); otherwise it is evicted at most once
-    /// per `PROBE_INTERVAL`, as a re-probe, and kept in between.
+    /// since the fallback, so this connection is stale) or if the streak hasn't reached
+    /// `FALLBACK_AFTER` yet (a connection turned read-only mid-pool, but we haven't actually
+    /// fallen back -- `on_connect`'s window check doesn't cover already-pooled connections, so
+    /// this is the only place that can reject them). Once the window has elapsed, it's evicted
+    /// at most once per `PROBE_INTERVAL`, as a re-probe, and kept in between.
     pub fn on_acquire(&self, read_only: bool, now: Instant) -> bool {
         let mut state = self.0.lock().expect("ReadOnlyFallback mutex poisoned");
         if !read_only {
@@ -216,7 +219,10 @@ impl ReadOnlyFallback {
             state.last_probe = None;
             return true;
         }
-        if state.streak_start.is_none() {
+        let Some(streak_start) = state.streak_start else {
+            return false;
+        };
+        if now.duration_since(streak_start) < FALLBACK_AFTER {
             return false;
         }
         match state.last_probe {

@@ -103,6 +103,26 @@ fn on_acquire_evicts_read_only_immediately_once_the_streak_is_cleared() {
 }
 
 #[test]
+fn on_acquire_evicts_read_only_repeatedly_while_inside_the_fallback_window() {
+    let fallback = ReadOnlyFallback::new();
+    let start = Instant::now();
+    // Start a streak without going through `on_connect`: a connection already sitting in the
+    // pool turned read-only, which `on_connect`'s window check never sees.
+    assert!(!fallback.on_connect(true, start));
+
+    // Every pooled read-only connection must be evicted while still inside the window, not just
+    // the first one -- there is no fallback yet, so nothing should be kept.
+    assert!(!fallback.on_acquire(true, start));
+    assert!(!fallback.on_acquire(true, start + FALLBACK_AFTER - Duration::from_millis(1)));
+    assert!(!fallback.on_acquire(true, start + FALLBACK_AFTER - Duration::from_millis(1)));
+
+    // Once the window elapses, the probe-interval rule takes over: the first acquire past the
+    // window re-probes (evicts), and a second one shortly after is kept.
+    assert!(!fallback.on_acquire(true, start + FALLBACK_AFTER));
+    assert!(fallback.on_acquire(true, start + FALLBACK_AFTER + Duration::from_secs(1)));
+}
+
+#[test]
 fn on_acquire_reprobes_read_only_at_most_once_per_probe_interval() {
     let fallback = ReadOnlyFallback::new();
     let start = Instant::now();
