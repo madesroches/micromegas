@@ -123,11 +123,10 @@ execute: async (config, { variables, cellResults, cellSelections, timeRange, run
 
 `useCellExecution` needs no logic change. The standard error path shows the zero-rows error
 (`CellContainer.tsx:295-304`), and the result is registered under the cell name like any other
-cell's, so downstream cells can use it. `canBlockDownstream` is `true`, like the other
-query-backed cell types: when an upstream blocking cell fails, `executeFromCell` marks the
-markdown cell `blocked` with `data: []` (`useCellExecution.ts:398-420`) instead of showing a
-stale cached headline, and a markdown query failure halts downstream execution the same way.
-Extra rows are ignored. On engine load failure, markdown cells behave like every other cell
+cell's, so downstream cells can use it. `canBlockDownstream` is `true`: when an upstream blocking
+cell fails, `executeFromCell` marks the markdown cell `blocked` with `data: []`
+(`useCellExecution.ts:398-420`), and a markdown query failure halts downstream execution the same
+way. Extra rows are ignored. On engine load failure, markdown cells behave like every other cell
 (never run; the notebook banner explains).
 
 `getRendererProps` returns `content`, `data`, `status`, `options`.
@@ -152,8 +151,7 @@ Extra rows are ignored. On engine load failure, markdown cells behave like every
   unsupported column type adds a warning shown in the existing `TemplateWarningBanner` and
   doesn't fail the cell.
 
-Render gate: a `blocked` status renders nothing (its `data` is cleared to `[]` anyway). Otherwise,
-evaluate the template only when `status === 'success'`, and keep the last successful
+Render gate: evaluate the template only when `status === 'success'`, and keep the last successful
 `{ text, warnings }` in `useState`, updating it during render when a fresh `status === 'success'`
 evaluation differs from what's stored — the `cacheInputsKey` pattern `PerfettoExportCell.tsx:57`
 uses, not a ref (reading/writing a ref during render trips `react-hooks/refs`, which
@@ -177,10 +175,9 @@ DOM structure:
 </div>
 ```
 
-- The root has no padding in any mode, so existing markdown cells keep rendering flush, as
-  before, and `background_color` fills the root edge to edge. When `background_color` is set the
-  root also gets `rounded-sm`, so the fill's corners match the cell. Fit mode adds no padding of
-  its own. The root is `flex-1` inside `CellContainer`'s flex column, so it fills the cell height
+- The root has no padding in any mode, and `background_color` fills the root edge to edge. When
+  `background_color` is set the root also gets `rounded-sm`, so the fill's corners match the
+  cell. The root is `flex-1` inside `CellContainer`'s flex column, so it fills the cell height
   even when the text is short. In non-fit mode it grows past
   the cell and `CellContainer` scrolls, as today. Inside a horizontal group, the same applies only
   if `HgChildPane`'s content wrapper is also a flex column: its wrapper is `flex-1 overflow-auto
@@ -262,7 +259,9 @@ already passes `availableColumns` from the cell's last result.
      values.
 3. **Run control cleanup**
    - Remove `canRun` / `cellCanRun` from `cell-registry.ts` and its four call sites. Update the
-     `cell-registry-mock.ts` markdown entry: give it an `execute`, remove `canRun: true` from
+     `cell-registry-mock.ts` markdown entry: give it its own `execute` that always calls
+     `runQuery` (falling back to `SELECT 1` when `sql` is absent), in place of
+     `createSqlExecute`/`simpleExecuteStub`, remove `canRun: true` from
      `BASE_METADATA.markdown` (~line 87), remove the mock's `cellCanRun` export (~line 330), drop
      `markdown` from the `type !== 'markdown' && type !== 'hg'` execute guard (~line 289), flip
      `canBlockDownstream` to `true`, update its `createDefaultConfig` to include
@@ -399,7 +398,10 @@ Unit tests (Vitest, jsdom, no services):
     nothing fits, and `max` when everything fits. Monotonic predicate across a range of
     thresholds.
   - Metadata: `createDefaultConfig` includes `sql: 'SELECT 1'`, and `execute` is defined. Replaces
-    the old "declares `canRun: true` ... no `execute`" assertion.
+    the old "declares `canRun: true` ... no `execute`" assertion. This file doesn't mock the
+    registry, so a test here calls the real `createDefaultCell('markdown', new Set(), 'remote')`
+    and asserts `dataSource: 'notebook'` and `sql: 'SELECT 1'`, covering
+    `cellTypeDefaultDataSource(type) ?? defaultDataSource` for real.
   - Editor: bare-column macros present in `availableColumns` aren't flagged. Toggling Fit writes
     `options.fit`. SQL editor shows `SELECT 1` when `sql` is absent.
   - Removes the old "should not render content when status is loading" case (superseded by the
@@ -418,7 +420,9 @@ Unit tests (Vitest, jsdom, no services):
   `notebook` and true on a remote source (replaces the "markdown stays false" tests).
   `configuredCellDataSource` returns `notebook` for a markdown cell with no `dataSource` under a
   remote notebook default. The existing `:822-825` "should not have sql property" assertion on
-  `createDefaultCell('markdown')` flips to assert `sql === 'SELECT 1'`.
+  `createDefaultCell('markdown')` flips to assert `sql === 'SELECT 1'`. This file mocks
+  `../cell-registry`, so these `createDefaultCell` tests run against the mocked registry, not the
+  real `cellTypeDefaultDataSource` lookup.
 - **`macro-substitution.test.ts`**: `validateTemplateMacros` accepts listed columns and still
   flags unknown ones.
 - **arrow-utils tests**: `resolveColorColumn` with a custom name, including the error message;
