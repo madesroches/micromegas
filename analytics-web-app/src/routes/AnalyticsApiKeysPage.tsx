@@ -6,6 +6,7 @@ import {
   listAnalyticsApiKeys,
   mintAnalyticsApiKey,
   revokeAnalyticsApiKey,
+  setAnalyticsApiKeyAllowlist,
   AnalyticsApiKeyError,
   MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
 } from '@/lib/analytics-api-keys-api'
@@ -26,6 +27,7 @@ const analyticsApiKeysPageConfig: ApiKeysAdminPageConfig = {
   listKeys: listAnalyticsApiKeys,
   mintKey: mintAnalyticsApiKey,
   revokeKey: revokeAnalyticsApiKey,
+  setAllowlist: setAnalyticsApiKeyAllowlist,
 }
 
 export interface AnalyticsApiKeysPageProps {

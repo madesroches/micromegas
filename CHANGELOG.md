@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* Show and edit API-key IP allowlists in the analytics web app (#1611).
 * **Bug fix:** Add a byte-denominated budget to the object cache's origin-fetch scheduler,
   bounding transient fetch memory independently of the concurrency knob (#1537). The scheduler
   previously throttled by a *count* of permits, so the worst-case transient memory of in-flight

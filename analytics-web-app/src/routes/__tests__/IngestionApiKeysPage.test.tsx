@@ -17,6 +17,7 @@ function makeKeys(count: number) {
     last_used_at: null,
     revoked_at: null,
     revoked_by: null,
+    allowed_cidrs: [],
   }))
 }
 
@@ -110,6 +111,7 @@ describe('IngestionApiKeysPage', () => {
             last_used_at: null,
             revoked_at: null,
             revoked_by: null,
+            allowed_cidrs: [],
           },
         ]),
     } as unknown as Response) as unknown as typeof fetch
@@ -133,6 +135,7 @@ describe('IngestionApiKeysPage', () => {
             last_used_at: null,
             revoked_at: null,
             revoked_by: null,
+            allowed_cidrs: [],
             audience: 'team-alpha',
           },
           {
@@ -143,6 +146,7 @@ describe('IngestionApiKeysPage', () => {
             last_used_at: null,
             revoked_at: null,
             revoked_by: null,
+            allowed_cidrs: [],
           },
         ]),
     } as unknown as Response) as unknown as typeof fetch
@@ -237,6 +241,7 @@ describe('IngestionApiKeysPage', () => {
               last_used_at: null,
               revoked_at: null,
               revoked_by: null,
+              allowed_cidrs: [],
               audience: 'public',
             },
           ]),
@@ -385,6 +390,7 @@ describe('IngestionApiKeysPage', () => {
               last_used_at: null,
               revoked_at: null,
               revoked_by: null,
+              allowed_cidrs: [],
             },
           ]),
       } as unknown as Response)
@@ -507,6 +513,68 @@ describe('IngestionApiKeysPage — non-admin', () => {
     })
 
     await waitFor(() => expect(screen.getByText('mmk_secret')).toBeInTheDocument())
+  })
+
+  it('filling the allowlist field puts allowed_cidrs in the POST body, and reopening clears it', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('/audience-grants/my-audiences')) {
+        return jsonResponse(200, {
+          is_admin: false,
+          audiences: ['team-alpha'],
+          mint_prefix: 'reader-',
+          email: 'reader@example.com',
+        })
+      }
+      if (url.includes('/ingestion-api-keys') && method === 'POST') {
+        const body = init?.body ? JSON.parse(init.body as string) : {}
+        return jsonResponse(201, {
+          key_id: 'key-1',
+          name: body.name,
+          created_at: '2026-01-01T00:00:00Z',
+          audience: body.audience ?? 'team-alpha',
+          key: 'mmk_secret',
+          claimed: false,
+        })
+      }
+      throw new Error(`unexpected fetch: ${method} ${url}`)
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Mint Key/i })).toBeInTheDocument()
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Mint Key/i }))
+
+    const nameInput = await screen.findByPlaceholderText('my-laptop')
+    fireEvent.change(nameInput, { target: { value: 'my-key' } })
+    fireEvent.change(screen.getByPlaceholderText(/203\.0\.113\.0\/24/), {
+      target: { value: '127.0.0.1' },
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Mint' }))
+    })
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        (c) => String(c[0]).includes('/ingestion-api-keys') && (c[1] as RequestInit)?.method === 'POST'
+      )
+      expect(postCall).toBeDefined()
+      const body = JSON.parse((postCall![1] as RequestInit).body as string)
+      expect(body.allowed_cidrs).toEqual(['127.0.0.1'])
+    })
+
+    // Close and reopen -- the allowlist field must reset, same as Name.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: /Mint Key/i }))
+    const reopenedAllowlist = (await screen.findByPlaceholderText(
+      /203\.0\.113\.0\/24/
+    )) as HTMLTextAreaElement
+    expect(reopenedAllowlist.value).toBe('')
   })
 
   it('shows the disabled note and hides Mint Key when self-service is off', async () => {

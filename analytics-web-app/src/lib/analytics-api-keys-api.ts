@@ -43,3 +43,4 @@ export const AnalyticsApiKeyError = api.ErrorClass
 export const listAnalyticsApiKeys = api.list
 export const mintAnalyticsApiKey = api.mint
 export const revokeAnalyticsApiKey = api.revoke
+export const setAnalyticsApiKeyAllowlist = api.setAllowlist

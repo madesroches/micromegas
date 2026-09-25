@@ -14,6 +14,7 @@ import {
   listIngestionApiKeys,
   mintIngestionApiKey,
   revokeIngestionApiKey,
+  setIngestionApiKeyAllowlist,
   IngestionApiKeyError,
   MAX_INGESTION_API_KEYS_LIST_LIMIT,
 } from '@/lib/ingestion-api-keys-api'
@@ -35,6 +36,7 @@ const ingestionApiKeysPageConfig: ApiKeysAdminPageConfig = {
   listKeys: listIngestionApiKeys,
   mintKey: mintIngestionApiKey,
   revokeKey: revokeIngestionApiKey,
+  setAllowlist: setIngestionApiKeyAllowlist,
   showAudience: true,
 }
 

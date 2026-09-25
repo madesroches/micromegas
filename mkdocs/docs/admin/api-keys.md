@@ -312,6 +312,12 @@ sending that header itself — the allowlist restricts nothing in that
 topology. This feature targets deployments behind a load balancer; no
 trusted-proxy configuration is added to change that.
 
+The allowlist can also be set from the web app. The mint dialogs on both
+admin key pages and on Audience Access take an optional allowlist at mint
+time; admins can edit an existing key's allowlist afterwards from either
+key table with the shield action next to Revoke — see [Web app admin
+pages](#web-app-admin-pages).
+
 ## Web app admin pages
 
 Two admin pages, both reachable from **Admin** (`/admin`) in the sidebar:
@@ -323,6 +329,13 @@ Two admin pages, both reachable from **Admin** (`/admin`) in the sidebar:
 - **Ingestion API Keys** (`/admin/ingestion-keys`) — calls
   `analytics-web-srv`'s `/api/ingestion-api-keys*` routes directly. No
   proxy, no forwarding to ingestion, no service credential.
+
+Both admin key tables show an **IP Allowlist** column (empty renders as
+*Unrestricted*, one line per entry otherwise) and a shield row action next
+to Revoke that opens a dialog to edit a key's allowlist via the `PATCH
+.../{key_id}/allowlist` route — see [IP allowlisting](#ip-allowlisting).
+The action is hidden on a revoked key, same as Revoke, but the column still
+shows a revoked key's allowlist for the audit trail.
 
 **`/admin` and `/admin/ingestion-keys` are viewable by every authenticated
 user, with role-filtered content.** `AuthGuard` on both routes carries no

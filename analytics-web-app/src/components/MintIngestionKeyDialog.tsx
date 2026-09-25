@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { MintedKeyBanner } from '@/components/MintedKeyBanner'
+import { AllowedCidrsField } from '@/components/AllowedCidrsField'
 import { AUDIENCE_PATTERN, type MyAudiences } from '@/lib/audience-grants-api'
 import { mintIngestionApiKey } from '@/lib/ingestion-api-keys-api'
-import type { MintApiKeyResponse } from '@/lib/api-keys-shared'
+import { parseAllowlistInput, type MintApiKeyResponse } from '@/lib/api-keys-shared'
 
 /**
  * The self-service ingestion-key mint dialog. Extracted from `AudienceAccessPage.tsx`'s local
@@ -27,6 +28,7 @@ export function MintIngestionKeyDialog({
   const [name, setName] = useState('')
   const [audienceChoice, setAudienceChoice] = useState<string>('__new__')
   const [newAudience, setNewAudience] = useState('')
+  const [allowlistText, setAllowlistText] = useState('')
   const [isMinting, setIsMinting] = useState(false)
   const [mintError, setMintError] = useState<string | null>(null)
   const [mintedKey, setMintedKey] = useState<MintApiKeyResponse | null>(null)
@@ -43,6 +45,7 @@ export function MintIngestionKeyDialog({
       wasOpenRef.current = open
       if (justOpened) {
         setName('')
+        setAllowlistText('')
         setMintError(null)
         setMintedKey(null)
         if (prefillAudience) {
@@ -83,7 +86,11 @@ export function MintIngestionKeyDialog({
     setIsMinting(true)
     setMintError(null)
     try {
-      const result = await mintIngestionApiKey(name.trim(), resolvedAudience || undefined)
+      const allowedCidrs = parseAllowlistInput(allowlistText)
+      const result = await mintIngestionApiKey(name.trim(), {
+        audience: resolvedAudience || undefined,
+        allowed_cidrs: allowedCidrs.length ? allowedCidrs : undefined,
+      })
       setMintedKey(result)
       onMinted(result)
     } catch (err) {
@@ -182,6 +189,7 @@ export function MintIngestionKeyDialog({
                   </div>
                 )}
               </div>
+              <AllowedCidrsField value={allowlistText} onChange={setAllowlistText} optional />
             </>
           )}
         </div>

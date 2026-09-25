@@ -46,3 +46,4 @@ export const IngestionApiKeyError = api.ErrorClass
 export const listIngestionApiKeys = api.list
 export const mintIngestionApiKey = api.mint
 export const revokeIngestionApiKey = api.revoke
+export const setIngestionApiKeyAllowlist = api.setAllowlist
