@@ -39,6 +39,7 @@ export {
   substituteMacros,
   substituteMacrosRaw,
   validateMacros,
+  validateTemplateMacros,
   findUnresolvedSelectionMacro,
   findUnresolvedViewerMacro,
 } from './macro-substitution'
@@ -164,11 +165,24 @@ export function collectAvailableVariables(
 
 /**
  * Returns true if a cell type should display a data source selector.
- * Markdown cells have no queries, variable cells handle their own selector,
- * referencetable cells don't query, and chart cells manage data source per-query.
+ * Variable cells handle their own selector, referencetable cells don't query,
+ * and chart cells manage data source per-query.
  */
 export function shouldShowDataSource(type: CellType): boolean {
-  return type !== 'markdown' && type !== 'variable' && type !== 'referencetable' && type !== 'chart'
+  return type !== 'variable' && type !== 'referencetable' && type !== 'chart'
+}
+
+/**
+ * Per-cell-type default data source, applied before the notebook-level default.
+ * Markdown cells run `SELECT 1` against the local WASM engine by default (a
+ * headline value has no reason to hit a remote source until the author points
+ * it there), so a saved markdown cell with no `dataSource` must resolve to
+ * `notebook` even when the notebook's own default is a remote source.
+ */
+const CELL_TYPE_DEFAULT_DATA_SOURCE: Partial<Record<CellType, string>> = { markdown: 'notebook' }
+
+export function cellTypeDefaultDataSource(type: CellType): string | undefined {
+  return CELL_TYPE_DEFAULT_DATA_SOURCE[type]
 }
 
 // Default SQL queries per cell type
@@ -186,6 +200,7 @@ LIMIT 100`,
 FROM log_entries
 ORDER BY time DESC
 LIMIT 100`,
+  markdown: `SELECT 1`,
   variable: `SELECT DISTINCT name FROM measures`,
   propertytimeline: `WITH changes AS (
   SELECT
@@ -332,20 +347,34 @@ export function cleanupVariableParams(params: URLSearchParams, savedConfig: Scre
 
 /**
  * Resolve a cell's data source, substituting $varname references
- * with the corresponding variable value. Falls back to the notebook-level
- * data source when the variable is missing or empty.
+ * with the corresponding variable value. Falls back to the cell type's default
+ * (see `cellTypeDefaultDataSource`), then the notebook-level data source, when
+ * the cell has none configured or the variable is missing or empty.
  */
 export function resolveCellDataSource(
   cell: CellConfig,
   variables: Record<string, VariableValue>,
   notebookDataSource: string | undefined,
 ): string | undefined {
-  let ds = ('dataSource' in cell ? cell.dataSource : undefined) || notebookDataSource
+  let ds = ('dataSource' in cell ? cell.dataSource : undefined) || cellTypeDefaultDataSource(cell.type) || notebookDataSource
   if (ds?.startsWith('$')) {
     const varValue = variables[ds.slice(1)]
     ds = (typeof varValue === 'string' && varValue) ? varValue : notebookDataSource
   }
   return ds
+}
+
+/**
+ * The data source a cell's editor should display: same fallback chain as
+ * `resolveCellDataSource` but without `$var` resolution, since the editor shows
+ * the configured value verbatim. Shared by `CellEditor` and
+ * `HorizontalGroupCell`'s child editor so they can't drift apart.
+ */
+export function configuredCellDataSource(
+  cell: CellConfig,
+  notebookDataSource: string | undefined,
+): string {
+  return ('dataSource' in cell ? cell.dataSource : undefined) || cellTypeDefaultDataSource(cell.type) || notebookDataSource || ''
 }
 
 // ============================================================================
@@ -413,7 +442,6 @@ export function shouldShowTimeRange(
   notebookDataSource: string | undefined,
 ): boolean {
   switch (cell.type) {
-    case 'markdown':
     case 'referencetable':
     case 'hg':
       return false
@@ -421,7 +449,7 @@ export function shouldShowTimeRange(
       if (cell.variableType !== 'combobox' && cell.variableType !== 'expression') return false
       break
     default:
-      break // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart, stackedbar
+      break // table, chart, log, markdown, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart, stackedbar
   }
   return resolveCellDataSource(cell, variables, notebookDataSource) !== 'notebook'
 }

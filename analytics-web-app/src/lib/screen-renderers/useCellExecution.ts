@@ -138,7 +138,7 @@ export function useCellExecution({
 
       const meta = getCellTypeMetadata(cell.type)
 
-      // Cell doesn't have an execute method (e.g., markdown)
+      // Cell doesn't have an execute method (e.g., hg — its children execute individually)
       if (!meta.execute) {
         completeCellExecution(cell.name, { status: 'success', data: [] })
         return true

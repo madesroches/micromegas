@@ -457,23 +457,85 @@ LIMIT 10000
 
 ## ![Markdown](../../assets/images/cell-icons/file-text.svg){ .cell-icon } Markdown
 
-Static text and documentation using GitHub Flavored Markdown.
+Documentation and headline values using GitHub Flavored Markdown. Every markdown cell runs a
+query — `SELECT 1` on the local `notebook` source by default — and binds row 0 of the result to
+the template, so the same cell type covers static notes and a single headline stat (a Grafana
+Stat-panel equivalent: "p99 latency", "active players", "healthy"/"degraded").
 
 **Configuration:**
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `content` | string | Markdown text to render |
+| `sql` | string | Query executed on row 0 binding (default `SELECT 1`) |
+| `dataSource` | string | Data source override (default `notebook`) |
+| `timeRange` | object | Per-cell query time range override — see [Per-Cell Query Time Range](variables.md#per-cell-query-time-range) |
+| `options.fit` | boolean | **Fit to cell**: scale the rendered markdown to fill the cell (default off) |
+
+**Row-0 binding:**
+
+Each column of the query's first row is available as a bare `$columnName` macro in the template —
+columns win name collisions against a same-named notebook variable. A query returning zero rows
+is a cell error; extra rows beyond row 0 are ignored. Each column carries its Arrow type, so a
+timestamp column renders RFC3339 and `format_value($columnName, 'unit')` gets the raw,
+full-precision value for adaptive unit formatting — e.g. `format_value($frame_time, 'milliseconds')`.
+
+**Color columns:**
+
+Two optional columns tint the cell, using the same convention as the chart cells' `color` column
+(integer packed RGBA u32, `'#rrggbb'`/`'#rrggbbaa'` string, or 4-byte binary):
+
+- `color` — text color for headings, paragraphs, bold text, and other prose elements (links and
+  inline code keep their fixed accent colors)
+- `background_color` — fills the cell background edge to edge
+
+An unsupported column type shows a warning instead of failing the cell — the text is still
+meaningful untinted. Steps, gradients, and value mappings are ordinary SQL (`CASE`, `color_scale()`,
+`lerp_color()`) — there is no separate thresholds/mappings UI.
+
+**Fit to cell:**
+
+With **Fit to cell** on, the rendered markdown is centered and scaled (by font size) to fill the
+cell, wrapping text to use a tall, narrow cell. Off (the default), rendering is left-aligned and
+unscaled, as in a plain documentation cell.
 
 **Features:**
 
 - Full GitHub Flavored Markdown: headings, tables, lists, code blocks, strikethrough
-- Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$from`, `$to`
-- Validates macro references during editing — warns about undefined variables
-- Does not execute queries or block downstream cells — its Run button just re-renders the cell in place against whatever upstream results already exist, without running any query or affecting other cells
-- On initial load (or after "Run from here"/a refresh resets it), rendered output appears only after the cell's turn in sequential execution — the body stays blank until upstream variables and cell results are resolved, so macros never display stale or broken values on first paint. Once that first render has happened, editing the content updates it live; if it's ever reset to blank while a slow cell above is still running, click **Run** to re-render immediately against whatever upstream results are currently resolved — macros for cells that are still re-running render unresolved (with a warning banner) until those cells finish
+- Supports [variable substitution](variables.md#sql-macro-substitution): `$variable`, `$variable.column`, `$from`, `$to`, plus the row-0 `$columnName` binding above
+- Validates macro references during editing — warns about undefined variables, in both the SQL and the template
+- Like other query-backed cell types, a markdown cell blocks downstream cells when its own query fails, is blocked by an upstream failure, and is blocked while an upstream cell waits on a row selection or viewer macro
+- On initial load (or after "Run from here"/a refresh resets it), rendered output stays blank until the cell's own query has run successfully at least once. During a re-run (the cell or an upstream cell is idle/loading), the previous output stays on screen instead of flashing blank. **Run** executes the cell's query — not a local re-render
 
-**Example content:**
+**Example — frame-time headline value:**
+
+SQL:
+
+```sql
+SELECT avg(duration) AS value,
+  CASE WHEN avg(duration) < 16 THEN '#2e7d32'
+       WHEN avg(duration) < 33 THEN '#f9a825'
+       ELSE '#c62828' END AS background_color,
+  '#ffffff' AS color
+FROM measures WHERE name = 'frame_time'
+```
+
+Content (with **Fit to cell** on):
+
+```markdown
+### Frame time (avg)
+# format_value($value, "milliseconds")
+```
+
+**Example — status text from a CASE:**
+
+```sql
+SELECT CASE WHEN error_rate < 0.01 THEN 'Healthy' ELSE 'Degraded' END AS value,
+  CASE WHEN error_rate < 0.01 THEN '#2e7d32' ELSE '#c62828' END AS background_color
+FROM service_health
+```
+
+**Example — documentation content:**
 
 ```markdown
 # Dashboard for $process_id

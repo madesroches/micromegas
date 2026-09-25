@@ -34,7 +34,7 @@ Auto-run automatically re-executes cells when their inputs change, keeping resul
 
 ### Enabling Auto-Run
 
-Each runnable query cell has an `autoRunFromHere` toggle (markdown cells do not). When enabled, changes to that cell or its inputs trigger automatic execution from that cell downward.
+Each runnable query cell has an `autoRunFromHere` toggle. When enabled, changes to that cell or its inputs trigger automatic execution from that cell downward.
 
 ### Trigger Behavior
 

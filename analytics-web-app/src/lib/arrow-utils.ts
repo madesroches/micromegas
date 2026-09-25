@@ -237,13 +237,14 @@ export interface ResolvedColorColumn {
 }
 
 /**
- * Resolve the optional 'color' field (case-insensitive) from a schema field list,
- * classifying its kind (integer/string/binary) for `cellColorToCss`. Shared by every
- * chart-shaped cell (`resolveChartColumns`, `validateChartColumns`, `extractStackedBarData`)
- * so the 'color' convention stays in one place.
+ * Resolve an optional color-carrying field (case-insensitive, `name` param, default
+ * 'color') from a schema field list, classifying its kind (integer/string/binary) for
+ * `cellColorToCss`. Shared by every chart-shaped cell (`resolveChartColumns`,
+ * `validateChartColumns`, `extractStackedBarData`) plus the Markdown cell's `color` /
+ * `background_color` columns, so the color-column convention stays in one place.
  */
-export function resolveColorColumn(fields: { name: string; type: DataType }[]): ResolvedColorColumn {
-  const index = fields.findIndex(f => f.name.toLowerCase() === 'color')
+export function resolveColorColumn(fields: { name: string; type: DataType }[], name = 'color'): ResolvedColorColumn {
+  const index = fields.findIndex(f => f.name.toLowerCase() === name.toLowerCase())
   if (index < 0) return { index }
 
   const field = fields[index]
@@ -260,7 +261,7 @@ export function resolveColorColumn(fields: { name: string; type: DataType }[]): 
   return {
     index,
     name: field.name,
-    error: `'color' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${field.type.toString()}`,
+    error: `'${name}' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${field.type.toString()}`,
   }
 }
 
@@ -863,4 +864,24 @@ export function extractStackedBarData(table: Table):
   }
 
   return { ok: true, data: { categories, series, values } }
+}
+
+// =============================================================================
+// Row / Column-Type Helpers
+// =============================================================================
+
+/** Raw column values for one row (no stringification). Null/undefined skipped. */
+export function rowValues(table: Table, rowIndex: number): Record<string, unknown> {
+  const row: Record<string, unknown> = {}
+  for (const field of table.schema.fields) {
+    const v = table.getChild(field.name)?.get(rowIndex)
+    if (v === null || v === undefined) continue
+    row[field.name] = v
+  }
+  return row
+}
+
+/** Column-name → Arrow DataType, for RFC3339 / format_value resolution. */
+export function columnTypeMap(table: Table): Map<string, DataType> {
+  return new Map(table.schema.fields.map((f) => [f.name, f.type]))
 }

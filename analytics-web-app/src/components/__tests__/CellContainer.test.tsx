@@ -164,13 +164,6 @@ describe('CellContainer', () => {
       expect(runButton).toBeDisabled()
     })
 
-    it('should show run button for a type with no execute but canRun: true (e.g. markdown)', () => {
-      // The shared mock registry gives markdown `canRun: true` with no `execute`,
-      // mirroring production — this is the metadata-driven fallback, not canRunProp.
-      render(<CellContainer {...defaultProps} type="markdown" onRun={vi.fn()} />)
-      expect(screen.getByTitle('Run cell')).toBeInTheDocument()
-    })
-
     it('should hide the run button when canRunProp={false} regardless of type', () => {
       render(<CellContainer {...defaultProps} onRun={vi.fn()} canRun={false} />)
       expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()

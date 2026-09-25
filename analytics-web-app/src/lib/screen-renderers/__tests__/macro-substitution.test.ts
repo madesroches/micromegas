@@ -1,7 +1,24 @@
 import type { StructRowProxy } from 'apache-arrow'
 import { Float64, List, Field } from 'apache-arrow'
-import { formatArrowValue } from '../macro-substitution'
+import { formatArrowValue, validateTemplateMacros } from '../macro-substitution'
 import { makeHistogramVector, SAMPLE_HISTOGRAM_ROW, HISTOGRAM_STRUCT_TYPE } from './histogram-fixtures'
+
+describe('validateTemplateMacros', () => {
+  it('does not flag a bare column present in availableColumns', () => {
+    const result = validateTemplateMacros('Value: $duration_ms', ['duration_ms'], {}, {}, {})
+    expect(result.errors).toEqual([])
+  })
+
+  it('still flags an unknown variable not in availableColumns', () => {
+    const result = validateTemplateMacros('Value: $unknown_col', ['duration_ms'], {}, {}, {})
+    expect(result.errors).toEqual(['Unknown variable: unknown_col'])
+  })
+
+  it('still validates ordinary variable/cell-result macros alongside the column placeholders', () => {
+    const result = validateTemplateMacros('$known_var and $bad_var', [], { known_var: 'x' }, {}, {})
+    expect(result.errors).toEqual(['Unknown variable: bad_var'])
+  })
+})
 
 describe('formatArrowValue — histogram struct branch', () => {
   it('renders a histogram-struct value as a compact, fixed-field-order dump', () => {

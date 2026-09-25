@@ -125,9 +125,12 @@ export interface QueryCellConfig extends CellConfigBase, QueryBackedCellConfig {
   options?: Record<string, unknown>
 }
 
-export interface MarkdownCellConfig extends CellConfigBase {
+export interface MarkdownCellConfig extends CellConfigBase, QueryBackedCellConfig {
   type: 'markdown'
   content: string
+  /** Optional for saved cells predating query-backed markdown; see `effectiveMarkdownSql`. */
+  sql?: string
+  options?: { fit?: boolean }
 }
 
 export interface VariableCellConfig extends CellConfigBase, QueryBackedCellConfig {

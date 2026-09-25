@@ -134,7 +134,7 @@ Markdown is the default and only render mode for most columns, but a column whos
 
 ## Per-Cell Query Time Range
 
-Every query-backed cell (table, chart, log, property timeline, swimlane, transposed table, flame graph, map, Perfetto export, image, and combobox/expression variable cells) accepts an optional `timeRange: { from, to }` field that overrides the notebook's global (URL-synced) time range for that cell's query.
+Every query-backed cell (table, chart, log, markdown, property timeline, swimlane, transposed table, flame graph, map, Perfetto export, image, and combobox/expression variable cells) accepts an optional `timeRange: { from, to }` field that overrides the notebook's global (URL-synced) time range for that cell's query.
 
 - **Empty = screen range.** Leaving `from` or `to` blank falls back to the screen's global range for that bound — you can override just one side (e.g. a fixed `from` with a `to` that still tracks the global range).
 - **Accepted values**: relative strings (`now-1h`, `now`), absolute ISO timestamps, or macros — `$from`, `$to` (the *global* range, useful as a base for a computed override), `$variableName`, `$cellName[N].column`, `$cellName.selected.column`.
