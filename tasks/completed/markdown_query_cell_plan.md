@@ -237,7 +237,7 @@ already passes `availableColumns` from the cell's last result.
 
 ## Mockups
 
-- `tasks/markdown_query_cell_mockups/stat-tiles.html`: a horizontal group of four fitted markdown
+- `tasks/completed/markdown_query_cell_mockups/stat-tiles.html`: a horizontal group of four fitted markdown
   tiles (background fill, text tint, status string, untinted), one resizable tile running the
   real binary-search fit on resize, and an unfitted documentation cell showing the default look,
   flush with no added padding, as before. One direction only, since the issue settles the
