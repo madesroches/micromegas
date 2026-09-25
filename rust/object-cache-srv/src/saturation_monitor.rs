@@ -70,18 +70,20 @@ pub fn sample_once(
 
     // Bytes, not counts: the signal that shows fetch-memory pressure, which
     // the count gauges above cannot see. Only "occupancy" is emitted -- the
-    // totals are static config, so an
-    // "available" gauge would add nothing beyond what's already implied.
+    // totals are static config, so an "available" gauge would add nothing
+    // beyond what's already implied. Emitted in bytes (not MiB like the
+    // `mem_budget` gauges below, whose permits already are whole MiB) so a
+    // typical sub-MiB run still registers instead of truncating to 0.
     let bytes = &budget_stats.bytes;
     imetric!(
-        "object_cache_fetch_mem_shared_occupancy_mb",
-        "megabytes",
-        ((bytes.shared_total - bytes.shared_available) as u64) / (1024 * 1024)
+        "object_cache_fetch_mem_shared_occupancy_bytes",
+        "bytes",
+        (bytes.shared_total - bytes.shared_available) as u64
     );
     imetric!(
-        "object_cache_fetch_mem_prefetch_occupancy_mb",
-        "megabytes",
-        ((bytes.prefetch_total - bytes.prefetch_available) as u64) / (1024 * 1024)
+        "object_cache_fetch_mem_prefetch_occupancy_bytes",
+        "bytes",
+        (bytes.prefetch_total - bytes.prefetch_available) as u64
     );
 
     imetric!(

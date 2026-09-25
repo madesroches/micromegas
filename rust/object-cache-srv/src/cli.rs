@@ -11,10 +11,9 @@ use std::net::SocketAddr;
 /// One MiB, in bytes -- the unit every `*_mb`/`*_gb` CLI knob converts
 /// through.
 const MIB: u64 = 1024 * 1024;
-/// Clap range shared by every byte-denominated knob whose value must fit
-/// comfortably below `u32::MAX` once divided into blocks (`max_run_bytes`'s
-/// result feeds `acquire_many_owned`, which takes a `u32`): `--block-size`
-/// and `--max-coalesced-get-bytes`.
+/// Clap range for `--block-size` and `--max-coalesced-get-bytes`: capping
+/// both at 1 GiB keeps `max_run_bytes` -- a byte count passed directly as
+/// `acquire_many_owned`'s `u32` permit count -- well below `u32::MAX`.
 const MAX_BYTES_KNOB: u64 = 1024 * 1024 * 1024; // 1 GiB
 
 #[derive(Parser, Debug)]

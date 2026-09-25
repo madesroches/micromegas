@@ -328,8 +328,8 @@ A background sampler emits these gauges on a fixed interval (5s by default), ind
 |---|---|
 | `object_cache_fetch_shared_occupancy` / `object_cache_fetch_shared_available` | Occupied/available slots in the total origin-GET concurrency budget (`--max-concurrent-fetches`). |
 | `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
-| `object_cache_fetch_mem_shared_occupancy_mb` | Occupied MiB of the total origin-GET **byte** budget (`--fetch-memory-budget-mb`) — the signal that shows fetch-memory pressure, which the count gauges above cannot see. |
-| `object_cache_fetch_mem_prefetch_occupancy_mb` | Occupied MiB of the prefetch-only byte sub-budget (`--fetch-memory-budget-mb` minus the reservation implied by `--demand-reserved-fetches`). |
+| `object_cache_fetch_mem_shared_occupancy_bytes` | Occupied bytes of the total origin-GET **byte** budget (`--fetch-memory-budget-mb`) — the signal that shows fetch-memory pressure, which the count gauges above cannot see. In bytes, not MiB, so a typical sub-MiB run still registers. |
+| `object_cache_fetch_mem_prefetch_occupancy_bytes` | Occupied bytes of the prefetch-only byte sub-budget (`--fetch-memory-budget-mb` minus the reservation implied by `--demand-reserved-fetches`). |
 | `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key scheduler signal alongside the permit-wait latency above. |
 | `object_cache_ram_tier_usage_bytes` | Accounted RAM-tier byte usage (foyer's own weigher total). Compare against the host's `used_memory` system metric: this gauge staying at/below the configured `--ram-mb` size *while* `used_memory` climbs is the signature of a cached block over-retaining a larger allocation than its accounted weight. |
 | `object_cache_ram_tier_entries` | Accounted RAM-tier entry count (foyer's own entry total), the entry-count sibling to `object_cache_ram_tier_usage_bytes`. |

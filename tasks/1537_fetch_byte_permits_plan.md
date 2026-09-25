@@ -185,10 +185,11 @@ agree with what `coalesce_runs` actually produces.
 ### Telemetry
 - `RangeCache::fetch_budget_stats()` returns `FetchBudgetStats`.
 - `saturation_monitor::sample_once` keeps the four existing count gauges unchanged and adds
-  two gauges, `object_cache_fetch_mem_shared_occupancy_mb` and
-  `object_cache_fetch_mem_prefetch_occupancy_mb` (bytes / MiB, unit `"megabytes"`). The totals
-  are static config, so "available" gauges would add nothing. These are the gauges that would
-  have shown pressure in the reported incident.
+  two gauges, `object_cache_fetch_mem_shared_occupancy_bytes` and
+  `object_cache_fetch_mem_prefetch_occupancy_bytes` (unit `"bytes"`, not MiB like the
+  `mem_budget_*_mb` gauges whose permits already are whole MiB: a typical ~43 KB run would
+  otherwise truncate to 0). The totals are static config, so "available" gauges would add
+  nothing. These are the gauges that would have shown pressure in the reported incident.
 - `range_cache_fetch_permit_wait_ms` keeps measuring the whole `acquire_run_permit`, now covering
   both budgets.
 
@@ -311,8 +312,8 @@ All no-DB unit/integration tests using the existing `CountingStore` gate and `Me
 - **`cli_tests.rs`** — `validate()` rejects a budget below `(demand_reserved + 1) * max_run_bytes`
   and accepts the defaults; `Cli::try_parse_from` rejects `--fetch-memory-budget-mb 0` and an
   out-of-range `--max-coalesced-get-bytes`.
-- **`saturation_tests.rs`** — `sample_once` emits the two `object_cache_fetch_mem_*_mb` gauges with
-  values reflecting a held run permit.
+- **`saturation_tests.rs`** — `sample_once` emits the two `object_cache_fetch_mem_*_bytes` gauges
+  with the exact byte charge of a held sub-MiB run permit.
 - Existing scheduler tests (`total_concurrency_never_exceeds_total`, the two priority tests, the
   prefetch-endpoint budget test in `object-cache-srv/tests/prefetch_tests.rs`) must pass unchanged
   in behavior with the default byte budget.

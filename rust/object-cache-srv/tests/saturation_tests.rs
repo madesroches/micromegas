@@ -315,9 +315,10 @@ async fn ram_tier_entries_gauge_reflects_cached_block_count() {
     );
 }
 
-/// `object_cache_fetch_mem_*_occupancy_mb` must reflect a held run permit --
-/// the gauge that shows fetch-memory pressure, which the count-only gauges
-/// above cannot see.
+/// `object_cache_fetch_mem_*_occupancy_bytes` must reflect a held run
+/// permit's exact byte charge -- the gauge that shows fetch-memory pressure,
+/// which the count-only gauges above cannot see. The object is deliberately
+/// far smaller than one MiB: a typical run is, and it must still register.
 #[tokio::test]
 #[serial]
 async fn fetch_mem_gauges_reflect_held_run_permit() {
@@ -393,9 +394,9 @@ async fn fetch_mem_gauges_reflect_held_run_permit() {
         }
     }
 
-    // At least one full block, or `block_byte_range` clips the run to the
-    // object's own (smaller) size and the MiB-rounded gauge reads 0.
-    let object_size = DEFAULT_BLOCK_SIZE as usize;
+    // Smaller than one block, so `block_byte_range` clips the run to the
+    // object's own size and the byte charge is exactly `object_size`.
+    let object_size = 4096usize;
     let store = Arc::new(InMemory::new());
     store
         .put(
@@ -444,25 +445,23 @@ async fn fetch_mem_gauges_reflect_held_run_permit() {
         5.0,
     );
     micromegas::tracing::dispatch::flush_metrics_buffer();
-    let shared_mb =
-        integer_metric_values(&guard.sink, "object_cache_fetch_mem_shared_occupancy_mb");
+    let shared_bytes =
+        integer_metric_values(&guard.sink, "object_cache_fetch_mem_shared_occupancy_bytes");
     assert_eq!(
-        shared_mb.len(),
-        1,
-        "the gauge must fire every tick, with no prior-sample requirement"
+        shared_bytes,
+        vec![object_size as u64],
+        "the gauge must fire exactly once per tick with the held run's exact byte charge \
+         (the run is clipped to the object's own size, well under one MiB)"
     );
-    assert!(
-        shared_mb[0] >= 1,
-        "a held run permit (>= 1 MiB at the default block size) must show up as MiB \
-         occupancy: {shared_mb:?}"
+    let prefetch_bytes = integer_metric_values(
+        &guard.sink,
+        "object_cache_fetch_mem_prefetch_occupancy_bytes",
     );
-    let prefetch_mb =
-        integer_metric_values(&guard.sink, "object_cache_fetch_mem_prefetch_occupancy_mb");
     assert_eq!(
-        prefetch_mb.len(),
-        1,
-        "the prefetch-pool gauge must fire every tick too, even though this run is demand \
-         (0 MiB occupied) and never touches the prefetch byte pool"
+        prefetch_bytes,
+        vec![0],
+        "the prefetch-pool gauge must fire every tick too, reading 0 since this run is \
+         demand and never touches the prefetch byte pool"
     );
 
     gate.add_permits(1);
