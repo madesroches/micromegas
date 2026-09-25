@@ -202,6 +202,21 @@ describe('StackedBarCell renderer', () => {
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
+  it('renders bars once data arrives after mounting in the loading state', () => {
+    // Regression test: the plot's ResizeObserver effect used to run with `[]`
+    // deps on the top-level cell, so it never re-attached after the cell
+    // mounted idle/loading and later transitioned to success — see the plot
+    // now living in a child component mounted only on the success path.
+    const table = stackedBarTable([{ category: 'a', series: 'first', value: 10 }])
+    const { rerender } = render(<StackedBarCell {...createMockProps({ status: 'loading', data: [] })} />)
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+
+    rerender(<StackedBarCell {...createMockProps({ status: 'success', data: [table] })} />)
+
+    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(document.querySelectorAll('svg path')).toHaveLength(1)
+  })
+
   it('shows "No data available" when there is no table', () => {
     render(<StackedBarCell {...createMockProps({ data: [] })} />)
     expect(screen.getByText('No data available')).toBeInTheDocument()

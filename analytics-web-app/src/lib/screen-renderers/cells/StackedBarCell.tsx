@@ -59,6 +59,8 @@ const TOP_MARGIN_PX = 10
 const RIGHT_MARGIN_PX = 12
 const X_LABEL_AREA_HEIGHT = 24
 const X_LABEL_AREA_HEIGHT_ROTATED = 64
+/** Gap below the plot's bottom edge before a rotated label's anchor point (its unrotated top). */
+const ROTATED_LABEL_GUTTER_PX = 8
 /** Gutter chrome (tick marks, label padding) added on top of the widest tick label. */
 const Y_AXIS_CHROME_PX = 28
 const Y_TICK_DIVISIONS = 5
@@ -224,9 +226,19 @@ interface HoverState {
   y: number
 }
 
-export function StackedBarCell({ data, status, options, variables, timeRange, cellResults, cellSelections }: CellRendererProps) {
-  const table = data[0]
+interface StackedBarViewProps {
+  resolvedData: StackedBarData & { series: ResolvedStackedBarSeries[] }
+  resolvedUnit: string
+  maxTotal: number
+}
 
+/**
+ * Owns the measured plot area (ResizeObserver) and hover state. Mounted only once
+ * data is ready to render (see `StackedBarCell`'s success-path return) so the
+ * observed div isn't detached/reattached across loading/success re-renders or
+ * re-runs of the query — mirrors `FlameGraphView` in FlameGraphCell.tsx.
+ */
+function StackedBarView({ resolvedData, resolvedUnit, maxTotal }: StackedBarViewProps) {
   const plotRef = useRef<HTMLDivElement>(null)
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
 
@@ -242,101 +254,22 @@ export function StackedBarCell({ data, status, options, variables, timeRange, ce
     return () => observer.disconnect()
   }, [])
 
-  const extraction = useMemo(() => {
-    if (!table || table.numRows === 0) return null
-    return extractStackedBarData(table)
-  }, [table])
-
-  const rawUnit = (options?.unit as string | undefined) ?? ''
-  const resolvedUnit = useMemo(
-    () => (rawUnit ? substituteMacros(rawUnit, variables, timeRange, cellResults, cellSelections) : ''),
-    [rawUnit, variables, timeRange, cellResults, cellSelections],
-  )
-
-  const resolvedSeries = useMemo(() => {
-    if (!extraction || !extraction.ok) return []
-    return resolveSeriesColors(extraction.data.series)
-  }, [extraction])
-
-  const resolvedData: (StackedBarData & { series: ResolvedStackedBarSeries[] }) | null = useMemo(() => {
-    if (!extraction || !extraction.ok) return null
-    return { categories: extraction.data.categories, series: resolvedSeries, values: extraction.data.values }
-  }, [extraction, resolvedSeries])
-
-  const maxTotal = useMemo(() => {
-    if (!resolvedData) return 0
-    return Math.max(0, ...resolvedData.categories.map((_, c) => resolvedData.values[c].reduce((a, b) => a + b, 0)))
-  }, [resolvedData])
-
   const layout = useMemo(() => {
-    if (!resolvedData || resolvedData.categories.length === 0 || maxTotal === 0) return null
+    if (resolvedData.categories.length === 0 || maxTotal === 0) return null
     if (dimensions.width === 0 || dimensions.height === 0) return null
     return buildStackedBarLayout(resolvedData, { width: dimensions.width, height: dimensions.height, unit: resolvedUnit })
   }, [resolvedData, maxTotal, dimensions, resolvedUnit])
 
   const [hover, setHover] = useState<HoverState | null>(null)
 
-  if (status === 'loading') {
-    return (
-      <div className="flex items-center justify-center h-[200px]">
-        <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
-        <span className="ml-2 text-theme-text-secondary text-sm">Loading...</span>
-      </div>
-    )
-  }
-
-  if (!table || table.numRows === 0) {
-    return (
-      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
-        No data available
-      </div>
-    )
-  }
-
-  if (!extraction || !extraction.ok) {
-    return (
-      <div className="flex items-center justify-center h-[200px] text-accent-error text-sm">
-        {extraction?.error ?? 'No data available'}
-      </div>
-    )
-  }
-
-  if (!resolvedData || resolvedData.categories.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
-        No data available
-      </div>
-    )
-  }
-
-  // Every present value is 0: distinct from having no categories at all (handled
-  // above). Every segment would have zero height, so show the same empty state
-  // instead of a blank plot.
-  if (maxTotal === 0) {
-    return (
-      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
-        No data available
-      </div>
-    )
-  }
+  // Anchor point for a rotated label: the top of the label area (just below the
+  // plot), not the bottom of the SVG — end-anchored text rotated -45deg hangs
+  // down-left from there, staying within X_LABEL_AREA_HEIGHT_ROTATED instead of
+  // being clipped past the bottom edge.
+  const rotatedLabelY = layout ? TOP_MARGIN_PX + layout.plotHeight + ROTATED_LABEL_GUTTER_PX : 0
 
   return (
-    <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
-      {/* Header — stats row, mirrors Pie/XY */}
-      <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-4 text-xs text-theme-text-muted">
-          <div>
-            categories: <span className="text-theme-text-secondary">{resolvedData.categories.length.toLocaleString()}</span>
-          </div>
-          <div>
-            series: <span className="text-theme-text-secondary">{resolvedData.series.length.toLocaleString()}</span>
-          </div>
-          <div>
-            max total: <span className="text-theme-text-secondary">{formatValueWithUnit(maxTotal, resolvedUnit)}</span>
-          </div>
-        </div>
-      </div>
-
+    <>
       {/* Body — plot (scrolls horizontally when bars hit the width floor) + side legend */}
       <div className="flex-1 min-h-0 flex gap-5 p-4 overflow-hidden">
         <div ref={plotRef} className="flex-1 min-w-0 h-full overflow-x-auto">
@@ -421,11 +354,11 @@ export function StackedBarCell({ data, status, options, variables, timeRange, ce
                     })}
                   <text
                     x={bar.labelX}
-                    y={dimensions.height - 8}
+                    y={layout.rotateLabels ? rotatedLabelY : dimensions.height - 8}
                     fill="#9ca3af"
                     fontSize={11}
                     textAnchor={layout.rotateLabels ? 'end' : 'middle'}
-                    transform={layout.rotateLabels ? `rotate(${ROTATE_DEG} ${bar.labelX} ${dimensions.height - 8})` : undefined}
+                    transform={layout.rotateLabels ? `rotate(${ROTATE_DEG} ${bar.labelX} ${rotatedLabelY})` : undefined}
                   >
                     <title>{bar.category}</title>
                     {bar.category}
@@ -477,6 +410,101 @@ export function StackedBarCell({ data, status, options, variables, timeRange, ce
           </div>
         </div>
       )}
+    </>
+  )
+}
+
+export function StackedBarCell({ data, status, options, variables, timeRange, cellResults, cellSelections }: CellRendererProps) {
+  const table = data[0]
+
+  const extraction = useMemo(() => {
+    if (!table || table.numRows === 0) return null
+    return extractStackedBarData(table)
+  }, [table])
+
+  const rawUnit = (options?.unit as string | undefined) ?? ''
+  const resolvedUnit = useMemo(
+    () => (rawUnit ? substituteMacros(rawUnit, variables, timeRange, cellResults, cellSelections) : ''),
+    [rawUnit, variables, timeRange, cellResults, cellSelections],
+  )
+
+  const resolvedSeries = useMemo(() => {
+    if (!extraction || !extraction.ok) return []
+    return resolveSeriesColors(extraction.data.series)
+  }, [extraction])
+
+  const resolvedData: (StackedBarData & { series: ResolvedStackedBarSeries[] }) | null = useMemo(() => {
+    if (!extraction || !extraction.ok) return null
+    return { categories: extraction.data.categories, series: resolvedSeries, values: extraction.data.values }
+  }, [extraction, resolvedSeries])
+
+  const maxTotal = useMemo(() => {
+    if (!resolvedData) return 0
+    return Math.max(0, ...resolvedData.categories.map((_, c) => resolvedData.values[c].reduce((a, b) => a + b, 0)))
+  }, [resolvedData])
+
+  if (status === 'loading') {
+    return (
+      <div className="flex items-center justify-center h-[200px]">
+        <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
+        <span className="ml-2 text-theme-text-secondary text-sm">Loading...</span>
+      </div>
+    )
+  }
+
+  if (!table || table.numRows === 0) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
+        No data available
+      </div>
+    )
+  }
+
+  if (!extraction || !extraction.ok) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-accent-error text-sm">
+        {extraction?.error ?? 'No data available'}
+      </div>
+    )
+  }
+
+  if (!resolvedData || resolvedData.categories.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
+        No data available
+      </div>
+    )
+  }
+
+  // Every present value is 0: distinct from having no categories at all (handled
+  // above). Every segment would have zero height, so show the same empty state
+  // instead of a blank plot.
+  if (maxTotal === 0) {
+    return (
+      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
+        No data available
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
+      {/* Header — stats row, mirrors Pie/XY */}
+      <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-4 text-xs text-theme-text-muted">
+          <div>
+            categories: <span className="text-theme-text-secondary">{resolvedData.categories.length.toLocaleString()}</span>
+          </div>
+          <div>
+            series: <span className="text-theme-text-secondary">{resolvedData.series.length.toLocaleString()}</span>
+          </div>
+          <div>
+            max total: <span className="text-theme-text-secondary">{formatValueWithUnit(maxTotal, resolvedUnit)}</span>
+          </div>
+        </div>
+      </div>
+
+      <StackedBarView resolvedData={resolvedData} resolvedUnit={resolvedUnit} maxTotal={maxTotal} />
     </div>
   )
 }
