@@ -408,8 +408,8 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                         {key.allowed_cidrs.length === 0 ? (
                           <span className="text-theme-text-muted italic">Unrestricted</span>
                         ) : (
-                          key.allowed_cidrs.map((cidr) => (
-                            <div key={cidr} className="font-mono text-xs">
+                          key.allowed_cidrs.map((cidr, i) => (
+                            <div key={`${i}-${cidr}`} className="font-mono text-xs">
                               {cidr}
                             </div>
                           ))

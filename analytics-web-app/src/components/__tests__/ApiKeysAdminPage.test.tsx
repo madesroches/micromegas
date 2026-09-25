@@ -109,9 +109,6 @@ describe('ApiKeysAdminPage mint dialog', () => {
   })
 })
 
-/**
- * IP allowlist column, edit dialog, and mint-form field (#1611).
- */
 describe('ApiKeysAdminPage IP allowlist', () => {
   function keyRow(overrides: Partial<Record<string, unknown>> = {}) {
     return {

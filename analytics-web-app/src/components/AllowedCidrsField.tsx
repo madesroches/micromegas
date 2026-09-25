@@ -1,7 +1,7 @@
 /**
  * The shared allowlist textarea used by both mint dialogs and the edit dialog
  * (`EditAllowlistDialog.tsx`). One component keeps the label/help-text wording and styling in a
- * single place instead of three copies (#1611).
+ * single place instead of three copies.
  */
 export function AllowedCidrsField({
   value,

@@ -5,7 +5,7 @@ import { parseAllowlistInput } from '@/lib/api-keys-shared'
 
 /**
  * Admin edit dialog for a key's IP allowlist, reached via the shield row action on
- * `ApiKeysAdminPage` (#1611). The parent mounts this only while it has a target and passes
+ * `ApiKeysAdminPage`. The parent mounts this only while it has a target and passes
  * `key={target.key_id}`, so the `useState` initializer below handles the prefill on open with no
  * reset-on-open effect needed.
  */

@@ -1,7 +1,7 @@
 /**
- * `parseAllowlistInput` (#1611): the lenient free-text splitter shared by the mint dialogs and
+ * `parseAllowlistInput` is the lenient free-text splitter shared by the mint dialogs and
  * `EditAllowlistDialog`. No CIDR validation here -- the server's `IpAllowlist::parse` is the one
- * validator (see the design plan's Trade-offs section).
+ * validator.
  */
 import { parseAllowlistInput } from '../api-keys-shared'
 
