@@ -86,9 +86,12 @@ the registry without an import cycle through the cell modules.) Consumers:
 
 - `resolveCellDataSource`: `cell.dataSource || cellTypeDefaultDataSource(cell.type) || notebookDataSource`
   (the `$var`-unresolved fallback is unchanged).
-- `createDefaultCell`: `cellTypeDefaultDataSource(type) ?? defaultDataSource`, still skipped for
-  `referencetable` / `hg`. The `type !== 'markdown'` clause goes away, and new markdown cells
-  persist `dataSource: 'notebook'` explicitly.
+- `createDefaultCell`: the gate on `defaultDataSource` truthiness runs first today
+  (`cell-registry.ts:298`), so a missing notebook default would leave markdown with no
+  `dataSource` at all. Compute the per-type default before that check instead:
+  `const ds = cellTypeDefaultDataSource(type) ?? defaultDataSource; if (ds && type !== 'referencetable' && type !== 'hg') return { ...base, dataSource: ds }`.
+  The `type !== 'markdown'` clause goes away, and new markdown cells persist
+  `dataSource: 'notebook'` explicitly even with no notebook-level default.
 - `CellEditor`'s `DataSourceField` value (`CellEditor.tsx:141`) and `HorizontalGroupCell`'s child
   editor `DataSourceField` value (`HorizontalGroupCell.tsx:356-358`, the same fallback chain) both
   need this fallback, so a saved markdown cell shows `notebook` rather than the notebook default.
@@ -126,7 +129,9 @@ execute: async (config, { variables, cellResults, cellSelections, timeRange, run
 cell's, so downstream cells can use it. `canBlockDownstream` is `true`: when an upstream blocking
 cell fails, `executeFromCell` marks the markdown cell `blocked` with `data: []`
 (`useCellExecution.ts:398-420`), and a markdown query failure halts downstream execution the same
-way. Extra rows are ignored. On engine load failure, markdown cells behave like every other cell
+way. The same flag also blocks a markdown cell (waiting placeholder) while an upstream cell waits
+on an unresolved `$cell.selected.*` or `$me.*` macro, like other query-backed cells
+(`useCellExecution.ts:183-205`). Extra rows are ignored. On engine load failure, markdown cells behave like every other cell
 (never run; the notebook banner explains).
 
 `getRendererProps` returns `content`, `data`, `status`, `options`.
@@ -237,8 +242,6 @@ already passes `availableColumns` from the cell's last result.
   real binary-search fit on resize, and an unfitted documentation cell showing the default look,
   flush with no added padding, as before. One direction only, since the issue settles the
   interaction model.
-  - The mockup's `.md-root` uses a flat 12px padding for every tile so the tiles read consistently
-    at a glance; that padding is illustrative only. The implementation uses no padding.
 
 ## Implementation Steps
 
@@ -259,8 +262,11 @@ already passes `availableColumns` from the cell's last result.
      values.
 3. **Run control cleanup**
    - Remove `canRun` / `cellCanRun` from `cell-registry.ts` and its four call sites. Update the
-     `cell-registry-mock.ts` markdown entry: give it its own `execute` that always calls
-     `runQuery` (falling back to `SELECT 1` when `sql` is absent), in place of
+     `cell-registry-mock.ts` markdown entry: under `withSqlExecution`, give it its own `execute`
+     that always calls `runQuery` (falling back to `SELECT 1` when `sql` is absent); otherwise it
+     uses `simpleExecuteStub`, the same split other types use at `cell-registry-mock.ts:300-309`
+     (`NotebookRenderer.test.tsx` mocks without `withSqlExecution`, so its Run-button tests must
+     not reach `runQuery`, which throws in jsdom). This replaces
      `createSqlExecute`/`simpleExecuteStub`, remove `canRun: true` from
      `BASE_METADATA.markdown` (~line 87), remove the mock's `cellCanRun` export (~line 330), drop
      `markdown` from the `type !== 'markdown' && type !== 'hg'` execute guard (~line 289), flip
@@ -346,7 +352,8 @@ already passes `availableColumns` from the cell's last result.
   double as dashboards, where padding wastes space. Pixel-identical rendering is otherwise not
   a goal.
 - Markdown sets `canBlockDownstream: true`, like other query-backed cell types, so it never shows
-  stale output after an upstream failure.
+  stale output after an upstream failure, and is likewise blocked (waiting placeholder) while an
+  upstream cell waits on an unresolved row selection or viewer macro.
 
 ## Documentation
 
@@ -357,8 +364,9 @@ already passes `availableColumns` from the cell's last result.
   types, same as the chart cells' color column), `format_value` for units, and Fit to cell.
   Add the issue's frame-time example and a `CASE`-based status example. Replace the "does not
   execute queries or block downstream cells" bullet: markdown cells now run a query, so like
-  other query-backed cell types they block downstream cells when their own query fails and are
-  blocked by an upstream failure. Rewrite the "On initial load ..." bullet (`:474`): blank until the
+  other query-backed cell types they block downstream cells when their own query fails, are
+  blocked by an upstream failure, and are blocked while an upstream cell waits on a row selection
+  or viewer macro. Rewrite the "On initial load ..." bullet (`:474`): blank until the
   first successful run; previous output stays while idle/loading during a re-run; **Run** executes
   the cell's query (not a local re-render).
 - `markdownMetadata.description` (`MarkdownCell.tsx:85`, shown in the add-cell modal) and the
@@ -371,8 +379,9 @@ already passes `availableColumns` from the cell's last result.
 - `variables.md:137`: add markdown to the list of query-backed cell types that accept
   `timeRange`.
 - `CHANGELOG.md` (Unreleased): feature entry, noting that markdown cells now run a query and
-  depend on the WASM engine, and now block downstream cells when their query fails and are
-  blocked by upstream failures, like other query-backed cell types. Removing `canRun` /
+  depend on the WASM engine, and now block downstream cells when their query fails, are
+  blocked by upstream failures, and are blocked while an upstream cell waits on a row selection
+  or viewer macro, like other query-backed cell types. Removing `canRun` /
   `cellCanRun` is internal web-app code, so it gets no breaking-change clause.
 
 ## Testing Strategy
@@ -439,7 +448,10 @@ Unit tests (Vitest, jsdom, no services):
   test asserts that a failing markdown cell halts and blocks its own downstream cells, matching
   table/chart.
 - **`NotebookRenderer.test.tsx`**: update the markdown run-control tests. Markdown now shows
-  "Run from here" / "Auto-run from here", and its Run executes only its own query.
+  "Run from here" / "Auto-run from here", and its Run executes only its own query. This suite
+  mocks the registry without `withSqlExecution`, so the mock's markdown `execute` is the plain
+  `simpleExecuteStub` (per Implementation Steps step 3); Run still transitions the cell to
+  `success` without touching `runQuery`, so the content-after-Run assertions keep passing.
 
 ## Manual Verification
 

@@ -11,8 +11,8 @@ code{font-size:11px;color:var(--accent-highlight)}
 .cell{flex:1;min-width:0;background:var(--panel-bg);border:1px solid var(--border-color);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
 .cell-header{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;color:var(--text-secondary);border-bottom:1px solid var(--border-color)}
 .content{padding:0 4px 4px;display:flex;flex-direction:column;overflow:auto}
-/* MarkdownCell root: owns the background + padding so background_color fills the whole tile */
-.md-root{flex:1;border-radius:4px;padding:12px}
+/* MarkdownCell root: owns the background so background_color fills the whole tile */
+.md-root{flex:1;border-radius:4px}
 .md-root.fit{min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;text-align:center}
 /* approximation of tailwind typography's em-relative prose */
 .prose{font-size:1rem;line-height:1.5;color:var(--text-secondary)}
