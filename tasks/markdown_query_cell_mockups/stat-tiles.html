@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Markdown cell — query-backed headline values</title><style>
+:root{--app-bg:#0a0a0f;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-highlight:#ffb300}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:32px}
+h1{font-size:14px;font-weight:500;color:var(--text-secondary);margin:0 0 4px}
+.note{font-size:12px;color:var(--text-muted);margin:0 0 20px;max-width:980px;line-height:1.5}
+.state{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:24px 0 8px}
+code{font-size:11px;color:var(--accent-highlight)}
+.hg{display:flex;gap:6px;max-width:980px}
+.cell{flex:1;min-width:0;background:var(--panel-bg);border:1px solid var(--border-color);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
+.cell-header{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;color:var(--text-secondary);border-bottom:1px solid var(--border-color)}
+.content{padding:0 4px 4px;display:flex;flex-direction:column;overflow:auto}
+/* MarkdownCell root: owns the background + padding so background_color fills the whole tile */
+.md-root{flex:1;border-radius:4px;padding:12px}
+.md-root.fit{min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;text-align:center}
+/* approximation of tailwind typography's em-relative prose */
+.prose{font-size:1rem;line-height:1.5;color:var(--text-secondary)}
+.prose>:first-child{margin-top:0}.prose>:last-child{margin-bottom:0}
+.prose h1{font-size:2.25em;line-height:1.1;margin:0 0 .4em;color:var(--text-primary);font-weight:800}
+.prose h3{font-size:1.25em;line-height:1.4;margin:0 0 .3em;color:var(--text-primary);font-weight:600}
+.prose p{margin:.6em 0}
+.prose strong{color:var(--text-primary)}
+.prose a{color:var(--accent-link)}
+.prose ul{margin:.6em 0;padding-left:1.4em}
+/* `color` column present: per-element prose colors inherit the tint */
+.tinted,.tinted h1,.tinted h3,.tinted p,.tinted strong,.tinted li{color:inherit}
+.resizable{resize:both;overflow:hidden;width:360px;height:180px;min-width:120px;min-height:60px}
+.resizable .content{flex:1;min-height:0}
+</style></head>
+<body>
+<h1>Markdown cell — query-backed headline values (fit to cell)</h1>
+<p class="note">Four markdown cells side by side in a horizontal group, each with <b>Fit to cell</b> on. Row 0 of each cell's query binds to bare <code>$col</code>; <code>color</code> tints the text, <code>background_color</code> fills the cell's content area. The last tile is resizable (drag its bottom-right corner) to show the fit re-running on resize.</p>
+
+<div class="state">horizontal group — four fitted markdown cells</div>
+<div class="hg" style="height:170px">
+  <div class="cell"><div class="cell-header">frame_time</div><div class="content" style="flex:1;min-height:0">
+    <div class="md-root fit" style="background:#2e7d32"><div class="prose fitme tinted" style="color:#ffffff"><h3>Frame time (avg)</h3><h1>14.2 ms</h1></div></div>
+  </div></div>
+  <div class="cell"><div class="cell-header">error_rate</div><div class="content" style="flex:1;min-height:0">
+    <div class="md-root fit"><div class="prose fitme tinted" style="color:#ef5350"><h3>Error rate</h3><h1>3.8 %</h1></div></div>
+  </div></div>
+  <div class="cell"><div class="cell-header">service_status</div><div class="content" style="flex:1;min-height:0">
+    <div class="md-root fit" style="background:#f9a825"><div class="prose fitme tinted" style="color:#0a0a0f"><h3>Ingestion</h3><h1>Degraded</h1></div></div>
+  </div></div>
+  <div class="cell"><div class="cell-header">active_players</div><div class="content" style="flex:1;min-height:0">
+    <div class="md-root fit"><div class="prose fitme"><h3>Active players</h3><h1>12,480</h1><p>last 5 min</p></div></div>
+  </div></div>
+</div>
+<div class="note" style="margin-top:8px">
+<code>SELECT avg(duration) AS value, CASE WHEN avg(duration) &lt; 16 THEN '#2e7d32' WHEN avg(duration) &lt; 33 THEN '#f9a825' ELSE '#c62828' END AS background_color, '#ffffff' AS color FROM measures WHERE name = 'frame_time'</code><br>
+content: <code>### Frame time (avg)\n# format_value($value, "milliseconds")</code>
+</div>
+
+<div class="state">fit on, resizable — font size re-fitted on every resize (min 12px; below that the cell scrolls)</div>
+<div class="cell resizable"><div class="cell-header">frame_time (resize me)</div><div class="content">
+  <div class="md-root fit" style="background:#c62828"><div class="prose fitme tinted" style="color:#ffffff"><h3>Frame time (p99)</h3><h1>41.7 ms</h1></div></div>
+</div></div>
+
+<div class="state">fit off (default) — documentation cell, unchanged look; default query <code>SELECT 1</code> on the notebook source</div>
+<div class="cell" style="max-width:980px"><div class="cell-header">Notes</div><div class="content" style="height:140px">
+  <div class="md-root"><div class="prose"><h3>Frame-time investigation</h3><p>Showing data from <strong>2026-09-24T00:00:00Z</strong> to <strong>2026-09-25T00:00:00Z</strong>. Tiles above turn amber past 16 ms and red past 33 ms.</p><ul><li>See the <a href="#">process list</a> for the affected builds.</li></ul></div></div>
+</div></div>
+
+<script>
+const MIN=12,MAX=320;
+function fit(el){
+  const root=el.parentElement;
+  const cs=getComputedStyle(root);
+  const w=root.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
+  const h=root.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
+  const fits=px=>{el.style.fontSize=px+'px';return el.scrollWidth<=w&&el.scrollHeight<=h};
+  let lo=MIN,hi=MAX;
+  if(!fits(lo)){el.style.fontSize=lo+'px';return}
+  while(hi-lo>1){const mid=(lo+hi)>>1;if(fits(mid))lo=mid;else hi=mid}
+  el.style.fontSize=lo+'px';
+}
+const ro=new ResizeObserver(es=>es.forEach(e=>fit(e.target.querySelector('.fitme'))));
+document.querySelectorAll('.fitme').forEach(el=>{fit(el);ro.observe(el.parentElement)});
+</script>
+</body></html>
