@@ -96,7 +96,7 @@ The Data Source selector comes from `CellEditor`'s shared chrome, as it does for
 - `execute` and `getRendererProps` identical in shape to `pieChartMetadata`
 
 ## Mockups
-In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query and the SQL-normalized query as two states of the same cell, have working hover tooltips, and were checked in headless Chromium:
+In `tasks/completed/stacked_bar_cell_mockups/`. All are vertical, show the absolute query and the SQL-normalized query as two states of the same cell, have working hover tooltips, and were checked in headless Chromium:
 
 - `option-a-side-legend-segment-labels.html` — chosen layout: side legend, in-segment labels.
 - `option-b-top-legend-bar-totals.html` — top legend, bar totals only.
