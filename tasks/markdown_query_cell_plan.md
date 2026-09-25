@@ -121,11 +121,14 @@ execute: async (config, { variables, cellResults, cellSelections, timeRange, run
 }
 ```
 
-`useCellExecution` needs no change. The standard error path shows the zero-rows error
+`useCellExecution` needs no logic change. The standard error path shows the zero-rows error
 (`CellContainer.tsx:295-304`), and the result is registered under the cell name like any other
-cell's, so downstream cells can use it. `canBlockDownstream` stays `false`. Extra rows are
-ignored. On engine load failure, markdown cells behave like every other cell (never run; the
-notebook banner explains).
+cell's, so downstream cells can use it. `canBlockDownstream` is `true`, like the other
+query-backed cell types: when an upstream blocking cell fails, `executeFromCell` marks the
+markdown cell `blocked` with `data: []` (`useCellExecution.ts:398-420`) instead of showing a
+stale cached headline, and a markdown query failure halts downstream execution the same way.
+Extra rows are ignored. On engine load failure, markdown cells behave like every other cell
+(never run; the notebook banner explains).
 
 `getRendererProps` returns `content`, `data`, `status`, `options`.
 
@@ -136,10 +139,11 @@ notebook banner explains).
 - `row = rowValues(table, 0)` and `columnTypes = columnTypeMap(table)`. Both helpers move from
   `components/map/overlay.ts` to `lib/arrow-utils.ts` (the map imports them from there), so the
   markdown cell doesn't import the map overlay module.
-- When `data[0]` is absent (e.g. a zero-row result), `row` and `columnTypes` are left `undefined`
-  and `evaluateTemplate` runs without them and without `bareColumnsFromRow`, so no colors are
-  applied either. This keeps the existing `MarkdownCell.test.tsx` renderer tests, which default
-  to `data: []` with `status: 'success'`, valid.
+- When `data[0]` is absent (e.g. the existing tests' `data: []`), `row` and `columnTypes` are left
+  `undefined`, which makes `bareColumnsFromRow: true` inert (`macro-resolve.ts:112` only reads
+  `ctx.row` when it's defined), so no colors are applied either. This keeps the existing
+  `MarkdownCell.test.tsx` renderer tests, which default to `data: []` with `status: 'success'`,
+  valid.
 - `evaluateTemplate(content, { variables, timeRange, cellResults, cellSelections, row, columnTypes, bareColumnsFromRow: true })`.
 - Colors: `resolveColorColumn` gains a `name` parameter (default `'color'`, error text uses it)
   and is called for `color` and `background_color`. A new pure helper in `MarkdownCell.tsx`,
@@ -148,7 +152,8 @@ notebook banner explains).
   unsupported column type adds a warning shown in the existing `TemplateWarningBanner` and
   doesn't fail the cell.
 
-Render gate: evaluate the template only when `status === 'success'`, and keep the last successful
+Render gate: a `blocked` status renders nothing (its `data` is cleared to `[]` anyway). Otherwise,
+evaluate the template only when `status === 'success'`, and keep the last successful
 `{ text, warnings }` in `useState`, updating it during render when a fresh `status === 'success'`
 evaluation differs from what's stored — the `cacheInputsKey` pattern `PerfettoExportCell.tsx:57`
 uses, not a ref (reading/writing a ref during render trips `react-hooks/refs`, which
@@ -172,12 +177,11 @@ DOM structure:
 </div>
 ```
 
-- The root has no padding in any mode — notebooks double as dashboards, where padding wastes
-  space — so existing markdown cells keep rendering flush, as before, and `background_color` fills
-  the root edge to edge. When `background_color` is set the root also gets `rounded-sm`, so the
-  fill's corners match the cell. Fit mode adds no padding of its own. The root is `flex-1` inside
-  `CellContainer`'s flex
-  column, so it fills the cell height even when the text is short. In non-fit mode it grows past
+- The root has no padding in any mode, so existing markdown cells keep rendering flush, as
+  before, and `background_color` fills the root edge to edge. When `background_color` is set the
+  root also gets `rounded-sm`, so the fill's corners match the cell. Fit mode adds no padding of
+  its own. The root is `flex-1` inside `CellContainer`'s flex column, so it fills the cell height
+  even when the text is short. In non-fit mode it grows past
   the cell and `CellContainer` scrolls, as today. Inside a horizontal group, the same applies only
   if `HgChildPane`'s content wrapper is also a flex column: its wrapper is `flex-1 overflow-auto
   px-1 pb-1` (`HgChildPane.tsx:215`), missing the `flex flex-col` that `CellContainer.tsx:461` has,
@@ -195,14 +199,16 @@ DOM structure:
 
 A `useFitFontSize(rootRef, proseRef, enabled, deps)` hook in `MarkdownCell.tsx`:
 
-- A `ResizeObserver` on the root stores its content-box size in state. A `useLayoutEffect`
+- A `ResizeObserver` on the root, attached only while `enabled` is true and disconnected when it
+  turns false (jsdom has no `ResizeObserver` and `src/test-setup.ts` doesn't stub one, so
+  non-fit tests never construct it), stores its content-box size in state. A `useLayoutEffect`
   keyed on size, rendered text, and colors runs the search synchronously before paint.
 - Search: the pure helper `fitFontSize(fits: (px: number) => boolean, min, max): number`, a
   binary search over integer px in `[MIN_FIT_FONT_PX = 12, MAX_FIT_FONT_PX = 320]`.
   `fits(px)` sets `prose.style.fontSize` and compares the prose element's
-  `scrollWidth`/`scrollHeight` against the root's content-box width/height (so any root padding
-  isn't counted against the fit). It takes about 9 layout passes per fit, only
-  on resize or content change. If `min` doesn't fit, it returns `min` and the root scrolls.
+  `scrollWidth`/`scrollHeight` against the root's content-box width/height. It takes about 9
+  layout passes per fit, only on resize or content change. If `min` doesn't fit, it returns `min`
+  and the root scrolls.
 - After the search, the hook writes the chosen px directly to `prose.style.fontSize` — not to
   React state, which would trip `react-hooks/set-state-in-effect` — and clears it when `enabled`
   is false, the same direct-write pattern the mockup's `fit()` uses (`stat-tiles.html:76`).
@@ -256,9 +262,10 @@ already passes `availableColumns` from the cell's last result.
      values.
 3. **Run control cleanup**
    - Remove `canRun` / `cellCanRun` from `cell-registry.ts` and its four call sites. Update the
-     `cell-registry-mock.ts` markdown entry (give it an `execute`, drop the `canRun` fallback, and
-     update its mock renderer's gate from `status === 'success'` to also cover `loading`/`idle`
-     with data, matching the real render gate).
+     `cell-registry-mock.ts` markdown entry (give it an `execute`, drop the `canRun` fallback,
+     flip `canBlockDownstream` to `true`, update its `createDefaultConfig` to include
+     `sql: DEFAULT_SQL.markdown`, and update its mock renderer's gate from `status === 'success'`
+     to also cover `loading`/`idle` with data, matching the real render gate).
    - Update the `useCellManager.ts` comment.
    - Update stale comments that predate query-backed markdown: `cell-registry.ts:16`
      (`CellRendererProps.sql` "undefined for markdown cells"), `cell-registry.ts:161` (`execute`
@@ -283,6 +290,7 @@ already passes `availableColumns` from the cell's last result.
 - `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 - `analytics-web-app/src/lib/screen-renderers/macro-substitution.ts`
 - `analytics-web-app/src/lib/screen-renderers/useCellManager.ts` (comment)
+- `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts` (comment only)
 - `analytics-web-app/src/lib/screen-renderers/cells/MapCell.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/HgChildPane.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx`
@@ -313,8 +321,8 @@ already passes `availableColumns` from the cell's last result.
   configs would be a migration, and it would dirty every notebook on open. A one-entry table
   read by `resolveCellDataSource` keeps saved configs as they are.
 - **Binary search on `font-size` vs. CSS `transform: scale`.** Scaling a transform doesn't reflow,
-  so text couldn't wrap to use a tall, narrow cell. Changing the root `font-size` reflows the
-  `em`-relative prose. Container-query units (`cqi`) can't target "largest size whose wrapped
+  so text couldn't wrap to use a tall, narrow cell. Changing the prose element's `font-size`
+  reflows the `em`-relative prose. Container-query units (`cqi`) can't target "largest size whose wrapped
   height fits".
 - **Unsupported color type: warning vs. cell error.** Chart cells fail on a bad `color` type
   because it breaks their marks. Here the text is still meaningful without the tint, so a
@@ -322,7 +330,7 @@ already passes `availableColumns` from the cell's last result.
 
 ## Decisions
 
-- `background_color` fills the MarkdownCell root edge to edge (no padding). `CellContainer`'s 4px
+- `background_color` fills the MarkdownCell root edge to edge. `CellContainer`'s 4px
   `px-1 pb-1` gutter stays the panel color, which reads as a tile, and changing it would touch
   every cell type.
 - Fitted content is centered on both axes and `text-align: center` (the issue's "centered when
@@ -332,8 +340,11 @@ already passes `availableColumns` from the cell's last result.
   "local re-render only" semantics are replaced.
 - A markdown cell with data gets `buildStatusText`'s row/elapsed status text and a header
   "Download CSV" item like any other query-backed cell, including the `SELECT 1` default.
-- Root adds no padding in any mode: notebooks double as dashboards, where padding wastes space.
-  Pixel-identical rendering is otherwise not a goal.
+- Root adds no padding in any mode (so `background_color` fills it edge to edge): notebooks
+  double as dashboards, where padding wastes space. Pixel-identical rendering is otherwise not
+  a goal.
+- Markdown sets `canBlockDownstream: true`, like other query-backed cell types, so it never shows
+  stale output after an upstream failure.
 
 ## Documentation
 
@@ -396,7 +407,7 @@ Unit tests (Vitest, jsdom, no services):
   canRun: true (e.g. markdown)"; the metadata-driven fallback it exercised no longer exists.
 - **`notebook-utils.test.ts`**: `resolveCellDataSource` returns `notebook` for a markdown cell
   without `dataSource` even with a remote notebook default, and honors an explicit markdown
-  `dataSource`. `createDefaultCell('markdown', …, 'remote')` gets `dataSource: 'notebook'`.
+  `dataSource`. `cellTypeDefaultDataSource('markdown')` returns `'notebook'`.
   `shouldShowDataSource('markdown')` is true. `shouldShowTimeRange` is false for markdown on
   `notebook` and true on a remote source (replaces the "markdown stays false" tests).
   `configuredCellDataSource` returns `notebook` for a markdown cell with no `dataSource` under a
@@ -412,8 +423,11 @@ Unit tests (Vitest, jsdom, no services):
   routed to `engine.execute_and_register` and not to `fetchQueryIPC`/`streamQuery`. The mock's
   `createSqlExecute` skips `runQuery` entirely when `config.sql` is absent, so give the mock's
   markdown entry its own `execute` that calls `runQuery` regardless. The `SELECT 1` fallback and
-  the zero-rows error belong to `MarkdownCell.test.tsx`'s `execute` tests, not here;
-  `canBlockDownstream: false` for markdown is already covered by the existing test at `:726`.
+  the zero-rows error belong to `MarkdownCell.test.tsx`'s `execute` tests, not here. The existing
+  test at `:726` ("should not mark markdown cells as blocked") is inverted to assert that an
+  upstream failure blocks a downstream markdown cell (`status: 'blocked'`, `data: []`); a new
+  test asserts that a failing markdown cell halts and blocks its own downstream cells, matching
+  table/chart.
 - **`NotebookRenderer.test.tsx`**: update the markdown run-control tests. Markdown now shows
   "Run from here" / "Auto-run from here", and its Run executes only its own query.
 
