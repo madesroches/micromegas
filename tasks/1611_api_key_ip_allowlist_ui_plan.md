@@ -50,9 +50,9 @@ blank cell.
   (`IngestionKeysSelfServicePanel`). It calls `mintIngestionApiKey(name, audience)` directly and
   shows `err.message` on failure.
 - The allowlist is edited through the `PATCH` route, which is admin-only. `ApiKeysAdminPage`
-  only renders for admins (`<AuthGuard requireAdmin>` on the analytics page; the `is_admin`
-  branch on the ingestion page), so every surface that shows the edit action is one where the
-  route is callable. Non-admins can set an allowlist at mint time but can't change it later.
+  wraps itself in `<AuthGuard requireAdmin>`, and the ingestion page mounts it only in its
+  `is_admin` branch, so every surface that shows the edit action is one where the route is
+  callable. Non-admins can set an allowlist at mint time but can't change it later.
 
 ## Design
 
@@ -179,9 +179,7 @@ dialog already shows.
 - `tasks/1611_api_key_ip_allowlist_ui_mockups/allowlist-column-and-dialogs.html` has four
   panels: (1) the admin list with the new column (restricted, unrestricted, and revoked rows) and
   the shield edit action, (2) the edit dialog prefilled, (3) the edit dialog showing a server 400
-  message, and (4) the mint dialog with the optional field. It is a single option. The change is
-  small and follows the existing table/modal conventions, so there was no real layout choice to
-  compare.
+  message, and (4) the mint dialog with the optional field.
 
 ## Implementation Steps
 
@@ -269,7 +267,6 @@ The server side of the round trip is #1600's, and this change fixes no bug seen 
   - Entries are passed through unchanged, with no normalization.
 - `lib/__tests__/{ingestion,analytics}-api-keys-api.test.ts`:
   - `mint` with `allowed_cidrs` puts it in the POST body.
-  - `mint` without it sends a body with no `allowed_cidrs` key.
   - `set*ApiKeyAllowlist` sends `PATCH /api/{table}-api-keys/<encoded id>/allowlist` with
     `{allowed_cidrs}` in the body, including the `[]` case.
 - `components/__tests__/ApiKeysAdminPage.test.tsx`:
