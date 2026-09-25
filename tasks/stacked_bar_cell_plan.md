@@ -71,15 +71,15 @@ It validates exactly 3 non-color columns (category: string/dictionary/numeric; s
 
 ### Layout math (pure, unit-testable)
 `buildStackedBarLayout(resolved, { width, height, unit })` returns bar and segment rectangles, y ticks and x-label placement:
-- **Y scale**: `step = niceStep(maxTotal / 5)` (1/2/2.5/5/10 × 10ⁿ). Compute `top = ceil(maxTotal / step − 1e-9) × step`; the epsilon keeps a floating-point 100.0000001% from rounding up to a 120% axis. Tick labels use `formatValueWithUnit`. The axis gutter width comes from `estimateLabelWidth` over the tick labels.
+- **Y scale**: `step = niceStep(maxTotal / 5)` (1/2/2.5/5/10 × 10ⁿ). `niceStep(x)` first snaps `x` down to a nice value if `x` is within a relative tolerance (`1e-6 × x`) of one, then returns the smallest nice value ≥ that snapped input. `top` is `maxTotal` snapped down to the nearest multiple of `step` when it's within a relative tolerance (`1e-6 × maxTotal`) of one, else `ceil(maxTotal / step) × step`. Applying the same relative-tolerance snap on both the `niceStep` input and the `top` computation keeps a floating-point 100.0000001% from rounding up to a 120% (or 125%) axis. Tick labels use `formatValueWithUnit`. The axis gutter width comes from `estimateLabelWidth` over the tick labels.
 - **Bars**: band = plot width / categories. Bar width = `min(56px, band × 0.62)`, floored at 12px. Below the floor, the plot area gets a minimum width and the plot div scrolls horizontally rather than squashing bars.
-- **Segments**: a 2px surface gap (panel background) separates stacked segments. Only the top segment of each bar gets a 4px rounded cap; the baseline stays square. These follow the dataviz mark spec, as in the Pie cell.
+- **Segments**: a 2px surface gap (panel background) separates stacked segments. Only the top segment of each bar gets a 4px rounded cap; the baseline stays square. These follow the dataviz mark spec, as in the Pie cell. The in-segment label fit check (18px min segment height, `estimateLabelWidth(label) + padding` against bar width) is decided here, not by measuring rendered text; the renderer only draws what this function marks fit.
 - **X labels**: centered under each bar. They rotate to `ROTATE_DEG` when any label's `estimateLabelWidth` exceeds the band, and are truncated with a `<title>` beyond a max width.
-- **Width**: measured with a `ResizeObserver` on the plot container, the same approach as `XYChart` / `FlameGraphCell`.
+- **Width**: measured with a `ResizeObserver` on the plot container, the same approach as `XYChart` / `FlameGraphCell`. jsdom has no `ResizeObserver`; tests stub it locally (see Phase 3 step 7).
 
 ### Rendering (`StackedBarCell.tsx`)
 - **Header**: stats `categories`, `series`, and `max total`, unit-formatted. This mirrors the Pie and XY header rows. There is no toggle in the header.
-- **Plot**: inline SVG with hairline gridlines, a y axis, stacked `<path>`s, and value labels inside segments (Option A). A label is drawn only when the segment is at least 18px tall and the measured text plus padding fits the bar width. It is never clipped, and its ink is chosen by `contrastingTextColor`.
+- **Plot**: inline SVG with hairline gridlines, a y axis, stacked `<path>`s, and value labels inside segments (Option A). A label is drawn only when `buildStackedBarLayout` marks its segment fit (18px min height, `estimateLabelWidth(label) + padding` within the bar width — see Layout math). It is never clipped, and its ink is chosen by `contrastingTextColor`.
 - **Tooltip** (per segment, pointer events): category, series swatch and name, value, **share of bar**, and bar total. The share is a display-only derived value, not normalization: it is always correct whatever the query returned.
 - **Legend**: always shown, one row per resolved series in stack order.
 - **States**: loading, empty, error and all-zero, copied from `PieChartCell`.
@@ -138,13 +138,13 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
    - **`resolveSeriesColors`**: SQL colors override the palette; the palette doesn't skip an entry for SQL-colored series; it wraps after 12 series
    - **`niceStep` / `buildStackedBarLayout`**:
      - clean tick steps
-     - a total of 100.0000001 with `percent` gives a 100 top, not 120
+     - a total of 100.0000001 with `percent` gives a 100 top, not 120 or 125 (exercises the relative-tolerance snap on both `niceStep` and `top`)
      - segments stack contiguously with the 2px gap
      - rounded cap only on the top segment
      - the minimum bar width triggers a scroll width
      - rotation when labels exceed the band
-     - an in-segment label is skipped when the segment is too short or narrow
-   - **Renderer**: loading, empty, error and all-zero states; legend rows in stack order; tooltip content (including share of bar) on `pointerMove`
+     - an in-segment label is skipped when the segment is too short or narrow (via `estimateLabelWidth`)
+   - **Renderer** (stub `ResizeObserver` with `vi.stubGlobal`, invoking its callback with a fixed `contentRect.width`, since jsdom/test-setup.ts has none): loading, empty, error and all-zero states; legend rows in stack order; tooltip content (including share of bar) on `pointerMove`
    - **Editor**: `unit` macro validation error display
 
 ### Phase 4 — Docs
@@ -196,7 +196,7 @@ All behavior is reachable with constructed Arrow tables and props, so everything
 - series color assignment
 - tick and layout math, including the percent-rounding edge case
 - label-fit decisions
-- renderer states, legend and tooltip
+- renderer states, legend and tooltip (behind a local `ResizeObserver` stub, since jsdom has none)
 - editor wiring
 
 No live-DB or service test: this is a new feature, not a pinned bug. Run `yarn lint`, `yarn type-check` and `yarn test` before the PR.
