@@ -181,7 +181,8 @@ describe('useCellExecution', () => {
 
   describe('executeCell', () => {
     describe('markdown cells', () => {
-      it('should immediately succeed for markdown cells without SQL execution', async () => {
+      it('routes to engine.execute_and_register (not fetchQueryIPC/streamQuery) since a markdown cell with no dataSource always resolves to notebook, even under a remote notebook default', async () => {
+        const engine = createMockEngine()
         const cells: CellConfig[] = [
           { type: 'markdown', name: 'Notes', content: '# Hello', layout: { height: 'auto' } },
         ]
@@ -194,6 +195,8 @@ describe('useCellExecution', () => {
             variableValuesRef,
             setVariableValue: vi.fn(),
             refreshTrigger: 0,
+            dataSource: 'remote-src',
+            engine,
           })
         )
 
@@ -203,8 +206,10 @@ describe('useCellExecution', () => {
         })
 
         expect(success).toBe(true)
-        expect(result.current.cellStates['Notes']).toEqual({ status: 'success', data: [] })
+        expect(engine.execute_and_register).toHaveBeenCalled()
+        expect(mockFetchQueryIPC).not.toHaveBeenCalled()
         expect(mockStreamQuery).not.toHaveBeenCalled()
+        expect(result.current.cellStates['Notes'].status).toBe('success')
       })
     })
 
@@ -723,7 +728,7 @@ describe('useCellExecution', () => {
       expect(result.current.cellStates['Third'].status).toBe('blocked')
     })
 
-    it('should not mark markdown cells as blocked', async () => {
+    it('blocks a downstream markdown cell after an upstream failure, like table/chart', async () => {
       mockStreamQuery.mockReturnValue(createThrowingGenerator('Query failed'))
 
       const cells: CellConfig[] = [
@@ -747,11 +752,41 @@ describe('useCellExecution', () => {
         expect(result.current.cellStates['Query']?.status).toBe('error')
       })
 
-      // Markdown cells executed before the error should still succeed
-      // Notes is after Query, so it should not be blocked (it's markdown)
       expect(result.current.cellStates['Query'].status).toBe('error')
-      // Markdown cells are never blocked - they just execute independently
-      expect(result.current.cellStates['Notes']).toBeUndefined()
+      // Markdown now blocks downstream / gets blocked like every other query-backed cell.
+      expect(result.current.cellStates['Notes']).toEqual({ status: 'blocked', data: [] })
+    })
+
+    it('halts and blocks downstream cells when a markdown cell itself fails', async () => {
+      // A markdown cell with no dataSource always resolves to 'notebook', so its
+      // failure comes from the WASM engine path, not streamQuery.
+      const engine = createMockEngine({
+        execute_and_register: vi.fn().mockRejectedValue(new Error('Query failed')),
+      })
+      const cells: CellConfig[] = [
+        { type: 'markdown', name: 'Notes', content: '# Notes', sql: 'SELECT 1', layout: { height: 'auto' } },
+        { type: 'table', name: 'Downstream', sql: 'SELECT 2', layout: { height: 'auto' } },
+      ]
+      const variableValuesRef = createVariableValuesRef()
+
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: vi.fn(),
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      await act(async () => {
+        await result.current.executeFromCell(0)
+      })
+
+      expect(result.current.cellStates['Notes'].status).toBe('error')
+      expect(result.current.cellStates['Notes'].error).toBe('Query failed')
+      expect(result.current.cellStates['Downstream']).toEqual({ status: 'blocked', data: [] })
     })
 
     it('should not halt execution when a canBlockDownstream: false cell fails (e.g. Perfetto export)', async () => {

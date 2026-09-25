@@ -12,6 +12,7 @@ import { SyntaxEditor } from '@/components/SyntaxEditor'
 import {
   substituteMacros,
   validateMacros,
+  validateTemplateMacros,
   DEFAULT_SQL,
   DEFAULT_MAP_DETAIL_TEMPLATE,
 } from '../notebook-utils'
@@ -22,17 +23,16 @@ import { MapHoverTooltip } from '@/components/map/MapHoverTooltip'
 import { useLatestRef } from '@/hooks/useLatestRef'
 import {
   buildOverlay,
-  columnTypeMap,
   defaultMappingFor,
   hexFromRgba,
   resolveMappingScalars,
   resolveOverlayConstants,
   rgbaFromHex,
-  rowValues,
   type ChannelBinding,
   type OverlayMapping,
   type Shape,
 } from '@/components/map/overlay'
+import { columnTypeMap, rowValues } from '@/lib/arrow-utils'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useGLTF } from '@react-three/drei'
 import {
@@ -800,16 +800,8 @@ export function MapCellEditor({
   const cameraKind =
     (mapConfig.options?.cameraKind as MapModeKind | undefined) ?? 'perspective'
 
-  // Empty-string placeholders for every column from the most recent result
-  // so the editor doesn't flag `$columnFromQuery` as "Unknown variable" at
-  // edit time. validateMacros only checks presence.
   const templateValidationErrors = useMemo(() => {
-    const syntheticColumnVars: Record<string, string> = {}
-    for (const name of availableColumns ?? []) {
-      syntheticColumnVars[name] = ''
-    }
-    const mergedVars = { ...variables, ...syntheticColumnVars }
-    return validateMacros(detailTemplate, mergedVars, cellResults, cellSelections).errors
+    return validateTemplateMacros(detailTemplate, availableColumns ?? [], variables, cellResults, cellSelections).errors
   }, [detailTemplate, availableColumns, variables, cellResults, cellSelections])
 
   return (

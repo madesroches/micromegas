@@ -131,6 +131,9 @@ import {
   extractMultiSeriesChartData,
   extractPieData,
   validateChartColumns,
+  resolveColorColumn,
+  rowValues,
+  columnTypeMap,
   detectXAxisMode,
   isTimeType,
   isNumericType,
@@ -186,6 +189,7 @@ function createMockTable(
     schema: { fields },
     numRows: rows.length,
     get: (i: number) => rows[i] ?? null,
+    getChild: (name: string) => ({ get: (i: number) => rows[i]?.[name] ?? null }),
   }
 }
 
@@ -1540,5 +1544,101 @@ describe('isHistogramStructType', () => {
     expect(isHistogramStructType(createFloatType() as never)).toBe(false)
     expect(isHistogramStructType(createUtf8Type() as never)).toBe(false)
     expect(isHistogramStructType(createIntType() as never)).toBe(false)
+  })
+})
+
+describe('resolveColorColumn', () => {
+  it('defaults to the field named color (case-insensitive)', () => {
+    const result = resolveColorColumn([
+      { name: 'x', type: createFloatType() },
+      { name: 'COLOR', type: createIntType() },
+    ])
+    expect(result).toEqual({ index: 1, name: 'COLOR', kind: 'integer' })
+  })
+
+  it('resolves a custom column name', () => {
+    const result = resolveColorColumn(
+      [
+        { name: 'x', type: createFloatType() },
+        { name: 'background_color', type: createUtf8Type() },
+      ],
+      'background_color',
+    )
+    expect(result).toEqual({ index: 1, name: 'background_color', kind: 'string' })
+  })
+
+  it('returns index -1 when the custom name is absent', () => {
+    const result = resolveColorColumn([{ name: 'color', type: createIntType() }], 'background_color')
+    expect(result.index).toBe(-1)
+  })
+
+  it('reports an error naming the custom column on an unsupported type', () => {
+    const result = resolveColorColumn(
+      [{ name: 'background_color', type: createBoolType() }],
+      'background_color',
+    )
+    expect(result.error).toContain("'background_color' column must be integer")
+  })
+})
+
+describe('rowValues', () => {
+  it('returns raw column values (no stringification)', () => {
+    const table = createMockTable(
+      [
+        { name: 'process_id', type: createUtf8Type() },
+        { name: 'x', type: createFloatType() },
+        { name: 'y', type: createFloatType() },
+        { name: 'z', type: createFloatType() },
+        { name: 'event_type', type: createUtf8Type() },
+      ],
+      [{ process_id: 'p1', x: 1.5, y: 2.5, z: 3.5, event_type: 'hit' }],
+    )
+    expect(rowValues(table as never, 0)).toEqual({
+      process_id: 'p1',
+      x: 1.5,
+      y: 2.5,
+      z: 3.5,
+      event_type: 'hit',
+    })
+  })
+
+  it('omits columns whose value is null', () => {
+    const table = createMockTable(
+      [
+        { name: 'process_id', type: createUtf8Type() },
+        { name: 'maybe_null', type: createUtf8Type() },
+      ],
+      [{ process_id: 'p1', maybe_null: null }],
+    )
+    const row = rowValues(table as never, 0)
+    expect(row).not.toHaveProperty('maybe_null')
+    expect(row.process_id).toBe('p1')
+  })
+
+  it('returns a Timestamp column as its raw epoch value', () => {
+    const table = createMockTable(
+      [{ name: 'time', type: createTimestampType() }],
+      [{ time: 1705314600000 }],
+    )
+    // Raw value (not RFC3339) — the type map carries the DataType so the
+    // template evaluator can format it at emission time.
+    expect(rowValues(table as never, 0).time).toBe(1705314600000)
+  })
+})
+
+describe('columnTypeMap', () => {
+  it('maps each column name to its Arrow DataType', () => {
+    const timestampType = createTimestampType()
+    const table = createMockTable(
+      [
+        { name: 'time', type: timestampType },
+        { name: 'x', type: createFloatType() },
+      ],
+      [],
+    )
+    const types = columnTypeMap(table as never)
+    expect(types.get('time')).toBe(timestampType)
+    expect(types.get('x')).toBeDefined()
+    expect(types.has('missing')).toBe(false)
   })
 })

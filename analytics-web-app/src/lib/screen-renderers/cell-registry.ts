@@ -1,6 +1,7 @@
 import { ComponentType, ReactNode } from 'react'
 import { Table, DataType } from 'apache-arrow'
 import type { CellConfig, CellState, CellType, CellStatus, VariableValue } from './notebook-types'
+import { cellTypeDefaultDataSource } from './notebook-utils'
 
 // Re-export types from notebook-types for backwards compatibility
 export type { CellType, CellStatus, CellConfig, CellState, VariableValue }
@@ -13,7 +14,7 @@ export interface CellRendererProps {
   name: string
   /** Originating notebook name (the screen's saved name), for query attribution. Undefined for an unsaved new screen. */
   notebookName?: string
-  /** SQL query for this cell (undefined for markdown cells) */
+  /** SQL query for this cell */
   sql?: string
   /** Cell-specific options (e.g., chart options) */
   options?: Record<string, unknown>
@@ -133,16 +134,8 @@ export interface CellTypeMetadata {
   /** Default height for new cells */
   readonly defaultHeight: number
 
-  /** Whether this cell can block downstream execution (false for markdown) */
+  /** Whether this cell can block downstream execution (false for e.g. Perfetto export, whose execute is validation-only) */
   readonly canBlockDownstream: boolean
-
-  /**
-   * Whether this cell type shows a Run control, independent of whether it has
-   * an `execute` method. Defaults to `!!execute`. Markdown sets this to `true`
-   * so users get an explicit "re-render" control even though execution is a
-   * free, local, synchronous no-op (markdown declares no `execute`).
-   */
-  readonly canRun?: boolean
 
   /**
    * Fallback selection mode when the cell config doesn't specify
@@ -158,7 +151,8 @@ export interface CellTypeMetadata {
   /**
    * Executes the cell and returns state updates.
    * Returns null if nothing to execute (e.g., text variables).
-   * Absence of this method means the cell doesn't execute (e.g., markdown).
+   * Absence of this method means the cell doesn't execute (e.g., hg — its
+   * children execute individually).
    */
   readonly execute?: (
     config: CellConfig,
@@ -254,14 +248,6 @@ export function getCellEditor(type: CellType): ComponentType<CellEditorProps> {
 }
 
 /**
- * Whether a cell type shows a Run control: explicit `canRun` if set,
- * otherwise whether it has an `execute` method.
- */
-export function cellCanRun(meta: CellTypeMetadata): boolean {
-  return meta.canRun ?? !!meta.execute
-}
-
-/**
  * Cell type options derived from metadata (for add cell modal).
  */
 export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellType, CellTypeMetadata][])
@@ -294,9 +280,13 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>, de
     ...meta.createDefaultConfig(),
   }
 
-  // Set default data source for cell types that support it
-  if (defaultDataSource && type !== 'markdown' && type !== 'referencetable' && type !== 'hg') {
-    return { ...base, dataSource: defaultDataSource } as CellConfig
+  // Set default data source for cell types that support it. The per-type default
+  // (e.g. markdown always starts on `notebook`) is computed before the notebook-level
+  // fallback so a new markdown cell persists `dataSource: 'notebook'` explicitly even
+  // when the notebook has no default data source at all.
+  const ds = cellTypeDefaultDataSource(type) ?? defaultDataSource
+  if (ds && type !== 'referencetable' && type !== 'hg') {
+    return { ...base, dataSource: ds } as CellConfig
   }
 
   return base as CellConfig

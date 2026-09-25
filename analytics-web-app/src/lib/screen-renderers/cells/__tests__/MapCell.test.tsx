@@ -4,8 +4,6 @@ import {
   Dictionary,
   Int32,
   Table,
-  Timestamp,
-  TimeUnit,
   Utf8,
   tableFromArrays,
   vectorFromArray,
@@ -13,9 +11,7 @@ import {
 import { ChannelBindingControl, mapMetadata } from '../MapCell'
 import {
   buildOverlay,
-  columnTypeMap,
   resolveMappingScalars,
-  rowValues,
   type ChannelBinding,
 } from '@/components/map/overlay'
 import { DEFAULT_MAP_DETAIL_TEMPLATE } from '../../notebook-utils'
@@ -386,66 +382,6 @@ describe('resolveMappingScalars', () => {
     if (!r.ok) return
     expect(r.mapping.size).toEqual({ column: 'radius' })
     expect(r.mapping.color).toEqual({ column: 'tint' })
-  })
-})
-
-describe('rowValues', () => {
-  it('returns raw column values (no stringification)', () => {
-    const table = tableFromArrays({
-      process_id: ['p1'],
-      x: new Float64Array([1.5]),
-      y: new Float64Array([2.5]),
-      z: new Float64Array([3.5]),
-      event_type: ['hit'],
-    })
-    expect(rowValues(table, 0)).toEqual({
-      process_id: 'p1',
-      x: 1.5,
-      y: 2.5,
-      z: 3.5,
-      event_type: 'hit',
-    })
-  })
-
-  it('omits columns whose value is null', () => {
-    const table = tableFromArrays({
-      process_id: ['p1'],
-      x: new Float64Array([0]),
-      y: new Float64Array([0]),
-      z: new Float64Array([0]),
-      maybe_null: [null as string | null],
-    })
-    const row = rowValues(table, 0)
-    expect(row).not.toHaveProperty('maybe_null')
-    expect(row.process_id).toBe('p1')
-  })
-
-  it('returns a Timestamp column as its raw epoch value', () => {
-    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
-    const timeVec = vectorFromArray([1705314600000], timestampType)
-    const table = new Table({
-      time: timeVec,
-      x: vectorFromArray([0]),
-      y: vectorFromArray([0]),
-      z: vectorFromArray([0]),
-    })
-    // Raw value (not RFC3339) — the type map carries the DataType so the
-    // template evaluator can format it at emission time.
-    expect(rowValues(table, 0).time).toBe(1705314600000)
-  })
-})
-
-describe('columnTypeMap', () => {
-  it('maps each column name to its Arrow DataType', () => {
-    const timestampType = new Timestamp(TimeUnit.MILLISECOND, null)
-    const table = new Table({
-      time: vectorFromArray([1705314600000], timestampType),
-      x: vectorFromArray([0]),
-    })
-    const types = columnTypeMap(table)
-    expect(types.get('time')).toBe(timestampType)
-    expect(types.get('x')).toBeDefined()
-    expect(types.has('missing')).toBe(false)
   })
 })
 

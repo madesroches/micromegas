@@ -25,16 +25,22 @@ const createMockRenderer = (type: string) => {
     onTimeRangeSelect,
     content,
     status,
+    data,
   }: {
     name: string
     onTimeRangeSelect?: (from: Date, to: Date) => void
     content?: string
     status?: string
+    data?: unknown[]
   }) => {
-    // Markdown mirrors the real MarkdownCell's defer-until-success gate so
-    // tests can exercise idle-blank / success-rendered / live-edit behavior
-    // without pulling in the real renderer (and react-markdown) here.
-    const text = type === 'markdown' ? (status === 'success' ? content ?? '' : '') : `Cell: ${name}`
+    // Markdown mirrors the real MarkdownCell's defer-until-success gate, plus its
+    // idle/loading-with-data cache (the mock has no separate cached value to fall
+    // back to, so it just keeps showing the current `content` prop), so tests can
+    // exercise idle-blank / success-rendered / live-edit behavior without pulling
+    // in the real renderer (and react-markdown) here.
+    const showMarkdown =
+      status === 'success' || ((status === 'loading' || status === 'idle') && (data?.length ?? 0) > 0)
+    const text = type === 'markdown' ? (showMarkdown ? content ?? '' : '') : `Cell: ${name}`
     return React.createElement(
       'div',
       {
@@ -80,11 +86,10 @@ const BASE_METADATA = {
   markdown: {
     label: 'Markdown',
     icon: 'M',
-    description: 'Documentation and notes',
+    description: 'Documentation and headline values',
     showTypeBadge: false,
     defaultHeight: 150,
-    canBlockDownstream: false,
-    canRun: true,
+    canBlockDownstream: true,
   },
   variable: {
     label: 'Variable',
@@ -266,7 +271,7 @@ export function createCellRegistryMock(options: MockOptions = {}) {
         meta.createDefaultConfig = () => ({ type: 'log', sql: DEFAULT_SQL.log })
         break
       case 'markdown':
-        meta.createDefaultConfig = () => ({ type: 'markdown', content: '# Notes\n\nAdd your documentation here.' })
+        meta.createDefaultConfig = () => ({ type: 'markdown', content: '# Notes\n\nAdd your documentation here.', sql: DEFAULT_SQL.markdown })
         break
       case 'variable':
         meta.createDefaultConfig = () => ({ type: 'variable', variableType: 'combobox', sql: DEFAULT_SQL.variable })
@@ -285,8 +290,8 @@ export function createCellRegistryMock(options: MockOptions = {}) {
         break
     }
 
-    // Add execute method (except markdown and hg which don't execute)
-    if (type !== 'markdown' && type !== 'hg') {
+    // Add execute method (except hg, whose children execute individually)
+    if (type !== 'hg') {
       if (type === 'perfettoexport') {
         // Minimal validating execute (mirrors the real PerfettoExportCell):
         // throws when the config asks it to, to simulate a bad timeRange
@@ -296,6 +301,28 @@ export function createCellRegistryMock(options: MockOptions = {}) {
             throw new Error('Invalid time range override')
           }
           return Promise.resolve({ data: [] })
+        }
+      } else if (type === 'markdown') {
+        if (withSqlExecution) {
+          // Unlike createSqlExecute, always calls runQuery — even with no `sql`
+          // configured — falling back to DEFAULT_SQL.markdown, mirroring the real
+          // MarkdownCell's `effectiveMarkdownSql`.
+          meta.execute = async (
+            config: { sql?: string },
+            { variables, timeRange, runQuery }: {
+              variables: Record<string, string>
+              timeRange: { begin: string; end: string }
+              runQuery: (sql: string) => Promise<unknown>
+            },
+          ) => {
+            const sql = substituteMacros(config.sql?.trim() ? config.sql : DEFAULT_SQL.markdown, variables, timeRange, {}, {})
+            const data = await runQuery(sql)
+            return { data: [data] }
+          }
+        } else {
+          // NotebookRenderer.test.tsx mocks without withSqlExecution, so its
+          // Run-button tests must not reach runQuery, which throws in jsdom.
+          meta.execute = simpleExecuteStub
         }
       } else if (withSqlExecution) {
         if (type === 'variable') {
@@ -326,8 +353,6 @@ export function createCellRegistryMock(options: MockOptions = {}) {
 
   const mock: Record<string, unknown> = {
     getCellTypeMetadata: (type: string) => metadata[type] || metadata['table'],
-
-    cellCanRun: (meta: { canRun?: boolean; execute?: unknown }) => meta.canRun ?? !!meta.execute,
 
     CELL_TYPE_OPTIONS: Object.entries(BASE_METADATA).map(([type, meta]) => ({
       type,

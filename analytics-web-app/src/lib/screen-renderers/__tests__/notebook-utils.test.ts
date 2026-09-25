@@ -29,6 +29,10 @@ import {
   evaluateTemplate,
   resolveQueryTimeRange,
   shouldShowTimeRange,
+  resolveCellDataSource,
+  shouldShowDataSource,
+  cellTypeDefaultDataSource,
+  configuredCellDataSource,
   viewerVariable,
   collectAvailableVariables,
   findUnresolvedViewerMacro,
@@ -819,9 +823,9 @@ describe('createDefaultCell', () => {
       expect((cell as { content: string }).content).toContain('# Notes')
     })
 
-    it('should not have sql property', () => {
+    it('should include default SQL', () => {
       const cell = createDefaultCell('markdown', new Set())
-      expect(cell).not.toHaveProperty('sql')
+      expect((cell as { sql: string }).sql).toBe('SELECT 1')
     })
   })
 
@@ -1436,14 +1440,86 @@ describe('resolveQueryTimeRange', () => {
   })
 })
 
+describe('cellTypeDefaultDataSource', () => {
+  it('returns notebook for markdown', () => {
+    expect(cellTypeDefaultDataSource('markdown')).toBe('notebook')
+  })
+
+  it('returns undefined for other cell types', () => {
+    expect(cellTypeDefaultDataSource('table')).toBeUndefined()
+    expect(cellTypeDefaultDataSource('chart')).toBeUndefined()
+  })
+})
+
+describe('resolveCellDataSource', () => {
+  const base = { name: 'c', layout: { height: 200 } }
+
+  it('returns notebook for a markdown cell with no dataSource, even under a remote notebook default', () => {
+    const cell = { ...base, type: 'markdown', content: '' } as CellConfig
+    expect(resolveCellDataSource(cell, {}, 'remote-src')).toBe('notebook')
+  })
+
+  it('honors an explicit markdown dataSource', () => {
+    const cell = { ...base, type: 'markdown', content: '', dataSource: 'remote-src' } as CellConfig
+    expect(resolveCellDataSource(cell, {}, undefined)).toBe('remote-src')
+  })
+
+  it('falls back to the notebook-level default for a type with no per-type default', () => {
+    const cell = { ...base, type: 'table', sql: '' } as CellConfig
+    expect(resolveCellDataSource(cell, {}, 'remote-src')).toBe('remote-src')
+  })
+})
+
+describe('configuredCellDataSource', () => {
+  const base = { name: 'c', layout: { height: 200 } }
+
+  it('returns notebook for a markdown cell with no dataSource under a remote notebook default', () => {
+    const cell = { ...base, type: 'markdown', content: '' } as CellConfig
+    expect(configuredCellDataSource(cell, 'remote-src')).toBe('notebook')
+  })
+
+  it('returns the cell-configured dataSource verbatim (no $var resolution)', () => {
+    const cell = { ...base, type: 'table', sql: '', dataSource: '$ds' } as CellConfig
+    expect(configuredCellDataSource(cell, 'remote-src')).toBe('$ds')
+  })
+
+  it('falls back to the notebook default, then empty string, when neither the cell nor its type has one', () => {
+    const cell = { ...base, type: 'table', sql: '' } as CellConfig
+    expect(configuredCellDataSource(cell, 'remote-src')).toBe('remote-src')
+    expect(configuredCellDataSource(cell, undefined)).toBe('')
+  })
+})
+
+describe('shouldShowDataSource', () => {
+  it('is true for markdown', () => {
+    expect(shouldShowDataSource('markdown')).toBe(true)
+  })
+
+  it('is false for variable, referencetable, and chart', () => {
+    expect(shouldShowDataSource('variable')).toBe(false)
+    expect(shouldShowDataSource('referencetable')).toBe(false)
+    expect(shouldShowDataSource('chart')).toBe(false)
+  })
+
+  it('is true for table', () => {
+    expect(shouldShowDataSource('table')).toBe(true)
+  })
+})
+
 describe('shouldShowTimeRange', () => {
   const base = { name: 'c', layout: { height: 200 } }
   const remoteDs = 'remote-src'
 
-  it('returns false for markdown, referencetable, and hg cells', () => {
-    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig, {}, remoteDs)).toBe(false)
+  it('returns false for referencetable and hg cells', () => {
     expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig, {}, remoteDs)).toBe(false)
     expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig, {}, remoteDs)).toBe(false)
+  })
+
+  it('returns false for a markdown cell with no dataSource (defaults to notebook), true when pointed at a remote source', () => {
+    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig, {}, remoteDs)).toBe(false)
+    expect(
+      shouldShowTimeRange({ ...base, type: 'markdown', content: '', dataSource: remoteDs } as CellConfig, {}, remoteDs)
+    ).toBe(true)
   })
 
   it('returns true for combobox/expression variable cells, false for datasource/text', () => {
@@ -1492,8 +1568,7 @@ describe('shouldShowTimeRange', () => {
     ).toBe(false)
   })
 
-  it('markdown/referencetable/hg stay false regardless of resolved data source', () => {
-    expect(shouldShowTimeRange({ ...base, type: 'markdown', content: '' } as CellConfig, {}, 'notebook')).toBe(false)
+  it('referencetable/hg stay false regardless of resolved data source', () => {
     expect(shouldShowTimeRange({ ...base, type: 'referencetable', csv: '' } as CellConfig, {}, 'notebook')).toBe(false)
     expect(shouldShowTimeRange({ ...base, type: 'hg', children: [] } as CellConfig, {}, 'notebook')).toBe(false)
   })

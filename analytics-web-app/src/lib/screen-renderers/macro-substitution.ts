@@ -245,6 +245,27 @@ export function validateMacros(
 }
 
 /**
+ * Validates macro references in a Markdown template against available variables,
+ * plus a set of bare column names that resolve from a row at render time (a map
+ * detail template's `$col`, or a Markdown cell's row-0 binding). Column names are
+ * passed as empty-string placeholders so `validateMacros` doesn't flag them as
+ * unknown variables — it only checks presence, not the row's actual value.
+ */
+export function validateTemplateMacros(
+  text: string,
+  availableColumns: string[],
+  variables: Record<string, VariableValue>,
+  cellResults: Record<string, Table>,
+  cellSelections: Record<string, Record<string, unknown>>,
+): MacroValidationResult {
+  const syntheticColumnVars: Record<string, string> = {}
+  for (const name of availableColumns) {
+    syntheticColumnVars[name] = ''
+  }
+  return validateMacros(text, { ...variables, ...syntheticColumnVars }, cellResults, cellSelections)
+}
+
+/**
  * Checks if a SQL string contains unresolved $cell.selected.column macros.
  * Returns the cell name if found, null otherwise.
  */

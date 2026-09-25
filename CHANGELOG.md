@@ -4,6 +4,17 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Notebooks:** Markdown cells are now query-backed (#1509), covering both documentation and
+  headline values (a Grafana Stat-panel equivalent: "p99 latency", "active players",
+  "healthy"/"degraded") in one cell type. Every markdown cell runs a query — `SELECT 1` on the
+  local `notebook` source by default — and binds row 0 of the result to the template as bare
+  `$column`; optional `color` / `background_color` columns tint the text and fill the cell
+  (same convention as the chart cells' `color` column); an optional **Fit to cell** mode scales
+  the rendered markdown, centered, to fill the cell. Thresholds, value mappings, and gradients
+  are ordinary SQL (`CASE`, `color_scale()`, `lerp_color()`); units reuse `format_value`. Markdown
+  cells now depend on the local WASM query engine and, like every other query-backed cell type,
+  block downstream cells when their own query fails, are blocked by an upstream failure, and are
+  blocked while an upstream cell waits on a row selection or viewer macro.
 * Show and edit API-key IP allowlists in the analytics web app (#1611).
 * **Bug fix:** Add a byte-denominated budget to the object cache's origin-fetch scheduler,
   bounding transient fetch memory independently of the concurrency knob (#1537). The scheduler

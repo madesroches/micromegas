@@ -504,7 +504,7 @@ describe('NotebookRenderer', () => {
       expect(screen.getByTitle('Run cell')).toBeInTheDocument()
     })
 
-    it('should show a run button for markdown cells (canRun via metadata, not execute)', async () => {
+    it('should show a run button for markdown cells (execute, like every other query-backed cell type)', async () => {
       const cells = [createMarkdownCell('Notes')]
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
@@ -512,13 +512,13 @@ describe('NotebookRenderer', () => {
       expect(screen.getByTitle('Run cell')).toBeInTheDocument()
     })
 
-    it('should not show "Run from here" or "Auto-run from here" for markdown cells', async () => {
+    it('should show "Run from here" and "Auto-run from here" for markdown cells', async () => {
       const cells = [createMarkdownCell('Notes')]
 
       await renderNotebook(createDefaultProps({ config: { cells } }))
 
-      expect(screen.queryByText('Run from here')).not.toBeInTheDocument()
-      expect(screen.queryByText('Auto-run from here')).not.toBeInTheDocument()
+      expect(screen.getByText('Run from here')).toBeInTheDocument()
+      expect(screen.getByText('Auto-run from here')).toBeInTheDocument()
     })
 
     it('updates markdown output live when content changes while status is success, with no Run click', async () => {

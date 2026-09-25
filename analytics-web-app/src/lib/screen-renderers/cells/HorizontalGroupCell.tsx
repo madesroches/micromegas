@@ -24,7 +24,7 @@ import {
   Group,
 } from 'lucide-react'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
-import { getCellTypeMetadata, createDefaultCell, cellCanRun } from '../cell-registry'
+import { getCellTypeMetadata, createDefaultCell } from '../cell-registry'
 import { AddCellModal } from '../shared'
 import type {
   CellConfig,
@@ -32,7 +32,7 @@ import type {
   HorizontalGroupCellConfig,
   VariableValue,
 } from '../notebook-types'
-import { resolveCellDataSource, shouldShowDataSource, shouldShowTimeRange, validateCellName, sanitizeCellName } from '../notebook-utils'
+import { resolveCellDataSource, shouldShowDataSource, shouldShowTimeRange, validateCellName, sanitizeCellName, configuredCellDataSource } from '../notebook-utils'
 import { buildCellRendererProps } from '../notebook-cell-view'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
@@ -355,7 +355,7 @@ function ChildEditorView({
       </div>
       {shouldShowDataSource(child.type) && (
         <DataSourceField
-          value={('dataSource' in child ? child.dataSource : undefined) || defaultDataSource || ''}
+          value={configuredCellDataSource(child, defaultDataSource)}
           onChange={(ds) => {
             const newChildren = config.children.map((c) =>
               c.name === child.name ? { ...c, dataSource: ds } : c,
@@ -397,7 +397,7 @@ function ChildEditorView({
         cellResults={cellResults}
         cellSelections={cellSelections}
       />
-      {onRun && cellCanRun(meta) && (
+      {onRun && !!meta.execute && (
         <Button onClick={onRun} className="w-full gap-2">
           <Play className="w-4 h-4" />
           Run

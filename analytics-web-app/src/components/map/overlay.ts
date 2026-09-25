@@ -1,4 +1,4 @@
-import type { DataType, Table } from 'apache-arrow'
+import type { Table } from 'apache-arrow'
 import {
   isBinaryType,
   isIntegerType,
@@ -516,20 +516,4 @@ export function resolveOverlayConstants(mapping?: OverlayMapping): OverlayConsta
     ],
     color: numericScalarOr(m.color, DEFAULT_RGBA) >>> 0,
   }
-}
-
-/** Raw column values for one row (no stringification). Null/undefined skipped. */
-export function rowValues(table: Table, rowIndex: number): Record<string, unknown> {
-  const row: Record<string, unknown> = {}
-  for (const field of table.schema.fields) {
-    const v = table.getChild(field.name)?.get(rowIndex)
-    if (v === null || v === undefined) continue
-    row[field.name] = v
-  }
-  return row
-}
-
-/** Column-name → Arrow DataType, for RFC3339 / format_value resolution. */
-export function columnTypeMap(table: Table): Map<string, DataType> {
-  return new Map(table.schema.fields.map((f) => [f.name, f.type]))
 }

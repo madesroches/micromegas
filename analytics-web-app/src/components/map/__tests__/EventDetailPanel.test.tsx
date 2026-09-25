@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router'
 import type { DataType } from 'apache-arrow'
 import { Table, Timestamp, TimeUnit, vectorFromArray } from 'apache-arrow'
 import { EventDetailPanel } from '../EventDetailPanel'
-import { columnTypeMap, rowValues } from '../overlay'
+import { columnTypeMap, rowValues } from '@/lib/arrow-utils'
 
 function buildRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { x: '1', y: '2', z: '3', ...overrides }

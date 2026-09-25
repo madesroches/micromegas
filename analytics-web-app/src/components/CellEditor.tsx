@@ -1,9 +1,9 @@
 import { useState, useCallback } from 'react'
 import type { Table, DataType } from 'apache-arrow'
 import { X, Play, Trash2 } from 'lucide-react'
-import { getCellTypeMetadata, cellCanRun } from '@/lib/screen-renderers/cell-registry'
+import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import type { CellConfig, QueryBackedCellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
-import { validateCellName, sanitizeCellName, shouldShowDataSource, shouldShowTimeRange } from '@/lib/screen-renderers/notebook-utils'
+import { validateCellName, sanitizeCellName, shouldShowDataSource, shouldShowTimeRange, configuredCellDataSource } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
 import { DataSourceField } from '@/components/DataSourceSelector'
 import { CellTimeRangeField } from '@/components/CellTimeRangeField'
@@ -92,7 +92,7 @@ export function CellEditor({
   const showTimeRange = shouldShowTimeRange(cell, variables, defaultDataSource)
 
   // Determine if this cell can run
-  const canRun = cellCanRun(meta)
+  const canRun = !!meta.execute
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -138,7 +138,7 @@ export function CellEditor({
         {/* Data Source (for SQL-executing cells; variable cells handle their own) */}
         {showDataSource && (
           <DataSourceField
-            value={('dataSource' in cell ? cell.dataSource : undefined) || defaultDataSource || ''}
+            value={configuredCellDataSource(cell, defaultDataSource)}
             onChange={(ds) => onUpdate({ dataSource: ds } as Partial<CellConfig>)}
             datasourceVariables={datasourceVariables}
             showNotebookOption={showNotebookOption}

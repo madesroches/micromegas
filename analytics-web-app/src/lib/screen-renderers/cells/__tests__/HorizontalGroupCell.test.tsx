@@ -17,6 +17,8 @@ vi.mock('lucide-react', () => ({
   ArrowLeft: () => <span data-testid="arrow-left">←</span>,
   Group: () => <span data-testid="group">⊞</span>,
   Pencil: () => <span data-testid="pencil">✏</span>,
+  Database: () => <span data-testid="database">🗄</span>,
+  AlertCircle: () => <span data-testid="alert-circle">⚠</span>,
 }))
 
 // Mock @dnd-kit
@@ -626,10 +628,9 @@ describe('HorizontalGroupCellEditor', () => {
       expect(screen.getByTestId('editor-table')).toBeInTheDocument()
     })
 
-    it('shows the Run button for a markdown child when onRun is provided (canRun fallback via metadata)', () => {
-      // Markdown has no `execute` but the shared mock gives it `canRun: true`,
-      // mirroring production — this exercises the same fallback as HgChildPane
-      // but for the full-panel child editor.
+    it('shows the Run button for a markdown child when onRun is provided', () => {
+      // Markdown now has its own `execute` like every other query-backed cell type,
+      // so the Run button follows the standard `!!meta.execute` gate.
       const onChildRun = vi.fn()
       const mdChildren = [makeChild('notes', 'markdown')]
       render(
@@ -646,20 +647,22 @@ describe('HorizontalGroupCellEditor', () => {
       expect(onChildRun).toHaveBeenCalledWith('notes')
     })
 
-    it('DataSourceField not shown for markdown type', () => {
-      // DataSourceField only renders when data sources are loaded;
-      // verify that shouldShowDataSource logic excludes markdown by checking
-      // that the editor for markdown does NOT attempt to render DataSourceField at all
+    it('DataSourceField shown for markdown type', () => {
+      // shouldShowDataSource no longer excludes markdown — a query-backed markdown
+      // cell can point at a remote source like any other cell. showNotebookOption
+      // forces DataSourceSelector past its "hide when loading/single-source" gate
+      // so the field actually renders instead of null either way.
       const mdChildren = [makeChild('notes', 'markdown')]
       render(
         <HorizontalGroupCellEditor
           {...createEditorProps({
             config: { type: 'hg', name: 'g', layout: { height: 300 }, children: mdChildren },
             selectedChildName: 'notes',
+            showNotebookOption: true,
           })}
         />
       )
-      expect(screen.queryByText('Data Source')).not.toBeInTheDocument()
+      expect(screen.getByText('Data Source')).toBeInTheDocument()
     })
 
     it('Query Time Range field shown for a remote-source child, hidden for a notebook-source child', () => {
