@@ -205,7 +205,11 @@ agree with what `coalesce_runs` actually produces.
    copy each block once in `fulfill_run_success`. Update the `fetch_blocks` / `join_prefetch` docs
    that cite `prefetch_concurrency * max_coalesced_get_bytes` to name the prefetch byte pool.
 5. `backend.rs`, `foyer_backend.rs`, `bounded_memory_backend.rs`: document the owned-value
-   contract on `put`; remove the backends' own copies.
+   contract on `put`; remove the backends' own copies. Delete `demand_fill_detaches_from_parent_buffer`
+   and `prefetch_fill_detaches_from_parent_buffer` (`foyer_backend_tests.rs`) and
+   `bounded_memory_backend_detaches_from_parent_buffer` (`l1_store_tests.rs`), which assert the
+   copy this step removes; their replacement is the range-cache "Fulfilled blocks don't pin the
+   run buffer" test in Testing Strategy.
 6. `l1_store.rs`: add `L1_FETCH_MEMORY_BUDGET_BYTES`, pass it, update the const docs.
 7. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb: u64`; add the clap ranges; reword
    `max_concurrent_fetches` help ("parallelism cap; transient fetch memory is bounded separately
@@ -223,7 +227,7 @@ agree with what `coalesce_runs` actually produces.
 - `rust/object-cache/src/l1_store.rs`
 - `rust/object-cache-srv/src/cli.rs`, `object_cache_srv.rs`, `saturation_monitor.rs`
 - `rust/object-cache/tests/range_cache_tests.rs`, `telemetry_tests.rs`, `blocks_tests.rs`,
-  `metric_tags_tests.rs`
+  `metric_tags_tests.rs`, `foyer_backend_tests.rs`, `l1_store_tests.rs`
 - `rust/object-cache-srv/tests/cli_tests.rs`, `prefetch_tests.rs`, `saturation_tests.rs`,
   `memory_budget_tests.rs`, `shutdown_sequence_tests.rs`, `telemetry_tests.rs`
 - `mkdocs/docs/admin/object-cache.md`, `mkdocs/docs/architecture/caching.md`
@@ -289,10 +293,11 @@ All no-DB unit/integration tests using the existing `CountingStore` gate and `Me
   blocks on a gate: after the origin GET completes, `fetch_budget_stats().count` shows the count
   slot released while `.bytes` still shows the run's charge; releasing the put gate returns the
   bytes.
-- **Fulfilled blocks don't pin the run buffer** — a test double backend records each `put` value;
-  for a multi-block run, assert each block returned to the demand caller is the same allocation
-  as the recorded `put` value (`as_ptr` equality) and that no two blocks share an allocation,
-  i.e. neither points into the origin buffer.
+- **Fulfilled blocks don't pin the run buffer** — a recording backend double captures each `put`
+  value; the origin double's run buffer is `Bytes::from_owner(DropFlag)`, the pattern in
+  `prefetch_fill_detaches_from_parent_buffer`. After the read completes and the run task ends,
+  assert the `DropFlag` (parent run buffer) has dropped while the recorded `put` block values are
+  still alive.
 - **Constructor assertions** — `#[should_panic]` for a budget whose prefetch pool is smaller than
   one max run.
 - **`blocks_tests.rs`** — `max_run_bytes` for `max_coalesced` a multiple of, not a multiple of,
