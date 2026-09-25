@@ -33,7 +33,7 @@ mappings and gradients are written in SQL; units reuse `format_value`.
   - `NotebookRenderer.tsx:712` — the auto-run toggle is gated on `meta.execute`.
   - `useCellManager.ts:228-232` — comment says `content` is markdown-only and presentation-only.
 - **Data source resolution** — `resolveCellDataSource` (`notebook-utils.ts:338-349`) falls back
-  to the notebook-level default when a cell has no `dataSource`; `CellEditor.tsx:137` displays
+  to the notebook-level default when a cell has no `dataSource`; `CellEditor.tsx:141` displays
   the same fallback.
 - **Row-bound templates already exist in the map cell.** `EventDetailContent.tsx:64-78` calls
   `evaluateTemplate` with `row`, `columnTypes` and `bareColumnsFromRow: true`
@@ -68,8 +68,8 @@ export interface MarkdownCellConfig extends CellConfigBase, QueryBackedCellConfi
 ```
 
 `DEFAULT_SQL.markdown = 'SELECT 1'` in `notebook-utils.ts`. The query executed is
-`config.sql?.trim() ? config.sql : DEFAULT_SQL.markdown`, so saved cells (no `sql`) and a
-cleared editor both run the default. No config migration.
+`effectiveMarkdownSql(config) = config.sql?.trim() ? config.sql : DEFAULT_SQL.markdown`, so saved
+cells (no `sql`) and a cleared editor both run the default. No config migration.
 
 ### Per-type default data source
 
@@ -144,9 +144,12 @@ notebook banner explains).
   unsupported column type adds a warning shown in the existing `TemplateWarningBanner` and
   doesn't fail the cell.
 
-Render gate: evaluate the template only when `status === 'success'`, and cache that evaluated
-text and warnings (e.g. in a ref) instead of re-evaluating on every render. While `status` is
-`'loading'` or `'idle'` with `data.length > 0`, render the cached output rather than
+Render gate: evaluate the template only when `status === 'success'`, and keep the last successful
+`{ text, warnings }` in `useState`, updating it during render when a fresh `status === 'success'`
+evaluation differs from what's stored — the `cacheInputsKey` pattern `PerfettoExportCell.tsx:57`
+uses, not a ref (reading/writing a ref during render trips `react-hooks/refs`, which
+`eslint-plugin-react-hooks` 7.1.1's `reactHooks.configs.recommended` enables). While `status` is
+`'loading'` or `'idle'` with `data.length > 0`, render that stored output rather than
 re-evaluating: `getAvailableCellResults` (`NotebookRenderer.tsx:514-523`) only includes upstream
 cells with `status === 'success'`, and `executeFromCell` resets every cell from the restart point
 to `idle` up front (`useCellExecution.ts:386-397`), so while a markdown cell is idle-with-data its
@@ -159,7 +162,7 @@ DOM structure:
 ```
 <div root  class="flex-1 rounded-sm p-3 [fit: min-h-0 overflow-auto flex text-center]"
            style={{ backgroundColor }}>
-  <div prose class={`${proseClasses(tinted)} ${fit ? 'm-auto' : ''}`} style={{ color, fontSize: fit ? `${px}px` : undefined }}>
+  <div prose class={`${proseClasses(tinted)} ${fit ? 'm-auto' : ''}`} style={{ color }}>
     <TemplateWarningBanner/> <Markdown/>
   </div>
 </div>
@@ -176,9 +179,10 @@ DOM structure:
 - `proseClasses(tinted)`: when `color` is present, the per-element color modifiers for headings,
   p, strong, li, em, blockquote, th/td and list markers become `text-inherit` (`marker:` too), so
   the inline `color` on the prose div applies. Links and inline code keep their accent colors.
-- Setting an inline `font-size` on the prose element overrides typography's `font-size: 1rem`.
-  All prose typography is `em`-relative, so everything scales and still wraps.
-  Typography already zeroes the first child's top margin and the last child's bottom margin.
+- `useFitFontSize` writes the fitted size directly to `prose.style.fontSize` (see Fit to cell), which
+  overrides typography's `font-size: 1rem`. All prose typography is `em`-relative, so everything
+  scales and still wraps. Typography already zeroes the first child's top margin and the last
+  child's bottom margin.
 
 ### Fit to cell
 
@@ -188,10 +192,13 @@ A `useFitFontSize(rootRef, proseRef, enabled, deps)` hook in `MarkdownCell.tsx`:
   keyed on size, rendered text, and colors runs the search synchronously before paint.
 - Search: the pure helper `fitFontSize(fits: (px: number) => boolean, min, max): number`, a
   binary search over integer px in `[MIN_FIT_FONT_PX = 12, MAX_FIT_FONT_PX = 320]`.
-  `fits(px)` sets `prose.style.fontSize` and checks
-  `scrollWidth <= width && scrollHeight <= height`. It takes about 9 layout passes per fit, only
+  `fits(px)` sets `prose.style.fontSize` and compares the prose element's
+  `scrollWidth`/`scrollHeight` against the root's content-box width/height (so the root's own
+  `p-3` padding isn't counted against the fit). It takes about 9 layout passes per fit, only
   on resize or content change. If `min` doesn't fit, it returns `min` and the root scrolls.
-- When `enabled` is false, the inline font size is cleared.
+- After the search, the hook writes the chosen px directly to `prose.style.fontSize` — not to
+  React state, which would trip `react-hooks/set-state-in-effect` — and clears it when `enabled`
+  is false, the same direct-write pattern the mockup's `fit()` uses (`stat-tiles.html:76`).
 
 ### Editor
 
@@ -243,8 +250,14 @@ already passes `availableColumns` from the cell's last result.
      update its mock renderer's gate from `status === 'success'` to also cover `loading`/`idle`
      with data, matching the real render gate).
    - Update the `useCellManager.ts` comment.
+   - Update stale comments that predate query-backed markdown: `cell-registry.ts:16`
+     (`CellRendererProps.sql` "undefined for markdown cells"), `cell-registry.ts:161` (`execute`
+     doc "e.g., markdown"), `useCellExecution.ts:141` ("e.g., markdown"), `notebook-utils.ts:167`
+     (`shouldShowDataSource` docstring "Markdown cells have no queries"), and
+     `CellContainer.tsx:53` (`canRun` prop doc referencing the type's `canRun`).
 4. **MarkdownCell**
-   - `execute`, `getRendererProps`, `createDefaultConfig` (`sql: DEFAULT_SQL.markdown`, content).
+   - `effectiveMarkdownSql`, `execute`, `getRendererProps`, `createDefaultConfig`
+     (`sql: DEFAULT_SQL.markdown`, content).
    - Renderer: row binding, `resolveMarkdownColors`, `proseClasses`, root/prose structure,
      loading gate, `fitFontSize` + `useFitFontSize`.
    - Editor: SQL editor, fit checkbox, `validateTemplateMacros`.
@@ -304,13 +317,11 @@ already passes `availableColumns` from the cell's last result.
   every cell type.
 - Fitted content is centered on both axes and `text-align: center` (the issue's "centered when
   fitting"). Non-fit rendering keeps today's left-aligned layout.
-- The previous result stays rendered while the cell is idle (waiting its turn behind a slower cell
-  during a re-run) or loading with data, not just while loading. This is a cached evaluation, not
-  a re-evaluation while idle/loading: the template is evaluated only on `status === 'success'`,
-  and that output is kept until the next success. The first render is still deferred to the first
-  successful run.
+- Previous output stays rendered while idle/loading with data (see Rendering).
 - Markdown's Run button now runs its own query (still one cell, no downstream re-run). The old
   "local re-render only" semantics are replaced.
+- A markdown cell with data gets `buildStatusText`'s row/elapsed status text and a header
+  "Download CSV" item like any other query-backed cell, including the `SELECT 1` default.
 
 ## Documentation
 
@@ -320,7 +331,13 @@ already passes `availableColumns` from the cell's last result.
   zero rows = error, extra rows ignored), the `color` / `background_color` columns (accepted
   types, same as the chart cells' color column), `format_value` for units, and Fit to cell.
   Add the issue's frame-time example and a `CASE`-based status example. Replace the "does not
-  execute queries" bullet.
+  execute queries" bullet. Rewrite the "On initial load ..." bullet (`:474`): blank until the
+  first successful run; previous output stays while idle/loading during a re-run; **Run** executes
+  the cell's query (not a local re-render).
+- `markdownMetadata.description` (`MarkdownCell.tsx:85`, shown in the add-cell modal) and the
+  mock's `BASE_METADATA.markdown.description` in `__test-utils__/cell-registry-mock.ts` change
+  from "Documentation and notes" to match the cell-types.md wording, "Documentation and headline
+  values".
 - `execution.md:37`: drop "(markdown cells do not)" from the auto-run sentence.
 - `index.md:40`: markdown cells now have data, so drop them from the "hidden for cells with no data"
   example.
@@ -353,7 +370,7 @@ Unit tests (Vitest, jsdom, no services):
   - Metadata: `createDefaultConfig` includes `sql: 'SELECT 1'`, and `execute` is defined. Replaces
     the old "declares `canRun: true` ... no `execute`" assertion.
   - Editor: bare-column macros present in `availableColumns` aren't flagged. Toggling Fit writes
-    `options.fit`.
+    `options.fit`. SQL editor shows `SELECT 1` when `sql` is absent.
   - Removes the old "should not render content when status is loading" case (superseded by the
     idle/loading-with-data renderer test above).
 - **`HorizontalGroupCell.test.tsx`**: replace "DataSourceField not shown for markdown type" with
@@ -368,6 +385,9 @@ Unit tests (Vitest, jsdom, no services):
   `dataSource`. `createDefaultCell('markdown', …, 'remote')` gets `dataSource: 'notebook'`.
   `shouldShowDataSource('markdown')` is true. `shouldShowTimeRange` is false for markdown on
   `notebook` and true on a remote source (replaces the "markdown stays false" tests).
+  `configuredCellDataSource` returns `notebook` for a markdown cell with no `dataSource` under a
+  remote notebook default. The existing `:822-825` "should not have sql property" assertion on
+  `createDefaultCell('markdown')` flips to assert `sql === 'SELECT 1'`.
 - **`macro-substitution.test.ts`**: `validateTemplateMacros` accepts listed columns and still
   flags unknown ones.
 - **arrow-utils tests**: `resolveColorColumn` with a custom name, including the error message;
@@ -379,8 +399,7 @@ Unit tests (Vitest, jsdom, no services):
   `createSqlExecute` skips `runQuery` entirely when `config.sql` is absent, so give the mock's
   markdown entry its own `execute` that calls `runQuery` regardless. The `SELECT 1` fallback and
   the zero-rows error belong to `MarkdownCell.test.tsx`'s `execute` tests, not here;
-  `canBlockDownstream: false` for markdown is already covered by the existing tests at `:726`,
-  `:762`, `:788`.
+  `canBlockDownstream: false` for markdown is already covered by the existing test at `:726`.
 - **`NotebookRenderer.test.tsx`**: update the markdown run-control tests. Markdown now shows
   "Run from here" / "Auto-run from here", and its Run executes only its own query.
 
@@ -392,8 +411,8 @@ these checks are manual:
 
 1. `python3 local_test_env/ai_scripts/start_services.py --monolith`, then open
    http://127.0.0.1:3000, create a notebook.
-2. Open an existing notebook with markdown cells. Expected: they render as before, and the editor
-   shows data source `notebook` with query `SELECT 1`.
+2. Open an existing notebook with markdown cells. Expected: they render as before, now with the
+   row/elapsed status text and a "Download CSV" header item (see Decisions).
 3. Add a markdown cell with the issue's frame-time example (data source switched to the remote
    source) and Fit on. Expected: the value fills the tile. Resizing the cell height and putting
    it in a horizontal group re-fits it, and text wraps in a narrow tile.
