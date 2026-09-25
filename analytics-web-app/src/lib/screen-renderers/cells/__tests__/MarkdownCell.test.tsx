@@ -467,6 +467,13 @@ describe('MarkdownCell', () => {
       expect(prose.style.color).not.toBe('')
       expect(prose.className).toContain('prose-headings:text-inherit')
       expect(prose.className).toContain('prose-p:text-inherit')
+      expect(prose.className).toContain('prose-strong:text-inherit')
+      expect(prose.className).toContain('prose-em:text-inherit')
+      expect(prose.className).toContain('prose-li:text-inherit')
+      expect(prose.className).toContain('prose-blockquote:text-inherit')
+      expect(prose.className).toContain('prose-th:text-inherit')
+      expect(prose.className).toContain('prose-td:text-inherit')
+      expect(prose.className).toContain('marker:text-inherit')
     })
 
     it('sets the root background from background_color', () => {
@@ -484,6 +491,9 @@ describe('MarkdownCell', () => {
       const prose = container.querySelector('.prose') as HTMLElement
       expect(prose.className).toContain('prose-headings:text-theme-text-primary')
       expect(prose.className).toContain('prose-p:text-theme-text-secondary')
+      expect(prose.className).toContain('prose-strong:text-theme-text-primary')
+      expect(prose.className).toContain('prose-em:text-theme-text-secondary')
+      expect(prose.className).toContain('marker:text-theme-text-muted')
       expect(root.getAttribute('style')).toBeNull()
       expect(prose.getAttribute('style')).toBeNull()
     })

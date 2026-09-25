@@ -55,27 +55,28 @@ export function resolveMarkdownColors(
 // Prose classes
 // =============================================================================
 
+// Tailwind v4 only emits classes that appear literally in source, so each variant is
+// spelled out in full below rather than built with `${}` interpolation of the color token.
+const TINTED_PROSE_CLASSES =
+  'prose prose-invert max-w-none prose-headings:text-inherit prose-p:text-inherit ' +
+  'prose-a:text-accent-link prose-strong:text-inherit prose-em:text-inherit prose-li:text-inherit ' +
+  'prose-blockquote:text-inherit prose-th:text-inherit prose-td:text-inherit marker:text-inherit ' +
+  'prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 ' +
+  'prose-code:rounded-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card'
+
+const UNTINTED_PROSE_CLASSES =
+  'prose prose-invert max-w-none prose-headings:text-theme-text-primary prose-p:text-theme-text-secondary ' +
+  'prose-a:text-accent-link prose-strong:text-theme-text-primary prose-em:text-theme-text-secondary ' +
+  'prose-li:text-theme-text-secondary prose-blockquote:text-theme-text-secondary prose-th:text-theme-text-primary ' +
+  'prose-td:text-theme-text-secondary marker:text-theme-text-muted ' +
+  'prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 ' +
+  'prose-code:rounded-sm prose-code:before:content-none prose-code:after:content-none prose-pre:bg-app-card'
+
 /** Tailwind Typography per-element color modifiers. When `tinted` (a `color` column is
  *  present), headings/body/marker colors become `text-inherit` so the prose div's inline
  *  `color` style applies; links and inline code keep their fixed accent colors. */
 function proseClasses(tinted: boolean): string {
-  const body = tinted ? 'text-inherit' : 'text-theme-text-secondary'
-  const heading = tinted ? 'text-inherit' : 'text-theme-text-primary'
-  return [
-    'prose prose-invert max-w-none',
-    `prose-headings:${heading}`,
-    `prose-p:${body}`,
-    'prose-a:text-accent-link',
-    `prose-strong:${heading}`,
-    `prose-em:${body}`,
-    `prose-li:${body}`,
-    `prose-blockquote:${body}`,
-    `prose-th:${heading}`,
-    `prose-td:${body}`,
-    `marker:${tinted ? 'text-inherit' : 'text-theme-text-muted'}`,
-    'prose-code:text-accent-highlight prose-code:bg-app-card prose-code:px-1 prose-code:py-0.5 prose-code:rounded-sm prose-code:before:content-none prose-code:after:content-none',
-    'prose-pre:bg-app-card',
-  ].join(' ')
+  return tinted ? TINTED_PROSE_CLASSES : UNTINTED_PROSE_CLASSES
 }
 
 // =============================================================================
