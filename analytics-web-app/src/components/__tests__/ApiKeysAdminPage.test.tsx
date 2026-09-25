@@ -36,6 +36,7 @@ function makeConfig(overrides: Partial<ApiKeysAdminPageConfig>): ApiKeysAdminPag
     listKeys: vi.fn().mockResolvedValue([]),
     mintKey: vi.fn(),
     revokeKey: vi.fn(),
+    setAllowlist: vi.fn(),
     ...overrides,
   }
 }
@@ -105,5 +106,159 @@ describe('ApiKeysAdminPage mint dialog', () => {
     const nameInput = screen.getByPlaceholderText(config.namePlaceholder)
     fireEvent.change(nameInput, { target: { value: 'new-key' } })
     expect(mintButton).not.toBeDisabled()
+  })
+})
+
+describe('ApiKeysAdminPage IP allowlist', () => {
+  function keyRow(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      key_id: 'key-1',
+      name: 'my-key',
+      created_at: '2026-01-01T00:00:00Z',
+      created_by: 'alice@example.com',
+      last_used_at: null,
+      revoked_at: null,
+      revoked_by: null,
+      allowed_cidrs: [],
+      ...overrides,
+    }
+  }
+
+  it('shows "Unrestricted" for an empty allowlist and one line per entry otherwise', async () => {
+    const config = makeConfig({
+      listKeys: vi.fn().mockResolvedValue([
+        keyRow({ key_id: 'key-1', name: 'unrestricted-key' }),
+        keyRow({
+          key_id: 'key-2',
+          name: 'restricted-key',
+          allowed_cidrs: ['10.0.0.0/8', '203.0.113.7'],
+        }),
+      ]),
+    })
+    renderPage(config)
+
+    await waitFor(() => expect(screen.getByText('unrestricted-key')).toBeInTheDocument())
+    expect(screen.getByText('Unrestricted')).toBeInTheDocument()
+    expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
+    expect(screen.getByText('203.0.113.7')).toBeInTheDocument()
+  })
+
+  it('hides the edit button on a revoked row', async () => {
+    const config = makeConfig({
+      listKeys: vi.fn().mockResolvedValue([
+        keyRow({ key_id: 'key-1', name: 'active-key' }),
+        keyRow({ key_id: 'key-2', name: 'revoked-key', revoked_at: '2026-01-02T00:00:00Z' }),
+      ]),
+    })
+    renderPage(config)
+
+    await waitFor(() => expect(screen.getByText('active-key')).toBeInTheDocument())
+    expect(
+      screen.getByRole('button', { name: 'Edit IP allowlist for active-key' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Edit IP allowlist for revoked-key' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('opens the edit dialog prefilled with the entries joined by newlines, saves, closes, and reloads', async () => {
+    const setAllowlist = vi.fn().mockResolvedValue({ allowed_cidrs: ['10.0.0.0/8'] })
+    const listKeys = vi
+      .fn()
+      .mockResolvedValueOnce([
+        keyRow({ allowed_cidrs: ['10.0.0.0/8', '203.0.113.7'] }),
+      ])
+      .mockResolvedValueOnce([keyRow({ allowed_cidrs: ['10.0.0.0/8'] })])
+    const config = makeConfig({ listKeys, setAllowlist })
+    renderPage(config)
+
+    await waitFor(() => expect(screen.getByText('my-key')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Edit IP allowlist for my-key' }))
+
+    const heading = await screen.findByRole('heading', { name: 'IP allowlist — my-key' })
+    const textarea = screen.getByPlaceholderText(/203\.0\.113\.0\/24/) as HTMLTextAreaElement
+    expect(textarea.value).toBe('10.0.0.0/8\n203.0.113.7')
+
+    fireEvent.change(textarea, { target: { value: '10.0.0.0/8' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(setAllowlist).toHaveBeenCalledWith('key-1', ['10.0.0.0/8']))
+    await waitFor(() => expect(heading).not.toBeInTheDocument())
+    await waitFor(() => expect(listKeys).toHaveBeenCalledTimes(2))
+  })
+
+  it('clearing the textarea saves []', async () => {
+    const setAllowlist = vi.fn().mockResolvedValue({ allowed_cidrs: [] })
+    const config = makeConfig({
+      listKeys: vi.fn().mockResolvedValue([keyRow({ allowed_cidrs: ['10.0.0.0/8'] })]),
+      setAllowlist,
+    })
+    renderPage(config)
+
+    await waitFor(() => expect(screen.getByText('my-key')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Edit IP allowlist for my-key' }))
+
+    const textarea = await screen.findByPlaceholderText(/203\.0\.113\.0\/24/)
+    fireEvent.change(textarea, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(setAllowlist).toHaveBeenCalledWith('key-1', []))
+  })
+
+  it('keeps the dialog open and shows the error message when setAllowlist is rejected', async () => {
+    const setAllowlist = vi.fn().mockRejectedValue(new TestApiKeyError('invalid allowed_cidrs: invalid CIDR or IP address: "foo"'))
+    const config = makeConfig({
+      listKeys: vi.fn().mockResolvedValue([keyRow()]),
+      setAllowlist,
+    })
+    renderPage(config)
+
+    await waitFor(() => expect(screen.getByText('my-key')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Edit IP allowlist for my-key' }))
+
+    const textarea = await screen.findByPlaceholderText(/203\.0\.113\.0\/24/)
+    fireEvent.change(textarea, { target: { value: 'foo' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/invalid allowed_cidrs: invalid CIDR or IP address/)
+      ).toBeInTheDocument()
+    )
+    expect(screen.getByRole('heading', { name: 'IP allowlist — my-key' })).toBeInTheDocument()
+  })
+
+  it('the inline mint form passes allowed_cidrs when filled and undefined when blank', async () => {
+    const mintKey = vi.fn().mockResolvedValue({ key_id: 'key-new', name: 'new-key', created_at: 't', key: 'k' })
+    const config = makeConfig({ mintKey })
+    renderPage(config)
+
+    const mintButton = await openMintDialog(config)
+    fireEvent.change(screen.getByPlaceholderText(config.namePlaceholder), {
+      target: { value: 'new-key' },
+    })
+
+    // Blank allowlist -> undefined.
+    fireEvent.click(mintButton)
+    await waitFor(() =>
+      expect(mintKey).toHaveBeenCalledWith('new-key', { audience: undefined, allowed_cidrs: undefined })
+    )
+
+    mintKey.mockClear()
+    fireEvent.click(screen.getAllByRole('button', { name: /Mint Key/i })[0])
+    fireEvent.change(screen.getByPlaceholderText(config.namePlaceholder), {
+      target: { value: 'new-key-2' },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/203\.0\.113\.0\/24/), {
+      target: { value: '10.0.0.0/8, 203.0.113.7' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Mint' }))
+
+    await waitFor(() =>
+      expect(mintKey).toHaveBeenCalledWith('new-key-2', {
+        audience: undefined,
+        allowed_cidrs: ['10.0.0.0/8', '203.0.113.7'],
+      })
+    )
   })
 })

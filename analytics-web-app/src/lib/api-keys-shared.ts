@@ -18,6 +18,8 @@ export interface ApiKeyListEntry {
   revoked_by: string | null
   /** The write audience an ingestion key is bound to (#1372). Analytics rows never carry one. */
   audience?: string
+  /** Empty = unrestricted. The server COALESCEs NULL to [], so this is always present. */
+  allowed_cidrs: string[]
 }
 
 export interface MintApiKeyResponse {
@@ -32,6 +34,15 @@ export interface MintApiKeyResponse {
    *  writing their own `read`+`mint` grant rows in the same request (#1510, AbAC Stage 6c).
    *  `false`/absent otherwise; ingestion-only, analytics keys never carry it. */
   claimed?: boolean
+}
+
+export interface MintApiKeyOptions {
+  audience?: string
+  allowed_cidrs?: string[]
+}
+
+export interface SetAllowlistResponse {
+  allowed_cidrs: string[]
 }
 
 interface ErrorResponseShape {
@@ -66,8 +77,9 @@ export interface ApiKeysApiConfig {
 export interface ApiKeysApi<TRevokeResponse> {
   ErrorClass: ApiKeyErrorConstructor
   list: (includeRevoked: boolean, offset: number, limit: number) => Promise<ApiKeyListEntry[]>
-  mint: (name: string, audience?: string) => Promise<MintApiKeyResponse>
+  mint: (name: string, options?: MintApiKeyOptions) => Promise<MintApiKeyResponse>
   revoke: (keyId: string) => Promise<TRevokeResponse>
+  setAllowlist: (keyId: string, allowedCidrs: string[]) => Promise<SetAllowlistResponse>
 }
 
 export function createApiKeysApi<
@@ -110,14 +122,19 @@ export function createApiKeysApi<
     return handleResponse<ApiKeyListEntry[]>(response)
   }
 
-  async function mint(name: string, audience?: string): Promise<MintApiKeyResponse> {
+  async function mint(name: string, options: MintApiKeyOptions = {}): Promise<MintApiKeyResponse> {
     const response = await authenticatedFetch(`${getApiBase()}${config.basePath}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // `audience` is only ever unset for callers that don't ask for one (analytics
-      // keys never carry an audience). `JSON.stringify` drops an `undefined` value
-      // entirely, so that case omits the field rather than sending `null`.
-      body: JSON.stringify({ name, audience }),
+      // `audience`/`allowed_cidrs` are only ever unset for callers that don't ask for one
+      // (analytics keys never carry an audience; most mints carry no allowlist).
+      // `JSON.stringify` drops an `undefined` value entirely, so that case omits the field
+      // rather than sending `null`.
+      body: JSON.stringify({
+        name,
+        audience: options.audience,
+        allowed_cidrs: options.allowed_cidrs,
+      }),
     })
     return handleResponse<MintApiKeyResponse>(response)
   }
@@ -130,5 +147,32 @@ export function createApiKeysApi<
     return handleResponse<TRevokeResponse>(response)
   }
 
-  return { ErrorClass, list, mint, revoke }
+  async function setAllowlist(
+    keyId: string,
+    allowedCidrs: string[]
+  ): Promise<SetAllowlistResponse> {
+    const response = await authenticatedFetch(
+      `${getApiBase()}${config.basePath}/${encodeURIComponent(keyId)}/allowlist`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowed_cidrs: allowedCidrs }),
+      }
+    )
+    return handleResponse<SetAllowlistResponse>(response)
+  }
+
+  return { ErrorClass, list, mint, revoke, setAllowlist }
+}
+
+/**
+ * Splits free-text input on newlines, commas, and whitespace, and drops blanks. No validation:
+ * the server's `IpAllowlist::parse` is the one validator, and its 400 message is shown to the
+ * user unchanged.
+ */
+export function parseAllowlistInput(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
 }

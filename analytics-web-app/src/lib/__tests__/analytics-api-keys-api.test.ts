@@ -7,7 +7,12 @@
  * goes on the wire. `offset` must be threaded through too, so the page can
  * page past the first 500 lifetime keys.
  */
-import { listAnalyticsApiKeys, MAX_ANALYTICS_API_KEYS_LIST_LIMIT } from '../analytics-api-keys-api'
+import {
+  listAnalyticsApiKeys,
+  mintAnalyticsApiKey,
+  setAnalyticsApiKeyAllowlist,
+  MAX_ANALYTICS_API_KEYS_LIST_LIMIT,
+} from '../analytics-api-keys-api'
 
 describe('analytics-api-keys-api', () => {
   afterEach(() => {
@@ -44,5 +49,36 @@ describe('analytics-api-keys-api', () => {
     expect(url).toBe(
       `/api/analytics-api-keys?limit=${MAX_ANALYTICS_API_KEYS_LIST_LIMIT}&offset=${MAX_ANALYTICS_API_KEYS_LIST_LIMIT}&include_revoked=true`
     )
+  })
+
+  it('mintAnalyticsApiKey puts allowed_cidrs in the POST body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ key_id: 'key-1', name: 'n', created_at: 't', key: 'k' }),
+    } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    await mintAnalyticsApiKey('n', { allowed_cidrs: ['10.0.0.0/8', '203.0.113.7'] })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'n',
+      allowed_cidrs: ['10.0.0.0/8', '203.0.113.7'],
+    })
+  })
+
+  it('setAnalyticsApiKeyAllowlist sends PATCH with allowed_cidrs, including []', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ allowed_cidrs: [] }),
+    } as unknown as Response)
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    await setAnalyticsApiKeyAllowlist('key with spaces', [])
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/analytics-api-keys/key%20with%20spaces/allowlist')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual({ allowed_cidrs: [] })
   })
 })

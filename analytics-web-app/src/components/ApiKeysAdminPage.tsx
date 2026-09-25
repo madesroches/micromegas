@@ -10,7 +10,7 @@
 // that part is identical between the two pages.
 import { useState, useEffect, useCallback } from 'react'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { Plus, Trash2, KeyRound } from 'lucide-react'
+import { Plus, Trash2, KeyRound, Shield } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
@@ -19,11 +19,15 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { MintedKeyBanner } from '@/components/MintedKeyBanner'
 import { TableFrame } from '@/components/TableFrame'
+import { AllowedCidrsField } from '@/components/AllowedCidrsField'
+import { EditAllowlistDialog } from '@/components/EditAllowlistDialog'
 import type {
   ApiKeyErrorConstructor,
   ApiKeyListEntry,
+  MintApiKeyOptions,
   MintApiKeyResponse,
 } from '@/lib/api-keys-shared'
+import { parseAllowlistInput } from '@/lib/api-keys-shared'
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—'
@@ -45,8 +49,14 @@ export interface ApiKeysAdminPageConfig {
   revokeConfirmMessage: (name: string | undefined) => string
   ErrorClass: ApiKeyErrorConstructor
   listKeys: (includeRevoked: boolean, offset: number, limit: number) => Promise<ApiKeyListEntry[]>
-  mintKey: (name: string, audience?: string) => Promise<MintApiKeyResponse>
+  mintKey: (name: string, options?: MintApiKeyOptions) => Promise<MintApiKeyResponse>
   revokeKey: (keyId: string) => Promise<unknown>
+  /**
+   * Sets a key's IP allowlist via the admin-only `PATCH .../{key_id}/allowlist` route. Required,
+   * not optional: both key tables have the route, so a config leaving it out would be a bug the
+   * compiler should catch.
+   */
+  setAllowlist: (keyId: string, allowedCidrs: string[]) => Promise<unknown>
   /**
    * Shows an "Audience" table column and an audience input in the mint dialog
    * (#1372, AbAC Stage 4). Ingestion keys carry a write audience; analytics
@@ -80,6 +90,7 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
   const [showMintForm, setShowMintForm] = useState(false)
   const [mintName, setMintName] = useState('')
   const [mintAudience, setMintAudience] = useState('')
+  const [mintAllowlist, setMintAllowlist] = useState('')
   const [isMinting, setIsMinting] = useState(false)
   const [mintError, setMintError] = useState<string | null>(null)
   // The cleartext key is shown exactly once, right after minting — never
@@ -87,6 +98,7 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
   const [mintedKey, setMintedKey] = useState<string | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ApiKeyListEntry | null>(null)
   const [isRevoking, setIsRevoking] = useState(false)
+  const [allowlistTarget, setAllowlistTarget] = useState<ApiKeyListEntry | null>(null)
 
   const loadKeys = useCallback(async () => {
     setIsLoading(true)
@@ -119,6 +131,7 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
   const openMintForm = () => {
     setMintName('')
     setMintAudience(config.showAudience ? 'public' : '')
+    setMintAllowlist('')
     setMintError(null)
     setShowMintForm(true)
   }
@@ -127,7 +140,11 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
     setIsMinting(true)
     setMintError(null)
     try {
-      const result = await config.mintKey(mintName.trim(), mintAudience.trim() || undefined)
+      const allowedCidrs = parseAllowlistInput(mintAllowlist)
+      const result = await config.mintKey(mintName.trim(), {
+        audience: mintAudience.trim() || undefined,
+        allowed_cidrs: allowedCidrs.length ? allowedCidrs : undefined,
+      })
       setShowMintForm(false)
       setMintedKey(result.key)
       // A key minted while on a later page would otherwise land on page 1
@@ -241,6 +258,7 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                       </p>
                     </div>
                   )}
+                  <AllowedCidrsField value={mintAllowlist} onChange={setMintAllowlist} optional />
                 </div>
                 <div className="flex justify-end gap-2 px-4 py-3 border-t border-theme-border">
                   <Button variant="outline" onClick={() => setShowMintForm(false)} disabled={isMinting}>
@@ -278,6 +296,20 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
             isLoading={isRevoking}
             variant="danger"
           />
+
+          {allowlistTarget && (
+            <EditAllowlistDialog
+              key={allowlistTarget.key_id}
+              keyName={allowlistTarget.name}
+              initialCidrs={allowlistTarget.allowed_cidrs}
+              onSave={async (allowedCidrs) => {
+                await config.setAllowlist(allowlistTarget.key_id, allowedCidrs)
+                setAllowlistTarget(null)
+                await loadKeys()
+              }}
+              onClose={() => setAllowlistTarget(null)}
+            />
+          )}
 
           {isLoading ? (
             <div className="flex-1 flex items-center justify-center">
@@ -344,6 +376,9 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                       </th>
                     )}
                     <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
+                      IP Allowlist
+                    </th>
+                    <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
                       Status
                     </th>
                     <th className="text-right p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
@@ -369,6 +404,17 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                           {key.audience ?? '—'}
                         </td>
                       )}
+                      <td className="p-2.5 px-4 text-theme-text-secondary text-sm">
+                        {key.allowed_cidrs.length === 0 ? (
+                          <span className="text-theme-text-muted italic">Unrestricted</span>
+                        ) : (
+                          key.allowed_cidrs.map((cidr, i) => (
+                            <div key={`${i}-${cidr}`} className="font-mono text-xs">
+                              {cidr}
+                            </div>
+                          ))
+                        )}
+                      </td>
                       <td className="p-2.5 px-4">
                         {key.revoked_at ? (
                           <span className="inline-flex items-center px-2 py-0.5 bg-red-500/15 text-red-400 rounded-sm text-xs font-medium">
@@ -382,14 +428,24 @@ export function ApiKeysAdminPage({ config, pageSize }: ApiKeysAdminPageProps) {
                       </td>
                       <td className="p-2.5 px-4 text-right">
                         {!key.revoked_at && (
-                          <button
-                            onClick={() => setRevokeTarget(key)}
-                            className="p-1.5 rounded-sm text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                            title="Revoke"
-                            aria-label={`Revoke ${key.name}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => setAllowlistTarget(key)}
+                              className="p-1.5 rounded-sm text-theme-text-muted hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+                              title="Edit IP allowlist"
+                              aria-label={`Edit IP allowlist for ${key.name}`}
+                            >
+                              <Shield className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => setRevokeTarget(key)}
+                              className="p-1.5 rounded-sm text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                              title="Revoke"
+                              aria-label={`Revoke ${key.name}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
                         )}
                       </td>
                     </tr>

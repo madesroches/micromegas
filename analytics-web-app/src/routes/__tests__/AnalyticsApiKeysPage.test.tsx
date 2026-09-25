@@ -17,6 +17,7 @@ function makeKeys(count: number) {
     last_used_at: null,
     revoked_at: null,
     revoked_by: null,
+    allowed_cidrs: [],
   }))
 }
 
@@ -103,6 +104,7 @@ describe('AnalyticsApiKeysPage', () => {
             last_used_at: null,
             revoked_at: null,
             revoked_by: null,
+            allowed_cidrs: [],
           },
         ]),
     } as unknown as Response) as unknown as typeof fetch
@@ -126,6 +128,7 @@ describe('AnalyticsApiKeysPage', () => {
             last_used_at: null,
             revoked_at: null,
             revoked_by: null,
+            allowed_cidrs: [],
           },
         ]),
     } as unknown as Response) as unknown as typeof fetch
@@ -182,6 +185,7 @@ describe('AnalyticsApiKeysPage', () => {
               last_used_at: null,
               revoked_at: null,
               revoked_by: null,
+              allowed_cidrs: [],
             },
           ]),
       } as unknown as Response)
@@ -329,6 +333,7 @@ describe('AnalyticsApiKeysPage', () => {
               last_used_at: null,
               revoked_at: null,
               revoked_by: null,
+              allowed_cidrs: [],
             },
           ]),
       } as unknown as Response)

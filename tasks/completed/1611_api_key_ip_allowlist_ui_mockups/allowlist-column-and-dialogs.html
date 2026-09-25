@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API key IP allowlist — admin list, edit dialog, mint field</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-error: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--app-bg); color: var(--text-primary);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .section-label {
+    margin: 32px 24px 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--accent-link-hover);
+  }
+  .page { padding: 24px; max-width: 1280px; }
+  .crumbs { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; display: flex; gap: 6px; }
+  .crumbs a { color: var(--accent-link); text-decoration: none; }
+  .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; }
+  .sub { margin: 4px 0 0; color: var(--text-secondary); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 8px 14px;
+    font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer;
+    background: var(--accent-link); color: #fff; font-family: inherit;
+  }
+  .btn:hover { background: var(--accent-link-hover); }
+  .btn.outline { background: transparent; border-color: var(--border-color); color: var(--text-primary); }
+  .tablewrap { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--panel-bg); }
+  th {
+    text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+  }
+  th.right, td.right { text-align: right; }
+  td { padding: 10px 16px; border-top: 1px solid var(--border-color); vertical-align: top; font-size: 13px; color: var(--text-secondary); }
+  tbody tr:hover { background: rgba(21,101,192,.05); }
+  .kname { color: var(--text-primary); font-weight: 500; font-size: 14px; }
+  .by { color: var(--text-muted); margin-left: 8px; font-size: 12px; }
+  .status { display: inline-flex; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 500; }
+  .active { background: rgba(34,197,94,.15); color: #22c55e; }
+  .revoked { background: rgba(239,68,68,.15); color: #f87171; }
+  .cidrs { display: flex; flex-direction: column; gap: 2px; }
+  .cidrs .mono { color: var(--text-primary); font-size: 12px; }
+  .unrestricted { color: var(--text-muted); font-style: italic; }
+  .icon-btn {
+    display: inline-flex; padding: 6px; border-radius: 3px; color: var(--text-muted); background: none;
+    border: none; cursor: pointer;
+  }
+  .icon-btn:hover { color: var(--text-primary); background: rgba(21,101,192,.12); }
+  .icon-btn.danger:hover { color: #f87171; background: rgba(248,113,113,.1); }
+  svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  .stage { position: relative; min-height: 440px; margin: 0 24px; border: 1px dashed var(--border-color); border-radius: 8px; overflow: hidden; }
+  .overlay { position: absolute; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 100%; max-width: 28rem; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: 0 20px 40px rgba(0,0,0,.5); }
+  .dialog .dh { padding: 12px 16px; border-bottom: 1px solid var(--border-color); font-size: 18px; font-weight: 500; }
+  .dialog .db { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  .dialog .df { padding: 12px 16px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 8px; }
+  label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; }
+  input[type=text], textarea {
+    width: 100%; background: var(--app-bg); border: 1px solid var(--border-color); border-radius: 6px;
+    color: var(--text-primary); padding: 8px 12px; font-size: 13px; outline: none; font-family: inherit;
+  }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; min-height: 84px; }
+  textarea::placeholder, input::placeholder { color: var(--text-muted); }
+  input:focus, textarea:focus { border-color: var(--accent-link); }
+  .help { margin-top: 4px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+  .err { padding: 12px; background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.3); border-radius: 8px; font-size: 13px; color: var(--accent-error); }
+  .row { display: flex; gap: 24px; margin: 0 24px 32px; }
+  .row .stage { flex: 1; margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="section-label">1 · Admin list (Ingestion API Keys — the Analytics page is identical minus the Audience column)</div>
+<div class="page">
+  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Ingestion API Keys</span></div>
+  <div class="head">
+    <div>
+      <h1>Ingestion API Keys</h1>
+      <p class="sub">Manage write credentials for telemetry ingestion clients.</p>
+    </div>
+    <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Mint Key</button>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th><th>Created</th><th>Last Used</th><th>Audience</th><th>IP Allowlist</th><th>Status</th><th class="right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="kname">export-partner-feed</span><span class="by">by ops@example.com</span></td>
+          <td>9/22/2026, 10:14:03 AM</td>
+          <td>9/25/2026, 8:02:41 AM</td>
+          <td>partner-feed</td>
+          <td><div class="cidrs"><span class="mono">203.0.113.0/24</span><span class="mono">198.51.100.7</span></div></td>
+          <td><span class="status active">Active</span></td>
+          <td class="right">
+            <button class="icon-btn" title="Edit IP allowlist"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
+            <button class="icon-btn danger" title="Revoke"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button>
+          </td>
+        </tr>
+        <tr>
+          <td><span class="kname">game-client-42</span><span class="by">by dev@example.com</span></td>
+          <td>9/10/2026, 3:40:11 PM</td>
+          <td>9/25/2026, 9:11:55 AM</td>
+          <td>public</td>
+          <td><span class="unrestricted">Unrestricted</span></td>
+          <td><span class="status active">Active</span></td>
+          <td class="right">
+            <button class="icon-btn" title="Edit IP allowlist"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button>
+            <button class="icon-btn danger" title="Revoke"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></button>
+          </td>
+        </tr>
+        <tr>
+          <td><span class="kname">ci-runner</span><span class="by">by dev@example.com</span></td>
+          <td>8/02/2026, 11:05:27 AM</td>
+          <td>9/01/2026, 6:30:00 PM</td>
+          <td>ci</td>
+          <td><div class="cidrs"><span class="mono">10.0.0.0/8</span></div></td>
+          <td><span class="status revoked">Revoked</span></td>
+          <td class="right"></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row">
+  <div style="flex:1">
+    <div class="section-label" style="margin-left:0">2 · Edit IP allowlist dialog (admin, from the row action)</div>
+    <div class="stage">
+      <div class="overlay">
+        <div class="dialog">
+          <div class="dh">IP allowlist — export-partner-feed</div>
+          <div class="db">
+            <div>
+              <label>Allowed IPs / CIDR ranges</label>
+              <textarea rows="4">203.0.113.0/24
+198.51.100.7</textarea>
+              <p class="help">One entry per line (commas also work). Bare IPs match that single address. Leave empty to allow this key from any IP.</p>
+            </div>
+          </div>
+          <div class="df">
+            <button class="btn outline">Cancel</button>
+            <button class="btn">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1">
+    <div class="section-label" style="margin-left:0">3 · Server rejects a bad entry (400 message shown as-is)</div>
+    <div class="stage">
+      <div class="overlay">
+        <div class="dialog">
+          <div class="dh">IP allowlist — export-partner-feed</div>
+          <div class="db">
+            <div class="err">invalid allowed_cidrs: CIDR entry "10.0.0.5/8" has host bits set; did you mean "10.0.0.0/8"?</div>
+            <div>
+              <label>Allowed IPs / CIDR ranges</label>
+              <textarea rows="4">203.0.113.0/24
+10.0.0.5/8</textarea>
+              <p class="help">One entry per line (commas also work). Bare IPs match that single address. Leave empty to allow this key from any IP.</p>
+            </div>
+          </div>
+          <div class="df">
+            <button class="btn outline">Cancel</button>
+            <button class="btn">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section-label">4 · Mint dialog gains the same optional field (admin inline form shown; MintIngestionKeyDialog gets the identical field under Audience)</div>
+<div class="stage" style="margin-bottom:48px">
+  <div class="overlay">
+    <div class="dialog">
+      <div class="dh">Mint Analytics API Key</div>
+      <div class="db">
+        <div>
+          <label>Name</label>
+          <input type="text" value="grafana-datasource">
+        </div>
+        <div>
+          <label>Allowed IPs / CIDR ranges <span style="color:var(--text-muted);font-weight:400">(optional)</span></label>
+          <textarea rows="3" placeholder="203.0.113.0/24&#10;198.51.100.7"></textarea>
+          <p class="help">One entry per line (commas also work). Bare IPs match that single address. Leave empty to allow this key from any IP.</p>
+        </div>
+      </div>
+      <div class="df">
+        <button class="btn outline">Cancel</button>
+        <button class="btn">Mint</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
