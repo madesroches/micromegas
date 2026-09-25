@@ -146,23 +146,128 @@ pub(super) enum Ownership {
     Joiner(Arc<InFlight>),
 }
 
+/// One priority-tiered pool of semaphore permits: `shared` sized `total`,
+/// `prefetch` sized `total - demand_reserved` so prefetch work never starves
+/// demand of its reserved slice. `FetchScheduler` instantiates this twice --
+/// once denominated in runs (`count`), once in bytes (`bytes`) -- so the two
+/// resources (origin-GET parallelism vs. transient fetch memory) are bounded
+/// independently but share the same reservation shape.
+struct PriorityBudget {
+    shared: Arc<Semaphore>,
+    /// Total capacity of `shared`, stored alongside it since
+    /// `tokio::sync::Semaphore` has no capacity accessor. Used by `stats`
+    /// for the saturation sampler.
+    shared_total: usize,
+    prefetch: Arc<Semaphore>,
+    /// Total capacity of `prefetch`, for the same reason as `shared_total`.
+    prefetch_total: usize,
+}
+
+impl PriorityBudget {
+    fn new(total: usize, demand_reserved: usize) -> Self {
+        assert!(total > 0, "fetch budget total must be > 0");
+        // Strictly less: `demand_reserved == total` would leave the prefetch
+        // semaphore with zero permits, hanging every prefetch run forever.
+        assert!(
+            demand_reserved < total,
+            "demand_reserved ({demand_reserved}) must be < total ({total})"
+        );
+        let prefetch_total = total - demand_reserved;
+        Self {
+            shared: Arc::new(Semaphore::new(total)),
+            shared_total: total,
+            prefetch: Arc::new(Semaphore::new(prefetch_total)),
+            prefetch_total,
+        }
+    }
+
+    /// Acquire `n` permits for one coalesced GET covering `entries`, honoring
+    /// promotion: the run's effective priority is the most urgent (minimum)
+    /// of its entries', re-checked every time a promotion wakes this loop so
+    /// a promotion mid-wait drops the prefetch-class requirement.
+    async fn acquire(&self, n: u32, entries: &[Arc<InFlight>]) -> BudgetPermit {
+        loop {
+            let all_prefetch = entries.iter().all(|e| e.priority() == Priority::Prefetch);
+            if !all_prefetch {
+                let shared = self
+                    .shared
+                    .clone()
+                    .acquire_many_owned(n)
+                    .await
+                    .expect("shared semaphore is never closed");
+                return BudgetPermit {
+                    _shared: shared,
+                    _prefetch: None,
+                };
+            }
+
+            tokio::select! {
+                prefetch = self.prefetch.clone().acquire_many_owned(n) => {
+                    let prefetch = prefetch.expect("prefetch semaphore is never closed");
+                    tokio::select! {
+                        shared = self.shared.clone().acquire_many_owned(n) => {
+                            let shared = shared.expect("shared semaphore is never closed");
+                            return BudgetPermit { _shared: shared, _prefetch: Some(prefetch) };
+                        }
+                        _ = any_entry_promoted(entries) => {
+                            drop(prefetch);
+                            continue;
+                        }
+                    }
+                }
+                _ = any_entry_promoted(entries) => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    fn stats(&self) -> BudgetStats {
+        BudgetStats {
+            shared_available: self.shared.available_permits(),
+            shared_total: self.shared_total,
+            prefetch_available: self.prefetch.available_permits(),
+            prefetch_total: self.prefetch_total,
+        }
+    }
+}
+
+/// Held for the duration of one origin GET's share of one `PriorityBudget`;
+/// dropping it frees the slot(s) for the next waiter. Fields are never read,
+/// only held for their `Drop` effect.
+pub(super) struct BudgetPermit {
+    _shared: OwnedSemaphorePermit,
+    _prefetch: Option<OwnedSemaphorePermit>,
+}
+
+/// A fetch-permit budget's current occupancy (one `PriorityBudget`'s worth),
+/// for the saturation sampler (`object-cache-srv/src/saturation_monitor.rs`).
+pub struct BudgetStats {
+    pub shared_available: usize,
+    pub shared_total: usize,
+    pub prefetch_available: usize,
+    pub prefetch_total: usize,
+}
+
+/// Both of `FetchScheduler`'s budgets' occupancy: `count` (one permit per
+/// in-flight run, bounding origin-GET parallelism) and `bytes` (one permit
+/// per in-flight byte, bounding transient fetch memory).
+pub struct FetchBudgetStats {
+    pub count: BudgetStats,
+    pub bytes: BudgetStats,
+}
+
 /// Owns the in-flight single-flight map and the priority-aware origin-fetch
 /// budget.
 pub(super) struct FetchScheduler {
     inflight: StdMutex<HashMap<String, Arc<InFlight>>>,
-    /// Bounds total concurrent origin GETs (blocks + size heads don't count
-    /// against this; only run GETs acquire it).
-    shared_permits: Arc<Semaphore>,
-    /// Total capacity of `shared_permits`, stored alongside it since
-    /// `tokio::sync::Semaphore` has no capacity accessor. Used by
-    /// `fetch_budget_stats` for the saturation sampler.
-    shared_total: usize,
-    /// Prefetch runs must additionally hold one of these; sized to
-    /// `total - demand_reserved` so demand always finds a free shared permit.
-    prefetch_permits: Arc<Semaphore>,
-    /// Total capacity of `prefetch_permits`, for the same reason as
-    /// `shared_total`.
-    prefetch_total: usize,
+    /// One permit per in-flight coalesced run (blocks + size heads don't
+    /// count against this; only run GETs acquire it). Bounds origin-GET
+    /// parallelism, independent of `bytes`.
+    count: PriorityBudget,
+    /// One permit per byte of an in-flight coalesced run's buffer. Bounds the
+    /// transient origin-fetch memory ceiling, independent of `count`.
+    bytes: PriorityBudget,
     promote_whole_batch: bool,
     /// Count of detached fetch tasks (`spawn_run_fetch` runs + `size()` HEADs)
     /// currently in flight, tracked by `FetchTaskGuard`. Used by graceful
@@ -174,21 +279,47 @@ pub(super) struct FetchScheduler {
 }
 
 impl FetchScheduler {
-    pub(super) fn new(total: usize, demand_reserved: usize, promote_whole_batch: bool) -> Self {
-        assert!(total > 0, "fetch concurrency total must be > 0");
-        // Strictly less: `demand_reserved == total` would leave the prefetch
-        // semaphore with zero permits, hanging every prefetch run forever.
+    /// `budget_bytes`/`reserved_bytes` are the byte-denominated analog of
+    /// `total`/`demand_reserved`; `max_run_bytes` is the largest byte span one
+    /// coalesced run can reach (`blocks::max_run_bytes`), asserted against
+    /// both so a run can never exceed what either budget can ever grant.
+    pub(super) fn new(
+        total: usize,
+        demand_reserved: usize,
+        budget_bytes: u64,
+        reserved_bytes: u64,
+        max_run_bytes: u64,
+        promote_whole_batch: bool,
+    ) -> Self {
+        // `acquire_many_owned` takes a `u32` permit count, so one run's byte
+        // charge must fit in a `u32` -- checked here once at construction
+        // rather than per-run in `acquire_run_permit`.
         assert!(
-            demand_reserved < total,
-            "demand_reserved ({demand_reserved}) must be < total ({total})"
+            max_run_bytes <= u32::MAX as u64,
+            "max_run_bytes ({max_run_bytes}) must fit in u32: acquire_many_owned takes a u32 permit count"
         );
-        let prefetch_total = total - demand_reserved;
+        assert!(
+            reserved_bytes < budget_bytes,
+            "fetch_memory_budget reserved_bytes ({reserved_bytes}) must be < budget_bytes ({budget_bytes})"
+        );
+        // Without this, a run larger than the prefetch byte pool would never
+        // complete (and never error) acquiring `bytes` permits: the same hang
+        // the `fetch_memory_budget_mb` floor in `object-cache-srv`'s
+        // `cli.rs::validate` guards against at the CLI boundary.
+        assert!(
+            budget_bytes - reserved_bytes >= max_run_bytes,
+            "fetch memory budget's prefetch pool ({} bytes = budget_bytes {budget_bytes} - \
+             reserved_bytes {reserved_bytes}) must be >= max_run_bytes ({max_run_bytes}), or a \
+             full-size run would hang forever acquiring its byte-budget permits",
+            budget_bytes - reserved_bytes
+        );
         Self {
             inflight: StdMutex::new(HashMap::new()),
-            shared_permits: Arc::new(Semaphore::new(total)),
-            shared_total: total,
-            prefetch_permits: Arc::new(Semaphore::new(prefetch_total)),
-            prefetch_total,
+            count: PriorityBudget::new(total, demand_reserved),
+            bytes: PriorityBudget::new(
+                usize::try_from(budget_bytes).expect("fetch_memory_budget_bytes fits in usize"),
+                usize::try_from(reserved_bytes).expect("reserved fetch memory bytes fit in usize"),
+            ),
             promote_whole_batch,
             outstanding_tasks: AtomicUsize::new(0),
             drained: Notify::new(),
@@ -232,16 +363,13 @@ impl FetchScheduler {
         }
     }
 
-    /// `(shared_available, shared_total, prefetch_available, prefetch_total)`
-    /// -- the fetch-permit budget's current occupancy, for the saturation
+    /// Both fetch-permit budgets' current occupancy, for the saturation
     /// sampler (`object-cache-srv/src/saturation_monitor.rs`).
-    pub(super) fn fetch_budget_stats(&self) -> (usize, usize, usize, usize) {
-        (
-            self.shared_permits.available_permits(),
-            self.shared_total,
-            self.prefetch_permits.available_permits(),
-            self.prefetch_total,
-        )
+    pub(super) fn fetch_budget_stats(&self) -> FetchBudgetStats {
+        FetchBudgetStats {
+            count: self.count.stats(),
+            bytes: self.bytes.stats(),
+        }
     }
 
     /// Number of keys (blocks or `size()` heads) currently in flight to
@@ -412,11 +540,13 @@ impl Drop for FetchTaskGuard {
     }
 }
 
-/// Held for the duration of one origin GET; dropping it frees the slot(s) for
-/// the next waiter. Fields are never read, only held for their `Drop` effect.
+/// Held for the duration of one coalesced run: `count` bounds origin-GET
+/// parallelism and is dropped right after the GET returns; `bytes` bounds the
+/// run's transient memory and is held through backend admission. See
+/// `acquire_run_permit` and its caller in `fetch.rs`.
 pub(super) struct RunPermit {
-    _shared: OwnedSemaphorePermit,
-    _prefetch: Option<OwnedSemaphorePermit>,
+    pub(super) count: BudgetPermit,
+    pub(super) bytes: BudgetPermit,
 }
 
 /// Resolves when any of `entries`' priority has been promoted since this call
@@ -438,48 +568,24 @@ async fn any_entry_promoted(entries: &[Arc<InFlight>]) {
     }
 }
 
-/// Acquire the permit(s) needed to run one coalesced GET covering `entries`,
-/// honoring promotion: the run's effective priority is the most urgent
-/// (minimum) of its entries', re-checked every time a promotion wakes this
-/// loop so a promotion mid-wait drops the prefetch-class requirement.
+/// Acquire the permits needed to run one coalesced GET covering `entries`,
+/// spanning `run_bytes` bytes: bytes first, then count. Every run acquires in
+/// this order, so there is no hold-and-wait cycle between the two budgets;
+/// the cost is that a run holding its bytes while queued for a count slot
+/// parks that byte budget idle for the wait, which only bites when the byte
+/// budget is deliberately sized larger than `count * typical run`. Each
+/// underlying `PriorityBudget::acquire` call independently honors promotion
+/// (see its doc).
 pub(super) async fn acquire_run_permit(
     scheduler: &FetchScheduler,
     entries: &[Arc<InFlight>],
+    run_bytes: u64,
 ) -> RunPermit {
-    loop {
-        let all_prefetch = entries.iter().all(|e| e.priority() == Priority::Prefetch);
-        if !all_prefetch {
-            let shared = scheduler
-                .shared_permits
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("shared_permits semaphore is never closed");
-            return RunPermit {
-                _shared: shared,
-                _prefetch: None,
-            };
-        }
-
-        tokio::select! {
-            prefetch = scheduler.prefetch_permits.clone().acquire_owned() => {
-                let prefetch = prefetch.expect("prefetch_permits semaphore is never closed");
-                tokio::select! {
-                    shared = scheduler.shared_permits.clone().acquire_owned() => {
-                        let shared = shared.expect("shared_permits semaphore is never closed");
-                        return RunPermit { _shared: shared, _prefetch: Some(prefetch) };
-                    }
-                    _ = any_entry_promoted(entries) => {
-                        drop(prefetch);
-                        continue;
-                    }
-                }
-            }
-            _ = any_entry_promoted(entries) => {
-                continue;
-            }
-        }
-    }
+    let n = u32::try_from(run_bytes)
+        .expect("run size validated <= u32::MAX at construction (FetchScheduler::new asserts max_run_bytes fits)");
+    let bytes = scheduler.bytes.acquire(n, entries).await;
+    let count = scheduler.count.acquire(1, entries).await;
+    RunPermit { count, bytes }
 }
 
 /// Reconstruct an owned error from a shared in-flight failure. `anyhow::Error`

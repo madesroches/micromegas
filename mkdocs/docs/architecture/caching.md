@@ -96,7 +96,10 @@ the shape is:
 - **Priority-aware shared fetch budget.** Every origin fetch is either *demand* (a real read) or
   *prefetch* (background warming). A reserved slice of the budget is always available to demand
   reads, so a demand read is never stuck behind a large prefetch batch — and a prefetch already
-  in flight is **promoted** to demand priority if a real read arrives for it.
+  in flight is **promoted** to demand priority if a real read arrives for it. The budget is bounded
+  in both concurrency (how many runs) and bytes (how much transient origin-GET buffer memory those
+  runs may hold at once), independently — see [Fetch scheduling &
+  memory bounds](../admin/object-cache.md#fetch-scheduling-memory-bounds).
 - **Single-flight de-duplication.** Concurrent reads of the same block coalesce into one origin
   GET; later readers wait on the in-flight fetch instead of issuing their own.
 - **Streaming with a memory bound.** `object-cache-srv` streams responses rather than buffering

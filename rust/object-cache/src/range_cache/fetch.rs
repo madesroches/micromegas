@@ -17,8 +17,8 @@ use crate::metric_tags;
 
 use super::RangeCache;
 use super::scheduler::{
-    BatchState, FetchScheduler, FulfillGuard, InFlight, Ownership, Priority, acquire_run_permit,
-    effective_priority, reconstruct_shared_error,
+    BatchState, FetchScheduler, FulfillGuard, InFlight, Ownership, Priority, RunPermit,
+    acquire_run_permit, effective_priority, reconstruct_shared_error,
 };
 
 /// Concurrency for probing the cache backend for block hits before going to
@@ -64,9 +64,9 @@ impl RangeCache {
     /// given priority, returning the bytes for every requested block on the
     /// `Demand` path. On the `Prefetch` path bytes are written to the backend
     /// and dropped as each owned run completes; the returned map is always
-    /// empty, which is what keeps the prefetch peak bounded by
-    /// `prefetch_concurrency * max_coalesced_get_bytes` rather than the full
-    /// request size.
+    /// empty, which is what keeps the prefetch peak bounded by the fetch
+    /// scheduler's prefetch byte pool (`--fetch-memory-budget-mb`'s prefetch
+    /// share) rather than the full request size.
     pub(super) async fn fetch_blocks(
         &self,
         key: &str,
@@ -291,12 +291,26 @@ impl RangeCache {
                     .zip(run.entries.iter().cloned())
                     .collect(),
             );
+            // The run's byte span is the fetch-budget charge, known before
+            // `acquire_run_permit` is called.
+            let byte_start = run.range.start * block_size;
+            let byte_end = block_byte_range(run.range.end - 1, block_size, file_size).end;
+
             let permit_wait_start = Instant::now();
             let permit = instrument_named!(
-                acquire_run_permit(&cache.scheduler, &run.entries),
+                acquire_run_permit(&cache.scheduler, &run.entries, byte_end - byte_start),
                 "range_cache_fetch_permit_wait"
             )
             .await;
+            // Split now: `count_permit` bounds origin-GET parallelism and is
+            // dropped right after the GET below; `byte_permit` bounds this
+            // run's transient memory and stays held through
+            // `fulfill_run_success` (or the error fulfill loop), covering the
+            // GET buffer through the per-block copies and backend admission.
+            let RunPermit {
+                count: count_permit,
+                bytes: byte_permit,
+            } = permit;
             // The run's effective priority, resolved once the permit is
             // acquired so a promotion racing the wait is reflected: used
             // to tag every latency/hit-rate signal this run emits.
@@ -313,8 +327,6 @@ impl RangeCache {
                 permit_wait_start.elapsed().as_secs_f64() * 1000.0
             );
 
-            let byte_start = run.range.start * block_size;
-            let byte_end = block_byte_range(run.range.end - 1, block_size, file_size).end;
             let path = Path::from(key_owned.as_str());
             let origin_get_start = Instant::now();
             let outcome = instrument_named!(
@@ -328,7 +340,7 @@ impl RangeCache {
                 metric_tags::class_tags(class),
                 origin_get_start.elapsed().as_secs_f64() * 1000.0
             );
-            drop(permit);
+            drop(count_permit);
 
             match outcome {
                 Ok(data) => {
@@ -350,6 +362,7 @@ impl RangeCache {
                     }
                 }
             }
+            drop(byte_permit);
             for k in &run.keys {
                 cache.scheduler.remove_entry(k);
             }
@@ -420,7 +433,11 @@ impl RangeCache {
                 let offset = i as u64 * block_size;
                 let local_start = offset as usize;
                 let local_end = (offset + block_size).min(data.len() as u64) as usize;
-                let chunk = data.slice(local_start..local_end);
+                // Copied once here (rather than `data.slice(..)`, a view into
+                // the whole run buffer) so both consumers get an owned value
+                // that does not pin the run buffer alive: see
+                // `RangeCacheBackend::put`'s doc.
+                let chunk = Bytes::copy_from_slice(&data[local_start..local_end]);
                 self.backend
                     .put(run.keys[i].clone(), chunk.clone(), hint)
                     .await;
@@ -457,14 +474,14 @@ async fn join_demand(
 
 /// Phase 4, prefetch path: join entries as each completes (not in index
 /// order), dropping the joined bytes and the `Arc<InFlight>` right away. The
-/// watch channel inside an entry retains the fulfilled `Bytes` — a slice
-/// sharing its whole run's GET buffer — for as long as the entry is alive,
-/// so holding every entry until all runs finished (as the demand path's
-/// `join_all` does) would let the prefetch peak reach the full request size
-/// instead of the documented `prefetch_concurrency * max_coalesced_get_bytes`
-/// bound. Any demand joiner that registered before completion still gets the
-/// bytes: it holds its own `Arc<InFlight>` and reads the channel
-/// independently of this early drop.
+/// watch channel inside an entry retains the fulfilled `Bytes` — the block's
+/// own owned copy (see `fulfill_run_success`), not a view into its parent run
+/// buffer — for as long as the entry is alive, so holding every entry until
+/// all runs finished (as the demand path's `join_all` does) would let the
+/// prefetch peak grow with the sum of those per-block copies instead of being
+/// bounded as each run completes. Any demand joiner that registered before
+/// completion still gets the bytes: it holds its own `Arc<InFlight>` and
+/// reads the channel independently of this early drop.
 async fn join_prefetch(entries: HashMap<u64, Arc<InFlight>>) -> Result<()> {
     let mut joins: FuturesUnordered<_> = entries
         .into_values()

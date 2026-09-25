@@ -27,6 +27,13 @@ pub trait RangeCacheBackend: Send + Sync {
     /// tier it maintains (the promotion gate) and MUST treat such a value as
     /// a miss. Single-tier backends accept and ignore the parameter.
     async fn get(&self, key: &str, expected_len: u64) -> Option<Bytes>;
+
+    /// `value` is an owned buffer, not a view into a larger one (e.g. a slice
+    /// of a coalesced multi-block origin GET): `range_cache::fetch` copies
+    /// each block once before calling `put`, specifically so no cached (or
+    /// in-flight-write) value pins a larger parent allocation alive. A
+    /// backend may therefore store `value` as-is; it must not assume it needs
+    /// its own defensive copy to detach from a parent buffer.
     async fn put(&self, key: String, value: Bytes, hint: FillHint);
 
     /// Disk write-path counters, for the saturation monitor's per-second

@@ -4,6 +4,27 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Bug fix:** Add a byte-denominated budget to the object cache's origin-fetch scheduler,
+  bounding transient fetch memory independently of the concurrency knob (#1537). The scheduler
+  previously throttled by a *count* of permits, so the worst-case transient memory of in-flight
+  origin GETs was `max_concurrent_fetches * max_coalesced_get_bytes`; raising
+  `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` for throughput silently multiplied that
+  ceiling, and `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` (the response path) did not cover these
+  buffers. The new budget (`MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB` /
+  `--fetch-memory-budget-mb`, default `256`) gives the fetch path a hard MiB ceiling that no
+  longer moves with `--max-concurrent-fetches`, which is now a pure parallelism cap. Fulfilled
+  blocks are also now each copied once into their own owned buffer, so a waiter holding one
+  block no longer pins its whole parent run buffer (up to `max_coalesced_get_bytes`) alive.
+  **Upgrade note:** defaults are unchanged when every fetch knob is at its default. A deployment
+  that raised `MAX_CONCURRENT_FETCHES` no longer gets more fetch memory for it and should set
+  `FETCH_MEMORY_BUDGET_MB`; one that raised `DEMAND_RESERVED_FETCHES`, `MAX_COALESCED_GET_BYTES`,
+  or `BLOCK_SIZE` past what 256 MiB allows will fail validation at startup with a message giving
+  the required floor; `MAX_COALESCED_GET_BYTES` and `BLOCK_SIZE` are now additionally capped at
+  1 GiB. **Minor breaking change:** `RangeCache::new` gains a new `fetch_memory_budget_bytes`
+  parameter (positional, after `demand_reserved_fetch_permits`); `RangeCache::fetch_budget_stats()`
+  now returns a `FetchBudgetStats` struct instead of a 4-tuple; and `RangeCacheBackend::put`'s
+  `value` is now documented (and required) to be an owned buffer rather than a possible view into
+  a larger one, so a backend implementation must not assume it needs its own defensive copy.
 * **Notebooks:** Log cell collapses consecutive repeated lines (#1557). Rows that are identical
   on every column except `time` (and any columns in the new `collapseIgnoreColumns` option) now
   render as a single line with a `×N` badge; click it to expand the run. Pagination now counts

@@ -21,8 +21,9 @@ use micromegas::object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 use micromegas::object_cache::memory_backend::MemoryBackend;
 use micromegas::object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas::object_cache::range_cache::{
-    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas_object_cache_srv::app_state::AppState;
 use micromegas_object_cache_srv::handlers::{get_range_handler, prefetch_handler};
@@ -141,6 +142,7 @@ fn memory_cache(origin: Arc<dyn ObjectStore>, block_size: u64) -> RangeCache {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     )
@@ -241,6 +243,7 @@ async fn prefetch_ssd_only_leaves_ram_usage_unchanged() {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -528,6 +531,7 @@ async fn prefetch_priority_does_not_starve_demand_read() {
         "test".to_string(),
         total,
         demand_reserved,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );

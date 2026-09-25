@@ -31,13 +31,23 @@ const DEFAULT_OBJECT_CACHE_L1_MB: u64 = 200;
 /// `L1_DEMAND_RESERVED_FETCH_PERMITS`). Sized smaller than the dedicated
 /// object-cache-srv's default (32): an in-process L1 shares the process with
 /// DataFusion's own working set, so a smaller concurrent-fetch /
-/// transient-buffer footprint (roughly
-/// `L1_TOTAL_FETCH_PERMITS * DEFAULT_MAX_COALESCED_GET_BYTES`) is preferable.
+/// transient-buffer footprint (see `L1_FETCH_MEMORY_BUDGET_BYTES`) is
+/// preferable.
 const L1_TOTAL_FETCH_PERMITS: usize = 16;
 /// Placeholder satisfying `RangeCache::new`'s `demand_reserved < total`
-/// assertion. This sizes the prefetch-only semaphore, but L1 never issues
-/// prefetch reads, so the value has no other effect.
+/// assertion. It sizes the prefetch-only pools of both fetch budgets -- the
+/// count pool, and the byte pool via a derived reservation of
+/// `L1_DEMAND_RESERVED_FETCH_PERMITS * max_run_bytes` (32 MiB here) -- so it
+/// must also leave `L1_FETCH_MEMORY_BUDGET_BYTES` at least one max run above
+/// that reservation. L1 never issues prefetch reads, so demand always draws
+/// on the full pools and the value has no runtime effect.
 const L1_DEMAND_RESERVED_FETCH_PERMITS: usize = 4;
+/// Transient origin-GET buffer memory bound for one `L1CacheStore`'s
+/// `RangeCache` (128 MiB at these defaults): `l1_wrap` builds a separate
+/// `L1CacheStore`/`RangeCache` per call (see `l1_wrap` below), so this bounds
+/// one `L1CacheStore` instance's fetch buffers, not the whole process.
+const L1_FETCH_MEMORY_BUDGET_BYTES: u64 =
+    L1_TOTAL_FETCH_PERMITS as u64 * DEFAULT_MAX_COALESCED_GET_BYTES;
 
 /// The shared in-process L1 RAM budget, lazily sized once (on first use) from
 /// `MICROMEGAS_OBJECT_CACHE_L1_MB`. `None` when L1 is disabled (budget `0`).
@@ -105,6 +115,7 @@ impl L1CacheStore {
             ns,
             L1_TOTAL_FETCH_PERMITS,
             L1_DEMAND_RESERVED_FETCH_PERMITS,
+            L1_FETCH_MEMORY_BUDGET_BYTES,
             DEFAULT_MAX_COALESCED_GET_BYTES,
             DEFAULT_PROMOTE_WHOLE_BATCH,
         );

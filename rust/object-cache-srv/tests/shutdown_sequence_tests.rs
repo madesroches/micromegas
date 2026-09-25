@@ -30,8 +30,9 @@ use micromegas::object_cache::backend::{FillHint, RangeCacheBackend};
 use micromegas::object_cache::foyer_backend::{FoyerBackend, WriteTuning};
 use micromegas::object_cache::prefetch::PrefetchItem;
 use micromegas::object_cache::range_cache::{
-    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas_object_cache_srv::prefetch_queue::spawn_prefetch_worker;
 use micromegas_object_cache_srv::shutdown_sequence;
@@ -160,6 +161,7 @@ fn make_cache(origin: Arc<dyn ObjectStore>, foyer: Arc<FoyerBackend>) -> RangeCa
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     )

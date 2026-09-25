@@ -10,7 +10,7 @@ use micromegas_tracing::prelude::*;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 
 use super::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
-use super::blocks::{assemble_range, block_byte_range, blocks_for_range};
+use super::blocks::{assemble_range, block_byte_range, blocks_for_range, max_run_bytes};
 use super::metric_tags::{self, PrefixTags};
 
 mod error;
@@ -18,6 +18,7 @@ mod fetch;
 mod scheduler;
 
 pub use error::{RangeError, StreamRangesCaller};
+pub use scheduler::{BudgetStats, FetchBudgetStats};
 use scheduler::{
     FetchScheduler, FulfillGuard, Ownership, Priority, decode_size, reconstruct_shared_error,
 };
@@ -40,6 +41,12 @@ pub const DEFAULT_TOTAL_FETCH_PERMITS: usize = 32;
 pub const DEFAULT_DEMAND_RESERVED_FETCH_PERMITS: usize = 8;
 /// Default max byte span of one coalesced run GET.
 pub const DEFAULT_MAX_COALESCED_GET_BYTES: u64 = 8 * 1024 * 1024;
+/// Default fetch-budget cap on transient origin-GET buffer memory (256 MiB):
+/// the smallest budget at which `DEFAULT_TOTAL_FETCH_PERMITS` runs of
+/// `DEFAULT_MAX_COALESCED_GET_BYTES` each can all be in flight, so at the
+/// defaults a cold contiguous scan is throttled by parallelism, not memory.
+pub const DEFAULT_FETCH_MEMORY_BUDGET_BYTES: u64 =
+    DEFAULT_TOTAL_FETCH_PERMITS as u64 * DEFAULT_MAX_COALESCED_GET_BYTES;
 /// Default promotion granularity: promote only the run(s) covering a demanded
 /// block, not the whole prefetch batch.
 pub const DEFAULT_PROMOTE_WHOLE_BATCH: bool = false;
@@ -96,6 +103,13 @@ pub struct RangeCache {
 }
 
 impl RangeCache {
+    /// `fetch_memory_budget_bytes` is the total transient origin-GET buffer
+    /// memory allowed across all in-flight coalesced runs; the slice reserved
+    /// for demand is derived, not a separate parameter -- each of
+    /// `demand_reserved_fetch_permits`'s reserved slots reserves one full-size
+    /// run's worth of bytes (`max_run_bytes(block_size, max_coalesced_get_bytes)`),
+    /// so it keeps the same "N full-size demand runs always fit" meaning the
+    /// count reservation already has.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         origin: Arc<dyn ObjectStore>,
@@ -104,9 +118,12 @@ impl RangeCache {
         ns: String,
         total_fetch_permits: usize,
         demand_reserved_fetch_permits: usize,
+        fetch_memory_budget_bytes: u64,
         max_coalesced_get_bytes: u64,
         promote_whole_batch: bool,
     ) -> Self {
+        let max_run = max_run_bytes(block_size, max_coalesced_get_bytes);
+        let reserved_bytes = demand_reserved_fetch_permits as u64 * max_run;
         Self {
             origin,
             backend,
@@ -115,6 +132,9 @@ impl RangeCache {
             scheduler: Arc::new(FetchScheduler::new(
                 total_fetch_permits,
                 demand_reserved_fetch_permits,
+                fetch_memory_budget_bytes,
+                reserved_bytes,
+                max_run,
                 promote_whole_batch,
             )),
             max_coalesced_get_bytes,
@@ -160,10 +180,9 @@ impl RangeCache {
         self.classify_tags(key).label
     }
 
-    /// `(shared_available, shared_total, prefetch_available, prefetch_total)`
-    /// -- the fetch-permit budget's current occupancy, for the saturation
-    /// sampler.
-    pub fn fetch_budget_stats(&self) -> (usize, usize, usize, usize) {
+    /// Both fetch-permit budgets' (count and bytes) current occupancy, for
+    /// the saturation sampler.
+    pub fn fetch_budget_stats(&self) -> FetchBudgetStats {
         self.scheduler.fetch_budget_stats()
     }
 

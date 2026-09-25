@@ -48,12 +48,9 @@ impl RangeCacheBackend for BoundedMemoryBackend {
         // No disk tier, so demand and prefetch fills are treated identically
         // (see `FillHint`'s docs and the L1 design notes): there is no
         // SSD-only admission path to route a prefetch fill through, and
-        // `foyer_memory::Cache` exposes only a plain `insert`.
-        //
-        // Copy so the cached block does not retain its coalesced-GET parent
-        // buffer -- see `FoyerBackend::put`'s identical copy for the full
-        // rationale.
-        let owned = Bytes::copy_from_slice(&value);
-        self.cache.insert(key, owned);
+        // `foyer_memory::Cache` exposes only a plain `insert`. `value` is
+        // already an owned per-block copy (see `RangeCacheBackend::put`'s
+        // doc), so it's stored as-is.
+        self.cache.insert(key, value);
     }
 }

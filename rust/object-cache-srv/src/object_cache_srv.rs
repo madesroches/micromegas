@@ -138,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ns,
         args.max_concurrent_fetches,
         args.demand_reserved_fetches,
+        args.fetch_memory_budget_mb * 1024 * 1024,
         args.max_coalesced_get_bytes,
         args.promote_whole_batch,
     );
