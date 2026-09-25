@@ -176,7 +176,7 @@ dialog already shows.
 
 ## Mockups
 
-- `tasks/1611_api_key_ip_allowlist_ui_mockups/allowlist-column-and-dialogs.html` has four
+- `tasks/completed/1611_api_key_ip_allowlist_ui_mockups/allowlist-column-and-dialogs.html` has four
   panels: (1) the admin list with the new column (restricted, unrestricted, and revoked rows) and
   the shield edit action, (2) the edit dialog prefilled, (3) the edit dialog showing a server 400
   message, and (4) the mint dialog with the optional field.
