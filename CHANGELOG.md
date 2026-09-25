@@ -4,6 +4,12 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Notebooks:** Log cell collapses consecutive repeated lines (#1557). Rows that are identical
+  on every column except `time` (and any columns in the new `collapseIgnoreColumns` option) now
+  render as a single line with a `×N` badge; click it to expand the run. Pagination now counts
+  these collapsed lines rather than raw rows, and the new "Collapse repeats" footer toggle
+  (persisted as `collapseRepeats`, on by default) turns the behavior off. The ignore list is
+  configured from the Log cell editor, including for a Log cell nested in a horizontal group.
 * **Telemetry:** Each built-in sink's max level is now configurable at startup through an
   environment variable, read once by `TelemetryGuardBuilder::build()`:
   `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` (default `info`) for the local (stdout) sink and the new

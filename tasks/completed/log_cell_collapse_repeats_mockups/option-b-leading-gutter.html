@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Log Cell — Collapse Repeats (Option B: leading gutter)</title>
+<style>
+  :root {
+    --bg: #0a0a0f; --panel: #121218; --panel-2: #17171f; --row-alt: #15151d;
+    --border: #26262f; --border-soft: #1d1d26;
+    --text-primary: #e7e7ec; --text-secondary: #9a9aab; --text-muted: #63636f;
+    --rust: #d9481f; --blue: #4d8fe0; --gold: #ffb300; --err: #ef5350; --err-bright: #ff8a80; --focus: #6fa8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; }
+  body { padding: 40px 24px 64px; display: flex; justify-content: center; }
+  .page { width: 100%; max-width: 1040px; display: flex; flex-direction: column; gap: 24px; }
+  header { display: flex; flex-direction: column; gap: 8px; padding-bottom: 18px; border-bottom: 1px solid var(--border-soft); }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--rust); }
+  h1 { margin: 0; font-size: 22px; font-weight: 650; }
+  .dek { margin: 0; max-width: 72ch; color: var(--text-secondary); line-height: 1.55; font-size: 13.5px; }
+
+  .cell { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
+  .cell-titlebar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+  .cell-titlebar .title { font-size: 12.5px; font-weight: 600; }
+  .cell-titlebar .badge { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; }
+
+  .log-body { max-height: 460px; overflow: auto; font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; font-size: 12px; padding: 4px 0; }
+  .log-row { display: flex; align-items: flex-start; padding: 2px 10px; position: relative; }
+  .log-row:hover { background: rgba(255,255,255,0.035); }
+  .log-row.alt { background: var(--row-alt); }
+  .log-row.member { background: rgba(77,143,224,0.06); }
+  .log-row.member .col-time { color: var(--text-secondary); }
+  .col-time { color: var(--text-muted); white-space: nowrap; width: 205px; flex: 0 0 auto; margin-right: 10px; }
+  .col-level { width: 44px; flex: 0 0 auto; font-weight: 700; margin-right: 10px; }
+  .lvl-ERROR { color: var(--err); } .lvl-WARN { color: var(--gold); } .lvl-INFO { color: var(--blue); } .lvl-DEBUG { color: var(--text-secondary); }
+  .col-target { color: #7fb2ef; width: 170px; flex: 0 0 auto; margin-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .divider { width: 5px; flex: 0 0 auto; align-self: stretch; margin-right: 5px; position: relative; }
+  .divider::after { content: ""; position: absolute; left: 2px; top: 0; bottom: 0; width: 1px; background: var(--border); }
+  .col-msg { flex: 1 1 0; min-width: 60px; white-space: pre-wrap; overflow-wrap: break-word; }
+
+  .gutter { flex: 0 0 auto; width: 38px; margin-right: 6px; display: flex; justify-content: flex-end; }
+  .repeat {
+    flex: 0 0 auto; align-self: flex-start;
+    font-size: 10.5px; line-height: 16px; padding: 0 6px; border-radius: 8px;
+    color: var(--blue); background: rgba(77,143,224,0.12); border: 1px solid rgba(77,143,224,0.35);
+    cursor: pointer; font-variant-numeric: tabular-nums; user-select: none; white-space: nowrap;
+  }
+  .repeat:hover { background: rgba(77,143,224,0.22); }
+  .repeat.open { color: var(--text-primary); background: rgba(77,143,224,0.3); }
+
+  .cell-bottombar { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; border-top: 1px solid var(--border); background: var(--panel-2); }
+  .pager { font-size: 10px; color: var(--text-muted); }
+  .pager b { color: var(--text-secondary); font-weight: 500; }
+  .tools { display: flex; align-items: center; }
+  .tool { font-size: 10px; padding: 2px 8px; background: none; border: none; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .tool:hover { color: var(--text-secondary); }
+  .tool.on { color: var(--blue); }
+  .tool svg { width: 11px; height: 11px; }
+
+  .notes { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+  .notes li { margin-bottom: 4px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="eyebrow">Mockup · Option B</div>
+    <h1>Collapse repeats — leading count gutter</h1>
+    <p class="dek">Consecutive rows identical apart from <code>time</code> (and any columns on the ignore list) render once, with the
+      count in a narrow gutter before the timestamp (Grafana-style). The gutter is present on every row of the cell while collapsing
+      is on, so columns stay aligned. Click the count to expand the run inline;
+      hover it for the time span. Toggle "Collapse repeats" in the bottom bar to compare with today's behaviour.</p>
+  </header>
+
+  <div class="cell">
+    <div class="cell-titlebar"><span class="title">recent_warnings</span><span class="badge">Log</span></div>
+    <div class="log-body" id="body"></div>
+    <div class="cell-bottombar">
+      <span class="pager" id="pager"></span>
+      <div class="tools">
+        <button class="tool on" id="collapseBtn" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg>
+          Collapse repeats
+        </button>
+        <button class="tool on" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7"/></svg>
+          Wrap text
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <ul class="notes">
+    <li><b>Pro:</b> counts line up in one column at the left edge — easy to scan for the noisiest lines.</li>
+    <li><b>Con:</b> costs ~44px of width on every row, and toggling collapse shifts every column sideways.</li>
+  </ul>
+</div>
+
+<script>
+  const planning = 'error building dataframe: Error during planning: Column "processes.exe" must be in GROUP BY or used in an aggregate function';
+  const raw = [];
+  const push = (t, level, target, msg) => raw.push({ t, level, target, msg });
+  push('2026-09-24 09:29:12.418203117', 'INFO', 'analytics::lakehouse', 'materialized partition log_entries/global [09:28:00, 09:29:00) 18342 rows');
+  for (let s = 11; s >= 0; s--) push(`2026-09-24 09:29:${String(s).padStart(2, '0')}.${String(100000000 + s * 7919).slice(1)}`, 'WARN', 'flight_sql_srv::service', planning);
+  push('2026-09-24 09:28:59.771002345', 'INFO', 'telemetry_ingestion', 'inserted block 4f1c… stream 9b2e… (412 events)');
+  push('2026-09-24 09:28:59.204118870', 'ERROR', 'analytics::response_writer', 'client disconnected before end of stream');
+  push('2026-09-24 09:28:58.990001002', 'ERROR', 'analytics::response_writer', 'client disconnected before end of stream');
+  push('2026-09-24 09:28:58.110400070', 'DEBUG', 'maintenance::daemon', 'tick: 3 views due for refresh');
+  push('2026-09-24 09:28:57.004210099', 'INFO', 'telemetry_ingestion', 'inserted block 77a0… stream 9b2e… (398 events)');
+
+  const same = (a, b) => a.level === b.level && a.target === b.target && a.msg === b.msg;
+  function groups(rows) {
+    const out = [];
+    for (let i = 0; i < rows.length; i++) {
+      const last = out[out.length - 1];
+      if (last && same(rows[last.start], rows[i])) last.end = i + 1;
+      else out.push({ start: i, end: i + 1 });
+    }
+    return out;
+  }
+
+  let collapse = true;
+  const expanded = new Set();
+  const body = document.getElementById('body');
+
+  function row(r, cls, badge) {
+    const gutter = collapse ? `<span class="gutter">${badge || ''}</span>` : '';
+    return `<div class="log-row ${cls}">${gutter}
+      <span class="col-time">${r.t}</span><span class="col-level lvl-${r.level}">${r.level}</span>
+      <span class="col-target">${r.target}</span><span class="divider"></span>
+      <span class="col-msg">${r.msg}</span></div>`;
+  }
+
+  function render() {
+    const gs = collapse ? groups(raw) : raw.map((_, i) => ({ start: i, end: i + 1 }));
+    let html = '';
+    gs.forEach((g, gi) => {
+      const n = g.end - g.start;
+      const alt = gi % 2 ? 'alt' : '';
+      const open = expanded.has(g.start);
+      const span = `${raw[g.end - 1].t.slice(11, 23)} → ${raw[g.start].t.slice(11, 23)}`;
+      const badge = n > 1 ? `<span class="repeat${open ? ' open' : ''}" data-g="${g.start}" title="${n} identical rows, ${span}. Click to ${open ? 'collapse' : 'expand'}.">×${n}</span>` : '';
+      html += row(raw[g.start], alt, badge);
+      if (open) for (let i = g.start + 1; i < g.end; i++) html += row(raw[i], 'member');
+    });
+    body.innerHTML = html;
+    document.getElementById('pager').innerHTML = `<b>1</b>–<b>${gs.length}</b> of <b>${gs.length}</b> lines${collapse ? ` · ${raw.length} rows` : ''}`;
+  }
+
+  body.addEventListener('click', (e) => {
+    const b = e.target.closest('.repeat');
+    if (!b) return;
+    const k = Number(b.dataset.g);
+    expanded.has(k) ? expanded.delete(k) : expanded.add(k);
+    render();
+  });
+  document.getElementById('collapseBtn').addEventListener('click', (e) => {
+    collapse = !collapse;
+    expanded.clear();
+    e.currentTarget.classList.toggle('on', collapse);
+    e.currentTarget.setAttribute('aria-pressed', String(collapse));
+    render();
+  });
+  render();
+</script>
+</body>
+</html>

@@ -122,6 +122,21 @@ function textCellClasses(wrap: boolean | undefined): string {
   return wrap ? 'whitespace-pre-wrap wrap-break-word' : 'truncate'
 }
 
+/** Formats a single column's value to the string shown/copied/measured for it,
+ *  independent of any per-kind JSX styling (className/title/color). */
+export function formatLogValue(col: LogColumn, value: unknown): string {
+  switch (col.kind) {
+    case 'time':
+      return formatLocalTime(value)
+    case 'level':
+      return formatLevelValue(value)
+    case 'target':
+      return String(value ?? '')
+    default:
+      return formatCell(value, col.type)
+  }
+}
+
 export function renderLogColumn(
   col: LogColumn,
   row: Record<string, unknown>,
@@ -146,11 +161,11 @@ export function renderLogColumn(
           className={`text-theme-text-muted ${trailingMargin} ${wrapClasses}`}
           style={widthStyle}
         >
-          {formatLocalTime(value)}
+          {formatLogValue(col, value)}
         </span>
       )
     case 'level': {
-      const levelStr = formatLevelValue(value)
+      const levelStr = formatLogValue(col, value)
       return (
         <span
           className={`${trailingMargin} font-semibold ${getLevelColor(levelStr)} ${wrapClasses}`}
@@ -161,7 +176,7 @@ export function renderLogColumn(
       )
     }
     case 'target': {
-      const targetStr = String(value ?? '')
+      const targetStr = formatLogValue(col, value)
       return (
         <span
           className={`text-accent-highlight ${trailingMargin} ${wrapClasses}`}
@@ -173,7 +188,7 @@ export function renderLogColumn(
       )
     }
     default: {
-      const formatted = formatCell(value, col.type)
+      const formatted = formatLogValue(col, value)
       return (
         <span
           className={`text-theme-text-primary ${trailingMargin} ${wrapClasses}`}
@@ -189,18 +204,7 @@ export function renderLogColumn(
 
 export function formatRowForCopy(columns: LogColumn[], row: Record<string, unknown>): string {
   return columns
-    .map((col) => {
-      switch (col.kind) {
-        case 'time':
-          return formatLocalTime(row[col.name])
-        case 'level':
-          return formatLevelValue(row[col.name])
-        case 'target':
-          return String(row[col.name] ?? '')
-        default:
-          return formatCell(row[col.name], col.type)
-      }
-    })
+    .map((col) => formatLogValue(col, row[col.name]))
     // Replace embedded tabs/newlines so a multi-line or tab-containing value
     // (e.g. a stack trace in `msg`) doesn't inject phantom rows/columns when
     // pasted into the tab-delimited output.
@@ -211,29 +215,15 @@ export function formatRowForCopy(columns: LogColumn[], row: Record<string, unkno
 export function computeFlexWidths(
   table: { numRows: number; get(i: number): Record<string, unknown> | null | undefined } | null | undefined,
   columns: LogColumn[],
-  startRow: number,
-  endRow: number,
+  rows: number[],
 ): Record<string, number> {
   if (!table || columns.length === 0) return {}
   const maxLens: Record<string, number> = {}
   for (const col of columns) maxLens[col.name] = 0
-  for (let i = startRow; i < endRow; i++) {
+  for (const i of rows) {
     const row = table.get(i)
     for (const col of columns) {
-      let formatted: string
-      switch (col.kind) {
-        case 'time':
-          formatted = formatLocalTime(row?.[col.name])
-          break
-        case 'level':
-          formatted = formatLevelValue(row?.[col.name])
-          break
-        case 'target':
-          formatted = String(row?.[col.name] ?? '')
-          break
-        default:
-          formatted = formatCell(row?.[col.name], col.type)
-      }
+      const formatted = formatLogValue(col, row?.[col.name])
       const len = formatted.length
       if (len > maxLens[col.name]) maxLens[col.name] = len
     }
@@ -257,5 +247,76 @@ export function computeFlexWidths(
     }
   }
   return result
+}
+
+// =============================================================================
+// Grouping consecutive repeated rows
+// =============================================================================
+
+export interface LogRowGroup {
+  start: number
+  end: number
+}
+
+/** `[start, end)` as an array of indices. */
+export function range(start: number, end: number): number[] {
+  const result: number[] = []
+  for (let i = start; i < end; i++) result.push(i)
+  return result
+}
+
+/** One group per row — the no-collapsing case. */
+export function singletonGroups(n: number): LogRowGroup[] {
+  const groups: LogRowGroup[] = []
+  for (let i = 0; i < n; i++) groups.push({ start: i, end: i + 1 })
+  return groups
+}
+
+/** `===` covers strings/numbers/bigints/booleans/null directly. A formatted-string
+ *  fallback only kicks in for non-primitives (Arrow struct/list/`Uint8Array`/Date),
+ *  where "identical" means "renders identically" — which is what the user sees. */
+function logValuesEqual(col: LogColumn, a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  const isPrimitive = (v: unknown) => v === null || v === undefined || typeof v !== 'object'
+  if (isPrimitive(a) || isPrimitive(b)) return false
+  return formatLogValue(col, a) === formatLogValue(col, b)
+}
+
+interface LogGroupableTable {
+  numRows: number
+  getChild(name: string): { get(i: number): unknown } | null
+}
+
+/**
+ * Splits `table`'s rows into maximal runs of consecutive rows equal on every
+ * column not in `ignore`. Reads through `table.getChild(col.name)` for compared
+ * columns only, so it never builds a row proxy: O(rows × compared columns)
+ * with an early exit on the first mismatching column.
+ */
+export function groupConsecutiveRows(
+  table: LogGroupableTable | null | undefined,
+  columns: LogColumn[],
+  ignore: ReadonlySet<string>,
+): LogRowGroup[] {
+  if (!table || table.numRows === 0) return []
+  const numRows = table.numRows
+  const compared = columns.filter((col) => !ignore.has(col.name))
+  // If every column is ignored, any two rows would compare equal — fall back
+  // to one row per group instead of collapsing the whole result into one line.
+  if (compared.length === 0) return singletonGroups(numRows)
+  const vectors = compared.map((col) => ({ col, vec: table.getChild(col.name) }))
+  const groups: LogRowGroup[] = []
+  let start = 0
+  for (let i = 1; i < numRows; i++) {
+    const matchesGroupStart = vectors.every(({ col, vec }) =>
+      logValuesEqual(col, vec?.get(start), vec?.get(i)),
+    )
+    if (!matchesGroupStart) {
+      groups.push({ start, end: i })
+      start = i
+    }
+  }
+  groups.push({ start, end: numRows })
+  return groups
 }
 

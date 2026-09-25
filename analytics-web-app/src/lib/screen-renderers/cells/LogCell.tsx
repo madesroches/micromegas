@@ -11,9 +11,20 @@ import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLi
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { usePagination, PaginationBar, DEFAULT_PAGE_SIZE } from '../pagination'
-import { classifyLogColumns, renderLogColumn, computeFlexWidths, formatRowForCopy } from '../log-utils'
+import {
+  classifyLogColumns,
+  renderLogColumn,
+  computeFlexWidths,
+  formatRowForCopy,
+  formatLocalTime,
+  groupConsecutiveRows,
+  singletonGroups,
+  range,
+  type LogRowGroup,
+} from '../log-utils'
+import { timestampToDate } from '@/lib/arrow-utils'
 import { LogDivider } from '../LogDivider'
-import { ScrollText, Copy, Check, WrapText } from 'lucide-react'
+import { ScrollText, Copy, Check, WrapText, ChevronsDownUp } from 'lucide-react'
 
 const MIN_COL_WIDTH_PX = 40
 const MAX_COL_WIDTH_PX = 1200
@@ -38,13 +49,42 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 
   const numRows = table?.numRows ?? 0
 
-  // Pagination
+  // -------------------------------------------------------------------------
+  // Collapse-repeats grouping
+  // -------------------------------------------------------------------------
+
+  const collapseRepeats = (options?.collapseRepeats as boolean | undefined) ?? true
+  const handleCollapseRepeatsToggle = useCallback(
+    () => onOptionsChange({ ...options, collapseRepeats: !collapseRepeats }),
+    [options, onOptionsChange, collapseRepeats],
+  )
+
+  const collapseIgnoreColumns = (options?.collapseIgnoreColumns as string[] | undefined) ?? []
+  // Serialized dep so a fresh array from `options` doesn't invalidate the
+  // memo (and therefore the grouping below) on every render.
+  const ignoreColumnsKey = JSON.stringify(collapseIgnoreColumns)
+  const ignoreSet = useMemo(() => {
+    const set = new Set<string>()
+    for (const col of columns) if (col.kind === 'time') set.add(col.name)
+    for (const name of JSON.parse(ignoreColumnsKey) as string[]) set.add(name)
+    return set
+  }, [columns, ignoreColumnsKey])
+
+  const groups = useMemo(
+    () =>
+      collapseRepeats
+        ? groupConsecutiveRows(table, columns, ignoreSet)
+        : singletonGroups(numRows),
+    [table, columns, ignoreSet, collapseRepeats, numRows],
+  )
+
+  // Pagination — counts display lines (groups), not raw rows
   const pageSize = (options?.pageSize as number | undefined) ?? DEFAULT_PAGE_SIZE
   const handlePageSizeChange = useCallback(
     (size: number) => onOptionsChange({ ...options, pageSize: size }),
     [options, onOptionsChange],
   )
-  const pagination = usePagination(numRows, pageSize, handlePageSizeChange)
+  const pagination = usePagination(groups.length, pageSize, handlePageSizeChange)
 
   const wrapText = (options?.wrapText as boolean | undefined) ?? true
   const handleWrapTextToggle = useCallback(
@@ -52,9 +92,43 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     [options, onOptionsChange, wrapText],
   )
 
+  const pageGroups = useMemo(
+    () => groups.slice(pagination.startRow, pagination.endRow),
+    [groups, pagination.startRow, pagination.endRow],
+  )
+
+  // -------------------------------------------------------------------------
+  // Expand/collapse state
+  // -------------------------------------------------------------------------
+
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<number>>(() => new Set())
+
+  // expandedGroups's own useState initializer is already an empty set, so a
+  // dropped mount-time run here is a no-op.
+  const [prevGroups, setPrevGroups] = useState(groups)
+  if (groups !== prevGroups) {
+    setPrevGroups(groups)
+    setExpandedGroups(new Set())
+  }
+
+  const handleToggleGroup = useCallback((start: number) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(start)) next.delete(start)
+      else next.add(start)
+      return next
+    })
+  }, [])
+
+  const displayedRows = useMemo(
+    () =>
+      pageGroups.flatMap((g) => (expandedGroups.has(g.start) ? range(g.start, g.end) : [g.start])),
+    [pageGroups, expandedGroups],
+  )
+
   const autoWidths = useMemo(
-    () => computeFlexWidths(table, columns, pagination.startRow, pagination.endRow),
-    [table, columns, pagination.startRow, pagination.endRow],
+    () => computeFlexWidths(table, columns, displayedRows),
+    [table, columns, displayedRows],
   )
 
   // -------------------------------------------------------------------------
@@ -239,6 +313,90 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   )
 
   // -------------------------------------------------------------------------
+  // Repeat badge
+  // -------------------------------------------------------------------------
+
+  const timeCol = useMemo(() => columns.find((col) => col.kind === 'time'), [columns])
+
+  const buildBadgeTitle = useCallback(
+    (group: LogRowGroup, count: number) => {
+      if (!timeCol) return `${count} identical rows`
+      const a = table!.get(group.start)?.[timeCol.name]
+      const b = table!.get(group.end - 1)?.[timeCol.name]
+      const aMs = timestampToDate(a)?.getTime() ?? 0
+      const bMs = timestampToDate(b)?.getTime() ?? 0
+      // Ordered by value, not row position — row order (and therefore which
+      // of start/end-1 is earlier) flips between ORDER BY time ASC and DESC.
+      const [earlier, later] = aMs <= bMs ? [a, b] : [b, a]
+      return `${count} identical rows, ${formatLocalTime(earlier)} → ${formatLocalTime(later)}`
+    },
+    [table, timeCol],
+  )
+
+  const renderRow = useCallback(
+    (rowIdx: number, stripeIndex: number, tinted: boolean, trailing?: React.ReactNode) => {
+      const row = table!.get(rowIdx)
+      if (!row) return null
+      return (
+        <div
+          key={rowIdx}
+          className={`relative group flex items-start px-2 py-0.5 hover:bg-app-card/50 transition-colors${tinted ? ' bg-accent-link/5' : stripeIndex % 2 === 0 ? '' : ' bg-app-card/30'}`}
+        >
+          <button
+            className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-theme-text-muted hover:text-theme-text-primary"
+            onClick={(e) => handleCopyRow(rowIdx, formatRowForCopy(columns, row), e)}
+            aria-label="Copy row"
+            tabIndex={-1}
+          >
+            {copiedRowIdx === rowIdx
+              ? <Check size={10} className="text-green-500" />
+              : <Copy size={10} />}
+          </button>
+          {columns.map((col, colIdx) => {
+            const isLast = colIdx === columns.length - 1
+            return (
+              <React.Fragment key={col.name}>
+                {renderLogColumn(col, row, {
+                  width: effectiveWidths[col.name],
+                  isLast,
+                  wrap: wrapText,
+                })}
+                {!isLast && (
+                  <LogDivider
+                    col={col.name}
+                    pinned={col.name in livePinnedWidths}
+                    hovered={hoveredDivider === col.name}
+                    onMouseDown={(e) => handleDividerMouseDown(col.name, e)}
+                    onContextMenu={(e) => e.stopPropagation()}
+                    onMouseEnter={() => setHoveredDivider(col.name)}
+                    onMouseLeave={() => setHoveredDivider(null)}
+                    onResetToAuto={() => handleResetToAuto(col.name)}
+                    onResetAll={handleResetAll}
+                  />
+                )}
+              </React.Fragment>
+            )
+          })}
+          {trailing}
+        </div>
+      )
+    },
+    [
+      table,
+      columns,
+      effectiveWidths,
+      wrapText,
+      livePinnedWidths,
+      hoveredDivider,
+      copiedRowIdx,
+      handleCopyRow,
+      handleDividerMouseDown,
+      handleResetToAuto,
+      handleResetAll,
+    ],
+  )
+
+  // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
 
@@ -260,51 +418,25 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   return (
     <div className="flex flex-col h-full font-mono text-[12px]">
       <div className="flex-1 overflow-auto min-h-0">
-        {Array.from({ length: pagination.endRow - pagination.startRow }, (_, i) => {
-          const rowIdx = pagination.startRow + i
-          const row = table!.get(rowIdx)
-          if (!row) return null
+        {pageGroups.map((g, i) => {
+          const count = g.end - g.start
+          const isExpanded = expandedGroups.has(g.start)
+          const badge =
+            count > 1 ? (
+              <RepeatBadge
+                count={count}
+                expanded={isExpanded}
+                title={buildBadgeTitle(g, count)}
+                onClick={() => handleToggleGroup(g.start)}
+              />
+            ) : undefined
+          const repRow = renderRow(g.start, i, false, badge)
+          if (!isExpanded || count <= 1) return repRow
           return (
-            <div
-              key={rowIdx}
-              className={`relative group flex items-start px-2 py-0.5 hover:bg-app-card/50 transition-colors${i % 2 === 0 ? '' : ' bg-app-card/30'}`}
-            >
-              <button
-                className="absolute left-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-theme-text-muted hover:text-theme-text-primary"
-                onClick={(e) => handleCopyRow(rowIdx, formatRowForCopy(columns, row), e)}
-                aria-label="Copy row"
-                tabIndex={-1}
-              >
-                {copiedRowIdx === rowIdx
-                  ? <Check size={10} className="text-green-500" />
-                  : <Copy size={10} />}
-              </button>
-              {columns.map((col, colIdx) => {
-                const isLast = colIdx === columns.length - 1
-                return (
-                  <React.Fragment key={col.name}>
-                    {renderLogColumn(col, row, {
-                      width: effectiveWidths[col.name],
-                      isLast,
-                      wrap: wrapText,
-                    })}
-                    {!isLast && (
-                      <LogDivider
-                        col={col.name}
-                        pinned={col.name in livePinnedWidths}
-                        hovered={hoveredDivider === col.name}
-                        onMouseDown={(e) => handleDividerMouseDown(col.name, e)}
-                        onContextMenu={(e) => e.stopPropagation()}
-                        onMouseEnter={() => setHoveredDivider(col.name)}
-                        onMouseLeave={() => setHoveredDivider(null)}
-                        onResetToAuto={() => handleResetToAuto(col.name)}
-                        onResetAll={handleResetAll}
-                      />
-                    )}
-                  </React.Fragment>
-                )
-              })}
-            </div>
+            <React.Fragment key={g.start}>
+              {repRow}
+              {range(g.start + 1, g.end).map((rowIdx) => renderRow(rowIdx, i, true))}
+            </React.Fragment>
           )
         })}
       </div>
@@ -319,6 +451,16 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
               Reset widths
             </button>
           )}
+          <button
+            onClick={handleCollapseRepeatsToggle}
+            className={`text-[10px] px-2 py-0.5 transition-colors flex items-center gap-1 ${
+              collapseRepeats ? 'text-accent-link' : 'text-theme-text-muted hover:text-theme-text-secondary'
+            }`}
+            aria-pressed={collapseRepeats}
+          >
+            <ChevronsDownUp size={11} />
+            Collapse repeats
+          </button>
           <button
             onClick={handleWrapTextToggle}
             className={`text-[10px] px-2 py-0.5 transition-colors flex items-center gap-1 ${
@@ -336,11 +478,53 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 }
 
 // =============================================================================
+// Repeat Badge
+// =============================================================================
+
+interface RepeatBadgeProps {
+  count: number
+  expanded: boolean
+  title: string
+  onClick: () => void
+}
+
+function RepeatBadge({ count, expanded, title, onClick }: RepeatBadgeProps) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-expanded={expanded}
+      aria-label={expanded ? `Hide ${count} repeated rows` : `Show ${count} repeated rows`}
+      className="flex-none ml-2 self-start px-1.5 rounded-full text-[10px] font-medium leading-[18px] text-accent-link bg-accent-link/10 hover:bg-accent-link/20 transition-colors"
+    >
+      &times;{count}
+    </button>
+  )
+}
+
+// =============================================================================
 // Editor Component
 // =============================================================================
 
-function LogCellEditor({ config, onChange, variables, timeRange, onRun, cellResults, cellSelections }: CellEditorProps) {
+function LogCellEditor({
+  config,
+  onChange,
+  variables,
+  timeRange,
+  onRun,
+  cellResults,
+  cellSelections,
+  availableColumns,
+}: CellEditorProps) {
   const logConfig = config as QueryCellConfig
+  const collapseIgnoreColumns = (logConfig.options?.collapseIgnoreColumns as string[] | undefined) ?? []
+
+  const handleIgnoreToggle = (name: string) => {
+    const next = collapseIgnoreColumns.includes(name)
+      ? collapseIgnoreColumns.filter((n) => n !== name)
+      : [...collapseIgnoreColumns, name]
+    onChange({ ...logConfig, options: { ...logConfig.options, collapseIgnoreColumns: next } })
+  }
 
   return (
     <>
@@ -356,6 +540,38 @@ function LogCellEditor({ config, onChange, variables, timeRange, onRun, cellResu
           minHeight="240px"
           onRunShortcut={onRun}
         />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          Ignore when collapsing repeats
+        </label>
+        {!availableColumns || availableColumns.length === 0 ? (
+          <p className="text-xs text-theme-text-muted">Run the query to choose columns</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {availableColumns.map((name) => {
+              const isTime = name === 'time'
+              const checked = isTime || collapseIgnoreColumns.includes(name)
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  disabled={isTime}
+                  title={isTime ? 'always ignored' : undefined}
+                  aria-pressed={checked}
+                  onClick={() => handleIgnoreToggle(name)}
+                  className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                    checked
+                      ? 'bg-accent-link/10 border-accent-link text-accent-link'
+                      : 'border-theme-border text-theme-text-secondary hover:border-accent-link/50'
+                  } ${isTime ? 'opacity-60 cursor-default' : ''}`}
+                >
+                  {name}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
