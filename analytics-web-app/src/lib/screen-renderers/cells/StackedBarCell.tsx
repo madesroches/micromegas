@@ -61,6 +61,13 @@ const X_LABEL_AREA_HEIGHT = 24
 const X_LABEL_AREA_HEIGHT_ROTATED = 64
 /** Gap below the plot's bottom edge before a rotated label's anchor point (its unrotated top). */
 const ROTATED_LABEL_GUTTER_PX = 8
+/**
+ * Longest a rotated label may run (measured along the text, pre-rotation) before it's
+ * truncated: past this, a -45deg label's vertical extent (length * sin(45deg)) would exceed
+ * the space between its anchor and the label area's bottom edge.
+ */
+const MAX_ROTATED_LABEL_WIDTH_PX =
+  (X_LABEL_AREA_HEIGHT_ROTATED - ROTATED_LABEL_GUTTER_PX) / Math.sin((Math.abs(ROTATE_DEG) * Math.PI) / 180)
 /** Gutter chrome (tick marks, label padding) added on top of the widest tick label. */
 const Y_AXIS_CHROME_PX = 28
 const Y_TICK_DIVISIONS = 5
@@ -91,6 +98,8 @@ export interface StackedBarSegmentLayout {
 
 export interface StackedBarBarLayout {
   category: string
+  /** `category`, truncated with an ellipsis when rotated labels would otherwise overrun the label area; equal to `category` otherwise. */
+  displayLabel: string
   x: number
   width: number
   total: number
@@ -113,6 +122,17 @@ export interface StackedBarLayout {
   plotHeight: number
   barWidth: number
   rotateLabels: boolean
+}
+
+/** Truncates `label` with an ellipsis so its estimated width fits within `maxWidth`. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function truncateLabel(label: string, maxWidth: number): string {
+  if (estimateLabelWidth(label) <= maxWidth) return label
+  let end = label.length
+  while (end > 0 && estimateLabelWidth(label.slice(0, end) + '…') > maxWidth) {
+    end--
+  }
+  return label.slice(0, end) + '…'
 }
 
 /**
@@ -192,7 +212,9 @@ export function buildStackedBarLayout(
       }
     })
 
-    return { category, x, width: barWidth, total, labelX: x + barWidth / 2, segments }
+    const displayLabel = rotateLabels ? truncateLabel(category, MAX_ROTATED_LABEL_WIDTH_PX) : category
+
+    return { category, displayLabel, x, width: barWidth, total, labelX: x + barWidth / 2, segments }
   })
 
   return { bars, yTicks, yAxisWidth, plotWidth, plotHeight, barWidth, rotateLabels }
@@ -234,9 +256,9 @@ interface StackedBarViewProps {
 
 /**
  * Owns the measured plot area (ResizeObserver) and hover state. Mounted only once
- * data is ready to render (see `StackedBarCell`'s success-path return) so the
- * observed div isn't detached/reattached across loading/success re-renders or
- * re-runs of the query — mirrors `FlameGraphView` in FlameGraphCell.tsx.
+ * data is ready to render (see `StackedBarCell`'s success-path return), so the
+ * ResizeObserver attaches to an already-present div — mirrors `FlameGraphView` in
+ * FlameGraphCell.tsx.
  */
 function StackedBarView({ resolvedData, resolvedUnit, maxTotal }: StackedBarViewProps) {
   const plotRef = useRef<HTMLDivElement>(null)
@@ -361,7 +383,7 @@ function StackedBarView({ resolvedData, resolvedUnit, maxTotal }: StackedBarView
                     transform={layout.rotateLabels ? `rotate(${ROTATE_DEG} ${bar.labelX} ${rotatedLabelY})` : undefined}
                   >
                     <title>{bar.category}</title>
-                    {bar.category}
+                    {bar.displayLabel}
                   </text>
                 </g>
               ))}

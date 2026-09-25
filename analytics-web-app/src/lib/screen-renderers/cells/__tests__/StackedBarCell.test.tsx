@@ -41,7 +41,7 @@ function stackedBarTable(rows: { category: string; series: string; value: number
 }
 
 // jsdom has no ResizeObserver; stub it so the cell's plot-container measurement
-// effect resolves synchronously to a fixed size, as the plan's Phase 3 step 7 asks.
+// effect resolves synchronously to a fixed size.
 class MockResizeObserver {
   callback: ResizeObserverCallback
   constructor(callback: ResizeObserverCallback) {
@@ -164,6 +164,18 @@ describe('buildStackedBarLayout', () => {
     const data = { categories, series: [{ name: 'x', color: '#1' }], values: categories.map(() => [10]) }
     const layout = buildStackedBarLayout(data, { width: 200, height: 300, unit: '' })
     expect(layout.rotateLabels).toBe(true)
+  })
+
+  it('truncates a long category label with an ellipsis when rotated, keeping the full text for the title', () => {
+    const categories = ['a very very long category label that would otherwise run off the plot', 'b', 'c']
+    const data = { categories, series: [{ name: 'x', color: '#1' }], values: categories.map(() => [10]) }
+    const layout = buildStackedBarLayout(data, { width: 200, height: 300, unit: '' })
+    const bar = layout.bars[0]
+    expect(layout.rotateLabels).toBe(true)
+    expect(bar.displayLabel).not.toBe(bar.category)
+    expect(bar.displayLabel.endsWith('…')).toBe(true)
+    expect(bar.displayLabel.length).toBeLessThan(bar.category.length)
+    expect(bar.category).toBe(categories[0])
   })
 
   it('does not rotate labels that fit within their band', () => {
