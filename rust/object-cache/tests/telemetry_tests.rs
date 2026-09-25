@@ -4,8 +4,9 @@ use bytes::Bytes;
 use micromegas_object_cache::backend::RangeCacheBackend;
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::range_cache::{
-    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas_tracing::metrics::MetricsMsgQueueAny;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
@@ -24,6 +25,7 @@ fn make_cache(origin: Arc<dyn ObjectStore>) -> RangeCache {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     )
@@ -240,15 +242,16 @@ async fn fetch_budget_stats_reflect_in_flight_fetch() {
         "ns".to_string(),
         4,
         1,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
 
-    let (shared_avail0, shared_total, prefetch_avail0, prefetch_total) = cache.fetch_budget_stats();
-    assert_eq!(shared_total, 4);
-    assert_eq!(prefetch_total, 3);
-    assert_eq!(shared_avail0, 4);
-    assert_eq!(prefetch_avail0, 3);
+    let stats0 = cache.fetch_budget_stats();
+    assert_eq!(stats0.count.shared_total, 4);
+    assert_eq!(stats0.count.prefetch_total, 3);
+    assert_eq!(stats0.count.shared_available, 4);
+    assert_eq!(stats0.count.prefetch_available, 3);
     assert_eq!(cache.inflight_len(), 0);
 
     let fetch_cache = cache.clone();
@@ -257,10 +260,10 @@ async fn fetch_budget_stats_reflect_in_flight_fetch() {
     while cache.inflight_len() == 0 {
         tokio::task::yield_now().await;
     }
-    let (shared_avail1, _, _, _) = cache.fetch_budget_stats();
+    let stats1 = cache.fetch_budget_stats();
     assert_eq!(
-        shared_avail1,
-        shared_total - 1,
+        stats1.count.shared_available,
+        stats0.count.shared_total - 1,
         "an in-flight demand fetch must hold one shared permit"
     );
     assert_eq!(cache.inflight_len(), 1);
@@ -270,9 +273,9 @@ async fn fetch_budget_stats_reflect_in_flight_fetch() {
     assert_eq!(got.len(), 10);
 
     assert_eq!(cache.inflight_len(), 0);
-    let (shared_avail2, _, prefetch_avail2, _) = cache.fetch_budget_stats();
-    assert_eq!(shared_avail2, shared_total);
-    assert_eq!(prefetch_avail2, prefetch_total);
+    let stats2 = cache.fetch_budget_stats();
+    assert_eq!(stats2.count.shared_available, stats0.count.shared_total);
+    assert_eq!(stats2.count.prefetch_available, stats0.count.prefetch_total);
 }
 
 /// `MemoryBackend` has no disk tier, so `disk_stats()` must stay `None` --

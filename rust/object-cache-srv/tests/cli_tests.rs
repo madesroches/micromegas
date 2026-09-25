@@ -111,3 +111,34 @@ fn validate_rejects_zero_write_buffer_mb() {
     cli.write_buffer_mb = 0;
     assert!(cli.validate().is_err());
 }
+
+#[test]
+fn validate_rejects_fetch_memory_budget_below_floor() {
+    let mut cli = Cli::parse_from(minimal_argv());
+    // floor = (demand_reserved_fetches + 1) * max_run_bytes(block_size, max_coalesced_get_bytes)
+    // = (8 + 1) * 8 MiB = 72 MiB at the defaults; 1 MiB is far below that.
+    cli.fetch_memory_budget_mb = 1;
+    assert!(cli.validate().is_err());
+}
+
+#[test]
+fn validate_accepts_default_fetch_memory_budget() {
+    let cli = Cli::parse_from(minimal_argv());
+    assert_eq!(cli.fetch_memory_budget_mb, 256);
+    assert!(cli.validate().is_ok());
+}
+
+#[test]
+fn try_parse_from_rejects_zero_fetch_memory_budget_mb() {
+    let mut argv = minimal_argv();
+    argv.extend(["--fetch-memory-budget-mb", "0"]);
+    assert!(Cli::try_parse_from(argv).is_err());
+}
+
+#[test]
+fn try_parse_from_rejects_out_of_range_max_coalesced_get_bytes() {
+    let mut argv = minimal_argv();
+    // 1 GiB + 1 byte -- one past the `1..=1 GiB` clap range.
+    argv.extend(["--max-coalesced-get-bytes", "1073741825"]);
+    assert!(Cli::try_parse_from(argv).is_err());
+}

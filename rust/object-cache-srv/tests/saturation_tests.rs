@@ -7,20 +7,28 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use micromegas::object_cache::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
 use micromegas::object_cache::foyer_backend::{FoyerBackend, WriteTuning};
+use micromegas::object_cache::memory_backend::MemoryBackend;
 use micromegas::object_cache::range_cache::{
-    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas::tracing::event::in_memory_sink::InMemorySink;
 use micromegas::tracing::metrics::MetricsMsgQueueAny;
 use micromegas::tracing::test_utils::init_in_memory_tracing;
 use micromegas_object_cache_srv::saturation_monitor::sample_once;
 use micromegas_transit::HeterogeneousQueue;
-use object_store::ObjectStore;
 use object_store::memory::InMemory;
+use object_store::path::Path;
+use object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
 use serial_test::serial;
 use sysinfo::Networks;
 use tokio::sync::{Semaphore, mpsc};
@@ -90,6 +98,7 @@ async fn foyer_disk_gauges_emit_only_after_a_second_tick() {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -187,6 +196,7 @@ async fn ram_tier_usage_gauge_reflects_demand_put() {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -269,6 +279,7 @@ async fn ram_tier_entries_gauge_reflects_cached_block_count() {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -302,4 +313,159 @@ async fn ram_tier_entries_gauge_reflects_cached_block_count() {
         vec![N as u64],
         "the gauge must fire exactly once with the number of demand-filled blocks resident in the RAM tier"
     );
+}
+
+/// `object_cache_fetch_mem_*_occupancy_mb` must reflect a held run permit --
+/// the gauge that would have shown pressure in the #1537 incident, which the
+/// count-only gauges above cannot see.
+#[tokio::test]
+#[serial]
+async fn fetch_mem_gauges_reflect_held_run_permit() {
+    /// Wraps an `ObjectStore`, blocking every ranged `get_opts` call on a
+    /// gate until the test releases it. Mirrors the identically-named helper
+    /// in `object-cache/tests/telemetry_tests.rs`.
+    #[derive(Debug)]
+    struct GatedStore {
+        inner: Arc<dyn ObjectStore>,
+        gate: Arc<Semaphore>,
+    }
+    impl std::fmt::Display for GatedStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "GatedStore({})", self.inner)
+        }
+    }
+    #[async_trait]
+    impl ObjectStore for GatedStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            if options.range.is_some() {
+                self.gate
+                    .acquire()
+                    .await
+                    .expect("gate never closed")
+                    .forget();
+            }
+            self.inner.get_opts(location, options).await
+        }
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    // At least one full block, or `block_byte_range` clips the run to the
+    // object's own (smaller) size and the MiB-rounded gauge reads 0.
+    let object_size = DEFAULT_BLOCK_SIZE as usize;
+    let store = Arc::new(InMemory::new());
+    store
+        .put(
+            &Path::from("obj"),
+            Bytes::from(vec![1u8; object_size]).into(),
+        )
+        .await
+        .expect("put");
+    let gate = Arc::new(Semaphore::new(0));
+    let gated = Arc::new(GatedStore {
+        inner: store.clone() as Arc<dyn ObjectStore>,
+        gate: gate.clone(),
+    });
+    let cache = RangeCache::new(
+        gated as Arc<dyn ObjectStore>,
+        Arc::new(MemoryBackend::new()),
+        DEFAULT_BLOCK_SIZE,
+        "test".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+        DEFAULT_MAX_COALESCED_GET_BYTES,
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    let mem_permits = Arc::new(Semaphore::new(4));
+    let (prefetch_tx, _prefetch_rx) = mpsc::channel(1);
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut prev_disk_stats: Option<BackendDiskStats> = None;
+
+    let guard = init_in_memory_tracing();
+
+    let fetch_cache = cache.clone();
+    let handle = tokio::spawn(async move { fetch_cache.get_range("obj", 0..10).await });
+    while cache.inflight_len() == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    sample_once(
+        &cache,
+        &mem_permits,
+        64,
+        &prefetch_tx,
+        &mut networks,
+        &mut prev_disk_stats,
+        5.0,
+    );
+    micromegas::tracing::dispatch::flush_metrics_buffer();
+    let shared_mb =
+        integer_metric_values(&guard.sink, "object_cache_fetch_mem_shared_occupancy_mb");
+    assert_eq!(
+        shared_mb.len(),
+        1,
+        "the gauge must fire every tick, with no prior-sample requirement"
+    );
+    assert!(
+        shared_mb[0] >= 1,
+        "a held run permit (>= 1 MiB at the default block size) must show up as MiB \
+         occupancy: {shared_mb:?}"
+    );
+    let prefetch_mb =
+        integer_metric_values(&guard.sink, "object_cache_fetch_mem_prefetch_occupancy_mb");
+    assert_eq!(
+        prefetch_mb.len(),
+        1,
+        "the prefetch-pool gauge must fire every tick too, even though this run is demand \
+         (0 MiB occupied) and never touches the prefetch byte pool"
+    );
+
+    gate.add_permits(1);
+    let got = handle.await.expect("join").expect("get_range");
+    assert_eq!(got.len(), 10);
 }

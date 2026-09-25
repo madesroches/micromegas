@@ -14,6 +14,15 @@ pub fn block_byte_range(block_idx: u64, block_size: u64, file_size: u64) -> Rang
     start..end
 }
 
+/// Largest byte span one `coalesce_runs` run may cover: `max_coalesced_get_bytes`
+/// rounded down to a whole number of blocks (at least one). Shared by
+/// `coalesce_runs` below and the fetch-budget reservation/assertion math in
+/// `range_cache/mod.rs` and `range_cache/scheduler.rs`, so every one of them
+/// agrees on what the largest possible run is.
+pub fn max_run_bytes(block_size: u64, max_coalesced_get_bytes: u64) -> u64 {
+    (max_coalesced_get_bytes / block_size).max(1) * block_size
+}
+
 /// Group sorted, deduplicated, *owned* missing block indices into maximal
 /// contiguous runs, splitting any run whose byte span would exceed
 /// `max_coalesced_get_bytes` at block boundaries. Each returned block-index
@@ -23,7 +32,7 @@ pub fn coalesce_runs(
     block_size: u64,
     max_coalesced_get_bytes: u64,
 ) -> Vec<Range<u64>> {
-    let max_blocks_per_run = (max_coalesced_get_bytes / block_size).max(1);
+    let max_blocks_per_run = max_run_bytes(block_size, max_coalesced_get_bytes) / block_size;
     let mut runs = Vec::new();
     let mut i = 0;
     while i < sorted_missing_owned.len() {

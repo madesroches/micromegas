@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,9 +17,9 @@ use tokio::sync::Semaphore;
 
 use micromegas_object_cache::memory_backend::MemoryBackend;
 use micromegas_object_cache::range_cache::{
-    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, DEMAND_WINDOW_BLOCKS, RangeCache,
-    RangeError, StreamRangesCaller,
+    DEFAULT_BLOCK_SIZE, DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    DEMAND_WINDOW_BLOCKS, RangeCache, RangeError, StreamRangesCaller,
 };
 
 fn make_cache(origin: Arc<dyn ObjectStore>) -> RangeCache {
@@ -31,6 +31,7 @@ fn make_cache(origin: Arc<dyn ObjectStore>) -> RangeCache {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     )
@@ -252,6 +253,7 @@ async fn cold_read_populates_backend() {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -283,6 +285,7 @@ async fn warm_read_does_not_refetch_cached_blocks() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -471,6 +474,7 @@ async fn cold_contiguous_read_coalesces_to_few_gets() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         max_coalesced,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -509,6 +513,7 @@ async fn partially_cached_read_never_refetches_cached_blocks() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -551,6 +556,7 @@ async fn scattered_read_stays_per_block() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -600,6 +606,7 @@ async fn demand_not_starved_under_prefetch_saturation() {
             "ns".to_string(),
             total,
             demand_reserved,
+            DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
             DEFAULT_MAX_COALESCED_GET_BYTES,
             DEFAULT_PROMOTE_WHOLE_BATCH,
         );
@@ -674,6 +681,7 @@ async fn promotion_lets_demand_start_before_remaining_prefetch() {
             "ns".to_string(),
             2,
             1,
+            DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
             DEFAULT_MAX_COALESCED_GET_BYTES,
             DEFAULT_PROMOTE_WHOLE_BATCH,
         );
@@ -744,6 +752,7 @@ async fn prefetch_blocks_with_empty_indices_is_a_no_op() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -753,6 +762,539 @@ async fn prefetch_blocks_with_empty_indices_is_a_no_op() {
         .expect("empty index set is a no-op");
     assert_eq!(counting.get_range_count(), 0);
     assert_eq!(counting.head_count(), 0);
+}
+
+// -- Phase 3b: byte budget ----------------------------------------------------
+
+/// Regression for #1537: the count budget alone let far more origin GETs run
+/// concurrently than the byte budget should ever allow, so a
+/// `MAX_CONCURRENT_FETCHES` raised for throughput silently multiplied the
+/// transient fetch-memory ceiling. Here the count budget (32) would allow all
+/// 8 runs at once; the byte budget (12 KiB / 4 KiB per run) must cap it at 3.
+#[tokio::test]
+async fn byte_budget_caps_in_flight_bytes_when_count_allows_more() {
+    with_timeout(async move {
+        let block_size = 1024u64;
+        let run_bytes = 4 * block_size; // one run's full span: 4 blocks, 4 KiB
+        let store = Arc::new(InMemory::new());
+        const N: usize = 8;
+        for i in 0..N {
+            put_bytes(
+                &store,
+                &format!("obj{i}"),
+                &vec![i as u8; run_bytes as usize],
+            )
+            .await;
+        }
+        let (counting, gate) = CountingStore::with_gate(store.clone() as Arc<dyn ObjectStore>);
+
+        let cache = RangeCache::new(
+            counting.clone() as Arc<dyn ObjectStore>,
+            Arc::new(MemoryBackend::new()),
+            block_size,
+            "ns".to_string(),
+            32,        // count total: would allow all 8 runs concurrently
+            1,         // count demand_reserved: also derives the 4 KiB byte reservation below
+            12 * 1024, // byte budget: 12 KiB (reserved 4 KiB), only 3 runs fit
+            run_bytes, // max_coalesced_get_bytes: exactly one run per object
+            DEFAULT_PROMOTE_WHOLE_BATCH,
+        );
+
+        let mut handles = Vec::new();
+        for i in 0..N {
+            let cache = cache.clone();
+            handles.push(tokio::spawn(async move {
+                cache.get_range(&format!("obj{i}"), 0..run_bytes).await
+            }));
+        }
+
+        while counting.get_range_count() < 3 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.get_range_count(),
+            3,
+            "the byte budget (12 KiB / 4 KiB per run) must cap in-flight runs at 3 \
+             even though the count budget (32) would allow all 8"
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.peak_in_flight(),
+            3,
+            "peak in-flight origin GETs must never exceed the byte budget's ceiling"
+        );
+
+        gate.add_permits(N);
+        for (i, h) in handles.into_iter().enumerate() {
+            let got = h.await.expect("join").expect("get_range");
+            assert_eq!(got, vec![i as u8; run_bytes as usize]);
+        }
+    })
+    .await;
+}
+
+/// Byte-budget mirror of `demand_not_starved_under_prefetch_saturation`: the
+/// count budget is ample here (never the binding constraint), so this
+/// isolates the byte budget's own demand/prefetch reservation.
+#[tokio::test]
+async fn demand_not_starved_by_prefetch_saturating_bytes() {
+    with_timeout(async move {
+        let block_size = 1024u64;
+        let run_bytes = 4 * block_size;
+        let store = Arc::new(InMemory::new());
+        const N_PREFETCH: usize = 3;
+        for i in 0..N_PREFETCH {
+            put_bytes(&store, &format!("pf{i}"), &vec![1u8; run_bytes as usize]).await;
+        }
+        put_bytes(&store, "demand", &vec![2u8; run_bytes as usize]).await;
+        let (counting, gate) = CountingStore::with_gate(store.clone() as Arc<dyn ObjectStore>);
+
+        let cache = RangeCache::new(
+            counting.clone() as Arc<dyn ObjectStore>,
+            Arc::new(MemoryBackend::new()),
+            block_size,
+            "ns".to_string(),
+            100,       // count total: ample, never the binding constraint here
+            1,         // count demand_reserved: also derives the 4 KiB byte reservation below
+            12 * 1024, // byte budget: 12 KiB (reserved 4 KiB) => 8 KiB prefetch pool (2 runs)
+            run_bytes, // max_coalesced_get_bytes
+            DEFAULT_PROMOTE_WHOLE_BATCH,
+        );
+
+        let mut prefetch_handles = Vec::new();
+        for i in 0..N_PREFETCH {
+            let cache = cache.clone();
+            prefetch_handles.push(tokio::spawn(async move {
+                cache
+                    .prefetch_blocks(&format!("pf{i}"), run_bytes, &[0, 1, 2, 3])
+                    .await
+            }));
+        }
+
+        while counting.get_range_count() < 2 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.get_range_count(),
+            2,
+            "the prefetch byte pool (8 KiB / 4 KiB per run) must cap prefetch at 2 runs"
+        );
+
+        let demand_cache = cache.clone();
+        let demand =
+            tokio::spawn(async move { demand_cache.get_range("demand", 0..run_bytes).await });
+
+        while counting.get_range_count() < 3 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.get_range_count(),
+            3,
+            "demand must find its reserved bytes despite prefetch saturating the prefetch byte pool"
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.get_range_count(),
+            3,
+            "queued prefetch must not sneak into the bytes reserved for demand"
+        );
+
+        // 4 permits, not 3: once opened, pf0/pf1 complete and free their byte-budget
+        // prefetch permits, letting the still-queued pf2 (not just demand) reach the
+        // origin gate too.
+        gate.add_permits(4);
+        let got = demand.await.expect("join").expect("get_range");
+        assert_eq!(got, vec![2u8; run_bytes as usize]);
+        for h in prefetch_handles {
+            h.await.expect("join").expect("prefetch_blocks");
+        }
+    })
+    .await;
+}
+
+/// Byte-budget mirror of `promotion_lets_demand_start_before_remaining_prefetch`:
+/// a demand joiner into a queued prefetch run drops that run's prefetch-pool
+/// byte requirement, letting it start on shared bytes alone even while the
+/// prefetch byte pool stays fully occupied by an earlier run.
+#[tokio::test]
+async fn promotion_drops_the_prefetch_byte_requirement() {
+    with_timeout(async move {
+        let block_size = 1024u64;
+        let file_size = 20 * block_size;
+        let store = Arc::new(InMemory::new());
+        put_bytes(&store, "obj", &vec![3u8; file_size as usize]).await;
+        let (counting, gate) = CountingStore::with_gate(store.clone() as Arc<dyn ObjectStore>);
+
+        // count budget: ample, never binding. byte budget: reserved 1 KiB (1
+        // block), total 2 KiB => prefetch pool 1 KiB (1 block): only one of
+        // the three scattered prefetch blocks (a, b, c) can run at a time.
+        let cache = RangeCache::new(
+            counting.clone() as Arc<dyn ObjectStore>,
+            Arc::new(MemoryBackend::new()),
+            block_size,
+            "ns".to_string(),
+            100,
+            1,
+            2 * 1024,
+            1024, // max_coalesced_get_bytes: exactly one block per run
+            DEFAULT_PROMOTE_WHOLE_BATCH,
+        );
+
+        let (a, b, c) = (0u64, 5u64, 10u64);
+        let prefetch = {
+            let cache = cache.clone();
+            tokio::spawn(async move { cache.prefetch_blocks("obj", file_size, &[a, b, c]).await })
+        };
+
+        while counting.get_range_count() < 1 {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(counting.get_range_count(), 1);
+
+        let demand_cache = cache.clone();
+        let demand = tokio::spawn(async move {
+            demand_cache
+                .get_range("obj", b * block_size..b * block_size + 10)
+                .await
+        });
+
+        while counting.get_range_count() < 2 {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counting.get_range_count(),
+            2,
+            "promoted block b should start before queued block c, drawing on shared \
+             bytes rather than the exhausted prefetch byte pool"
+        );
+
+        gate.add_permits(3);
+        let got = demand.await.expect("join").expect("get_range");
+        assert_eq!(got.len(), 10);
+        prefetch.await.expect("join").expect("prefetch_blocks");
+
+        assert_eq!(counting.get_range_count(), 3);
+        let spans = counting.spans();
+        let block_c_start = c * block_size;
+        assert!(
+            spans[..2].iter().all(|s| s.start != block_c_start),
+            "block c must not have started before b's promotion: {spans:?}"
+        );
+    })
+    .await;
+}
+
+// -- Byte-budget lifetime & backend contract ---------------------------------
+
+/// The byte permit must stay held through backend admission, not just the
+/// origin GET: a backend whose `put` blocks lets the test catch the run task
+/// mid-admission and observe the count permit already released (it only
+/// bounds origin-GET parallelism) while the byte permit (which bounds this
+/// run's transient memory) is still charged.
+#[tokio::test]
+async fn byte_permit_held_through_backend_admission() {
+    with_timeout(async move {
+        use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
+
+        struct GatedPutBackend {
+            inner: MemoryBackend,
+            put_entered: AtomicBool,
+            gate: Arc<Semaphore>,
+        }
+
+        #[async_trait]
+        impl RangeCacheBackend for GatedPutBackend {
+            async fn get(&self, key: &str, expected_len: u64) -> Option<Bytes> {
+                self.inner.get(key, expected_len).await
+            }
+            async fn put(&self, key: String, value: Bytes, hint: FillHint) {
+                // Only gate block puts, not the `meta:`-prefixed size-cache put
+                // `RangeCache::size()` issues before the block fetch even starts --
+                // gating that too would deadlock this test on the wrong call.
+                if key.starts_with("blk:") {
+                    self.put_entered.store(true, Ordering::SeqCst);
+                    self.gate
+                        .acquire()
+                        .await
+                        .expect("gate never closed")
+                        .forget();
+                }
+                self.inner.put(key, value, hint).await;
+            }
+        }
+
+        let block_size = 1024u64;
+        let store = Arc::new(InMemory::new());
+        put_bytes(&store, "obj", &vec![9u8; block_size as usize]).await;
+        let put_gate = Arc::new(Semaphore::new(0));
+        let backend = Arc::new(GatedPutBackend {
+            inner: MemoryBackend::new(),
+            put_entered: AtomicBool::new(false),
+            gate: put_gate.clone(),
+        });
+        let cache = RangeCache::new(
+            store as Arc<dyn ObjectStore>,
+            backend.clone(),
+            block_size,
+            "ns".to_string(),
+            DEFAULT_TOTAL_FETCH_PERMITS,
+            DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+            DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+            DEFAULT_MAX_COALESCED_GET_BYTES,
+            DEFAULT_PROMOTE_WHOLE_BATCH,
+        );
+
+        let fetch_cache = cache.clone();
+        let handle = tokio::spawn(async move { fetch_cache.get_range("obj", 0..10).await });
+
+        while !backend.put_entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+
+        let stats = cache.fetch_budget_stats();
+        assert_eq!(
+            stats.count.shared_available, stats.count.shared_total,
+            "the count permit must already be released: it bounds origin-GET \
+             parallelism, not memory, and the origin GET already returned"
+        );
+        assert_eq!(
+            stats.bytes.shared_available,
+            stats.bytes.shared_total - block_size as usize,
+            "the byte permit must still be held while backend admission (`put`) is in flight"
+        );
+
+        put_gate.add_permits(1);
+        let got = handle.await.expect("join").expect("get_range");
+        assert_eq!(got, vec![9u8; 10]);
+
+        let stats_after = cache.fetch_budget_stats();
+        assert_eq!(
+            stats_after.bytes.shared_available, stats_after.bytes.shared_total,
+            "releasing the put gate must return the byte permit"
+        );
+    })
+    .await;
+}
+
+/// A fulfilled block's `Bytes` must be its own owned copy, not a slice
+/// sharing its parent run buffer: a `DropFlag`-owned run buffer must have
+/// dropped once the fetch task finishes, even while the recorded per-block
+/// `put` values (copied out of it) are still alive.
+#[tokio::test]
+async fn fulfilled_blocks_dont_pin_the_run_buffer() {
+    use micromegas_object_cache::backend::{FillHint, RangeCacheBackend};
+
+    struct DropFlag {
+        data: Vec<u8>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl AsRef<[u8]> for DropFlag {
+        fn as_ref(&self) -> &[u8] {
+            &self.data
+        }
+    }
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Wraps an `ObjectStore`, replacing every non-head `get_opts` payload
+    /// with an owned `Bytes::from_owner(DropFlag)` carrying the same
+    /// content, so the run buffer `spawn_run_fetch` receives from
+    /// `origin.get_range` can be observed dropping independently of the
+    /// per-block copies handed to the backend.
+    #[derive(Debug)]
+    struct DropFlagStore {
+        inner: Arc<dyn ObjectStore>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl std::fmt::Display for DropFlagStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "DropFlagStore({})", self.inner)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for DropFlagStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            let head = options.head;
+            let result = self.inner.get_opts(location, options).await?;
+            if head {
+                return Ok(result);
+            }
+            let meta = result.meta.clone();
+            let range = result.range.clone();
+            let content = result.bytes().await?;
+            let owned = Bytes::from_owner(DropFlag {
+                data: content.to_vec(),
+                dropped: self.dropped.clone(),
+            });
+            Ok(GetResult {
+                payload: object_store::GetResultPayload::Stream(Box::pin(futures::stream::once(
+                    async move { Ok(owned) },
+                ))),
+                meta,
+                range,
+                attributes: object_store::Attributes::default(),
+            })
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    /// Records every value handed to `put`, so the test can assert those
+    /// per-block copies outlive the run buffer they were copied from.
+    struct RecordingBackend {
+        /// Only `blk:`-prefixed (block) puts; the `meta:`-prefixed size-cache
+        /// put `RangeCache::size()` issues before the block fetch even starts
+        /// is filtered out, so this holds exactly one entry per block.
+        puts: Mutex<Vec<Bytes>>,
+    }
+
+    #[async_trait]
+    impl RangeCacheBackend for RecordingBackend {
+        async fn get(&self, _key: &str, _expected_len: u64) -> Option<Bytes> {
+            None
+        }
+        async fn put(&self, key: String, value: Bytes, _hint: FillHint) {
+            if key.starts_with("blk:") {
+                self.puts.lock().expect("lock").push(value);
+            }
+        }
+    }
+
+    let block_size = 1024u64;
+    let run_len = 4 * block_size;
+    let dropped = Arc::new(AtomicBool::new(false));
+    let inner = Arc::new(InMemory::new());
+    put_bytes(&inner, "obj", &vec![7u8; run_len as usize]).await;
+    let origin = Arc::new(DropFlagStore {
+        inner: inner as Arc<dyn ObjectStore>,
+        dropped: dropped.clone(),
+    });
+    let backend = Arc::new(RecordingBackend {
+        puts: Mutex::new(Vec::new()),
+    });
+    let cache = RangeCache::new(
+        origin as Arc<dyn ObjectStore>,
+        backend.clone(),
+        block_size,
+        "ns".to_string(),
+        DEFAULT_TOTAL_FETCH_PERMITS,
+        DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+        run_len, // max_coalesced_get_bytes: the whole object in one run
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
+
+    let got = cache.get_range("obj", 0..run_len).await.expect("get_range");
+    assert_eq!(got, vec![7u8; run_len as usize]);
+
+    // The demand caller only waits for its blocks to be individually
+    // fulfilled, which can race the detached run task's own tail (dropping
+    // the byte permit, removing scheduler entries, and finally dropping the
+    // run buffer itself) -- so wait for the task to fully finish before
+    // checking the parent buffer's drop flag.
+    cache.wait_for_fetch_tasks_drain().await;
+
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "the run buffer must have dropped once the fetch task finished"
+    );
+    let puts = backend.puts.lock().expect("lock");
+    assert_eq!(puts.len(), 4, "one put per block in the run");
+    for (i, chunk) in puts.iter().enumerate() {
+        assert_eq!(
+            &chunk[..],
+            &vec![7u8; block_size as usize][..],
+            "block {i}'s recorded put value must still be valid after the run buffer dropped"
+        );
+    }
+}
+
+/// `FetchScheduler::new` must reject a byte budget whose prefetch pool (after
+/// the demand reservation) can't fit one full-size run -- without this, a run
+/// larger than the pool would hang forever acquiring its byte permits instead
+/// of erroring at construction.
+#[test]
+#[should_panic(expected = "must be >= max_run_bytes")]
+fn constructor_panics_when_byte_prefetch_pool_smaller_than_one_max_run() {
+    let origin: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let backend = Arc::new(MemoryBackend::new());
+    let _ = RangeCache::new(
+        origin,
+        backend,
+        1024,
+        "ns".to_string(),
+        4,
+        1,    // demand_reserved_fetch_permits: reserves 1024 bytes
+        1500, // fetch_memory_budget_bytes: prefetch pool = 1500 - 1024 = 476
+        1024, // max_coalesced_get_bytes: max_run_bytes = 1024
+        DEFAULT_PROMOTE_WHOLE_BATCH,
+    );
 }
 
 // -- Size-trust guard --------------------------------------------------------
@@ -773,6 +1315,7 @@ async fn undersized_prefetch_size_is_healed_on_demand_read() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -824,6 +1367,7 @@ async fn oversized_prefetch_size_fails_fill_without_storing() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -874,6 +1418,7 @@ async fn implausible_cached_size_degrades_to_a_miss() {
         ns.clone(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -928,6 +1473,7 @@ async fn implausible_origin_size_surfaces_as_error() {
         ns.clone(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -966,6 +1512,7 @@ async fn total_concurrency_never_exceeds_total() {
             "ns".to_string(),
             total,
             1,
+            DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
             DEFAULT_MAX_COALESCED_GET_BYTES,
             DEFAULT_PROMOTE_WHOLE_BATCH,
         );
@@ -1184,6 +1731,7 @@ async fn stream_ranges_multi_window_matches_direct() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -1212,6 +1760,7 @@ async fn stream_ranges_non_block_aligned_boundary() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -1240,6 +1789,7 @@ async fn stream_ranges_multiple_ranges_sharing_blocks() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );
@@ -1351,6 +1901,7 @@ async fn stream_ranges_mid_stream_origin_failure_surfaces_as_stream_err() {
         "ns".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );

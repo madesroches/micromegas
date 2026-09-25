@@ -18,8 +18,9 @@ use tokio::sync::Semaphore;
 use micromegas::object_cache::CacheClientStore;
 use micromegas::object_cache::memory_backend::MemoryBackend;
 use micromegas::object_cache::range_cache::{
-    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas_object_cache_srv::app_state::AppState;
 use micromegas_object_cache_srv::handlers::{
@@ -282,6 +283,7 @@ fn make_state(origin: Arc<dyn ObjectStore>, memory_budget_mb: u32) -> AppState {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );

@@ -1,11 +1,21 @@
 use crate::handlers::{permits_for_bytes, stream_window_bytes};
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use micromegas::object_cache::blocks::max_run_bytes;
 use micromegas::object_cache::range_cache::{
-    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
 };
 use std::net::SocketAddr;
+
+/// One MiB, in bytes -- the unit every `*_mb`/`*_gb` CLI knob converts
+/// through.
+const MIB: u64 = 1024 * 1024;
+/// Clap range shared by every byte-denominated knob whose value must fit
+/// comfortably below `u32::MAX` once divided into blocks (`max_run_bytes`'s
+/// result feeds `acquire_many_owned`, which takes a `u32`): `--block-size`
+/// and `--max-coalesced-get-bytes`.
+const MAX_BYTES_KNOB: u64 = 1024 * 1024 * 1024; // 1 GiB
 
 #[derive(Parser, Debug)]
 #[clap(name = "micromegas-object-cache-srv")]
@@ -33,7 +43,8 @@ pub struct Cli {
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE",
-        default_value = "1048576"
+        default_value = "1048576",
+        value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES_KNOB)
     )]
     pub block_size: u64,
 
@@ -70,7 +81,9 @@ pub struct Cli {
     #[command(flatten)]
     pub common: micromegas::config::CommonServerArgs,
 
-    /// Total number of origin GETs allowed to run concurrently.
+    /// Total number of origin GETs allowed to run concurrently -- a
+    /// parallelism cap; transient fetch memory is bounded separately by
+    /// `--fetch-memory-budget-mb`.
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES",
@@ -79,7 +92,8 @@ pub struct Cli {
     pub max_concurrent_fetches: usize,
 
     /// Origin-GET slots always available to demand reads; prefetch is capped
-    /// at `max_concurrent_fetches - demand_reserved_fetches`.
+    /// at `max_concurrent_fetches - demand_reserved_fetches`. Each reserved
+    /// slot also reserves one full-size run's worth of `--fetch-memory-budget-mb`.
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES",
@@ -92,9 +106,23 @@ pub struct Cli {
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES",
-        default_value_t = DEFAULT_MAX_COALESCED_GET_BYTES
+        default_value_t = DEFAULT_MAX_COALESCED_GET_BYTES,
+        value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES_KNOB)
     )]
     pub max_coalesced_get_bytes: u64,
+
+    /// Cap (MiB) on transient origin-GET buffer memory across all in-flight
+    /// coalesced fetch runs -- independent of `--max-concurrent-fetches`,
+    /// which only bounds parallelism. Default `256` (= today's effective
+    /// worst case at the other defaults: `--max-concurrent-fetches` runs of
+    /// up to `--max-coalesced-get-bytes` each).
+    #[clap(
+        long,
+        env = "MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB",
+        default_value_t = DEFAULT_FETCH_MEMORY_BUDGET_BYTES / MIB,
+        value_parser = clap::value_parser!(u64).range(1..=1_048_576)
+    )]
+    pub fetch_memory_budget_mb: u64,
 
     /// Cross-request cap (MiB) on concurrent in-flight streaming windows: a
     /// small response charges close to its actual size, while a large one
@@ -203,6 +231,33 @@ impl Cli {
                  MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES ({})",
                 self.demand_reserved_fetches,
                 self.max_concurrent_fetches
+            ));
+        }
+        // The byte-budget analog of the count-budget check above:
+        // `FetchScheduler::new` asserts the same relationship and panics
+        // deep inside the cache if it's violated, since a run larger than
+        // the byte budget's prefetch pool would hang forever acquiring its
+        // `bytes` permits (`acquire_many_owned` never completes past the
+        // semaphore's total). `saturating_mul`/`saturating_add` since
+        // `demand_reserved_fetches` is an unranged `usize`; a saturated
+        // floor is simply rejected below.
+        let max_run = max_run_bytes(self.block_size, self.max_coalesced_get_bytes);
+        let floor_bytes = (self.demand_reserved_fetches as u64)
+            .saturating_add(1)
+            .saturating_mul(max_run);
+        let budget_bytes = self.fetch_memory_budget_mb.saturating_mul(MIB);
+        if budget_bytes < floor_bytes {
+            let floor_mb = floor_bytes.div_ceil(MIB);
+            return Err(anyhow!(
+                "MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB ({}) must be at least {floor_mb} \
+                 MiB -- the floor implied by MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES ({}), \
+                 MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES ({}), and \
+                 MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE ({}): each reserved demand slot must fit one \
+                 full-size run, or a run could hang forever acquiring its byte-budget permits",
+                self.fetch_memory_budget_mb,
+                self.demand_reserved_fetches,
+                self.max_coalesced_get_bytes,
+                self.block_size,
             ));
         }
         // A zero budget would make every non-empty data request hang forever

@@ -8,8 +8,9 @@ use bytes::Bytes;
 use micromegas::object_cache::CacheClientStore;
 use micromegas::object_cache::memory_backend::MemoryBackend;
 use micromegas::object_cache::range_cache::{
-    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_MAX_COALESCED_GET_BYTES,
-    DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS, RangeCache,
+    DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
+    DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
+    RangeCache,
 };
 use micromegas::tracing::event::in_memory_sink::InMemorySink;
 use micromegas::tracing::metrics::MetricsMsgQueueAny;
@@ -32,6 +33,7 @@ fn make_state(origin: Arc<dyn ObjectStore>) -> AppState {
         "test".to_string(),
         DEFAULT_TOTAL_FETCH_PERMITS,
         DEFAULT_DEMAND_RESERVED_FETCH_PERMITS,
+        DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
         DEFAULT_MAX_COALESCED_GET_BYTES,
         DEFAULT_PROMOTE_WHOLE_BATCH,
     );

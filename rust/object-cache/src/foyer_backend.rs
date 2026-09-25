@@ -552,18 +552,15 @@ impl RangeCacheBackend for FoyerBackend {
             // picker so the block is always admitted deterministically (no
             // silent decline). The write holds only an ephemeral RAM record
             // that is dropped immediately (no eviction-structure residency),
-            // so a prefetch fill never retains RAM residency.
+            // so a prefetch fill never retains RAM residency. `value` is
+            // already an owned per-block copy (see `RangeCacheBackend::put`'s
+            // doc), so it's stored as-is rather than copied again.
             FillHint::Prefetch => {
-                // Copy so the phantom prefetch record does not retain its whole
-                // coalesced-GET parent buffer for the duration it lives in foyer's
-                // write pipeline (submit queue, io buffer encode, pending piece_refs) --
-                // see the demand arm's identical rationale below.
-                let owned = Bytes::copy_from_slice(&value);
                 let entry = self
                     .cache
                     .storage_writer(key)
                     .force()
-                    .insert(CachedBlock::new_prefetch(owned));
+                    .insert(CachedBlock::new_prefetch(value));
                 if entry.is_none() {
                     // Should not occur under `.force()`, which always admits.
                     imetric!(
@@ -575,13 +572,7 @@ impl RangeCacheBackend for FoyerBackend {
                 }
             }
             FillHint::Demand => {
-                // Copy so the cached block does not retain its whole coalesced-GET
-                // parent buffer; otherwise RAM-tier RSS runs up to
-                // (max_coalesced_get_bytes / block_size)x its accounted weight while the
-                // weigher (value.len()) believes the tier is under budget. One memcpy per
-                // admitted block is negligible against the origin GET.
-                let owned = Bytes::copy_from_slice(&value);
-                self.cache.insert(key, CachedBlock::new(owned));
+                self.cache.insert(key, CachedBlock::new(value));
             }
         }
     }

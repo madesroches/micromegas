@@ -45,27 +45,43 @@ pub fn sample_once(
     prev_disk_stats: &mut Option<BackendDiskStats>,
     interval_secs: f64,
 ) {
-    let (shared_available, shared_total, prefetch_available, prefetch_total) =
-        cache.fetch_budget_stats();
+    let budget_stats = cache.fetch_budget_stats();
+    let count = &budget_stats.count;
     imetric!(
         "object_cache_fetch_shared_occupancy",
         "count",
-        (shared_total - shared_available) as u64
+        (count.shared_total - count.shared_available) as u64
     );
     imetric!(
         "object_cache_fetch_shared_available",
         "count",
-        shared_available as u64
+        count.shared_available as u64
     );
     imetric!(
         "object_cache_fetch_prefetch_occupancy",
         "count",
-        (prefetch_total - prefetch_available) as u64
+        (count.prefetch_total - count.prefetch_available) as u64
     );
     imetric!(
         "object_cache_fetch_prefetch_available",
         "count",
-        prefetch_available as u64
+        count.prefetch_available as u64
+    );
+
+    // Bytes, not counts: the signal that would have shown pressure in the
+    // #1537 incident (a count budget alone can't see memory occupancy). Only
+    // "occupancy" is emitted -- the totals are static config, so an
+    // "available" gauge would add nothing beyond what's already implied.
+    let bytes = &budget_stats.bytes;
+    imetric!(
+        "object_cache_fetch_mem_shared_occupancy_mb",
+        "megabytes",
+        ((bytes.shared_total - bytes.shared_available) as u64) / (1024 * 1024)
+    );
+    imetric!(
+        "object_cache_fetch_mem_prefetch_occupancy_mb",
+        "megabytes",
+        ((bytes.prefetch_total - bytes.prefetch_available) as u64) / (1024 * 1024)
     );
 
     imetric!(

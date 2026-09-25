@@ -42,13 +42,14 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache tier size (default `512`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache tier size (default `50`) |
-| `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be > 0 |
+| `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be in `1..=1073741824` (1 GiB) |
 | `MICROMEGAS_OBJECT_CACHE_NAMESPACE` | No | Cache namespace (default: derived from the origin URI) |
 | `MICROMEGAS_OBJECT_CACHE_PREFIX` | Yes | Allowed key prefixes, comma-separated (e.g. `blobs,views`); only keys equal to or under a prefix are served. Required unless `--allow-all-prefixes` is set (development only) |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default `25`); covers axum's HTTP drain plus draining in-flight origin fetches and closing the disk cache -- see [How it works](service-lifecycle.md#how-it-works) |
-| `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | No | Total concurrent origin GETs (default `32`; NIC-sized starting point, tune against measurement) |
-| `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | No | Origin-GET slots always available to demand reads; prefetch is capped at `total - reserved` (default `8`); must be less than `MAX_CONCURRENT_FETCHES` |
-| `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries |
+| `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` | No | Total concurrent origin GETs -- a parallelism cap (default `32`; NIC-sized starting point, tune against measurement). Transient fetch memory is bounded separately by `FETCH_MEMORY_BUDGET_MB` below; raising this alone no longer raises the fetch-memory ceiling |
+| `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES` | No | Origin-GET slots always available to demand reads; prefetch is capped at `total - reserved` (default `8`); must be less than `MAX_CONCURRENT_FETCHES`. Each reserved slot also reserves one full-size run's worth of `FETCH_MEMORY_BUDGET_MB` |
+| `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES` | No | Max span of one coalesced run GET, in bytes (default `8388608`, 8 MiB); larger contiguous runs are split at block boundaries; must be in `1..=1073741824` (1 GiB) |
+| `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB` | No | Cap on transient origin-GET buffer memory across all in-flight coalesced fetch runs, in MiB (default `256`, = today's effective worst case at the other defaults); must be in `1..=1048576` (1 TiB), and at least `(DEMAND_RESERVED_FETCHES + 1) * max_run_bytes(BLOCK_SIZE, MAX_COALESCED_GET_BYTES)` or the server refuses to start |
 | `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` | No | Cross-request cap on concurrent in-flight streaming windows, in MiB (default `1024`); must be at least the fixed per-stream window's size, or the server refuses to start |
 | `MICROMEGAS_OBJECT_CACHE_PROMOTE_WHOLE_BATCH` | No | On a demand hit into a prefetch batch, promote the whole batch (anticipatory) instead of only the covering run (default `false`, precise) |
 | `MICROMEGAS_OBJECT_CACHE_PREFETCH_QUEUE_CAPACITY` | No | Depth of the bounded `POST /prefetch` queue; items beyond this are load-shed (default `4096`); must be > 0 |
@@ -70,14 +71,15 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 | `--disk-path` | — | Local disk path for the cache (required) |
 | `--ram-mb` | `512` | In-memory cache tier size |
 | `--disk-gb` | `50` | On-disk cache tier size |
-| `--block-size` | `1048576` | Cache block size in bytes |
+| `--block-size` | `1048576` | Cache block size in bytes; must be in `1..=1073741824` (1 GiB) |
 | `--namespace` | derived from origin | Cache namespace |
 | `--prefix` | none | Restrict served keys to this prefix (repeatable) |
 | `--disable-auth` | off | Disable authentication (development only) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` -- covers axum's HTTP drain plus draining in-flight origin fetches and closing the disk cache -- see [How it works](service-lifecycle.md#how-it-works) |
-| `--max-concurrent-fetches` | `32` | Total concurrent origin GETs |
-| `--demand-reserved-fetches` | `8` | Origin-GET slots reserved for demand reads |
-| `--max-coalesced-get-bytes` | `8388608` | Max span of one coalesced run GET, in bytes |
+| `--max-concurrent-fetches` | `32` | Total concurrent origin GETs -- a parallelism cap; transient fetch memory is bounded separately by `--fetch-memory-budget-mb` |
+| `--demand-reserved-fetches` | `8` | Origin-GET slots reserved for demand reads; each reserved slot also reserves one full-size run's worth of `--fetch-memory-budget-mb` |
+| `--max-coalesced-get-bytes` | `8388608` | Max span of one coalesced run GET, in bytes; must be in `1..=1073741824` (1 GiB) |
+| `--fetch-memory-budget-mb` | `256` | Cap on transient origin-GET buffer memory across all in-flight coalesced fetch runs, in MiB; must be in `1..=1048576` (1 TiB) and at least the floor implied by `--demand-reserved-fetches`/`--max-coalesced-get-bytes`/`--block-size` |
 | `--memory-budget-mb` | `1024` | Cross-request memory budget, in MiB |
 | `--promote-whole-batch` | `false` | Promote a whole prefetch batch (not just the covering run) on a demand hit |
 | `--prefetch-queue-capacity` | `4096` | Depth of the bounded `POST /prefetch` queue |
@@ -87,16 +89,33 @@ Authenticating *against the origin* (e.g. AWS credentials) uses the same environ
 
 ## Fetch scheduling & memory bounds
 
-Origin fetches share one global, priority-aware budget rather than a per-request cap. The knobs
-that shape it are in the [environment variables](#environment-variables) table above; the ones
-worth tuning:
+Origin fetches share two global, priority-aware budgets rather than a per-request cap: one counts
+runs (concurrency), the other counts bytes (transient memory). The knobs that shape them are in the
+[environment variables](#environment-variables) table above; the ones worth tuning:
 
-- `--max-concurrent-fetches` / `--demand-reserved-fetches` — total origin-GET concurrency, and the
-  slice always reserved for demand reads so they never queue behind a large prefetch batch.
+- `--max-concurrent-fetches` / `--demand-reserved-fetches` — total origin-GET **concurrency**, and
+  the slice always reserved for demand reads so they never queue behind a large prefetch batch.
+  This is a parallelism cap only; it no longer bounds fetch memory (see below).
+- `--fetch-memory-budget-mb` — total **bytes** of origin-GET buffers allowed across all in-flight
+  coalesced runs, independent of how many runs that is. Each of `--demand-reserved-fetches`'
+  reserved slots also reserves one full-size run's worth of this budget, so demand always has room
+  for a run even while prefetch saturates the rest. The server refuses to start if the budget is
+  below `(demand_reserved_fetches + 1) * max_run_bytes(block_size, max_coalesced_get_bytes)` —
+  the floor below which a full-size run could hang forever acquiring its byte permits.
 - `--max-coalesced-get-bytes` — how large a run of contiguous missing blocks may be merged into a
-  single origin GET.
-- `--memory-budget-mb` — cross-request cap on in-flight streaming memory; the server refuses to
-  start if it is set below one per-stream window.
+  single origin GET; also the unit `max_run_bytes` above is computed from.
+- `--memory-budget-mb` — cross-request cap on in-flight *streaming* memory (the response path);
+  the server refuses to start if it is set below one per-stream window. This is separate from
+  `--fetch-memory-budget-mb` (the origin-GET path): peak transient memory across both stages is
+  approximately their sum.
+
+**Upgrading:** defaults are unchanged when every fetch knob is left at its default. A deployment
+that raised `--max-concurrent-fetches` for throughput no longer gets more fetch memory for it —
+set `--fetch-memory-budget-mb` explicitly if that headroom was load-bearing. A deployment that
+raised `--demand-reserved-fetches`, `--max-coalesced-get-bytes`, or `--block-size` past what the
+default 256 MiB fetch-memory budget allows will fail validation at startup with a message giving
+the required floor. `--max-coalesced-get-bytes` and `--block-size` are now additionally capped at
+1 GiB.
 
 See [Caching Architecture](../architecture/caching.md#read-path-mechanics) for how demand/prefetch
 prioritization, coalescing, and streaming work.
@@ -309,6 +328,8 @@ A background sampler emits these gauges on a fixed interval (5s by default), ind
 |---|---|
 | `object_cache_fetch_shared_occupancy` / `object_cache_fetch_shared_available` | Occupied/available slots in the total origin-GET concurrency budget (`--max-concurrent-fetches`). |
 | `object_cache_fetch_prefetch_occupancy` / `object_cache_fetch_prefetch_available` | Occupied/available slots in the prefetch-only sub-budget (`--max-concurrent-fetches` minus `--demand-reserved-fetches`). |
+| `object_cache_fetch_mem_shared_occupancy_mb` | Occupied MiB of the total origin-GET **byte** budget (`--fetch-memory-budget-mb`) — the signal that would have shown pressure in the #1537 incident, which the count gauges above cannot see. |
+| `object_cache_fetch_mem_prefetch_occupancy_mb` | Occupied MiB of the prefetch-only byte sub-budget (`--fetch-memory-budget-mb` minus the reservation implied by `--demand-reserved-fetches`). |
 | `object_cache_inflight_entries` | Number of block/`size()` keys currently in flight to origin. A key scheduler signal alongside the permit-wait latency above. |
 | `object_cache_ram_tier_usage_bytes` | Accounted RAM-tier byte usage (foyer's own weigher total). Compare against the host's `used_memory` system metric: this gauge staying at/below the configured `--ram-mb` size *while* `used_memory` climbs is the signature of a cached block over-retaining a larger allocation than its accounted weight. |
 | `object_cache_ram_tier_entries` | Accounted RAM-tier entry count (foyer's own entry total), the entry-count sibling to `object_cache_ram_tier_usage_bytes`. |

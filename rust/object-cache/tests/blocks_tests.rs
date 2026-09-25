@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use micromegas_object_cache::blocks::{
-    assemble_range, block_byte_range, blocks_for_range, coalesce_runs,
+    assemble_range, block_byte_range, blocks_for_range, coalesce_runs, max_run_bytes,
 };
 
 #[test]
@@ -112,4 +112,36 @@ fn coalesce_exact_boundary_run_not_split() {
     // 4 contiguous blocks at exactly the max span should stay in one run.
     let runs = coalesce_runs(&[0, 1, 2, 3], 1024, 4096);
     assert_eq!(runs, vec![0..4]);
+}
+
+#[test]
+fn max_run_bytes_exact_multiple() {
+    assert_eq!(max_run_bytes(1024, 4096), 4096);
+}
+
+#[test]
+fn max_run_bytes_rounds_down_to_whole_blocks() {
+    // 4500 / 1024 = 4 whole blocks; the remainder is dropped, not rounded up.
+    assert_eq!(max_run_bytes(1024, 4500), 4096);
+}
+
+#[test]
+fn max_run_bytes_floors_at_one_block() {
+    // A `max_coalesced_get_bytes` smaller than one block must still allow a
+    // single-block run, or nothing missing could ever be fetched.
+    assert_eq!(max_run_bytes(1024, 500), 1024);
+}
+
+#[test]
+fn max_run_bytes_agrees_with_coalesce_runs_longest_run() {
+    let block_size = 1024;
+    let max_coalesced = 4096;
+    let indices: Vec<u64> = (0..10).collect();
+    let runs = coalesce_runs(&indices, block_size, max_coalesced);
+    let longest_run_bytes = runs
+        .iter()
+        .map(|r| (r.end - r.start) * block_size)
+        .max()
+        .expect("at least one run");
+    assert_eq!(longest_run_bytes, max_run_bytes(block_size, max_coalesced));
 }
