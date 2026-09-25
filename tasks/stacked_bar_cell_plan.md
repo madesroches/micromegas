@@ -3,12 +3,10 @@
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1511
 
 ## Overview
-Add a `stackedbar` notebook cell type for "breakdown of X across several things" comparisons: one vertical bar per category, each bar stacked from named series sharing a single legend and color mapping (e.g. time per startup phase across test scenarios, resource usage per component across builds). The query returns long/tidy rows `(category, series, value[, color])`. The cell has no normalize toggle. A 100%-stacked view is just a different query: the SQL computes each row's share with a window function and sets the unit to `percent`. The cell follows the Pie Chart cell's pattern: one query, hand-rolled SVG, registered like every other cell type.
-
-Source issue: [#1511](https://github.com/madesroches/micromegas/issues/1511).
+Add a `stackedbar` notebook cell type for "breakdown of X across several things" comparisons: one vertical bar per category, each bar stacked from named series sharing a single legend and color mapping (e.g. time per startup phase across test scenarios, resource usage per component across builds). The query returns long/tidy rows `(category, series, value[, color])`. The cell follows the Pie Chart cell's pattern: one query, hand-rolled SVG, registered like every other cell type.
 
 ## Current State
-- **Chart cell** (`src/lib/screen-renderers/cells/ChartCell.tsx`, on uPlot via `src/components/XYChart.tsx`) draws one value per x position per query. Its 2-column contract (`validateChartColumns`, `src/lib/arrow-utils.ts:274`) has no series column, and uPlot has no native stacking. Stacking there means pre-accumulated data, band fills and tooltip un-stacking, all mixed into a component that is already about 1,300 lines.
+- **Chart cell** (`src/lib/screen-renderers/cells/ChartCell.tsx`, on uPlot via `src/components/XYChart.tsx`) draws one value per x position per query. Its 2-column contract (`validateChartColumns`, `src/lib/arrow-utils.ts:274`) has no series column.
 - **Pie Chart cell** (`src/lib/screen-renderers/cells/PieChartCell.tsx`) is the direct precedent: one query, `QueryCellConfig` with an `options` bag, inline SVG, a side legend, a fixed-position tooltip div, and `contrastingTextColor` for labels drawn inside fills. `extractPieData` (`arrow-utils.ts:687`) reuses `validateChartColumns`.
 - **Color column handling** lives inside `resolveChartColumns` / `validateChartColumns` (`arrow-utils.ts:236-341`). Both detect the case-insensitive `color` field, classify it as integer/string/binary and validate its type. `cellColorToCss` (`src/lib/color-utils.ts:97`) decodes a cell. That logic is inline and hard-coded to "exactly 2 non-color columns", so a 3-column contract can't call it as-is.
 - **Palette**: `SERIES_COLORS` (`src/components/chart-constants.ts`) holds 12 hues in fixed order.
@@ -36,7 +34,7 @@ There is deliberately no `normalize` option and no series cap (see Decisions).
 | 3rd non-color | yes | Numeric value |
 | `color` | no | Per-series color. The first non-null value seen for a series wins |
 
-- **Order**: categories appear left to right, and series stack bottom-up and list in the legend, in first-appearance order of the query rows. The query's `ORDER BY` controls both. A series missing from one bar leaves a gap in that bar and keeps its place everywhere else.
+- **Order**: categories appear left to right, and series stack bottom-up and list in the legend, in first-appearance order of the query rows. The query's `ORDER BY` controls both. A series missing from one bar draws no segment in that bar (the stack closes up) and keeps its place everywhere else.
 - **Dropped rows**: rows with a null category or series, or a null, non-finite or negative value, are dropped, as the Pie cell does. Stacking negatives needs a diverging baseline, which is out of scope. A zero value draws no segment.
 - **Duplicates**: duplicate `(category, series)` rows are **summed**. This differs from the Pie cell, where duplicates stay separate slices. In a stack, two same-colored neighboring segments would read as one segment with a spurious gap, so summing is the only faithful rendering.
 
@@ -67,19 +65,19 @@ export function extractStackedBarData(table: Table):
 It validates exactly 3 non-color columns (category: string/dictionary/numeric; series: string/dictionary; value: numeric), with error messages in the same style as `validateChartColumns`. It then pivots in one pass using `Map` indices, applying the ordering, dropping and summing rules above.
 
 ### Series colors (pure, in the cell file)
-`resolveSeriesColors(series)`: a SQL-supplied color wins. Otherwise each series takes the next `SERIES_COLORS` entry in series order, wrapping after 12 the way the Chart cell does. This is the same rule as `groupPieSlices`, minus the folding. Every series the query returns is drawn. A query author who wants fewer segments folds the tail in SQL (for example a `CASE` mapping minor series to `'Other'`), the same way normalization lives in SQL.
+`resolveSeriesColors(series)`: a SQL-supplied color wins. Otherwise each series takes the next `SERIES_COLORS` entry in series order, wrapping after 12 the way the Chart cell does. This is the same rule as `groupPieSlices`, minus the folding.
 
 ### Layout math (pure, unit-testable)
 `buildStackedBarLayout(resolved, { width, height, unit })` returns bar and segment rectangles, y ticks and x-label placement:
-- **Y scale**: `step = niceStep(maxTotal / 5)` (1/2/2.5/5/10 × 10ⁿ). `niceStep(x)` first snaps `x` down to a nice value if `x` is within a relative tolerance (`1e-6 × x`) of one, then returns the smallest nice value ≥ that snapped input. `top` is `maxTotal` snapped down to the nearest multiple of `step` when it's within a relative tolerance (`1e-6 × maxTotal`) of one, else `ceil(maxTotal / step) × step`. Applying the same relative-tolerance snap on both the `niceStep` input and the `top` computation keeps a floating-point 100.0000001% from rounding up to a 120% (or 125%) axis. Tick labels use `formatValueWithUnit`. The axis gutter width comes from `estimateLabelWidth` over the tick labels.
+- **Y scale**: mirrors `XYChart` (`src/components/XYChart.tsx:733`). `top = maxTotal × 1.05`. `step = niceStep(top / 5)` (smallest 1/2/2.5/5 × 10ⁿ ≥ input). Ticks at multiples of `step` up to `top`; the top is not itself snapped to a tick. Tick labels use `formatValueWithUnit`. The axis gutter width comes from `estimateLabelWidth` over the tick labels.
 - **Bars**: band = plot width / categories. Bar width = `min(56px, band × 0.62)`, floored at 12px. Below the floor, the plot area gets a minimum width and the plot div scrolls horizontally rather than squashing bars.
-- **Segments**: a 2px surface gap (panel background) separates stacked segments. Only the top segment of each bar gets a 4px rounded cap; the baseline stays square. These follow the dataviz mark spec, as in the Pie cell. The in-segment label fit check (18px min segment height, `estimateLabelWidth(label) + padding` against bar width) is decided here, not by measuring rendered text; the renderer only draws what this function marks fit.
+- **Segments**: a 2px surface gap (panel background) separates stacked segments. Only the topmost non-zero segment of each bar gets a 4px rounded cap; the baseline stays square. These follow the dataviz mark spec, as in the Pie cell. The in-segment label fit check (18px min segment height, `estimateLabelWidth(label) + padding` against bar width) is decided here, not by measuring rendered text; the renderer only draws what this function marks fit.
 - **X labels**: centered under each bar. They rotate to `ROTATE_DEG` when any label's `estimateLabelWidth` exceeds the band, and are truncated with a `<title>` beyond a max width.
-- **Width**: measured with a `ResizeObserver` on the plot container, the same approach as `XYChart` / `FlameGraphCell`. jsdom has no `ResizeObserver`; tests stub it locally (see Phase 3 step 7).
+- **Width and height**: both measured with a `ResizeObserver` on the plot container (`contentRect.width`/`.height`), the same approach as `XYChart` / `FlameGraphCell`. jsdom has no `ResizeObserver`; tests stub it locally (see Phase 3 step 7).
 
 ### Rendering (`StackedBarCell.tsx`)
 - **Header**: stats `categories`, `series`, and `max total`, unit-formatted. This mirrors the Pie and XY header rows. There is no toggle in the header.
-- **Plot**: inline SVG with hairline gridlines, a y axis, stacked `<path>`s, and value labels inside segments (Option A). A label is drawn only when `buildStackedBarLayout` marks its segment fit (18px min height, `estimateLabelWidth(label) + padding` within the bar width — see Layout math). It is never clipped, and its ink is chosen by `contrastingTextColor`.
+- **Plot**: inline SVG with hairline gridlines, a y axis, stacked `<path>`s, and value labels inside segments (Option A). A label is drawn only when `buildStackedBarLayout` marks its segment fit. It is never clipped, and its ink is chosen by `contrastingTextColor`.
 - **Tooltip** (per segment, pointer events): category, series swatch and name, value, **share of bar**, and bar total. The share is a display-only derived value, not normalization: it is always correct whatever the query returned.
 - **Legend**: always shown, one row per resolved series in stack order.
 - **States**: loading, empty, error and all-zero, copied from `PieChartCell`.
@@ -97,16 +95,14 @@ The Data Source selector comes from `CellEditor`'s shared chrome, as it does for
 - `defaultHeight: 360`, `canBlockDownstream: true`
 - `execute` and `getRendererProps` identical in shape to `pieChartMetadata`
 
-The two `execute` bodies are the same 8 lines. Folding them into a shared helper is tempting, but `ImageCell` and `MapCell` carry near-copies too. That refactor would span five cells, so it's left out of scope here (see Trade-offs).
-
 ## Mockups
 In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query and the SQL-normalized query as two states of the same cell, have working hover tooltips, and were checked in headless Chromium:
 
-- `option-a-side-legend-segment-labels.html` — The issue's reference shape: y axis, a value inside every segment that fits, and a plain side legend. Most information at a glance, but the busiest; it bends the dataviz "label selectively" guidance, which the issue explicitly asks for.
-- `option-b-top-legend-bar-totals.html` — The legend wraps in a row above the plot so bars get the full cell width, and only bar totals appear on the caps (segment values in the tooltip). Quietest, and best for many categories or narrow cells. The percent view still uses in-segment labels, since every total is 100%.
-- `option-c-summary-legend-series-focus.html` — Side legend as a summary table: each series' total and share (average share in percent view). Hovering a legend row dims all other series, which helps with the hardest part of reading stacked bars: comparing a middle segment across bars. Bar totals on the caps, no in-segment labels.
+- `option-a-side-legend-segment-labels.html` — chosen layout: side legend, in-segment labels.
+- `option-b-top-legend-bar-totals.html` — top legend, bar totals only.
+- `option-c-summary-legend-series-focus.html` — summary legend with per-series totals and hover fade.
 
-**Chosen: Option A** — side legend and in-segment labels, the same layout as the Pie Chart cell. B and C stay as reference only; C's legend-hover fade and per-series legend totals are not built.
+C's legend-hover fade and per-series legend totals are not built.
 
 ## Implementation Steps
 
@@ -129,7 +125,7 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
    ```sql
    SELECT exe, <level-name CASE as in DEFAULT_SQL.piechart>, count(*) FROM log_entries GROUP BY 1, 2 ORDER BY 1, 2
    ```
-   Also add `stackedbar` to the `shouldShowTimeRange` default-branch comment.
+   Also add `stackedbar` to the `shouldShowTimeRange` default-branch comment, and add `'stackedbar'` to the `types` array in `src/lib/screen-renderers/__tests__/notebook-utils.test.ts` ("returns true for all query-backed cell types…").
 5. `cell-registry.ts`: register `stackedbar: stackedBarMetadata`.
 
 ### Phase 3 — Cell
@@ -138,13 +134,13 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
    - **`resolveSeriesColors`**: SQL colors override the palette; the palette doesn't skip an entry for SQL-colored series; it wraps after 12 series
    - **`niceStep` / `buildStackedBarLayout`**:
      - clean tick steps
-     - a total of 100.0000001 with `percent` gives a 100 top, not 120 or 125 (exercises the relative-tolerance snap on both `niceStep` and `top`)
+     - a 100 `percent` total gives a 100 tick with headroom above it
      - segments stack contiguously with the 2px gap
-     - rounded cap only on the top segment
+     - rounded cap only on the top segment (including when the last series is absent from a bar)
      - the minimum bar width triggers a scroll width
      - rotation when labels exceed the band
      - an in-segment label is skipped when the segment is too short or narrow (via `estimateLabelWidth`)
-   - **Renderer** (stub `ResizeObserver` with `vi.stubGlobal`, invoking its callback with a fixed `contentRect.width`, since jsdom/test-setup.ts has none): loading, empty, error and all-zero states; legend rows in stack order; tooltip content (including share of bar) on `pointerMove`
+   - **Renderer** (stub `ResizeObserver` with `vi.stubGlobal`, invoking its callback with a fixed `contentRect.width`/`.height`, since jsdom/test-setup.ts has none): loading, empty, error and all-zero states; legend rows in stack order; tooltip content (including share of bar) on `pointerMove`
    - **Editor**: `unit` macro validation error display
 
 ### Phase 4 — Docs
@@ -163,6 +159,7 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/notebook-types.ts`
 - `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`
+- `analytics-web-app/src/lib/screen-renderers/__tests__/notebook-utils.test.ts`
 - `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/StackedBarCell.tsx` (new)
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/StackedBarCell.test.tsx` (new)
@@ -176,7 +173,7 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
 - **Hand-rolled SVG vs. uPlot or a new library.** uPlot's stacking is a demo-level recipe, not an API, and the categorical axis is simple to build directly. The Pie cell set the precedent of keeping charting dependencies at uPlot only.
 - **Long/tidy vs. wide format** (one numeric column per series). Tidy works with `GROUP BY category, series` without the query author knowing the series set in advance, and it's what the issue proposes. Wide format would require pivot SQL for every new series.
 - **Bar width cap of 56px vs. the dataviz 24px cap.** In-segment labels (Option A) need room for text like `42.6%`. At 24px nothing fits, and the issue asks for those labels. The cap only applies when bands are wide. With many categories, bars shrink toward the 12px floor anyway.
-- **Not sharing `execute` / `getRendererProps` across single-query cells now.** The duplication predates this feature and spans five cells. Folding it into this change would widen the diff and the review surface for no functional gain. It's worth its own cleanup.
+- **Not sharing `execute` / `getRendererProps` across single-query cells now.** The duplication predates this feature. Folding it into this change would widen the diff and the review surface for no functional gain. It's worth its own cleanup.
 
 ## Decisions
 - Normalization is done in SQL, not by a UI toggle or option (user call). The cell renders the values it's given, and the docs and editor hint show the window-function recipe with `unit: percent`.
@@ -184,6 +181,7 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
 - No series cap or "Other" folding in the cell (user call). The query decides how many series there are; past 12 the palette wraps, as in the Chart cell.
 - No segment click or cell selection (user call). The cell exposes no `$cell.selected.*` values.
 - Option A layout (user call): side legend with names only, in-segment labels where they fit; no legend-hover fade.
+- Y scale mirrors XYChart (max × 1.05, free ticks) — no snapping/epsilon (user call).
 
 ## Documentation
 - `mkdocs/docs/web-app/notebooks/cell-types.md` — new Stacked Bar section and cell-type count (step 8)
@@ -194,7 +192,7 @@ In `tasks/stacked_bar_cell_mockups/`. All are vertical, show the absolute query 
 All behavior is reachable with constructed Arrow tables and props, so everything is covered by Vitest unit and component tests (Phases 1 and 3):
 - extraction, pivoting and validation
 - series color assignment
-- tick and layout math, including the percent-rounding edge case
+- tick and layout math
 - label-fit decisions
 - renderer states, legend and tooltip (behind a local `ResizeObserver` stub, since jsdom has none)
 - editor wiring
@@ -204,5 +202,5 @@ No live-DB or service test: this is a new feature, not a pinned bug. Run `yarn l
 ## Manual Verification
 Only for what needs eyes: visual polish that no assertion captures (label legibility on each palette hue, rotated-label spacing, the scroll threshold feel).
 1. `python3 local_test_env/ai_scripts/start_services.py --monolith`, then open http://127.0.0.1:3000 and add a Stacked Bar cell. Expected: `DEFAULT_SQL.stackedbar` renders bars per process with level segments and a legend.
-2. Replace the query with the window-function form and set the unit to `percent`. Expected: every bar reaches exactly the 100% gridline, and the axis tops out at 100%.
+2. Replace the query with the window-function form and set the unit to `percent`. Expected: every bar reaches the 100% tick, with headroom above it on the axis.
 3. Resize the cell narrow, and query more than 30 categories. Expected: x labels rotate, then the plot scrolls horizontally; bars never go below 12px.
