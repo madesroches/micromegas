@@ -291,10 +291,8 @@ impl RangeCache {
                     .zip(run.entries.iter().cloned())
                     .collect(),
             );
-            // Hoisted above permit acquisition so the run's byte span (the
-            // fetch-budget charge) is known before `acquire_run_permit` is
-            // called, rather than being computed only after a permit was
-            // already granted.
+            // The run's byte span is the fetch-budget charge, known before
+            // `acquire_run_permit` is called.
             let byte_start = run.range.start * block_size;
             let byte_end = block_byte_range(run.range.end - 1, block_size, file_size).end;
 

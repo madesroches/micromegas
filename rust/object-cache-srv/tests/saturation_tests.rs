@@ -316,8 +316,8 @@ async fn ram_tier_entries_gauge_reflects_cached_block_count() {
 }
 
 /// `object_cache_fetch_mem_*_occupancy_mb` must reflect a held run permit --
-/// the gauge that would have shown pressure in the #1537 incident, which the
-/// count-only gauges above cannot see.
+/// the gauge that shows fetch-memory pressure, which the count-only gauges
+/// above cannot see.
 #[tokio::test]
 #[serial]
 async fn fetch_mem_gauges_reflect_held_run_permit() {

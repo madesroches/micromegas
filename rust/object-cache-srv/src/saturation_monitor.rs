@@ -68,9 +68,9 @@ pub fn sample_once(
         count.prefetch_available as u64
     );
 
-    // Bytes, not counts: the signal that would have shown pressure in the
-    // #1537 incident (a count budget alone can't see memory occupancy). Only
-    // "occupancy" is emitted -- the totals are static config, so an
+    // Bytes, not counts: the signal that shows fetch-memory pressure, which
+    // the count gauges above cannot see. Only "occupancy" is emitted -- the
+    // totals are static config, so an
     // "available" gauge would add nothing beyond what's already implied.
     let bytes = &budget_stats.bytes;
     imetric!(

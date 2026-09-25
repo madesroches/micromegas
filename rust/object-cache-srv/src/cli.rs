@@ -113,7 +113,8 @@ pub struct Cli {
 
     /// Cap (MiB) on transient origin-GET buffer memory across all in-flight
     /// coalesced fetch runs -- independent of `--max-concurrent-fetches`,
-    /// which only bounds parallelism. Default `256` (= today's effective
+    /// which only bounds parallelism. Default `256` (=
+    /// `DEFAULT_TOTAL_FETCH_PERMITS × DEFAULT_MAX_COALESCED_GET_BYTES`, the
     /// worst case at the other defaults: `--max-concurrent-fetches` runs of
     /// up to `--max-coalesced-get-bytes` each).
     #[clap(

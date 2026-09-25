@@ -766,11 +766,13 @@ async fn prefetch_blocks_with_empty_indices_is_a_no_op() {
 
 // -- Phase 3b: byte budget ----------------------------------------------------
 
-/// Regression for #1537: the count budget alone let far more origin GETs run
+/// Regression test: byte budget caps in-flight bytes when count budget alone
+/// would allow more. The count budget alone lets far more origin GETs run
 /// concurrently than the byte budget should ever allow, so a
-/// `MAX_CONCURRENT_FETCHES` raised for throughput silently multiplied the
-/// transient fetch-memory ceiling. Here the count budget (32) would allow all
-/// 8 runs at once; the byte budget (12 KiB / 4 KiB per run) must cap it at 3.
+/// `MAX_CONCURRENT_FETCHES` raised for throughput would otherwise silently
+/// multiply the transient fetch-memory ceiling. Here the count budget (32)
+/// would allow all 8 runs at once; the byte budget (12 KiB / 4 KiB per run)
+/// must cap it at 3.
 #[tokio::test]
 async fn byte_budget_caps_in_flight_bytes_when_count_allows_more() {
     with_timeout(async move {
