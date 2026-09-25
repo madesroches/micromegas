@@ -117,6 +117,9 @@ pub struct Cli {
     /// (8 MiB) runs, so a cold contiguous scan is throttled by parallelism
     /// rather than memory, and a modest share next to the default RAM tier
     /// (`--ram-mb` 512) and streaming budget (`--memory-budget-mb` 1024).
+    /// Actual peak can briefly reach about 2x this value: while a run's
+    /// blocks are copied into the cache, the run buffer and its per-block
+    /// copies coexist, and only the run buffer is charged.
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB",

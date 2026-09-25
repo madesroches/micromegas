@@ -101,13 +101,16 @@ runs (concurrency), the other counts bytes (transient memory). The knobs that sh
   reserved slots also reserves one full-size run's worth of this budget, so demand always has room
   for a run even while prefetch saturates the rest. The server refuses to start if the budget is
   below `(demand_reserved_fetches + 1) * max_run_bytes(block_size, max_coalesced_get_bytes)` —
-  the floor below which a full-size run could hang forever acquiring its byte permits.
+  the floor below which a full-size run could hang forever acquiring its byte permits. Size
+  container limits for up to about **2×** this budget: while a run's blocks are being copied into
+  the cache, the run buffer and its per-block copies briefly coexist, and the budget charges only
+  the run buffer.
 - `--max-coalesced-get-bytes` — how large a run of contiguous missing blocks may be merged into a
   single origin GET; also the unit `max_run_bytes` above is computed from.
 - `--memory-budget-mb` — cross-request cap on in-flight *streaming* memory (the response path);
   the server refuses to start if it is set below one per-stream window. This is separate from
   `--fetch-memory-budget-mb` (the origin-GET path): peak transient memory across both stages is
-  approximately their sum.
+  approximately this budget plus twice the fetch budget.
 
 **Upgrading:** defaults are unchanged when every fetch knob is left at its default. A deployment
 that raised `--max-concurrent-fetches` for throughput no longer gets more fetch memory for it —
