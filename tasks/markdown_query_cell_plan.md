@@ -262,13 +262,16 @@ already passes `availableColumns` from the cell's last result.
      values.
 3. **Run control cleanup**
    - Remove `canRun` / `cellCanRun` from `cell-registry.ts` and its four call sites. Update the
-     `cell-registry-mock.ts` markdown entry (give it an `execute`, drop the `canRun` fallback,
-     flip `canBlockDownstream` to `true`, update its `createDefaultConfig` to include
+     `cell-registry-mock.ts` markdown entry: give it an `execute`, remove `canRun: true` from
+     `BASE_METADATA.markdown` (~line 87), remove the mock's `cellCanRun` export (~line 330), drop
+     `markdown` from the `type !== 'markdown' && type !== 'hg'` execute guard (~line 289), flip
+     `canBlockDownstream` to `true`, update its `createDefaultConfig` to include
      `sql: DEFAULT_SQL.markdown`, and update its mock renderer's gate from `status === 'success'`
-     to also cover `loading`/`idle` with data, matching the real render gate).
+     to also cover `loading`/`idle` with data, matching the real render gate.
    - Update the `useCellManager.ts` comment.
    - Update stale comments that predate query-backed markdown: `cell-registry.ts:16`
-     (`CellRendererProps.sql` "undefined for markdown cells"), `cell-registry.ts:161` (`execute`
+     (`CellRendererProps.sql` "undefined for markdown cells"), `cell-registry.ts:136`
+     (`canBlockDownstream` doc "false for markdown"), `cell-registry.ts:161` (`execute`
      doc "e.g., markdown"), `useCellExecution.ts:141` ("e.g., markdown"), `notebook-utils.ts:167`
      (`shouldShowDataSource` docstring "Markdown cells have no queries"), and
      `CellContainer.tsx:53` (`canRun` prop doc referencing the type's `canRun`).
@@ -354,7 +357,9 @@ already passes `availableColumns` from the cell's last result.
   zero rows = error, extra rows ignored), the `color` / `background_color` columns (accepted
   types, same as the chart cells' color column), `format_value` for units, and Fit to cell.
   Add the issue's frame-time example and a `CASE`-based status example. Replace the "does not
-  execute queries" bullet. Rewrite the "On initial load ..." bullet (`:474`): blank until the
+  execute queries or block downstream cells" bullet: markdown cells now run a query, so like
+  other query-backed cell types they block downstream cells when their own query fails and are
+  blocked by an upstream failure. Rewrite the "On initial load ..." bullet (`:474`): blank until the
   first successful run; previous output stays while idle/loading during a re-run; **Run** executes
   the cell's query (not a local re-render).
 - `markdownMetadata.description` (`MarkdownCell.tsx:85`, shown in the add-cell modal) and the
@@ -367,8 +372,9 @@ already passes `availableColumns` from the cell's last result.
 - `variables.md:137`: add markdown to the list of query-backed cell types that accept
   `timeRange`.
 - `CHANGELOG.md` (Unreleased): feature entry, noting that markdown cells now run a query and
-  depend on the WASM engine. Removing `canRun` / `cellCanRun` is internal web-app code, so it
-  gets no breaking-change clause.
+  depend on the WASM engine, and now block downstream cells when their query fails and are
+  blocked by upstream failures, like other query-backed cell types. Removing `canRun` /
+  `cellCanRun` is internal web-app code, so it gets no breaking-change clause.
 
 ## Testing Strategy
 
