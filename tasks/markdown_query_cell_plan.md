@@ -136,6 +136,10 @@ notebook banner explains).
 - `row = rowValues(table, 0)` and `columnTypes = columnTypeMap(table)`. Both helpers move from
   `components/map/overlay.ts` to `lib/arrow-utils.ts` (the map imports them from there), so the
   markdown cell doesn't import the map overlay module.
+- When `data[0]` is absent (e.g. a zero-row result), `row` and `columnTypes` are left `undefined`
+  and `evaluateTemplate` runs without them and without `bareColumnsFromRow`, so no colors are
+  applied either. This keeps the existing `MarkdownCell.test.tsx` renderer tests, which default
+  to `data: []` with `status: 'success'`, valid.
 - `evaluateTemplate(content, { variables, timeRange, cellResults, cellSelections, row, columnTypes, bareColumnsFromRow: true })`.
 - Colors: `resolveColorColumn` gains a `name` parameter (default `'color'`, error text uses it)
   and is called for `color` and `background_color`. A new pure helper in `MarkdownCell.tsx`,
@@ -224,8 +228,8 @@ already passes `availableColumns` from the cell's last result.
 
 - `tasks/markdown_query_cell_mockups/stat-tiles.html`: a horizontal group of four fitted markdown
   tiles (background fill, text tint, status string, untinted), one resizable tile running the
-  real binary-search fit on resize, and an unfitted documentation cell showing the default look is
-  unchanged. One direction only, since the issue settles the interaction model.
+  real binary-search fit on resize, and an unfitted documentation cell showing the default look
+  with the new root padding. One direction only, since the issue settles the interaction model.
 
 ## Implementation Steps
 
@@ -287,7 +291,7 @@ already passes `availableColumns` from the cell's last result.
   `components/__tests__/CellContainer.test.tsx`, `cells/__tests__/MapCell.test.tsx`,
   `components/map/__tests__/EventDetailPanel.test.tsx`, `lib/__tests__/arrow-utils.test.ts`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`, `mkdocs/docs/web-app/notebooks/execution.md`,
-  `mkdocs/docs/web-app/notebooks/index.md`
+  `mkdocs/docs/web-app/notebooks/index.md`, `mkdocs/docs/web-app/notebooks/variables.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -322,6 +326,8 @@ already passes `availableColumns` from the cell's last result.
   "local re-render only" semantics are replaced.
 - A markdown cell with data gets `buildStatusText`'s row/elapsed status text and a header
   "Download CSV" item like any other query-backed cell, including the `SELECT 1` default.
+- Existing markdown cells gain the root's `p-3` padding; pixel-identical rendering of existing
+  cells is not a goal.
 
 ## Documentation
 
@@ -341,6 +347,8 @@ already passes `availableColumns` from the cell's last result.
 - `execution.md:37`: drop "(markdown cells do not)" from the auto-run sentence.
 - `index.md:40`: markdown cells now have data, so drop them from the "hidden for cells with no data"
   example.
+- `variables.md:137`: add markdown to the list of query-backed cell types that accept
+  `timeRange`.
 - `CHANGELOG.md` (Unreleased): feature entry, noting that markdown cells now run a query and
   depend on the WASM engine. Removing `canRun` / `cellCanRun` is internal web-app code, so it
   gets no breaking-change clause.
@@ -411,8 +419,9 @@ these checks are manual:
 
 1. `python3 local_test_env/ai_scripts/start_services.py --monolith`, then open
    http://127.0.0.1:3000, create a notebook.
-2. Open an existing notebook with markdown cells. Expected: they render as before, now with the
-   row/elapsed status text and a "Download CSV" header item (see Decisions).
+2. Open an existing notebook with markdown cells. Expected: they render the same content with the
+   new root `p-3` padding, now with the row/elapsed status text and a "Download CSV" header item
+   (see Decisions).
 3. Add a markdown cell with the issue's frame-time example (data source switched to the remote
    source) and Fit on. Expected: the value fills the tile. Resizing the cell height and putting
    it in a horizontal group re-fits it, and text wraps in a narrow tile.
