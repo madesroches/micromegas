@@ -144,12 +144,15 @@ notebook banner explains).
   unsupported column type adds a warning shown in the existing `TemplateWarningBanner` and
   doesn't fail the cell.
 
-Render gate: render when `status === 'success'`, or when `status` is `'loading'` or `'idle'` and
-`data.length > 0`. `executeFromCell` resets every cell from the restart point to `idle` up front
-and only flips a cell to `loading` when its turn comes (`useCellExecution.ts:386-397, 214-221`),
-so a markdown cell waiting behind a slower cell sits in `idle` with data — the gate must cover
-that case too, not just `loading`, or the cell blanks on every refresh. First paint stays deferred
-until the cell's first successful run, as today.
+Render gate: evaluate the template only when `status === 'success'`, and cache that evaluated
+text and warnings (e.g. in a ref) instead of re-evaluating on every render. While `status` is
+`'loading'` or `'idle'` with `data.length > 0`, render the cached output rather than
+re-evaluating: `getAvailableCellResults` (`NotebookRenderer.tsx:514-523`) only includes upstream
+cells with `status === 'success'`, and `executeFromCell` resets every cell from the restart point
+to `idle` up front (`useCellExecution.ts:386-397`), so while a markdown cell is idle-with-data its
+`cellResults` prop lacks upstream results that were already resolved in the cached output —
+re-evaluating against that stripped-down `cellResults` would flash upstream macros as unresolved.
+First paint stays deferred until the cell's first successful run, as today.
 
 DOM structure:
 
@@ -165,7 +168,11 @@ DOM structure:
 - The root owns padding and background, so `background_color` fills the whole content area
   including the padding around fitted content. It is `flex-1` inside `CellContainer`'s flex
   column, so it fills the cell height even when the text is short. In non-fit mode it grows past
-  the cell and `CellContainer` scrolls, as today.
+  the cell and `CellContainer` scrolls, as today. Inside a horizontal group, the same applies only
+  if `HgChildPane`'s content wrapper is also a flex column: its wrapper is `flex-1 overflow-auto
+  px-1 pb-1` (`HgChildPane.tsx:215`), missing the `flex flex-col` that `CellContainer.tsx:461` has,
+  so the markdown root's `flex-1` has no effect there and Fit to cell has no definite height to
+  fit against. Add `flex flex-col` to that wrapper to match `CellContainer`.
 - `proseClasses(tinted)`: when `color` is present, the per-element color modifiers for headings,
   p, strong, li, em, blockquote, th/td and list markers become `text-inherit` (`marker:` too), so
   the inline `color` on the prose div applies. Links and inline code keep their accent colors.
@@ -216,7 +223,11 @@ already passes `availableColumns` from the cell's last result.
 ## Implementation Steps
 
 1. **Shared helpers**
-   - Move `rowValues` / `columnTypeMap` to `lib/arrow-utils.ts`; update `MapCell.tsx` imports.
+   - Move `rowValues` / `columnTypeMap` to `lib/arrow-utils.ts`; update imports in `MapCell.tsx`,
+     `cells/__tests__/MapCell.test.tsx`, and `components/map/__tests__/EventDetailPanel.test.tsx`
+     (currently `from '@/components/map/overlay'` / `from '../overlay'`). Move the
+     `describe('rowValues')` and `describe('columnTypeMap')` blocks from `MapCell.test.tsx`
+     (`:392-450`) to `lib/__tests__/arrow-utils.test.ts`.
    - Add the `name` parameter to `resolveColorColumn`.
    - Add `validateTemplateMacros` to `macro-substitution.ts` (re-export via `notebook-utils` like
      `validateMacros`); switch `MapCell`'s editor to it.
@@ -237,6 +248,8 @@ already passes `availableColumns` from the cell's last result.
    - Renderer: row binding, `resolveMarkdownColors`, `proseClasses`, root/prose structure,
      loading gate, `fitFontSize` + `useFitFontSize`.
    - Editor: SQL editor, fit checkbox, `validateTemplateMacros`.
+   - `HgChildPane.tsx`: add `flex flex-col` to the content wrapper so Fit to cell and
+     `background_color` fill work for a markdown cell inside a horizontal group.
 5. **Docs and changelog** (see Documentation).
 
 ## Files to Modify
@@ -258,7 +271,8 @@ already passes `availableColumns` from the cell's last result.
 - Tests: `cells/__tests__/MarkdownCell.test.tsx`, `__tests__/notebook-utils.test.ts`,
   `__tests__/useCellExecution.test.ts`, `__tests__/NotebookRenderer.test.tsx`,
   `__tests__/macro-substitution.test.ts`, `cells/__tests__/HorizontalGroupCell.test.tsx`,
-  `components/__tests__/CellContainer.test.tsx`, plus the arrow-utils test file
+  `components/__tests__/CellContainer.test.tsx`, `cells/__tests__/MapCell.test.tsx`,
+  `components/map/__tests__/EventDetailPanel.test.tsx`, `lib/__tests__/arrow-utils.test.ts`
 - `mkdocs/docs/web-app/notebooks/cell-types.md`, `mkdocs/docs/web-app/notebooks/execution.md`,
   `mkdocs/docs/web-app/notebooks/index.md`
 - `CHANGELOG.md`
@@ -291,8 +305,10 @@ already passes `availableColumns` from the cell's last result.
 - Fitted content is centered on both axes and `text-align: center` (the issue's "centered when
   fitting"). Non-fit rendering keeps today's left-aligned layout.
 - The previous result stays rendered while the cell is idle (waiting its turn behind a slower cell
-  during a re-run) or loading with data, not just while loading. The first render is still
-  deferred to the first successful run.
+  during a re-run) or loading with data, not just while loading. This is a cached evaluation, not
+  a re-evaluation while idle/loading: the template is evaluated only on `status === 'success'`,
+  and that output is kept until the next success. The first render is still deferred to the first
+  successful run.
 - Markdown's Run button now runs its own query (still one cell, no downstream re-run). The old
   "local re-render only" semantics are replaced.
 
@@ -322,7 +338,9 @@ Unit tests (Vitest, jsdom, no services):
   - Renderer: bare `$col` resolves from row 0 and wins over a same-named variable.
     `format_value($value, "milliseconds")` formats the raw value. Rows past 0 are ignored.
     Renders nothing before the first success, and keeps the previous output while idle or loading
-    with data.
+    with data. Idle-with-data case: an upstream `$cell[0].col` macro whose cell is absent from
+    `cellResults` (as `getAvailableCellResults` would produce while idle) still shows the
+    resolved value from the cached evaluation, not a re-evaluated/unresolved macro.
   - `resolveMarkdownColors`: integer, `#rrggbb` string, `#rrggbbaa` string, 4-byte binary,
     null → absent, malformed string → absent, unsupported type → warning; `color` and
     `background_color` are independent.
@@ -353,7 +371,8 @@ Unit tests (Vitest, jsdom, no services):
 - **`macro-substitution.test.ts`**: `validateTemplateMacros` accepts listed columns and still
   flags unknown ones.
 - **arrow-utils tests**: `resolveColorColumn` with a custom name, including the error message;
-  `rowValues` / `columnTypeMap` move with their existing coverage, if any.
+  `rowValues` / `columnTypeMap` move with their existing coverage (the `describe('rowValues')` /
+  `describe('columnTypeMap')` blocks from `MapCell.test.tsx`).
 - **`useCellExecution.test.ts`**: replace "markdown immediately succeeds without SQL" with a
   routing-only test: a markdown cell with no `dataSource`, under a remote notebook default, is
   routed to `engine.execute_and_register` and not to `fetchQueryIPC`/`streamQuery`. The mock's
