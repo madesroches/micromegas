@@ -207,6 +207,7 @@ import { flamegraphMetadata } from './cells/FlameGraphCell'
 import { mapMetadata } from './cells/MapCell'
 import { imageMetadata } from './cells/ImageCell'
 import { pieChartMetadata } from './cells/PieChartCell'
+import { stackedBarMetadata } from './cells/StackedBarCell'
 
 /**
  * Registry of all cell type metadata.
@@ -228,6 +229,7 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   map: mapMetadata,
   image: imageMetadata,
   piechart: pieChartMetadata,
+  stackedbar: stackedBarMetadata,
 }
 
 /**

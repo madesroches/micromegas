@@ -1,6 +1,6 @@
 # Cell Types Reference
 
-Notebooks support 15 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
+Notebooks support 16 cell types. Each cell has a `name` (unique within the notebook), a `type`, and a `layout` controlling its display height and collapsed state.
 
 Data cells (table, chart, log, etc.) execute SQL queries and register their results in the [local WASM query engine](execution.md#local-wasm-query-engine), making them available for downstream cells to query.
 
@@ -635,6 +635,66 @@ FROM raw_metrics m
 JOIN thresholds t ON m.name = t.metric
 WHERE m.value > t.warn_threshold
 ```
+
+---
+
+## ![Stacked Bar](../../assets/images/cell-icons/chart-column-stacked.svg){ .cell-icon } Stacked Bar
+
+Single-query breakdown chart for comparing a value across several things at once (e.g. time per startup phase across test scenarios, resource usage per component across builds): one vertical bar per category, each stacked from named series that share a single legend and color mapping.
+
+**Configuration:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | string | SQL query returning category + series + value columns (plus optional `color`) |
+| `dataSource` | string | Data source override |
+| `options.unit` | string | Value unit, formatted the same way as the Chart cell (e.g. `bytes`, `ms`). Use `percent` for a SQL-normalized query |
+
+**SQL columns:**
+
+| Column | Required | Description |
+|--------|----------|-------------|
+| Category (1st non-color) | Yes | One bar each — string, dictionary string, or numeric (stringified) |
+| Series (2nd non-color) | Yes | One stack segment each, shared across bars in the legend — string or dictionary string |
+| Value (3rd non-color) | Yes | Numeric value |
+| `color` | No | Per-series fill color — packed RGBA u32 (e.g. from `rgba()` or `color_scale()`), `'#rrggbb'`/`'#rrggbbaa'` string, or 4-byte binary. The first non-null value seen for a series wins. |
+
+**Ordering, dropping, and summing:**
+
+- Categories appear left to right, and series stack bottom-up and list in the legend, in first-appearance order of the query rows — the query's `ORDER BY` controls both. A series missing from one bar draws no segment there (the stack closes up) and keeps its place everywhere else.
+- Rows with a null category or series, or a null, non-finite, or negative value, are dropped, as the Pie cell does. A zero value draws no segment.
+- Duplicate `(category, series)` rows are **summed** — unlike the Pie cell, where duplicate labels stay separate slices. In a stack, two same-colored neighboring segments would otherwise read as one segment with a spurious gap.
+
+**Features:**
+
+- Y-axis with clean tick steps sized to the tallest bar's total (5% headroom above it)
+- A value label is drawn inside a segment only when it's tall and wide enough to hold the text
+- Always-visible side legend — swatch and name per series, in stack order
+- Hover tooltip shows category, series, value, share of the bar, and the bar's total
+- Bars keep a 12px floor; below that width the plot scrolls horizontally instead of squashing bars further
+- Series beyond 12 wrap the default color palette, same as the Chart cell
+- Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
+
+**Example — absolute values:**
+
+```sql
+SELECT scenario, phase, sum(duration_ms) AS duration_ms
+FROM startup_events
+GROUP BY scenario, phase
+ORDER BY scenario, phase
+```
+
+**Example — normalized to 100% per bar in SQL** (set `options.unit` to `percent`):
+
+```sql
+SELECT scenario, phase,
+       100.0 * sum(duration_ms) / sum(sum(duration_ms)) OVER (PARTITION BY scenario) AS share
+FROM startup_events
+GROUP BY scenario, phase
+ORDER BY scenario, phase
+```
+
+There is no `normalize` option or UI toggle — normalization is always done in SQL, so the cell renders exactly the values the query returns.
 
 ---
 

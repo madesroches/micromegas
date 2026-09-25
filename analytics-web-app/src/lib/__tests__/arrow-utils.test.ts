@@ -139,6 +139,7 @@ import {
   isBinaryType,
   resolveChartColumns,
   isHistogramStructType,
+  extractStackedBarData,
 } from '../arrow-utils'
 
 // Get test helpers from mock
@@ -1313,6 +1314,172 @@ describe('extractPieData', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.slices).toEqual([])
+    }
+  })
+})
+
+describe('extractStackedBarData', () => {
+  it('pivots rows into categories x series with first-appearance ordering, leaving 0 where a series is absent from a category', () => {
+    const table = createMockTable(
+      [
+        { name: 'scenario', type: createUtf8Type() },
+        { name: 'phase', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      [
+        { scenario: 'cold', phase: 'load', value: 10 },
+        { scenario: 'cold', phase: 'init', value: 5 },
+        { scenario: 'warm', phase: 'load', value: 3 },
+        // 'warm' never reports 'init' -> stays 0
+      ]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.categories).toEqual(['cold', 'warm'])
+      expect(result.data.series.map((s) => s.name)).toEqual(['load', 'init'])
+      expect(result.data.values).toEqual([
+        [10, 5],
+        [3, 0],
+      ])
+    }
+  })
+
+  it('sums duplicate (category, series) rows instead of keeping them as separate segments', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      [
+        { category: 'A', series: 'x', value: 10 },
+        { category: 'A', series: 'x', value: 5 },
+      ]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.values).toEqual([[15]])
+    }
+  })
+
+  it('drops rows with a null category, null series, or a null/non-finite/negative value, but keeps a zero value', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      [
+        { category: 'A', series: 'x', value: 10 },
+        { category: null, series: 'x', value: 5 },
+        { category: 'A', series: null, value: 5 },
+        { category: 'A', series: 'y', value: null },
+        { category: 'A', series: 'z', value: NaN },
+        { category: 'A', series: 'w', value: -1 },
+        { category: 'A', series: 'v', value: 0 },
+      ]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.series.map((s) => s.name)).toEqual(['x', 'v'])
+      expect(result.data.values).toEqual([[10, 0]])
+    }
+  })
+
+  it('accepts a dictionary-encoded string category and a plain numeric category', () => {
+    const dictTable = createMockTable(
+      [
+        { name: 'category', type: createDictionaryType(createUtf8Type()) },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      [{ category: 'A', series: 'x', value: 1 }]
+    )
+    expect(extractStackedBarData(dictTable as never).ok).toBe(true)
+
+    const numericTable = createMockTable(
+      [
+        { name: 'category', type: createIntType() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      [{ category: 42, series: 'x', value: 1 }]
+    )
+    const result = extractStackedBarData(numericTable as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.categories).toEqual(['42'])
+    }
+  })
+
+  it('returns an error for the wrong column count', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+      ],
+      []
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain('category, series, and value columns')
+    }
+  })
+
+  it('returns an error for a non-numeric value column', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createUtf8Type() },
+      ],
+      [{ category: 'A', series: 'x', value: 'not a number' }]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toMatch(/numeric/)
+    }
+  })
+
+  it('decodes a color column and keeps the first non-null color seen for a series', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+        { name: 'color', type: createUtf8Type() },
+      ],
+      [
+        { category: 'A', series: 'x', value: 1, color: null },
+        { category: 'B', series: 'x', value: 2, color: '#ff0000' },
+        { category: 'C', series: 'x', value: 3, color: '#00ff00' },
+      ]
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.series).toEqual([{ name: 'x', color: '#ff0000ff' }])
+    }
+  })
+
+  it('returns ok with empty categories/series for an empty table', () => {
+    const table = createMockTable(
+      [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'series', type: createUtf8Type() },
+        { name: 'value', type: createFloatType() },
+      ],
+      []
+    )
+    const result = extractStackedBarData(table as never)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toEqual({ categories: [], series: [], values: [] })
     }
   })
 })
