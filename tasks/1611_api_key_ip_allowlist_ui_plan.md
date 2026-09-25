@@ -1,5 +1,7 @@
 # API-Key IP Allowlist Web UI Plan (#1611)
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1611
+
 ## Overview
 
 Show API-key IP allowlists in the analytics web app. #1600 added the backend: the
