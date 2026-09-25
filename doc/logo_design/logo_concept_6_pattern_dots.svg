@@ -1,0 +1,36 @@
+<svg width="400" height="100" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Pattern for the large, sparse M -->
+    <pattern id="sparse-dots" x="0" y="0" width="12" height="12" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="9" r="1.2" fill="#CCC"/>
+      <circle cx="9" cy="3" r="0.8" fill="#DDD"/>
+    </pattern>
+
+    <!-- Pattern for the small, dense m -->
+    <pattern id="dense-dots" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#333"/>
+    </pattern>
+
+    <!-- The path for the large M -->
+    <path id="mega-m-path" d="M 40 70 L 55 30 L 70 50 L 85 30 L 100 70" stroke-width="12" stroke="black" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- The path for the small m -->
+    <path id="micro-m-path" d="M -10 12 v -8 c 0 -4 4 -4 4 0 v 8 c 0 -4 4 -4 4 0 v -8 c 0 -4 4 -4 4 0 v 8" stroke-width="4" stroke="black" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Clipping path to show the 'm' only inside the lens -->
+    <clipPath id="lens-clip">
+        <circle cx="70" cy="50" r="22"/>
+    </clipPath>
+  </defs>
+
+  <!-- Draw the shapes using the patterns -->
+  <use href="#mega-m-path" fill="url(#sparse-dots)" />
+  <use href="#micro-m-path" transform="translate(75, 45)" fill="url(#dense-dots)" clip-path="url(#lens-clip)"/>
+
+  <!-- The Lens (drawn on top) -->
+  <g transform="translate(70, 50)">
+    <circle cx="0" cy="0" r="30" fill="none" stroke="#333" stroke-width="4" stroke-dasharray="150 40" transform="rotate(-30)"/>
+    <circle cx="0" cy="0" r="22" fill="rgba(0, 174, 239, 0.1)" stroke="#00AEEF" stroke-width="4" stroke-dasharray="100 30" transform="rotate(90)"/>
+  </g>
+
+</svg>

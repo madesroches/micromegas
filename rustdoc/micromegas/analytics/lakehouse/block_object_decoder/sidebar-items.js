@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["default_block_object_decoders"],"struct":["TransitBlockDecoder"],"trait":["BlockObjectDecoder","ObjectVisitor"],"type":["BlockObjectDecoderMap"]};

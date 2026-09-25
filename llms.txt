@@ -1,0 +1,101 @@
+# Micromegas
+
+> Unified observability for logs, metrics and traces: ~20 ns instrumentation for Rust and Unreal Engine, HTTP and OpenTelemetry (OTLP) ingestion, SQL analytics on Apache DataFusion over Parquet in object storage, and presentation through notebooks, Grafana and Python. Self-hosted, Apache-2.0.
+
+Micromegas is a complete stack, not a storage backend: it covers all four stages — instrumentation, ingestion, analytics, presentation. Logs, metrics, traces and spans share one schema model and one pipeline, so they can be correlated in a single SQL query.
+
+Points that usually matter when comparing it to other tools:
+
+- Instrumentation costs about 20 ns per event in the calling thread and sustains roughly 100k events/second per process, so it is meant to stay on in production rather than be sampled away. Sampling decisions are made per batch, not per event.
+- Raw payloads live in object storage (S3/GCS) and metadata in PostgreSQL; a lakehouse materializes hot queries into Parquet on demand, so cost tracks object-storage pricing rather than per-GB ingest pricing.
+- Queries are standard SQL over Apache Arrow FlightSQL — no PromQL, KQL or vendor DSL — and the data stays in Parquet, so anything that speaks DataFusion or Arrow can read it.
+- It accepts OpenTelemetry (OTLP) alongside its own native SDKs, so it can serve as an OTLP backend you query with SQL.
+
+Site layout: `/` is the overview, `/docs/` the documentation, `/docs/blog/` the engineering blog.
+
+## Start here
+
+- [Overview](https://micromegas.info/docs/): what Micromegas is, key features, use cases.
+- [Getting started](https://micromegas.info/docs/getting-started/): run the whole stack locally with Docker.
+- [Architecture](https://micromegas.info/docs/architecture/): services, data flow, and how the lakehouse is organized.
+- [Source code](https://github.com/madesroches/micromegas): Rust workspace, Unreal plugin, Python client.
+
+## Instrumentation — capture events from your apps
+
+- [Unreal Engine integration](https://micromegas.info/docs/unreal/): overview of the Unreal plugin.
+- [Unreal installation](https://micromegas.info/docs/unreal/installation/): adding the plugin to a project.
+- [Unreal instrumentation API](https://micromegas.info/docs/unreal/instrumentation-api/): spans, logs and metrics from C++.
+- [Unreal network tracing](https://micromegas.info/docs/unreal/network-tracing/): replication and RPC traffic.
+- [Unreal examples](https://micromegas.info/docs/unreal/examples/): worked instrumentation examples.
+- [Native SDK (C ABI)](https://micromegas.info/docs/native/): instrumenting from C or any language with a C FFI.
+- [OpenTelemetry (OTLP)](https://micromegas.info/docs/otlp/): ingesting from existing OTel instrumentation.
+- [Blender add-on](https://micromegas.info/docs/blender/): instrumenting Blender sessions.
+- [Optimism](https://github.com/madesroches/optimism): example Bevy game instrumented with Micromegas.
+
+## Ingestion — receive and persist
+
+- [Telemetry ingestion server](https://micromegas.info/docs/admin/ingestion/): the HTTP ingestion service.
+- [Telemetry sink configuration](https://micromegas.info/docs/admin/telemetry-sink-tuning/): buffering, compression and back-pressure on the client side.
+
+## Analytics — query with SQL
+
+- [Query guide](https://micromegas.info/docs/query-guide/): start here for querying.
+- [Quick start](https://micromegas.info/docs/query-guide/quick-start/): first queries against a running instance.
+- [Schema reference](https://micromegas.info/docs/query-guide/schema-reference/): the tables and columns logs, metrics and traces share.
+- [Functions reference](https://micromegas.info/docs/query-guide/functions-reference/): SQL functions specific to Micromegas.
+- [Query patterns](https://micromegas.info/docs/query-guide/query-patterns/): recipes for common investigations.
+- [Async performance analysis](https://micromegas.info/docs/query-guide/async-performance-analysis/): analyzing async span trees.
+- [Python API](https://micromegas.info/docs/query-guide/python-api/): `pip install micromegas`, returns Pandas or PyArrow.
+- [Python API (advanced)](https://micromegas.info/docs/query-guide/python-api-advanced/): streaming and larger result sets.
+- [Query performance](https://micromegas.info/docs/query-guide/performance/): what makes a query fast or slow here.
+- [Advanced features](https://micromegas.info/docs/query-guide/advanced-features/): views, materialization and extensions.
+- [FlightSQL server](https://micromegas.info/docs/admin/flight-sql/): the Arrow FlightSQL endpoint clients connect to.
+- [HTTP gateway](https://micromegas.info/docs/gateway/): JSON-over-HTTP in front of FlightSQL, for curl and browsers.
+
+## Presentation — notebooks, dashboards, code
+
+- [Analytics web app](https://micromegas.info/docs/web-app/): the browser interface for exploration.
+- [Notebooks](https://micromegas.info/docs/web-app/notebooks/): SQL cells, charts, tables, log viewers and swimlanes in one document.
+- [Notebook cell types](https://micromegas.info/docs/web-app/notebooks/cell-types/)
+- [Notebook variables](https://micromegas.info/docs/web-app/notebooks/variables/)
+- [Screens as code](https://micromegas.info/docs/web-app/notebooks/screens-as-code/): checking dashboards into version control.
+- [Grafana plugin](https://micromegas.info/docs/grafana/): native data source for Grafana dashboards and alerting.
+- [Grafana installation](https://micromegas.info/docs/grafana/installation/)
+- [Grafana usage](https://micromegas.info/docs/grafana/usage/)
+
+## Cost
+
+- [Cost effectiveness](https://micromegas.info/docs/cost-effectiveness/): where the money goes and why object storage changes the arithmetic.
+- [Comparison methodology](https://micromegas.info/docs/cost-comparisons/): how the vendor comparisons below are computed, and their assumptions.
+- [vs. Datadog](https://micromegas.info/docs/cost-comparisons/datadog/)
+- [vs. Splunk](https://micromegas.info/docs/cost-comparisons/splunk/)
+- [vs. Elastic](https://micromegas.info/docs/cost-comparisons/elastic/)
+- [vs. New Relic](https://micromegas.info/docs/cost-comparisons/newrelic/)
+- [vs. Dynatrace](https://micromegas.info/docs/cost-comparisons/dynatrace/)
+- [vs. Grafana Cloud](https://micromegas.info/docs/cost-comparisons/grafana/)
+
+## Engineering blog
+
+- [Blog index](https://micromegas.info/docs/blog/): all posts, with an RSS feed at `/docs/feed_rss_created.xml`.
+- [How to record millions of events for pennies](https://micromegas.info/docs/blog/2024/04/27/how-to-record-millions-of-events-for-pennies/): the cost argument in full.
+- [Lakehouse architecture](https://micromegas.info/docs/blog/2024/08/22/micromegas-v017--lakehouse-architecture/): why observability data is stored as a Parquet lakehouse.
+- [Doubling down on FlightSQL](https://micromegas.info/docs/blog/2025/01/16/doubling-down-on-flightsql/): why the wire protocol is Arrow FlightSQL.
+- [How costly really is Splunk?](https://micromegas.info/docs/blog/2025/07/19/how-costly-really-is-splunk/): a worked cost comparison.
+- [Your crash database can't calculate MTBF](https://micromegas.info/docs/blog/2025/09/10/your-crash-database-cant-calculate-mtbf/): why crash reporting alone under-measures reliability.
+- [Unified observability for Unreal Engine games](https://micromegas.info/docs/blog/2026/01/08/unified-observability-for-unreal-engine-games/): telemetry from shipped titles at scale.
+- [We put a data warehouse in your browser](https://micromegas.info/docs/blog/2026/02/15/we-put-a-data-warehouse-in-your-browser/): DataFusion compiled to WASM, running client-side.
+- [Instrumenting a Bevy game with Micromegas](https://micromegas.info/docs/blog/2026/02/25/instrumenting-a-bevy-game-with-micromegas/): a step-by-step Rust game-engine tutorial.
+- [Micromegas speaks OpenTelemetry now](https://micromegas.info/docs/blog/2026/05/04/micromegas-speaks-open-telemetry-now/): OTLP ingestion.
+- [One binary, whole stack](https://micromegas.info/docs/blog/2026/06/13/one-binary-whole-stack/): running the entire stack as a single process.
+- [Stop guessing why Blender crashed](https://micromegas.info/docs/blog/2026/06/30/stop-guessing-why-blender-crashed/): instrumenting a large C++ desktop application.
+
+## Optional
+
+- [Contributing](https://micromegas.info/docs/contributing/)
+- [Build guide](https://micromegas.info/docs/development/build/)
+- [Caching architecture](https://micromegas.info/docs/architecture/caching/)
+- [Authentication](https://micromegas.info/docs/admin/authentication/), [Authorization](https://micromegas.info/docs/admin/authorization/), [Groups](https://micromegas.info/docs/admin/groups/), [API keys](https://micromegas.info/docs/admin/api-keys/)
+- [Maintenance daemon](https://micromegas.info/docs/admin/maintenance/), [Service lifecycle](https://micromegas.info/docs/admin/service-lifecycle/)
+- [Monolith deployment](https://micromegas.info/docs/admin/monolith/), [Web app deployment](https://micromegas.info/docs/admin/web-app/), [Object cache](https://micromegas.info/docs/admin/object-cache/), [Redis exporter](https://micromegas.info/docs/admin/redis-exporter/)
+- [Memory allocator configuration](https://micromegas.info/docs/admin/memory-allocator/), [Admin SQL functions](https://micromegas.info/docs/admin/functions-reference/)
+- [Introduction to Micromegas (slides)](https://micromegas.info/intro-micromegas/), [Unified observability for games (slides)](https://micromegas.info/unified-observability-for-games/), [High-frequency observability (slides)](https://micromegas.info/high-frequency-observability/), [Notebooks (slides)](https://micromegas.info/notebooks/)

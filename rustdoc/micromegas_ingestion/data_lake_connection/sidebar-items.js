@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["FALLBACK_AFTER","PROBE_INTERVAL"],"enum":["WritablePolicy"],"fn":["connect_to_data_lake","is_read_only","is_read_only_violation","pool_options","read_write_pool_options"],"struct":["DataLakeConnection","ReadOnlyFallback"]};

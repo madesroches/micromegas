@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["mm_flush","mm_init","mm_log","mm_metric_f","mm_metric_i","mm_shutdown"],"struct":["MmConfig","MmHandle"]};

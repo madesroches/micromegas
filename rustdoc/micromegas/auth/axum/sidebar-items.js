@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AuthError"],"fn":["auth_middleware"]};
