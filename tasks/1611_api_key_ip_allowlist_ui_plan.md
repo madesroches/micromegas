@@ -197,8 +197,12 @@ dialog already shows.
 6. **Page configs**: `routes/AnalyticsApiKeysPage.tsx` and `routes/IngestionApiKeysPage.tsx`
    gain `setAllowlist`.
 7. **`components/MintIngestionKeyDialog.tsx`**: the field and the options-object mint call.
-8. Fix whatever `yarn type-check` flags: test fixtures of `ApiKeyListEntry` that lack
-   `allowed_cidrs`, and `makeConfig` in `ApiKeysAdminPage.test.tsx`, which needs `setAllowlist`.
+8. Add `allowed_cidrs: []` to every list-response fixture in
+   `routes/__tests__/{Ingestion,Analytics}ApiKeysPage.test.tsx`, including both `makeKeys`
+   helpers — these fixtures are untyped plain JSON, so `yarn type-check` won't catch a missing
+   field, but the page reads `key.allowed_cidrs.length` at runtime. Then fix whatever `yarn
+   type-check` flags: typed fixtures of `ApiKeyListEntry` that lack `allowed_cidrs`, and
+   `makeConfig` in `ApiKeysAdminPage.test.tsx`, which needs `setAllowlist`.
 9. Tests (see Testing Strategy), docs, and a CHANGELOG entry.
 
 ## Files to Modify
@@ -214,7 +218,8 @@ dialog already shows.
 - `analytics-web-app/src/routes/IngestionApiKeysPage.tsx`
 - Tests: `lib/__tests__/{ingestion,analytics}-api-keys-api.test.ts`, a new
   `lib/__tests__/api-keys-shared.test.ts`, `components/__tests__/ApiKeysAdminPage.test.tsx`,
-  `routes/__tests__/IngestionApiKeysPage.test.tsx`, and `routes/__tests__/AudienceAccessPage.test.tsx`
+  `routes/__tests__/IngestionApiKeysPage.test.tsx`, `routes/__tests__/AnalyticsApiKeysPage.test.tsx`,
+  and `routes/__tests__/AudienceAccessPage.test.tsx`
 - `mkdocs/docs/admin/api-keys.md`
 - `CHANGELOG.md`
 
@@ -230,8 +235,9 @@ dialog already shows.
   whitespace) accepts every common pasted format, and it needs no new component library.
 - **`allowed_cidrs` is required on `ApiKeyListEntry`, not optional as the issue sketched.** The
   server always sends it (`COALESCE(..., '{}')`), so the type is accurate, and the compiler finds
-  every fixture that needs updating. An optional field would allow a meaningless third state,
-  `undefined`.
+  every typed fixture that needs updating for it (untyped list-response mocks still need the
+  manual pass in Implementation Steps step 8). An optional field would allow a meaningless third
+  state, `undefined`.
 - **Edit is a separate dialog, not inline editing in the cell.** This matches how the page
   already handles mint and revoke, and it gives the server's error message a place to appear.
 - **No "only an admin can change this later" note in the self-service dialog.** A non-admin who
@@ -284,9 +290,12 @@ The server side of the round trip is #1600's, and this change fixes no bug seen 
 The layout and wording are visual and nothing checks them automatically. A broken layout would
 be obvious the first time anyone opens the page, so a manual check is enough.
 
-1. `python3 local_test_env/ai_scripts/start_services.py --monolith`, then open
-   `http://127.0.0.1:3000/admin/ingestion-keys` as an admin. Existing keys show *Unrestricted*
-   in the IP Allowlist column.
+1. Export `MICROMEGAS_OIDC_CONFIG` (or `MICROMEGAS_ANALYTICS_OIDC_CONFIG`) before running
+   `start_services.py`; otherwise it starts with `--disable-auth` and every key-management
+   route returns 503 AUTH_DISABLED. Then run
+   `python3 local_test_env/ai_scripts/start_services.py --monolith`, open
+   `http://127.0.0.1:3000/admin/ingestion-keys`, and sign in as an admin. Existing keys show
+   *Unrestricted* in the IP Allowlist column.
 2. Mint a key with `127.0.0.1` in the allowlist field. The new row lists `127.0.0.1`.
 3. Use the shield action to change the entry to `10.0.0.5/8`. The dialog shows the "has host bits
    set" error and stays open. Change it to `10.0.0.0/8` and save. The row updates.
