@@ -9,9 +9,12 @@ Raising `MICROMEGAS_OBJECT_CACHE_MAX_CONCURRENT_FETCHES` for throughput — a kn
 says nothing about memory — silently multiplies that ceiling (128 permits × 8 MiB ≈ 1 GiB). The
 response-path `MICROMEGAS_OBJECT_CACHE_MEMORY_BUDGET_MB` does not cover these buffers, so it
 reported ~100 of 256 MB occupied while a production process grew ~1.9 GB and was OOM-killed.
+
 This plan adds a byte-denominated budget to the fetch scheduler, with the same demand/prefetch
 reservation structure the count budget has, so the fetch path gets a hard MiB ceiling that does
-not move when the concurrency knob moves. Concurrency stays as a parallelism cap.
+not move when the concurrency knob moves. Concurrency stays as a parallelism cap. It also stops
+fulfilled blocks from pinning their parent GET buffer, so memory is actually released when the
+byte permit is.
 
 ## Current State
 - `rust/object-cache/src/range_cache/scheduler.rs:151-196` — `FetchScheduler` holds two count
@@ -26,15 +29,19 @@ not move when the concurrency knob moves. Concurrency stays as a parallelism cap
   `rust/object-cache-srv/src/saturation_monitor.rs:48-68` as the
   `object_cache_fetch_{shared,prefetch}_{occupancy,available}` gauges.
 - `rust/object-cache/src/range_cache/fetch.rs:261-358` — `spawn_run_fetch` computes the run's
-  `byte_start..byte_end` only *after* acquiring the permit (`fetch.rs:316-317`), and drops the
-  permit right after the origin GET returns (`fetch.rs:331`) — *before* `fulfill_run_success`
-  (`fetch.rs:365-430`) slices the buffer and `backend.put`s each block. `FoyerBackend::put`
-  (`rust/object-cache/src/foyer_backend.rs:549-586`) does `Bytes::copy_from_slice` per block, so
-  the GET buffer and its copy coexist for the whole put loop with no permit held at all.
+  `byte_start..byte_end` only *after* acquiring the permit, and drops the permit right after the
+  origin GET returns — *before* `fulfill_run_success` (`fetch.rs:365-430`) runs the per-block
+  put loop.
+- `fulfill_run_success` passes each block to `backend.put` **and** to `entry.fulfill` as
+  `data.slice(..)` — a view into the whole run buffer. `FoyerBackend::put`
+  (`foyer_backend.rs:549-586`) and `BoundedMemoryBackend::put` (`bounded_memory_backend.rs:47-58`)
+  each `Bytes::copy_from_slice` so the cache does not pin the parent, but the fulfilled chunk
+  handed to waiters still does: a demand caller holding one block keeps the full run (up to
+  8 MiB) alive, and the response-path `mem_permits` only charge the block-sized window.
+  `MemoryBackend::put` stores the value as-is.
 - `rust/object-cache/src/blocks.rs:21-41` — `coalesce_runs` caps a run at
   `max(max_coalesced_get_bytes / block_size, 1)` blocks, so the largest possible run is
-  `max(floor(max_coalesced / block_size), 1) * block_size` bytes (≥ `block_size` even when
-  `max_coalesced_get_bytes < block_size`).
+  `max(floor(max_coalesced / block_size), 1) * block_size` bytes.
 - `rust/object-cache/src/range_cache/mod.rs:35-45` — defaults: `DEFAULT_TOTAL_FETCH_PERMITS = 32`,
   `DEFAULT_DEMAND_RESERVED_FETCH_PERMITS = 8`, `DEFAULT_MAX_COALESCED_GET_BYTES = 8 MiB`.
   `RangeCache::new` (`mod.rs:100-125`) forwards the counts to `FetchScheduler::new`.
@@ -42,8 +49,10 @@ not move when the concurrency knob moves. Concurrency stays as a parallelism cap
   `object-cache/src/l1_store.rs:100-109` (`L1_TOTAL_FETCH_PERMITS = 16`, demand-only), and many
   tests in `object-cache/tests/{range_cache,telemetry,metric_tags}_tests.rs` and
   `object-cache-srv/tests/{prefetch,memory_budget,shutdown_sequence,telemetry,saturation}_tests.rs`.
-- `rust/object-cache-srv/src/cli.rs:73-108,192-207` — the concurrency knobs, their validation,
-  and the response-path `memory_budget_mb` (1 MiB `mem_permits`, `handlers.rs:38-43`).
+- `rust/object-cache-srv/src/cli.rs:73-108,182-240` — the concurrency knobs, their validation,
+  and the response-path `memory_budget_mb` (1 MiB `mem_permits`, `handlers.rs:38-43`). None of
+  the numeric knobs carry a clap range today; `cli_tests.rs` builds a default `Cli` and mutates
+  fields before calling `validate()`.
 
 ## Design
 
@@ -74,24 +83,18 @@ pub struct FetchBudgetStats { pub count: BudgetStats, pub bytes: BudgetStats }
 `acquire_many_owned(n)`. `FetchScheduler` holds `count: PriorityBudget` (one permit per run) and
 `bytes: PriorityBudget` (one permit per byte).
 
-- **One permit = one byte.** A run charges exactly its length. tokio's semaphore capacity
-  (`usize::MAX >> 3`) is effectively unbounded on 64-bit; the only constraint is that
-  `acquire_many_owned` takes a `u32`, so a single run must be ≤ `u32::MAX` bytes (~4 GiB) —
-  enforced at startup (see Constructor and validation). Coarser units (e.g. the 1 MiB
+- **One permit = one byte.** A run charges exactly its length. Coarser units (e.g. the 1 MiB
   `mem_permits` unit) would overcharge small runs (~43 KB observed average) for no benefit.
+  `acquire_many_owned` takes a `u32`, so a run must be ≤ `u32::MAX` bytes; the CLI ranges below
+  guarantee it and `FetchScheduler::new` asserts it for library callers.
 - **Byte reservation is derived, not a new knob:**
   `demand_reserved_bytes = demand_reserved_fetches * max_run_bytes`. Each reserved demand slot can
   hold one full-size run, which is exactly what the count reservation already promises. At
   defaults: 8 × 8 MiB = 64 MiB reserved, 192 MiB prefetch cap — identical to today's effective
   bound.
 - **New knob:** `--fetch-memory-budget-mb` / `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`,
-  default `256` (= 32 × 8 MiB, today's default worst case, so defaults change nothing *when every
-  other fetch knob is also at its default*). A deployment that raised `DEMAND_RESERVED_FETCHES`,
-  `MAX_COALESCED_GET_BYTES`, or `BLOCK_SIZE` (a larger block size can itself push `max_run_bytes`
-  past the 256 MiB floor, per `coalesce_runs`'s per-block-size rounding) past what the 256 MiB
-  floor allows will fail `Cli::validate` at startup; a deployment that raised
-  `MAX_CONCURRENT_FETCHES` no longer gets more fetch memory for it and must set the new knob
-  explicitly. See the CHANGELOG/admin-doc upgrade note.
+  default `256` (= 32 × 8 MiB, today's default worst case). Upgrade impact is described once, in
+  Documentation.
 
 ### Acquisition in `acquire_run_permit`
 ```rust
@@ -105,22 +108,47 @@ pub(super) async fn acquire_run_permit(s: &FetchScheduler, entries, run_bytes: u
 }
 ```
 - **Bytes first, then count.** Every run acquires in the same order, so there is no hold-and-wait
-  cycle.
+  cycle. The cost: a run holding its bytes while queued for a count slot parks that budget idle.
+  At defaults the count pool is sized to the byte pool, so this only bites when the byte budget
+  is deliberately larger than `count × typical run`; don't reorder to "fix" it — count-first
+  would park a count slot behind a large byte request instead, which throttles origin
+  parallelism, the scarcer resource.
 - A promotion that lands after the byte permit was taken with a prefetch component does not
   re-acquire it: the held prefetch-pool bytes are merely over-restrictive for that run's lifetime,
   and the count acquisition that follows sees the promotion normally.
-- tokio's `Semaphore` is FIFO for `acquire_many`, so a large run at the head of the queue is not
-  starved by a stream of small ones.
+- tokio's `Semaphore` is FIFO for `acquire_many`: a large run at the head of the queue is not
+  starved by a stream of small ones, but it also blocks smaller runs behind it that would fit.
+  Accepted: runs are capped at `max_run_bytes`, which the budget floor guarantees fits, so the
+  head waits at most for in-flight runs to drain. Cancelling a partially-satisfied
+  `acquire_many_owned` (the promotion race) returns its permits, so the existing `select!` loop
+  stays correct.
 
 ### Permit lifetime in `spawn_run_fetch`
 - Hoist the `byte_start`/`byte_end` computation above the permit acquisition and pass
   `byte_end - byte_start` to `acquire_run_permit`.
 - Release `permit.count` right after the origin GET (unchanged semantics: it bounds origin
   concurrency). Hold `permit.bytes` until after `fulfill_run_success` / the error fulfill loop, so
-  the byte budget covers the GET buffer through the per-block `backend.put` copies. Once the task
-  ends, remaining references to the buffer are either demand callers' block maps (covered by the
-  response-path `mem_permits`) or prefetch entries that `join_prefetch` drops as they complete.
-- Charge is 1× run bytes (see Trade-offs).
+  the byte budget covers the GET buffer through the per-block copies and backend admission.
+- With owned block copies (next section), the run buffer is dropped when the task ends, so
+  releasing the byte permit coincides with releasing the memory it accounted for.
+
+### Owned block copies
+`fulfill_run_success` copies each block once and hands the same owned `Bytes` to both consumers:
+
+```rust
+let chunk = Bytes::copy_from_slice(&data[local_start..local_end]);
+self.backend.put(run.keys[i].clone(), chunk.clone(), hint).await;
+run.entries[i].fulfill(Ok(chunk));
+```
+
+- `RangeCacheBackend::put` documents that `value` is an owned buffer (not a view into a larger
+  one) and may be stored as-is. `FoyerBackend::put` and `BoundedMemoryBackend::put` drop their
+  `copy_from_slice`, replacing the per-backend "don't pin the parent" comments with the single
+  contract on the trait.
+- Net effect: the same number of memcpys as today (one per block), but waiters no longer pin the
+  run buffer. Peak per run during the put loop is ≤ 2× run bytes (buffer + copies so far), for
+  the duration the byte permit is held; afterwards only block-sized copies remain, which the
+  response-path `mem_permits` (demand) or foyer's own budgets (cached blocks) account for.
 
 ### Shared sizing helper
 Add `pub fn max_run_bytes(block_size: u64, max_coalesced_get_bytes: u64) -> u64` to `blocks.rs`
@@ -136,73 +164,64 @@ agree with what `coalesce_runs` actually produces.
 - `FetchScheduler::new` asserts `max_run <= u32::MAX` and `budget_bytes - reserved_bytes >=
   max_run` (with `reserved_bytes < budget_bytes`). Without the latter, `acquire_many_owned` on a
   run larger than the prefetch pool never completes and never errors — the same hang the
-  `memory_budget_mb` floor in `cli.rs:216-231` guards against.
-- `Cli::validate` adds the fatal-at-startup counterparts: `fetch_memory_budget_mb > 0`,
-  `max_run_bytes(block_size, max_coalesced_get_bytes) <= u32::MAX`, and (via `checked_mul` on both
-  the `fetch_memory_budget_mb * MiB` and `(demand_reserved_fetches + 1) * max_run_bytes` products,
-  rejecting overflow as a validation error) `fetch_memory_budget_mb * MiB >=
-  (demand_reserved_fetches + 1) * max_run_bytes`, with error messages naming
-  `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`,
-  `MICROMEGAS_OBJECT_CACHE_DEMAND_RESERVED_FETCHES`,
-  `MICROMEGAS_OBJECT_CACHE_MAX_COALESCED_GET_BYTES`, and `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` (all
-  four feed the floor via `max_run_bytes`) and the computed floor. It also rejects any
-  `fetch_memory_budget_mb` whose byte value exceeds
-  `usize::MAX >> 3` (tokio's `Semaphore::MAX_PERMITS`), since `FetchScheduler::new` hands out one
-  permit per byte and `Semaphore::new` panics above that limit.
+  `memory_budget_mb` floor in `cli.rs` guards against.
+- **Clap ranges rule out overflow by construction** instead of a chain of runtime checks:
+  `fetch_memory_budget_mb` in `1..=1_048_576` (1 TiB), `max_coalesced_get_bytes` and
+  `block_size` in `1..=1 GiB` (via `value_parser!(u64).range(..)`). Then `max_run_bytes` ≤ 1 GiB
+  < `u32::MAX`, and the budget in bytes fits both `u64` and tokio's `Semaphore::MAX_PERMITS`.
+  The existing `block_size == 0` check in `validate()` stays (tests mutate fields directly).
+- `Cli::validate` adds one check, the floor:
+  `fetch_memory_budget_mb * MiB >= (demand_reserved_fetches + 1).saturating_mul(max_run_bytes)`
+  (saturating, since `demand_reserved_fetches` is an unranged `usize`; a saturated floor is
+  simply rejected). The error names `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`, the three
+  knobs that feed the floor (`DEMAND_RESERVED_FETCHES`, `MAX_COALESCED_GET_BYTES`, `BLOCK_SIZE`),
+  and the computed floor in MiB.
 - New `pub const DEFAULT_FETCH_MEMORY_BUDGET_BYTES: u64 = DEFAULT_TOTAL_FETCH_PERMITS as u64 *
   DEFAULT_MAX_COALESCED_GET_BYTES;` in `range_cache/mod.rs`; the CLI default derives its MiB value
   from it.
-- `L1CacheStore` passes `L1_TOTAL_FETCH_PERMITS * DEFAULT_MAX_COALESCED_GET_BYTES` (128 MiB) as a
-  new `L1_FETCH_MEMORY_BUDGET_BYTES` const, replacing the "roughly `L1_TOTAL_FETCH_PERMITS *
-  DEFAULT_MAX_COALESCED_GET_BYTES`" prose with an actual bound.
+- `L1CacheStore` passes a new `L1_FETCH_MEMORY_BUDGET_BYTES = L1_TOTAL_FETCH_PERMITS *
+  DEFAULT_MAX_COALESCED_GET_BYTES` (128 MiB), replacing the "roughly ..." prose with an actual
+  bound.
 
 ### Telemetry
 - `RangeCache::fetch_budget_stats()` returns `FetchBudgetStats`.
 - `saturation_monitor::sample_once` keeps the four existing count gauges unchanged and adds
-  `object_cache_fetch_mem_shared_occupancy_mb`, `object_cache_fetch_mem_shared_available_mb`,
-  `object_cache_fetch_mem_prefetch_occupancy_mb`, `object_cache_fetch_mem_prefetch_available_mb`
-  (bytes / MiB, unit `"megabytes"`, matching `object_cache_mem_budget_*_mb`). These are the gauges
-  that would have shown pressure in the reported incident.
+  two gauges, `object_cache_fetch_mem_shared_occupancy_mb` and
+  `object_cache_fetch_mem_prefetch_occupancy_mb` (bytes / MiB, unit `"megabytes"`). The totals
+  are static config, so "available" gauges would add nothing. These are the gauges that would
+  have shown pressure in the reported incident.
 - `range_cache_fetch_permit_wait_ms` keeps measuring the whole `acquire_run_permit`, now covering
   both budgets.
 
 ## Implementation Steps
 1. `blocks.rs`: add `max_run_bytes`; use it in `coalesce_runs`.
-2. `range_cache/scheduler.rs`: extract `PriorityBudget` / `BudgetPermit` / `BudgetStats` from the
-   existing fields and loop; add `FetchBudgetStats`; give `FetchScheduler` `count` and `bytes`
-   budgets; rewrite `acquire_run_permit` (bytes then count) and `fetch_budget_stats`; add the
-   budget assertions to `FetchScheduler::new`.
+2. `range_cache/scheduler.rs`: extract `PriorityBudget` / `BudgetPermit` / `BudgetStats`; add
+   `FetchBudgetStats`; give `FetchScheduler` `count` and `bytes` budgets; rewrite
+   `acquire_run_permit` (bytes then count) and `fetch_budget_stats`; add the constructor asserts.
 3. `range_cache/mod.rs`: add `DEFAULT_FETCH_MEMORY_BUDGET_BYTES`; new `RangeCache::new` parameter
-   and reservation derivation; re-export `FetchBudgetStats`/`BudgetStats`; update the
-   `fetch_budget_stats` return type and doc.
+   and reservation derivation; re-export `FetchBudgetStats`/`BudgetStats`.
 4. `range_cache/fetch.rs`: hoist the byte-range computation, pass run bytes into
-   `acquire_run_permit`, drop `permit.count` after the GET and `permit.bytes` after fulfillment.
-   Update the `fetch_blocks` doc's "`prefetch_concurrency * max_coalesced_get_bytes`" bound (and
-   the matching sentence on `join_prefetch`) to name the prefetch byte pool.
-5. `l1_store.rs`: add `L1_FETCH_MEMORY_BUDGET_BYTES`, pass it, update the const docs.
-6. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb: u64`; reword
-   `max_concurrent_fetches` help ("parallelism cap; transient fetch memory is bounded separately by
-   `--fetch-memory-budget-mb`"); extend `Cli::validate`.
-7. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024`; safe
-   because `Cli::validate` has already rejected values that would overflow `u64` or exceed the
-   semaphore's permit limit.
-8. `object-cache-srv/src/saturation_monitor.rs`: consume `FetchBudgetStats`, emit the four new
-   gauges.
-9. Update every test call site of `RangeCache::new` (pass `DEFAULT_FETCH_MEMORY_BUDGET_BYTES`
-   unless the test is about the byte budget), including `saturation_tests.rs` (constructs a
-   `RangeCache` directly); `cli_tests.rs` builds its `Cli` via `Cli::parse_from` and needs no
-   change from a new `RangeCache::new` parameter.
-10. Add the tests in Testing Strategy; docs and CHANGELOG.
+   `acquire_run_permit`, drop `permit.count` after the GET and `permit.bytes` after fulfillment;
+   copy each block once in `fulfill_run_success`. Update the `fetch_blocks` / `join_prefetch` docs
+   that cite `prefetch_concurrency * max_coalesced_get_bytes` to name the prefetch byte pool.
+5. `backend.rs`, `foyer_backend.rs`, `bounded_memory_backend.rs`: document the owned-value
+   contract on `put`; remove the backends' own copies.
+6. `l1_store.rs`: add `L1_FETCH_MEMORY_BUDGET_BYTES`, pass it, update the const docs.
+7. `object-cache-srv/src/cli.rs`: add `fetch_memory_budget_mb: u64`; add the clap ranges; reword
+   `max_concurrent_fetches` help ("parallelism cap; transient fetch memory is bounded separately
+   by `--fetch-memory-budget-mb`"); add the floor check to `Cli::validate`.
+8. `object-cache-srv/src/object_cache_srv.rs`: pass `fetch_memory_budget_mb * 1024 * 1024`.
+9. `object-cache-srv/src/saturation_monitor.rs`: consume `FetchBudgetStats`, emit the new gauges.
+10. Update every test call site of `RangeCache::new` (pass `DEFAULT_FETCH_MEMORY_BUDGET_BYTES`
+    unless the test is about the byte budget), including `saturation_tests.rs`.
+11. Add the tests in Testing Strategy; docs and CHANGELOG.
 
 ## Files to Modify
 - `rust/object-cache/src/blocks.rs`
-- `rust/object-cache/src/range_cache/scheduler.rs`
-- `rust/object-cache/src/range_cache/mod.rs`
-- `rust/object-cache/src/range_cache/fetch.rs`
+- `rust/object-cache/src/backend.rs`, `foyer_backend.rs`, `bounded_memory_backend.rs`
+- `rust/object-cache/src/range_cache/scheduler.rs`, `mod.rs`, `fetch.rs`
 - `rust/object-cache/src/l1_store.rs`
-- `rust/object-cache-srv/src/cli.rs`
-- `rust/object-cache-srv/src/object_cache_srv.rs`
-- `rust/object-cache-srv/src/saturation_monitor.rs`
+- `rust/object-cache-srv/src/cli.rs`, `object_cache_srv.rs`, `saturation_monitor.rs`
 - `rust/object-cache/tests/range_cache_tests.rs`, `telemetry_tests.rs`, `blocks_tests.rs`,
   `metric_tags_tests.rs`
 - `rust/object-cache-srv/tests/cli_tests.rs`, `prefetch_tests.rs`, `saturation_tests.rs`,
@@ -214,42 +233,42 @@ agree with what `coalesce_runs` actually produces.
 ## Trade-offs
 - **Replace the count budget with bytes only** — rejected. With ~43 KB average runs, a 256 MiB
   byte-only budget would admit thousands of concurrent GETs, pushing the concern onto the origin
-  client's connection pool and the NIC. Count remains the right bound for parallelism; bytes is the
-  right bound for memory.
-- **Single byte semaphore, no demand reservation in bytes** — rejected. Prefetch could then occupy
-  the whole byte budget and demand would queue behind it even with count slots free, reintroducing
+  client's connection pool and the NIC. Count bounds parallelism; bytes bounds memory.
+- **Single byte semaphore, no demand reservation in bytes** — rejected. Prefetch could occupy the
+  whole byte budget and demand would queue behind it even with count slots free, reintroducing
   the starvation the count reservation exists to prevent.
 - **Reuse `--memory-budget-mb` (response path) for fetches** — rejected. A request holds its
   response permits while its fetch waits; drawing the fetch from the same pool is a hold-and-wait
-  deadlock under saturation. It also measures a different thing (streaming windows, which for
-  demand overlap the same buffers).
-- **Separate `--demand-reserved-fetch-memory-mb` knob** — rejected in favor of deriving it from
-  `demand_reserved_fetches * max_run_bytes`: one fewer knob to mis-set, and it keeps the existing
-  reservation's meaning ("N full-size demand runs always fit").
-- **Charge 2× run bytes to cover the foyer copy** — rejected. The copy is accounted by foyer's
-  budgets once inserted; holding the 1× permit across the put loop already bounds the overlap.
-- **1 MiB units, reusing `permits_for_bytes`** — rejected; see the one-permit-per-byte rationale
-  above.
+  deadlock under saturation.
+- **Separate `--demand-reserved-fetch-memory-mb` knob** — rejected in favor of deriving it: one
+  fewer knob to mis-set, and it keeps the reservation's meaning ("N full-size demand runs always
+  fit").
+- **Keep fulfilling with slices of the run buffer** — rejected. Any waiter holding one block would
+  keep up to `max_run_bytes` alive after the byte permit is released, so the budget would bound
+  the fetch but not what it leaves behind.
+- **Charge 2× run bytes to cover the copies** — rejected. The overlap lasts only for the put loop
+  while the 1× permit is held; after that, the copies are accounted by foyer or `mem_permits`.
+- **Runtime overflow checks (`checked_mul`, explicit `u32::MAX` / `MAX_PERMITS` checks) in
+  `Cli::validate`** — replaced by clap ranges, which make those states unrepresentable.
 
 ## Documentation
-- `mkdocs/docs/admin/object-cache.md`: add `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB` to the
-  env-var table and `--fetch-memory-budget-mb` to the CLI-flag table; reword the
-  `MAX_CONCURRENT_FETCHES` row to say it is a parallelism cap, not a memory knob; extend "Fetch
+- `mkdocs/docs/admin/object-cache.md`: add `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB` /
+  `--fetch-memory-budget-mb` to the env-var and CLI-flag tables (with the value ranges); reword
+  the `MAX_CONCURRENT_FETCHES` row as a parallelism cap, not a memory knob; extend "Fetch
   scheduling & memory bounds" with the two-budget model (fetch budget bounds origin-GET buffers
-  through backend admission; `--memory-budget-mb` bounds response streaming windows; peak transient
-  ≈ their sum) and the startup floor; add the four `object_cache_fetch_mem_*_mb` gauges to the
-  Saturation table; add an upgrade note that a config with `DEMAND_RESERVED_FETCHES`,
-  `MAX_COALESCED_GET_BYTES`, or `BLOCK_SIZE` raised past the new 256 MiB floor will now fail to
-  start, and that raising `MAX_CONCURRENT_FETCHES` no longer buys more fetch memory — such
-  deployments must also set `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`.
+  through backend admission; `--memory-budget-mb` bounds response streaming windows; peak
+  transient ≈ their sum) and the startup floor; add the new gauges to the Saturation table.
+- **Upgrade note** (admin doc, and repeated verbatim in the CHANGELOG): defaults are unchanged
+  when every fetch knob is at its default. A deployment that raised `MAX_CONCURRENT_FETCHES` no
+  longer gets more fetch memory for it and should set `FETCH_MEMORY_BUDGET_MB`; one that raised
+  `DEMAND_RESERVED_FETCHES`, `MAX_COALESCED_GET_BYTES`, or `BLOCK_SIZE` past what 256 MiB allows
+  will fail validation at startup with a message giving the required floor.
 - `mkdocs/docs/architecture/caching.md:96-99`: one sentence that the shared fetch budget is bounded
   in both concurrency and bytes.
 - `rust/object-cache-srv/README.md`: new flag row; reworded `--max-concurrent-fetches` row.
-- `CHANGELOG.md` (Unreleased): bug fix entry for #1537, with a **Minor breaking change** clause for
-  `RangeCache::new`'s new parameter and `fetch_budget_stats()` returning `FetchBudgetStats`, plus an
-  operator-facing upgrade note (mirroring the admin-doc note above) that non-default
-  `DEMAND_RESERVED_FETCHES`/`MAX_COALESCED_GET_BYTES`/`BLOCK_SIZE` configs may now fail validation
-  at startup and that `MAX_CONCURRENT_FETCHES` no longer implies more fetch memory.
+- `CHANGELOG.md` (Unreleased): bug fix entry for #1537 with the upgrade note, and a **Minor
+  breaking change** clause for `RangeCache::new`'s new parameter, `fetch_budget_stats()`
+  returning `FetchBudgetStats`, and the `RangeCacheBackend::put` owned-value contract.
 
 ## Testing Strategy
 All no-DB unit/integration tests using the existing `CountingStore` gate and `MemoryBackend`.
@@ -257,30 +276,32 @@ All no-DB unit/integration tests using the existing `CountingStore` gate and `Me
 - **Regression for the OOM (#1537)** — `range_cache_tests.rs`,
   `byte_budget_caps_in_flight_bytes_when_count_allows_more`: block size 1 KiB, run size 4 blocks
   (`max_coalesced = 4 KiB`), count total 32 / reserved 1, byte budget 12 KiB (reserved 4 KiB;
-  demand reads draw on the full 12 KiB shared pool). Launch 8 disjoint 4-block demand reads with the gate closed; assert
-  exactly 3 GETs reach origin (count alone would allow 8) and that `peak_in_flight` stays 3 after
-  yielding; open the gate, all reads complete with correct bytes. This is the in-the-wild bug: a
-  high count authorizing proportionally more buffer.
+  demand reads draw on the full 12 KiB shared pool). Launch 8 disjoint 4-block demand reads with
+  the gate closed; assert exactly 3 GETs reach origin (count alone would allow 8) and that
+  `peak_in_flight` stays 3 after yielding; open the gate, all reads complete with correct bytes.
 - **Demand not starved by prefetch saturating bytes** — prefetch runs fill the prefetch byte pool
   (count ample); a demand read still reaches origin via the reserved bytes, and a queued prefetch
-  does not take them. Mirrors `demand_not_starved_under_prefetch_saturation` in the byte
-  dimension.
+  does not take them. Mirrors `demand_not_starved_under_prefetch_saturation`.
 - **Promotion drops the prefetch byte requirement** — mirror of
-  `promotion_lets_demand_start_before_remaining_prefetch` with the byte pool, not the count pool,
-  as the binding constraint.
+  `promotion_lets_demand_start_before_remaining_prefetch` with the byte pool as the binding
+  constraint.
 - **Byte permit held through backend admission** — a `RangeCacheBackend` test double whose `put`
   blocks on a gate: after the origin GET completes, `fetch_budget_stats().count` shows the count
   slot released while `.bytes` still shows the run's charge; releasing the put gate returns the
-  bytes. Pins the lifetime change in `spawn_run_fetch`.
+  bytes.
+- **Fulfilled blocks don't pin the run buffer** — a test double backend records each `put` value;
+  for a multi-block run, assert each block returned to the demand caller is the same allocation
+  as the recorded `put` value (`as_ptr` equality) and that no two blocks share an allocation,
+  i.e. neither points into the origin buffer.
 - **Constructor assertions** — `#[should_panic]` for a budget whose prefetch pool is smaller than
   one max run.
 - **`blocks_tests.rs`** — `max_run_bytes` for `max_coalesced` a multiple of, not a multiple of,
   and smaller than `block_size`, and agreement with the longest run `coalesce_runs` emits.
-- **`cli_tests.rs`** — rejects `fetch_memory_budget_mb = 0`; rejects a `max_coalesced_get_bytes`
-  whose `max_run_bytes` exceeds `u32::MAX`; rejects a budget below
-  `(demand_reserved + 1) * max_run_bytes`; accepts the defaults.
-- **`saturation_tests.rs`** — `sample_once` emits the four `object_cache_fetch_mem_*_mb` gauges
-  with values reflecting a held run permit.
+- **`cli_tests.rs`** — `validate()` rejects a budget below `(demand_reserved + 1) * max_run_bytes`
+  and accepts the defaults; `Cli::try_parse_from` rejects `--fetch-memory-budget-mb 0` and an
+  out-of-range `--max-coalesced-get-bytes`.
+- **`saturation_tests.rs`** — `sample_once` emits the two `object_cache_fetch_mem_*_mb` gauges with
+  values reflecting a held run permit.
 - Existing scheduler tests (`total_concurrency_never_exceeds_total`, the two priority tests, the
   prefetch-endpoint budget test in `object-cache-srv/tests/prefetch_tests.rs`) must pass unchanged
   in behavior with the default byte budget.
