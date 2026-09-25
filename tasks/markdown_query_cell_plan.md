@@ -89,10 +89,11 @@ the registry without an import cycle through the cell modules.) Consumers:
 - `createDefaultCell`: `cellTypeDefaultDataSource(type) ?? defaultDataSource`, still skipped for
   `referencetable` / `hg`. The `type !== 'markdown'` clause goes away, and new markdown cells
   persist `dataSource: 'notebook'` explicitly.
-- `CellEditor`'s `DataSourceField` value uses the same fallback chain, so a saved markdown cell
-  shows `notebook` rather than the notebook default. Extract that chain into a small
-  `configuredCellDataSource(cell, notebookDataSource)` helper so `resolveCellDataSource` and
-  the editor can't drift apart.
+- `CellEditor`'s `DataSourceField` value (`CellEditor.tsx:141`) and `HorizontalGroupCell`'s child
+  editor `DataSourceField` value (`HorizontalGroupCell.tsx:356-358`, the same fallback chain) both
+  need this fallback, so a saved markdown cell shows `notebook` rather than the notebook default.
+  Extract that chain into a small `configuredCellDataSource(cell, notebookDataSource)` helper so
+  `resolveCellDataSource` and both editors can't drift apart.
 
 Because `shouldShowTimeRange` goes through `resolveCellDataSource`, a markdown cell on `notebook`
 hides the time-range field automatically, and one switched to a remote source shows it.
@@ -143,16 +144,19 @@ notebook banner explains).
   unsupported column type adds a warning shown in the existing `TemplateWarningBanner` and
   doesn't fail the cell.
 
-Render gate: render when `status === 'success'`, or `status === 'loading'` with `data.length > 0`
-(the previous result is kept while a re-run is in flight, so a remote-backed stat doesn't blank on
-every refresh). First paint stays deferred until the cell's first successful run, as today.
+Render gate: render when `status === 'success'`, or when `status` is `'loading'` or `'idle'` and
+`data.length > 0`. `executeFromCell` resets every cell from the restart point to `idle` up front
+and only flips a cell to `loading` when its turn comes (`useCellExecution.ts:386-397, 214-221`),
+so a markdown cell waiting behind a slower cell sits in `idle` with data — the gate must cover
+that case too, not just `loading`, or the cell blanks on every refresh. First paint stays deferred
+until the cell's first successful run, as today.
 
 DOM structure:
 
 ```
-<div root  class="flex-1 rounded-sm p-3 [fit: min-h-0 overflow-auto flex items-center justify-center text-center]"
+<div root  class="flex-1 rounded-sm p-3 [fit: min-h-0 overflow-auto flex text-center]"
            style={{ backgroundColor }}>
-  <div prose class={proseClasses(tinted)} style={{ color, fontSize: fit ? `${px}px` : undefined }}>
+  <div prose class={`${proseClasses(tinted)} ${fit ? 'm-auto' : ''}`} style={{ color, fontSize: fit ? `${px}px` : undefined }}>
     <TemplateWarningBanner/> <Markdown/>
   </div>
 </div>
@@ -192,7 +196,12 @@ A `useFitFontSize(rootRef, proseRef, enabled, deps)` hook in `MarkdownCell.tsx`:
 3. **Fit to cell** checkbox (`options.fit`).
 4. Validation errors, then `AvailableVariablesPanel`.
 
-Validation needs the map cell's placeholder trick for bare columns. Extract it into
+Validation covers both the SQL and the template, as `MapCell`'s editor does for its query and
+detail template: `validateMacros(sql, variables, cellResults, cellSelections)` for the SQL editor
+(`MapCell.tsx:792-793`, `TableCell.tsx:238`, `StackedBarCell.tsx:550`), shown alongside the content
+errors.
+
+The content validation needs the map cell's placeholder trick for bare columns. Extract it into
 `validateTemplateMacros(text, availableColumns, variables, cellResults, cellSelections)` in
 `macro-substitution.ts` and use it from both `MapCell` and `MarkdownCellEditor`. `CellEditor`
 already passes `availableColumns` from the cell's last result.
@@ -215,10 +224,13 @@ already passes `availableColumns` from the cell's last result.
    - `MarkdownCellConfig` per Design. Add `DEFAULT_SQL.markdown` and
      `cellTypeDefaultDataSource` / `configuredCellDataSource` in `notebook-utils.ts`.
    - Update `resolveCellDataSource`, `shouldShowDataSource`, `shouldShowTimeRange`,
-     `createDefaultCell`, and `CellEditor`'s data-source value.
+     `createDefaultCell`, and the `CellEditor` and `HorizontalGroupCell` child-editor data-source
+     values.
 3. **Run control cleanup**
    - Remove `canRun` / `cellCanRun` from `cell-registry.ts` and its four call sites. Update the
-     `cell-registry-mock.ts` markdown entry (give it an `execute`, drop the `canRun` fallback).
+     `cell-registry-mock.ts` markdown entry (give it an `execute`, drop the `canRun` fallback, and
+     update its mock renderer's gate from `status === 'success'` to also cover `loading`/`idle`
+     with data, matching the real render gate).
    - Update the `useCellManager.ts` comment.
 4. **MarkdownCell**
    - `execute`, `getRendererProps`, `createDefaultConfig` (`sql: DEFAULT_SQL.markdown`, content).
@@ -245,7 +257,8 @@ already passes `availableColumns` from the cell's last result.
 - `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts`
 - Tests: `cells/__tests__/MarkdownCell.test.tsx`, `__tests__/notebook-utils.test.ts`,
   `__tests__/useCellExecution.test.ts`, `__tests__/NotebookRenderer.test.tsx`,
-  `__tests__/macro-substitution.test.ts`, plus the arrow-utils test file
+  `__tests__/macro-substitution.test.ts`, `cells/__tests__/HorizontalGroupCell.test.tsx`,
+  `components/__tests__/CellContainer.test.tsx`, plus the arrow-utils test file
 - `mkdocs/docs/web-app/notebooks/cell-types.md`, `mkdocs/docs/web-app/notebooks/execution.md`,
   `mkdocs/docs/web-app/notebooks/index.md`
 - `CHANGELOG.md`
@@ -277,8 +290,9 @@ already passes `availableColumns` from the cell's last result.
   every cell type.
 - Fitted content is centered on both axes and `text-align: center` (the issue's "centered when
   fitting"). Non-fit rendering keeps today's left-aligned layout.
-- The previous result stays rendered while a re-run is loading. The first render is still deferred
-  to the first successful run.
+- The previous result stays rendered while the cell is idle (waiting its turn behind a slower cell
+  during a re-run) or loading with data, not just while loading. The first render is still
+  deferred to the first successful run.
 - Markdown's Run button now runs its own query (still one cell, no downstream re-run). The old
   "local re-render only" semantics are replaced.
 
@@ -307,8 +321,8 @@ Unit tests (Vitest, jsdom, no services):
     or blank. Throws on a zero-row result. Returns the table when there are several rows.
   - Renderer: bare `$col` resolves from row 0 and wins over a same-named variable.
     `format_value($value, "milliseconds")` formats the raw value. Rows past 0 are ignored.
-    Renders nothing before the first success, and keeps the previous output while `loading` with
-    data.
+    Renders nothing before the first success, and keeps the previous output while idle or loading
+    with data.
   - `resolveMarkdownColors`: integer, `#rrggbb` string, `#rrggbbaa` string, 4-byte binary,
     null → absent, malformed string → absent, unsupported type → warning; `color` and
     `background_color` are independent.
@@ -318,9 +332,19 @@ Unit tests (Vitest, jsdom, no services):
   - `fitFontSize`: returns the largest fitting px for a threshold predicate. Returns `min` when
     nothing fits, and `max` when everything fits. Monotonic predicate across a range of
     thresholds.
-  - Metadata: `createDefaultConfig` includes `sql: 'SELECT 1'`, and `execute` is defined.
+  - Metadata: `createDefaultConfig` includes `sql: 'SELECT 1'`, and `execute` is defined. Replaces
+    the old "declares `canRun: true` ... no `execute`" assertion.
   - Editor: bare-column macros present in `availableColumns` aren't flagged. Toggling Fit writes
     `options.fit`.
+  - Removes the old "should not render content when status is loading" case (superseded by the
+    idle/loading-with-data renderer test above).
+- **`HorizontalGroupCell.test.tsx`**: replace "DataSourceField not shown for markdown type" with
+  its inverse — the field is shown for a markdown child, since `shouldShowDataSource` no longer
+  excludes markdown. Remove "shows the Run button for a markdown child ... (canRun fallback via
+  metadata)"; markdown's Run button now comes from `meta.execute` like every other type, already
+  covered by the existing non-markdown Run-button tests.
+- **`CellContainer.test.tsx`**: remove "should show run button for a type with no execute but
+  canRun: true (e.g. markdown)"; the metadata-driven fallback it exercised no longer exists.
 - **`notebook-utils.test.ts`**: `resolveCellDataSource` returns `notebook` for a markdown cell
   without `dataSource` even with a remote notebook default, and honors an explicit markdown
   `dataSource`. `createDefaultCell('markdown', …, 'remote')` gets `dataSource: 'notebook'`.
@@ -331,9 +355,13 @@ Unit tests (Vitest, jsdom, no services):
 - **arrow-utils tests**: `resolveColorColumn` with a custom name, including the error message;
   `rowValues` / `columnTypeMap` move with their existing coverage, if any.
 - **`useCellExecution.test.ts`**: replace "markdown immediately succeeds without SQL" with a
-  markdown cell executing through the notebook engine mock (legacy config without `sql` /
-  `dataSource` runs `SELECT 1` via `execute_and_register`, with no remote fetch). Zero rows
-  → `error` status, and downstream execution continues (`canBlockDownstream: false`).
+  routing-only test: a markdown cell with no `dataSource`, under a remote notebook default, is
+  routed to `engine.execute_and_register` and not to `fetchQueryIPC`/`streamQuery`. The mock's
+  `createSqlExecute` skips `runQuery` entirely when `config.sql` is absent, so give the mock's
+  markdown entry its own `execute` that calls `runQuery` regardless. The `SELECT 1` fallback and
+  the zero-rows error belong to `MarkdownCell.test.tsx`'s `execute` tests, not here;
+  `canBlockDownstream: false` for markdown is already covered by the existing tests at `:726`,
+  `:762`, `:788`.
 - **`NotebookRenderer.test.tsx`**: update the markdown run-control tests. Markdown now shows
   "Run from here" / "Auto-run from here", and its Run executes only its own query.
 
@@ -352,8 +380,6 @@ these checks are manual:
    it in a horizontal group re-fits it, and text wraps in a narrow tile.
 4. Add `color` / `background_color` columns. Expected: headings, paragraphs and bold text take
    the tint, and the background fills the tile edge to edge inside the 4px gutter.
-5. Change the query to return zero rows. Expected: the "Query returned no rows" error state, and
-   cells below still run.
 
 ## Open Questions
 
