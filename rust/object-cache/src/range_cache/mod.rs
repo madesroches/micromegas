@@ -41,9 +41,10 @@ pub const DEFAULT_TOTAL_FETCH_PERMITS: usize = 32;
 pub const DEFAULT_DEMAND_RESERVED_FETCH_PERMITS: usize = 8;
 /// Default max byte span of one coalesced run GET.
 pub const DEFAULT_MAX_COALESCED_GET_BYTES: u64 = 8 * 1024 * 1024;
-/// Default fetch-budget cap on transient origin-GET buffer memory: the
-/// worst case of `DEFAULT_TOTAL_FETCH_PERMITS` runs, each up to
-/// `DEFAULT_MAX_COALESCED_GET_BYTES`.
+/// Default fetch-budget cap on transient origin-GET buffer memory (256 MiB):
+/// the smallest budget at which `DEFAULT_TOTAL_FETCH_PERMITS` runs of
+/// `DEFAULT_MAX_COALESCED_GET_BYTES` each can all be in flight, so at the
+/// defaults a cold contiguous scan is throttled by parallelism, not memory.
 pub const DEFAULT_FETCH_MEMORY_BUDGET_BYTES: u64 =
     DEFAULT_TOTAL_FETCH_PERMITS as u64 * DEFAULT_MAX_COALESCED_GET_BYTES;
 /// Default promotion granularity: promote only the run(s) covering a demanded

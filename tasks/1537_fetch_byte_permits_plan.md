@@ -88,11 +88,15 @@ pub struct FetchBudgetStats { pub count: BudgetStats, pub bytes: BudgetStats }
 - **Byte reservation is derived, not a new knob:**
   `demand_reserved_bytes = demand_reserved_fetches * max_run_bytes`. Each reserved demand slot can
   hold one full-size run, which is exactly what the count reservation already promises. At
-  defaults: 8 × 8 MiB = 64 MiB reserved, 192 MiB prefetch cap — identical to today's effective
-  bound.
+  defaults: 8 × 8 MiB = 64 MiB reserved, 192 MiB prefetch cap.
 - **New knob:** `--fetch-memory-budget-mb` / `MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB`,
-  default `256` (= 32 × 8 MiB, today's default worst case). Upgrade impact is described once, in
-  Documentation.
+  default `256`. Chosen on its own terms, not to match the previous ceiling: it is the smallest
+  budget at which the default concurrency (32) stays fully usable for max-size (8 MiB) runs, so
+  a cold contiguous scan is throttled by parallelism rather than memory, and it is a modest
+  share next to the default RAM tier (512 MiB) and streaming budget (1 GiB). The real transient
+  peak can reach 2× this (run buffer plus per-block copies during the put loop; see Owned block
+  copies), which a lower default would trade against cold-scan parallelism. Upgrade impact is
+  described once, in Documentation.
 
 ### Acquisition in `acquire_run_permit`
 ```rust

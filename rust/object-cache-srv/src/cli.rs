@@ -112,10 +112,11 @@ pub struct Cli {
 
     /// Cap (MiB) on transient origin-GET buffer memory across all in-flight
     /// coalesced fetch runs -- independent of `--max-concurrent-fetches`,
-    /// which only bounds parallelism. Default `256` (=
-    /// `DEFAULT_TOTAL_FETCH_PERMITS × DEFAULT_MAX_COALESCED_GET_BYTES`, the
-    /// worst case at the other defaults: `--max-concurrent-fetches` runs of
-    /// up to `--max-coalesced-get-bytes` each).
+    /// which only bounds parallelism. Default `256`: the smallest budget at
+    /// which the default concurrency (32) stays fully usable for max-size
+    /// (8 MiB) runs, so a cold contiguous scan is throttled by parallelism
+    /// rather than memory, and a modest share next to the default RAM tier
+    /// (`--ram-mb` 512) and streaming budget (`--memory-budget-mb` 1024).
     #[clap(
         long,
         env = "MICROMEGAS_OBJECT_CACHE_FETCH_MEMORY_BUDGET_MB",
