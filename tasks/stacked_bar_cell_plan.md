@@ -1,5 +1,7 @@
 # Stacked Bar Cell Plan
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1511
+
 ## Overview
 Add a `stackedbar` notebook cell type for "breakdown of X across several things" comparisons: one vertical bar per category, each bar stacked from named series sharing a single legend and color mapping (e.g. time per startup phase across test scenarios, resource usage per component across builds). The query returns long/tidy rows `(category, series, value[, color])`. The cell has no normalize toggle. A 100%-stacked view is just a different query: the SQL computes each row's share with a window function and sets the unit to `percent`. The cell follows the Pie Chart cell's pattern: one query, hand-rolled SVG, registered like every other cell type.
 
