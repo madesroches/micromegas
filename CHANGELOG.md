@@ -31,6 +31,15 @@ This file documents the historical progress of the Micromegas project. For curre
   these collapsed lines rather than raw rows, and the new "Collapse repeats" footer toggle
   (persisted as `collapseRepeats`, on by default) turns the behavior off. The ignore list is
   configured from the Log cell editor, including for a Log cell nested in a horizontal group.
+* **Notebooks:** Add a Stacked Bar cell (#1511) for comparing a value across several things at
+  once — one vertical bar per category, each stacked from named series sharing a single legend
+  and color mapping (e.g. time per startup phase across test scenarios, resource usage per
+  component across builds). The query is a long/tidy `(category, series, value[, color])`
+  contract: categories and series both keep first-appearance row order, a series missing from a
+  bar simply draws no segment there, and duplicate `(category, series)` rows are summed. An
+  in-segment label is drawn where it fits; the side legend and hover tooltip (value, share of
+  bar, bar total) cover the rest. Normalization to 100% per bar is done in SQL with a window
+  function and `options.unit: 'percent'` — there is no separate toggle.
 * **Telemetry:** Each built-in sink's max level is now configurable at startup through an
   environment variable, read once by `TelemetryGuardBuilder::build()`:
   `MICROMEGAS_LOCAL_SINK_MAX_LEVEL` (default `info`) for the local (stdout) sink and the new

@@ -227,6 +227,43 @@ interface ResolvedChartColumns {
   colorColumnKind?: ColorColumnKind
 }
 
+export interface ResolvedColorColumn {
+  /** Index of the field named 'color' (case-insensitive) in the original field list, or -1 if absent. */
+  index: number
+  name?: string
+  kind?: ColorColumnKind
+  /** Set when a 'color' field exists but its type isn't a supported kind. */
+  error?: string
+}
+
+/**
+ * Resolve the optional 'color' field (case-insensitive) from a schema field list,
+ * classifying its kind (integer/string/binary) for `cellColorToCss`. Shared by every
+ * chart-shaped cell (`resolveChartColumns`, `validateChartColumns`, `extractStackedBarData`)
+ * so the 'color' convention stays in one place.
+ */
+export function resolveColorColumn(fields: { name: string; type: DataType }[]): ResolvedColorColumn {
+  const index = fields.findIndex(f => f.name.toLowerCase() === 'color')
+  if (index < 0) return { index }
+
+  const field = fields[index]
+  const innerType = unwrapDictionary(field.type)
+  if (isIntegerType(innerType)) {
+    return { index, name: field.name, kind: 'integer' }
+  }
+  if (isStringType(innerType)) {
+    return { index, name: field.name, kind: 'string' }
+  }
+  if (isBinaryType(field.type)) {
+    return { index, name: field.name, kind: 'binary' }
+  }
+  return {
+    index,
+    name: field.name,
+    error: `'color' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${field.type.toString()}`,
+  }
+}
+
 /**
  * Resolve X, Y, and optional color columns from a schema field list.
  * The color column is the field named 'color' (case-insensitive).
@@ -236,9 +273,9 @@ interface ResolvedChartColumns {
 export function resolveChartColumns(
   fields: { name: string; type: DataType }[]
 ): ResolvedChartColumns {
-  const colorIdx = fields.findIndex(f => f.name.toLowerCase() === 'color')
-  const nonColorFields = colorIdx >= 0
-    ? fields.filter((_, i) => i !== colorIdx)
+  const color = resolveColorColumn(fields)
+  const nonColorFields = color.index >= 0
+    ? fields.filter((_, i) => i !== color.index)
     : fields
 
   const xField = nonColorFields[0]
@@ -251,17 +288,9 @@ export function resolveChartColumns(
     yType: yField.type,
   }
 
-  if (colorIdx >= 0) {
-    const colorField = fields[colorIdx]
-    const innerType = unwrapDictionary(colorField.type)
-    result.colorColumnName = colorField.name
-    if (isIntegerType(innerType)) {
-      result.colorColumnKind = 'integer'
-    } else if (isStringType(innerType)) {
-      result.colorColumnKind = 'string'
-    } else if (isBinaryType(colorField.type)) {
-      result.colorColumnKind = 'binary'
-    }
+  if (color.name) {
+    result.colorColumnName = color.name
+    if (color.kind) result.colorColumnKind = color.kind
   }
 
   return result
@@ -283,8 +312,8 @@ export function validateChartColumns(table: Table):
     }
   | { valid: false; error: string } {
   const fields = table.schema.fields
-  const colorIdx = fields.findIndex(f => f.name.toLowerCase() === 'color')
-  const nonColorCount = colorIdx >= 0 ? fields.length - 1 : fields.length
+  const color = resolveColorColumn(fields)
+  const nonColorCount = color.index >= 0 ? fields.length - 1 : fields.length
 
   if (nonColorCount < 2) {
     return {
@@ -322,15 +351,8 @@ export function validateChartColumns(table: Table):
   }
 
   // Validate color column type if present
-  if (colorIdx >= 0) {
-    const colorField = fields[colorIdx]
-    const innerType = unwrapDictionary(colorField.type)
-    if (!isIntegerType(innerType) && !isStringType(innerType) && !isBinaryType(colorField.type)) {
-      return {
-        valid: false,
-        error: `'color' column must be integer (packed RGBA u32), string ('#rrggbb'/'#rrggbbaa'), or binary, got ${colorField.type.toString()}`,
-      }
-    }
+  if (color.index >= 0 && color.error) {
+    return { valid: false, error: color.error }
   }
 
   return { valid: true, xType, yType, xColumnName, yColumnName, colorColumnName, colorColumnKind }
@@ -718,4 +740,127 @@ export function extractPieData(table: Table):
   }
 
   return { ok: true, slices }
+}
+
+// =============================================================================
+// Stacked Bar Data
+// =============================================================================
+
+export interface StackedBarData {
+  categories: string[]
+  series: { name: string; color?: string }[]
+  /** values[c][s]; 0 where the series has no row for that category. */
+  values: number[][]
+}
+
+/**
+ * Extract stacked bar data from an Arrow table: category + series + value
+ * (plus optional 'color'), pivoted into one row per category and one column
+ * per series.
+ *
+ * Rows with a null category or series, or a null/non-finite/negative value,
+ * are dropped, mirroring `extractPieData`. Unlike the Pie cell, duplicate
+ * (category, series) rows are summed rather than kept separate — two
+ * same-colored neighboring segments in a stack would otherwise read as one
+ * segment with a spurious gap. Categories and series both keep first-appearance
+ * (SQL row) order; a series absent from a given category is left as 0, which
+ * the renderer draws as no segment.
+ */
+export function extractStackedBarData(table: Table):
+  | { ok: true; data: StackedBarData }
+  | { ok: false; error: string } {
+  const fields = table.schema.fields
+  const color = resolveColorColumn(fields)
+  const nonColorFields = color.index >= 0 ? fields.filter((_, i) => i !== color.index) : fields
+  const nonColorCount = nonColorFields.length
+
+  if (nonColorCount < 3) {
+    return {
+      ok: false,
+      error: `Query must return category, series, and value columns, got ${nonColorCount} non-color columns`,
+    }
+  }
+  if (nonColorCount > 3) {
+    return {
+      ok: false,
+      error: `Query must return category, series, and value columns (plus optional 'color'), got ${nonColorCount} non-color columns`,
+    }
+  }
+
+  const [categoryField, seriesField, valueField] = nonColorFields
+
+  if (!isStringType(unwrapDictionary(categoryField.type)) && !isNumericType(categoryField.type)) {
+    return { ok: false, error: 'First column must be string or numeric type for category' }
+  }
+  if (!isStringType(unwrapDictionary(seriesField.type))) {
+    return { ok: false, error: 'Second column must be string type for series' }
+  }
+  if (!isNumericType(valueField.type)) {
+    return { ok: false, error: 'Third column must be numeric type for value' }
+  }
+  if (color.index >= 0 && color.error) {
+    return { ok: false, error: color.error }
+  }
+
+  const categoryName = categoryField.name
+  const seriesName = seriesField.name
+  const valueName = valueField.name
+
+  const categoryIndex = new Map<string, number>()
+  const categories: string[] = []
+  const seriesIndex = new Map<string, number>()
+  const series: { name: string; color?: string }[] = []
+  const values: number[][] = []
+
+  for (let i = 0; i < table.numRows; i++) {
+    const row = table.get(i)
+    if (!row) continue
+
+    const catVal = row[categoryName]
+    const serVal = row[seriesName]
+    const valVal = row[valueName]
+    if (catVal == null || serVal == null || valVal == null) continue
+
+    const valNum = Number(valVal)
+    if (!Number.isFinite(valNum) || valNum < 0) continue
+
+    const catStr = String(catVal)
+    const serStr = String(serVal)
+
+    let ci = categoryIndex.get(catStr)
+    if (ci === undefined) {
+      ci = categories.length
+      categoryIndex.set(catStr, ci)
+      categories.push(catStr)
+      values.push(series.map(() => 0))
+    }
+
+    let si = seriesIndex.get(serStr)
+    if (si === undefined) {
+      si = series.length
+      seriesIndex.set(serStr, si)
+      const entry: { name: string; color?: string } = { name: serStr }
+      if (color.name && color.kind) {
+        const colorVal = row[color.name]
+        if (colorVal != null) {
+          const css = cellColorToCss(colorVal, color.kind)
+          if (css !== null) entry.color = css
+        }
+      }
+      series.push(entry)
+      for (const valuesRow of values) valuesRow.push(0)
+    } else if (series[si].color === undefined && color.name && color.kind) {
+      // First non-null color wins: fill it in only if an earlier row for
+      // this series didn't already supply one.
+      const colorVal = row[color.name]
+      if (colorVal != null) {
+        const css = cellColorToCss(colorVal, color.kind)
+        if (css !== null) series[si].color = css
+      }
+    }
+
+    values[ci][si] += valNum
+  }
+
+  return { ok: true, data: { categories, series, values } }
 }

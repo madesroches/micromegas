@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Stacked Bar — Option B: legend above + totals on bar caps</title><style>
+:root{--app-bg:#0a0a0f;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent:#bf360c;--accent-link:#1565c0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:32px}
+h1{font-size:14px;font-weight:500;color:var(--text-secondary);margin:0 0 4px}
+.note{font-size:12px;color:var(--text-muted);margin:0 0 20px;max-width:900px;line-height:1.5}
+.state{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin:24px 0 8px}
+.cell{max-width:900px;background:var(--panel-bg);border:1px solid var(--border-color);border-radius:8px;display:flex;flex-direction:column}
+.cell-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border-color)}
+.stats{display:flex;gap:16px;font-size:12px;color:var(--text-muted)}
+.stats b{color:var(--text-secondary);font-weight:500}
+.body{display:flex;gap:20px;padding:16px 20px;min-height:0}
+.body.col{flex-direction:column;gap:10px}
+.plot{flex:1;min-width:0}
+svg text{font-family:inherit}
+.legend{min-width:170px;display:flex;flex-direction:column;gap:6px;padding-top:6px}
+.legend.row{flex-direction:row;flex-wrap:wrap;gap:6px 16px;padding-top:0;min-width:0}
+.li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);padding:2px 6px;border-radius:3px;cursor:default}
+.li:hover{background:rgba(255,255,255,.04)}
+.sw{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+.li .v{margin-left:auto;font-weight:600;color:var(--text-primary);font-variant-numeric:tabular-nums}
+.li .p{width:44px;text-align:right;font-size:11px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.seg{transition:opacity .12s}
+.dim .seg{opacity:.25}.dim .seg.on{opacity:1}
+.tt{position:fixed;z-index:50;pointer-events:none;background:var(--app-bg);border:1px solid var(--border-color);border-radius:6px;padding:8px 12px;font-size:12px;display:none;box-shadow:0 4px 12px rgba(0,0,0,.4);min-width:180px}
+.tt .h{color:var(--text-muted);margin-bottom:4px}
+.tt .r{display:flex;align-items:center;gap:8px}
+.tt .r .v{margin-left:auto;font-weight:600}
+.tt .t{margin-top:4px;padding-top:4px;border-top:1px solid var(--border-color);color:var(--text-muted);display:flex}
+.tt .t span:last-child{margin-left:auto;color:var(--text-secondary)}
+</style></head>
+<body>
+<h1>Stacked Bar — Option B: legend above + totals on bar caps</h1>
+<p class="note">Legend wraps in a row above the plot so the bars get the full cell width (better for many categories or narrow cells). Absolute view labels only the bar total on each cap — segment values live in the tooltip — which keeps the chart quiet. Percent view falls back to in-segment labels since every total is 100%.</p>
+
+<div class="state">absolute — <code>SELECT scenario, phase, sum(duration_ms) …</code>, unit <code>ms</code></div>
+<div class="cell"><div class="cell-header"><div class="stats"><div>categories: <b>6</b></div><div>series: <b>6</b></div><div>max total: <b>16.5 s</b></div></div><div class="stats">unit: ms</div></div><div class="body col"><div class="legend row" id="lb1"></div><div class="plot" id="b1"></div></div></div>
+<div class="state">normalized in SQL — <code>100 * v / sum(v) OVER (PARTITION BY scenario)</code>, unit <code>percent</code></div>
+<div class="cell"><div class="cell-header"><div class="stats"><div>categories: <b>6</b></div><div>series: <b>6</b></div><div>each bar: <b>100%</b></div></div><div class="stats">unit: percent</div></div><div class="body col"><div class="legend row" id="lb2"></div><div class="plot" id="b2"></div></div></div>
+
+<div class="tt" id="tt"></div>
+<script>
+const SERIES=["Load assets", "Compile shaders", "Init world", "Spawn actors", "Network sync", "First frame"], COLORS=["#bf360c", "#1565c0", "#ffb300", "#2e7d32", "#5e35b1", "#ff8f00"], ROWS=[["cold-start", "Load assets", 4200], ["cold-start", "Compile shaders", 2600], ["cold-start", "Init world", 1400], ["cold-start", "Spawn actors", 900], ["cold-start", "Network sync", 300], ["cold-start", "First frame", 450], ["warm-start", "Load assets", 1500], ["warm-start", "Compile shaders", 300], ["warm-start", "Init world", 1300], ["warm-start", "Spawn actors", 850], ["warm-start", "Network sync", 280], ["warm-start", "First frame", 420], ["low-mem", "Load assets", 5100], ["low-mem", "Compile shaders", 2700], ["low-mem", "Init world", 2100], ["low-mem", "Spawn actors", 1250], ["low-mem", "Network sync", 320], ["low-mem", "First frame", 610], ["big-map", "Load assets", 6300], ["big-map", "Compile shaders", 2900], ["big-map", "Init world", 3400], ["big-map", "Spawn actors", 2400], ["big-map", "Network sync", 700], ["big-map", "First frame", 780], ["dedicated-srv", "Load assets", 2100], ["dedicated-srv", "Init world", 1900], ["dedicated-srv", "Spawn actors", 1700], ["dedicated-srv", "Network sync", 1100], ["replay", "Load assets", 3300], ["replay", "Compile shaders", 1900], ["replay", "Init world", 1200], ["replay", "Spawn actors", 600], ["replay", "Network sync", 150], ["replay", "First frame", 390]];
+const tt=document.getElementById('tt');
+function lum(h){const c=[1,3,5].map(i=>{let v=parseInt(h.substr(i,2),16)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4)});return .2126*c[0]+.7152*c[1]+.0722*c[2]}
+function ink(h){return lum(h)>.18?'#0a0a0f':'#ffffff'}
+function fmt(v,unit){if(unit==='percent')return v.toFixed(1)+'%';if(unit==='ms'){return v>=1000?(v/1000).toFixed(v>=10000?1:2)+' s':Math.round(v)+' ms'}return v.toLocaleString()}
+function niceStep(max){const raw=max/5,p=Math.pow(10,Math.floor(Math.log10(raw))),n=raw/p;return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p}
+function pivot(rows){const cats=[],m={};for(const[c,s,v]of rows){if(!(c in m)){m[c]={};cats.push(c)}m[c][s]=(m[c][s]||0)+v}return{cats,m}}
+function normalize(rows){const tot={};for(const[c,,v]of rows)tot[c]=(tot[c]||0)+v;return rows.map(([c,s,v])=>[c,s,100*v/tot[c]])}
+function roundTop(x,y,w,h,r){r=Math.min(r,h,w/2);return `M${x},${y+h}V${y+r}Q${x},${y} ${x+r},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h}Z`}
+function showTT(e,cat,s,v,tot,unit){tt.innerHTML=`<div class="h">${cat}</div><div class="r"><span class="sw" style="background:${COLORS[SERIES.indexOf(s)]}"></span>${s}<span class="v">${fmt(v,unit)}</span></div><div class="t"><span>share of bar</span><span>${(100*v/tot).toFixed(1)}%</span></div><div class="t"><span>bar total</span><span>${fmt(tot,unit)}</span></div>`;tt.style.display='block';tt.style.left=Math.min(e.clientX+14,innerWidth-220)+'px';tt.style.top=(e.clientY-10)+'px'}
+function hideTT(){tt.style.display='none'}
+function chart(el,rows,o){
+  const{cats,m}=pivot(rows);const W=o.width,H=o.height,ml=o.yAxis?56:12,mr=12,mt=o.totals?22:10,mb=28;
+  const pw=W-ml-mr,ph=H-mt-mb;const totals=cats.map(c=>SERIES.reduce((a,s)=>a+(m[c][s]||0),0));
+  const max=o.unit==='percent'?100:Math.max(...totals);const step=o.unit==='percent'?25:niceStep(max);const top=o.unit==='percent'?100:Math.ceil(max/step)*step;
+  const band=pw/cats.length,bw=Math.min(o.barMax||56,band*.62);const y=v=>mt+ph-v/top*ph;
+  let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  for(let t=0;t<=top+1e-9;t+=step){const yy=y(t);s+=`<line x1="${ml}" x2="${W-mr}" y1="${yy}" y2="${yy}" stroke="${t===0?'#3a3a52':'#1f1f2e'}" stroke-width="1"/>`;if(o.yAxis)s+=`<text x="${ml-8}" y="${yy}" fill="#6b7280" font-size="11" text-anchor="end" dominant-baseline="middle">${fmt(t,o.unit)}</text>`}
+  cats.forEach((c,i)=>{const x=ml+band*i+(band-bw)/2;let acc=0;const present=SERIES.filter(se=>m[c][se]>0);
+    present.forEach((se,j)=>{const v=m[c][se],y0=y(acc),y1=y(acc+v),h=y0-y1,gap=j<present.length-1?2:0;acc+=v;const col=COLORS[SERIES.indexOf(se)];
+      const hh=Math.max(h-gap,0.5),yy=y1+gap;const d=j===present.length-1?roundTop(x,y1,bw,h,4):`M${x},${yy}h${bw}v${hh}h${-bw}Z`;
+      s+=`<path class="seg" data-s="${se}" d="${d}" fill="${col}" data-c="${c}" data-v="${v}" data-t="${totals[i]}"/>`;
+      if(o.segLabels){const txt=fmt(v,o.unit);if(h>=18&&txt.length*6.4+8<=bw)s+=`<text x="${x+bw/2}" y="${y1+gap+hh/2}" fill="${ink(col)}" font-size="10.5" font-weight="600" opacity=".9" text-anchor="middle" dominant-baseline="middle" pointer-events="none">${txt}</text>`}});
+    if(o.totals)s+=`<text x="${x+bw/2}" y="${y(totals[i])-7}" fill="#e7e9ea" font-size="11" font-weight="600" text-anchor="middle">${fmt(totals[i],o.unit)}</text>`;
+    s+=`<text x="${ml+band*i+band/2}" y="${H-10}" fill="#9ca3af" font-size="11" text-anchor="middle">${c}</text>`});
+  el.innerHTML=s+'</svg>';
+  el.querySelectorAll('.seg').forEach(p=>{p.addEventListener('mousemove',e=>showTT(e,p.dataset.c,p.dataset.s,+p.dataset.v,+p.dataset.t,o.unit));p.addEventListener('mouseleave',hideTT)});
+  return{cats,m,totals}
+}
+function legend(el,svgHost,rows,o){const{cats,m}=pivot(rows);const grand=rows.reduce((a,r)=>a+r[2],0);
+  el.innerHTML=SERIES.map((s,i)=>{const t=cats.reduce((a,c)=>a+(m[c][s]||0),0);return `<div class="li" data-s="${s}"><span class="sw" style="background:${COLORS[i]}"></span>${s}${o.values?`<span class="v">${o.unit==='percent'?(t/cats.length).toFixed(1)+'%':fmt(t,o.unit)}</span><span class="p">${o.unit==='percent'?'avg':(100*t/grand).toFixed(1)+'%'}</span>`:''}</div>`}).join('');
+  if(o.focus)el.querySelectorAll('.li').forEach(li=>{li.addEventListener('mouseenter',()=>{svgHost.classList.add('dim');svgHost.querySelectorAll('.seg').forEach(p=>p.classList.toggle('on',p.dataset.s===li.dataset.s))});li.addEventListener('mouseleave',()=>svgHost.classList.remove('dim'))})}
+
+
+chart(b1,ROWS,{width:858,height:300,unit:'ms',yAxis:true,totals:true,barMax:64});legend(lb1,b1,ROWS,{});
+const N=normalize(ROWS);chart(b2,N,{width:858,height:300,unit:'percent',yAxis:true,segLabels:true,barMax:64});legend(lb2,b2,N,{});
+
+</script>
+</body></html>

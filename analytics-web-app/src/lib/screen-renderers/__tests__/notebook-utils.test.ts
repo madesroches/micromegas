@@ -1457,7 +1457,7 @@ describe('shouldShowTimeRange', () => {
     const types = [
       'table', 'chart', 'log', 'propertytimeline', 'swimlane',
       'transposed', 'flamegraph', 'map', 'perfettoexport', 'image',
-      'piechart',
+      'piechart', 'stackedbar',
     ]
     for (const type of types) {
       expect(shouldShowTimeRange({ ...base, type, sql: '' } as CellConfig, {}, remoteDs)).toBe(true)

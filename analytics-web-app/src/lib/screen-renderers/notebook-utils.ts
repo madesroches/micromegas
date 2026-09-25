@@ -218,6 +218,7 @@ FROM process_spans('$process_id', 'both')
 ORDER BY lane, begin`,
   map: `SELECT NOW() as time, 0.0 as x, 0.0 as y, 0.0 as z`,
   piechart: `SELECT CASE level WHEN 1 THEN 'FATAL' WHEN 2 THEN 'ERROR' WHEN 3 THEN 'WARN' WHEN 4 THEN 'INFO' WHEN 5 THEN 'DEBUG' ELSE 'TRACE' END AS level_name, count(*) AS count FROM log_entries GROUP BY level_name ORDER BY count DESC`,
+  stackedbar: `SELECT exe, CASE level WHEN 1 THEN 'FATAL' WHEN 2 THEN 'ERROR' WHEN 3 THEN 'WARN' WHEN 4 THEN 'INFO' WHEN 5 THEN 'DEBUG' ELSE 'TRACE' END AS level_name, count(*) AS count FROM log_entries GROUP BY 1, 2 ORDER BY 1, 2`,
 }
 
 /**
@@ -420,7 +421,7 @@ export function shouldShowTimeRange(
       if (cell.variableType !== 'combobox' && cell.variableType !== 'expression') return false
       break
     default:
-      break // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart
+      break // table, chart, log, propertytimeline, swimlane, transposed, flamegraph, map, perfettoexport, image, piechart, stackedbar
   }
   return resolveCellDataSource(cell, variables, notebookDataSource) !== 'notebook'
 }
