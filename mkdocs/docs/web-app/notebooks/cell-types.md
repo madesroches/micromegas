@@ -507,14 +507,18 @@ unscaled, as in a plain documentation cell.
 - Like other query-backed cell types, a markdown cell blocks downstream cells when its own query fails, is blocked by an upstream failure, and is blocked while an upstream cell waits on a row selection or viewer macro
 - On initial load (or after "Run from here"/a refresh resets it), rendered output stays blank until the cell's own query has run successfully at least once. During a re-run (the cell or an upstream cell is idle/loading), the previous output stays on screen instead of flashing blank. **Run** executes the cell's query — not a local re-render
 
+These examples query telemetry views (`measures`, `service_health`), so the cell's data source must
+be set to a remote (server) source — the default `notebook` source (local WASM engine) doesn't have
+these views.
+
 **Example — frame-time headline value:**
 
 SQL:
 
 ```sql
-SELECT avg(duration) AS value,
-  CASE WHEN avg(duration) < 16 THEN '#2e7d32'
-       WHEN avg(duration) < 33 THEN '#f9a825'
+SELECT avg(value) AS value,
+  CASE WHEN avg(value) < 16 THEN '#2e7d32'
+       WHEN avg(value) < 33 THEN '#f9a825'
        ELSE '#c62828' END AS background_color,
   '#ffffff' AS color
 FROM measures WHERE name = 'frame_time'
