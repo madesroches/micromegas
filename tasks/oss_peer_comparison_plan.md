@@ -46,7 +46,8 @@ linked to that project's own current docs or repo.
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`tracing` / `telemetry` crates), Unreal Engine plugin, C ABI | `unreal/`, `native/`, `rust/` |
-| Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust. Unbounded per-event context (URLs, query text) goes in log and metric properties | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
+| Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
+| Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
@@ -55,6 +56,8 @@ linked to that project's own current docs or repo.
 **Instrumentation cost**: the page does **not** quote the ~20 ns figure, since it depends on too many
 variables (see Decisions). Describe the design instead:
 - events are recorded in-process on the calling thread;
+- context is attached as an interned property set, so it costs one pointer per event rather than
+  repeated key/value strings;
 - the telemetry sink batches and ships them off the hot path;
 - sampling decisions are made per batch, not per event;
 - the intent is instrumentation that stays on in production.
@@ -68,8 +71,9 @@ Unreal Engine is one example, not the defining audience.
 
 **Code vs. data**: a sampling profiler sees the call stack, so it shows *which code* is hot.
 Instrumentation can record *which data* that code was processing: spans named by the asset or
-script (`FName`s or other statically allocated strings), and URLs or query text as properties on
-logs and metrics. In a game it is rarely the animation code that is slow; it is a particular animation.
+script (`FName`s or other statically allocated strings), and context such as the current level,
+asset or route as a property set that every log and metric event references for the cost of one
+pointer. In a game it is rarely the animation code that is slow; it is a particular animation.
 The same holds for any interpreter or resolver (script VMs, query engines, template renderers, rule
 engines, asset loaders, routers, dependency resolvers): the stack is the same for every input, and
 the cost depends on the input. This is the point to make against sampling and continuous profilers
