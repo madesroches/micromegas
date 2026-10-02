@@ -16,6 +16,8 @@ linked to that project's own current docs or repo.
 
 - **Docs site**: MkDocs Material, config in `mkdocs/mkdocs.yml`, sources in `mkdocs/docs/`. The nav
   is explicit (`mkdocs.yml` `nav:`), with tabs enabled, so every top-level entry becomes a tab.
+  There are seven tabs today: Home, Blog, Getting Started, Query Guide, Analytics Web App,
+  Integrations, Operations. The SaaS cost pages sit under **Operations → Cost Effectiveness**.
 - **Sitemap**: MkDocs generates `/docs/sitemap.xml` from every built page automatically.
   `welcome/public/robots.txt` already advertises it, and `welcome/public/sitemap.xml` lists only
   non-MkDocs pages. A new page therefore lands in the sitemap without any manual edit.
@@ -44,6 +46,7 @@ linked to that project's own current docs or repo.
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`tracing` / `telemetry` crates), Unreal Engine plugin, C ABI | `unreal/`, `native/`, `rust/` |
+| Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust. Unbounded per-event context (URLs, query text) goes in log and metric properties | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
@@ -58,6 +61,22 @@ variables (see Decisions). Describe the design instead:
 
 Compare this with OpenTelemetry **SDKs**, which are the in-process counterpart, never with
 collectors.
+
+**Audience framing**: the page describes Micromegas for any native-code or client/fleet workload
+(desktop and mobile clients, edge devices, batch jobs, CI runners, game clients and servers).
+Unreal Engine is one example, not the defining audience.
+
+**Code vs. data**: a sampling profiler sees the call stack, so it shows *which code* is hot.
+Instrumentation can record *which data* that code was processing: spans named by the asset or
+script (`FName`s or other statically allocated strings), and URLs or query text as properties on
+logs and metrics. In a game it is rarely the animation code that is slow; it is a particular animation.
+The same holds for any interpreter or resolver (script VMs, query engines, template renderers, rule
+engines, asset loaders, routers, dependency resolvers): the stack is the same for every input, and
+the cost depends on the input. This is the point to make against sampling and continuous profilers
+(Pyroscope, eBPF profilers, Perfetto's stack sampling), not against OTel SDKs or Tracy/Unreal
+Insights zones, which can also carry data in span attributes or zone names. Against those, the
+difference is cost and retention: data-named spans cheap enough to leave on everywhere, kept across
+the fleet.
 
 ## Design
 
@@ -80,27 +99,37 @@ collectors.
 
 | Tier | Projects | Treatment |
 |---|---|---|
-| Full section | Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse (incl. ClickStack/HyperDX), Grafana LGTM (Loki/Tempo/Mimir), InfluxDB 3 Core, VictoriaMetrics/Logs/Traces | Glance-table row plus a section |
+| Full section | Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse (incl. ClickStack/HyperDX), Grafana LGTM (Loki/Tempo/Mimir, plus Pyroscope), InfluxDB 3 Core, VictoriaMetrics/Logs/Traces, Quickwit | Glance-table row plus a section |
 | Complementary tools | Tracy, Unreal Insights, Perfetto | Short section: session-local profilers vs. a fleet-wide, historical store. Not head-to-head |
-| Also considered | Elasticsearch/OpenSearch, Quickwit, Uptrace, Jaeger, Apache Doris/StarRocks, Sentry self-hosted | One line each with the reason it isn't a full entry |
+| Also considered | Elasticsearch/OpenSearch, Uptrace, Jaeger (with Zipkin), Apache SkyWalking, Apache Doris/StarRocks, Sentry self-hosted | One line each with the reason it isn't a full entry |
 
-The five peers named in the issue are kept. Three are added from the additional-peer research:
+The five peers named in the issue are kept. Four are added from the additional-peer research:
 - **Grafana LGTM**: it is the default self-hosted answer and the stack most readers already run.
-- **InfluxDB 3 Core**: it has the closest architecture to Micromegas (Rust, Arrow, DataFusion, Parquet, Flight, object storage).
+- **InfluxDB 3 Core**: it has the closest storage/query stack to Micromegas (Rust, Arrow, DataFusion, Parquet, Flight, object storage).
 - **VictoriaMetrics family**: it is widely recommended and now covers all three signals.
+- **Quickwit**: Rust, search directly on object storage, with PostgreSQL as the recommended
+  metastore — the closest metadata design to Micromegas — and still actively released.
 
 Excluded, and not listed on the page:
-- archived or discontinued projects: SigLens, HoraeDB, Highlight.io;
-- different categories: Netdata, Zabbix, Coroot, DeepFlow, OneUptime;
+- archived or discontinued projects: SigLens, HoraeDB, Highlight.io (no release since 2025-08);
+- different categories: Netdata, Zabbix, Coroot, DeepFlow, OneUptime, Odigos (instrumentation only);
 - niche or stale projects: gigapipe, CnosDB, Optick, MicroProfile;
-- Superluminal, which is not open source.
+- not open source: Superluminal (proprietary), Graylog (SSPL).
+
+Star counts and latest releases, from `gh api` on 2026-10-02 (context for the peer-set choice, not
+for the page): ClickHouse 50.2k (v26.3.39.7-lts); SigNoz 32.3k (v0.144.0); InfluxDB 31.8k
+(v3.11.4); Loki 29.0k (v3.7.8); SkyWalking 25.0k (v11.0.0); Jaeger 23.3k (v2.21.0); OpenObserve
+22.2k (v1.1.0-rc1); VictoriaMetrics 17.8k (v1.153.0); Quickwit 11.7k (v0.9.1); HyperDX 9.9k;
+GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); Parseable 2.5k
+(v3.2.4); VictoriaLogs 2.3k; VictoriaTraces 0.5k (v0.12.0).
 
 ### Page structure
 
 1. **Intro**:
    - scope: open-source and self-hosted only, with a link to the SaaS cost comparisons;
    - a `*Last reviewed: October 2026*` line;
-   - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues.
+   - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues;
+   - one line pointing to the summary at the end ("Short on time? Jump to the summary").
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
    analytics, presentation), followed by a **Limits** list stated plainly:
    - PostgreSQL is required for metadata;
@@ -126,39 +155,85 @@ Excluded, and not listed on the page:
      - in-process native SDKs vs. relying on OTel SDKs;
      - Parquet on object storage plus PostgreSQL metadata vs. that peer's storage and dependencies;
      - one SQL surface (DataFusion) vs. that peer's query languages;
-     - notebooks running the same engine in the browser (WASM).
+     - notebooks running the same engine in the browser (WASM);
+     - per-row access control on ingested data;
+     - spans named by the data being processed vs. sampled call stacks (only for peers that offer
+       profiling: LGTM via Pyroscope, OpenObserve profiles).
 
      Where a peer shares an axis (e.g. Parseable, OpenObserve, GreptimeDB and InfluxDB 3 also run
-     DataFusion over Parquet), the section says so and leaves that axis out of the differences.
+     DataFusion over Parquet; Quickwit also keeps metadata in PostgreSQL), the section says so and
+     leaves that axis out of the differences.
    - OpenObserve, Parseable and SigNoz each get one sentence on their LLM/agent observability features.
 5. **Complementary tools**: Tracy, Unreal Insights and Perfetto give a deep view of one session.
    Micromegas keeps the history of many processes in a single store and makes it queryable. Teams
-   commonly use both.
+   commonly use both. One sentence applies the code-vs-data point (see Current State): their
+   sampling modes show the hot function, and data-named spans show the asset or input behind it.
 6. **Also considered**: one line each.
+7. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
+   compete, and many teams run two of them"), then an "If you need… / Look at" table. Every row
+   restates a peer's *Credit it for* line from the research below, so the summary adds no new claims
+   and needs no new links:
+
+   | If you need… | Look at |
+   |---|---|
+   | The standard self-hosted stack, PromQL, and the Grafana ecosystem | Grafana LGTM |
+   | Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
+   | A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
+   | The smallest footprint: one binary, no metadata database | Parseable |
+   | The widest signal coverage (RUM, session replay), or a migration off ELK | OpenObserve |
+   | One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
+   | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
+   | Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |
+   | Elasticsearch-compatible log and trace search directly on object storage | Quickwit |
+   | A deep look at one session on one machine | Tracy, Unreal Insights, Perfetto (alongside any of the above) |
+
+   Then two short lists:
+   - **Choose Micromegas when**:
+     - you instrument native code (Rust, or C/C++ through the C ABI) and want detailed spans, logs
+       and metrics left on in production rather than sampled away;
+     - your cost depends on the data more than the code (assets, URLs, scripts, queries going
+       through an interpreter or resolver) and you need to know *which* input was slow, not just
+       which function;
+     - your telemetry comes from many processes that aren't classic services: desktop or mobile
+       clients, edge devices, batch jobs, CI runners, game clients and servers;
+     - you need high event volume and long retention at a predictable cost, stored as Parquet on
+       your own object storage;
+     - you want one SQL surface across logs, metrics and traces, including in notebooks, instead of
+       one query language per signal;
+     - you need per-row access control on telemetry shared across teams or customers.
+   - **Look elsewhere if**: you can't run PostgreSQL, need a built-in alert engine or PromQL, or
+     want a large community behind your tool.
 
 ### Peer research (October 2026)
 
-All facts below were fetched on 2026-10-02 from the linked source. The implementer re-checks each
-cell against the link before publishing (step 1), because these projects release weekly. Items
-marked **unverified** must be checked or left off the page.
+All facts below were fetched on 2026-10-02 from the linked first-party source. The implementer
+re-checks each cell against its link before publishing (step 1), because these projects release
+weekly. Items under **Not confirmed** stay off the page.
 
 #### Parseable — [repo](https://github.com/parseablehq/parseable)
 - **What it is**: Rust "unified observability platform on a data lake architecture" for logs,
   metrics, traces and events.
 - **License and editions**: AGPL-3.0. Paid Cloud/Enterprise tiers gate PromQL, the HA cluster, APM,
   anomaly detection and AI features. SQL, dashboards, threshold alerts, OIDC/SSO and RBAC are in OSS
-  ([pricing](https://www.parseable.com/pricing)).
-- **Ingestion**: OTLP over HTTP and gRPC; Prometheus remote write; Fluent Bit, Vector, Logstash,
-  Filebeat; Kafka ([integrations](https://www.parseable.com/docs/integrations)).
+  ([pricing](https://www.parseable.com/pricing)). PromQL alerts are rejected in the OSS build
+  ("Upgrade to Parseable Enterprise", `src/alerts/mod.rs`).
+- **Ingestion**: its own HTTP JSON API (`/ingest`), OTLP over HTTP and gRPC, and Kafka; plus
+  shippers (Fluent Bit, Vector, Logstash, Filebeat) and Prometheus remote write
+  ([integrations](https://www.parseable.com/docs/integrations),
+  [architecture](https://www.parseable.com/docs/architecture)). **No** Elasticsearch `_bulk`
+  endpoint (no such route in `src/handlers/http/modal/server.rs`).
 - **Storage**: Arrow staged on local disk, then converted to Parquet on S3, GCS, Azure Blob or the
   local filesystem.
 - **Metadata**: no external database; metadata lives in the object store
   ([architecture](https://www.parseable.com/docs/architecture)).
 - **Query**: SQL on DataFusion (`Cargo.toml`). PromQL is paid-only.
 - **UI**: built-in UI with dashboards, alerts and RBAC.
-- **Deployment**: single binary, standalone or distributed with ingest, query and search roles.
+- **Deployment**: single binary, standalone or distributed. OSS distributed mode allows many ingest
+  nodes but **only one query node**; multiple query nodes, indexer nodes and the HA/multi-tenant
+  cluster are Cloud/Enterprise ([architecture](https://www.parseable.com/docs/architecture),
+  [pricing](https://www.parseable.com/pricing),
+  [OSS helm](https://www.parseable.com/docs/self-hosted/installation/distributed/k8s-helm-oss)).
 - **SDKs**: relies on OTel; there is a small Go SDK.
-- **Unverified**: an Elasticsearch `_bulk` endpoint; the exact OSS limits on distributed mode.
 - **Credit it for**: smallest footprint of the set (one binary, no metadata DB); broad ingestion compatibility.
 
 #### OpenObserve — [repo](https://github.com/openobserve/openobserve)
@@ -166,19 +241,22 @@ marked **unverified** must be checked or left off the page.
   profiles and LLM observability.
 - **License and editions**: AGPL-3.0 OSS (it moved from Apache). The Enterprise edition is under a
   commercial license and free up to 50 GB/day
-  ([license](https://openobserve.ai/docs/enterprise-setup/license-and-pricing/)). It gates SSO,
-  advanced RBAC, audit logs, federation and AI features
-  ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)).
-- **Ingestion**: OTLP; JSON, `_multi` and Elasticsearch-compatible `_bulk` APIs; syslog; the
-  Collector, Vector, Fluent Bit and Filebeat; Prometheus and Telegraf
-  ([ingestion](https://openobserve.ai/docs/ingestion/)).
+  ([license](https://openobserve.ai/docs/enterprise-setup/license-and-pricing/),
+  [pricing](https://openobserve.ai/pricing/)). It gates SSO, advanced RBAC, audit logs, federation
+  and AI features ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)).
+- **Ingestion**: OTLP; JSON, `_multi` and Elasticsearch-compatible `_bulk` APIs; syslog; Kinesis
+  Firehose; the Collector, Vector, Fluent Bit and Filebeat; Prometheus remote write and Telegraf
+  ([ingestion](https://openobserve.ai/docs/user-guide/ingestion/),
+  [metrics](https://openobserve.ai/docs/features/metrics/)). **No** built-in Kafka consumer: Kafka
+  data arrives through an external agent (feature request
+  [#2882](https://github.com/openobserve/openobserve/issues/2882) is still open).
 - **Storage**: Parquet on S3, GCS, Azure Blob or MinIO, or local disk on a single node.
 - **Metadata**: SQLite on a single node; PostgreSQL plus NATS in HA mode
   ([architecture](https://openobserve.ai/docs/architecture/)).
-- **Query**: SQL on DataFusion (`Cargo.toml`), PromQL, and full-text search via Tantivy.
+- **Query**: SQL on DataFusion (`Cargo.toml`), PromQL (in the AGPL build, `src/promql`), and
+  full-text search via Tantivy ([metrics](https://openobserve.ai/docs/features/metrics/)).
 - **UI**: rich built-in UI with dashboards, pipelines, alerts and incidents.
 - **SDKs**: OTel SDKs for backend code; its own RUM SDKs for browser, Android, iOS and React Native.
-- **Unverified**: native Kafka ingestion; whether PromQL is free in OSS.
 - **Credit it for**: broadest signal coverage; easy migration from ELK via `_bulk`; full-text indexing.
 
 #### GreptimeDB — [repo](https://github.com/GreptimeTeam/greptimedb)
@@ -186,7 +264,8 @@ marked **unverified** must be checked or left off the page.
   with SQL joins across signals.
 - **License and editions**: Apache-2.0 core, open-core model. Enterprise gates Triggers (alerting),
   LDAP, RBAC, audit logs and automatic rebalancing
-  ([enterprise](https://docs.greptime.com/enterprise/overview/)). There is also GreptimeCloud.
+  ([enterprise](https://docs.greptime.com/enterprise/overview/),
+  [triggers](https://docs.greptime.com/reference/sql/trigger-syntax/)). There is also GreptimeCloud.
 - **Ingestion**: OTLP, Prometheus remote write, Loki push, Elasticsearch `_bulk`, InfluxDB line
   protocol, and the MySQL and PostgreSQL wire protocols.
 - **Storage**: Parquet on S3, GCS or Azure Blob, or local file storage
@@ -207,16 +286,19 @@ marked **unverified** must be checked or left off the page.
   - the license column must say this precisely.
 - **Editions**: Cloud and Enterprise gate anomaly detection, SAML, fine-grained RBAC and audit
   logs ([pricing](https://signoz.io/pricing/)).
-- **Ingestion**: through the SigNoz OTel Collector: OTLP, Jaeger, Zipkin, Kafka, Prometheus, and
-  more.
+- **Ingestion**: through the SigNoz OTel Collector: OTLP, Jaeger, Zipkin, Kafka, and Prometheus
+  **scraping** ([send metrics](https://signoz.io/docs/userguide/send-metrics/)). No documented
+  Prometheus remote-write path; the page must not claim one.
 - **Storage and dependencies**: ClickHouse plus ClickHouse Keeper or ZooKeeper, with SQLite
   (PostgreSQL in `ee/`) for dashboards, alerts and users
   ([Foundry moldings](https://github.com/SigNoz/foundry/blob/main/docs/concepts/moldings.md)).
+  Hot/cold tiering to S3 or GCS is configurable through the Helm chart (`clickhouse.coldStorage`,
+  [values.yaml](https://raw.githubusercontent.com/SigNoz/charts/main/charts/signoz/values.yaml);
+  "hot/cold storage tiers" in [what is SigNoz](https://signoz.io/docs/what-is-signoz/)).
 - **Query**: query builder, PromQL, ClickHouse SQL.
 - **UI**: built-in APM views, traces, logs, dashboards and alerts (Ruler plus Alertmanager)
   ([architecture](https://signoz.io/docs/architecture/)).
 - **SDKs**: OTel SDKs only.
-- **Unverified**: object-storage tiering in SigNoz deployments; first-party docs for Prometheus remote write.
 - **Credit it for**: the best out-of-box APM experience for an OTel-instrumented service, with no Grafana needed.
 
 #### ClickHouse / ClickStack — [ClickHouse](https://github.com/ClickHouse/ClickHouse), [HyperDX](https://github.com/hyperdxio/hyperdx)
@@ -236,51 +318,159 @@ marked **unverified** must be checked or left off the page.
   - SharedMergeTree (object-storage native) is only documented for Cloud;
   - reads and writes Parquet.
 - **Coordination and dependencies**: replication needs ClickHouse Keeper or ZooKeeper. Self-hosted
-  ClickStack also needs **MongoDB** for dashboards, alerts and users
-  ([architecture](https://clickhouse.com/docs/use-cases/observability/clickstack/architecture)).
+  ClickStack also needs **MongoDB** for dashboards, saved searches, user settings and alerts
+  ([HyperDX-only deployment](https://clickhouse.com/docs/use-cases/observability/clickstack/deployment/hyperdx-only)).
 - **Query**: ClickHouse SQL; ClickStack adds Lucene-style search and a SQL WHERE mode. Metrics and
   PromQL support are described as less mature.
 - **UI**: HyperDX provides search, traces, dashboards, alerts and session replay.
 - **SDKs**: OTel-based SDKs.
 - **Credit it for**: raw query speed and compression at very large scale, plus ecosystem maturity (about 50k stars).
 
-#### Grafana LGTM — [Loki](https://github.com/grafana/loki), [Tempo](https://github.com/grafana/tempo), [Mimir](https://github.com/grafana/mimir)
-- **Verified so far**:
-  - license AGPL-3.0;
-  - active (Loki v3.7.8 2026-09-17, Tempo v3.1.0 2026-09-29, Mimir 3.2.1 2026-09-10);
-  - three stores with LogQL, TraceQL and PromQL respectively.
-- **To verify in step 1**:
-  - object-storage backends per component;
-  - Tempo's Parquet block format;
-  - the required dependencies;
-  - Pyroscope's role;
-  - alerting via Grafana and Mimir/Loki rulers.
-- **Credit it for**: the de-facto self-hosted standard, the Grafana ecosystem, and PromQL compatibility.
+#### Grafana LGTM — [Loki](https://github.com/grafana/loki), [Tempo](https://github.com/grafana/tempo), [Mimir](https://github.com/grafana/mimir), [Pyroscope](https://github.com/grafana/pyroscope)
+- **What it is**: one backend per signal, viewed in Grafana. Loki indexes labels, not log contents;
+  Tempo stores traces; Mimir is long-term Prometheus storage; Pyroscope adds continuous profiling.
+- **License and editions**: AGPL-3.0 (Loki, Tempo and Grafana with Apache-2.0 exceptions in
+  `LICENSING.md`). Paid GEL/GET/GEM add tenant management, token auth and cross-tenant query; GEL
+  adds label-based access control, GEM adds fine-grained access control
+  ([GEL](https://grafana.com/docs/enterprise-logs/latest/),
+  [GET](https://grafana.com/docs/enterprise-traces/latest/),
+  [GEM](https://grafana.com/docs/enterprise-metrics/latest/)).
+- **Ingestion**:
+  - Loki: push API and OTLP over HTTP ([OTel](https://grafana.com/docs/loki/latest/send-data/otel/));
+  - Mimir: Prometheus remote write and OTLP over HTTP
+    ([otel](https://grafana.com/docs/mimir/latest/configure/configure-otel-collector/));
+  - Tempo: OTLP over gRPC and HTTP, Jaeger, Zipkin, Kafka
+    ([distributor](https://grafana.com/docs/tempo/latest/reference-tempo-architecture/components/distributor/));
+  - Alloy, Grafana's Apache-2.0 OTel Collector distribution ([alloy](https://github.com/grafana/alloy)).
+- **Storage**: all three keep data in object storage (S3, GCS, Azure; Mimir also Swift), with local
+  filesystem for single-node use only
+  ([Loki](https://grafana.com/docs/loki/latest/configure/storage/),
+  [Tempo](https://grafana.com/docs/tempo/latest/introduction/architecture/),
+  [Mimir](https://grafana.com/docs/mimir/latest/get-started/about-grafana-mimir-architecture/)).
+  Parquet is Tempo 3.x's only block format, vParquet5 by default
+  ([schema](https://grafana.com/docs/tempo/latest/operations/schema/)).
+- **Dependencies**:
+  - Mimir 3.0 defaults to Kafka-based ingest storage, which "requires a production-grade Apache
+    Kafka cluster"; the classic architecture is still supported
+    ([v3.0](https://grafana.com/docs/mimir/latest/release-notes/v3.0/),
+    [ingest storage](https://grafana.com/docs/mimir/latest/set-up/jsonnet/configure-ingest-storage/));
+  - Tempo microservices mode requires a Kafka-compatible system; monolithic mode does not
+    ([modes](https://grafana.com/docs/tempo/latest/set-up-for-tracing/setup-tempo/plan/deployment-modes/));
+  - hash ring via memberlist by default, no external KV store needed
+    ([KV](https://grafana.com/docs/mimir/latest/references/architecture/key-value-store/));
+  - Memcached recommended but optional for Mimir
+    ([store-gateway](https://grafana.com/docs/mimir/latest/references/architecture/components/store-gateway/)).
+- **Query**: LogQL ([LogQL](https://grafana.com/docs/loki/latest/query/)), TraceQL
+  ([TraceQL](https://grafana.com/docs/tempo/latest/traceql/)), PromQL in Mimir. No SQL.
+- **UI and alerting**: Grafana and Grafana Alerting; Mimir ruler plus a bundled multi-tenant
+  Alertmanager ([ruler](https://grafana.com/docs/mimir/latest/references/architecture/components/ruler/),
+  [alertmanager](https://grafana.com/docs/mimir/latest/references/architecture/components/alertmanager/));
+  Loki ruler sends to an external Alertmanager ([alert](https://grafana.com/docs/loki/latest/alert/)).
+- **Deployment**: each backend runs as one binary with `-target=all`, or as microservices for
+  production ([Loki](https://grafana.com/docs/loki/latest/get-started/deployment-modes/),
+  [Mimir](https://grafana.com/docs/mimir/latest/references/architecture/deployment-modes/)).
+  `grafana/otel-lgtm` is a single container for development and demos
+  ([otel-lgtm](https://github.com/grafana/docker-otel-lgtm)).
+- **SDKs**: upstream OTel SDKs ([otel docs](https://grafana.com/docs/opentelemetry/)); Faro for
+  browser RUM ([faro](https://github.com/grafana/faro-web-sdk)); Beyla eBPF auto-instrumentation
+  ([beyla](https://github.com/grafana/beyla)); Pyroscope profiling SDKs, including Rust.
+- **Credit it for**: the de-facto self-hosted standard; object-storage backends; purpose-built
+  query languages including PromQL; a mature UI and alerting; OTel-first.
+- **Not confirmed**: OTLP over gRPC for Loki and Mimir; whether Loki's Kafka write path is GA.
 
 #### InfluxDB 3 Core — [repo](https://github.com/influxdata/influxdb)
-- **Verified so far**:
-  - MIT/Apache-2.0;
-  - active (v3.11.4, 2026-09-08);
-  - Rust on Arrow, DataFusion, Parquet and Flight with object storage
-    ([GA post](https://www.influxdata.com/blog/influxdb-3-oss-ga));
-  - time-series and metrics focused.
-- **To verify in step 1**:
-  - which features are Core vs. Enterprise (retention, compaction, HA);
-  - query languages (SQL, InfluxQL);
-  - ingestion paths (line protocol; OTLP?);
-  - whether a metadata catalog is stored in object storage.
+- **What it is**: a time-series database built for recent data, with last-value and distinct-value
+  caches and an embedded Python processing engine ([docs](https://docs.influxdata.com/influxdb3/core/)).
+  Metrics and events first; logs and traces only via Telegraf conversion.
+- **License and editions**: MIT or Apache-2.0 ([repo](https://github.com/influxdata/influxdb)).
+  Commercial Enterprise adds HA, read replicas, multi-node, long-range historical queries and
+  historical compaction ([product](https://www.influxdata.com/products/influxdb-core/)). Core
+  queries cover about **72 hours** by default (`query-file-limit`, 432 Parquet files), raisable at a
+  memory and speed cost ([query](https://docs.influxdata.com/influxdb3/core/get-started/query/),
+  [config](https://docs.influxdata.com/influxdb3/core/reference/config-options/)). Retention is set
+  per database at creation and cannot be changed
+  ([retention](https://docs.influxdata.com/influxdb3/core/reference/internals/data-retention/)).
+- **Ingestion**: line protocol only (v1, v2 and v3 write APIs)
+  ([write](https://docs.influxdata.com/influxdb3/core/write-data/)). No native OTLP; Telegraf's
+  OpenTelemetry input converts OTLP to line protocol
+  ([Telegraf OTel](https://docs.influxdata.com/telegraf/v1/input-plugins/opentelemetry/)).
+- **Storage**: Parquet on S3, GCS, Azure or local file, with a WAL flushed every second; can run
+  diskless ([setup](https://docs.influxdata.com/influxdb3/core/get-started/setup/),
+  [durability](https://docs.influxdata.com/influxdb3/core/reference/internals/durability/)).
+- **Metadata**: the catalog is persisted in object storage; no external database
+  ([backup](https://docs.influxdata.com/influxdb3/core/admin/backup-restore/)).
+- **Query**: SQL on DataFusion and InfluxQL, over HTTP, Arrow Flight and Flight SQL. No Flux
+  ([query](https://docs.influxdata.com/influxdb3/core/get-started/query/)).
+- **UI and alerting**: InfluxDB 3 Explorer, a separate container for Core
+  ([Explorer](https://docs.influxdata.com/influxdb3/explorer/)). Alerting through processing-engine
+  plugins ([plugins](https://docs.influxdata.com/influxdb3/core/plugins/)).
+- **Deployment**: single binary, single node.
+- **SDKs**: v3 client libraries for writing and querying, not instrumentation SDKs
+  ([clients](https://docs.influxdata.com/influxdb3/core/reference/client-libraries/v3/)).
+- **Credit it for**: permissive license; the same Arrow/DataFusion/Parquet/Flight SQL stack as
+  Micromegas; all metadata in object storage; very fast recent-data queries; embedded Python engine.
+- **Not confirmed**: Explorer's license; Prometheus remote write into Core.
 
 #### VictoriaMetrics / VictoriaLogs / VictoriaTraces — [org](https://github.com/VictoriaMetrics)
-- **Verified so far**:
-  - Apache-2.0;
-  - active (VM v1.153.0, VictoriaLogs v1.53.0, VictoriaTraces v0.12.0, all Sept–Oct 2026);
-  - Go;
-  - query languages MetricsQL and LogsQL; no SQL.
-- **To verify in step 1**:
-  - storage on local disk vs. object storage;
-  - which features are cluster vs. enterprise;
-  - ingestion protocols (Prometheus, OTLP, Loki, ES);
-  - VictoriaTraces' maturity (pre-1.0).
+- **What it is**: three Go databases from one vendor: VictoriaMetrics (Prometheus long-term storage),
+  VictoriaLogs, and VictoriaTraces, which is built on VictoriaLogs and stores spans as structured
+  logs ([VT docs](https://docs.victoriametrics.com/victoriatraces/)). VictoriaTraces is pre-1.0
+  (v0.12.0) and warns that APIs "may not be backward compatible"
+  ([repo](https://github.com/VictoriaMetrics/VictoriaTraces)).
+- **License and editions**: Apache-2.0 for all three, cluster versions included
+  ([cluster](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/)). Enterprise
+  gates downsampling, multiple retentions, backup automation, mTLS, anomaly detection, Kafka/PubSub
+  integration and vmalert multitenancy
+  ([enterprise](https://docs.victoriametrics.com/victoriametrics/enterprise/)).
+- **Ingestion**:
+  - VictoriaMetrics: Prometheus remote write and scraping, Influx line protocol, Graphite,
+    OpenTSDB, DataDog, NewRelic, and OTLP over HTTP only
+    ([otel](https://docs.victoriametrics.com/victoriametrics/integrations/opentelemetry/));
+  - VictoriaLogs: Elasticsearch `_bulk`, Loki push, OTLP over HTTP, syslog, journald, Splunk,
+    Datadog agent ([ingestion](https://docs.victoriametrics.com/victorialogs/data-ingestion/));
+  - VictoriaTraces: OTLP over HTTP and gRPC
+    ([ingestion](https://docs.victoriametrics.com/victoriatraces/data-ingestion/)).
+- **Storage**: local disk (NFS works); object storage is for vmbackup snapshots only
+  ([single-node](https://docs.victoriametrics.com/victoriametrics/single-server-victoriametrics/),
+  [vmbackup](https://docs.victoriametrics.com/victoriametrics/vmbackup/)). No Parquet.
+- **Dependencies**: none; "a single small executable without external dependencies". The cluster
+  is shared-nothing (vminsert, vmselect, vmstorage).
+- **Query**: MetricsQL, "backwards-compatible with PromQL"
+  ([metricsql](https://docs.victoriametrics.com/victoriametrics/metricsql/)); LogsQL, no SQL
+  ([faq](https://docs.victoriametrics.com/victorialogs/faq/)); VictoriaTraces serves the Jaeger
+  query API and LogsQL ([querying](https://docs.victoriametrics.com/victoriatraces/querying/)).
+- **UI and alerting**: vmui built into each product; Grafana data sources; vmalert evaluates
+  MetricsQL and LogsQL rules and notifies through Alertmanager
+  ([vmalert](https://docs.victoriametrics.com/victoriametrics/vmalert/)).
+- **Deployment**: single binary or open-source cluster, for all three.
+- **SDKs**: relies on OTel and Prometheus clients; the one first-party library is the Go
+  [metrics](https://github.com/VictoriaMetrics/metrics) package.
+- **Credit it for**: drop-in compatibility with Prometheus, Loki, Elasticsearch and Jaeger
+  clients; operational simplicity; an open-source cluster mode; low resource use.
+- **Not confirmed**: VictoriaLogs object-storage offload (preview docs only, not in a release).
+
+#### Quickwit — [repo](https://github.com/quickwit-oss/quickwit)
+- **What it is**: Rust search engine on Tantivy for logs and traces, with compute separated from
+  storage and search running directly on object storage
+  ([overview](https://quickwit.io/docs/overview/introduction)). Metrics aggregations are not
+  available.
+- **License and stewardship**: Apache-2.0 (relicensed from AGPL when Datadog acquired the team in
+  January 2025). The founders said they would focus on "building a new product with Datadog";
+  there is no standalone commercial offering or paid support
+  ([announcement](https://quickwit.io/blog/quickwit-joins-datadog)). Still released: v0.9.0
+  (2025-07-25), v0.9.1 (2026-09-23) ([releases](https://github.com/quickwit-oss/quickwit/releases)).
+- **Ingestion**: native OTLP for logs and traces, Jaeger, an Elasticsearch-compatible ingest API,
+  Kafka and SQS sources ([v0.9.0](https://github.com/quickwit-oss/quickwit/releases/tag/v0.9.0)).
+- **Storage**: indexes (splits) on S3, Azure or other object storage.
+- **Metadata**: PostgreSQL metastore, "recommended for any distributed usage", or a file-backed
+  metastore for single-instance setups
+  ([metastore](https://quickwit.io/docs/configuration/metastore-config)).
+- **Query**: Elasticsearch-compatible query API and REST. No SQL (Parquet/DataFusion work in the
+  tree is an unreleased prototype per the v0.9.0 notes; the page must not mention it as a feature).
+- **UI**: a basic built-in UI; a Grafana data source and the Jaeger UI for traces.
+- **SDKs**: OTel SDKs.
+- **Credit it for**: fast full-text log search on cheap object storage; a drop-in for
+  Elasticsearch-compatible tooling; Jaeger-native trace storage.
 
 #### Complementary and also-considered (status verified 2026-10-02)
 
@@ -298,18 +488,18 @@ marked **unverified** must be checked or left off the page.
 |---|---|---|---|
 | Elasticsearch | AGPL / SSPL / ELv2 triple license | Active | https://github.com/elastic/elasticsearch |
 | OpenSearch | Apache-2.0 | Active | https://github.com/opensearch-project/OpenSearch |
-| Quickwit | Apache-2.0 | Acquired by Datadog Jan 2025; still releasing (v0.9.1, 2026-09-23) | https://www.datadoghq.com/blog/datadog-acquires-quickwit/ |
-| Uptrace | AGPL-3.0 | ClickHouse + PostgreSQL; v2.1.0-beta.8 | https://github.com/uptrace/uptrace |
-| Jaeger | Apache-2.0 | Traces only | https://github.com/jaegertracing/jaeger |
+| Uptrace | AGPL-3.0 | ClickHouse + PostgreSQL metadata; v2.1.0-beta.8 | https://github.com/uptrace/uptrace |
+| Jaeger (and Zipkin) | Apache-2.0 | Traces only; storage delegated to other backends. Zipkin overlaps, last release 2026-04 | https://github.com/jaegertracing/jaeger |
+| Apache SkyWalking | Apache-2.0 | Agent-centric APM; BanyanDB storage; GraphQL plus PromQL/LogQL/TraceQL APIs; v11.0.0 | https://skywalking.apache.org/docs/main/next/en/setup/backend/backend-storage/ |
 | Apache Doris | Apache-2.0 | DIY SQL warehouse, same category as plain ClickHouse | https://github.com/apache/doris |
 | StarRocks | Apache-2.0 | DIY SQL warehouse, same category as plain ClickHouse | https://github.com/StarRocks/starrocks |
 | Sentry self-hosted | FSL-1.1-Apache-2.0 (not OSI open source) | Active | https://github.com/getsentry/self-hosted |
 
 ## Implementation Steps
 
-1. **Re-verify and complete the research.** For every peer, open each linked source and confirm each
-   cell in the research above. Then finish the "to verify" items for LGTM, InfluxDB 3 and the
-   Victoria family. Anything that stays unconfirmed is dropped from the page; it is not hedged.
+1. **Re-check the research.** For every peer, open each linked source and confirm each cell in the
+   research above still holds. Anything that no longer holds, and everything under **Not
+   confirmed**, stays off the page; it is not hedged.
 2. **Write `mkdocs/docs/comparisons/open-source.md`** following the page structure above:
    - inline-link every peer claim to its source;
    - avoid superlatives about Micromegas and the 20 ns figure;
@@ -338,18 +528,23 @@ marked **unverified** must be checked or left off the page.
   page keeps the glance table meaningful and puts all the review-date maintenance in a single
   place. Per-peer pages would rank better for "X vs Micromegas" searches but would multiply the
   pages that go stale. If search data later justifies them, they can split off.
-- **New `comparisons/` section vs. nesting under Cost Effectiveness**: this page is about
-  architecture and fit, not cost, and its peers are free software, so a cost framing would be
-  misleading. A separate section also has room for the agent-observability page.
+- **New top-level `Comparisons` tab vs. nesting under Operations → Cost Effectiveness**: this page
+  is about architecture and fit, not cost or operations, and its peers are free software, so a cost
+  framing would be misleading. A separate tab also has room for the agent-observability page. It
+  takes the tab count from seven to eight; Material collapses tabs into the drawer on narrow
+  screens, so the cost is width on desktop only.
 - **Also-considered one-liners vs. silence**: a short "also considered" list answers "why isn't X
-  here?" cheaply. Projects that are archived or in a different category are left off entirely,
-  rather than listed only to dismiss them.
+  here?" cheaply. Projects that are archived, in a different category, or not open source are left
+  off entirely, rather than listed only to dismiss them.
 
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
 - LLM agent observability gets its own page under `comparisons/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve, Parseable and SigNoz.
-- Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core and the VictoriaMetrics family as full entries.
+- Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family and Quickwit as full entries.
+- Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
+- The page ends with a "which one fits" summary; Micromegas recommendations are domain-neutral, not limited to games (user call).
+- Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
@@ -388,9 +583,8 @@ can only be eyeballed.
 
 ## Open Questions
 
-- Is the peer set right: the issue's five plus LGTM, InfluxDB 3 Core and VictoriaMetrics as full
-  entries, Tracy, Unreal Insights and Perfetto as complementary, and the rest as one-liners? Should
-  Quickwit be promoted to a full entry?
-- Is a top-level `Comparisons` nav tab OK, or should the page sit under an existing tab
-  (e.g. `Operations`) to keep the tab bar short?
-- Should the separate AI-agent observability issue be filed now?
+- Confirm the peer-set changes the research recommends: Quickwit promoted to a full entry,
+  SkyWalking added as a one-liner, Graylog excluded. (Applied in this plan; revert if not wanted.)
+- Top-level `Comparisons` tab (eight tabs) vs. a sub-section under Operations next to Cost
+  Effectiveness? The plan recommends the tab (see Trade-offs).
+- File the separate AI-agent observability issue now? No such issue exists yet (checked 2026-10-02).
