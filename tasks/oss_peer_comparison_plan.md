@@ -48,6 +48,7 @@ linked to that project's own current docs or repo.
 | Native SDKs: Rust (`tracing` / `telemetry` crates), Unreal Engine plugin, C ABI | `unreal/`, `native/`, `rust/` |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
+| Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
@@ -169,8 +170,8 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
      leaves that axis out of the differences.
    - OpenObserve, Parseable and SigNoz each get one sentence on their LLM/agent observability features.
 5. **Complementary tools**: Tracy, Unreal Insights and Perfetto give a deep view of one session.
-   Micromegas keeps the history of many processes in a single store and makes it queryable. Teams
-   commonly use both. One sentence applies the code-vs-data point (see Current State): their
+   Micromegas keeps the history of many processes in a single store and makes it queryable. It also
+   exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): their
    sampling modes show the hot function, and data-named spans show the asset or input behind it.
 6. **Also considered**: one line each.
 7. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
@@ -509,13 +510,13 @@ weekly. Items under **Not confirmed** stay off the page.
    - avoid superlatives about Micromegas and the 20 ns figure;
    - use the Micromegas phrasing from "Micromegas facts the page may state".
 3. **Nav**: add the `Comparisons` section to `mkdocs/mkdocs.yml` after `Getting Started`.
-4. **Cross-links**:
-   - one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page;
-   - one line in the matching section of `mkdocs/docs/index.md`, if it has a comparison/why section.
+4. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
 5. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
    `[Open-source peers](https://micromegas.info/docs/comparisons/open-source/)` and a one-line
    description naming the peers, since LLM retrieval matches on those names.
-6. **Build and check locally** (see Testing Strategy).
+6. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
+   Comparisons nav section and the `llms.txt` section.
+7. **Build and check locally** (see Testing Strategy).
 
 ## Files to Modify
 
@@ -523,8 +524,7 @@ weekly. Items under **Not confirmed** stay off the page.
 - `mkdocs/mkdocs.yml` (nav)
 - `welcome/public/llms.txt`
 - `mkdocs/docs/cost-comparisons/index.md` (one cross-link line)
-- `mkdocs/docs/index.md` (optional cross-link)
-- `CHANGELOG.md` (docs entry under Unreleased, if docs pages are logged there)
+- `CHANGELOG.md` (Docs entry under Unreleased)
 
 ## Trade-offs
 
@@ -573,15 +573,12 @@ can only be eyeballed.
 1. `cd mkdocs && python serve.py`. Open `http://127.0.0.1:8000/docs/comparisons/open-source/`
    (or the URL `serve.py` prints). The page should render with the glance table readable at
    laptop width and the new `Comparisons` tab visible in the nav.
-2. Build the staged tree the way CI does, then run the checker:
+2. Build the docs and check the sitemap entry:
    ```
    mkdocs build --config-file mkdocs/mkdocs.yml --site-dir $PWD/public_docs/docs
-   cp welcome/public/{llms.txt,robots.txt,sitemap.xml} public_docs/ && echo micromegas.info > public_docs/CNAME
-   python3 build/check_docs_site.py public_docs
    ```
-   Expected: `OK`, and `grep comparisons/open-source public_docs/docs/sitemap.xml` returns one line.
-   The root `index.html` comes from the welcome build. If it is missing locally, the canonical check
-   for it is simply not run.
+   `grep comparisons/open-source public_docs/docs/sitemap.xml` should return one line. The full
+   staged check runs in CI.
 3. Click every peer source link on the rendered page. Each one should load and support the
    statement next to it.
 
