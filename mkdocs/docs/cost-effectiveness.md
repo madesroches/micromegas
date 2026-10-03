@@ -73,7 +73,7 @@ Resources are sized for redundancy, not peak utilization — a tighter deploymen
 This deployment handles:
 
 - **449 billion total events** over 90 days
-- **~5 billion events per day**
+- **Spikes of ~266 million events per minute**
 - **~58,000 events per second** average throughput
 
 ## Cost Management Features

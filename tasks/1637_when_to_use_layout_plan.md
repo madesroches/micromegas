@@ -370,8 +370,8 @@ locally per phase as rollback points.
 ## Decisions
 
 - Cost figures ($1,100/month, 449B events) are carried over unchanged. Refreshing them is
-  separate work. The derived Scale Perspective rates are already corrected in
-  `cost-effectiveness.md` (~5B/day, ~58k/s) and move over as-is.
+  separate work. The Scale Perspective rates are already corrected in
+  `cost-effectiveness.md` (~266M/min peak, ~58k/s average) and move over as-is.
 - One PR for the layout, the SaaS merge and the agent page (user call).
 - The agent page title is "Micromegas for LLM Agent Observability" (user call); the nav label is
   `vs. LLM Agent Tools`.
