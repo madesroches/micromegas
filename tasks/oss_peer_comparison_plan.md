@@ -25,7 +25,7 @@ retrieval" below.
   Integrations, Operations. The SaaS cost pages sit under **Operations → Cost Effectiveness**.
 - **Sitemap**: MkDocs generates `/docs/sitemap.xml` from every built page automatically.
   `welcome/public/robots.txt` already advertises it, and `welcome/public/sitemap.xml` lists only
-  non-MkDocs pages. A new page therefore lands in the sitemap without any manual edit.
+  non-MkDocs pages.
 - **llms.txt**: `welcome/public/llms.txt` is a hand-maintained index, grouped by section, with a
   `## Cost` section that links the SaaS comparisons.
 - **CI check**: `.github/workflows/publish-docs.yml` runs on PRs touching `mkdocs/**` or
@@ -34,9 +34,6 @@ retrieval" below.
   - sitemap `<loc>`s resolve
   - canonical tags are present
   - every on-site `llms.txt` link resolves to a built file (`check_llms_txt`)
-
-  That last check covers the issue's "link check passing in CI" requirement as-is. No checker
-  change is needed.
 - **Precedent**: `cost-comparisons/*.md` open with a "Last reviewed" or "verified" date and a
   disclaimer, use one summary table, then qualitative sections. `tasks/completed/rework_cost_section_plan.md`
   embedded its dated research in the plan itself; this plan does the same below.
@@ -55,8 +52,9 @@ retrieval" below.
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
 | Every metric emission is stored as its own row with a nanosecond timestamp, carrying process/exe/computer/username plus properties; SQL can group or filter by any of them at query time | `query-guide/schema-reference.md` (`measures`) |
-| The built-in system monitor samples host-wide CPU usage and used/free memory every 200 ms in each instrumented process (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
+| The built-in system monitor samples host-wide CPU usage and used/free memory every 200 ms in each process using the Rust telemetry sink or the C ABI (on by default; not part of the Unreal plugin) (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
 | Cardinality is bounded on the producer side: metric names, log targets and property sets are interned in process memory, so they must stay bounded; free-form values go in the log message body | `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
+| Fleet-wide dimensions (process, computer, user) and log message bodies are per-row data with no per-series index on the server; names and property sets within a process must stay bounded | `query-guide/schema-reference.md` (`measures`), `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
@@ -116,14 +114,7 @@ the fleet.
 | Complementary tools | Tracy, Unreal Insights, Perfetto | Short section: session-local profilers vs. a fleet-wide, historical store. Not head-to-head |
 | Also considered | Elasticsearch/OpenSearch, Uptrace, Jaeger (with Zipkin), Apache SkyWalking, Apache Doris/StarRocks, Sentry self-hosted | One line each with the reason it isn't a full entry |
 
-The five peers named in the issue are kept. Five are added from the additional-peer research:
-- **Prometheus (with Thanos)**: the most widely deployed open-source metrics system; its own docs
-  state the frequency, dimensionality and single-node limits that Micromegas is designed around.
-- **Grafana LGTM**: it is the default self-hosted answer and the stack most readers already run.
-- **InfluxDB 3 Core**: it has the closest storage/query stack to Micromegas (Rust, Arrow, DataFusion, Parquet, Flight, object storage).
-- **VictoriaMetrics family**: it is widely recommended and now covers all three signals.
-- **Quickwit**: Rust, search directly on object storage, with PostgreSQL as the recommended
-  metastore — the closest metadata design to Micromegas — and still actively released.
+The five peers named in the issue are kept. Five are added from the additional-peer research (see Decisions).
 
 Excluded, and not listed on the page:
 - archived or discontinued projects: SigLens, HoraeDB, Highlight.io (no release since 2025-08);
@@ -148,8 +139,8 @@ quote. So:
 - **A quotable definition first.** The page's first sentence defines Micromegas in one line
   (open-source, Apache-2.0, what it collects, where it stores, how it is queried).
 - **Query vocabulary, where true.** Headings and first sentences use the words people search
-  with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality,
-  Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
+  with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality fleet
+  dimensions (many processes, machines, users), Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
   telemetry, Prometheus alternative.
 - **Specific numbers over adjectives.** E.g. host CPU and memory every 200 ms vs. a 1m
   default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
@@ -163,11 +154,12 @@ quote. So:
 ### Page structure
 
 1. **Intro**:
+   - the one-line definition of Micromegas;
+   - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
+     it doesn't, and a link to the full summary at the end;
    - scope: open-source and self-hosted only, with a link to the SaaS cost comparisons;
    - a `*Last reviewed: October 2026*` line;
-   - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues;
-   - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
-     it doesn't, and a link to the full summary at the end.
+   - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues.
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
    analytics, presentation), followed by a **Limits** list stated plainly:
    - PostgreSQL is required for metadata;
@@ -205,8 +197,8 @@ quote. So:
    - The Prometheus section's *How Micromegas differs* is longer than the others, with three
      short paragraphs, each quoting Prometheus's own docs (see its research entry):
      - *Frequency*: one sample per series per scrape (default interval 1m) vs. every emission stored as its
-       own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each instrumented process
-       (and the process's own memory every 5 s).
+       own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each process using the Rust telemetry sink or the C ABI (on by default; not part of the
+       Unreal plugin), plus the process's own memory every 5 s.
      - *Dimensionality*: every label combination is a new time series with RAM/CPU/disk cost, so
        labels stay low-cardinality and are chosen at instrumentation time vs. properties and
        columns on each row, grouped by any of them in SQL at query time. State Micromegas's own
@@ -241,7 +233,8 @@ quote. So:
    Then two short lists:
    - **Choose Micromegas when**:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
-       metrics (also C/C++ through the C ABI) left on in production rather than sampled away;
+       metrics (also C/C++ through the C ABI) left on in production; in Unreal, whole blocks are kept
+       around anomalies such as frame spikes rather than sampling individual requests;
      - your cost depends on the data more than the code (assets, URLs, scripts, queries going
        through an interpreter or resolver) and you need to know *which* input was slow, not just
        which function;
@@ -259,7 +252,7 @@ quote. So:
    on the page, so they add no new sources. Candidates:
    - What is an open-source, self-hosted alternative to Datadog that I can query with SQL?
    - How do I collect high-frequency telemetry from Unreal Engine games or desktop applications?
-   - Which open-source tool handles high-cardinality metrics better than Prometheus?
+   - Which open-source tool handles telemetry from millions of processes or users better than Prometheus? (the answer also credits GreptimeDB for high-cardinality metrics, per its research entry)
    - Can I store observability data as Parquet on S3 and query it with SQL?
    - How do I trace Rust applications in production with low overhead?
    - Which tool should I use for OpenTelemetry APM? (answer: SigNoz or ClickStack)
@@ -383,7 +376,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   PromQL support are described as less mature.
 - **UI**: HyperDX provides search, traces, dashboards, alerts and session replay.
 - **SDKs**: OTel-based SDKs.
-- **Credit it for**: raw query speed and compression at very large scale, plus ecosystem maturity (about 50k stars); ClickStack's HyperDX adds built-in search, traces, dashboards and alerts UI.
+- **Credit it for**: raw query speed and compression at very large scale, plus ecosystem maturity; ClickStack's HyperDX adds built-in search, traces, dashboards and alerts UI.
 
 #### Grafana LGTM — [Loki](https://github.com/grafana/loki), [Tempo](https://github.com/grafana/tempo), [Mimir](https://github.com/grafana/mimir), [Pyroscope](https://github.com/grafana/pyroscope)
 - **What it is**: one backend per signal, viewed in Grafana. Loki indexes labels, not log contents;
@@ -615,8 +608,8 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 3. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
 4. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
    `[Open-source peers](https://micromegas.info/docs/comparisons/open-source/)` and a one-line
-   description naming the peers and the workloads Micromegas fits (high-frequency, high-cardinality
-   telemetry from native and client processes, queried with SQL), since LLM retrieval matches on
+   description naming the peers and the workloads Micromegas fits (high-frequency telemetry with high-cardinality fleet
+   dimensions (many processes, machines, users) from native and client processes, queried with SQL), since LLM retrieval matches on
    those names and terms.
 5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    Comparisons nav section and the `llms.txt` section.
@@ -677,8 +670,7 @@ job, which runs on this PR because it touches `mkdocs/**` and `welcome/**`:
 These checks need a human: whether a table reads well and whether a claim matches a peer's docs
 can only be eyeballed.
 
-1. `cd mkdocs && python serve.py`. Open `http://127.0.0.1:8000/docs/comparisons/open-source/`
-   (or the URL `serve.py` prints). The page should render with the glance table readable at
+1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/comparisons/open-source/`. The page should render with the glance table readable at
    laptop width and the new `Comparisons` tab visible in the nav.
 2. Build the docs and check the sitemap entry:
    ```
