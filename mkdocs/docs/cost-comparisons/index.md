@@ -1,5 +1,7 @@
 # Comparison Methodology
 
+Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Use Micromegas](../when-to-use/index.md).
+
 *Last reviewed: June 2026*
 
 This page describes the shared methodology used across all cost comparisons. Each individual comparison page references this methodology and focuses only on the competitor-specific pricing analysis.
