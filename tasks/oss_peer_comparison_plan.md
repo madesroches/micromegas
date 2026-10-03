@@ -55,7 +55,7 @@ retrieval" below.
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
 | Every metric emission is stored as its own row with a nanosecond timestamp, carrying process/exe/computer/username plus properties; SQL can group or filter by any of them at query time | `query-guide/schema-reference.md` (`measures`) |
-| The built-in system monitor records CPU usage and used/free memory every 200 ms per process (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
+| The built-in system monitor samples host-wide CPU usage and used/free memory every 200 ms in each instrumented process (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
 | Cardinality is bounded on the producer side: metric names, log targets and property sets are interned in process memory, so they must stay bounded; free-form values go in the log message body | `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
@@ -151,7 +151,7 @@ quote. So:
   with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality,
   Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
   telemetry, Prometheus alternative.
-- **Specific numbers over adjectives.** E.g. CPU and memory every 200 ms per process vs. a 1m
+- **Specific numbers over adjectives.** E.g. host CPU and memory every 200 ms vs. a 1m
   default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
 - **Explicit fit statements.** Every recommendation names the workload: "for X, choose Y". The
   summary and FAQ make this explicit for Micromegas and for each peer.
@@ -204,8 +204,9 @@ quote. So:
    - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
    - The Prometheus section's *How Micromegas differs* is longer than the others, with three
      short paragraphs, each quoting Prometheus's own docs (see its research entry):
-     - *Frequency*: one value per target per scrape (default 1m) vs. every emission stored as its
-       own row; e.g. Micromegas's system monitor records CPU and memory every 200 ms per process.
+     - *Frequency*: one sample per series per scrape (default interval 1m) vs. every emission stored as its
+       own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each instrumented process
+       (and the process's own memory every 5 s).
      - *Dimensionality*: every label combination is a new time series with RAM/CPU/disk cost, so
        labels stay low-cardinality and are chosen at instrumentation time vs. properties and
        columns on each row, grouped by any of them in SQL at query time. State Micromegas's own
