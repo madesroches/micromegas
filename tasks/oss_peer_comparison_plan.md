@@ -201,7 +201,7 @@ quote. So:
    - no built-in alert engine (alerting goes through Grafana);
    - spans come from the Rust and Unreal SDKs; the C ABI records logs and metrics;
    - no browser or mobile-web RUM SDK and no session replay (game-client RUM comes through the Unreal plugin);
-   - smaller community than the peers;
+   - younger project (first commit January 2024) with a smaller community than the peers; issues go straight to the maintainers;
    - you operate it yourself: PostgreSQL, object storage, and the services (or the monolith).
    The brief also carries one **access control** bullet that says what it is, concretely (from
    `admin/authorization.md`): every row is stamped server-side with an audience taken from the
