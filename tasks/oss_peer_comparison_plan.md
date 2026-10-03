@@ -240,6 +240,10 @@ quote. So:
      - one SQL surface (DataFusion) vs. that peer's query languages;
      - notebooks running the same engine in the browser (WASM);
      - per-row access control on ingested data;
+     - the ingest path: what the peer does per event when data arrives (parsing, schema inference,
+       indexing, replication, collector hops), against Micromegas storing each LZ4-compressed block as
+       received. Every full peer gets this axis individually, with permalinks to the peer's source;
+       no cross-vendor throughput ratios, since vendor benchmarks differ in hardware, payload and date;
      - spans named by the data being processed vs. sampled call stacks (only for peers that offer
        profiling: LGTM via Pyroscope, OpenObserve profiles).
 
@@ -248,8 +252,8 @@ quote. So:
      leaves that axis out of the differences. The JIT ETL axis still applies to the four
      DataFusion/Parquet peers for spans and per-process views, since they write Parquet at ingestion.
    - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
-   - The Prometheus section's *How Micromegas differs* is longer than the others, with three
-     short paragraphs, each quoting Prometheus's own docs (see its research entry):
+   - The Prometheus section's *How Micromegas differs* is longer than the others, with four
+     short paragraphs (the fourth, *Ingestion*, is the ingest-path axis), each quoting Prometheus's own docs (see its research entry):
      - *Frequency*: one sample per series per scrape (default interval 1m) vs. every emission stored as its
        own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each process, plus the process's own memory every 5 s.
      - *Dimensionality*: every label combination is a new time series with RAM/CPU/disk cost, so
@@ -737,6 +741,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
 - No scope sentence in the intro ("this page covers…"): too meta; the page's sections make the scope evident (user call).
 - "Micromegas in brief" states what each stage does, not what it lacks (e.g. "the C ABI records logs and metrics", not "…only"); missing features belong in the Limits list (user call).
+- Ingestion is compared with every peer individually, in its own section (user call). One object-storage write and one PostgreSQL row per block is a strength, not a limit: the SDKs batch per stream when they can (Rust defaults: 10 MiB logs and thread spans, 1 MiB metrics) and flush when necessary (every 60 s), so one write covers a whole LZ4-compressed block (user call). Compression happens in the instrumented process, so it is not listed as a peer advantage (user call). Parsing is deferred, not avoided: logs and metrics are parsed continuously by the daemon, and the page says so.
 - The InfluxDB 3 Core section thanks InfluxData for its upstream investment in Apache DataFusion and the Rust Arrow implementation, which Micromegas's query engine builds on (user call); sourced from InfluxData's FDAP and InfluxDB 3 GA posts.
 - Against Grafana LGTM, unification leads the *How Micromegas differs* paragraph (user call): LGTM is one backend per signal with its own deployment, storage and query language, tied together by Grafana data-source links (trace to logs generates a LogQL query from span attributes; the reverse needs trace IDs in log lines), while Micromegas is one ingestion service, one store and one SQL engine, with every signal keyed by the same process and stream identifiers and one access-control model.
 - SQL as the only query language is not a limit: one SQL surface across logs, metrics and traces is the unified promise. PromQL appears only as a fit statement for teams with existing PromQL dashboards and alert rules (user call).
