@@ -39,8 +39,10 @@ The 8 old cost URLs keep working through redirect stubs from the `mkdocs-redirec
     `Comparison of Philosophies` are the same SaaS-vs-Micromegas table, at different detail.
   - `A Note on Personnel Costs` and `Why Personnel Costs Are Excluded` make the same point.
   - Each vendor page opens with the same "see the Comparison Methodology page" line and has the
-    same four sections: `<Vendor> Pricing`, `Cost Comparison Summary` (a two-row table),
-    `Qualitative Differences`, `References` (a numbered list). There is no table across vendors.
+    same four H2 sections: `<Vendor> Pricing`, `Cost Comparison Summary` (a two-row table),
+    `Qualitative Differences`, `References` (a numbered list). `dynatrace.md` (`Important
+    Caveats`) and `splunk.md` (`Cisco Acquisition Context`) each add one H3 under the pricing
+    section. There is no table across vendors.
 - Inbound links to the cost URLs outside `mkdocs/docs/`:
   - `welcome/public/llms.txt:71-80`, the `## Cost` section: 8 links.
   - `welcome/src/components/Footer.tsx:31`: `/docs/cost-effectiveness/`.
@@ -101,8 +103,7 @@ stubs. Teach `check_canonical_tags` about them:
   trailing slash becomes `index.html`.
 - Files with no refresh tag are checked exactly as today.
 
-This keeps check 4 strict for real pages and turns a typo in `redirect_maps` (which the plugin only
-logs as a warning, and the build is not `--strict`) into a CI failure.
+This keeps check 4 strict for real pages.
 
 ### 3. `when-to-use/saas-vendors.md`: merged cost page
 
@@ -115,7 +116,8 @@ figures are unchanged (see Decisions). Outline:
 ## At a glance                    ← new: one table, a row per vendor, from the 6 summary tables
 ## Cost Philosophy                ← cost-effectiveness.md (keep heading text = keep anchors)
 ### Why This Matters
-## Primary Cost Drivers
+## Primary Cost Drivers            ← also absorbs cost-comparisons/index.md "The Micromegas Cost
+                                    Model" (cost-driver bullets and the OTLP/HTTP note)
 ### Compute Services / Storage Services / Supporting Infrastructure
 ## Example Deployment Cost        ← the single copy of the $1,100 table
 ### Data Scale / Monthly Infrastructure Costs / Scale Perspective
@@ -155,7 +157,10 @@ including the caveats in parentheses (Dynatrace "logs + monitoring only", Grafan
 retention only"). Rows are sorted by vendor name, not by ratio.
 
 `cost-effectiveness.md`, `cost-comparisons/index.md` and the six vendor files are deleted (the
-redirect map replaces them). The `cost-comparisons/` directory goes away.
+redirect map replaces them). The `cost-comparisons/` directory goes away. The link-list sections
+`## Commercial Platform Comparison` and `## Detailed Cost Comparisons` (`cost-effectiveness.md`)
+and `## Detailed Comparisons` (`cost-comparisons/index.md`) are deleted, not carried over: the
+merged page replaces them.
 
 ### 4. `when-to-use/agent-observability.md`: new page (#1637)
 
@@ -341,8 +346,7 @@ locally per phase as rollback points.
   merged page gets a table across all six vendors, which no page has today.
 - **`mkdocs-redirects` vs. hand-written stubs.** Hand-written HTML could carry absolute canonicals
   and skip the checker change, but the stubs would live outside the build, and nothing would
-  catch a target that drifts. The plugin is the standard tool. The checker change is small and
-  validates targets, which hand-written stubs would not get.
+  catch a target that drifts. The plugin is the standard tool. The checker change is small.
 - **Bold lead-ins vs. H3s inside vendor sections.** H3s would add 18 near-duplicate TOC entries
   with numbered slugs. Bold lead-ins match the peer page.
 
@@ -377,7 +381,8 @@ checker. That is the end-to-end test of the redirect map, nav, sitemap and `llms
 Whether a merged page reads well and whether an anchor lands on the right heading are things to
 check by eye. To do it locally (from repo root, in the docs venv):
 
-1. `mkdocs build --config-file mkdocs/mkdocs.yml --site-dir /tmp/mm_site/docs`, then
+1. `mkdocs build --strict --config-file mkdocs/mkdocs.yml --site-dir /tmp/mm_site/docs` (strict
+   turns the plugin's missing-target warning into an error), then
    `python3 build/check_docs_site.py` against a staged tree. To reproduce CI's layout, follow the
    staging step in `publish-docs.yml`, or copy `welcome/public/*` plus a `CNAME` and the root
    `robots.txt`/`sitemap.xml` into `/tmp/mm_site`. Expected: `OK`.
