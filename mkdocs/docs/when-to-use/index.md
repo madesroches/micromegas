@@ -23,7 +23,7 @@ Every claim on this page links to its source: the project's own docs or reposito
 - There is no built-in alert engine; alerting goes through Grafana ([Grafana plugin](../grafana/index.md)).
 - Among the native SDKs, spans come from Rust and Unreal; the C ABI records logs and metrics only. OTLP/HTTP traces are also accepted as spans ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
 - There is no browser or mobile-web RUM SDK and no session replay; RUM for game clients comes through the [Unreal plugin](../unreal/index.md).
-- Micromegas is a younger project ([first commit January 2024](https://github.com/madesroches/micromegas)) with a smaller community than its peers; issues and design discussions go straight to the maintainers.
+- Micromegas is a younger project: it was extracted in January 2024 from the [Legion Labs engine](https://github.com/legion-labs/legion), where its telemetry code had been in development since 2022. Its community is smaller than its peers'; issues and design discussions go straight to the maintainers.
 - You operate it yourself: PostgreSQL, object storage, and the services (or the [single-process monolith](../admin/monolith.md)).
 
 ## At a glance
