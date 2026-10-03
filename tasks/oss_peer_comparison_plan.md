@@ -48,7 +48,7 @@ retrieval" below.
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
-| Full-resolution spans: Rust CPU (thread) spans are not sampled by default; at this overhead, recording every span is practical in production (user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/`, `unreal/instrumentation-api.md` (Console Commands) |
+| Full-resolution spans: Rust CPU (thread) spans are opt-in (`MICROMEGAS_ENABLE_CPU_TRACING=true`); once enabled, every span is recorded without sampling, and at this overhead that is practical in production (user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
 | Raw data stays in object storage and views are materialized on demand when queried (JIT ETL), so processing cost follows what is queried, not what is collected | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
 | A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~165 million/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
@@ -84,8 +84,8 @@ to operate the stack. Efficiency always means two concrete things, never the bar
 
 That efficiency is what enables the use cases peers make expensive: very high-frequency,
 high-resolution telemetry (every emission its own row; host metrics every 200 ms), and full-resolution
-traces recorded without sampling: Rust CPU traces are unsampled by default because recording every
-span proves practical, and Unreal records every span with `telemetry.spans.all`. State the
+traces recorded without sampling: Rust CPU traces are opt-in (`MICROMEGAS_ENABLE_CPU_TRACING=true`) and, once enabled, record every
+span without sampling because that proves practical, and Unreal records every span with `telemetry.spans.all`. State the
 peer side neutrally ("the widely adopted default", "a managed or turnkey option"), never as a motive.
 
 **Audience framing**: the page describes Micromegas for any native-code or client/fleet workload
@@ -273,7 +273,7 @@ quote. So:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
        metrics (also C/C++ through the C ABI) left on in production;
      - you want very high-frequency, high-resolution telemetry, or full-resolution traces without
-       sampling (Rust CPU traces are unsampled by default; `telemetry.spans.all` in Unreal, whose default keeps blocks
+       sampling (Rust CPU traces, opt-in via `MICROMEGAS_ENABLE_CPU_TRACING=true`, record every span unsampled; `telemetry.spans.all` in Unreal, whose default keeps blocks
        around frame spikes);
      - your cost depends on the data more than the code (assets, URLs, scripts, queries going
        through an interpreter or resolver) and you need to know *which* input was slow, not just
@@ -301,7 +301,7 @@ quote. So:
      client fleets, when efficiency matters)
    - How do I reduce observability costs at high event volume? (Micromegas with its cost figure;
      VictoriaMetrics credited for metrics)
-   - How do I record full-resolution traces in production without sampling?
+   - How do I record full-resolution traces in production without sampling? (Rust: enable CPU tracing with `MICROMEGAS_ENABLE_CPU_TRACING=true`, then every span is recorded; Unreal: `telemetry.spans.all`)
    - How do I collect telemetry from Unreal Engine games in production? (Unreal Insights credited
      for one session)
    - How do I collect telemetry from desktop apps or game clients across many users?
