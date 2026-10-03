@@ -275,26 +275,9 @@ quote. So:
    model rather than a feature list; link to the `vs. SaaS Vendors` pages for the numbers. No
    per-vendor detail on this page.
 8. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
-   compete, and many teams run two of them"), then an "If you need… / Look at" table. Every row
-   restates a peer's *Credit it for* line from the research below, so the summary adds no new claims
-   and needs no new links:
-
-   | If you need… | Look at |
-   |---|---|
-   | The standard self-hosted stack, PromQL, and the Grafana ecosystem | Grafana LGTM |
-   | Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
-   | A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
-   | All signals as Parquet on object storage, one binary, no metadata database | Parseable |
-   | The widest signal coverage (browser and mobile RUM, session replay), or a migration off ELK | OpenObserve |
-   | One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
-   | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
-   | Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |
-   | Elasticsearch-compatible log and trace search directly on object storage | Quickwit |
-   | Scrape-based service monitoring and alerting, with the largest exporter ecosystem | Prometheus (Thanos for long-term, global view) |
-   | A deep look at one session on one machine | Tracy, Unreal Insights, Perfetto (alongside any of the above) |
-   | You're on a SaaS vendor and cost at high volume is the problem | see the `vs. SaaS Vendors` cost pages |
-
-   Then two short lists:
+   compete, and many teams run two of them"), then two short lists. No "If you need… / Look at"
+   table: the per-peer sections already say what each peer is for, and the lists are clear on
+   their own (user call).
    - **Choose Micromegas when** efficiency matters, meaning instrumentation overhead and cost:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
        metrics (also from any app through the C ABI, e.g. the Blender add-on) left on in production;

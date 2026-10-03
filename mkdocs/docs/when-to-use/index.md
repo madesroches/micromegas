@@ -2,7 +2,7 @@
 
 Micromegas is an open-source ([Apache-2.0](https://github.com/madesroches/micromegas/blob/main/LICENSE)), self-hosted observability stack that collects logs, metrics and traces from native and client processes, stores raw payloads in object storage with [PostgreSQL metadata][arch], and is queried with SQL over Apache Arrow FlightSQL.
 
-**TL;DR.** Choose Micromegas for low instrumentation overhead and low cost, and for the high-frequency, full-resolution telemetry that efficiency makes affordable. Choose a peer when you want the established, widely adopted default, or when you do not want to operate the stack yourself. The [summary at the end](#summary-which-one-fits) maps workloads to tools.
+**TL;DR.** Choose Micromegas for low instrumentation overhead and low cost, and for the high-frequency, full-resolution telemetry that efficiency makes affordable. Choose a peer when you want the established, widely adopted default, or when you do not want to operate the stack yourself. The [summary at the end](#summary-which-one-fits) lists when each choice fits.
 
 *Last reviewed: October 2026*
 
@@ -183,21 +183,6 @@ SaaS vendors bill on volume (hosts, GB ingested, spans), while Micromegas runs o
 ## Summary: which one fits
 
 These projects overlap more than they compete, and many teams run two of them.
-
-| If you need... | Look at |
-|---|---|
-| The standard self-hosted stack, PromQL, and the Grafana ecosystem | Grafana LGTM |
-| Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
-| A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
-| All signals as Parquet on object storage, one binary, no metadata database | Parseable |
-| The widest signal coverage (browser and mobile RUM, session replay), or a migration off ELK | OpenObserve |
-| One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
-| Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
-| Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |
-| Elasticsearch-compatible log and trace search directly on object storage | Quickwit |
-| Scrape-based service monitoring and alerting, with the largest exporter ecosystem | Prometheus (Thanos for long-term, global view) |
-| A deep look at one session on one machine | Tracy, Unreal Insights, Perfetto (alongside any of the above) |
-| You're on a SaaS vendor and cost at high volume is the problem | see the [vs. SaaS Vendors](../cost-effectiveness.md) cost pages |
 
 **Choose Micromegas when** efficiency matters, meaning instrumentation overhead and cost:
 
