@@ -94,6 +94,11 @@ stubs. Teach `check_canonical_tags` about them:
 - A file is a redirect stub when it has a `<meta http-equiv="refresh" content="0; url=...">` tag.
 - For a stub, don't apply the self-canonical rule. Instead, resolve the refresh URL with the
   existing `href_to_path` (fragment dropped) and fail if the target file does not exist.
+- `href_to_path` must first apply `_resolve_url_path` to relative hrefs too (today only the
+  root-absolute branch does). The stubs' refresh URLs are relative directory URLs such as
+  `../when-to-use/saas-vendors/`, and `.resolve()` drops the trailing slash, which would yield the
+  directory rather than `index.html`. Compute the joined path from the resolved URL path so a
+  trailing slash becomes `index.html`.
 - Files with no refresh tag are checked exactly as today.
 
 This keeps check 4 strict for real pages and turns a typo in `redirect_maps` (which the plugin only
@@ -360,6 +365,7 @@ existing synthetic-tree helpers:
 - a redirect stub whose refresh target exists passes;
 - a redirect stub whose target is missing fails, and the message names the stub;
 - a redirect target with a fragment (`../saas-vendors/#vs-datadog`) resolves, fragment ignored;
+- a relative directory URL (trailing slash) resolves to that directory's `index.html`;
 - a non-stub page with a relative or foreign canonical still fails (stub handling must not
   loosen check 4).
 
