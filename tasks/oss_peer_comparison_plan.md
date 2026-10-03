@@ -49,8 +49,8 @@ retrieval" below.
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
 | Full-resolution spans: Rust CPU (thread) spans are recorded at full resolution, unsampled, and run in production; `MICROMEGAS_ENABLE_CPU_TRACING=true` turns them on (the default is off, a conservative setting; user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
-| Raw data stays in object storage and views are materialized on demand when queried (JIT ETL), so processing cost follows what is queried, not what is collected | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
-| A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~165 million/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
+| Raw data stays in object storage. Spans and per-process views are materialized only when queried (JIT ETL), so their processing cost follows what is queried; logs and metrics are materialized continuously into global views by the maintenance daemon | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
+| A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~5 billion/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
@@ -86,7 +86,7 @@ collectors.
 efficiency, and choose a peer when they want the established, widely adopted default or don't want
 to operate the stack. Efficiency always means two concrete things, never the bare adjective:
 - *instrumentation overhead*: the in-process design above, cheap enough to leave on in production;
-- *cost*: raw data on your own object storage, processed only when queried, with the production
+- *cost*: raw data on your own object storage, spans materialized only when queried, with the production
   deployment figure (~$1,100/month for 449 billion events over 90 days) as the anchor number.
 
 That efficiency is what enables the use cases peers make expensive: very high-frequency,
@@ -221,8 +221,9 @@ quote. So:
      candidate axes are:
      - in-process native SDKs vs. relying on OTel SDKs;
      - Parquet on object storage plus PostgreSQL metadata vs. that peer's storage and dependencies;
-     - raw payloads kept in object storage and processed into Parquet views only when queried
-       (JIT ETL), so processing cost follows what is queried, not what is collected;
+     - raw payloads kept in object storage; spans and per-process views are processed into Parquet
+       only when queried (JIT ETL), so their processing cost follows what is queried, not what is
+       collected (logs and metrics are materialized continuously by the maintenance daemon);
      - every emission stored as its own row (high-frequency, full-resolution telemetry);
      - one SQL surface (DataFusion) vs. that peer's query languages;
      - notebooks running the same engine in the browser (WASM);
@@ -233,7 +234,7 @@ quote. So:
      Where a peer shares an axis (e.g. Parseable, OpenObserve, GreptimeDB and InfluxDB 3 also run
      DataFusion over Parquet; Quickwit also keeps metadata in PostgreSQL), the section says so and
      leaves that axis out of the differences. The JIT ETL axis still applies to the four
-     DataFusion/Parquet peers, since they write Parquet at ingestion.
+     DataFusion/Parquet peers for spans and per-process views, since they write Parquet at ingestion.
    - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
    - The Prometheus section's *How Micromegas differs* is longer than the others, with three
      short paragraphs, each quoting Prometheus's own docs (see its research entry):
@@ -288,7 +289,7 @@ quote. So:
      - your telemetry comes from many processes that aren't classic services: desktop or mobile
        clients, edge devices, batch jobs, CI runners, game clients and servers;
      - you need high event volume and long retention at a predictable cost, stored as Parquet on
-       your own object storage and processed only when queried (one production deployment: ~$1,100/month
+       your own object storage, with spans processed only when queried (one production deployment: ~$1,100/month
        for 449 billion events over 90 days);
      - you want one SQL surface across logs, metrics and traces, including in notebooks, instead of
        one query language per signal;
@@ -680,7 +681,6 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
    those names and terms.
 5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    `When to Use` nav tab and the `llms.txt` section.
-6. **Build and check locally** (see Testing Strategy).
 
 ## Files to Modify
 
