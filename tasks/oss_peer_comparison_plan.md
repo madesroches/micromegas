@@ -186,8 +186,9 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
        storage for scale-out vs. independently scaled services over object storage.
 5. **Complementary tools**: Tracy, Unreal Insights and Perfetto give a deep view of one session.
    Micromegas keeps the history of many processes in a single store and makes it queryable. It also
-   exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): their
-   sampling modes show the hot function, and data-named spans show the asset or input behind it.
+   exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): Tracy's sampling
+   profiler and Perfetto's call-stack sampling show the hot function, and data-named spans show the
+   asset or input behind it. Against Unreal Insights (instrumented scopes) the difference is cost and retention.
 6. **Also considered**: one line each.
 7. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
    compete, and many teams run two of them"), then an "If you need… / Look at" table. Every row
@@ -549,9 +550,9 @@ weekly. Items under **Not confirmed** stay off the page.
 
 | Project | License | Status | Source |
 |---|---|---|---|
-| Tracy | BSD-3-Clause | v0.14.1, 2026-08-22 | https://github.com/wolfpld/tracy |
+| Tracy | BSD-3-Clause | v0.14.1, 2026-08-22; has a sampling profiler (README: "hybrid frame and sampling profiler") | https://github.com/wolfpld/tracy |
 | Unreal Insights | Epic EULA (source-available, not OSS) | Ships with UE | https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-insights-in-unreal-engine |
-| Perfetto | Apache-2.0 | v58.2; SQL over single trace files via trace_processor | https://github.com/google/perfetto |
+| Perfetto | Apache-2.0 | v58.2; SQL over single trace files via trace_processor; call-stack sampling (https://perfetto.dev/docs/getting-started/cpu-profiling) | https://github.com/google/perfetto |
 
 **Also considered**
 
@@ -651,8 +652,6 @@ can only be eyeballed.
 
 ## Open Questions
 
-- Confirm the peer-set changes the research recommends: Quickwit promoted to a full entry,
-  SkyWalking added as a one-liner, Graylog excluded. (Applied in this plan; revert if not wanted.)
 - Top-level `Comparisons` tab (eight tabs) vs. a sub-section under Operations next to Cost
   Effectiveness? The plan recommends the tab (see Trade-offs).
 - File the separate AI-agent observability issue now? No such issue exists yet (checked 2026-10-02).
