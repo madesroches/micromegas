@@ -192,7 +192,6 @@ quote. So:
      (see Current State): choose Micromegas for low instrumentation overhead and low cost, and the
      high-frequency, full-resolution telemetry that enables; choose a peer for the established
      default or a managed stack; link to the full summary at the end;
-   - scope: open-source and self-hosted tools, with commercial SaaS covered briefly in its own section;
    - a `*Last reviewed: October 2026*` line;
    - one sentence saying every claim, Micromegas's own included, links to its source (the project's docs, or its source code), and inviting corrections via GitHub issues.
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
@@ -718,6 +717,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - The page describes what the system can do and states defaults as settings, not as limits; facts stay accurate (user call).
 - Micromegas code-level claims link to the source file on `main`, without line anchors, so links follow the latest code (user call).
 - The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
+- No scope sentence in the intro ("this page covers…"): too meta; the page's sections make the scope evident (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 - Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (per-team access control and privacy). Micromegas is not framed as multi-tenant: access control is about teams in one organization seeing the right information, with privacy guarantees (user call). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
 

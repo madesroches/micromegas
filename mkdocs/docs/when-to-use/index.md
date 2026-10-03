@@ -4,8 +4,6 @@ Micromegas is an open-source (Apache-2.0), self-hosted observability stack that 
 
 **TL;DR.** Choose Micromegas for low instrumentation overhead and low cost, and for the high-frequency, full-resolution telemetry that efficiency makes affordable. Choose a peer when you want the established, widely adopted default, or when you do not want to operate the stack yourself. The [summary at the end](#summary-which-one-fits) maps workloads to tools.
 
-This page covers open-source and self-hosted tools; commercial SaaS vendors get [a short section](#commercial-saas) of their own.
-
 *Last reviewed: October 2026*
 
 Every claim on this page links to its source: the project's own docs or repository for the peers, and the Micromegas docs or source code for Micromegas. If something is wrong or out of date, please [open an issue](https://github.com/madesroches/micromegas/issues).
