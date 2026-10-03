@@ -45,10 +45,10 @@ retrieval" below.
 | Apache-2.0 | `LICENSE`, `README.md` |
 | Raw payloads in object storage (S3, GCS, local); **metadata in PostgreSQL** | `mkdocs/docs/architecture/index.md` (Storage) |
 | Lakehouse materializes views to Parquet; SQL via Apache DataFusion | `architecture/index.md`, `query-guide/` |
-| **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
+| **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `architecture/index.md` (Ingestion Service), `admin/flight-sql.md`, `otlp/index.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
-| Full-resolution spans: Rust CPU (thread) spans are opt-in (`MICROMEGAS_ENABLE_CPU_TRACING=true`); once enabled, every span is recorded without sampling, and at this overhead that is practical in production (user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
+| Full-resolution spans: Rust CPU (thread) spans are recorded at full resolution, unsampled, and run in production; `MICROMEGAS_ENABLE_CPU_TRACING=true` turns them on (the default is off, a conservative setting; user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
 | Raw data stays in object storage and views are materialized on demand when queried (JIT ETL), so processing cost follows what is queried, not what is collected | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
 | A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~165 million/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
@@ -84,8 +84,7 @@ to operate the stack. Efficiency always means two concrete things, never the bar
 
 That efficiency is what enables the use cases peers make expensive: very high-frequency,
 high-resolution telemetry (every emission its own row; host metrics every 200 ms), and full-resolution
-traces recorded without sampling: Rust CPU traces are opt-in (`MICROMEGAS_ENABLE_CPU_TRACING=true`) and, once enabled, record every
-span without sampling because that proves practical, and Unreal records every span with `telemetry.spans.all`. State the
+traces recorded without sampling (see the facts table). State the
 peer side neutrally ("the widely adopted default", "a managed or turnkey option"), never as a motive.
 
 **Audience framing**: the page describes Micromegas for any native-code or client/fleet workload
@@ -142,8 +141,6 @@ the fleet.
 | Complementary tools | Tracy, Unreal Insights, Perfetto | Short section: session-local profilers vs. a fleet-wide, historical store. Not head-to-head |
 | Also considered | Elasticsearch/OpenSearch, Uptrace, Jaeger (with Zipkin), Apache SkyWalking, Apache Doris/StarRocks, Sentry self-hosted | One line each with the reason it isn't a full entry |
 
-The five peers named in the issue are kept. Five are added from the additional-peer research (see Decisions).
-
 Excluded, and not listed on the page:
 - archived or discontinued projects: SigLens, HoraeDB, Highlight.io (no release since 2025-08);
 - different categories: Netdata, Zabbix, Coroot, DeepFlow, OneUptime, Odigos (instrumentation only);
@@ -169,7 +166,7 @@ quote. So:
 - **Query vocabulary, where true.** Headings and first sentences use the words people search
   with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality fleet
   dimensions (many processes, machines, users), Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
-  telemetry, game client telemetry, Prometheus alternative, sub-second metrics, low-overhead
+  telemetry, Prometheus alternative, sub-second metrics, low-overhead
   instrumentation, full-resolution traces without sampling, observability cost.
 - **Specific numbers over adjectives.** E.g. host CPU and memory every 200 ms vs. a 1m
   default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
@@ -230,8 +227,7 @@ quote. So:
    - The Prometheus section's *How Micromegas differs* is longer than the others, with three
      short paragraphs, each quoting Prometheus's own docs (see its research entry):
      - *Frequency*: one sample per series per scrape (default interval 1m) vs. every emission stored as its
-       own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each process using the Rust telemetry sink or the C ABI (on by default; not part of the
-       Unreal plugin), plus the process's own memory every 5 s.
+       own row; e.g. Micromegas's system monitor samples host CPU and memory every 200 ms in each process, plus the process's own memory every 5 s.
      - *Dimensionality*: every label combination is a new time series with RAM/CPU/disk cost, so
        labels stay low-cardinality and are chosen at instrumentation time vs. properties and
        columns on each row, grouped by any of them in SQL at query time. State Micromegas's own
@@ -273,7 +269,7 @@ quote. So:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
        metrics (also C/C++ through the C ABI) left on in production;
      - you want very high-frequency, high-resolution telemetry, or full-resolution traces without
-       sampling (Rust CPU traces, opt-in via `MICROMEGAS_ENABLE_CPU_TRACING=true`, record every span unsampled; `telemetry.spans.all` in Unreal, whose default keeps blocks
+       sampling (Rust CPU traces record every span unsampled in production, enabled with `MICROMEGAS_ENABLE_CPU_TRACING=true`; `telemetry.spans.all` in Unreal, whose default keeps blocks
        around frame spikes);
      - your cost depends on the data more than the code (assets, URLs, scripts, queries going
        through an interpreter or resolver) and you need to know *which* input was slow, not just
@@ -301,7 +297,7 @@ quote. So:
      client fleets, when efficiency matters)
    - How do I reduce observability costs at high event volume? (Micromegas with its cost figure;
      VictoriaMetrics credited for metrics)
-   - How do I record full-resolution traces in production without sampling? (Rust: enable CPU tracing with `MICROMEGAS_ENABLE_CPU_TRACING=true`, then every span is recorded; Unreal: `telemetry.spans.all`)
+   - How do I record full-resolution traces in production without sampling? (Rust: set `MICROMEGAS_ENABLE_CPU_TRACING=true` and every span is recorded unsampled; Unreal: `telemetry.spans.all`)
    - How do I collect telemetry from Unreal Engine games in production? (Unreal Insights credited
      for one session)
    - How do I collect telemetry from desktop apps or game clients across many users?
@@ -681,16 +677,6 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - `mkdocs/docs/cost-comparisons/index.md` (one cross-link line)
 - `CHANGELOG.md` (Docs entry under Unreleased)
 
-## Trade-offs
-
-- **One page vs. one page per peer** (like `cost-comparisons/`): the issue asks for one page. One
-  page keeps the glance table meaningful and puts all the review-date maintenance in a single
-  place. Per-peer pages would rank better for "X vs Micromegas" searches but would multiply the
-  pages that go stale. If search data later justifies them, they can split off.
-- **Also-considered one-liners vs. silence**: a short "also considered" list answers "why isn't X
-  here?" cheaply. Projects that are archived, in a different category, or not open source are left
-  off entirely, rather than listed only to dismiss them.
-
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
@@ -707,6 +693,8 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - Research accuracy is verified by the plan and branch reviewers, not by a re-check step during implementation (user call).
 - Top-level nav tab named `When to Use`, page `when-to-use/index.md` titled "When to Use Micromegas"; framed as fit, not comparison (user call). The tab takes the tab count from seven to eight; Material collapses tabs into the drawer on narrow screens.
 - SaaS vendors stay out of this page beyond a short section linking to the cost pages, because their cost model is too different for a fit comparison (user call). The cost pages join the `When to Use` tab in the nav only, so their URLs don't change.
+- One page, not one per peer (the issue asks for one; per-peer pages can split off later if search data justifies them).
+- The page describes what the system can do and states defaults as settings, not as limits; facts stay accurate (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
@@ -729,10 +717,4 @@ can only be eyeballed.
 
 1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/when-to-use/`. The page should render with the glance table
    readable at laptop width and the new `When to Use` tab visible in the nav.
-2. Build the docs and check the sitemap entry:
-   ```
-   mkdocs build --config-file mkdocs/mkdocs.yml --site-dir /tmp/mm-docs/docs
-   ```
-   `grep when-to-use /tmp/mm-docs/docs/sitemap.xml` should return one line. The full
-   staged check runs in CI.
-3. Click every peer source link on the rendered page. Each one should load.
+2. Click every peer source link on the rendered page. Each one should load.
