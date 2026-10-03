@@ -34,7 +34,7 @@ Each project's section below gives the sources for its row.
 
 | Project | License (OSS edition) | Storage | Also requires |
 |---|---|---|---|
-| [**Micromegas**](#micromegas-in-brief) | Apache-2.0, no paid tier | Raw payloads in object storage; Parquet views | PostgreSQL |
+| [**Micromegas**](#micromegas-in-brief) | Apache-2.0, no paid tier | Raw payloads in object storage; Parquet views | PostgreSQL; Grafana with the [Micromegas plugin](../grafana/index.md) for alerts |
 | [Parseable](#micromegas-vs-parseable) | AGPL-3.0; paid PromQL, HA | Parquet on object storage | Nothing |
 | [OpenObserve](#micromegas-vs-openobserve) | AGPL-3.0; paid SSO, advanced RBAC | Parquet on object storage | Nothing on one node; PostgreSQL and NATS for HA |
 | [GreptimeDB](#micromegas-vs-greptimedb) | Apache-2.0; paid alerting, RBAC | Parquet on object storage | Nothing standalone; etcd, PostgreSQL or MySQL when distributed |
