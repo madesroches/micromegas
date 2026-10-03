@@ -50,7 +50,7 @@ retrieval" below.
 | Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
 | Full-resolution spans: Rust CPU (thread) spans are recorded at full resolution, unsampled, and run in production; `MICROMEGAS_ENABLE_CPU_TRACING=true` turns them on (the default is off, a conservative setting; user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
 | Raw data stays in object storage. Spans and per-process views are materialized only when queried (JIT ETL), so their processing cost follows what is queried; logs and metrics are materialized continuously into global views by the maintenance daemon | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
-| A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~5 billion/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
+| A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days, 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
@@ -709,6 +709,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - One page, not one per peer (the issue asks for one; per-peer pages can split off later if search data justifies them).
 - The page describes what the system can do and states defaults as settings, not as limits; facts stay accurate (user call).
 - Micromegas code-level claims link to the source file on `main`, without line anchors, so links follow the latest code (user call).
+- The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
