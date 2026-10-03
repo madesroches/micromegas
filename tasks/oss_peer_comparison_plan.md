@@ -48,11 +48,11 @@ retrieval" below.
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `architecture/index.md` (Ingestion Service), `admin/flight-sql.md`, `otlp/index.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
 | Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
-| Full-resolution spans: Rust CPU (thread) spans are recorded at full resolution, unsampled, and run in production; `MICROMEGAS_ENABLE_CPU_TRACING=true` turns them on (the default is off, a conservative setting; user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `unreal/instrumentation-api.md` (Console Commands) |
+| Full-resolution spans: Rust CPU (thread) spans are recorded at full resolution, unsampled, and run in production; `MICROMEGAS_ENABLE_CPU_TRACING=true` turns them on (the default is off, a conservative setting; user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/lib.rs` (`MICROMEGAS_ENABLE_CPU_TRACING`, default off), `mkdocs/docs/unreal/installation.md` (console variables table), `mkdocs/docs/unreal/index.md` |
 | Raw data stays in object storage. Spans and per-process views are materialized only when queried (JIT ETL), so their processing cost follows what is queried; logs and metrics are materialized continuously into global views by the maintenance daemon | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
 | A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days, 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
-| Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
-| Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
+| Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `mkdocs/docs/unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
+| Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `mkdocs/docs/unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
 | Every metric emission is stored as its own row with a nanosecond timestamp, carrying process/exe/computer/username plus properties; SQL can group or filter by any of them at query time | `query-guide/schema-reference.md` (`measures`) |
 | The built-in system monitor samples host-wide CPU usage and used/free memory every 200 ms in each process using the Rust telemetry sink or the C ABI (on by default; not part of the Unreal plugin) (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
@@ -67,7 +67,7 @@ retrieval" below.
 peer claims do. The link goes to the docs page from this table, with a section anchor. A claim
 that rests on code (defaults, sampling, which signals the C ABI exports, the 200 ms / 5 s intervals,
 OTLP/HTTP only, the span-naming macros) also gets a GitHub link to the file on `main`, with no
-line anchor, so the link tracks the latest code. The cost figure links to `cost-effectiveness.md`,
+line anchor, so the link tracks the latest code. A claim whose only source is code (e.g. the system monitor) links to its GitHub file on `main` alone. The cost figure links to `cost-effectiveness.md`,
 which states how it was measured.
 
 **Instrumentation cost**: the page does **not** quote the ~20 ns figure, since it depends on too many
@@ -76,7 +76,7 @@ variables (see Decisions). Describe the design instead:
 - context is attached as an interned property set, so it costs one pointer per event rather than
   repeated key/value strings;
 - the telemetry sink batches and ships them off the hot path;
-- the Unreal sink can sample whole blocks, e.g. keeping blocks around frame spikes, rather than individual events (`unreal/MicromegasTelemetrySink/Private/SamplingController.h`, CVars in `unreal/instrumentation-api.md`);
+- the Unreal sink can sample whole blocks, e.g. keeping blocks around frame spikes, rather than individual events (`unreal/MicromegasTelemetrySink/Private/SamplingController.h`, CVars in `mkdocs/docs/unreal/installation.md` and `mkdocs/docs/unreal/index.md`);
 - the intent is instrumentation that stays on in production.
 
 Compare this with OpenTelemetry **SDKs**, which are the in-process counterpart, never with
@@ -678,7 +678,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
    `## Cost`, with `[When to use Micromegas](https://micromegas.info/docs/when-to-use/)` and a one-line
    description naming the peers and the workloads Micromegas fits (high-frequency telemetry with high-cardinality fleet
    dimensions (many processes, machines, users) from native and client processes, queried with SQL), since LLM retrieval matches on
-   those names and terms.
+   those names and terms. Also reword the preamble's "a lakehouse materializes hot queries into Parquet on demand" to match the facts row (logs and metrics are materialized continuously; only spans and per-process views on demand).
 5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    `When to Use` nav tab and the `llms.txt` section.
 
