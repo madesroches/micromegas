@@ -101,11 +101,22 @@ the fleet.
   ```yaml
   - When to Use:
     - When to Use Micromegas: when-to-use/index.md
+    - vs. SaaS Vendors:
+      - Cost Overview: cost-effectiveness.md
+      - Methodology: cost-comparisons/index.md
+      - vs. Datadog: cost-comparisons/datadog.md
+      - vs. Dynatrace: cost-comparisons/dynatrace.md
+      - vs. Elastic: cost-comparisons/elastic.md
+      - vs. Grafana Cloud: cost-comparisons/grafana.md
+      - vs. New Relic: cost-comparisons/newrelic.md
+      - vs. Splunk: cost-comparisons/splunk.md
   ```
+- The SaaS cost pages move into this tab **in the nav only**; their files and URLs
+  (`/docs/cost-comparisons/…`, `/docs/cost-effectiveness/`) stay as they are, so `llms.txt` links
+  and indexed pages keep working. The `Cost Effectiveness` group is removed from the `Operations`
+  tab.
 - The `when-to-use/` directory has room for the planned AI-agent observability page (see
-  Decisions). That page gets added beside this one, and this page doesn't change. The SaaS cost
-  pages stay where they are, because moving them would change URLs that are already linked in
-  `llms.txt` and indexed.
+  Decisions). That page gets added beside this one, and this page doesn't change.
 
 ### Peer set
 
@@ -158,7 +169,7 @@ quote. So:
    - the one-line definition of Micromegas;
    - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
      it doesn't, and a link to the full summary at the end;
-   - scope: open-source and self-hosted only, with a link to the SaaS cost comparisons;
+   - scope: open-source and self-hosted tools, with commercial SaaS covered briefly in its own section;
    - a `*Last reviewed: October 2026*` line;
    - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues.
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
@@ -212,7 +223,11 @@ quote. So:
    profiler and Perfetto's call-stack sampling show the hot function, and data-named spans show the
    asset or input behind it. Against Unreal Insights (instrumented scopes) the difference is cost and retention.
 6. **Also considered**: one line each.
-7. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
+7. **Commercial SaaS** (short, two or three sentences): SaaS vendors bill on volume (hosts, GB
+   ingested, spans), while Micromegas runs on your own object storage, so the comparison is a cost
+   model rather than a feature list; link to the `vs. SaaS Vendors` pages for the numbers. No
+   per-vendor detail on this page.
+8. **Summary: which one fits**. One opening sentence ("These projects overlap more than they
    compete, and many teams run two of them"), then an "If you need… / Look at" table. Every row
    restates a peer's *Credit it for* line from the research below, so the summary adds no new claims
    and needs no new links:
@@ -230,6 +245,7 @@ quote. So:
    | Elasticsearch-compatible log and trace search directly on object storage | Quickwit |
    | Scrape-based service monitoring and alerting, with the largest exporter ecosystem | Prometheus (Thanos for long-term, global view) |
    | A deep look at one session on one machine | Tracy, Unreal Insights, Perfetto (alongside any of the above) |
+   | You're on a SaaS vendor and cost at high volume is the problem | see the `vs. SaaS Vendors` cost pages |
 
    Then two short lists:
    - **Choose Micromegas when**:
@@ -248,7 +264,7 @@ quote. So:
      - you need per-row access control on telemetry shared across teams or customers.
    - **Look elsewhere if**: you can't run PostgreSQL, need a built-in alert engine or PromQL, or
      want a large community behind your tool.
-8. **FAQ**: five to eight question-shaped `###` headings phrased the way people ask an LLM, each
+9. **FAQ**: five to eight question-shaped `###` headings phrased the way people ask an LLM, each
    answered in two or three sentences that name the fitting tool. The answers reuse claims already
    on the page, so they add no new sources. Candidates:
    - What is an open-source, self-hosted alternative to Datadog that I can query with SQL?
@@ -605,8 +621,10 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
    - leave out everything under **Not confirmed**;
    - avoid superlatives about Micromegas and the 20 ns figure;
    - use the Micromegas phrasing from "Micromegas facts the page may state".
-2. **Nav**: add the `When to Use` tab to `mkdocs/mkdocs.yml` after `Getting Started`.
-3. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
+2. **Nav**: add the `When to Use` tab to `mkdocs/mkdocs.yml` after `Getting Started`, and move the
+   `Cost Effectiveness` entries from `Operations` into it as `vs. SaaS Vendors` (nav only).
+3. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing
+   readers weighing self-hosted open-source tools to `When to Use Micromegas`.
 4. **llms.txt**: add a `## When to use Micromegas` section to `welcome/public/llms.txt` above
    `## Cost`, with `[When to use Micromegas](https://micromegas.info/docs/when-to-use/)` and a one-line
    description naming the peers and the workloads Micromegas fits (high-frequency telemetry with high-cardinality fleet
@@ -652,12 +670,13 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
 - Research accuracy is verified by the plan and branch reviewers, not by a re-check step during implementation (user call).
 - Top-level nav tab named `When to Use`, page `when-to-use/index.md` titled "When to Use Micromegas"; framed as fit, not comparison (user call).
+- SaaS vendors stay out of this page beyond a short section linking to the cost pages, because their cost model is too different for a fit comparison (user call). The cost pages join the `When to Use` tab in the nav only, so their URLs don't change.
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
 
-This change is documentation. Besides the new page: the nav, `llms.txt`, and one cross-link line
-on the SaaS comparison methodology page.
+This change is documentation. Besides the new page: the nav (new tab, SaaS cost pages moved into
+it), `llms.txt`, and one cross-link line on the SaaS comparison methodology page.
 
 ## Testing Strategy
 
