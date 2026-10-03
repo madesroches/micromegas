@@ -21,7 +21,7 @@ Every claim on this page links to its source: the project's own docs or reposito
 - PostgreSQL is required for metadata ([architecture][arch]).
 - OTLP is HTTP-only; there is no OTLP/gRPC ([OTLP limitations][otlp-limits]).
 - There is no built-in alert engine; alerting goes through Grafana ([Grafana plugin](../grafana/index.md)).
-- Spans come from the Rust and Unreal SDKs; the C ABI records logs and metrics ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
+- Among the native SDKs, spans come from Rust and Unreal; the C ABI records logs and metrics only. OTLP/HTTP traces are also accepted as spans ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
 - There is no RUM or session replay.
 - The community is smaller than the peers' communities.
 - You operate it yourself: PostgreSQL, object storage, and the services (or the [single-process monolith](../admin/monolith.md)).
