@@ -419,10 +419,12 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   Parquet is Tempo 3.x's only block format, vParquet5 by default
   ([schema](https://grafana.com/docs/tempo/latest/operations/schema/)).
 - **Dependencies**:
-  - Mimir 3.0 defaults to Kafka-based ingest storage, which "requires a production-grade Apache
-    Kafka cluster"; the classic architecture is still supported
+  - the `mimir-distributed` Helm chart enables Kafka-based ingest storage by default (the binary's
+    `-ingest-storage.enabled` defaults to false), which "requires a production-grade Apache Kafka
+    cluster"; the classic architecture is still supported
     ([v3.0](https://grafana.com/docs/mimir/latest/release-notes/v3.0/),
-    [ingest storage](https://grafana.com/docs/mimir/latest/set-up/jsonnet/configure-ingest-storage/));
+    [ingest storage](https://grafana.com/docs/mimir/latest/set-up/jsonnet/configure-ingest-storage/),
+    [Helm values](https://github.com/grafana/mimir/blob/main/operations/helm/charts/mimir-distributed/values.yaml));
   - Tempo microservices mode requires a Kafka-compatible system; monolithic mode does not
     ([modes](https://grafana.com/docs/tempo/latest/set-up-for-tracing/setup-tempo/plan/deployment-modes/));
   - hash ring via memberlist by default, no external KV store needed
@@ -527,7 +529,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   January 2025). The founders said they would focus on "building a new product with Datadog";
   there is no standalone commercial offering or paid support
   ([announcement](https://quickwit.io/blog/quickwit-joins-datadog)). Still released: v0.9.0
-  (2025-07-25), v0.9.1 (2026-09-23) ([releases](https://github.com/quickwit-oss/quickwit/releases)).
+  (2026-07-25), v0.9.1 (2026-09-23) ([releases](https://github.com/quickwit-oss/quickwit/releases)).
 - **Ingestion**: native OTLP for logs and traces, Jaeger, an Elasticsearch-compatible ingest API,
   Kafka and SQS sources ([v0.9.0](https://github.com/quickwit-oss/quickwit/releases/tag/v0.9.0)).
 - **Storage**: indexes (splits) on S3, Azure or other object storage.
