@@ -106,6 +106,7 @@ nav:
   - Getting Started: getting-started.md
   - When to Use:
     - When to Use Micromegas: when-to-use/index.md
+    - vs. LLM Agent Tools: when-to-use/agent-observability.md
     - vs. SaaS Vendors: when-to-use/saas-vendors.md
   - Query Guide:
     - Overview: query-guide/index.md

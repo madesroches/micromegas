@@ -73,7 +73,7 @@ Each project's section below gives the sources for its row.
 
 ## Micromegas vs. OpenObserve
 
-**OpenObserve** is a Rust backend with a Vue UI covering logs, metrics, traces, RUM, session replay, profiles and LLM observability ([repo](https://github.com/openobserve/openobserve)). It is AGPL-3.0 in the open-source edition (it [moved from Apache](https://openobserve.ai/blog/what-are-apache-gpl-and-agpl-licenses-and-why-openobserve-moved-from-apache-to-agpl/)); the Enterprise edition is under a commercial license, free up to 50 GB/day ([license](https://openobserve.ai/docs/enterprise-setup/license-and-pricing/)) and gates SSO, advanced RBAC, audit logs, federation and AI features ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)). It has an LLM observability feature set for agent traces.
+**OpenObserve** is a Rust backend with a Vue UI covering logs, metrics, traces, RUM, session replay, profiles and LLM observability ([repo](https://github.com/openobserve/openobserve)). It is AGPL-3.0 in the open-source edition (it [moved from Apache](https://openobserve.ai/blog/what-are-apache-gpl-and-agpl-licenses-and-why-openobserve-moved-from-apache-to-agpl/)); the Enterprise edition is under a commercial license, free up to 50 GB/day ([license](https://openobserve.ai/docs/enterprise-setup/license-and-pricing/)) and gates SSO, advanced RBAC, audit logs, federation and AI features ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)). It has an [LLM observability](agent-observability.md) feature set for agent traces.
 
 **Choose OpenObserve when** you need the broadest signal coverage (browser and mobile RUM and session replay included), a rich built-in UI with dashboards, pipelines, alerts and incidents, full-text search via Tantivy, or an easy migration off ELK through its Elasticsearch-compatible `_bulk` API ([ingestion](https://openobserve.ai/docs/user-guide/ingestion/), [metrics](https://openobserve.ai/docs/features/metrics/)).
 
@@ -91,7 +91,7 @@ Each project's section below gives the sources for its row.
 
 **SigNoz** is a Go and React OTel-native APM covering logs, metrics, traces, exceptions and LLM observability ([repo](https://github.com/SigNoz/signoz)). The code is MIT outside `ee/` and `cmd/enterprise/`, which are proprietary, and its collector is AGPL-3.0 ([LICENSE](https://github.com/SigNoz/signoz/blob/main/LICENSE), [collector](https://github.com/SigNoz/signoz-otel-collector)). The paid Teams and Enterprise tiers gate anomaly detection and SAML, and Enterprise adds fine-grained RBAC ([pricing](https://signoz.io/pricing/)).
 
-**Choose SigNoz when** you want the best out-of-the-box APM experience for OTel-instrumented services, with built-in APM views, traces, logs, dashboards and alerts and no Grafana needed ([repo](https://github.com/SigNoz/signoz), [architecture](https://signoz.io/docs/architecture/)). It also has LLM observability features for agent workloads.
+**Choose SigNoz when** you want the best out-of-the-box APM experience for OTel-instrumented services, with built-in APM views, traces, logs, dashboards and alerts and no Grafana needed ([repo](https://github.com/SigNoz/signoz), [architecture](https://signoz.io/docs/architecture/)). It also has [LLM observability](agent-observability.md) features for agent workloads.
 
 **How Micromegas differs.** SigNoz relies on OTel SDKs only; Micromegas adds [in-process SDKs](#micromegas-in-brief) for Rust and Unreal Engine. SigNoz stores data in ClickHouse, with ClickHouse Keeper or ZooKeeper, and PostgreSQL (the default) or SQLite for dashboards, alerts and users ([moldings](https://github.com/SigNoz/foundry/blob/main/docs/concepts/moldings.md)); Micromegas stores Parquet on object storage with PostgreSQL metadata. On ingestion, SigNoz always goes through its collector, which decodes OTLP, rebuilds each log record's attributes as maps and serializes them to JSON only to meter their size, then issues five inserts per log batch ([`exporter.go`](https://github.com/SigNoz/signoz-otel-collector/blob/29e18e650c21b0db5d490d089128dc34002b7719/exporter/clickhouselogsexporter/exporter.go#L608-L763)); ClickHouse then builds token and n-gram bloom filters on each insert ([logs schema](https://github.com/SigNoz/signoz-otel-collector/blob/29e18e650c21b0db5d490d089128dc34002b7719/cmd/signozschemamigrator/schema_migrator/v2_squashed_logs_migration.go#L187-L198)). Micromegas's native SDKs send compressed blocks of up to hundreds of thousands of events, which the server stores as received, with no per-event work ([ingestion](#micromegas-in-brief)). Micromegas keeps raw payloads in object storage and processes spans and per-process views [only when queried][jit]. Every emission is stored as its own row. SigNoz offers a query builder, PromQL and ClickHouse SQL ([repo](https://github.com/SigNoz/signoz)); Micromegas has one SQL surface, plus notebooks running the same engine in the browser ([WASM][exec]). SigNoz Enterprise gates fine-grained RBAC ([pricing](https://signoz.io/pricing/)), whereas Micromegas's [per-row access control][authz] is in the open-source build.
 
@@ -180,6 +180,10 @@ Micromegas keeps the history of many processes in a single store and makes it qu
 
 SaaS vendors bill on volume (hosts, GB ingested, spans), while Micromegas runs on your own object storage, so the comparison is a cost model rather than a feature list. The [vs. SaaS Vendors](saas-vendors.md) page works through the numbers for Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk, and states its [methodology](saas-vendors.md#methodology).
 
+## LLM agent tools
+
+Langfuse, Arize Phoenix, Opik and Laminar are built for LLM applications and agents, with evals, prompt management and trace UIs that Micromegas does not have. The [vs. LLM Agent Tools](agent-observability.md) page compares them with Micromegas, which records an agent's OTLP/HTTP telemetry next to the rest of your fleet's data, with per-row access control.
+
 ## Summary: which one fits
 
 These projects overlap more than they compete, and many teams run two of them.
@@ -237,6 +241,10 @@ Micromegas stamps every row with an audience taken from the ingestion credential
 ### How do I drill down from a fleet-wide dashboard to one process without scanning terabytes of data?
 
 Define a reduced view with `CREATE MATERIALIZED VIEW` (for example, per-minute counts by process): Micromegas refreshes it every second and merges it into minute, hour and day partitions, so the fleet-wide query stays small, and the drill-down reads full-resolution rows only for the selected processes and time range ([derived views](#micromegas-in-brief)). Old data is not downsampled: raw events keep full resolution for the whole retention period. Prometheus recording rules precompute metrics the same way, for PromQL ([precomputation](#micromegas-vs-prometheus)).
+
+### How do I observe an LLM agent such as Claude Code with Micromegas?
+
+Point the agent's OTLP/HTTP exporter at Micromegas and its requests, token counts, cost and (optionally) prompts land as `log_entries`, `measures` and `otel_spans` rows, queried with SQL and readable only by the audiences you grant. It has no evals or prompt management, so for those look at Langfuse, Phoenix, Opik or Laminar, or use them together ([LLM agent tools](agent-observability.md)).
 
 ### How do I trace Rust applications in production with low overhead?
 

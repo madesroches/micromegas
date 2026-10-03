@@ -4,6 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Docs:** Regroup the `When to Use` tab into three pages (#1637): the open-source peer page, a
+  new `vs. LLM Agent Tools` page comparing Micromegas with Langfuse, Arize Phoenix, Opik and
+  Laminar for LLM agent observability, and a single `vs. SaaS Vendors` page that merges the cost
+  overview, methodology and six vendor pages (Datadog, Dynatrace, Elastic, Grafana Cloud, New
+  Relic, Splunk). The old `/cost-effectiveness/` and `/cost-comparisons/*` URLs redirect to the
+  merged page through `mkdocs-redirects`; the site check accepts redirect stubs, and the docs
+  build now runs with `--strict`.
 * **Docs:** Add a "When to Use Micromegas" page (#1636) comparing Micromegas with open-source
   peers (Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse/ClickStack, Grafana LGTM,
   InfluxDB 3 Core, VictoriaMetrics, Quickwit, Prometheus), with sourced claims, a fit summary and

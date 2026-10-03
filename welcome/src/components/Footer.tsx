@@ -28,7 +28,7 @@ export default function Footer() {
             View on GitHub
           </a>
           <a
-            href="/docs/cost-effectiveness/"
+            href="/docs/when-to-use/saas-vendors/"
             className="inline-flex items-center gap-2 rounded-lg border border-theme-border px-6 py-3 text-sm font-medium text-theme-text-primary transition-colors hover:border-theme-border-hover hover:bg-app-card/50"
           >
             Cost Comparison
