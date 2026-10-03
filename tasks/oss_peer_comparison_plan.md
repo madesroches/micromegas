@@ -199,7 +199,7 @@ quote. So:
    - PostgreSQL is required for metadata;
    - OTLP is HTTP-only (no gRPC);
    - no built-in alert engine (alerting goes through Grafana);
-   - native SDKs only for Rust, Unreal and C;
+   - spans come from the Rust and Unreal SDKs; the C ABI records logs and metrics;
    - no RUM or session replay;
    - smaller community than the peers;
    - you operate it yourself: PostgreSQL, object storage, and the services (or the monolith).
@@ -282,7 +282,7 @@ quote. So:
    Then two short lists:
    - **Choose Micromegas when** efficiency matters, meaning instrumentation overhead and cost:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
-       metrics (also C/C++ through the C ABI) left on in production;
+       metrics (also from any app through the C ABI, e.g. the Blender add-on) left on in production;
      - you want very high-frequency, high-resolution telemetry, or full-resolution traces without
        sampling (Rust CPU traces record every span unsampled in production, enabled with `MICROMEGAS_ENABLE_CPU_TRACING=true`; `telemetry.spans.all` in Unreal, whose default keeps blocks
        around frame spikes);
@@ -719,6 +719,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - No scope sentence in the intro ("this page covers…"): too meta; the page's sections make the scope evident (user call).
 - "Micromegas in brief" states what each stage does, not what it lacks (e.g. "the C ABI records logs and metrics", not "…only"); missing features belong in the Limits list (user call).
 - SQL as the only query language is not a limit: one SQL surface across logs, metrics and traces is the unified promise. PromQL appears only as a fit statement for teams with existing PromQL dashboards and alert rules (user call).
+- The C ABI is presented as the way to embed Micromegas in any app or language that can load a shared library, with the Blender add-on (Python via `ctypes`, `mkdocs/docs/blender/index.md`) as the example (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 - Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (per-team access control and privacy). Micromegas is not framed as multi-tenant: access control is about teams in one organization seeing the right information, with privacy guarantees (user call). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
 
