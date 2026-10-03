@@ -21,10 +21,10 @@ The 8 old cost URLs keep working through redirect stubs from the `mkdocs-redirec
 
 ## Current State
 
-- `mkdocs/mkdocs.yml:97-106` — the `When to Use` nav: `when-to-use/index.md`, then a
+- `mkdocs/mkdocs.yml:97-107` — the `When to Use` nav: `when-to-use/index.md`, then a
   `vs. SaaS Vendors` group with `cost-effectiveness.md`, `cost-comparisons/index.md` and
   `cost-comparisons/{datadog,dynatrace,elastic,grafana,newrelic,splunk}.md`. Plugins are
-  `search`, `mkdocstrings`, `blog`, `rss`; there is no redirect plugin.
+  `search`, `mkdocstrings`, `blog`, `tags`, `rss`; there is no redirect plugin.
 - `mkdocs/docs/when-to-use/index.md` (~6,200 words): intro, `Micromegas in brief`, Limits,
   `At a glance` tables, one `Micromegas vs. <peer>` section per open-source peer, `Complementary
   tools`, `Also considered`, `Commercial SaaS` (`:179-181`, a paragraph linking the 8 cost pages),
@@ -65,7 +65,8 @@ The 8 old cost URLs keep working through redirect stubs from the `mkdocs-redirec
 
 ### 1. Redirects
 
-Add `mkdocs-redirects` to `mkdocs/docs-requirements.txt` and configure it in `mkdocs.yml`:
+Add `mkdocs-redirects` to `mkdocs/docs-requirements.txt` and configure it in `mkdocs.yml` (in the
+same phase that creates `saas-vendors.md`, so every phase builds clean under `--strict`):
 
 ```yaml
   - redirects:
@@ -84,9 +85,15 @@ The plugin (1.2.3) writes a stub at each old path after the build: meta refresh,
 carries the old URL's fragment over, and `<link rel="canonical">` with the **relative** target URL.
 Stubs are not pages, so they never enter `sitemap.xml`.
 
+The plugin's `on_post_build` only logs a warning and skips a redirect whose target file is missing,
+and CI builds without `--strict`. `publish-docs.yml` therefore gets `--strict` on its `mkdocs build`
+line, which turns a broken target into a build failure. `mkdocs build --strict` passes on the
+current tree.
+
 Since the plugin's script appends the old fragment, `cost-effectiveness/#scale-perspective` lands on
 `saas-vendors/#scale-perspective` only if the merged page keeps that heading. The merged page
-therefore keeps the `cost-effectiveness.md` section headings verbatim (see §2).
+therefore keeps the `Scale Perspective` and `On-Demand Processing (Tail Sampling)` headings
+verbatim, and the other `cost-effectiveness.md` headings it carries over (see §3).
 
 ### 2. Checker: accept redirect stubs
 
@@ -95,7 +102,9 @@ stubs. Teach `check_canonical_tags` about them:
 
 - A file is a redirect stub when it has a `<meta http-equiv="refresh" content="0; url=...">` tag.
 - For a stub, don't apply the self-canonical rule. Instead, resolve the refresh URL with the
-  existing `href_to_path` (fragment dropped) and fail if the target file does not exist.
+  existing `href_to_path` (fragment dropped) and fail if the target file does not exist. With
+  `--strict` the build already catches a missing target, so this is a defensive check on the staged
+  tree.
 - `href_to_path` must first apply `_resolve_url_path` to relative hrefs too (today only the
   root-absolute branch does). The stubs' refresh URLs are relative directory URLs such as
   `../when-to-use/saas-vendors/`, and `.resolve()` drops the trailing slash, which would yield the
@@ -158,9 +167,11 @@ retention only"). Rows are sorted by vendor name, not by ratio.
 
 `cost-effectiveness.md`, `cost-comparisons/index.md` and the six vendor files are deleted (the
 redirect map replaces them). The `cost-comparisons/` directory goes away. The link-list sections
-`## Commercial Platform Comparison` and `## Detailed Cost Comparisons` (`cost-effectiveness.md`)
-and `## Detailed Comparisons` (`cost-comparisons/index.md`) are deleted, not carried over: the
-merged page replaces them.
+`## Detailed Cost Comparisons` (`cost-effectiveness.md`) and `## Detailed Comparisons`
+(`cost-comparisons/index.md`) are deleted, not carried over: the merged page replaces them.
+`## Commercial Platform Comparison` (`cost-effectiveness.md`) is dissolved into `## Methodology`,
+which absorbs its `Pricing Model Differences`, `A Note on Personnel Costs` and `When Micromegas is
+Cost Effective` subsections.
 
 ### 4. `when-to-use/agent-observability.md`: new page (#1637)
 
@@ -171,7 +182,6 @@ others, and every claim carries a link:
 # Micromegas for LLM Agent Observability
   intro · TL;DR · *Last reviewed* · sourcing note (same wording as index.md)
 ## What Micromegas records from an agent
-## Limits                         ← agent-specific; general limits link to index.md#micromegas-in-brief
 ## At a glance                    ← one table: license, self-hosted deps, OTLP, SQL access,
                                     evals, prompt mgmt, token/cost, per-row access control
 ## Micromegas vs. Langfuse
@@ -186,9 +196,12 @@ others, and every claim carries a link:
 ```
 
 **What Micromegas records from an agent**: only what exists today.
-- Agents that emit OTLP/HTTP, with Claude Code as the worked example: prompts, responses, tool
-  calls, API requests with model, token counts and cost, landing as `log_entries` and `measures`
-  rows; beta traces as `otel_spans` ([OTLP recipe](../otlp/index.md#claude-code)).
+- Agents that emit OTLP/HTTP, with Claude Code as the worked example: API requests with model,
+  token counts and cost, landing as `log_entries` and `measures` rows; beta traces as `otel_spans`
+  ([OTLP recipe](../otlp/index.md#claude-code)). Prompt, response and tool content is redacted by
+  default; it is recorded only when `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES` and
+  `OTEL_LOG_TOOL_DETAILS` are set, as the blog post
+  `2026-09-03-record-your-ai-agent-share-on-your-terms.md` does.
 - Per-row audiences: private by default, with sharing done by editing grants rather than rewriting
   data, and metrics split from prompt-bearing logs across a team audience and a personal one
   ([authorization](../admin/authorization.md), and the blog post).
@@ -196,7 +209,8 @@ others, and every claim carries a link:
   runners the agent touches. Agent analysis is done by pointing an agent at the data through the
   CLI and a skill file (blog post, `from-o11y-to-candor`).
 
-**Limits** (agent-specific, stated plainly):
+**Limits** (bold lead-in inside `## What Micromegas records from an agent`, as in `index.md`;
+agent-specific, stated plainly; general limits link to `index.md#micromegas-in-brief`):
 - No evaluations (LLM-as-judge, datasets, experiments), no prompt management or versioning, no
   playground, no annotation queues.
 - No LLM-specific trace UI: no chat-transcript view, no tool-call tree. Agent data is shown with
@@ -267,11 +281,11 @@ unless a source turns up.
 |---|---|---|---|---|
 | License | MIT; `ee/` proprietary ([repo](https://github.com/langfuse/langfuse)) | **ELv2**, source-available, not OSI ([LICENSE](https://github.com/Arize-ai/phoenix/blob/main/LICENSE)) | Apache-2.0 ([repo](https://github.com/comet-ml/opik)) | Apache-2.0 ([repo](https://github.com/lmnr-ai/lmnr)) |
 | Paid gating | Project RBAC, protected prompt labels, retention policies, audit logs, data masking, SCIM ([license key](https://langfuse.com/self-hosting/license-key)) | Self-hosting free with all features ([self-hosting](https://arize.com/docs/phoenix/self-hosting)); Arize AX is separate | Enterprise via Comet sales; gating *unconfirmed* | Signals, Slack/email alerts ([hosting](https://laminar.sh/docs/hosting-options)) |
-| Self-hosted deps | Postgres, ClickHouse, Redis/Valkey, S3 ([self-hosting](https://langfuse.com/self-hosting)) | SQLite or PostgreSQL ([config](https://arize.com/docs/phoenix/self-hosting/configuration)) | ClickHouse, MySQL, Redis, MinIO, ZooKeeper; Helm for production ([local](https://www.comet.com/docs/opik/self-host/local_deployment)) | Postgres, ClickHouse, RabbitMQ (repo) |
-| OTLP | HTTP only; `langfuse.*`, `gen_ai.*`, OpenInference attrs ([otel](https://langfuse.com/integrations/native/opentelemetry)) | HTTP and gRPC (config); OpenInference *unconfirmed* | HTTP only ([otel](https://www.comet.com/docs/opik/tracing/opentelemetry/overview)) | Yes; transport *unconfirmed* |
-| Native SDKs | Python, JS/TS | Python, TS/JS, Java, Go | Python, TS | Python, TS/JS |
+| Self-hosted deps | Postgres, ClickHouse, Redis/Valkey, S3 ([self-hosting](https://langfuse.com/self-hosting)) | SQLite or PostgreSQL ([config](https://arize.com/docs/phoenix/self-hosting/configuration)) | ClickHouse, MySQL, Redis, MinIO, ZooKeeper; Helm for production ([local](https://www.comet.com/docs/opik/self-host/local_deployment)) | Postgres, ClickHouse, Quickwit; Helm adds RabbitMQ, Redis ([hosting](https://laminar.sh/docs/hosting-options)) |
+| OTLP | HTTP only; `langfuse.*`, `gen_ai.*`, OpenInference attrs ([otel](https://langfuse.com/integrations/native/opentelemetry)) | HTTP and gRPC (config); uses OpenInference as its instrumentation and semantic-convention layer | HTTP only ([otel](https://www.comet.com/docs/opik/tracing/opentelemetry/overview)) | HTTP and gRPC |
+| Native SDKs | Python, JS/TS | Python, TS/JS (Java/Go through OpenInference instrumentation) | Python, TS | Python, TS/JS |
 | Agent features | Tracing, prompt mgmt, evals, datasets, playground; token/cost mapping | Tracing, evals, datasets, experiments, playground, prompt mgmt | Agent traces, datasets, experiments, LLM-as-judge, prompt mgmt, playground, guardrails | Evals, datasets, labeling queues, browser recording |
-| SQL over traces | Not listed ([API overview](https://langfuse.com/docs/api-and-data-platform/overview)) | *Unconfirmed* | No; OQL search, REST, export ([export](https://www.comet.com/docs/opik/tracing/export_data)) | **Yes**: SQL editor, SQL dashboards, MCP |
+| SQL over traces | Not listed ([API overview](https://langfuse.com/docs/api-and-data-platform/overview)) | *Unconfirmed* | No; OQL search, REST, export ([export](https://www.comet.com/docs/opik/tracing/export_data)) | **Yes**: SQL editor ([docs](https://laminar.sh/docs/platform/sql-editor)), SQL dashboards, MCP |
 | Retention | Self-hosted: indefinite; policies are EE ([retention](https://langfuse.com/docs/data-retention)) | `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS` | *Unconfirmed* | *Unconfirmed* |
 
 Also considered:
@@ -293,7 +307,7 @@ Claude Code's own exporter ([monitoring](https://code.claude.com/docs/en/monitor
 What this means for the page:
 - Phoenix and MLflow have the lightest self-hosted footprint, which counts against the
   "Micromegas needs PostgreSQL" limit. Say so.
-- Laminar already offers SQL over agent traces. The Micromegas difference is therefore not "SQL",
+- Laminar already offers SQL over agent traces ([SQL editor](https://laminar.sh/docs/platform/sql-editor)). The Micromegas difference is therefore not "SQL",
   but agent data in the same store and SQL surface as the rest of the fleet's telemetry, plus
   per-row audiences.
 - No peer was found with per-row access control set by the ingestion credential. Langfuse gates
@@ -304,29 +318,33 @@ What this means for the page:
 One PR, closing #1637. The phases are ordered so the build stays green after each one; commit
 locally per phase as rollback points.
 
-**Phase 1: redirects and checker**
+**Phase 1: checker and strict build**
 1. `build/check_docs_site.py`: add redirect-stub handling to `check_canonical_tags` (§2), and add
    tests for it in `build/test_check_docs_site.py`.
-2. `mkdocs/docs-requirements.txt`: add `mkdocs-redirects>=1.2.3`. `mkdocs.yml`: add the
-   `redirects` plugin with the map in §1.
+2. `.github/workflows/publish-docs.yml`: add `--strict` to the `mkdocs build` line.
+   `mkdocs/docs-requirements.txt`: add `mkdocs-redirects>=1.2.3`.
 
 **Phase 2: SaaS merge**
 3. Write `mkdocs/docs/when-to-use/saas-vendors.md` from the 8 sources (§3). Then delete
    `cost-effectiveness.md` and `cost-comparisons/`, and replace the nav's `vs. SaaS Vendors`
    group with `- vs. SaaS Vendors: when-to-use/saas-vendors.md`.
+4. `mkdocs.yml`: add the `redirects` plugin with the map in §1.
+5. `when-to-use/index.md`: repoint the `## Commercial SaaS` paragraph's links and the `[cost]` /
+   `[cost-ondemand]` references (§5), so no page links to a deleted file.
 
 **Phase 3: agent page**
-4. Re-verify the peer research. Write `mkdocs/docs/when-to-use/agent-observability.md` (§4).
+6. Re-verify the peer research. Write `mkdocs/docs/when-to-use/agent-observability.md` (§4).
 
 **Phase 4: nav and links**
-5. `mkdocs.yml` nav: add `- vs. LLM Agent Tools: when-to-use/agent-observability.md` between the
+7. `mkdocs.yml` nav: add `- vs. LLM Agent Tools: when-to-use/agent-observability.md` between the
    two other entries.
-6. Update `when-to-use/index.md`, `llms.txt`, `Footer.tsx` and `README.md` (§5).
-7. Build and run the checker locally (Testing Strategy).
+8. Update the rest of `when-to-use/index.md` (§5), `llms.txt`, `Footer.tsx` and `README.md`.
+9. Build and run the checker locally (Testing Strategy).
 
 ## Files to Modify
 
 - `build/check_docs_site.py`, `build/test_check_docs_site.py`
+- `.github/workflows/publish-docs.yml` (`--strict` on `mkdocs build`)
 - `mkdocs/docs-requirements.txt`, `mkdocs/mkdocs.yml`
 - `mkdocs/docs/when-to-use/index.md`
 - `mkdocs/docs/when-to-use/saas-vendors.md` (new)
@@ -345,16 +363,17 @@ locally per phase as rollback points.
   `vs. <Vendor>` H2 and its own `llms.txt` link. In exchange, the duplicates go away and the
   merged page gets a table across all six vendors, which no page has today.
 - **`mkdocs-redirects` vs. hand-written stubs.** Hand-written HTML could carry absolute canonicals
-  and skip the checker change, but the stubs would live outside the build, and nothing would
-  catch a target that drifts. The plugin is the standard tool. The checker change is small.
-- **Bold lead-ins vs. H3s inside vendor sections.** H3s would add 18 near-duplicate TOC entries
-  with numbered slugs. Bold lead-ins match the peer page.
+  and skip the checker change, but the stubs would live outside the build, so a drifting
+  target would go unnoticed. The plugin is the standard tool, and `--strict` makes it fail the build
+  on a missing target. The checker change is small.
 
 ## Decisions
 
 - Cost figures ($1,100/month, 449B events) are carried over unchanged. Refreshing them is
   separate work.
 - One PR for the layout, the SaaS merge and the agent page (user call).
+- The agent page title is "Micromegas for LLM Agent Observability" (user call); the nav label is
+  `vs. LLM Agent Tools`.
 
 ## Documentation
 
@@ -382,18 +401,11 @@ Whether a merged page reads well and whether an anchor lands on the right headin
 check by eye. To do it locally (from repo root, in the docs venv):
 
 1. `mkdocs build --strict --config-file mkdocs/mkdocs.yml --site-dir /tmp/mm_site/docs` (strict
-   turns the plugin's missing-target warning into an error), then
-   `python3 build/check_docs_site.py` against a staged tree. To reproduce CI's layout, follow the
-   staging step in `publish-docs.yml`, or copy `welcome/public/*` plus a `CNAME` and the root
-   `robots.txt`/`sitemap.xml` into `/tmp/mm_site`. Expected: `OK`.
+   turns the plugin's missing-target warning into an error), then stage the rest of the tree by
+   following the staging step in `publish-docs.yml` (`welcome/dist`, `CNAME`, ...) and run
+   `python3 build/check_docs_site.py /tmp/mm_site`. Expected: `OK`.
 2. `python mkdocs/serve.py`, then open `/cost-comparisons/datadog/`. It should land on
    `/when-to-use/saas-vendors/#vs-datadog`. Open `/cost-effectiveness/#scale-perspective`: it
    should land on the `Scale Perspective` heading.
 3. Check the `When to Use` tab shows three entries and the merged page's TOC has one entry per
    vendor.
-
-## Open Questions
-
-- Page title for the agent page: "Micromegas for LLM Agent Observability" (matches the query) or
-  "Micromegas vs. LLM Agent Observability Tools" (matches the other pages' `vs.` naming)? The nav
-  label is `vs. LLM Agent Tools` either way.
