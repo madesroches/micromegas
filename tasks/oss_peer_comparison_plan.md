@@ -58,7 +58,7 @@ retrieval" below.
 | The built-in system monitor samples host-wide CPU usage and used/free memory every 200 ms in each process using the Rust telemetry sink or the C ABI (on by default; not part of the Unreal plugin) (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
 | Cardinality is bounded on the producer side: metric names, log targets and property sets are interned in process memory, so they must stay bounded; free-form values go in the log message body | `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
 | Fleet-wide dimensions (process, computer, user) and log message bodies are per-row data with no per-series index on the server; names and property sets within a process must stay bounded | `query-guide/schema-reference.md` (`measures`), `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
-| Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
+| Notebooks run DataFusion in the browser via WASM. The web app's server fetches results over FlightSQL and streams them to the browser as Arrow IPC; the browser keeps them as Arrow in memory and later cells query them locally | `web-app/notebooks/execution.md`, `rust/analytics-web-srv/src/stream_query.rs`, `analytics-web-app/src/lib/arrow-stream.ts` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
 | Single-process `micromegas-monolith` or split services | `admin/monolith.md` |
