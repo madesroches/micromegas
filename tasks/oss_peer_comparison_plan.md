@@ -93,15 +93,16 @@ the fleet.
 
 ### Page location and nav
 
-- New file: `mkdocs/docs/comparisons/open-source.md`, served at
-  `https://micromegas.info/docs/comparisons/open-source/`.
-- New top-level nav section, placed after `Getting Started` because comparing tools is something
-  readers do while evaluating:
+- New file: `mkdocs/docs/when-to-use/index.md`, titled **When to Use Micromegas** and served at
+  `https://micromegas.info/docs/when-to-use/`. The page is framed around fit (when Micromegas is
+  the tool for the job, and when another open-source tool is), not as a comparison sheet.
+- New top-level nav tab `When to Use`, placed after `Getting Started` because readers ask this
+  while evaluating:
   ```yaml
-  - Comparisons:
-    - Open-Source Peers: comparisons/open-source.md
+  - When to Use:
+    - When to Use Micromegas: when-to-use/index.md
   ```
-- The `comparisons/` directory has room for the planned AI-agent observability page (see
+- The `when-to-use/` directory has room for the planned AI-agent observability page (see
   Decisions). That page gets added beside this one, and this page doesn't change. The SaaS cost
   pages stay where they are, because moving them would change URLs that are already linked in
   `llms.txt` and indexed.
@@ -153,7 +154,7 @@ quote. So:
 
 ### Page structure
 
-1. **Intro**:
+1. **Intro** (under the `# When to Use Micromegas` title):
    - the one-line definition of Micromegas;
    - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
      it doesn't, and a link to the full summary at the end;
@@ -599,25 +600,25 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 
 ## Implementation Steps
 
-1. **Write `mkdocs/docs/comparisons/open-source.md`** following the page structure above:
+1. **Write `mkdocs/docs/when-to-use/index.md`** following the page structure above:
    - inline-link every peer claim to its source;
    - leave out everything under **Not confirmed**;
    - avoid superlatives about Micromegas and the 20 ns figure;
    - use the Micromegas phrasing from "Micromegas facts the page may state".
-2. **Nav**: add the `Comparisons` section to `mkdocs/mkdocs.yml` after `Getting Started`.
+2. **Nav**: add the `When to Use` tab to `mkdocs/mkdocs.yml` after `Getting Started`.
 3. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
-4. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
-   `[Open-source peers](https://micromegas.info/docs/comparisons/open-source/)` and a one-line
+4. **llms.txt**: add a `## When to use Micromegas` section to `welcome/public/llms.txt` above
+   `## Cost`, with `[When to use Micromegas](https://micromegas.info/docs/when-to-use/)` and a one-line
    description naming the peers and the workloads Micromegas fits (high-frequency telemetry with high-cardinality fleet
    dimensions (many processes, machines, users) from native and client processes, queried with SQL), since LLM retrieval matches on
    those names and terms.
 5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
-   Comparisons nav section and the `llms.txt` section.
+   `When to Use` nav tab and the `llms.txt` section.
 6. **Build and check locally** (see Testing Strategy).
 
 ## Files to Modify
 
-- `mkdocs/docs/comparisons/open-source.md` (new)
+- `mkdocs/docs/when-to-use/index.md` (new)
 - `mkdocs/mkdocs.yml` (nav)
 - `welcome/public/llms.txt`
 - `mkdocs/docs/cost-comparisons/index.md` (one cross-link line)
@@ -629,7 +630,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   page keeps the glance table meaningful and puts all the review-date maintenance in a single
   place. Per-peer pages would rank better for "X vs Micromegas" searches but would multiply the
   pages that go stale. If search data later justifies them, they can split off.
-- **New top-level `Comparisons` tab vs. nesting under Operations → Cost Effectiveness**: this page
+- **New top-level `When to Use` tab vs. nesting under Operations → Cost Effectiveness**: this page
   is about architecture and fit, not cost or operations, and its peers are free software, so a cost
   framing would be misleading. A separate tab also has room for the agent-observability page. It
   takes the tab count from seven to eight; Material collapses tabs into the drawer on narrow
@@ -641,7 +642,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
-- LLM agent observability gets its own page under `comparisons/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
+- LLM agent observability gets its own page under `when-to-use/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
 - Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family, Quickwit and Prometheus (with Thanos) as full entries.
 - Prometheus gets extra space for frequency, dimensionality and single-node scale, each backed by its own docs (user call).
 - Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
@@ -650,6 +651,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
 - Research accuracy is verified by the plan and branch reviewers, not by a re-check step during implementation (user call).
+- Top-level nav tab named `When to Use`, page `when-to-use/index.md` titled "When to Use Micromegas"; framed as fit, not comparison (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
@@ -670,18 +672,16 @@ job, which runs on this PR because it touches `mkdocs/**` and `welcome/**`:
 These checks need a human: whether a table reads well and whether a claim matches a peer's docs
 can only be eyeballed.
 
-1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/comparisons/open-source/`. The page should render with the glance table readable at
-   laptop width and the new `Comparisons` tab visible in the nav.
+1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/when-to-use/`. The page should render with the glance table
+   readable at laptop width and the new `When to Use` tab visible in the nav.
 2. Build the docs and check the sitemap entry:
    ```
    mkdocs build --config-file mkdocs/mkdocs.yml --site-dir $PWD/public_docs/docs
    ```
-   `grep comparisons/open-source public_docs/docs/sitemap.xml` should return one line. The full
+   `grep when-to-use public_docs/docs/sitemap.xml` should return one line. The full
    staged check runs in CI.
 3. Click every peer source link on the rendered page. Each one should load.
 
 ## Open Questions
 
-- Top-level `Comparisons` tab (eight tabs) vs. a sub-section under Operations next to Cost
-  Effectiveness? The plan recommends the tab (see Trade-offs).
 - File the separate AI-agent observability issue now? No such issue exists yet (checked 2026-10-02).
