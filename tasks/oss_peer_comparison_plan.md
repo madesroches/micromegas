@@ -298,7 +298,7 @@ quote. So:
        for 449 billion events over 90 days);
      - you want one SQL surface across logs, metrics and traces, including in notebooks, instead of
        one query language per signal;
-     - you need per-row access control on telemetry shared across teams or customers.
+     - you need each team to see the telemetry meant for it, with privacy guarantees (per-row access control).
    - **Look elsewhere if**:
      - you want the established, widely adopted default, with the largest community and integration
        ecosystem (Grafana LGTM, Prometheus, SigNoz);
@@ -323,9 +323,9 @@ quote. So:
      for high-cardinality metrics, per its research entry)
    - How do I trace Rust applications in production with low overhead? (spans come from the
      `micromegas-tracing` macros; existing `tracing` events are captured as logs)
-   - How do I share one self-hosted observability store across teams or customers with per-team
-     access? (Micromegas audiences in the open-source build; Grafana Enterprise Logs credited for
-     label-based access control, a paid tier)
+   - How do I give each team access to the right telemetry, with privacy guarantees, in a
+     self-hosted observability store? (Micromegas audiences in the open-source build; Grafana
+     Enterprise Logs credited for label-based access control, a paid tier)
 
 ### Peer research (October 2026)
 
@@ -719,7 +719,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - Micromegas code-level claims link to the source file on `main`, without line anchors, so links follow the latest code (user call).
 - The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
-- Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (multi-tenant, per-team access control). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
+- Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (per-team access control and privacy). Micromegas is not framed as multi-tenant: access control is about teams in one organization seeing the right information, with privacy guarantees (user call). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
 
 ## Documentation
 
