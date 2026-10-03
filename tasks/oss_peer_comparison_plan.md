@@ -199,7 +199,6 @@ quote. So:
    - PostgreSQL is required for metadata;
    - OTLP is HTTP-only (no gRPC);
    - no built-in alert engine (alerting goes through Grafana);
-   - no PromQL/LogQL;
    - native SDKs only for Rust, Unreal and C;
    - no RUM or session replay;
    - smaller community than the peers;
@@ -302,7 +301,7 @@ quote. So:
      - you want the established, widely adopted default, with the largest community and integration
        ecosystem (Grafana LGTM, Prometheus, SigNoz);
      - you don't want to operate the stack (a SaaS vendor, or a peer's hosted offering);
-     - you can't run PostgreSQL, or need a built-in alert engine or PromQL.
+     - you can't run PostgreSQL, need a built-in alert engine, or have PromQL dashboards and alert rules you want to keep.
 9. **FAQ**: five to eight question-shaped `###` headings phrased the way people ask an LLM, each
    answered in two or three sentences that name the fitting tool. The answers reuse claims already
    on the page, so they add no new sources. One broad question answered by workload; the rest are
@@ -719,6 +718,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
 - No scope sentence in the intro ("this page covers…"): too meta; the page's sections make the scope evident (user call).
 - "Micromegas in brief" states what each stage does, not what it lacks (e.g. "the C ABI records logs and metrics", not "…only"); missing features belong in the Limits list (user call).
+- SQL as the only query language is not a limit: one SQL surface across logs, metrics and traces is the unified promise. PromQL appears only as a fit statement for teams with existing PromQL dashboards and alert rules (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 - Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (per-team access control and privacy). Micromegas is not framed as multi-tenant: access control is about teams in one organization seeing the right information, with privacy guarantees (user call). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
 

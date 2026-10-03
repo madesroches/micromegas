@@ -21,7 +21,6 @@ Every claim on this page links to its source: the project's own docs or reposito
 - PostgreSQL is required for metadata ([architecture][arch]).
 - OTLP is HTTP-only; there is no OTLP/gRPC ([OTLP limitations][otlp-limits]).
 - There is no built-in alert engine; alerting goes through Grafana ([Grafana plugin](../grafana/index.md)).
-- There is no PromQL or LogQL; the query language is SQL ([query guide](../query-guide/index.md)).
 - Native SDKs exist only for Rust, Unreal Engine and C ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
 - There is no RUM or session replay.
 - The community is smaller than the peers' communities.
@@ -187,7 +186,7 @@ These projects overlap more than they compete, and many teams run two of them.
 
 - you want the established, widely adopted default, with the largest community and integration ecosystem (Grafana LGTM, Prometheus, SigNoz);
 - you don't want to operate the stack (a SaaS vendor, or a peer's hosted offering);
-- you can't run PostgreSQL, or need a built-in alert engine or PromQL.
+- you can't run PostgreSQL, need a built-in alert engine, or have PromQL dashboards and alert rules you want to keep.
 
 ## FAQ
 
