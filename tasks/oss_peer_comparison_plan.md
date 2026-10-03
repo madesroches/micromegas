@@ -155,6 +155,10 @@ quote. So:
   default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
 - **Explicit fit statements.** Every recommendation names the workload: "for X, choose Y". The
   summary and FAQ make this explicit for Micromegas and for each peer.
+- **Tone toward peers.** They are fellow open-source projects. Each section credits the peer
+  before contrasting; limits are stated in the peer's own documented words, with the link; no
+  characterizing of motives, licensing choices or business models beyond stating the license and
+  editions.
 
 ### Page structure
 
