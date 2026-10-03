@@ -678,7 +678,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
    `## Cost`, with `[When to use Micromegas](https://micromegas.info/docs/when-to-use/)` and a one-line
    description naming the peers and the workloads Micromegas fits (high-frequency telemetry with high-cardinality fleet
    dimensions (many processes, machines, users) from native and client processes, queried with SQL), since LLM retrieval matches on
-   those names and terms. Also reword the preamble's "a lakehouse materializes hot queries into Parquet on demand" to match the facts row (logs and metrics are materialized continuously; only spans and per-process views on demand).
+   those names and terms. Also reword the preamble's "a lakehouse materializes hot queries into Parquet on demand" to match the facts row (logs and metrics are materialized continuously; only spans and per-process views on demand). Drop "~20 ns" from the summary line (say "low-overhead instrumentation"), and scope the per-event bullet's figure to thread-local streams (CPU traces); logs and metrics cost somewhat more per event.
 5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    `When to Use` nav tab and the `llms.txt` section.
 
@@ -692,7 +692,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 
 ## Decisions
 
-- Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
+- Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables). In `llms.txt` the figure is kept only for thread-local streams (CPU traces), since logs and metrics cost more per event (user call).
 - Positioning: choose Micromegas for efficiency (instrumentation overhead and cost) and the high-frequency, full-resolution use cases it enables; choose a peer for the established default or to avoid operating the stack (user call).
 - FAQ weighted toward narrow questions where Micromegas fits; no FAQ entry whose only answer is a peer (user call).
 - LLM agent observability gets its own page under `when-to-use/` in [#1637](https://github.com/madesroches/micromegas/issues/1637), against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
