@@ -208,14 +208,23 @@ quote. So:
    ingestion credential, so a producer cannot forge it; read grants are separate and editable;
    re-sharing applies to already-ingested data immediately, with no restamping; all of it is in the
    Apache-2.0 build, with no paid tier.
-3. **At a glance** table. The columns below are the ones the research could fill with a source for
-   every cell. The first row is Micromegas, filled only from the "Micromegas facts the page may
-   state" table:
+3. **At a glance**: two compact tables, so each fits the content width at laptop width (one
+   eight-column table with cited sentences in every cell did not). Cells are short values with no
+   citations; each project name links to its section, and every cell's source is cited there (one
+   line under the heading says so). The first row is Micromegas, filled only from the "Micromegas
+   facts the page may state" table and linking to "Micromegas in brief".
 
-   | Project | License (OSS edition) | Signals | Storage | Required services beyond the binary | Query languages | Own in-process SDKs | Built-in UI / alerting |
-   |---|---|---|---|---|---|---|---|
+   *Deployment and licensing*:
 
-   License cells must name gated editions where they exist, e.g. "AGPL-3.0; paid tiers gate PromQL, HA".
+   | Project | License (OSS edition) | Storage | Also requires |
+   |---|---|---|---|
+
+   *Capabilities*:
+
+   | Project | Signals | Query | Own in-process SDKs | UI / alerting |
+   |---|---|---|---|---|
+
+   License cells name what the paid editions gate, e.g. "AGPL-3.0; paid PromQL, HA".
 4. **One section per full peer**, headed `Micromegas vs. <Peer>`, each with the same three sub-headings, which keeps entries comparable and stops
    them drifting into a sales sheet:
    - *What it is*: one or two sentences, plus license and editions.
@@ -337,10 +346,20 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   anomaly detection and AI features. SQL, dashboards, threshold alerts, OIDC/SSO and RBAC are in OSS
   ([pricing](https://www.parseable.com/pricing)). PromQL alerts are rejected in the OSS build
   ("Upgrade to Parseable Enterprise", `src/alerts/mod.rs`).
-- **Ingestion**: its own HTTP JSON API (`/ingest`), OTLP over HTTP and gRPC, and Kafka; plus
-  shippers (Fluent Bit, Vector, Logstash, Filebeat) and Prometheus remote write
+- **Ingestion**: its own HTTP JSON API (`/ingest`), OTLP over HTTP, and Kafka; plus shippers
+  (Fluent Bit, Vector, Logstash, Filebeat)
   ([integrations](https://www.parseable.com/docs/integrations),
-  [architecture](https://www.parseable.com/docs/architecture)). **No** Elasticsearch `_bulk`
+  [architecture](https://www.parseable.com/docs/architecture)). The OSS build has **no OTLP/gRPC
+  server and no Prometheus remote-write handler**, and accepts OTLP as **JSON only**: protobuf is
+  rejected with "Protobuf ingestion is not supported in Parseable OSS"
+  ([`ingest_utils.rs`](https://github.com/parseablehq/parseable/blob/d3cc4110bbdb4d1cc32a5cd91d2cbbde957d8e45/src/handlers/http/modal/utils/ingest_utils.rs#L158-L164)); the docs list
+  protobuf for Cloud/Enterprise ([OTLP logs](https://www.parseable.com/docs/OpenTelemetry/logs)).
+- **Ingestion cost path** (source at `d3cc411`): each request becomes a `serde_json::Value` tree
+  (OTLP also goes through prost structs and a per-record flattened map); schema inference and
+  merge run over every record on every request ([`json.rs`](https://github.com/parseablehq/parseable/blob/d3cc4110bbdb4d1cc32a5cd91d2cbbde957d8e45/src/event/format/json.rs#L64-L186));
+  the batch is serialized into Arrow, written as Arrow IPC to local staging disk, converted to
+  Parquet every 60 s and uploaded every 30 s. Its only published benchmark (v1.3.0 blog, June
+  2024, JSON) works out to roughly 24–29k events/s per ingest vCPU. **No** Elasticsearch `_bulk`
   endpoint (no such route in `src/handlers/http/modal/server.rs`).
 - **Storage**: Arrow staged on local disk, then converted to Parquet on S3, GCS, Azure Blob or the
   local filesystem.
@@ -741,7 +760,7 @@ job, which runs on this PR because it touches `mkdocs/**` and `welcome/**`:
 These checks need a human: whether a table reads well and whether a claim matches a peer's docs
 can only be eyeballed.
 
-1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/when-to-use/`. The page should render with the glance table
+1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/when-to-use/`. The page should render with both glance tables
    readable at laptop width and the new `When to Use` tab visible in the nav.
 2. Click every source link on the rendered page, peer and Micromegas. Each one should load, and each
    Micromegas source file should still contain what its claim cites.
