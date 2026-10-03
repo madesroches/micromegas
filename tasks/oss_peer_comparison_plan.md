@@ -49,6 +49,9 @@ linked to that project's own current docs or repo.
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
+| Every metric emission is stored as its own row with a nanosecond timestamp, carrying process/exe/computer/username plus properties; SQL can group or filter by any of them at query time | `query-guide/schema-reference.md` (`measures`) |
+| The built-in system monitor records CPU usage and used/free memory every 200 ms per process (`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` on Linux and Windows), process memory every 5 s | `rust/telemetry-sink/src/system_monitor.rs`, sysinfo 0.37.2 |
+| Cardinality is bounded on the producer side: metric names, log targets and property sets are interned in process memory, so they must stay bounded; free-form values go in the log message body | `native/index.md` ("Cardinality contract"), `blender/index.md` (Cardinality) |
 | Notebooks run DataFusion in the browser via WASM | `web-app/notebooks/execution.md` |
 | Grafana data source plugin; alerting goes **through Grafana**. No built-in alert engine | `grafana/`, `llms.txt` |
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
@@ -104,11 +107,13 @@ the fleet.
 
 | Tier | Projects | Treatment |
 |---|---|---|
-| Full section | Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse (incl. ClickStack/HyperDX), Grafana LGTM (Loki/Tempo/Mimir, plus Pyroscope), InfluxDB 3 Core, VictoriaMetrics/Logs/Traces, Quickwit | Glance-table row plus a section |
+| Full section | Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse (incl. ClickStack/HyperDX), Grafana LGTM (Loki/Tempo/Mimir, plus Pyroscope), InfluxDB 3 Core, VictoriaMetrics/Logs/Traces, Quickwit, Prometheus (with Thanos) | Glance-table row plus a section |
 | Complementary tools | Tracy, Unreal Insights, Perfetto | Short section: session-local profilers vs. a fleet-wide, historical store. Not head-to-head |
 | Also considered | Elasticsearch/OpenSearch, Uptrace, Jaeger (with Zipkin), Apache SkyWalking, Apache Doris/StarRocks, Sentry self-hosted | One line each with the reason it isn't a full entry |
 
-The five peers named in the issue are kept. Four are added from the additional-peer research:
+The five peers named in the issue are kept. Five are added from the additional-peer research:
+- **Prometheus (with Thanos)**: the most widely deployed open-source metrics system; its own docs
+  state the frequency, dimensionality and single-node limits that Micromegas is designed around.
 - **Grafana LGTM**: it is the default self-hosted answer and the stack most readers already run.
 - **InfluxDB 3 Core**: it has the closest storage/query stack to Micromegas (Rust, Arrow, DataFusion, Parquet, Flight, object storage).
 - **VictoriaMetrics family**: it is widely recommended and now covers all three signals.
@@ -122,11 +127,11 @@ Excluded, and not listed on the page:
 - not open source: Superluminal (proprietary), Graylog (SSPL).
 
 Star counts and latest releases, from `gh api` on 2026-10-02 (context for the peer-set choice, not
-for the page): ClickHouse 50.2k (v26.3.39.7-lts); SigNoz 32.3k (v0.144.0); InfluxDB 31.8k
+for the page): Prometheus 66.3k (v3.15.0); ClickHouse 50.2k (v26.3.39.7-lts); SigNoz 32.3k (v0.144.0); InfluxDB 31.8k
 (v3.11.4); Loki 29.0k (v3.7.8); SkyWalking 25.0k (v11.0.0); Jaeger 23.3k (v2.21.0); OpenObserve
 22.2k (v1.1.0-rc1); VictoriaMetrics 17.8k (v1.153.0); Quickwit 11.7k (v0.9.1); HyperDX 9.9k;
 GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); Parseable 2.5k
-(v3.2.4); VictoriaLogs 2.3k; VictoriaTraces 0.5k (v0.12.0).
+(v3.2.4); VictoriaLogs 2.3k; VictoriaTraces 0.5k (v0.12.0); Thanos 14.2k (v0.42.4).
 
 ### Page structure
 
@@ -169,6 +174,16 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
      DataFusion over Parquet; Quickwit also keeps metadata in PostgreSQL), the section says so and
      leaves that axis out of the differences.
    - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
+   - The Prometheus section's *How Micromegas differs* is longer than the others, with three
+     short paragraphs, each quoting Prometheus's own docs (see its research entry):
+     - *Frequency*: one value per target per scrape (default 1m) vs. every emission stored as its
+       own row; e.g. Micromegas's system monitor records CPU and memory every 200 ms per process.
+     - *Dimensionality*: every label combination is a new time series with RAM/CPU/disk cost, so
+       labels stay low-cardinality and are chosen at instrumentation time vs. properties and
+       columns on each row, grouped by any of them in SQL at query time. State Micromegas's own
+       producer-side cardinality contract alongside, so the contrast stays honest.
+     - *Scale*: local storage limited to one node, HA by duplicate servers, Thanos or remote
+       storage for scale-out vs. independently scaled services over object storage.
 5. **Complementary tools**: Tracy, Unreal Insights and Perfetto give a deep view of one session.
    Micromegas keeps the history of many processes in a single store and makes it queryable. It also
    exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): their
@@ -190,6 +205,7 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
    | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
    | Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |
    | Elasticsearch-compatible log and trace search directly on object storage | Quickwit |
+   | Scrape-based service monitoring and alerting, with the largest exporter ecosystem | Prometheus (Thanos for long-term, global view) |
    | A deep look at one session on one machine | Tracy, Unreal Insights, Perfetto (alongside any of the above) |
 
    Then two short lists:
@@ -477,6 +493,56 @@ weekly. Items under **Not confirmed** stay off the page.
 - **Credit it for**: fast full-text log search on cheap object storage; a drop-in for
   Elasticsearch-compatible tooling; Jaeger-native trace storage.
 
+#### Prometheus (with Thanos) — [Prometheus](https://github.com/prometheus/prometheus), [Thanos](https://github.com/thanos-io/thanos)
+- **What it is**: "an open-source systems monitoring and alerting toolkit"
+  ([overview](https://prometheus.io/docs/introduction/overview/)). Metrics only: each sample is a
+  float64 or native histogram with a millisecond timestamp
+  ([data model](https://prometheus.io/docs/concepts/data_model/)); on logs the FAQ says "Don't!"
+  ([FAQ](https://prometheus.io/docs/introduction/faq/)).
+- **License**: Apache-2.0, Go, CNCF graduated. Thanos is Apache-2.0, CNCF incubating.
+- **Ingestion**: HTTP pull (scrape); Pushgateway only for "the outcome of a service-level batch
+  job" ([pushing](https://prometheus.io/docs/practices/pushing/)). Remote-write and OTLP/HTTP
+  (metrics only) receivers, both off by default
+  ([CLI](https://prometheus.io/docs/prometheus/latest/command-line/prometheus/),
+  [OTel guide](https://prometheus.io/docs/guides/opentelemetry/)).
+- **Storage**: local TSDB; head block in memory behind a WAL; retention defaults to 15d
+  ([storage](https://prometheus.io/docs/prometheus/latest/storage/)).
+- **Scale (own docs)**:
+  - "Prometheus's local storage is limited to a single node's scalability and durability" and
+    "is not clustered or replicated" ([storage](https://prometheus.io/docs/prometheus/latest/storage/));
+  - it runs reliably "with tens of millions of active series" ([FAQ](https://prometheus.io/docs/introduction/faq/));
+  - HA: "run identical Prometheus servers on two or more separate machines" ([FAQ](https://prometheus.io/docs/introduction/faq/));
+  - Thanos adds object storage for blocks, a global query view, deduplication of HA pairs and
+    downsampling; its sidecar uploads blocks every 2 hours and its compactor is a singleton per
+    bucket ([Thanos](https://github.com/thanos-io/thanos),
+    [sidecar](https://thanos.io/tip/components/sidecar.md/),
+    [compactor](https://thanos.io/tip/components/compact.md/)).
+- **Frequency (own docs)**: `scrape_interval` defaults to `1m`
+  ([config](https://prometheus.io/docs/prometheus/latest/configuration/configuration/)); gauges are
+  "snapshots of state" ([instrumentation](https://prometheus.io/docs/practices/instrumentation/));
+  "If you need 100% accuracy, such as for per-request billing, Prometheus is not a good choice, as
+  the collected data will likely not be detailed and complete enough"
+  ([overview](https://prometheus.io/docs/introduction/overview/)).
+- **Dimensionality (own docs)**:
+  - "every unique combination of key-value label pairs represents a new time series… Do not use
+    labels to store dimensions with high cardinality" ([naming](https://prometheus.io/docs/practices/naming/));
+  - "Each labelset is an additional time series that has RAM, CPU, disk, and network costs"; keep
+    cardinality "below 10"; over 100, consider "moving the analysis away from monitoring and to a
+    general-purpose processing system" ([instrumentation](https://prometheus.io/docs/practices/instrumentation/)).
+- **Query**: PromQL ([basics](https://prometheus.io/docs/prometheus/latest/querying/basics/)).
+- **UI and alerting**: built-in expression browser for ad-hoc queries, Grafana for graphs
+  ([browser](https://prometheus.io/docs/visualization/browser/)); alerting rules plus Alertmanager
+  ([alerting](https://prometheus.io/docs/alerting/latest/overview/)).
+- **Deployment**: "Autonomous single-server nodes without distributed storage dependencies"
+  ([overview](https://prometheus.io/docs/introduction/overview/)).
+- **SDKs**: official metric client libraries for Go, Java/Scala, Node.js, Python, Ruby and Rust
+  ([clientlibs](https://prometheus.io/docs/instrumenting/clientlibs/)); no log or trace SDKs.
+- **Credit it for**: the de-facto standard for service metrics; PromQL; simple single-binary
+  operation; service discovery; mature alerting; the largest exporter ecosystem; Thanos and
+  remote storage for long-term, global views.
+- **Not confirmed** (keep off the page): that gauges miss changes between scrapes (follows from the
+  model, not stated); a bytes-per-series figure; a first-party "no SQL" statement.
+
 #### Complementary and also-considered (status verified 2026-10-02)
 
 **Complementary tools**
@@ -545,7 +611,8 @@ weekly. Items under **Not confirmed** stay off the page.
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
 - LLM agent observability gets its own page under `comparisons/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
-- Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family and Quickwit as full entries.
+- Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family, Quickwit and Prometheus (with Thanos) as full entries.
+- Prometheus gets extra space for frequency, dimensionality and single-node scale, each backed by its own docs (user call).
 - Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
 - The page ends with a "which one fits" summary; Micromegas recommendations are domain-neutral, not limited to games (user call).
 - Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
