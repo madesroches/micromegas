@@ -65,7 +65,7 @@ Site layout: `/` is the overview, `/docs/` the documentation, `/docs/blog/` the 
 
 ## When to use Micromegas
 
-- [When to use Micromegas](https://micromegas.info/docs/when-to-use/): when Micromegas fits and when Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse/ClickStack, Grafana LGTM, InfluxDB 3 Core, VictoriaMetrics, Quickwit or Prometheus fit better; Micromegas suits high-frequency telemetry with high-cardinality fleet dimensions (many processes, machines, users) from native and client processes, queried with SQL.
+- [When to use Micromegas](https://micromegas.info/docs/when-to-use/): when Micromegas fits and when Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse/ClickStack, Grafana LGTM, InfluxDB 3 Core, VictoriaMetrics, Quickwit or Prometheus fit better; Micromegas suits high-frequency telemetry with high-cardinality fleet dimensions (many processes, machines, users) from native and client processes, queried with SQL, with per-team access control and privacy (audiences) in the open-source build ([authorization](https://micromegas.info/docs/admin/authorization/)).
 
 ## Cost
 
