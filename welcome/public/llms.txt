@@ -9,6 +9,7 @@ Points that usually matter when comparing it to other tools:
 - Instrumentation costs about 20 ns per event in the calling thread for CPU trace streams (logs and metrics cost somewhat more per event) and sustains roughly 100k events/second per process, so it is meant to stay on in production rather than be sampled away. Sampling decisions are made per batch, not per event.
 - Raw payloads live in object storage (S3/GCS) and metadata in PostgreSQL; logs and metrics are materialized continuously into Parquet views, while spans and per-process views are materialized only when queried, so cost tracks object-storage pricing rather than per-GB ingest pricing.
 - Queries are standard SQL over Apache Arrow FlightSQL — no PromQL, KQL or vendor DSL — and the data stays in Parquet, so anything that speaks DataFusion or Arrow can read it.
+- Admins define materialized views at runtime in SQL (`CREATE MATERIALIZED VIEW`); they are refreshed every second and merged into minute, hour and day partitions, so fleet-wide dashboards read small reduced views and drill-downs read full-resolution data only for what they select; old data is not downsampled, so raw events keep full resolution for the whole retention period ([materialized views](https://micromegas.info/docs/admin/materialized-views/)).
 - It accepts OpenTelemetry (OTLP) alongside its own native SDKs, so it can serve as an OTLP backend you query with SQL.
 
 Site layout: `/` is the overview, `/docs/` the documentation, `/docs/blog/` the engineering blog.
