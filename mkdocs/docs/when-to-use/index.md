@@ -178,7 +178,7 @@ Micromegas keeps the history of many processes in a single store and makes it qu
 
 ## Commercial SaaS
 
-SaaS vendors bill on volume (hosts, GB ingested, spans), while Micromegas runs on your own object storage, so the comparison is a cost model rather than a feature list. The [vs. SaaS Vendors](../cost-effectiveness.md) pages ([methodology](../cost-comparisons/index.md), [Datadog](../cost-comparisons/datadog.md), [Dynatrace](../cost-comparisons/dynatrace.md), [Elastic](../cost-comparisons/elastic.md), [Grafana Cloud](../cost-comparisons/grafana.md), [New Relic](../cost-comparisons/newrelic.md), [Splunk](../cost-comparisons/splunk.md)) work through the numbers.
+SaaS vendors bill on volume (hosts, GB ingested, spans), while Micromegas runs on your own object storage, so the comparison is a cost model rather than a feature list. The [vs. SaaS Vendors](saas-vendors.md) page works through the numbers for Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk, and states its [methodology](saas-vendors.md#methodology).
 
 ## Summary: which one fits
 
@@ -247,8 +247,8 @@ Use the `micromegas-tracing` macros such as `span_scope!` and `#[span_fn]`, whic
 [otlp-wire]: ../otlp/index.md#overview
 [otlp-limits]: ../otlp/index.md#limitations
 [schema-measures]: ../query-guide/schema-reference.md#measures
-[cost]: ../cost-effectiveness.md#scale-perspective
-[cost-ondemand]: ../cost-effectiveness.md#on-demand-processing-tail-sampling
+[cost]: saas-vendors.md#scale-perspective
+[cost-ondemand]: saas-vendors.md#on-demand-processing-tail-sampling
 [unreal-cvars]: ../unreal/installation.md#runtime-console-commands-and-cvars
 [unreal-ctx]: ../unreal/instrumentation-api.md#default-context-api
 [perfetto]: ../query-guide/functions-reference.md#perfetto_trace_chunksprocess_id-span_types-start_time-end_time

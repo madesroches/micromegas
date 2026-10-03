@@ -52,6 +52,16 @@ plugins:
       archive_date_format: yyyy
       categories: true
   - tags
+  - redirects:
+      redirect_maps:
+        cost-effectiveness.md: when-to-use/saas-vendors.md
+        cost-comparisons/index.md: when-to-use/saas-vendors.md#methodology
+        cost-comparisons/datadog.md: when-to-use/saas-vendors.md#vs-datadog
+        cost-comparisons/dynatrace.md: when-to-use/saas-vendors.md#vs-dynatrace
+        cost-comparisons/elastic.md: when-to-use/saas-vendors.md#vs-elastic
+        cost-comparisons/grafana.md: when-to-use/saas-vendors.md#vs-grafana-cloud
+        cost-comparisons/newrelic.md: when-to-use/saas-vendors.md#vs-new-relic
+        cost-comparisons/splunk.md: when-to-use/saas-vendors.md#vs-splunk
   - rss:
       match_path: blog/posts/.*
       use_git: false
@@ -96,15 +106,7 @@ nav:
   - Getting Started: getting-started.md
   - When to Use:
     - When to Use Micromegas: when-to-use/index.md
-    - vs. SaaS Vendors:
-      - Cost Overview: cost-effectiveness.md
-      - Methodology: cost-comparisons/index.md
-      - vs. Datadog: cost-comparisons/datadog.md
-      - vs. Dynatrace: cost-comparisons/dynatrace.md
-      - vs. Elastic: cost-comparisons/elastic.md
-      - vs. Grafana Cloud: cost-comparisons/grafana.md
-      - vs. New Relic: cost-comparisons/newrelic.md
-      - vs. Splunk: cost-comparisons/splunk.md
+    - vs. SaaS Vendors: when-to-use/saas-vendors.md
   - Query Guide:
     - Overview: query-guide/index.md
     - Quick Start: query-guide/quick-start.md
