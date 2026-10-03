@@ -22,7 +22,7 @@ Every claim on this page links to its source: the project's own docs or reposito
 - OTLP is HTTP-only; there is no OTLP/gRPC ([OTLP limitations][otlp-limits]).
 - There is no built-in alert engine; alerting goes through Grafana ([Grafana plugin](../grafana/index.md)).
 - Among the native SDKs, spans come from Rust and Unreal; the C ABI records logs and metrics only. OTLP/HTTP traces are also accepted as spans ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
-- There is no RUM or session replay.
+- There is no browser or mobile-web RUM SDK and no session replay; RUM for game clients comes through the [Unreal plugin](../unreal/index.md).
 - The community is smaller than the peers' communities.
 - You operate it yourself: PostgreSQL, object storage, and the services (or the [single-process monolith](../admin/monolith.md)).
 
@@ -74,7 +74,7 @@ Each project's section below gives the sources for its row.
 
 **OpenObserve** is a Rust backend with a Vue UI covering logs, metrics, traces, RUM, session replay, profiles and LLM observability ([repo](https://github.com/openobserve/openobserve)). It is AGPL-3.0 in the open-source edition (it moved from Apache); the Enterprise edition is under a commercial license, free up to 50 GB/day ([license](https://openobserve.ai/docs/enterprise-setup/license-and-pricing/)) and gates SSO, advanced RBAC, audit logs, federation and AI features ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)). It has an LLM observability feature set for agent traces.
 
-**Choose OpenObserve when** you need the broadest signal coverage (RUM and session replay included), a rich built-in UI with dashboards, pipelines, alerts and incidents, full-text search via Tantivy, or an easy migration off ELK through its Elasticsearch-compatible `_bulk` API ([ingestion](https://openobserve.ai/docs/user-guide/ingestion/), [metrics](https://openobserve.ai/docs/features/metrics/)).
+**Choose OpenObserve when** you need the broadest signal coverage (browser and mobile RUM and session replay included), a rich built-in UI with dashboards, pipelines, alerts and incidents, full-text search via Tantivy, or an easy migration off ELK through its Elasticsearch-compatible `_bulk` API ([ingestion](https://openobserve.ai/docs/user-guide/ingestion/), [metrics](https://openobserve.ai/docs/features/metrics/)).
 
 **How Micromegas differs.** Both run SQL on DataFusion over Parquet on object storage ([OpenObserve `Cargo.toml`](https://github.com/openobserve/openobserve/blob/main/Cargo.toml)). OpenObserve uses OTel SDKs for backend code, plus its own RUM SDKs ([repo](https://github.com/openobserve/openobserve)); Micromegas has in-process [Rust and Unreal SDKs](../native/index.md). On ingestion, OpenObserve turns each event into a JSON value, flattens it and resolves the batch schema before converting it to Arrow ([`ingest.rs`](https://github.com/openobserve/openobserve/blob/b75978cd37c65f07a07f04a21a71e8ed6268585d/src/core/src/logs/ingest.rs#L779-L791), [`mod.rs`](https://github.com/openobserve/openobserve/blob/b75978cd37c65f07a07f04a21a71e8ed6268585d/src/core/src/logs/mod.rs#L435-L560)); the resulting Parquet is merged again on upload, where a Tantivy index is built, and compacted later ([`parquet.rs`](https://github.com/openobserve/openobserve/blob/b75978cd37c65f07a07f04a21a71e8ed6268585d/src/jobs/src/job/files/parquet.rs#L786-L895), [`config.rs`](https://github.com/openobserve/openobserve/blob/b75978cd37c65f07a07f04a21a71e8ed6268585d/src/config/src/config.rs#L2973-L2982)). Micromegas stores each compressed block as received ([ingestion](#micromegas-in-brief)). OpenObserve writes Parquet at ingestion, whereas Micromegas processes spans and per-process views only [when queried][jit]. OpenObserve keeps metadata in SQLite on one node, and PostgreSQL plus NATS in HA mode ([architecture](https://openobserve.ai/docs/architecture/)). Micromegas also offers one SQL surface rather than SQL plus PromQL, and notebooks running the same engine in the browser ([WASM][exec]). OpenObserve's Enterprise edition gates advanced RBAC ([features](https://openobserve.ai/docs/enterprise-setup/enterprise-features/)), whereas Micromegas's [per-row access control][authz] is in the open-source build. Where OpenObserve offers profiling, Micromegas's difference is spans named by the data being processed rather than sampled call stacks ([code vs. data](#complementary-tools)).
 
@@ -187,7 +187,7 @@ These projects overlap more than they compete, and many teams run two of them.
 | Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
 | A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
 | All signals as Parquet on object storage, one binary, no metadata database | Parseable |
-| The widest signal coverage (RUM, session replay), or a migration off ELK | OpenObserve |
+| The widest signal coverage (browser and mobile RUM, session replay), or a migration off ELK | OpenObserve |
 | One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
 | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
 | Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |

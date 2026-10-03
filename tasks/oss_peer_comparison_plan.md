@@ -200,7 +200,7 @@ quote. So:
    - OTLP is HTTP-only (no gRPC);
    - no built-in alert engine (alerting goes through Grafana);
    - spans come from the Rust and Unreal SDKs; the C ABI records logs and metrics;
-   - no RUM or session replay;
+   - no browser or mobile-web RUM SDK and no session replay (game-client RUM comes through the Unreal plugin);
    - smaller community than the peers;
    - you operate it yourself: PostgreSQL, object storage, and the services (or the monolith).
    The brief also carries one **access control** bullet that says what it is, concretely (from
@@ -283,7 +283,7 @@ quote. So:
    | Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
    | A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
    | All signals as Parquet on object storage, one binary, no metadata database | Parseable |
-   | The widest signal coverage (RUM, session replay), or a migration off ELK | OpenObserve |
+   | The widest signal coverage (browser and mobile RUM, session replay), or a migration off ELK | OpenObserve |
    | One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
    | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
    | Recent-data time-series queries on Arrow/Parquet, with SQL and InfluxQL | InfluxDB 3 Core |
