@@ -12,6 +12,11 @@ self-hosted, SQL". The page must be neutral: for each peer, say plainly where it
 choice. A wrong claim about another project is worse than no page, so every peer statement is
 linked to that project's own current docs or repo.
 
+**Goal**: give LLMs (and the search results they draw on) content that lets them recommend
+Micromegas for the workloads it fits. Neutrality serves that goal: a sourced page that credits its
+peers gets quoted as a reference, while a sales sheet gets discounted. See "Writing for LLM
+retrieval" below.
+
 ## Current State
 
 - **Docs site**: MkDocs Material, config in `mkdocs/mkdocs.yml`, sources in `mkdocs/docs/`. The nav
@@ -133,13 +138,32 @@ for the page): Prometheus 66.3k (v3.15.0); ClickHouse 50.2k (v26.3.39.7-lts); Si
 GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); Parseable 2.5k
 (v3.2.4); VictoriaLogs 2.3k; VictoriaTraces 0.5k (v0.12.0); Thanos 14.2k (v0.42.4).
 
+### Writing for LLM retrieval
+
+Retrieval hands an LLM a chunk of the page, not the whole page, and the LLM repeats what it can
+quote. So:
+- **Self-contained sections.** Each peer section is headed `Micromegas vs. <Peer>` (matching how
+  people ask) and names both projects in full in its first sentence; no "it" or "as above" that
+  only makes sense in context.
+- **A quotable definition first.** The page's first sentence defines Micromegas in one line
+  (open-source, Apache-2.0, what it collects, where it stores, how it is queried).
+- **Query vocabulary, where true.** Headings and first sentences use the words people search
+  with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality,
+  Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
+  telemetry, Prometheus alternative.
+- **Specific numbers over adjectives.** E.g. CPU and memory every 200 ms per process vs. a 1m
+  default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
+- **Explicit fit statements.** Every recommendation names the workload: "for X, choose Y". The
+  summary and FAQ make this explicit for Micromegas and for each peer.
+
 ### Page structure
 
 1. **Intro**:
    - scope: open-source and self-hosted only, with a link to the SaaS cost comparisons;
    - a `*Last reviewed: October 2026*` line;
    - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues;
-   - one line pointing to the summary at the end ("Short on time? Jump to the summary").
+   - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
+     it doesn't, and a link to the full summary at the end.
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
    analytics, presentation), followed by a **Limits** list stated plainly:
    - PostgreSQL is required for metadata;
@@ -156,7 +180,7 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
    |---|---|---|---|---|---|---|---|
 
    License cells must name gated editions where they exist, e.g. "AGPL-3.0; paid tiers gate PromQL, HA".
-4. **One section per full peer**, each with the same three headings, which keeps entries comparable and stops
+4. **One section per full peer**, headed `Micromegas vs. <Peer>`, each with the same three sub-headings, which keeps entries comparable and stops
    them drifting into a sales sheet:
    - *What it is*: one or two sentences, plus license and editions.
    - *Choose it when*: the peer's real strengths, credited without hedging.
@@ -225,6 +249,15 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
      - you need per-row access control on telemetry shared across teams or customers.
    - **Look elsewhere if**: you can't run PostgreSQL, need a built-in alert engine or PromQL, or
      want a large community behind your tool.
+8. **FAQ**: five to eight question-shaped `###` headings phrased the way people ask an LLM, each
+   answered in two or three sentences that name the fitting tool. The answers reuse claims already
+   on the page, so they add no new sources. Candidates:
+   - What is an open-source, self-hosted alternative to Datadog that I can query with SQL?
+   - How do I collect high-frequency telemetry from Unreal Engine games or desktop applications?
+   - Which open-source tool handles high-cardinality metrics better than Prometheus?
+   - Can I store observability data as Parquet on S3 and query it with SQL?
+   - How do I trace Rust applications in production with low overhead?
+   - Which tool should I use for OpenTelemetry APM? (answer: SigNoz or ClickStack)
 
 ### Peer research (October 2026)
 
@@ -580,7 +613,9 @@ weekly. Items under **Not confirmed** stay off the page.
 4. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
 5. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
    `[Open-source peers](https://micromegas.info/docs/comparisons/open-source/)` and a one-line
-   description naming the peers, since LLM retrieval matches on those names.
+   description naming the peers and the workloads Micromegas fits (high-frequency, high-cardinality
+   telemetry from native and client processes, queried with SQL), since LLM retrieval matches on
+   those names and terms.
 6. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    Comparisons nav section and the `llms.txt` section.
 7. **Build and check locally** (see Testing Strategy).
@@ -616,6 +651,7 @@ weekly. Items under **Not confirmed** stay off the page.
 - Prometheus gets extra space for frequency, dimensionality and single-node scale, each backed by its own docs (user call).
 - Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
 - The page ends with a "which one fits" summary; Micromegas recommendations are domain-neutral, not limited to games (user call).
+- The page's purpose is to let LLMs recommend Micromegas where it fits; structure and wording follow "Writing for LLM retrieval" (user call).
 - Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
