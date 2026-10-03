@@ -63,6 +63,13 @@ retrieval" below.
 | Per-row audience access control on ingested data | `admin/authorization.md`, blog 2026-09-03 |
 | Single-process `micromegas-monolith` or split services | `admin/monolith.md` |
 
+**Making the facts checkable.** On the page, each Micromegas claim links to its proof the same way
+peer claims do. The link goes to the docs page from this table, with a section anchor. A claim
+that rests on code (defaults, sampling, which signals the C ABI exports, the 200 ms / 5 s intervals,
+OTLP/HTTP only, the span-naming macros) also gets a GitHub link to the file on `main`, with no
+line anchor, so the link tracks the latest code. The cost figure links to `cost-effectiveness.md`,
+which states how it was measured.
+
 **Instrumentation cost**: the page does **not** quote the ~20 ns figure, since it depends on too many
 variables (see Decisions). Describe the design instead:
 - events are recorded in-process on the calling thread;
@@ -187,7 +194,7 @@ quote. So:
      default or a managed stack; link to the full summary at the end;
    - scope: open-source and self-hosted tools, with commercial SaaS covered briefly in its own section;
    - a `*Last reviewed: October 2026*` line;
-   - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues.
+   - one sentence saying every claim, Micromegas's own included, links to its source (the project's docs, or its source code), and inviting corrections via GitHub issues.
 2. **Micromegas in brief**: four short bullets, one per stage (instrumentation, ingestion,
    analytics, presentation), followed by a **Limits** list stated plainly:
    - PostgreSQL is required for metadata;
@@ -657,6 +664,8 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 
 1. **Write `mkdocs/docs/when-to-use/index.md`** following the page structure above:
    - inline-link every peer claim to its source;
+   - link every Micromegas claim to its docs page and, for code-level facts, its source file on
+     `main` (see "Making the facts checkable");
    - leave out everything under **Not confirmed**;
    - avoid superlatives about Micromegas and the 20 ns figure;
    - use the Micromegas phrasing from "Micromegas facts the page may state".
@@ -699,6 +708,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - SaaS vendors stay out of this page beyond a short section linking to the cost pages, because their cost model is too different for a fit comparison (user call). The cost pages join the `When to Use` tab in the nav only, so their URLs don't change.
 - One page, not one per peer (the issue asks for one; per-peer pages can split off later if search data justifies them).
 - The page describes what the system can do and states defaults as settings, not as limits; facts stay accurate (user call).
+- Micromegas code-level claims link to the source file on `main`, without line anchors, so links follow the latest code (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
@@ -721,4 +731,5 @@ can only be eyeballed.
 
 1. `cd mkdocs && python serve.py`. Open `http://localhost:8765/docs/when-to-use/`. The page should render with the glance table
    readable at laptop width and the new `When to Use` tab visible in the nav.
-2. Click every peer source link on the rendered page. Each one should load.
+2. Click every source link on the rendered page, peer and Micromegas. Each one should load, and each
+   Micromegas source file should still contain what its claim cites.
