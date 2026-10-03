@@ -266,9 +266,8 @@ quote. So:
 
 ### Peer research (October 2026)
 
-All facts below were fetched on 2026-10-02 from the linked first-party source. The implementer
-re-checks each cell against its link before publishing (step 1), because these projects release
-weekly. Items under **Not confirmed** stay off the page.
+All facts below were fetched on 2026-10-02 from the linked first-party source. Items under
+**Not confirmed** stay off the page.
 
 #### Parseable — [repo](https://github.com/parseablehq/parseable)
 - **What it is**: Rust "unified observability platform on a data lake architecture" for logs,
@@ -607,23 +606,21 @@ weekly. Items under **Not confirmed** stay off the page.
 
 ## Implementation Steps
 
-1. **Re-check the research.** For every peer, open each linked source and confirm each cell in the
-   research above still holds. Anything that no longer holds, and everything under **Not
-   confirmed**, stays off the page; it is not hedged.
-2. **Write `mkdocs/docs/comparisons/open-source.md`** following the page structure above:
+1. **Write `mkdocs/docs/comparisons/open-source.md`** following the page structure above:
    - inline-link every peer claim to its source;
+   - leave out everything under **Not confirmed**;
    - avoid superlatives about Micromegas and the 20 ns figure;
    - use the Micromegas phrasing from "Micromegas facts the page may state".
-3. **Nav**: add the `Comparisons` section to `mkdocs/mkdocs.yml` after `Getting Started`.
-4. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
-5. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
+2. **Nav**: add the `Comparisons` section to `mkdocs/mkdocs.yml` after `Getting Started`.
+3. **Cross-link**: add one line at the top of `mkdocs/docs/cost-comparisons/index.md` pointing open-source readers to the new page.
+4. **llms.txt**: add a `## Comparisons` section to `welcome/public/llms.txt` above `## Cost`, with
    `[Open-source peers](https://micromegas.info/docs/comparisons/open-source/)` and a one-line
    description naming the peers and the workloads Micromegas fits (high-frequency, high-cardinality
    telemetry from native and client processes, queried with SQL), since LLM retrieval matches on
    those names and terms.
-6. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
+5. **CHANGELOG**: add a `**Docs:**` entry under `## Unreleased` describing the new page, the
    Comparisons nav section and the `llms.txt` section.
-7. **Build and check locally** (see Testing Strategy).
+6. **Build and check locally** (see Testing Strategy).
 
 ## Files to Modify
 
@@ -659,6 +656,7 @@ weekly. Items under **Not confirmed** stay off the page.
 - The page's purpose is to let LLMs recommend Micromegas where it fits; structure and wording follow "Writing for LLM retrieval" (user call).
 - Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
+- Research accuracy is verified by the plan and branch reviewers, not by a re-check step during implementation (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
 ## Documentation
@@ -688,8 +686,7 @@ can only be eyeballed.
    ```
    `grep comparisons/open-source public_docs/docs/sitemap.xml` should return one line. The full
    staged check runs in CI.
-3. Click every peer source link on the rendered page. Each one should load and support the
-   statement next to it.
+3. Click every peer source link on the rendered page. Each one should load.
 
 ## Open Questions
 
