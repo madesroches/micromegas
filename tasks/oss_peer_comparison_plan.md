@@ -182,7 +182,8 @@ quote. So:
    - no RUM or session replay;
    - smaller community than the peers.
 3. **At a glance** table. The columns below are the ones the research could fill with a source for
-   every cell:
+   every cell. The first row is Micromegas, filled only from the "Micromegas facts the page may
+   state" table:
 
    | Project | License (OSS edition) | Signals | Storage | Required services beyond the binary | Query languages | Own in-process SDKs | Built-in UI / alerting |
    |---|---|---|---|---|---|---|---|
@@ -650,11 +651,6 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
   page keeps the glance table meaningful and puts all the review-date maintenance in a single
   place. Per-peer pages would rank better for "X vs Micromegas" searches but would multiply the
   pages that go stale. If search data later justifies them, they can split off.
-- **New top-level `When to Use` tab vs. nesting under Operations → Cost Effectiveness**: this page
-  is about architecture and fit, not cost or operations, and its peers are free software, so a cost
-  framing would be misleading. A separate tab also has room for the agent-observability page. It
-  takes the tab count from seven to eight; Material collapses tabs into the drawer on narrow
-  screens, so the cost is width on desktop only.
 - **Also-considered one-liners vs. silence**: a short "also considered" list answers "why isn't X
   here?" cheaply. Projects that are archived, in a different category, or not open source are left
   off entirely, rather than listed only to dismiss them.
@@ -662,7 +658,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
-- LLM agent observability gets its own page under `when-to-use/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
+- LLM agent observability gets its own page under `when-to-use/` in [#1637](https://github.com/madesroches/micromegas/issues/1637), against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
 - Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family, Quickwit and Prometheus (with Thanos) as full entries.
 - Prometheus gets extra space for frequency, dimensionality and single-node scale, each backed by its own docs (user call).
 - Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
@@ -671,7 +667,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - Code vs. data (spans named by the asset/URL/input, generalized to any interpreter or resolver) is a stated differentiator against sampling profilers (user call).
 - No change to `build/check_docs_site.py`: its existing `llms.txt` check already enforces the issue's CI requirement.
 - Research accuracy is verified by the plan and branch reviewers, not by a re-check step during implementation (user call).
-- Top-level nav tab named `When to Use`, page `when-to-use/index.md` titled "When to Use Micromegas"; framed as fit, not comparison (user call).
+- Top-level nav tab named `When to Use`, page `when-to-use/index.md` titled "When to Use Micromegas"; framed as fit, not comparison (user call). The tab takes the tab count from seven to eight; Material collapses tabs into the drawer on narrow screens.
 - SaaS vendors stay out of this page beyond a short section linking to the cost pages, because their cost model is too different for a fit comparison (user call). The cost pages join the `When to Use` tab in the nav only, so their URLs don't change.
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
 
@@ -697,12 +693,8 @@ can only be eyeballed.
    readable at laptop width and the new `When to Use` tab visible in the nav.
 2. Build the docs and check the sitemap entry:
    ```
-   mkdocs build --config-file mkdocs/mkdocs.yml --site-dir $PWD/public_docs/docs
+   mkdocs build --config-file mkdocs/mkdocs.yml --site-dir /tmp/mm-docs/docs
    ```
-   `grep when-to-use public_docs/docs/sitemap.xml` should return one line. The full
+   `grep when-to-use /tmp/mm-docs/docs/sitemap.xml` should return one line. The full
    staged check runs in CI.
 3. Click every peer source link on the rendered page. Each one should load.
-
-## Open Questions
-
-- File the separate AI-agent observability issue now? No such issue exists yet (checked 2026-10-02).
