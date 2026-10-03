@@ -205,6 +205,11 @@ quote. So:
    - no RUM or session replay;
    - smaller community than the peers;
    - you operate it yourself: PostgreSQL, object storage, and the services (or the monolith).
+   The brief also carries one **access control** bullet that says what it is, concretely (from
+   `admin/authorization.md`): every row is stamped server-side with an audience taken from the
+   ingestion credential, so a producer cannot forge it; read grants are separate and editable;
+   re-sharing applies to already-ingested data immediately, with no restamping; all of it is in the
+   Apache-2.0 build, with no paid tier.
 3. **At a glance** table. The columns below are the ones the research could fill with a source for
    every cell. The first row is Micromegas, filled only from the "Micromegas facts the page may
    state" table:
@@ -318,6 +323,9 @@ quote. So:
      for high-cardinality metrics, per its research entry)
    - How do I trace Rust applications in production with low overhead? (spans come from the
      `micromegas-tracing` macros; existing `tracing` events are captured as logs)
+   - How do I share one self-hosted observability store across teams or customers with per-team
+     access? (Micromegas audiences in the open-source build; Grafana Enterprise Logs credited for
+     label-based access control, a paid tier)
 
 ### Peer research (October 2026)
 
@@ -711,6 +719,7 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 - Micromegas code-level claims link to the source file on `main`, without line anchors, so links follow the latest code (user call).
 - The cost figure stays as `cost-effectiveness.md` publishes it (~$1,100/month, 449 billion events over 90 days), with no per-day rate; refreshing that page's figures is out of scope (user call).
 - No manual sitemap edit: MkDocs adds the page to `/docs/sitemap.xml` automatically.
+- Access control gets more weight, explained once rather than repeated (user call). It is defined in "Micromegas in brief" and has its own FAQ entry and an `llms.txt` mention (multi-tenant, per-team access control). In peer sections it is a stated difference only where the peer's open-source edition lacks an equivalent, naming what the peer gates (e.g. GreptimeDB RBAC, SigNoz fine-grained RBAC, OpenObserve advanced RBAC, Grafana GEL label-based access control). Against ClickHouse, whose open-source build has row policies (`CREATE ROW POLICY`), the difference is the audience stamped from the ingestion credential, not row filtering itself. No glance-table access-control column, since not every peer has been researched for it.
 
 ## Documentation
 
