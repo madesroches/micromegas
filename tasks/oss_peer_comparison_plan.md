@@ -214,6 +214,9 @@ quote. So:
      candidate axes are:
      - in-process native SDKs vs. relying on OTel SDKs;
      - Parquet on object storage plus PostgreSQL metadata vs. that peer's storage and dependencies;
+     - raw payloads kept in object storage and processed into Parquet views only when queried
+       (JIT ETL), so processing cost follows what is queried, not what is collected;
+     - every emission stored as its own row (high-frequency, full-resolution telemetry);
      - one SQL surface (DataFusion) vs. that peer's query languages;
      - notebooks running the same engine in the browser (WASM);
      - per-row access control on ingested data;
@@ -222,7 +225,8 @@ quote. So:
 
      Where a peer shares an axis (e.g. Parseable, OpenObserve, GreptimeDB and InfluxDB 3 also run
      DataFusion over Parquet; Quickwit also keeps metadata in PostgreSQL), the section says so and
-     leaves that axis out of the differences.
+     leaves that axis out of the differences. The JIT ETL axis still applies to the four
+     DataFusion/Parquet peers, since they write Parquet at ingestion.
    - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
    - The Prometheus section's *How Micromegas differs* is longer than the others, with three
      short paragraphs, each quoting Prometheus's own docs (see its research entry):
