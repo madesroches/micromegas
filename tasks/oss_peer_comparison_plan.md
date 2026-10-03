@@ -45,7 +45,7 @@ linked to that project's own current docs or repo.
 | Lakehouse materializes views to Parquet; SQL via Apache DataFusion | `architecture/index.md`, `query-guide/` |
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
-| Native SDKs: Rust (`tracing` / `telemetry` crates), Unreal Engine plugin, C ABI | `unreal/`, `native/`, `rust/` |
+| Native SDKs: Rust (`tracing` / `telemetry` crates) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `mkdocs/docs/native/index.md` |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
@@ -60,7 +60,7 @@ variables (see Decisions). Describe the design instead:
 - context is attached as an interned property set, so it costs one pointer per event rather than
   repeated key/value strings;
 - the telemetry sink batches and ships them off the hot path;
-- sampling decisions are made per batch, not per event;
+- the Unreal sink can sample whole blocks, e.g. keeping blocks around frame spikes, rather than individual events (`unreal/MicromegasTelemetrySink/Private/SamplingController.h`, CVars in `unreal/instrumentation-api.md`);
 - the intent is instrumentation that stays on in production.
 
 Compare this with OpenTelemetry **SDKs**, which are the in-process counterpart, never with
@@ -72,7 +72,7 @@ Unreal Engine is one example, not the defining audience.
 
 **Code vs. data**: a sampling profiler sees the call stack, so it shows *which code* is hot.
 Instrumentation can record *which data* that code was processing: spans named by the asset or
-script (`FName`s or other statically allocated strings), and context such as the current level,
+script (`FName`s in Unreal, statically allocated strings in Rust), and context such as the current level,
 asset or route as a property set that every log and metric event references for the cost of one
 pointer. In a game it is rarely the animation code that is slow; it is a particular animation.
 The same holds for any interpreter or resolver (script VMs, query engines, template renderers, rule
@@ -168,7 +168,7 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
      Where a peer shares an axis (e.g. Parseable, OpenObserve, GreptimeDB and InfluxDB 3 also run
      DataFusion over Parquet; Quickwit also keeps metadata in PostgreSQL), the section says so and
      leaves that axis out of the differences.
-   - OpenObserve, Parseable and SigNoz each get one sentence on their LLM/agent observability features.
+   - OpenObserve and SigNoz each get one sentence on their LLM/agent observability features.
 5. **Complementary tools**: Tracy, Unreal Insights and Perfetto give a deep view of one session.
    Micromegas keeps the history of many processes in a single store and makes it queryable. It also
    exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): their
@@ -184,7 +184,7 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
    | The standard self-hosted stack, PromQL, and the Grafana ecosystem | Grafana LGTM |
    | Prometheus-compatible metrics and logs with few moving parts and no external dependencies | VictoriaMetrics / VictoriaLogs |
    | A ready-made APM UI for OTel-instrumented services, alerting included | SigNoz or ClickStack |
-   | The smallest footprint: one binary, no metadata database | Parseable |
+   | All signals as Parquet on object storage, one binary, no metadata database | Parseable |
    | The widest signal coverage (RUM, session replay), or a migration off ELK | OpenObserve |
    | One SQL database for metrics, logs and traces, replacing Prometheus long-term storage | GreptimeDB |
    | Raw query speed at very large scale, if you build your own pipeline | ClickHouse |
@@ -194,8 +194,8 @@ GreptimeDB 6.7k (v1.2.1); Tempo 5.5k; Mimir 5.2k; Uptrace 4.3k (v2.1.0-beta.8); 
 
    Then two short lists:
    - **Choose Micromegas when**:
-     - you instrument native code (Rust, or C/C++ through the C ABI) and want detailed spans, logs
-       and metrics left on in production rather than sampled away;
+     - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
+       metrics (also C/C++ through the C ABI) left on in production rather than sampled away;
      - your cost depends on the data more than the code (assets, URLs, scripts, queries going
        through an interpreter or resolver) and you need to know *which* input was slow, not just
        which function;
@@ -239,7 +239,7 @@ weekly. Items under **Not confirmed** stay off the page.
   [pricing](https://www.parseable.com/pricing),
   [OSS helm](https://www.parseable.com/docs/self-hosted/installation/distributed/k8s-helm-oss)).
 - **SDKs**: relies on OTel; there is a small Go SDK.
-- **Credit it for**: smallest footprint of the set (one binary, no metadata DB); broad ingestion compatibility.
+- **Credit it for**: one binary, no metadata database, all signals as Parquet on object storage queried with SQL; broad ingestion compatibility.
 
 #### OpenObserve — [repo](https://github.com/openobserve/openobserve)
 - **What it is**: Rust backend with a Vue UI, covering logs, metrics, traces, RUM, session replay,
@@ -329,7 +329,7 @@ weekly. Items under **Not confirmed** stay off the page.
   PromQL support are described as less mature.
 - **UI**: HyperDX provides search, traces, dashboards, alerts and session replay.
 - **SDKs**: OTel-based SDKs.
-- **Credit it for**: raw query speed and compression at very large scale, plus ecosystem maturity (about 50k stars).
+- **Credit it for**: raw query speed and compression at very large scale, plus ecosystem maturity (about 50k stars); ClickStack's HyperDX adds built-in search, traces, dashboards and alerts UI.
 
 #### Grafana LGTM — [Loki](https://github.com/grafana/loki), [Tempo](https://github.com/grafana/tempo), [Mimir](https://github.com/grafana/mimir), [Pyroscope](https://github.com/grafana/pyroscope)
 - **What it is**: one backend per signal, viewed in Grafana. Loki indexes labels, not log contents;
@@ -544,7 +544,7 @@ weekly. Items under **Not confirmed** stay off the page.
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
-- LLM agent observability gets its own page under `comparisons/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve, Parseable and SigNoz.
+- LLM agent observability gets its own page under `comparisons/` in a separate issue, against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
 - Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family and Quickwit as full entries.
 - Peer-set adjustments from research: Apache SkyWalking added as a one-liner; Zipkin folded into the Jaeger line; Pyroscope folded into the LGTM entry; Graylog excluded (SSPL).
 - The page ends with a "which one fits" summary; Micromegas recommendations are domain-neutral, not limited to games (user call).
