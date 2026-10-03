@@ -107,9 +107,10 @@ The same holds for any interpreter or resolver (script VMs, query engines, templ
 engines, asset loaders, routers, dependency resolvers): the stack is the same for every input, and
 the cost depends on the input. This is the point to make against sampling and continuous profilers
 (Pyroscope, eBPF profilers, Perfetto's stack sampling), not against OTel SDKs or Tracy/Unreal
-Insights zones, which can also carry data in span attributes or zone names. Against those, the
-difference is cost and retention: data-named spans cheap enough to leave on everywhere, kept across
-the fleet.
+Insights zones, which can also carry data in span attributes or zone names. Against OTel SDKs and
+Tracy, the difference is cost and retention: data-named spans cheap enough to leave on everywhere,
+kept across the fleet. Against Unreal Insights, the gain is the global view: Insights looks at one
+process at a time, Micromegas queries the whole fleet at once.
 
 ## Design
 
@@ -266,7 +267,8 @@ quote. So:
    Micromegas keeps the history of many processes in a single store and makes it queryable. It also
    exports a process's spans as a Perfetto trace that opens in the Perfetto UI. One sentence applies the code-vs-data point (see Current State): Tracy's sampling
    profiler and Perfetto's call-stack sampling show the hot function, and data-named spans show the
-   asset or input behind it. Against Unreal Insights (instrumented scopes) the difference is cost and retention.
+   asset or input behind it. Against Unreal Insights (instrumented scopes) the difference is the global view: Insights opens
+   one process's trace at a time, Micromegas queries every process at once.
 6. **Also considered**: one line each.
 7. **Commercial SaaS** (short, two or three sentences): SaaS vendors bill on volume (hosts, GB
    ingested, spans), while Micromegas runs on your own object storage, so the comparison is a cost
