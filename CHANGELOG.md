@@ -4,6 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Docs:** Add a "When to Use Micromegas" page (#1636) comparing Micromegas with open-source
+  peers (Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse/ClickStack, Grafana LGTM,
+  InfluxDB 3 Core, VictoriaMetrics, Quickwit, Prometheus), with sourced claims, a fit summary and
+  an FAQ; it presents runtime-defined materialized views (`CREATE MATERIALIZED VIEW`, refreshed
+  every second) as the way to drill down without scanning raw data.
+  A new `When to Use` nav tab hosts it and now also holds the SaaS cost pages (nav only; their
+  URLs are unchanged), and `llms.txt` gains a `When to use Micromegas` section.
 * **Notebooks:** Markdown cells are now query-backed (#1509), covering both documentation and
   headline values (a Grafana Stat-panel equivalent: "p99 latency", "active players",
   "healthy"/"degraded") in one cell type. Every markdown cell runs a query — `SELECT 1` on the
