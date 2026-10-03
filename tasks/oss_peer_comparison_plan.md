@@ -47,7 +47,10 @@ retrieval" below.
 | Lakehouse materializes views to Parquet; SQL via Apache DataFusion | `architecture/index.md`, `query-guide/` |
 | **FlightSQL is the query protocol**, not ingestion. Ingestion is HTTP (native transit/CBOR format and OTLP) | `admin/flight-sql.md`, `admin/ingestion.md` |
 | **Accepts** OTLP/HTTP (protobuf or JSON, gzip) for logs, metrics, traces. **No OTLP/gRPC** | `otlp/index.md` (Wire format; limitations at line ~693) |
-| Native SDKs: Rust (`tracing` / `telemetry` crates) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `mkdocs/docs/native/index.md` |
+| Native SDKs: Rust (`micromegas-tracing` macros such as `span_scope!` / `#[span_fn]`) and Unreal Engine plugin for spans, logs and metrics; the C ABI covers logs and metrics only. The `tracing`-crate interop forwards `tracing` **events** as logs, not spans | `unreal/`, `rust/`, `rust/capi/src/lib.rs`, `rust/telemetry-sink/src/tracing_interop.rs`, `mkdocs/docs/native/index.md` |
+| Full-resolution spans: Rust CPU (thread) spans are not sampled by default; at this overhead, recording every span is practical in production (user call). The Unreal plugin samples by default (blocks kept around frame spikes); `telemetry.spans.all 1` records every span | `rust/telemetry-sink/src/`, `unreal/instrumentation-api.md` (Console Commands) |
+| Raw data stays in object storage and views are materialized on demand when queried (JIT ETL), so processing cost follows what is queried, not what is collected | `architecture/index.md` (JIT ETL), `cost-effectiveness.md` (On-Demand Processing) |
+| A production deployment on AWS: ~$1,100/month total, 449 billion events over 90 days (~165 million/day), 8.5 TB in S3 | `cost-effectiveness.md` (Scale Perspective, cost breakdown) |
 | Span names can come from runtime data as long as the string is statically allocated: an `FName` (asset, UObject) in Unreal, a `&'static str` (e.g. interned) in Rust | `rust/tracing/src/macros.rs` (`span_scope_named!`, `instrument_named!`), `unreal/instrumentation-api.md` (`MICROMEGAS_SPAN_NAME`, `MICROMEGAS_SPAN_UOBJECT`) |
 | Context is a property set: an interned set of statically allocated name/value pairs (the caller manages cardinality). An event carries only a pointer to it; the set is serialized once per block as a dependency. Unreal's Default Context attaches global properties (`FName` key/value) to all telemetry | `rust/tracing/src/property_set.rs`, `logs/block.rs`, `metrics/block.rs`; `unreal/instrumentation-api.md` (Default Context API) |
 | Exports a process's spans as a Perfetto trace | `query-guide/functions-reference.md` (`perfetto_trace_chunks`), notebook Perfetto export cell |
@@ -71,6 +74,19 @@ variables (see Decisions). Describe the design instead:
 
 Compare this with OpenTelemetry **SDKs**, which are the in-process counterpart, never with
 collectors.
+
+**Positioning: efficiency**: the page's through-line is that teams choose Micromegas for
+efficiency, and choose a peer when they want the established, widely adopted default or don't want
+to operate the stack. Efficiency always means two concrete things, never the bare adjective:
+- *instrumentation overhead*: the in-process design above, cheap enough to leave on in production;
+- *cost*: raw data on your own object storage, processed only when queried, with the production
+  deployment figure (~$1,100/month for 449 billion events over 90 days) as the anchor number.
+
+That efficiency is what enables the use cases peers make expensive: very high-frequency,
+high-resolution telemetry (every emission its own row; host metrics every 200 ms), and full-resolution
+traces recorded without sampling: Rust CPU traces are unsampled by default because recording every
+span proves practical, and Unreal records every span with `telemetry.spans.all`. State the
+peer side neutrally ("the widely adopted default", "a managed or turnkey option"), never as a motive.
 
 **Audience framing**: the page describes Micromegas for any native-code or client/fleet workload
 (desktop and mobile clients, edge devices, batch jobs, CI runners, game clients and servers).
@@ -153,7 +169,8 @@ quote. So:
 - **Query vocabulary, where true.** Headings and first sentences use the words people search
   with: open-source Datadog alternative, self-hosted, SQL, high-frequency, high-cardinality fleet
   dimensions (many processes, machines, users), Parquet, object storage, Rust tracing, Unreal Engine telemetry, desktop and game client
-  telemetry, Prometheus alternative.
+  telemetry, game client telemetry, Prometheus alternative, sub-second metrics, low-overhead
+  instrumentation, full-resolution traces without sampling, observability cost.
 - **Specific numbers over adjectives.** E.g. host CPU and memory every 200 ms vs. a 1m
   default scrape. LLMs repeat specifics; they skip "fast" and "scalable".
 - **Explicit fit statements.** Every recommendation names the workload: "for X, choose Y". The
@@ -167,8 +184,10 @@ quote. So:
 
 1. **Intro** (under the `# When to Use Micromegas` title):
    - the one-line definition of Micromegas;
-   - a three-sentence **TL;DR** right after the definition: which workloads Micromegas fits, which
-     it doesn't, and a link to the full summary at the end;
+   - a three-sentence **TL;DR** right after the definition, built on the efficiency positioning
+     (see Current State): choose Micromegas for low instrumentation overhead and low cost, and the
+     high-frequency, full-resolution telemetry that enables; choose a peer for the established
+     default or a managed stack; link to the full summary at the end;
    - scope: open-source and self-hosted tools, with commercial SaaS covered briefly in its own section;
    - a `*Last reviewed: October 2026*` line;
    - one sentence saying every peer claim links to that project's docs, and inviting corrections via GitHub issues.
@@ -180,7 +199,8 @@ quote. So:
    - no PromQL/LogQL;
    - native SDKs only for Rust, Unreal and C;
    - no RUM or session replay;
-   - smaller community than the peers.
+   - smaller community than the peers;
+   - you operate it yourself: PostgreSQL, object storage, and the services (or the monolith).
 3. **At a glance** table. The columns below are the ones the research could fill with a source for
    every cell. The first row is Micromegas, filled only from the "Micromegas facts the page may
    state" table:
@@ -249,31 +269,47 @@ quote. So:
    | You're on a SaaS vendor and cost at high volume is the problem | see the `vs. SaaS Vendors` cost pages |
 
    Then two short lists:
-   - **Choose Micromegas when**:
+   - **Choose Micromegas when** efficiency matters, meaning instrumentation overhead and cost:
      - you instrument native code and want detailed spans (Rust crates, Unreal plugin), logs and
-       metrics (also C/C++ through the C ABI) left on in production; in Unreal, whole blocks are kept
-       around anomalies such as frame spikes rather than sampling individual requests;
+       metrics (also C/C++ through the C ABI) left on in production;
+     - you want very high-frequency, high-resolution telemetry, or full-resolution traces without
+       sampling (Rust CPU traces are unsampled by default; `telemetry.spans.all` in Unreal, whose default keeps blocks
+       around frame spikes);
      - your cost depends on the data more than the code (assets, URLs, scripts, queries going
        through an interpreter or resolver) and you need to know *which* input was slow, not just
        which function;
      - your telemetry comes from many processes that aren't classic services: desktop or mobile
        clients, edge devices, batch jobs, CI runners, game clients and servers;
      - you need high event volume and long retention at a predictable cost, stored as Parquet on
-       your own object storage;
+       your own object storage and processed only when queried (one production deployment: ~$1,100/month
+       for 449 billion events over 90 days);
      - you want one SQL surface across logs, metrics and traces, including in notebooks, instead of
        one query language per signal;
      - you need per-row access control on telemetry shared across teams or customers.
-   - **Look elsewhere if**: you can't run PostgreSQL, need a built-in alert engine or PromQL, or
-     want a large community behind your tool.
+   - **Look elsewhere if**:
+     - you want the established, widely adopted default, with the largest community and integration
+       ecosystem (Grafana LGTM, Prometheus, SigNoz);
+     - you don't want to operate the stack (a SaaS vendor, or a peer's hosted offering);
+     - you can't run PostgreSQL, or need a built-in alert engine or PromQL.
 9. **FAQ**: five to eight question-shaped `###` headings phrased the way people ask an LLM, each
    answered in two or three sentences that name the fitting tool. The answers reuse claims already
-   on the page, so they add no new sources. Candidates:
-   - What is an open-source, self-hosted alternative to Datadog that I can query with SQL?
-   - How do I collect high-frequency telemetry from Unreal Engine games or desktop applications?
-   - Which open-source tool handles telemetry from millions of processes or users better than Prometheus? (the answer also credits GreptimeDB for high-cardinality metrics, per its research entry)
-   - Can I store observability data as Parquet on S3 and query it with SQL?
-   - How do I trace Rust applications in production with low overhead?
-   - Which tool should I use for OpenTelemetry APM? (answer: SigNoz or ClickStack)
+   on the page, so they add no new sources. One broad question answered by workload; the rest are
+   the narrow questions where Micromegas is the right answer, each still crediting a peer where one
+   fits:
+   - What is an open-source, self-hosted alternative to Datadog that I can query with SQL? (by
+     workload: SigNoz or ClickStack for OTel-instrumented services; Micromegas for native code and
+     client fleets, when efficiency matters)
+   - How do I reduce observability costs at high event volume? (Micromegas with its cost figure;
+     VictoriaMetrics credited for metrics)
+   - How do I record full-resolution traces in production without sampling?
+   - How do I collect telemetry from Unreal Engine games in production? (Unreal Insights credited
+     for one session)
+   - How do I collect telemetry from desktop apps or game clients across many users?
+   - How do I find which asset, script or query made my code slow, not just which function?
+   - What is a Prometheus alternative for sub-second, high-frequency metrics? (GreptimeDB credited
+     for high-cardinality metrics, per its research entry)
+   - How do I trace Rust applications in production with low overhead? (spans come from the
+     `micromegas-tracing` macros; existing `tracing` events are captured as logs)
 
 ### Peer research (October 2026)
 
@@ -658,6 +694,8 @@ All facts below were fetched on 2026-10-02 from the linked first-party source. I
 ## Decisions
 
 - Don't quote the ~20 ns instrumentation figure; describe the design instead (user call: it depends on too many variables).
+- Positioning: choose Micromegas for efficiency (instrumentation overhead and cost) and the high-frequency, full-resolution use cases it enables; choose a peer for the established default or to avoid operating the stack (user call).
+- FAQ weighted toward narrow questions where Micromegas fits; no FAQ entry whose only answer is a peer (user call).
 - LLM agent observability gets its own page under `when-to-use/` in [#1637](https://github.com/madesroches/micromegas/issues/1637), against its own peers (Langfuse, Arize Phoenix, Opik, etc.). This page carries only a one-sentence agent-features note on OpenObserve and SigNoz.
 - Peer set extended beyond the issue with Grafana LGTM, InfluxDB 3 Core, the VictoriaMetrics family, Quickwit and Prometheus (with Thanos) as full entries.
 - Prometheus gets extra space for frequency, dimensionality and single-node scale, each backed by its own docs (user call).
