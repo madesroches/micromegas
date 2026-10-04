@@ -127,6 +127,9 @@ This file documents the historical progress of the Micromegas project. For curre
   v1.44.0/v1.38.0 to v1.46.0, resolving three Dependabot alerts for the exporter
   config-logging endpoint-URL leak (fixed upstream in v1.45.0).
 * **Dependencies:** Bump `jsonwebtoken` from 10.4 to 11.1.
+* **Dependencies:** Bump `undici` to `>=8.10.2` via yarn `resolutions` across the root, `analytics-web-app`,
+  `welcome`, `doc/intro-micromegas`, `doc/notebooks`, and `doc/unified-observability-for-games` workspaces, and
+  `moment` to `^2.31.0` at the repo root, to resolve Dependabot alerts 483-549.
 * **Auth:** IP allowlisting for API keys (#1600): an `ingestion_api_keys`/`analytics_api_keys`
   row (schema v11's new `allowed_cidrs TEXT[]` column) or an env-keyring entry
   (`MICROMEGAS_API_KEYS`'s new optional `allowed_cidrs` field) can now be pinned to a set of
