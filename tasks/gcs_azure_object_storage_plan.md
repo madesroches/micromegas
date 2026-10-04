@@ -42,8 +42,8 @@ since `object_store` 0.13.2 lowercases option keys itself.
   `azure = ["cloud", "httparse"]`. `aws` already enables `cloud`, and `rustls-pki-types` and
   `httparse` are already in the tree (rustls and hyper). So the dependency graph should gain no
   new crates, and the `cargo deny` license and duplicate checks should be unaffected.
-- `rust/datafusion-wasm` is a separate tree that does not use `object_store`, so it is
-  unaffected.
+- `rust/datafusion-wasm` is a separate workspace with its own `Cargo.lock`, so the root
+  `object_store` features do not apply to it.
 - Docs: object-store URIs are described piecemeal. `admin/ingestion.md:28` lists `gs://`.
   `admin/monolith.md:43`, `admin/flight-sql.md:27` and `admin/maintenance.md:17` list only
   `file`/`s3` or nothing. `admin/web-app.md:153-159` has a URI table with S3/GCS.
@@ -105,7 +105,10 @@ for `MICROMEGAS_OBJECT_STORE_URI` and the other URI settings
 - Credentials: point to the standard `AWS_*`, `GOOGLE_*`, `AZURE_STORAGE_*` / `AZURE_*`
   variables, including instance/managed identity. Say that options are read from the
   environment (lowercased) as `object_store` keys, and link to the `object_store` builder docs
-  instead of copying every key.
+  instead of copying every key. Warn that `object_store` also matches unprefixed alias names from
+  the environment (Azure: `token`, `endpoint`, `client_id`, `tenant_id`, `access_key`,
+  `account_name`; GCS: `bucket`, `base_url`, `service_account`), so a generic `TOKEN` or
+  `ENDPOINT` variable can reconfigure the store.
 - **S3-compatible stores** (MinIO, Cloudflare R2, Ceph, …): use `s3://` plus `AWS_ENDPOINT`
   (and `AWS_ALLOW_HTTP=true` for plain HTTP). Taken from the conditional-put section moved out of
   `admin/ingestion.md:120-138`, not written fresh.
@@ -124,7 +127,8 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 1. **Cargo** — add `gcp` and `azure` to the `object_store` features in `rust/Cargo.toml`. Run
    `cargo update -p object_store` only if the lockfile needs it (building normally refreshes the
    feature set). Confirm `cargo tree -e features -i object_store` shows `gcp` and `azure`.
-2. **Dependency hygiene** — run `cargo deny check` and `cargo machete` (as CI does) and confirm
+2. **Dependency hygiene** — run `cargo deny check licenses bans sources` and `cargo machete` from `rust/` (as
+   `build/rust_ci.py` does) and confirm
    no new license or duplicate-version failures.
 3. **Drop lowercasing** — in `rust/telemetry/src/blob_storage.rs`, pass `std::env::vars()`
    straight to `parse_url_opts` and fix the two doc comments (see Design).
@@ -146,12 +150,16 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
    mention that the cache origin (line 213) can also be `gs://` or `az://`. In
    `analytics-web-app/README.md:111`, list `gs://` and `az://` with the other
    `MICROMEGAS_MAPS_OBJECT_STORE_URI` forms and link the new page.
-7. **Docs, overview wording** — replace "S3/GCS" with "S3, GCS, Azure" (or "S3/GCS/Azure"
-   inside diagram labels) in `index.md`, `getting-started.md`, `query-guide/index.md`,
+7. **Docs, overview wording** — add Azure wherever S3 and GCS are listed together (e.g.
+   "S3/GCS", "S3 / GCS", "S3, GCS") in `index.md`, `getting-started.md`, `query-guide/index.md`,
    `query-guide/advanced-features.md`, `architecture/index.md`, `architecture/caching.md`,
    `when-to-use/saas-vendors.md`, `README.md`, `rust/object-cache-srv/README.md`,
    `rust/CLAUDE.md:32` and `.github/copilot-instructions.md:77`. In `admin/object-cache.md`
-   also update line 3, and in `docker/README.md` line 137.
+   also update line 3, and in `docker/README.md` line 137. In the welcome site, update
+   `welcome/public/llms.txt:10`, `welcome/src/components/Differentiators.tsx:45`,
+   `Hero.tsx:60` and `HowItWorks.tsx:52`, and add an
+   `[Object storage](https://micromegas.info/docs/admin/object-storage/)` entry to the admin
+   list in `welcome/public/llms.txt` (lines 99-102).
 
 ## Files to Modify
 
@@ -165,23 +173,14 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
   `mkdocs/docs/architecture/{index,caching}.md`, `mkdocs/docs/when-to-use/saas-vendors.md`
 - `README.md`, `rust/object-cache-srv/README.md`, `docker/README.md`,
   `analytics-web-app/README.md`, `rust/CLAUDE.md`, `.github/copilot-instructions.md`
-
-## Trade-offs
-
-- **Unconditional features vs. Cargo feature flags on our crates** (e.g. `micromegas/gcp`).
-  Unconditional is simpler, adds no new crates and no measurable binary size (the `cloud` stack
-  is already linked for `aws`), and one Docker image then serves every cloud. Opt-in flags would
-  thread through `public`, `telemetry` and every server crate and push the backend choice to
-  build time.
-- **Changing single-key delete sites to tolerate `NotFound`** — not done. Every remaining site
-  is best-effort and already logs or ignores errors. Wrapping them would add code for a cosmetic
-  warning.
-- **One docs page vs. editing each service page in place** — one page avoids repeating the
-  scheme list and credential guidance in seven places (DRY), and gives S3-compatible stores and
-  the conditional-put requirement a natural home.
+- `welcome/public/llms.txt`, `welcome/src/components/{Differentiators,Hero,HowItWorks}.tsx`
 
 ## Decisions
 
+- `object_store` gcp/azure features are unconditional, with no crate-level feature flags (one
+  image serves every cloud, and no new crates are added).
+- Single-key delete sites are left as they are (they are best-effort, see Current State).
+- There is one Object Storage docs page instead of per-service scheme lists.
 - Stay on object_store 0.13.2 (user decision): 0.14 is blocked until DataFusion moves off
   object_store 0.13 / arrow 59 (DataFusion 55.1.0 requires object_store ^0.13.2); the 0.14 bump is
   a separate coordinated DataFusion/arrow/parquet upgrade.
