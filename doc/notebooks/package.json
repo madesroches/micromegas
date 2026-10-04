@@ -25,7 +25,7 @@
     "nanoid": "^3.3.17",
     "postcss": "^8.5.18",
     "tar": "^7.5.21",
-    "undici": ">=8.9.0",
+    "undici": ">=8.10.2",
     "vite": "^7.3.5"
   },
   "packageManager": "yarn@4.14.1"
