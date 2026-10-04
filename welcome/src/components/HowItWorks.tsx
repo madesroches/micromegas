@@ -49,7 +49,7 @@ export default function HowItWorks() {
             number={2}
             title="Ingest"
             description="HTTP ingestion service stores everything."
-            detail="Metadata in PostgreSQL, payloads in S3/GCS"
+            detail="Metadata in PostgreSQL, payloads in S3/GCS/Azure"
           />
           <Step
             icon={<Search size={24} className="text-brand-gold" />}

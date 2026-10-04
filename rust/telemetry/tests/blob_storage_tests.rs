@@ -47,3 +47,19 @@ async fn put_if_absent_create_then_collide_preserves_first_write() {
         "a colliding put_if_absent must leave the original bytes untouched"
     );
 }
+
+#[test]
+fn parse_object_store_url_gcs_scheme() {
+    let (_store, prefix) =
+        parse_object_store_url("gs://bucket/lake/root").expect("parsing a gs:// URI");
+    assert_eq!(prefix.as_ref(), "lake/root");
+}
+
+#[test]
+fn parse_object_store_url_azure_scheme() {
+    // This form embeds the account, so the test does not depend on the environment.
+    let (_store, prefix) =
+        parse_object_store_url("https://account.blob.core.windows.net/container/lake/root")
+            .expect("parsing an Azure blob URI");
+    assert_eq!(prefix.as_ref(), "lake/root");
+}

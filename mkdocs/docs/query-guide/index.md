@@ -4,7 +4,7 @@ Micromegas provides a SQL interface for querying logs, metrics, spans, and trace
 
 ## Data Architecture
 
-- **Raw data** stored in object storage (S3/GCS) in Parquet format
+- **Raw data** stored in object storage (S3/GCS/Azure) in Parquet format
 - **Metadata** stored in PostgreSQL for fast lookups
 - **Views** provide logical organization of telemetry data
 - **On-demand ETL** processes data only when queried

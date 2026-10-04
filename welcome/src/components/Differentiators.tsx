@@ -42,7 +42,7 @@ export default function Differentiators() {
           <Card
             icon={<HardDrive size={24} className="text-brand-rust" />}
             title="Object Storage Pricing"
-            description="Raw data lives on S3 or GCS — orders of magnitude cheaper than proprietary observability vendors."
+            description="Raw data lives on S3, GCS or Azure — orders of magnitude cheaper than proprietary observability vendors."
           />
           <Card
             icon={<Layers size={24} className="text-brand-gold" />}

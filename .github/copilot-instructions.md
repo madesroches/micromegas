@@ -74,7 +74,7 @@ some_future.instrument(&static_span_desc!("operation_name")).await
 
 ### Environment Variables (services)
 - `MICROMEGAS_SQL_CONNECTION_STRING`: PostgreSQL connection
-- `MICROMEGAS_OBJECT_STORE_URI`: S3/GCS bucket for payload storage
+- `MICROMEGAS_OBJECT_STORE_URI`: S3/GCS/Azure bucket for payload storage
 
 ### Testing Strategy
 - Use `serial_test` crate for tests requiring exclusive access to global state

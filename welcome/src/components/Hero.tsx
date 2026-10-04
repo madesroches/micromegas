@@ -57,7 +57,7 @@ export default function Hero() {
         <p className="mx-auto mb-10 max-w-2xl text-lg text-theme-text-secondary sm:text-xl">
           Open-source, high-performance observability platform.
           Instrument once, query everything with SQL.
-          Cost-efficient storage on S3/GCS.
+          Cost-efficient storage on S3/GCS/Azure.
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-4">

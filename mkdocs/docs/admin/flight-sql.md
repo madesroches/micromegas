@@ -24,9 +24,9 @@ The gRPC listener binds to `0.0.0.0:50051`. The Docker image
 | Variable | Required | Description |
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
-| `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store holding the partitions |
+| `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store holding the partitions; see [Object Storage](object-storage.md) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
-| `MICROMEGAS_STATIC_TABLES_URL` | No | Location of static lookup tables to load at startup |
+| `MICROMEGAS_STATIC_TABLES_URL` | No | Location of static lookup tables to load at startup; any [Object Storage](object-storage.md) URI form |
 | `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | No | Shared whole-table snapshot cache TTL, in seconds, for the API-key, audience-grant, and local-group (`admins` and any `group:` selector) stores — default `60`. Membership and admin changes take effect within this TTL per process. See [Groups](groups.md) |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The audience a credential with no bound ingestion audience is **stamped** with at write time (default `public`). Set it identically on every role that builds a lakehouse — this one, the [Maintenance](maintenance.md) daemon, the [monolith](monolith.md), and [ingestion](ingestion.md) — since the maintenance role bakes the value into partitions and the ingestion role stamps new rows with it. See [Audience stamping](authorization.md#audience-stamping) |

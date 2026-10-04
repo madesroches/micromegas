@@ -131,7 +131,7 @@ own grant dialog.
 
 Map cells render GLB assets fetched from a server-side object store. Set `MICROMEGAS_MAPS_OBJECT_STORE_URI` to a prefix the web-app process can read **and write** — admins upload and delete GLBs through **Admin → Maps**, which calls `PUT`/`DELETE` on `/api/maps/blob/{filename}`. If the variable is unset, the maps endpoints return 503 and the dropdown is empty.
 
-**IAM / credentials.** The process credentials need the equivalent of `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and `s3:ListBucket` (or GCS / local-fs equivalents) scoped to the configured prefix. Read-only credentials are sufficient only if you keep populating maps out-of-band (`aws s3 cp ...`) and don't expose the admin page.
+**IAM / credentials.** The process credentials need read, write, delete and list on the configured prefix (see [required permissions](object-storage.md#required-permissions)). Read-only credentials are sufficient only if you keep populating maps out-of-band (`aws s3 cp ...`) and don't expose the admin page.
 
 **Upload cap.** `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` bounds the per-request body for uploads (default 256 MiB). The cap is enforced before the body is buffered. The handler gzips on upload and the read path serves bytes verbatim with `Content-Encoding: gzip`. Bare uploads (no metadata) are served uncompressed.
 
@@ -150,13 +150,14 @@ GLBs missing the camera log a console error and fall back to the default seed fr
 
 > Because the contract uses Z-up, the GLBs are technically out of spec for glTF 2.0 (which mandates Y-up). External viewers — Blender, online glTF validators, Windows 3D Viewer — will render them rotated. The micromegas web-app is the only intended consumer.
 
-**URI grammar.** Same shape as `MICROMEGAS_OBJECT_STORE_URI` (passed through `object_store::parse_url_opts`):
+**URI grammar.** Same shape as `MICROMEGAS_OBJECT_STORE_URI` (see [Object Storage](object-storage.md); passed through `object_store::parse_url_opts`):
 
 | Backend | Example |
 |---|---|
 | Local dev | `file:///home/you/lake/maps/` |
 | AWS prod | `s3://my-bucket/maps/` |
 | GCS | `gs://my-bucket/maps/` |
+| Azure | `az://my-container/maps/` |
 
 `start_analytics_web.py` defaults this to `<MICROMEGAS_OBJECT_STORE_URI>/maps/` — i.e. a `maps/` sibling of the telemetry lake — so a single lake root supplies both telemetry blobs and map assets for local dev.
 

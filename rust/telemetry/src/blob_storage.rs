@@ -15,8 +15,8 @@ pub enum PutIfAbsent {
 }
 
 /// Parses an object-store URI into the raw store + root prefix, feeding
-/// `object_store` the process env vars lowercased (its expected option keys).
-/// The single home for the `parse_url_opts(url, env-vars-lowercased)` idiom.
+/// `object_store` the process env vars as options (it normalizes the keys).
+/// The single home for the `parse_url_opts(url, env vars)` idiom.
 pub fn parse_object_store_url(uri: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
     parse_object_store_url_parsed(&url::Url::parse(uri)?)
 }
@@ -24,8 +24,7 @@ pub fn parse_object_store_url(uri: &str) -> Result<(Arc<dyn ObjectStore>, Path)>
 /// Like `parse_object_store_url` but takes an already-parsed URL, for callers
 /// that also need the `url::Url` themselves and would otherwise parse it twice.
 pub fn parse_object_store_url_parsed(url: &url::Url) -> Result<(Arc<dyn ObjectStore>, Path)> {
-    let (store, prefix) =
-        object_store::parse_url_opts(url, std::env::vars().map(|(k, v)| (k.to_lowercase(), v)))?;
+    let (store, prefix) = object_store::parse_url_opts(url, std::env::vars())?;
     Ok((Arc::new(store), prefix))
 }
 
@@ -56,7 +55,7 @@ impl BlobStorage {
     /// `connect_with_layer`. Exposed so callers that need to apply their own layer
     /// (e.g. the object cache client) and also need the root prefix (e.g. to key a
     /// write-time cache warm the same way `PrefixStore` keys a demand read) don't
-    /// have to re-parse the URL or duplicate the env-var lowercasing.
+    /// have to re-parse the URL or duplicate the env-var option plumbing.
     pub fn parse_url_opts(object_store_url: &str) -> Result<(Arc<dyn ObjectStore>, Path)> {
         parse_object_store_url(object_store_url)
     }

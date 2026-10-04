@@ -160,6 +160,7 @@ nav:
         - Groups: admin/groups.md
         - Control-Plane Audit Log: admin/control-plane-audit-log.md
         - API Keys: admin/api-keys.md
+        - Object Storage: admin/object-storage.md
         - Telemetry Ingestion Server: admin/ingestion.md
         - FlightSQL Server: admin/flight-sql.md
         - Maintenance Daemon: admin/maintenance.md

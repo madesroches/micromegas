@@ -25,7 +25,7 @@ binary as its entrypoint.
 | Variable | Required | Description |
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection for lake metadata |
-| `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads (`file:///path`, `s3://…`, `gs://…`) |
+| `MICROMEGAS_OBJECT_STORE_URI` | Yes | Object store for payloads; see [Object Storage](object-storage.md) for URI forms and credentials |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default: `public`) — what `analytics-web-srv`'s key mint routes fall back to ([API Keys](api-keys.md)). The ingestion role now reads it too: a process whose credential carries no audience is stamped with this value explicitly at write time, the same audience the roles that build a lakehouse ([FlightSQL](flight-sql.md), [Maintenance](maintenance.md)) apply where a legacy or replicated row's audience is read. One knob, one meaning: what anything arriving without an audience gets. Read unprefixed — see the monolith's ["one prefix asymmetry"](monolith.md#environment-variables) note. |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
@@ -118,25 +118,7 @@ idempotent: block payload objects are stored at deterministic paths with a
 applied), and the row insert still uses `ON CONFLICT DO NOTHING`, so retried or
 duplicated requests never double-count or corrupt a previously stored payload.
 
-The object store backing ingestion must support conditional put
-(`PutMode::Create`). AWS S3 supports it with no configuration. An S3-compatible
-store explicitly configured with `aws_conditional_put=disabled` will fail every
-block write rather than silently falling back to overwrite — see the CHANGELOG
-entry for this behavior.
-
-Before depending on a new S3-compatible endpoint, verify it actually enforces
-conditional put: write a key, write different bytes to the same key, read it
-back, and confirm either an `AlreadyExists` error on the second write, or (if
-it succeeded) that the read still returns the *first* write's bytes. If
-neither holds, the store does not honor conditional put and the write-once
-guarantee does not hold against it.
-
-**Caveat**: a store that *accepts* `If-None-Match: *` but doesn't enforce it
-(returns 200 and overwrites regardless) will make `put_if_absent` return
-`Created` on every call — no error, no log line — so the write-once invariant
-silently degrades to a plain overwrite. There is no code-level way to detect
-this; it must be verified operationally with the procedure above before
-depending on the store.
+The object store backing ingestion must support create-only writes; see [Object Storage](object-storage.md#create-only-writes) for the requirement and for verifying an S3-compatible endpoint.
 
 ## Producer configuration
 

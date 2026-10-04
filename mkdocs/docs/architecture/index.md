@@ -28,7 +28,7 @@ graph TD
     
     subgraph "Storage Layer"
         PG[(PostgreSQL<br/>Metadata & Schema)]
-        S3[(Object Storage<br/>S3/GCS/Local<br/>Raw Payloads)]
+        S3[(Object Storage<br/>S3/GCS/Azure/Local<br/>Raw Payloads)]
     end
     
     subgraph "Caching (read path)"
@@ -110,7 +110,7 @@ graph TD
 
 #### Data Storage
 - **PostgreSQL**: Stores metadata, process information, and stream definitions
-- **Object Storage**: Stores raw telemetry payloads in efficient binary format (S3, GCS, or local files)
+- **Object Storage**: Stores raw telemetry payloads in efficient binary format (S3, GCS, Azure Blob Storage, or local files)
 - **Lakehouse**: Materialized Parquet views created on-demand for fast analytics
 - **Read Caching**: Reads of lake objects are served through a tiered cache — an in-process **L1** and a shared **L2** (`object-cache-srv`) — before falling through to the origin store; writes go straight to origin. See [Caching Architecture](caching.md) for how the tiers fit together.
 

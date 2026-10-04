@@ -2,7 +2,7 @@
 
 ## View Materialization
 
-Micromegas uses a lakehouse architecture with on-demand view materialization: raw data lives in object storage (S3/GCS) and views are materialized when queried, with automatic caching for frequently accessed data.
+Micromegas uses a lakehouse architecture with on-demand view materialization: raw data lives in object storage (S3/GCS/Azure) and views are materialized when queried, with automatic caching for frequently accessed data.
 
 ### Global Views vs View Instances
 
