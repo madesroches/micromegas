@@ -6,3 +6,4 @@ mkdocs-material>=9.0.0
 mkdocstrings>=0.22.0
 mkdocstrings-python>=1.0.0
 mkdocs-rss-plugin>=1.19.0
+mkdocs-redirects>=1.2.3

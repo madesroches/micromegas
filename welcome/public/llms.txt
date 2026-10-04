@@ -67,17 +67,14 @@ Site layout: `/` is the overview, `/docs/` the documentation, `/docs/blog/` the 
 ## When to use Micromegas
 
 - [When to use Micromegas](https://micromegas.info/docs/when-to-use/): when Micromegas fits and when Parseable, OpenObserve, GreptimeDB, SigNoz, ClickHouse/ClickStack, Grafana LGTM, InfluxDB 3 Core, VictoriaMetrics, Quickwit or Prometheus fit better; Micromegas suits high-frequency telemetry with high-cardinality fleet dimensions (many processes, machines, users) from native and client processes, queried with SQL, with per-team access control and privacy (audiences) in the open-source build ([authorization](https://micromegas.info/docs/admin/authorization/)).
-
-## Cost
-
-- [Cost effectiveness](https://micromegas.info/docs/cost-effectiveness/): where the money goes and why object storage changes the arithmetic.
-- [Comparison methodology](https://micromegas.info/docs/cost-comparisons/): how the vendor comparisons below are computed, and their assumptions.
-- [vs. Datadog](https://micromegas.info/docs/cost-comparisons/datadog/)
-- [vs. Splunk](https://micromegas.info/docs/cost-comparisons/splunk/)
-- [vs. Elastic](https://micromegas.info/docs/cost-comparisons/elastic/)
-- [vs. New Relic](https://micromegas.info/docs/cost-comparisons/newrelic/)
-- [vs. Dynatrace](https://micromegas.info/docs/cost-comparisons/dynatrace/)
-- [vs. Grafana Cloud](https://micromegas.info/docs/cost-comparisons/grafana/)
+- [vs. LLM agent tools](https://micromegas.info/docs/when-to-use/agent-observability/): Langfuse, Arize Phoenix, Opik and Laminar fit when you need evals and an LLM-specific trace UI (prompt management in Langfuse, Phoenix and Opik); Micromegas fits when agent telemetry (OTLP/HTTP, e.g. Claude Code) should sit in the same SQL-queryable store as the rest of your fleet's telemetry, with per-row access control.
+- [vs. SaaS vendors](https://micromegas.info/docs/when-to-use/saas-vendors/): where the money goes, the comparison methodology, and dollar estimates against each vendor on one reference workload.
+  - [vs. Datadog](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-datadog)
+  - [vs. Splunk](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-splunk)
+  - [vs. Elastic](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-elastic)
+  - [vs. New Relic](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-new-relic)
+  - [vs. Dynatrace](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-dynatrace)
+  - [vs. Grafana Cloud](https://micromegas.info/docs/when-to-use/saas-vendors/#vs-grafana-cloud)
 
 ## Engineering blog
 

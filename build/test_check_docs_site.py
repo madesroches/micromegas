@@ -238,3 +238,54 @@ def test_llms_txt_offsite_links_are_not_checked(tmp_path):
         "- [Also elsewhere](https://crates.io/crates/nope): off-site.\n",
     )
     assert check_site(root) == []
+
+
+def write_stub(root: Path, rel: str, target: str, canonical: str | None = None) -> None:
+    canonical = canonical if canonical is not None else target
+    write(
+        root / "docs" / rel / "index.html",
+        "<!doctype html><html><head>"
+        f'<link rel="canonical" href="{canonical}">'
+        f'<meta http-equiv="refresh" content="0; url={target}">'
+        "</head><body></body></html>",
+    )
+
+
+def test_redirect_stub_with_existing_target_passes(tmp_path):
+    root = build_base_tree(tmp_path)
+    write_stub(root, "old", "../page/")
+    assert check_site(root) == []
+
+
+def test_redirect_stub_with_missing_target_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    write_stub(root, "old", "../gone/")
+    failures = check_site(root)
+    assert any(str(root / "docs" / "old" / "index.html") in f for f in failures)
+
+
+def test_redirect_stub_fragment_is_ignored(tmp_path):
+    root = build_base_tree(tmp_path)
+    write_stub(root, "nested/old", "../../page/#vs-datadog")
+    assert check_site(root) == []
+
+
+def test_redirect_stub_directory_url_resolves_to_index_html(tmp_path):
+    root = build_base_tree(tmp_path)
+    # A directory holding only other files has no index.html to resolve to.
+    write(root / "docs" / "dir-only" / "other.html", "<html></html>")
+    write_stub(root, "old", "../dir-only/")
+    failures = check_site(root)
+    assert any("dir-only" in f and "old" in f for f in failures)
+
+
+def test_non_stub_with_relative_canonical_still_fails(tmp_path):
+    root = build_base_tree(tmp_path)
+    write(
+        root / "docs" / "page" / "index.html",
+        '<html><head><link rel="canonical" href="../other/">'
+        '<link rel="alternate" type="application/rss+xml" title="RSS feed" href="../feed_rss_created.xml">'
+        "</head><body></body></html>",
+    )
+    failures = check_site(root)
+    assert any("canonical" in f and "page" in f for f in failures)

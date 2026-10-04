@@ -12,7 +12,9 @@ any equivalent staging directory passed on the command line):
    files actually found.
 4. Every scanned HTML file (``<root>/docs/**/*.html`` and ``<root>/index.html``)
    carries a ``<link rel="canonical">`` tag that points at the file that
-   emitted it, unless the file is on the exemption list (``404.html``).
+   emitted it, unless the file is on the exemption list (``404.html``). A
+   redirect stub (a page with a ``<meta http-equiv="refresh">`` tag) is held
+   to a different rule: its refresh target must resolve to an existing file.
 5. Every feed autodiscovery link (``<link rel="alternate"
    type="application/rss+xml">``, from the same HTML files as check 4)
    resolves to a file that exists.
@@ -40,6 +42,11 @@ FEED_RE = re.compile(
     r'<link\b[^>]*\brel=(["\'])alternate\1[^>]*\btype=(["\'])application/rss\+xml\2[^>]*>',
     re.IGNORECASE,
 )
+META_REFRESH_RE = re.compile(
+    r'<meta\b(?=[^>]*\bhttp-equiv=(["\'])refresh\1)[^>]*\bcontent=(["\'])(.*?)\2[^>]*>',
+    re.IGNORECASE | re.DOTALL,
+)
+REFRESH_URL_RE = re.compile(r"\burl\s*=\s*(\S+)", re.IGNORECASE)
 HREF_RE = re.compile(r'\bhref=(["\'])(.*?)\1', re.IGNORECASE)
 SITEMAP_LINE_RE = re.compile(r"^Sitemap:\s*(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
@@ -83,14 +90,16 @@ def href_to_path(root: Path, html_file: Path, href: str) -> Path:
     A root-absolute href (starting with ``/``) is resolved against the staged
     root, the same rule ``url_to_path`` applies to a root-relative path --
     ``build.py`` sets the 404 template's ``base_url`` to ``site_url``'s path,
-    so its feed links are root-absolute rather than genuinely relative.
+    so its feed links are root-absolute rather than genuinely relative. A
+    relative href ending in ``/`` resolves to that directory's ``index.html``,
+    and the fragment is dropped.
     """
     parsed = urlsplit(href)
     path = unquote(parsed.path)
     if href.startswith("/"):
         rel = _resolve_url_path(path)
         return root / rel.lstrip("/")
-    return (html_file.parent / path).resolve()
+    return (html_file.parent / _resolve_url_path(path)).resolve()
 
 
 def find_sitemaps(root: Path) -> list[Path]:
@@ -199,10 +208,30 @@ def check_robots_txt(root: Path, origin: str, sitemaps: list[Path]) -> list[str]
     return failures
 
 
+def extract_refresh_target(html_text: str) -> str | None:
+    """Return the URL of a ``<meta http-equiv="refresh">`` tag, or None if absent."""
+    for tag_match in META_REFRESH_RE.finditer(html_text):
+        url_match = REFRESH_URL_RE.search(tag_match.group(3))
+        if url_match:
+            return url_match.group(1)
+    return None
+
+
 def check_canonical_tags(root: Path, origin: str, html_files: list[Path]) -> list[str]:
     failures = []
     for html_file in html_files:
         html_text = html_file.read_text(encoding="utf-8", errors="replace")
+        # A redirect stub's canonical is relative and names another file by
+        # design, so it is checked for a live target instead.
+        refresh_target = extract_refresh_target(html_text)
+        if refresh_target is not None:
+            target = href_to_path(root, html_file, refresh_target)
+            if not target.is_file():
+                failures.append(
+                    f"{html_file}: redirect stub refreshes to {refresh_target!r}, "
+                    f"which resolves to {target}, which does not exist"
+                )
+            continue
         hrefs = extract_hrefs(html_text, CANONICAL_RE)
         if not hrefs:
             if html_file.name not in NO_CANONICAL_EXEMPT:
