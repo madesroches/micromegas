@@ -21,13 +21,13 @@ Every claim on this page links to its source: the project's own docs or reposito
 - No GenAI semantic-convention mapping: `gen_ai.*` attributes land in the generic JSONB `properties` column like any other attribute and are read with the `jsonb_*` functions ([attribute encoding](../otlp/index.md#attribute-encoding)).
 - No token-cost price table: cost is whatever the agent reports, and Claude Code reports `claude_code.cost.usage`. An agent that only reports tokens gets no dollar figure.
 - OTLP histograms are not materialized, and `otel_spans` is per-process, so a multi-agent trace spanning processes needs a UNION ([OTLP limitations](../otlp/index.md#limitations)).
-- PostgreSQL and object storage are required. Phoenix has a lighter self-hosted footprint (see below).
+- PostgreSQL is required. The [monolith](../admin/monolith.md) runs everything in one process next to PostgreSQL, with a local directory (`file:///…`) as the object store. Phoenix can also drop the database server and run on SQLite (see below).
 
 ## At a glance
 
 | | License | Self-hosted dependencies | OTLP ingestion | SQL over agent data | Evals | Prompt management |
 |---|---|---|---|---|---|---|
-| Micromegas | [Apache-2.0](https://github.com/madesroches/micromegas/blob/main/LICENSE) | PostgreSQL, object storage ([architecture](../architecture/index.md#core-components)) | HTTP only ([limitations](../otlp/index.md#limitations)) | Yes, FlightSQL and notebooks ([query guide](../query-guide/index.md)) | No | No |
+| Micromegas | [Apache-2.0](https://github.com/madesroches/micromegas/blob/main/LICENSE) | PostgreSQL; object store can be a local directory ([monolith](../admin/monolith.md)) | HTTP only ([limitations](../otlp/index.md#limitations)) | Yes, FlightSQL and notebooks ([query guide](../query-guide/index.md)) | No | No |
 | [Langfuse](#micromegas-vs-langfuse) | MIT except `ee/` ([repo](https://github.com/langfuse/langfuse)) | Postgres, ClickHouse, Redis/Valkey, S3 ([self-hosting](https://langfuse.com/self-hosting)) | HTTP only ([OTel](https://langfuse.com/integrations/native/opentelemetry)) | Not listed ([data access](https://langfuse.com/docs/api-and-data-platform/overview)) | Yes ([repo](https://github.com/langfuse/langfuse)) | Yes ([repo](https://github.com/langfuse/langfuse)) |
 | [Arize Phoenix](#micromegas-vs-arize-phoenix) | Elastic License 2.0 ([LICENSE](https://github.com/Arize-ai/phoenix/blob/main/LICENSE)) | SQLite or PostgreSQL ([configuration](https://arize.com/docs/phoenix/self-hosting/configuration)) | HTTP and gRPC ([configuration](https://arize.com/docs/phoenix/self-hosting/configuration)) | Not found in the docs read | Yes ([repo](https://github.com/Arize-ai/phoenix)) | Yes ([repo](https://github.com/Arize-ai/phoenix)) |
 | [Opik](#micromegas-vs-opik) | Apache-2.0 ([repo](https://github.com/comet-ml/opik)) | MySQL, Redis, ClickHouse, ZooKeeper, MinIO; Helm for production ([local deployment](https://www.comet.com/docs/opik/self-host/local_deployment)) | HTTP only ([OTel](https://www.comet.com/docs/opik/tracing/opentelemetry/overview)) | No: OQL filters, REST, export ([export](https://www.comet.com/docs/opik/tracing/export_data)) | Yes ([repo](https://github.com/comet-ml/opik)) | Yes ([repo](https://github.com/comet-ml/opik)) |
@@ -47,7 +47,7 @@ Per-row access control, set by the ingestion credential, is not something the pe
 
 **Arize Phoenix** covers tracing on OpenTelemetry, evaluation, versioned datasets, experiments, a playground and prompt management ([repo](https://github.com/Arize-ai/phoenix)). Its license is the Elastic License 2.0, which is source-available rather than OSI open source ([LICENSE](https://github.com/Arize-ai/phoenix/blob/main/LICENSE)). The docs state that "Phoenix is free to self-host with no feature limitations"; Arize AX is a separate enterprise option with support ([self-hosting](https://arize.com/docs/phoenix/self-hosting)). It runs on SQLite by default or PostgreSQL, accepts OTLP over HTTP (port 6006) and gRPC (port 4317), and retains traces indefinitely unless `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS` is set ([configuration](https://arize.com/docs/phoenix/self-hosting/configuration)). Its instrumentation comes from OpenInference, with Python, JavaScript, Java and Go support ([repo](https://github.com/Arize-ai/phoenix)).
 
-**Choose Phoenix when** you want a light self-hosted footprint (a single service on SQLite, or one PostgreSQL), evals, experiments and a playground, and OTLP over gRPC. Its footprint is lighter than Micromegas's, which needs PostgreSQL plus object storage.
+**Choose Phoenix when** you want a single service with no database server (SQLite), evals, experiments and a playground, and OTLP over gRPC. On PostgreSQL, its footprint matches the Micromegas [monolith](../admin/monolith.md): one service plus PostgreSQL.
 
 **How Micromegas differs.** Micromegas is Apache-2.0 rather than source-available, and its ingestion is HTTP only. It is built for telemetry from many kinds of processes, not only LLM applications, so agent data lands next to everything else and is queried with the same SQL. The Phoenix docs read for this page do not describe an SQL interface over traces, so nothing is claimed either way. Micromegas adds per-row audiences, which are not described in Phoenix's configuration docs.
 
@@ -91,7 +91,7 @@ Micromegas ships no integration with the peers above.
 
 - you need evals, datasets, experiments, prompt management or a playground (Langfuse, Phoenix, Opik, Laminar);
 - you want a trace UI built for LLM calls and agent steps;
-- you want the lightest self-hosted footprint (Phoenix) or the broadest OTLP transport support (Phoenix over gRPC).
+- you want no database server at all (Phoenix on SQLite) or the broadest OTLP transport support (Phoenix over gRPC).
 
 ## FAQ
 
