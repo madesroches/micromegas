@@ -4,6 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Object storage:** Enable the `gcp` and `azure` features of `object_store` (#1639), so
+  `gs://` and Azure (`az://`, `abfss://`, `https://<account>.blob.core.windows.net/…`) URIs now
+  work for the lake, the object-cache origin, the maps store and static tables. They were
+  previously advertised but rejected at startup. A new Object Storage admin page documents every
+  backend, credentials, S3-compatible endpoints and the create-only write requirement, and the
+  per-service pages link to it. Also drop the redundant env-var key lowercasing before
+  `parse_url_opts` (#952), since `object_store` 0.13 lowercases keys itself.
 * **Docs:** Regroup the `When to Use` tab into three pages (#1637): the open-source peer page, a
   new `vs. LLM Agent Tools` page comparing Micromegas with Langfuse, Arize Phoenix, Opik and
   Laminar for LLM agent observability, and a single `vs. SaaS Vendors` page that merges the cost
