@@ -1,6 +1,7 @@
 # Enable GCS and Azure Object Storage Plan
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1639
+**Also resolves**: https://github.com/madesroches/micromegas/issues/952
 
 ## Overview
 
@@ -9,7 +10,8 @@ The docs advertise Google Cloud Storage (`gs://…`) as a lake backend, but the 
 `gs://` and `az://` URI at startup. Enable the `gcp` and `azure` features so both backends work
 through the existing generic `ObjectStore` code path. Then give object-storage configuration one
 documentation home that names S3, GCS, Azure and S3-compatible endpoints, and make every other
-page point to it.
+page point to it. Also drop the now-redundant env-var key lowercasing in `parse_object_store_url`,
+since `object_store` 0.13.2 lowercases option keys itself.
 
 ## Current State
 
@@ -25,8 +27,7 @@ page point to it.
   (`rust/analytics/src/lakehouse/static_tables_configurator.rs:72-73`) and
   `rust/ingestion/src/remote_data_lake.rs:51`. No code branches on the URL scheme.
 - `BlobStorage::put_if_absent` (`blob_storage.rs:94-115`) uses `PutMode::Create` and maps
-  `AlreadyExists` to `PutIfAbsent::AlreadyExists` and `NotImplemented` to an error that only
-  mentions S3. GCS (`ifGenerationMatch=0`) and Azure (`If-None-Match: *`) both implement
+  `AlreadyExists` to `PutIfAbsent::AlreadyExists` and `NotImplemented` to an error. GCS (`ifGenerationMatch=0`) and Azure (`If-None-Match: *`) both implement
   `PutMode::Create` and return `AlreadyExists` on a collision.
 - Deleting a missing key returns `NotFound` on GCS and Azure. S3 returns success. Behavior at
   each delete site:
@@ -51,7 +52,10 @@ page point to it.
   `query-guide/index.md:7`, `query-guide/advanced-features.md:5`, `architecture/index.md:31,113`,
   `architecture/caching.md:4,24`, `when-to-use/saas-vendors.md:55,106`, `README.md:53`,
   `rust/object-cache-srv/README.md:4`. `docker/README.md:201,208` says "S3/GCS bucket URI for
-  payloads" and `docker/README.md:213` shows an `s3://my-bucket` cache origin.
+  payloads" and `docker/README.md:213` shows an `s3://my-bucket` cache origin, and `docker/README.md:137`
+  says "fronts a bucket-only S3/GCS origin". `admin/object-cache.md:3` says "re-fetching the same
+  bytes from S3/GCS". `rust/CLAUDE.md:32` says "S3/GCS bucket URI for payload storage" and
+  `.github/copilot-instructions.md:77` says "S3/GCS bucket for payload storage".
   `analytics-web-app/README.md:111` lists `MICROMEGAS_MAPS_OBJECT_STORE_URI` forms as `file://`,
   `s3://`, `memory://` only. `admin/flight-sql.md:29` and `admin/maintenance.md:21` document
   `MICROMEGAS_STATIC_TABLES_URL` with no URI guidance.
@@ -81,12 +85,13 @@ No other code changes are needed for the backends to work:
   works for any scheme, since `parse_url_opts` returns the path after the bucket or container
   as the prefix. The default namespace already strips any `scheme://`.
 
-### Error message tweak
+### Drop env-var lowercasing
 
-The `NotImplemented` message in `put_if_absent` currently assumes S3. Generalize the first
-clause ("object store does not support conditional put (PutMode::Create)…") and keep the
-`aws_conditional_put=disabled` hint scoped to S3-compatible stores. This is a wording change
-only.
+`object_store` 0.13.2 lowercases option keys itself for every backend (`parse_url_opts`,
+`src/parse.rs:142-152`), so the `.map(|(k, v)| (k.to_lowercase(), v))` in
+`parse_object_store_url_parsed` is redundant. Pass `std::env::vars()` directly. Update the doc
+comments on `parse_object_store_url` and `BlobStorage::parse_url_opts` so they no longer describe
+lowercasing or the "env-vars-lowercased" idiom.
 
 ### Documentation home
 
@@ -119,8 +124,8 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
    feature set). Confirm `cargo tree -e features -i object_store` shows `gcp` and `azure`.
 2. **Dependency hygiene** — run `cargo deny check` and `cargo machete` (as CI does) and confirm
    no new license or duplicate-version failures.
-3. **Error message** — generalize the `NotImplemented` message in
-   `rust/telemetry/src/blob_storage.rs` (see Design).
+3. **Drop lowercasing** — in `rust/telemetry/src/blob_storage.rs`, pass `std::env::vars()`
+   straight to `parse_url_opts` and fix the two doc comments (see Design).
 4. **Unit tests** — add parse tests to `rust/telemetry/tests/blob_storage_tests.rs` (see
    Testing Strategy).
 5. **Docs** — create `mkdocs/docs/admin/object-storage.md` and add it to the `nav` in
@@ -140,7 +145,9 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 7. **Docs, overview wording** — replace "S3/GCS" with "S3, GCS, Azure" (or "S3/GCS/Azure"
    inside diagram labels) in `index.md`, `getting-started.md`, `query-guide/index.md`,
    `query-guide/advanced-features.md`, `architecture/index.md`, `architecture/caching.md`,
-   `when-to-use/saas-vendors.md`, `README.md` and `rust/object-cache-srv/README.md`.
+   `when-to-use/saas-vendors.md`, `README.md`, `rust/object-cache-srv/README.md`,
+   `rust/CLAUDE.md:32` and `.github/copilot-instructions.md:77`. In `admin/object-cache.md`
+   also update line 3, and in `docker/README.md` line 137.
 
 ## Files to Modify
 
@@ -153,7 +160,7 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 - `mkdocs/docs/{index,getting-started}.md`, `mkdocs/docs/query-guide/{index,advanced-features}.md`,
   `mkdocs/docs/architecture/{index,caching}.md`, `mkdocs/docs/when-to-use/saas-vendors.md`
 - `README.md`, `rust/object-cache-srv/README.md`, `docker/README.md`,
-  `analytics-web-app/README.md`
+  `analytics-web-app/README.md`, `rust/CLAUDE.md`, `.github/copilot-instructions.md`
 
 ## Trade-offs
 
@@ -168,6 +175,12 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 - **One docs page vs. editing each service page in place** — one page avoids repeating the
   scheme list and credential guidance in seven places (DRY), and gives S3-compatible stores and
   the conditional-put requirement a natural home.
+
+## Decisions
+
+- Stay on object_store 0.13.2 (user decision): 0.14 is blocked until DataFusion moves off
+  object_store 0.13 / arrow 59 (DataFusion 55.1.0 requires object_store ^0.13.2); the 0.14 bump is
+  a separate coordinated DataFusion/arrow/parquet upgrade.
 
 ## Documentation
 
@@ -189,6 +202,9 @@ build rejected it):
   `AZURE_STORAGE_ACCOUNT_NAME`. Neither builder makes network calls at build time (credential
   providers resolve lazily). GCS reads application default credentials from the well-known path
   only if that file exists.
+
+No dedicated test for the lowercasing removal: that behavior is now upstream's, and the existing
+parse tests cover the call path.
 
 The conditional-put and `NotFound` behavior belongs to the backends themselves and needs real
 GCS/Azure endpoints, so it is covered by manual verification. A failure there is loud, not
