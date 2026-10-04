@@ -107,10 +107,12 @@ for `MICROMEGAS_OBJECT_STORE_URI` and the other URI settings
   environment (lowercased) as `object_store` keys, and link to the `object_store` builder docs
   instead of copying every key.
 - **S3-compatible stores** (MinIO, Cloudflare R2, Ceph, …): use `s3://` plus `AWS_ENDPOINT`
-  (and `AWS_ALLOW_HTTP=true` for plain HTTP). The store must support conditional put
-  (`If-None-Match: *`).
-- **Requirement**: the lake needs create-only writes (`PutMode::Create`). Say this is why plain
-  `http`/WebDAV stores are not supported.
+  (and `AWS_ALLOW_HTTP=true` for plain HTTP). Taken from the conditional-put section moved out of
+  `admin/ingestion.md:120-138`, not written fresh.
+- **Requirement**: the lake needs create-only writes (`PutMode::Create`), with the verification
+  procedure and the silent-degradation caveat, also taken from that moved section. Note that GCS
+  and Azure enforce create-only natively, so the procedure applies to S3-compatible endpoints.
+  Say this is why plain `http`/WebDAV stores are not supported.
 - Required permissions: read, write, delete and list on the configured prefix (generalize the
   IAM note now in `web-app.md:134`).
 
@@ -128,7 +130,9 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
    straight to `parse_url_opts` and fix the two doc comments (see Design).
 4. **Unit tests** — add parse tests to `rust/telemetry/tests/blob_storage_tests.rs` (see
    Testing Strategy).
-5. **Docs** — create `mkdocs/docs/admin/object-storage.md` and add it to the `nav` in
+5. **Docs** — create `mkdocs/docs/admin/object-storage.md`, moving the conditional-put /
+   S3-compatible section from `mkdocs/docs/admin/ingestion.md:120-138` into it (requirement,
+   verification procedure, caveat) and leaving a one-line link in its place. Add it to the `nav` in
    `mkdocs/mkdocs.yml` as `Object Storage: admin/object-storage.md` in the `Operations >
    Administration` list, next to the server deployment pages.
 6. **Docs, per-service tables** — in `admin/ingestion.md`, `admin/flight-sql.md`,
@@ -203,8 +207,8 @@ build rejected it):
   providers resolve lazily). GCS reads application default credentials from the well-known path
   only if that file exists.
 
-No dedicated test for the lowercasing removal: that behavior is now upstream's, and the existing
-parse tests cover the call path.
+No unit test for the lowercasing removal: the env-key path needs a real S3 endpoint and is covered
+manually (see Manual Verification step 5).
 
 The conditional-put and `NotFound` behavior belongs to the backends themselves and needs real
 GCS/Azure endpoints, so it is covered by manual verification. A failure there is loud, not
@@ -230,3 +234,11 @@ as they implement conditional create.
 4. **Retention** — delete one block object out of band (`gcloud storage rm` /
    `az storage blob delete`), then run the maintenance daemon with `MICROMEGAS_RETENTION_DAYS=0`
    until its hourly task runs. Expected: the expired data is removed with no `NotFound` error.
+5. **Uppercase `AWS_*` vars after dropping lowercasing** — run
+   `python3 local_test_env/ai_scripts/start_minio.py`. It starts a MinIO container, creates the
+   bucket, exports uppercase `AWS_ENDPOINT` / `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+   `AWS_REGION` / `AWS_ALLOW_HTTP` plus `MICROMEGAS_OBJECT_STORE_URI` to the child process, and
+   launches `start_services.py` itself (pass `--no-launch` to only print exports). Then run
+   `python3 local_test_env/ai_scripts/run_generator.py` and
+   `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`. Expected: rows returned,
+   confirming the uppercase variables are still honored.
