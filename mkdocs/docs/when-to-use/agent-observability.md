@@ -75,7 +75,7 @@ Per-row access control, set by the ingestion credential, is not something the pe
 
 ## Using them together
 
-For many teams the realistic answer is both. A purpose-built tool handles evals and the prompt-level UI, while Micromegas keeps the full-resolution, access-controlled record next to the rest of the fleet's telemetry. One setup works with what exists today: send to an OpenTelemetry collector that fans out to both, over a protocol each side accepts. Langfuse, Opik and Micromegas accept OTLP over HTTP, so HTTP is the common denominator. Claude Code selects the protocol with `OTEL_EXPORTER_OTLP_PROTOCOL` ([Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage)), and Micromegas needs `http/protobuf` ([OTLP recipe](../otlp/index.md#claude-code)).
+For many teams the realistic answer is both. A purpose-built tool handles evals and the prompt-level UI, while Micromegas keeps the full-resolution, access-controlled record next to the rest of the fleet's telemetry. One setup works with what exists today: send to an OpenTelemetry collector that fans out to both, over a protocol each side accepts. Langfuse, Opik and Micromegas accept OTLP over HTTP, so HTTP is the common denominator. Claude Code selects the protocol with `OTEL_EXPORTER_OTLP_PROTOCOL` ([Claude Code monitoring](https://code.claude.com/docs/en/monitoring-usage)), and Micromegas accepts `http/protobuf` or `http/json` (the [OTLP recipe](../otlp/index.md#claude-code) uses `http/protobuf`).
 
 Micromegas ships no integration with the peers above.
 
