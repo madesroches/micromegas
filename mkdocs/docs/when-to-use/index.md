@@ -182,7 +182,7 @@ SaaS vendors bill on volume (hosts, GB ingested, spans), while Micromegas runs o
 
 ## LLM agent tools
 
-Langfuse, Arize Phoenix, Opik and Laminar are built for LLM applications and agents, with evals, prompt management and trace UIs that Micromegas does not have. The [vs. LLM Agent Tools](agent-observability.md) page compares them with Micromegas, which records an agent's OTLP/HTTP telemetry next to the rest of your fleet's data, with per-row access control.
+Langfuse, Arize Phoenix, Opik and Laminar are built for LLM applications and agents, with evals and trace UIs that Micromegas does not have (and, in Langfuse, Phoenix and Opik, prompt management). The [vs. LLM Agent Tools](agent-observability.md) page compares them with Micromegas, which records an agent's OTLP/HTTP telemetry next to the rest of your fleet's data, with per-row access control.
 
 ## Summary: which one fits
 
@@ -244,7 +244,7 @@ Define a reduced view with `CREATE MATERIALIZED VIEW` (for example, per-minute c
 
 ### How do I observe an LLM agent such as Claude Code with Micromegas?
 
-Point the agent's OTLP/HTTP exporter at Micromegas and its requests, token counts, cost and (optionally) prompts land as `log_entries`, `measures` and `otel_spans` rows, queried with SQL and readable only by the audiences you grant. It has no evals or prompt management, so for those look at Langfuse, Phoenix, Opik or Laminar, or use them together ([LLM agent tools](agent-observability.md)).
+Point the agent's OTLP/HTTP exporter at Micromegas and its requests, token counts, cost and (optionally) prompts land as `log_entries`, `measures` and `otel_spans` rows, queried with SQL and readable only by the audiences you grant. It has no evals or prompt management, so for evals look at Langfuse, Phoenix, Opik or Laminar (and for prompt management, Langfuse, Phoenix or Opik), or use them together ([LLM agent tools](agent-observability.md)).
 
 ### How do I trace Rust applications in production with low overhead?
 

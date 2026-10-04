@@ -1,8 +1,8 @@
 # Micromegas for LLM Agent Observability
 
-Micromegas records what an LLM agent emits over OTLP/HTTP (Claude Code is the worked example) into the same SQL-queryable lakehouse as the rest of your telemetry, with per-row access control. It is not an LLM engineering platform: it has no evaluations, prompt management or LLM-specific trace UI. This page compares it with Langfuse, Arize Phoenix, Opik and Laminar, which do.
+Micromegas records what an LLM agent emits over OTLP/HTTP (Claude Code is the worked example) into the same SQL-queryable lakehouse as the rest of your telemetry, with per-row access control. It is not an LLM engineering platform: it has no evaluations, prompt management or LLM-specific trace UI. This page compares it with Langfuse, Arize Phoenix, Opik and Laminar, which offer evaluations (and, for Langfuse, Phoenix and Opik, prompt management).
 
-**TL;DR.** Choose Langfuse, Phoenix, Opik or Laminar when you want evals, datasets, prompt management and a purpose-built trace UI. Choose Micromegas when you want agent telemetry stored with the rest of your fleet's telemetry, queried with the same SQL, and readable only by the people it is shared with. Many teams will want both; see [Using them together](#using-them-together). The [summary at the end](#summary-which-one-fits) lists when each choice fits.
+**TL;DR.** Choose Langfuse, Phoenix, Opik or Laminar when you want evals, datasets and a purpose-built trace UI (plus prompt management with Langfuse, Phoenix or Opik). Choose Micromegas when you want agent telemetry stored with the rest of your fleet's telemetry, queried with the same SQL, and readable only by the people it is shared with. Many teams will want both; see [Using them together](#using-them-together). The [summary at the end](#summary-which-one-fits) lists when each choice fits.
 
 *Last reviewed: October 2026*
 
@@ -89,7 +89,7 @@ Micromegas ships no integration with the peers above.
 
 **Choose a purpose-built tool when**:
 
-- you need evals, datasets, experiments, prompt management or a playground (Langfuse, Phoenix, Opik, Laminar);
+- you need evals, datasets, experiments (Langfuse, Phoenix, Opik, Laminar), or prompt management or a playground (Langfuse, Phoenix, Opik);
 - you want a trace UI built for LLM calls and agent steps;
 - you want no database server at all (Phoenix on SQLite) or the broadest OTLP transport support (Phoenix over gRPC).
 
