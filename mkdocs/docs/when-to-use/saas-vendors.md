@@ -6,7 +6,7 @@ description: How Micromegas delivers enterprise-grade observability at a fractio
 
 Micromegas runs on your own infrastructure, so its cost is the direct cost of the cloud services it uses rather than a per-GB, per-host or per-user price. This page explains that cost model, states the methodology shared by every estimate, and compares it with six commercial vendors on one reference workload.
 
-**TL;DR:** on the reference workload (90-day retention, 5 users) Micromegas costs about $1,100/month. The six vendors below come out between roughly 1.5× (Dynatrace, with custom metrics excluded) and roughly 20× (Splunk) that figure. The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
+**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month. The six vendors below come out between roughly 1.5× (Dynatrace, with custom metrics excluded) and roughly 36× (New Relic, driven by per-seat fees) that figure. The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
 
 *Last reviewed: June 2026*
 
@@ -19,8 +19,8 @@ Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Us
 | [Datadog](#vs-datadog) | Per host, per GB ingested, per million events indexed | ~$7,950 | ~7× |
 | [Dynatrace](#vs-dynatrace) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
 | [Elastic](#vs-elastic) | Per GB ingested (volume-tiered), per GB-month retained | ~$2,200 | ~2× |
-| [Grafana Cloud](#vs-grafana-cloud) | Per 1,000 active series, per GB of logs, per user | ~$7,300+ (30-day retention only) | ~6.6× |
-| [New Relic](#vs-new-relic) | Per GB ingested, per user seat | ~$6,025 | ~5.5× |
+| [Grafana Cloud](#vs-grafana-cloud) | Per 1,000 active series, per GB of logs, per user | ~$8,100+ (30-day retention only) | ~7.3× |
+| [New Relic](#vs-new-relic) | Per GB ingested, per user seat | ~$39,200 | ~36× |
 | [Splunk](#vs-splunk) | Daily index volume, billed annually | ~$22,000 | ~20× |
 
 Every estimate excludes traces, and the Dynatrace figure excludes custom metrics at the reference volume; see [Methodology](#methodology).
@@ -164,7 +164,7 @@ All comparisons use the same reference workload, based on a real Micromegas prod
     *   **Logs:** 3 billion log entries/month
     *   **Metrics:** ~92 billion metric data points/month
     *   **Traces:** ~55 billion trace events/month
-*   **Users:** 5 active users
+*   **Users:** ~100 active users
 *   **Data size assumptions for billing estimates:**
     *   Average log entry size: 500 bytes
     *   Average metric data point size: 100 bytes
@@ -369,10 +369,10 @@ Grafana Cloud Pro pricing is component-based, with separate charges for logs (Lo
     *   **Subtotal:** **~$6,500/month**
 
 *   **Users:**
-    *   `5 active users × $8/user`
-    *   **Subtotal:** **$40/month**
+    *   `100 active users × $8/user`
+    *   **Subtotal:** **$800/month**
 
-*   **Total Estimated Monthly Cost (30-day retention only):** **~$7,309/month**
+*   **Total Estimated Monthly Cost (30-day retention only):** **~$8,069/month**
 
 Note: This estimate uses only 30-day log retention. The reference workload requires 90 days — the actual cost with extended retention would be higher. Metric costs dominate at this scale; 1 million active series at $6.50/1k series = $6,500/month.
 
@@ -380,8 +380,8 @@ Note: This estimate uses only 30-day log retention. The reference workload requi
 
 | Category | Micromegas | Grafana Cloud Pro |
 | :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$7,300+/month (30-day retention only) |
-| **Ratio** | **1×** | **~6.6× more** |
+| **Platform/Infrastructure Cost** | ~$1,100/month | ~$8,100+/month (30-day retention only) |
+| **Ratio** | **1×** | **~7.3× more** |
 
 Note: With 90-day log retention (not publicly priced), the actual ratio would be higher.
 
@@ -414,10 +414,10 @@ New Relic's pricing combines per-GB data ingestion with per-user seat fees. They
     *   **Subtotal:** **~$4,280/month**
 
 *   **User Seats (Pro, Full Platform Users, annual):**
-    *   `5 users × $349/user/month`
-    *   **Subtotal:** **~$1,745/month**
+    *   `100 users × $349/user/month`
+    *   **Subtotal:** **~$34,900/month**
 
-*   **Total Estimated Monthly Cost:** **~$6,025/month**
+*   **Total Estimated Monthly Cost:** **~$39,180/month**
 
 Note: New Relic also offers a Data Plus option at $0.60/GB with additional features (extended retention, HIPAA eligibility, etc.). The CCU model provides compute-based pricing as an alternative, but its pricing is not transparently published.
 
@@ -425,12 +425,12 @@ Note: New Relic also offers a Data Plus option at $0.60/GB with additional featu
 
 | Category | Micromegas | New Relic |
 | :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$6,025/month |
-| **Ratio** | **1×** | **~5.5× more** |
+| **Platform/Infrastructure Cost** | ~$1,100/month | ~$39,200/month |
+| **Ratio** | **1×** | **~36× more** |
 
 **Qualitative differences.**
 
-*   **Cost Drivers:** Both data ingestion and user seats contribute significantly. At $349/user/month for Pro Full Platform Users, just 5 users cost $1,745/month — more than the entire Micromegas infrastructure.
+*   **Cost Drivers:** User seats dominate. At $349/user/month for Pro Full Platform Users, 100 users cost $34,900/month — over 30× the entire Micromegas infrastructure. Giving some users cheaper Core or free Basic seats lowers this, but those seats restrict access to parts of the platform.
 
 *   **Platform Philosophy:**
     *   **New Relic** offers a broad, integrated SaaS platform covering APM, infrastructure, logs, and more, with a focus on providing a single pane of glass for observability.
@@ -474,7 +474,7 @@ Note: Splunk Cloud pricing is heavily volume-discounted at scale. The AWS Market
 
 **Qualitative differences.**
 
-*   **Cost at Scale:** Splunk is the most expensive option by a wide margin. At ~20× the cost of Micromegas, the difference is primarily driven by Splunk's ingest-based pricing applied to high data volumes.
+*   **Cost at Scale:** On data volume alone, Splunk is the most expensive option by a wide margin. At ~20× the cost of Micromegas, the difference is driven by Splunk's ingest-based pricing applied to high data volumes.
 
 *   **Platform Maturity:** Splunk has decades of investment in log analysis, security (SIEM), and IT operations. Its SPL (Search Processing Language) is powerful but requires specialized knowledge.
 
