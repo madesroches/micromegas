@@ -40,7 +40,7 @@ cargo run --bin micromegas-monolith -- \
 | Variable | Required | Description |
 |---|---|---|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes (lake roles) | PostgreSQL for the data lake. Also read by the `web` role to open its own small pool backing **all three** key/grant-management route groups (`/api/ingestion-api-keys*`, `/api/analytics-api-keys*`, `/api/audience-grants*` — the same pool serves all three tables, see [API Keys](api-keys.md)) — a `--roles web`-only monolith never runs the migrations itself, so the target telemetry DB must already have had ingestion or a lakehouse-role monolith run against it at least once, or those routes fail at request time with an opaque `500` |
-| `MICROMEGAS_OBJECT_STORE_URI` | Yes (lake roles) | Object store URI (`file:///path` or `s3://…`) |
+| `MICROMEGAS_OBJECT_STORE_URI` | Yes (lake roles) | Object store URI (`file://`, `s3://`, `gs://`, `az://`; see [Object Storage](object-storage.md)) |
 | `MICROMEGAS_APP_SQL_CONNECTION_STRING` | Yes (web role) | PostgreSQL for the web app |
 | `MICROMEGAS_WEB_CORS_ORIGIN` | Yes (web role) | Allowed CORS origin (e.g. `http://localhost:3000`) |
 | `MICROMEGAS_BASE_PATH` | Yes (web role) | URL prefix (e.g. `/` or `/micromegas`) |

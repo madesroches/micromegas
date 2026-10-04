@@ -1,6 +1,6 @@
 # Object Cache Deployment
 
-`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode query services (FlightSQL and the maintenance daemon) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS on every process, cutting egress cost and read latency.
+`micromegas-object-cache-srv` is a shared HTTP range cache that sits in front of the data lake's object store. Split-mode query services (FlightSQL and the maintenance daemon) read overlapping byte ranges of the same Parquet/block files; routing those reads through one shared cache avoids re-fetching the same bytes from S3/GCS/Azure on every process, cutting egress cost and read latency.
 
 It only caches **reads**. Writes, deletes, and listings always go straight to the origin store — see [What gets cached](#what-gets-cached) below.
 
@@ -15,7 +15,7 @@ python3 local_test_env/ai_scripts/start_minio.py
 
 Starts a local MinIO container as an S3-compatible origin, creates a test bucket, and launches the rest of the services with the cache wired in front of it. `--no-launch` sets up MinIO only; `--monolith` forwards through to monolith mode. See `local_test_env/ai_scripts/stop_minio.py` for teardown.
 
-This is the only way to exercise the cache locally: it requires a bucket-style origin (`s3://`/`gs://`), and `start_services.py`'s default `file://` lake can't provide one.
+This is the only way to exercise the cache locally: it requires a bucket-style origin (`s3://`, `gs://` or `az://`), and `start_services.py`'s default `file://` lake can't provide one.
 
 ## Quick start with Docker
 
@@ -36,7 +36,7 @@ docker run -d -p 8080:8080 \
 
 | Variable | Required | Description |
 |---|---|---|
-| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`) |
+| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`, `az://container`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier. The disk store carries an internal format version; on startup, a build whose format differs from the persisted store wipes the store directory once and rewarms from origin (no data loss). Same-format restarts reuse the store warm. |
 | `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"...","allowed_cidrs":[...]?}`. `allowed_cidrs` (CIDR ranges or bare IPs) is optional and defaults to unrestricted when omitted/empty -- see [IP allowlisting](api-keys.md#ip-allowlisting) (that section otherwise covers the DB-backed key tables; this is the env-keyring equivalent, the sole construction site of this keyring shape outside tests) |
 | `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
@@ -57,7 +57,7 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_FLUSHERS` | No | foyer disk-engine flusher count -- how many blocks can be written to disk concurrently (default `2`); must be > 0 |
 | `MICROMEGAS_OBJECT_CACHE_WRITE_BUFFER_MB` | No | foyer disk-engine flush buffer pool size, in MiB (default `128`); the submit-queue overflow threshold is set to 2x this value; must be > 0 |
 
-Authenticating *against the origin* (e.g. AWS credentials) uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI` — standard `object_store` crate variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT`, `AWS_REGION`, `AWS_ALLOW_HTTP`.
+Authenticating *against the origin* uses the same environment variables as every other Micromegas service's `MICROMEGAS_OBJECT_STORE_URI`; see [Object Storage](object-storage.md#credentials).
 
 !!! warning "Give the cache its own directory — its contents can be wiped on startup"
     The cache manages `MICROMEGAS_OBJECT_CACHE_DISK_PATH` exclusively. The on-disk store carries an internal format version, and when a build's format differs from the persisted store (a format-changing upgrade, or a first boot onto a pre-versioning store), the cache **deletes all contents** of this path on startup, then rewarms from origin. The directory/mount point itself is preserved; only its contents are removed. This is safe for cache data — the cache is a read-through layer over a write-once origin, so nothing but reconstructible cache blocks is lost (this is what "no data loss" means above) — but it means the path must be used **exclusively** by the cache. Never point it at a shared volume or a directory holding anything else, or that data will be erased on the next format bump. The wipe emits the `object_cache_disk_format_wiped` metric (see [Monitoring](#monitoring)).

@@ -29,4 +29,4 @@ branch on error kind.
 
 ## Environment Variables (for services)
 - `MICROMEGAS_SQL_CONNECTION_STRING`: PostgreSQL connection
-- `MICROMEGAS_OBJECT_STORE_URI`: S3/GCS bucket URI for payload storage
+- `MICROMEGAS_OBJECT_STORE_URI`: S3/GCS/Azure bucket URI for payload storage

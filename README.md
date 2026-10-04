@@ -50,7 +50,7 @@ Micromegas consists of several key components:
 4.  **Analytics Web App (`analytics-web-srv`):** A browser UI for exploring data through interactive notebooks.
 5.  **Maintenance Daemon (`telemetry-maintenance-srv`):** Runs the on-demand and continuous ETL that materializes raw blocks into Parquet views, so data is only processed when it's worth querying.
 6.  **PostgreSQL Database:** Stores metadata about processes, streams, and data blocks, keeping the object storage indexable and fast to query.
-7.  **Object Storage (S3/GCS):** Stores all raw telemetry payloads and materialized query results in Parquet format.
+7.  **Object Storage (S3/GCS/Azure):** Stores all raw telemetry payloads and materialized query results in Parquet format.
 
 These roles can run as independent, horizontally-scalable services or bundled into a single `micromegas-monolith` process for local development and single-machine deployments. An optional shared read cache (`micromegas-object-cache-srv`) can front the object store to cut egress cost and read latency across services.
 

@@ -128,7 +128,7 @@ The monolith ingests its own traces and logs by default, so this query returns M
 This setup is for **evaluation, not production**:
 
 - `--disable-auth` — no authentication on ingestion, FlightSQL, or the web app
-- A file-backed object store (`file:///data`) instead of S3/GCS
+- A file-backed object store (`file:///data`) instead of S3/GCS/Azure
 - A single process running every role, with no isolation or horizontal scaling
 - Data lives in Docker volumes that are easy to delete (see below)
 

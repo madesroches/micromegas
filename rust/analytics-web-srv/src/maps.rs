@@ -6,7 +6,7 @@
 //! always responds with `Content-Encoding: gzip`, and PUT gzips the body
 //! before writing. That keeps the design portable: no
 //! `PutOptions::attributes`, so `object_store::LocalFileSystem` (which
-//! rejects attributes with `NotImplemented`) works the same as S3/GCS.
+//! rejects attributes with `NotImplemented`) works the same as S3/GCS/Azure.
 
 use crate::auth::{AdminRequired, AdminUser};
 use anyhow::{Context, Result};

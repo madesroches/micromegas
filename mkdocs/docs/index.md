@@ -33,7 +33,7 @@ Micromegas is a comprehensive observability solution that provides:
 - Thread-local storage for minimal performance impact
 
 ### 💰 Cost Effective
-- Raw data stored in cheap object storage (S3/GCS)
+- Raw data stored in cheap object storage (S3/GCS/Azure)
 - Metadata in PostgreSQL for fast queries
 - Pay only for what you query with on-demand ETL
 

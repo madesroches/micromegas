@@ -134,7 +134,7 @@ docker run -d \
   -e MICROMEGAS_OBJECT_STORE_URI \
   marcantoinedesroches/micromegas-maintenance:latest
 
-# Object cache (fronts a bucket-only S3/GCS origin; see Environment Variables below)
+# Object cache (fronts a bucket-only S3/GCS/Azure origin; see Environment Variables below)
 docker run -d -p 8080:8080 \
   -e MICROMEGAS_OBJECT_CACHE_ORIGIN_URI \
   -e MICROMEGAS_OBJECT_CACHE_DISK_PATH=/data \
@@ -198,19 +198,19 @@ docker run -d --name analytics-web \
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection string |
-| `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3/GCS bucket URI for payloads |
+| `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3, GCS or Azure bucket URI for payloads (see [Object Storage](../mkdocs/docs/admin/object-storage.md)) |
 | `MICROMEGAS_OIDC_CONFIG` | No | OIDC configuration JSON |
 
 ### FlightSQL Server
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MICROMEGAS_SQL_CONNECTION_STRING` | Yes | PostgreSQL connection string |
-| `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3/GCS bucket URI for payloads |
+| `MICROMEGAS_OBJECT_STORE_URI` | Yes | S3, GCS or Azure bucket URI for payloads (see [Object Storage](../mkdocs/docs/admin/object-storage.md)) |
 
 ### Object Cache
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin URI (e.g. `s3://my-bucket`, no path — the lake-root prefix arrives inside each request key) |
+| `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin URI (e.g. `s3://my-bucket`, `gs://my-bucket` or `az://my-container`, no path — the lake-root prefix arrives inside each request key) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the cache backend. Used exclusively by the cache: on a format-changing upgrade its **contents are wiped** on startup and rewarmed from origin (safe for cache data — see the [admin guide](../mkdocs/docs/admin/object-cache.md)). Point it at a dedicated volume, never a shared directory. |
 | `MICROMEGAS_API_KEYS` | Yes* | JSON array of `{"name":"...","key":"..."}` |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache size (default `512`) |

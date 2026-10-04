@@ -1,7 +1,7 @@
 # Caching Architecture
 
 Queries read the same Parquet partitions and footers repeatedly, and the origin object store
-(S3/GCS) is the slowest and most expensive hop in that path. Micromegas caches these reads with a
+(S3/GCS/Azure) is the slowest and most expensive hop in that path. Micromegas caches these reads with a
 small family of caches that share one design principle — **the lake is write-once, so cached bytes
 never go stale** — so none of them need invalidation logic.
 
@@ -21,7 +21,7 @@ flowchart LR
     Q[Query engine<br/>DataFusion]
     L1["L1 — in-process<br/>RAM only<br/>per query process"]
     L2["L2 — object-cache-srv<br/>RAM + SSD<br/>shared over HTTP"]
-    Origin[("Origin object store<br/>S3 / GCS / local")]
+    Origin[("Origin object store<br/>S3 / GCS / Azure / local")]
 
     Q --> L1
     L1 -->|miss| L2

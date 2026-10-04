@@ -1,7 +1,7 @@
 # Micromegas Object Cache Server Crate
 
 This crate provides a shared object range cache service for the Micromegas
-observability platform. It sits in front of an origin object store (S3, GCS,
+observability platform. It sits in front of an origin object store (S3, GCS, Azure,
 local filesystem, ...) and serves byte-range reads from a two-tier RAM + disk
 cache, so that many query workers share a single warm cache of frequently read
 objects (parquet column chunks, blocks) instead of each re-reading from the

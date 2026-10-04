@@ -52,7 +52,7 @@ The infrastructure cost for Micromegas comes from standard cloud services:
 ### Storage Services
 
 - **Database (PostgreSQL)** - Stores metadata about processes, streams, and data blocks
-- **Object Storage (S3/GCS)** - Stores raw telemetry payloads and materialized Parquet files. Typically the largest portion of the cost.
+- **Object Storage (S3/GCS/Azure)** - Stores raw telemetry payloads and materialized Parquet files. Typically the largest portion of the cost.
 
 ### Supporting Infrastructure
 
@@ -103,7 +103,7 @@ This deployment handles:
 
 Micromegas supports storing all raw telemetry data in low-cost object storage and materializing it for analysis only when needed:
 
-- **Raw data** stored cheaply in S3/GCS
+- **Raw data** stored cheaply in S3/GCS/Azure
 - **Processing costs** only when querying specific data
 - **Selective materialization** based on actual analysis needs
 
