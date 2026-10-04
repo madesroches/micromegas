@@ -21,7 +21,7 @@ Every claim on this page links to its source: the project's own docs or reposito
 - No GenAI semantic-convention mapping: `gen_ai.*` attributes land in the generic JSONB `properties` column like any other attribute and are read with the `jsonb_*` functions ([attribute encoding](../otlp/index.md#attribute-encoding)).
 - No token-cost price table: cost is whatever the agent reports, and Claude Code reports `claude_code.cost.usage`. An agent that only reports tokens gets no dollar figure.
 - OTLP histograms are not materialized, and `otel_spans` is per-process, so a multi-agent trace spanning processes needs a UNION ([OTLP limitations](../otlp/index.md#limitations)).
-- PostgreSQL and object storage are required. Phoenix and MLflow have a lighter self-hosted footprint (see below).
+- PostgreSQL and object storage are required. Phoenix has a lighter self-hosted footprint (see below).
 
 ## At a glance
 
