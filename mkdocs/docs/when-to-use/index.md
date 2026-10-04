@@ -23,6 +23,7 @@ Every claim on this page links to its source: the project's own docs or reposito
 - OTLP is HTTP-only; there is no OTLP/gRPC ([OTLP limitations][otlp-limits]).
 - There is no built-in alert engine; alerting goes through Grafana ([Grafana plugin](../grafana/index.md)).
 - Among the native SDKs, spans come from Rust and Unreal; the C ABI records logs and metrics only. OTLP/HTTP traces are also accepted as spans ([native SDK](../native/index.md), [Unreal plugin](../unreal/index.md)).
+- Native CPU traces are not distributed traces: thread spans (`thread_spans`) and async spans (`async_events`) are both scoped to one process, with no trace context propagated across processes or services ([schema reference](../query-guide/schema-reference.md#thread_spans)).
 - There is no browser or mobile-web RUM SDK and no session replay; RUM for game clients comes through the [Unreal plugin](../unreal/index.md).
 - Micromegas is a younger project: it was extracted in January 2024 from the [Legion Labs engine](https://github.com/legion-labs/legion/tree/main), where its telemetry code was developed from 2021 to 2022. Its community is smaller than its peers'; issues and design discussions go straight to the maintainers.
 - You operate it yourself: PostgreSQL, object storage, and the services (or the [single-process monolith](../admin/monolith.md)).
