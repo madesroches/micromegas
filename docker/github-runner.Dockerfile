@@ -111,15 +111,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     /home/runner/bin/installdependencies.sh
 
-# Install Rust for runner user (default CARGO_HOME=~/.cargo during build)
+# Install Rust for runner user (default CARGO_HOME=~/.cargo during build).
+# Bake in the toolchain pinned by rust/rust-toolchain.toml (with its components
+# and targets) — RUSTUP_HOME is not on the /cache volume, so anything missing
+# here is re-downloaded by every ephemeral container.
 USER runner
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
 ENV PATH="/home/runner/.cargo/bin:${PATH}"
+COPY --chown=runner:runner rust/rust-toolchain.toml /tmp/rust-toolchain/rust-toolchain.toml
+RUN cd /tmp/rust-toolchain \
+    && rustup toolchain install \
+    && rustup default "$(rustup show active-toolchain | cut -d' ' -f1)" \
+    && rm -rf /tmp/rust-toolchain
 
-# Rust targets (WASM; windows-gnu for the capi-release cross-build) and cargo tools
-RUN rustup target add wasm32-unknown-unknown \
-    && rustup target add x86_64-pc-windows-gnu \
-    && cargo install cargo-machete \
+# Cargo tools
+RUN cargo install cargo-machete \
     && cargo install cargo-nextest --locked \
     && cargo install cargo-audit --locked --version '^0.22' \
     && cargo install cargo-deny --locked \
