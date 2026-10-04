@@ -6,7 +6,7 @@ description: How Micromegas delivers enterprise-grade observability at a fractio
 
 Micromegas runs on your own infrastructure, so its cost is the direct cost of the cloud services it uses rather than a per-GB, per-host or per-user price. This page explains that cost model, states the methodology shared by every estimate, and compares it with six commercial vendors on one reference workload.
 
-**TL;DR:** on the reference workload (logs and metrics, 90-day retention, 5 users) Micromegas costs about $1,100/month. The six vendors below come out between roughly 1.5× (Dynatrace, with custom metrics excluded) and roughly 20× (Splunk) that figure. All vendor numbers are estimates, not quotes.
+**TL;DR:** on the reference workload (90-day retention, 5 users) Micromegas costs about $1,100/month. The six vendors below come out between roughly 1.5× (Dynatrace, with custom metrics excluded) and roughly 20× (Splunk) that figure. The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
 
 *Last reviewed: June 2026*
 
