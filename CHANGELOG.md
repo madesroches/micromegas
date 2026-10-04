@@ -4,6 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:** Bake the toolchain pinned by `rust/rust-toolchain.toml` (with its components and
+  targets) into the dev-worker runner image instead of `stable`, so ephemeral runner containers
+  no longer re-download the pinned toolchain on every job.
 * **Object storage:** Enable the `gcp` and `azure` features of `object_store` (#1639), so
   `gs://` and Azure (`az://`, `abfss://`, `https://<account>.blob.core.windows.net/…`) URIs now
   work for the lake, the object-cache origin, the maps store and static tables. They were
