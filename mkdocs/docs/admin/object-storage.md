@@ -45,10 +45,12 @@ See the builder documentation for the full list of keys:
 [`MicrosoftAzureBuilder`](https://docs.rs/object_store/latest/object_store/azure/struct.MicrosoftAzureBuilder.html).
 
 !!! warning "Unprefixed variable names also match"
-    `object_store` also accepts unprefixed alias names from the environment (Azure: `token`,
-    `endpoint`, `client_id`, `tenant_id`, `access_key`, `account_name`; GCS: `bucket`, `base_url`,
-    `service_account`). A generic `TOKEN` or `ENDPOINT` variable in the process environment can
-    therefore reconfigure the store. Keep the environment of Micromegas services free of such names.
+    `object_store` also accepts unprefixed alias names from the environment, for every backend
+    including S3 (for example `TOKEN`, `ENDPOINT`, `REGION`, `BUCKET`, `TIMEOUT`). A generic
+    variable with one of these names in the process environment can therefore reconfigure the
+    store. Keep the environment of Micromegas services free of such names. The full alias sets are
+    in the `AmazonS3ConfigKey`, `GoogleConfigKey`, `AzureConfigKey` and `ClientConfigKey`
+    documentation of the builders above.
 
 ## Required permissions
 
