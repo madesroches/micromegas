@@ -7,6 +7,10 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Build:** Bake the toolchain pinned by `rust/rust-toolchain.toml` (with its components and
   targets) into the dev-worker runner image instead of `stable`, so ephemeral runner containers
   no longer re-download the pinned toolchain on every job.
+* **Dependencies:** Resolve Dependabot alerts 550-567: bump `brace-expansion` to `^5.0.12` (root,
+  `analytics-web-app`, `welcome`), `dompurify` to `^3.4.16` (root, `doc/intro-micromegas`,
+  `doc/high-frequency-observability`), `fast-uri` to `^3.1.8` (root), `xxhash-rust` to 0.8.19 and
+  `urllib3` to 2.8.0. `braces` (alert 568) has no patched release yet and stays at 3.0.3.
 * **Object storage:** Enable the `gcp` and `azure` features of `object_store` (#1639), so
   `gs://` and Azure (`az://`, `abfss://`, `https://<account>.blob.core.windows.net/…`) URIs now
   work for the lake, the object-cache origin, the maps store and static tables. They were
