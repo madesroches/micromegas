@@ -21,8 +21,9 @@ page point to it.
   place that builds a store from a URI. It calls `object_store::parse_url_opts(url, env vars
   lowercased)`. The lake (`BlobStorage::connect*`), the ingestion data-lake connection
   (`rust/ingestion/src/data_lake_connection.rs:341`), the object-cache origin
-  (`rust/object-cache-srv/src/object_cache_srv.rs:51`) and the maps store all go through it. No
-  code branches on the URL scheme.
+  (`rust/object-cache-srv/src/object_cache_srv.rs:51`) and the maps store all go through it, as do `MICROMEGAS_STATIC_TABLES_URL`
+  (`rust/analytics/src/lakehouse/static_tables_configurator.rs:72-73`) and
+  `rust/ingestion/src/remote_data_lake.rs:51`. No code branches on the URL scheme.
 - `BlobStorage::put_if_absent` (`blob_storage.rs:94-115`) uses `PutMode::Create` and maps
   `AlreadyExists` to `PutIfAbsent::AlreadyExists` and `NotImplemented` to an error that only
   mentions S3. GCS (`ifGenerationMatch=0`) and Azure (`If-None-Match: *`) both implement
@@ -49,7 +50,11 @@ page point to it.
   AWS env vars. Overview pages say "S3/GCS": `index.md:36`, `getting-started.md:131`,
   `query-guide/index.md:7`, `query-guide/advanced-features.md:5`, `architecture/index.md:31,113`,
   `architecture/caching.md:4,24`, `when-to-use/saas-vendors.md:55,106`, `README.md:53`,
-  `rust/object-cache-srv/README.md:4`.
+  `rust/object-cache-srv/README.md:4`. `docker/README.md:201,208` says "S3/GCS bucket URI for
+  payloads" and `docker/README.md:213` shows an `s3://my-bucket` cache origin.
+  `analytics-web-app/README.md:111` lists `MICROMEGAS_MAPS_OBJECT_STORE_URI` forms as `file://`,
+  `s3://`, `memory://` only. `admin/flight-sql.md:29` and `admin/maintenance.md:21` document
+  `MICROMEGAS_STATIC_TABLES_URL` with no URI guidance.
 
 ## Design
 
@@ -87,7 +92,8 @@ only.
 
 Add `mkdocs/docs/admin/object-storage.md` ("Object Storage"). It becomes the single reference
 for `MICROMEGAS_OBJECT_STORE_URI` and the other URI settings
-(`MICROMEGAS_OBJECT_CACHE_ORIGIN_URI`, `MICROMEGAS_MAPS_OBJECT_STORE_URI`):
+(`MICROMEGAS_OBJECT_CACHE_ORIGIN_URI`, `MICROMEGAS_MAPS_OBJECT_STORE_URI`,
+`MICROMEGAS_STATIC_TABLES_URL`):
 
 - A backend table (local `file://`, AWS S3 `s3://`, GCS `gs://`, Azure `az://` / `abfss://` /
   `https://…blob.core.windows.net`) with an example URI for each.
@@ -118,14 +124,19 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 4. **Unit tests** — add parse tests to `rust/telemetry/tests/blob_storage_tests.rs` (see
    Testing Strategy).
 5. **Docs** — create `mkdocs/docs/admin/object-storage.md` and add it to the `nav` in
-   `mkdocs/mkdocs.yml`, next to the other admin deployment pages, both where `admin/*` pages
-   appear (around lines 132 and 163).
+   `mkdocs/mkdocs.yml` as `Object Storage: admin/object-storage.md` in the `Operations >
+   Administration` list, next to the server deployment pages.
 6. **Docs, per-service tables** — in `admin/ingestion.md`, `admin/flight-sql.md`,
    `admin/maintenance.md` and `admin/monolith.md`, make the `MICROMEGAS_OBJECT_STORE_URI`
-   description link to the new page. In `admin/object-cache.md`, list `s3://`, `gs://` and
+   description link to the new page, and link the `MICROMEGAS_STATIC_TABLES_URL` rows in
+   `admin/flight-sql.md` and `admin/maintenance.md` to it too. In `admin/object-cache.md`, list `s3://`, `gs://` and
    `az://` origins (lines 18 and 39) and replace the AWS-only env-var sentence (line 60) with a
    link. In `admin/web-app.md`, add an Azure row to the URI table (153-159) and link the IAM
-   paragraph (134) to the permissions section of the new page.
+   paragraph (134) to the permissions section of the new page. In `docker/README.md`, change
+   "S3/GCS bucket URI" (lines 201, 208) to name S3, GCS and Azure with a link to the new page, and
+   mention that the cache origin (line 213) can also be `gs://` or `az://`. In
+   `analytics-web-app/README.md:111`, list `gs://` and `az://` with the other
+   `MICROMEGAS_MAPS_OBJECT_STORE_URI` forms and link the new page.
 7. **Docs, overview wording** — replace "S3/GCS" with "S3, GCS, Azure" (or "S3/GCS/Azure"
    inside diagram labels) in `index.md`, `getting-started.md`, `query-guide/index.md`,
    `query-guide/advanced-features.md`, `architecture/index.md`, `architecture/caching.md`,
@@ -141,7 +152,8 @@ Overview pages change "S3/GCS" to name S3, GCS and Azure.
 - `mkdocs/docs/admin/{ingestion,flight-sql,maintenance,monolith,object-cache,web-app}.md`
 - `mkdocs/docs/{index,getting-started}.md`, `mkdocs/docs/query-guide/{index,advanced-features}.md`,
   `mkdocs/docs/architecture/{index,caching}.md`, `mkdocs/docs/when-to-use/saas-vendors.md`
-- `README.md`, `rust/object-cache-srv/README.md`
+- `README.md`, `rust/object-cache-srv/README.md`, `docker/README.md`,
+  `analytics-web-app/README.md`
 
 ## Trade-offs
 
@@ -190,13 +202,15 @@ as they implement conditional create.
 
 1. **GCS** — create a bucket and export `GOOGLE_APPLICATION_CREDENTIALS` (or
    `GOOGLE_SERVICE_ACCOUNT`). Start services with
-   `MICROMEGAS_OBJECT_STORE_URI=gs://<bucket>/mm-test`, run an instrumented sample (or the
-   Python ingestion test sender), and then run
+   `MICROMEGAS_OBJECT_STORE_URI=gs://<bucket>/mm-test`, run
+   `python3 local_test_env/ai_scripts/run_generator.py`, and then run
    `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h`. Expected: rows returned,
    and objects present under `mm-test/blobs/` and `mm-test/views/`.
-2. **GCS duplicate block** — resend a block with the same id. Expected: the ingestion log shows
-   the `AlreadyExists` path (the block is accepted as a duplicate) and no error.
+2. **GCS duplicate block** — POST the same OTLP JSON payload twice to
+   `/ingestion/otlp/v1/logs` (e.g. with curl). Expected: both return 200, and the second logs
+   `duplicate block: object and row both already exist` with no error.
 3. **Azure** — repeat steps 1–2 with `AZURE_STORAGE_ACCOUNT_NAME` / `AZURE_STORAGE_ACCOUNT_KEY`
    and `MICROMEGAS_OBJECT_STORE_URI=az://<container>/mm-test`.
-4. **Retention** — run the maintenance daemon's expiry or `delete_batch` against each store.
-   Expected: no `NotFound` errors surface.
+4. **Retention** — delete one block object out of band (`gcloud storage rm` /
+   `az storage blob delete`), then run the maintenance daemon with `MICROMEGAS_RETENTION_DAYS=0`
+   until its hourly task runs. Expected: the expired data is removed with no `NotFound` error.
