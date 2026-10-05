@@ -6,7 +6,6 @@ API key and OIDC (OpenID Connect) authentication providers for axum and tonic se
 use micromegas_auth::api_key::parse_key_ring;
 
 let keyring = parse_key_ring(r#"[{"name": "user1", "key": "secret-key-123"}]"#).unwrap();
-# let _ = keyring;
 ```
 
 See the crate documentation on docs.rs for complete API key and OIDC examples.

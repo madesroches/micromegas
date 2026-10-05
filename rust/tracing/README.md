@@ -4,9 +4,8 @@ Low-overhead logs, metrics and spans for Rust applications and game engines. Rec
 
 ## Usage
 
-```toml
-[dependencies]
-micromegas-tracing = "0.32"
+```bash
+cargo add micromegas-tracing
 ```
 
 ```rust
@@ -14,8 +13,12 @@ use micromegas_tracing::prelude::*;
 
 #[span_fn]
 async fn fetch_user(id: u64) {
-    span_scope!("lookup");
     info!("fetching user {id}");
+}
+
+fn parse_config() {
+    span_scope!("parse");
+    info!("parsing config");
 }
 ```
 

@@ -1,6 +1,6 @@
 # micromegas-datafusion-extensions
 
-WASM-compatible DataFusion UDF extensions (JSONB, histogram) for the [Micromegas](https://github.com/madesroches/micromegas/) observability platform.
+Apache DataFusion UDFs that also compile to wasm32: JSONB, histograms, properties, colors, binning and math, for the [Micromegas](https://github.com/madesroches/micromegas/) observability platform.
 
 This crate provides shared user-defined functions that work in both native and `wasm32-unknown-unknown` targets, used by `micromegas-analytics` (server-side) and `micromegas-datafusion-wasm` (browser-side).
 
