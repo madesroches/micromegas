@@ -1,4 +1,4 @@
-# Micromegas DataFusion Extensions Crate
+# micromegas-datafusion-extensions
 
 WASM-compatible DataFusion UDF extensions (JSONB, histogram) for the [Micromegas](https://github.com/madesroches/micromegas/) observability platform.
 
@@ -12,6 +12,9 @@ This crate provides shared user-defined functions that work in both native and `
 - `jsonb_get` - extract nested value by key
 - `jsonb_as_string`, `jsonb_as_i64`, `jsonb_as_f64` - type casts
 - `jsonb_object_keys` - extract object keys
+- `jsonb_array_length` - number of elements in a JSONB array
+- `jsonb_path_query_first`, `jsonb_path_query` - JSONPath queries
+- `jsonb_array_elements`, `jsonb_each` (UDTF) - expand a JSONB array or object into rows
 - `jsonb_entries`, `jsonb_elements`, `jsonb_path_elements` - expand a JSONB value into an Arrow `List`, for per-row expansion via `unnest()`
 
 ### Histogram
@@ -20,7 +23,30 @@ This crate provides shared user-defined functions that work in both native and `
 - `expand_histogram` (UDTF) - histogram to rows of (bin_center, count)
 - `quantile_from_histogram`, `variance_from_histogram`, `count_from_histogram`, `sum_from_histogram` - scalar accessors
 
+### Properties
+- `property_get`, `properties_to_array`, `properties_length` - access Micromegas property lists
+
+### Color
+- `rgba`, `lerp_color`, `color_scale` - build, interpolate and map colors
+
+### Math
+- `lerp`, `unlerp` - linear interpolation and its inverse
+
+### Binning
+- `bin_center` - center of the bin containing a value
+
+## Usage
+
+```rust
+use datafusion::execution::FunctionRegistry;
+use datafusion::prelude::SessionContext;
+
+let ctx = SessionContext::new();
+micromegas_datafusion_extensions::register_extension_udfs(&ctx);
+assert!(ctx.udf("jsonb_parse").is_ok());
+```
+
 ## Documentation
 
-- [Home Page](https://micromegas.info/)
+- [Functions Reference](https://micromegas.info/docs/query-guide/functions-reference/)
 - [GitHub Repository](https://github.com/madesroches/micromegas)

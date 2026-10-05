@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-perfetto"
-description = "perfetto trace writer, part of micromegas"
-keywords.workspace = true
+description = "Streaming writer for Perfetto trace files: encodes thread and async spans as protobuf TracePackets, with bundled Perfetto proto bindings. From the Micromegas project."
+keywords = ["perfetto", "trace", "profiling", "protobuf", "chrome-tracing"]
 categories.workspace = true
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://docs.rs/micromegas-perfetto"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

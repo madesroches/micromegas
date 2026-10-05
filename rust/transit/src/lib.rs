@@ -1,6 +1,4 @@
-//! Fast, zero-copy binary serialization library for Plain Old Data structures, used by
-//! Micromegas to encode telemetry events efficiently for high-throughput ingestion.
-
+#![doc = include_str!("../README.md")]
 // crate-specific lint exceptions:
 #![allow(
     unsafe_code,

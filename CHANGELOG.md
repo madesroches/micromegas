@@ -4,6 +4,12 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Packaging:** Give `micromegas-perfetto`, `micromegas-object-cache`,
+  `micromegas-datafusion-extensions`, `micromegas-transit`, `micromegas-tracing`,
+  `micromegas-otel-ingestion` and `micromegas-auth` their own crates.io description, keywords and
+  homepage instead of the shared workspace values, and add `opentelemetry` and `datafusion`
+  keywords to the `micromegas` crate. The READMEs of the first four are now also their docs.rs
+  landing pages, with compiled examples.
 * **Build:** Bump the pinned Rust toolchain to 1.99.0; bump `async-trait` to 0.1.92, whose macro
   output no longer trips the new `clippy::double_must_use` lint, and regenerate the datafusion-wasm
   bindings whose internal closure-glue symbol names changed under the new compiler.
