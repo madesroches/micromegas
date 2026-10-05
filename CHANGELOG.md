@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Build:** Bump the pinned Rust toolchain to 1.99.0.
 * **Build:** Bake the toolchain pinned by `rust/rust-toolchain.toml` (with its components and
   targets) into the dev-worker runner image instead of `stable`, so ephemeral runner containers
   no longer re-download the pinned toolchain on every job.
