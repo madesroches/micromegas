@@ -1,6 +1,6 @@
 # micromegas-tracing
 
-Low-overhead logs, metrics and spans for Rust applications and game engines. Recording an event costs about 20 ns, with predictable performance on the critical path of execution. Originally designed for video game engines, it is the instrumentation library of [Micromegas](https://micromegas.info/).
+Low-overhead logs, metrics and spans for Rust applications and game engines. It keeps performance predictable on the critical path of execution. Originally designed for video game engines, it is the instrumentation library of [Micromegas](https://micromegas.info/).
 
 ## Usage
 

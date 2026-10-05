@@ -1,6 +1,6 @@
 [package]
 name = "micromegas-tracing"
-description = "Low-overhead (~20 ns) logs, metrics and spans for Rust applications and game engines. The instrumentation library of Micromegas."
+description = "Low-overhead logs, metrics and spans for Rust applications and game engines. The instrumentation library of Micromegas."
 keywords = ["profiling", "instrumentation", "logging", "metrics", "gamedev"]
 categories.workspace = true
 version.workspace = true
