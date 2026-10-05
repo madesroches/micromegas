@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-tracing"
-description = "instrumentation module, part of micromegas"
-keywords.workspace = true
+description = "Low-overhead logs, metrics and spans for Rust applications and game engines. The instrumentation library of Micromegas."
+keywords = ["profiling", "instrumentation", "logging", "metrics", "gamedev"]
 categories.workspace = true
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://docs.rs/micromegas-tracing"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

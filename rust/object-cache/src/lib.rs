@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 pub mod backend;
 pub mod blocks;
 pub mod bounded_memory_backend;

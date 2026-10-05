@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-object-cache"
-description = "object range cache for micromegas: shared cache engine and client ObjectStore"
-keywords.workspace = true
+description = "Range-aware read cache for `object_store`: a byte-range cache engine plus an ObjectStore client that routes reads through a shared cache service and falls back to the origin. From the Micromegas project."
+keywords = ["object-store", "cache", "s3", "parquet", "range-requests"]
 categories = ["caching"]
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://micromegas.info/docs/architecture/caching/"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-datafusion-extensions"
-description = "WASM-compatible DataFusion UDF extensions for micromegas"
-keywords.workspace = true
+description = "Apache DataFusion UDFs that also compile to wasm32: JSONB parsing and querying, histograms, colors, binning and math. From the Micromegas project."
+keywords = ["datafusion", "udf", "jsonb", "wasm", "sql"]
 categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://micromegas.info/docs/query-guide/functions-reference/"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-transit"
-description = "low overhead serialization, part of micromegas"
-keywords.workspace = true
+description = "Low-overhead binary serialization for plain-old-data structs, with reflection metadata for decoding heterogeneous event queues. From the Micromegas project."
+keywords = ["serialization", "binary", "pod", "encoding", "reflection"]
 categories = ["development-tools::profiling", "development-tools::debugging", "encoding"]
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://docs.rs/micromegas-transit"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

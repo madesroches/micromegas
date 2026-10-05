@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-auth"
-description = "Authentication providers for Micromegas (API keys, OIDC)"
-keywords.workspace = true
+description = "API key and OIDC authentication providers for axum and tonic services, used by Micromegas."
+keywords = ["oidc", "api-key", "authentication"]
 categories = ["authentication"]
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://micromegas.info/docs/admin/authentication/"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

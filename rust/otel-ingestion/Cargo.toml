@@ -1,11 +1,11 @@
 [package]
 name = "micromegas-otel-ingestion"
-description = "OTLP/HTTP ingestion adapter for micromegas"
-keywords.workspace = true
+description = "OTLP/HTTP ingestion of OpenTelemetry logs, metrics and traces into the Micromegas data lake."
+keywords = ["opentelemetry", "otlp", "ingestion", "observability"]
 categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
-homepage.workspace = true
+homepage = "https://micromegas.info/docs/otlp/"
 repository.workspace = true
 license.workspace = true
 authors.workspace = true

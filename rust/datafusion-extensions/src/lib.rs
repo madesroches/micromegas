@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 /// Unified binary column accessor for Arrow arrays
 pub mod binary_column_accessor;
 /// Binning UDFs (bin_center)

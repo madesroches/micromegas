@@ -1,4 +1,4 @@
-//! Library to write Perfetto traces, part of Micromegas.
+#![doc = include_str!("../README.md")]
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
 // The library modules below are emptied out only while regenerating the
