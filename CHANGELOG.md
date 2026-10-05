@@ -4,7 +4,9 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
-* **Build:** Bump the pinned Rust toolchain to 1.99.0.
+* **Build:** Bump the pinned Rust toolchain to 1.99.0; bump `async-trait` to 0.1.92, whose macro
+  output no longer trips the new `clippy::double_must_use` lint, and regenerate the datafusion-wasm
+  bindings whose internal closure-glue symbol names changed under the new compiler.
 * **Build:** Bake the toolchain pinned by `rust/rust-toolchain.toml` (with its components and
   targets) into the dev-worker runner image instead of `stable`, so ephemeral runner containers
   no longer re-download the pinned toolchain on every job.
