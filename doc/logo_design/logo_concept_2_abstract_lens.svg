@@ -1,0 +1,13 @@
+<svg width="400" height="100" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .name { font: 20px sans-serif; fill: #333; }
+  </style>
+  <!-- Abstract Lens -->
+  <g transform="translate(60, 50)">
+    <circle cx="0" cy="0" r="30" fill="none" stroke="#333" stroke-width="4" stroke-dasharray="150 40" transform="rotate(-30)"/>
+    <circle cx="0" cy="0" r="18" fill="none" stroke="#00AEEF" stroke-width="4" stroke-dasharray="80 30" transform="rotate(90)"/>
+    <circle cx="0" cy="0" r="6" fill="#333"/>
+  </g>
+  <!-- Text -->
+  <text x="120" y="58" class="name">Micromegas</text>
+</svg>

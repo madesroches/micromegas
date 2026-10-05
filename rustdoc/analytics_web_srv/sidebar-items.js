@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["analytics_keys","app_db","audience_grants","auth","data_source_cache","data_sources","folders","groups","ingestion_keys","maps","mutation_audit","screen_types","screens","stream_query","web_server"]};

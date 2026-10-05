@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["delete_tx","list_tx","partition_insert_range","upsert_tx"],"struct":["PgViewDefinitionStore","ViewDefinitionRow"],"trait":["ViewDefinitionStore"]};

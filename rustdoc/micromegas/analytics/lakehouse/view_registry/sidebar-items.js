@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_REFRESH_SECONDS","MICROMEGAS_VIEW_DEFINITION_REFRESH_SECONDS"],"enum":["BuildPurpose"],"fn":["build_factory"],"struct":["BuildFailure","ViewRegistry"]};

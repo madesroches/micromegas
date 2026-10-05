@@ -1,0 +1,25 @@
+<svg width="400" height="100" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .name { font: 20px sans-serif; fill: #333; }
+  </style>
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:rgb(100,100,255);stop-opacity:1" />
+      <stop offset="100%" style="stop-color:rgb(75,0,130);stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Flow Lines of Dots -->
+  <path d="M 20 20 C 40 25, 70 28, 105 30" stroke="#AAA" stroke-width="1.5" stroke-dasharray="4 6" fill="none" stroke-linecap="round"/>
+  <path d="M 25 50 C 45 50, 75 48, 105 45" stroke="#BBB" stroke-width="1.5" stroke-dasharray="3 5" fill="none" stroke-linecap="round"/>
+  <path d="M 22 80 C 42 75, 72 65, 105 60" stroke="#CCC" stroke-width="1.5" stroke-dasharray="4 4" fill="none" stroke-linecap="round"/>
+
+  <!-- Coalescing dots near the M -->
+  <circle cx="95" cy="32" r="2.5" fill="#999"/>
+  <circle cx="100" cy="48" r="2.5" fill="#AAA"/>
+  <circle cx="102" cy="57" r="2.5" fill="#BBB"/>
+
+  
+
+  
+</svg>

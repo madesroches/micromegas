@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Encoding"],"fn":["build_webhook_request","decode_firehose_envelope","decode_next_length_delimited","ingest_firehose_metrics","ingest_logs","ingest_metrics","ingest_traces","ingest_webhook"],"struct":["FirehoseEnvelope"]};

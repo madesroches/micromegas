@@ -1,0 +1,3636 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Micromegas is an open-source observability platform unifying telemetry instrumentation, ingestion, SQL analytics, and dashboards for high-performance systems.">
+      
+      
+      
+        <link rel="canonical" href="https://micromegas.info/docs/when-to-use/agent-observability/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../saas-vendors/">
+      
+      
+        
+      
+      
+        <link rel="alternate" type="application/rss+xml" title="RSS feed" href="../../feed_rss_created.xml">
+        <link rel="alternate" type="application/rss+xml" title="RSS feed of updated content" href="../../feed_rss_updated.xml">
+      
+      <link rel="icon" href="../../assets/images/micromegas-icon-transparent.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+  
+    
+      
+        <title>vs. LLM Agent Tools - Micromegas Documentation</title>
+      
+    
+  
+
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  <script data-goatcounter="https://madesroches.goatcounter.com/count"
+      async src="//gc.zgo.at/count.js"></script>
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#micromegas-for-llm-agent-observability" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Micromegas Documentation" class="md-header__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Micromegas Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              vs. LLM Agent Tools
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../blog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Blog
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  When to Use
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../query-guide/" class="md-tabs__link">
+          
+  
+  
+  Query Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../web-app/" class="md-tabs__link">
+          
+  
+  
+  Analytics Web App
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../otlp/" class="md-tabs__link">
+          
+  
+  
+  Integrations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  
+  Operations
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Micromegas Documentation" class="md-nav__button md-logo" aria-label="Micromegas Documentation" data-md-component="logo">
+      
+  <img src="../../assets/images/micromegas-icon-transparent.svg" alt="logo">
+
+    </a>
+    Micromegas Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/madesroches/micromegas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    madesroches/micromegas
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+    
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When to Use
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    When to Use
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    When to Use Micromegas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. LLM Agent Tools
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. LLM Agent Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-micromegas-records-from-an-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Micromegas records from an agent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        At a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-langfuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Langfuse
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-arize-phoenix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Arize Phoenix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-opik" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Opik
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-laminar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Laminar
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#also-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Also considered
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-them-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using them together
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-which-one-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary: which one fits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-a-self-hosted-alternative-to-langfuse-that-i-can-query-with-sql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is a self-hosted alternative to Langfuse that I can query with SQL?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-record-claude-code-prompts-and-tool-calls-without-exposing-them-to-my-whole-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I record Claude Code prompts and tool calls without exposing them to my whole team?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-track-ai-agent-token-cost-per-developer-or-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I track AI agent token cost per developer or team?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-keep-agent-telemetry-next-to-the-rest-of-my-application-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I keep agent telemetry next to the rest of my application telemetry?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../saas-vendors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    vs. SaaS Vendors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Query Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/python-api-advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API Advanced
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/schema-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-audit-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Audit Log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/query-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/async-performance-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Async Performance Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-guide/advanced-features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analytics Web App
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Notebooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Notebooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/cell-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cell Types
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/variables/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Variables
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Execution & Auto-Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../web-app/notebooks/screens-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Screens as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OpenTelemetry (OTLP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_2" id="__nav_7_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unreal Engine
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Unreal Engine
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/instrumentation-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Instrumentation API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/network-tracing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../unreal/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana Plugin
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Grafana Plugin
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grafana/usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP Gateway
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    HTTP Gateway
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blender/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blender Add-on
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../native/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Native SDK (C ABI)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_8_1" id="__nav_8_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_8_2" id="__nav_8_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/authorization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authorization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/groups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Groups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/control-plane-audit-log/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Control-Plane Audit Log
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/api-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/object-storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Object Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/ingestion/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry Ingestion Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/flight-sql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FlightSQL Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/maintenance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance Daemon
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/materialized-views/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Materialized Views
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/views-as-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    View Sets as Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics Web App Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/monolith/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monolith Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/object-cache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Object Cache Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/redis-exporter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Redis Exporter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/service-lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Service Lifecycle & Shutdown
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/high-availability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating in a High-Availability Environment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/telemetry-sink-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry Sink Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/memory-allocator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory Allocator Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin/functions-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin SQL Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_8_3" id="__nav_8_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/build/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-micromegas-records-from-an-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Micromegas records from an agent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        At a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-langfuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Langfuse
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-arize-phoenix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Arize Phoenix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-opik" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Opik
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#micromegas-vs-laminar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Micromegas vs. Laminar
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#also-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Also considered
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-them-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using them together
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-which-one-fits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary: which one fits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#faq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FAQ
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FAQ">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-is-a-self-hosted-alternative-to-langfuse-that-i-can-query-with-sql" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is a self-hosted alternative to Langfuse that I can query with SQL?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-record-claude-code-prompts-and-tool-calls-without-exposing-them-to-my-whole-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I record Claude Code prompts and tool calls without exposing them to my whole team?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-track-ai-agent-token-cost-per-developer-or-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I track AI agent token cost per developer or team?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-do-i-keep-agent-telemetry-next-to-the-rest-of-my-application-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How do I keep agent telemetry next to the rest of my application telemetry?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    When to Use
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="micromegas-for-llm-agent-observability">Micromegas for LLM Agent Observability<a class="headerlink" href="#micromegas-for-llm-agent-observability" title="Permanent link">&para;</a></h1>
+<p>Micromegas records what an LLM agent emits over OTLP/HTTP (Claude Code is the worked example) into the same SQL-queryable lakehouse as the rest of your telemetry, with per-row access control. It is not an LLM engineering platform: it has no evaluations, prompt management or LLM-specific trace UI. This page compares it with Langfuse, Arize Phoenix, Opik and Laminar, which offer evaluations (and, for Langfuse, Phoenix and Opik, prompt management).</p>
+<p><strong>TL;DR.</strong> Choose Langfuse, Phoenix, Opik or Laminar when you want evals, datasets and a purpose-built trace UI (plus prompt management with Langfuse, Phoenix or Opik). Choose Micromegas when you want agent telemetry stored with the rest of your fleet's telemetry, queried with the same SQL, and readable only by the people it is shared with. Many teams will want both; see <a href="#using-them-together">Using them together</a>. The <a href="#summary-which-one-fits">summary at the end</a> lists when each choice fits.</p>
+<p><em>Last reviewed: October 2026</em></p>
+<p>Every claim on this page links to its source: the project's own docs or repository for the peers, and the Micromegas docs or source code for Micromegas. If something is wrong or out of date, please <a href="https://github.com/madesroches/micromegas/issues">open an issue</a>.</p>
+<h2 id="what-micromegas-records-from-an-agent">What Micromegas records from an agent<a class="headerlink" href="#what-micromegas-records-from-an-agent" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Agent telemetry over OTLP/HTTP.</strong> An agent that exports OpenTelemetry can send to Micromegas. Claude Code is the worked example: its API requests, with model, token counts and cost, land as <code>log_entries</code> and <code>measures</code> rows, and its beta traces land as <code>otel_spans</code> (<a href="../../otlp/#claude-code">OTLP recipe</a>). Claude Code exports <code>claude_code.cost.usage</code> and <code>claude_code.token.usage</code> metrics and <code>user_prompt</code>, <code>assistant_response</code>, <code>api_request</code> and <code>tool_result</code> events, and traces are in beta (<a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code monitoring</a>). Prompt, response and tool content is off by default; it is recorded only when the matching flag is set (<code>OTEL_LOG_USER_PROMPTS</code>, <code>OTEL_LOG_ASSISTANT_RESPONSES</code>, <code>OTEL_LOG_TOOL_DETAILS</code>, and <code>OTEL_LOG_TOOL_CONTENT</code> for tool output), as the <a href="../../blog/2026/09/03/record-everything-your-ai-agent-does-share-it-on-your-terms/">blog post on recording an agent</a> does.</li>
+<li><strong>Per-row audiences.</strong> Every row is stamped server-side from the ingestion credential, so a producer cannot forge it (<a href="../../admin/authorization/#audience-stamping">audience stamping</a>). Rows are private by default, sharing is an edit to read grants rather than a rewrite of data, and metrics can go to a team audience while prompt-bearing logs go to a personal one (<a href="../../admin/authorization/">authorization</a>, <a href="../../blog/2026/09/03/record-everything-your-ai-agent-does-share-it-on-your-terms/">blog post</a>).</li>
+<li><strong>One SQL surface for everything.</strong> Agent data sits next to the game servers and CI runners the agent touches, queried with the same SQL and <a href="../../web-app/">notebooks</a>. Analysis of the agent's own sessions is done by pointing an agent at the data through the CLI and a skill file (<a href="../../blog/2026/03/29/from-observability-to-candor/">from o11y to candor</a>).</li>
+</ul>
+<p><strong>Limits</strong>, stated plainly (the general ones are in <a href="../#micromegas-in-brief">Micromegas in brief</a>):</p>
+<ul>
+<li>No evaluations (LLM-as-judge, datasets, experiments), no prompt management or versioning, no playground and no annotation queues.</li>
+<li>No LLM-specific trace UI: no chat-transcript view and no tool-call tree. Agent data is shown with SQL, notebooks and Grafana.</li>
+<li>No GenAI semantic-convention mapping: <code>gen_ai.*</code> attributes land in the generic JSONB <code>properties</code> column like any other attribute and are read with the <code>jsonb_*</code> functions (<a href="../../otlp/#attribute-encoding">attribute encoding</a>).</li>
+<li>No token-cost price table: cost is whatever the agent reports, and Claude Code reports <code>claude_code.cost.usage</code>. An agent that only reports tokens gets no dollar figure.</li>
+<li>OTLP histograms are not materialized, and <code>otel_spans</code> is per-process, so a multi-agent trace spanning processes needs a UNION (<a href="../../otlp/#limitations">OTLP limitations</a>).</li>
+<li>PostgreSQL is required. The <a href="../../admin/monolith/">monolith</a> runs everything in one process next to PostgreSQL, with a local directory (<code>file:///…</code>) as the object store. Phoenix can also drop the database server and run on SQLite (see below).</li>
+</ul>
+<h2 id="at-a-glance">At a glance<a class="headerlink" href="#at-a-glance" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>License</th>
+<th>Self-hosted dependencies</th>
+<th>OTLP ingestion</th>
+<th>SQL over agent data</th>
+<th>Evals</th>
+<th>Prompt management</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Micromegas</td>
+<td><a href="https://github.com/madesroches/micromegas/blob/main/LICENSE">Apache-2.0</a></td>
+<td>PostgreSQL; object store can be a local directory (<a href="../../admin/monolith/">monolith</a>)</td>
+<td>HTTP only (<a href="../../otlp/#limitations">limitations</a>)</td>
+<td>Yes, FlightSQL and notebooks (<a href="../../query-guide/">query guide</a>)</td>
+<td>No</td>
+<td>No</td>
+</tr>
+<tr>
+<td><a href="#micromegas-vs-langfuse">Langfuse</a></td>
+<td>MIT except <code>ee/</code> (<a href="https://github.com/langfuse/langfuse">repo</a>)</td>
+<td>Postgres, ClickHouse, Redis/Valkey, S3 (<a href="https://langfuse.com/self-hosting">self-hosting</a>)</td>
+<td>HTTP only (<a href="https://langfuse.com/integrations/native/opentelemetry">OTel</a>)</td>
+<td>Not listed (<a href="https://langfuse.com/docs/api-and-data-platform/overview">data access</a>)</td>
+<td>Yes (<a href="https://github.com/langfuse/langfuse">repo</a>)</td>
+<td>Yes (<a href="https://github.com/langfuse/langfuse">repo</a>)</td>
+</tr>
+<tr>
+<td><a href="#micromegas-vs-arize-phoenix">Arize Phoenix</a></td>
+<td>Elastic License 2.0 (<a href="https://github.com/Arize-ai/phoenix/blob/main/LICENSE">LICENSE</a>)</td>
+<td>SQLite or PostgreSQL (<a href="https://arize.com/docs/phoenix/self-hosting/configuration">configuration</a>)</td>
+<td>HTTP and gRPC (<a href="https://arize.com/docs/phoenix/self-hosting/configuration">configuration</a>)</td>
+<td>Not found in the docs read</td>
+<td>Yes (<a href="https://github.com/Arize-ai/phoenix">repo</a>)</td>
+<td>Yes (<a href="https://github.com/Arize-ai/phoenix">repo</a>)</td>
+</tr>
+<tr>
+<td><a href="#micromegas-vs-opik">Opik</a></td>
+<td>Apache-2.0 (<a href="https://github.com/comet-ml/opik">repo</a>)</td>
+<td>MySQL, Redis, ClickHouse, ZooKeeper, MinIO; Helm for production (<a href="https://www.comet.com/docs/opik/self-host/local_deployment">local deployment</a>)</td>
+<td>HTTP only (<a href="https://www.comet.com/docs/opik/tracing/opentelemetry/overview">OTel</a>)</td>
+<td>No: OQL filters, REST, export (<a href="https://www.comet.com/docs/opik/tracing/export_data">export</a>)</td>
+<td>Yes (<a href="https://github.com/comet-ml/opik">repo</a>)</td>
+<td>Yes (<a href="https://github.com/comet-ml/opik">repo</a>)</td>
+</tr>
+<tr>
+<td><a href="#micromegas-vs-laminar">Laminar</a></td>
+<td>Apache-2.0 (<a href="https://github.com/lmnr-ai/lmnr">repo</a>)</td>
+<td>Postgres, ClickHouse, Quickwit; Helm adds RabbitMQ, Redis (<a href="https://laminar.sh/docs/hosting-options">hosting</a>)</td>
+<td>OTLP-native, gRPC exporter named (<a href="https://github.com/lmnr-ai/lmnr">repo</a>)</td>
+<td>Yes, ClickHouse-dialect SQL editor (<a href="https://laminar.sh/docs/platform/sql-editor">SQL editor</a>)</td>
+<td>Yes (<a href="https://github.com/lmnr-ai/lmnr">repo</a>)</td>
+<td>Not listed</td>
+</tr>
+</tbody>
+</table>
+<p>Per-row access control, set by the ingestion credential, is not something the peers' docs describe. Langfuse gates even project-level RBAC behind a license key (<a href="https://langfuse.com/self-hosting/license-key">license key</a>); this is "not found in their docs", not a claim that they cannot do it.</p>
+<h2 id="micromegas-vs-langfuse">Micromegas vs. Langfuse<a class="headerlink" href="#micromegas-vs-langfuse" title="Permanent link">&para;</a></h2>
+<p><strong>Langfuse</strong> is an open-source platform for LLM engineering with tracing, prompt management, evaluations, datasets and a playground (<a href="https://github.com/langfuse/langfuse">repo</a>). The repository is MIT licensed except the <code>ee</code> folders. Some features need a license key when self-hosted: project-level RBAC roles, protected prompt labels, data retention policies, audit logs, server-side data masking, SCIM and others (<a href="https://langfuse.com/self-hosting/license-key">license key</a>). Self-hosting needs PostgreSQL, ClickHouse, Redis or Valkey, and S3-compatible blob storage (<a href="https://langfuse.com/self-hosting">self-hosting</a>). It ingests OTLP over HTTP (JSON or protobuf; gRPC is not supported) and maps <code>langfuse.*</code>, <code>gen_ai.*</code>, OpenInference and MLflow attributes (<a href="https://langfuse.com/integrations/native/opentelemetry">OpenTelemetry</a>).</p>
+<p><strong>Choose Langfuse when</strong> you want evals, datasets, a playground and prompt management in one product, a trace UI built for LLM calls, and mapping of <code>gen_ai.*</code> and <code>langfuse.*</code> attributes done for you.</p>
+<p><strong>How Micromegas differs.</strong> Micromegas has none of those LLM-specific features and no GenAI attribute mapping. In exchange, agent data shares one store and one SQL surface with the rest of your telemetry, instead of a separate stack with four dependencies. The data-access paths Langfuse lists are CLI, MCP server, public API, SDKs, metrics and observations APIs and exports, with no direct SQL (<a href="https://langfuse.com/docs/api-and-data-platform/overview">data access</a>); Micromegas is queried with SQL over FlightSQL (<a href="../../query-guide/">query guide</a>). Self-hosted Langfuse keeps data indefinitely by default, and retention policies are an enterprise feature (<a href="https://langfuse.com/docs/data-retention">data retention</a>). In Micromegas, row-level audiences are in the Apache-2.0 build with no paid tier (<a href="../../admin/authorization/">authorization</a>).</p>
+<h2 id="micromegas-vs-arize-phoenix">Micromegas vs. Arize Phoenix<a class="headerlink" href="#micromegas-vs-arize-phoenix" title="Permanent link">&para;</a></h2>
+<p><strong>Arize Phoenix</strong> covers tracing on OpenTelemetry, evaluation, versioned datasets, experiments, a playground and prompt management (<a href="https://github.com/Arize-ai/phoenix">repo</a>). Its license is the Elastic License 2.0, which is source-available rather than OSI open source (<a href="https://github.com/Arize-ai/phoenix/blob/main/LICENSE">LICENSE</a>). The docs state that "Phoenix is free to self-host with no feature limitations"; Arize AX is a separate enterprise option with support (<a href="https://arize.com/docs/phoenix/self-hosting">self-hosting</a>). It runs on SQLite by default or PostgreSQL, accepts OTLP over HTTP (port 6006) and gRPC (port 4317), and retains traces indefinitely unless <code>PHOENIX_DEFAULT_RETENTION_POLICY_DAYS</code> is set (<a href="https://arize.com/docs/phoenix/self-hosting/configuration">configuration</a>). Its instrumentation comes from OpenInference, with Python, JavaScript, Java and Go support (<a href="https://github.com/Arize-ai/phoenix">repo</a>).</p>
+<p><strong>Choose Phoenix when</strong> you want a single service with no database server (SQLite), evals, experiments and a playground, and OTLP over gRPC. On PostgreSQL, its footprint matches the Micromegas <a href="../../admin/monolith/">monolith</a>: one service plus PostgreSQL.</p>
+<p><strong>How Micromegas differs.</strong> Micromegas is Apache-2.0 rather than source-available, and its ingestion is HTTP only. It is built for telemetry from many kinds of processes, not only LLM applications, so agent data lands next to everything else and is queried with the same SQL. The Phoenix docs read for this page do not describe an SQL interface over traces, so nothing is claimed either way. Micromegas adds per-row audiences, which are not described in Phoenix's configuration docs.</p>
+<h2 id="micromegas-vs-opik">Micromegas vs. Opik<a class="headerlink" href="#micromegas-vs-opik" title="Permanent link">&para;</a></h2>
+<p><strong>Opik</strong>, from Comet, is an Apache-2.0 LLM observability platform with tracing, datasets, experiments, LLM-as-a-judge metrics, a prompt playground and guardrails (<a href="https://github.com/comet-ml/opik">repo</a>). Its Docker Compose deployment runs MySQL, Redis, ClickHouse, ZooKeeper and MinIO, and for production the docs recommend the Kubernetes Helm chart (<a href="https://www.comet.com/docs/opik/self-host/local_deployment">local deployment</a>). OpenTelemetry integration supports HTTP transport only, and the docs warn against the gRPC exporter (<a href="https://www.comet.com/docs/opik/tracing/opentelemetry/overview">OpenTelemetry</a>). Its SDKs are Python and TypeScript, with OpenTelemetry for Java, Ruby and .NET (<a href="https://github.com/comet-ml/opik">repo</a>).</p>
+<p><strong>Choose Opik when</strong> you want agent traces with full trace trees, evaluation with LLM-as-judge metrics, and a prompt playground, and you are prepared to run Kubernetes for production. The README describes it as designed for scale, at 40M+ traces per day (<a href="https://github.com/comet-ml/opik">repo</a>).</p>
+<p><strong>How Micromegas differs.</strong> Opik is queried through SDK search with its own filter language (OQL), REST and exports, with no SQL mentioned (<a href="https://www.comet.com/docs/opik/tracing/export_data">export</a>). Micromegas offers SQL and notebooks over data that also includes non-agent telemetry. Both ingest OTLP over HTTP only. Micromegas has no evaluations or prompt tooling.</p>
+<h2 id="micromegas-vs-laminar">Micromegas vs. Laminar<a class="headerlink" href="#micromegas-vs-laminar" title="Permanent link">&para;</a></h2>
+<p><strong>Laminar</strong> is an Apache-2.0, OpenTelemetry-native agent observability platform written in Rust, with tracing, evals, dashboards, annotation and datasets, and SQL-based querying of traces, spans, metrics and events (<a href="https://github.com/lmnr-ai/lmnr">repo</a>). Self-hosting runs PostgreSQL, ClickHouse and Quickwit, and the Helm setup adds RabbitMQ and Redis. Trace ingestion, the SQL editor, dashboards, evaluations, datasets, labeling queues and browser session recording are available without a license; Signals and email or Slack alerts need an enterprise license (<a href="https://laminar.sh/docs/hosting-options">hosting options</a>).</p>
+<p><strong>Choose Laminar when</strong> you want a purpose-built agent trace UI together with evals, labeling queues and browser session recording, and SQL over your agent traces.</p>
+<p><strong>How Micromegas differs.</strong> The difference is not SQL: Laminar's SQL editor queries spans, traces, evaluation data and datasets, in the ClickHouse dialect, <code>SELECT</code> only, with a mandatory time filter and per-project rate limits (<a href="https://laminar.sh/docs/platform/sql-editor">SQL editor</a>). Micromegas puts agent data in the same store and SQL surface as the rest of your fleet's telemetry (game servers, CI runners, services), and stamps each row with an audience from the ingestion credential. Per-row access control is not described in the Laminar docs read for this page.</p>
+<h2 id="also-considered">Also considered<a class="headerlink" href="#also-considered" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Helicone</strong>: Apache-2.0, an AI gateway plus observability platform. Self-hosting uses Supabase, ClickHouse and MinIO (<a href="https://github.com/Helicone/helicone">repo</a>).</li>
+<li><strong>OpenLLMetry / Traceloop</strong>: Apache-2.0 OpenTelemetry instrumentation for LLM libraries, not a backend. It complements Micromegas, because its output can go to any OTLP backend (<a href="https://github.com/traceloop/openllmetry">repo</a>); note that Micromegas accepts OTLP over HTTP only.</li>
+<li><strong>MLflow Tracing</strong>: described as a fully OpenTelemetry-compatible LLM observability solution with native support for GenAI semantic conventions for export and ingestion, and sampling controlled by <code>MLFLOW_TRACE_SAMPLING_RATIO</code> (<a href="https://mlflow.org/docs/latest/genai/tracing/">tracing</a>).</li>
+</ul>
+<h2 id="using-them-together">Using them together<a class="headerlink" href="#using-them-together" title="Permanent link">&para;</a></h2>
+<p>For many teams the realistic answer is both. A purpose-built tool handles evals and the prompt-level UI, while Micromegas keeps the full-resolution, access-controlled record next to the rest of the fleet's telemetry. One setup works with what exists today: send to an OpenTelemetry collector that fans out to both, over a protocol each side accepts. Langfuse, Opik and Micromegas accept OTLP over HTTP, so HTTP is the common denominator. Claude Code selects the protocol with <code>OTEL_EXPORTER_OTLP_PROTOCOL</code> (<a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code monitoring</a>), and Micromegas accepts <code>http/protobuf</code> or <code>http/json</code> (the <a href="../../otlp/#claude-code">OTLP recipe</a> uses <code>http/protobuf</code>).</p>
+<p>Micromegas ships no integration with the peers above.</p>
+<h2 id="summary-which-one-fits">Summary: which one fits<a class="headerlink" href="#summary-which-one-fits" title="Permanent link">&para;</a></h2>
+<p><strong>Choose Micromegas when</strong>:</p>
+<ul>
+<li>you want agent telemetry in the same store and SQL surface as your other telemetry, rather than a separate stack;</li>
+<li>prompts and tool output are sensitive and should be readable only by the person who generated them unless they share them, with metrics visible to a team (<a href="../../admin/authorization/">authorization</a>);</li>
+<li>you want to analyze agent sessions with SQL, notebooks or an agent pointed at the data.</li>
+</ul>
+<p><strong>Choose a purpose-built tool when</strong>:</p>
+<ul>
+<li>you need evals, datasets, experiments (Langfuse, Phoenix, Opik, Laminar), or prompt management or a playground (Langfuse, Phoenix, Opik);</li>
+<li>you want a trace UI built for LLM calls and agent steps;</li>
+<li>you want no database server at all (Phoenix on SQLite) or the broadest OTLP transport support (Phoenix over gRPC).</li>
+</ul>
+<h2 id="faq">FAQ<a class="headerlink" href="#faq" title="Permanent link">&para;</a></h2>
+<h3 id="what-is-a-self-hosted-alternative-to-langfuse-that-i-can-query-with-sql">What is a self-hosted alternative to Langfuse that I can query with SQL?<a class="headerlink" href="#what-is-a-self-hosted-alternative-to-langfuse-that-i-can-query-with-sql" title="Permanent link">&para;</a></h3>
+<p>Micromegas is Apache-2.0, self-hosted and queried with SQL over FlightSQL (<a href="../../query-guide/">query guide</a>), but it has no evals or prompt management, so it replaces Langfuse only for recording and querying agent telemetry (<a href="#what-micromegas-records-from-an-agent">limits</a>). Laminar offers an SQL editor over traces together with evals (<a href="#micromegas-vs-laminar">Laminar</a>).</p>
+<h3 id="how-do-i-record-claude-code-prompts-and-tool-calls-without-exposing-them-to-my-whole-team">How do I record Claude Code prompts and tool calls without exposing them to my whole team?<a class="headerlink" href="#how-do-i-record-claude-code-prompts-and-tool-calls-without-exposing-them-to-my-whole-team" title="Permanent link">&para;</a></h3>
+<p>Mint a personal audience, set <code>OTEL_LOG_USER_PROMPTS</code>, <code>OTEL_LOG_ASSISTANT_RESPONSES</code> and <code>OTEL_LOG_TOOL_DETAILS</code>, and send the logs under that key. Rows are readable only by that audience until you add a read grant (<a href="../../blog/2026/09/03/record-everything-your-ai-agent-does-share-it-on-your-terms/">blog post</a>, <a href="../../admin/authorization/">authorization</a>).</p>
+<h3 id="how-do-i-track-ai-agent-token-cost-per-developer-or-team">How do I track AI agent token cost per developer or team?<a class="headerlink" href="#how-do-i-track-ai-agent-token-cost-per-developer-or-team" title="Permanent link">&para;</a></h3>
+<p>Claude Code exports <code>claude_code.cost.usage</code> and <code>claude_code.token.usage</code> (<a href="https://code.claude.com/docs/en/monitoring-usage">monitoring</a>). They land in <code>measures</code>, so SQL can group them by user or by the team's resource attributes (<a href="../../otlp/#claude-code">OTLP recipe</a>). Sending metrics under a team-audience key keeps the numbers visible without the prompts (<a href="../../blog/2026/09/03/record-everything-your-ai-agent-does-share-it-on-your-terms/">blog post</a>). Cost is whatever the agent reports; Micromegas has no price table (<a href="#what-micromegas-records-from-an-agent">limits</a>).</p>
+<h3 id="how-do-i-keep-agent-telemetry-next-to-the-rest-of-my-application-telemetry">How do I keep agent telemetry next to the rest of my application telemetry?<a class="headerlink" href="#how-do-i-keep-agent-telemetry-next-to-the-rest-of-my-application-telemetry" title="Permanent link">&para;</a></h3>
+<p>Send the agent's OTLP/HTTP output to the same Micromegas ingestion endpoint as your other processes. Agent rows become <code>log_entries</code>, <code>measures</code> and <code>otel_spans</code> beside the rest, queried with the same SQL (<a href="../../otlp/">OTLP</a>, <a href="../../query-guide/">query guide</a>).</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.path", "navigation.top", "search.highlight", "search.suggest", "toc.follow", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js"></script>
+      
+    
+  </body>
+</html>

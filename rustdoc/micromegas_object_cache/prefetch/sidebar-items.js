@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["PrefetchItem","PrefetchResponse","PrefixPrefetch"],"trait":["ObjectPrefetch"]};

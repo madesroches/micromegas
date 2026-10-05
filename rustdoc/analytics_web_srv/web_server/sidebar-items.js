@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_auth_routes","build_protected_routes","run_web_server"],"struct":["AdminRoutesState","WebCliArgs","WebServerConfig"]};
