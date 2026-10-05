@@ -96,9 +96,10 @@ READMEs that get included (treatment 1) become rustdoc, so they must follow thes
 Per crate:
 - **perfetto**: what it is (a streaming Perfetto `TracePacket` writer over any `AsyncWriter`
   sink), when to use it (generate traces viewable in ui.perfetto.dev from your own span data), a
-  usage example, and links (docs.rs, repo, Micromegas home). The example implements `AsyncWriter`
-  for an in-memory `Vec<u8>` (the pattern in `rust/perfetto/tests/async_streaming_writer_tests.rs`)
-  and runs `PerfettoWriter::new` → `emit_process_descriptor` → `emit_thread_descriptor` →
+  usage example, and links (docs.rs, repo, Micromegas home). The example defines a local newtype
+  sink wrapping `Arc<Mutex<Vec<u8>>>` with `#[async_trait::async_trait] impl AsyncWriter` (like
+  `SharedBufferAsyncWriter` in `rust/perfetto/tests/async_streaming_writer_tests.rs`; the orphan
+  rule forbids implementing it for `Vec<u8>` in a doctest) and runs `PerfettoWriter::new` → `emit_process_descriptor` → `emit_thread_descriptor` →
   `emit_span` → `flush`, driven by `#[tokio::main]`. tokio is a regular dependency, and the
   workspace enables its `macros` and `rt-multi-thread` features. Mention the `protos` module for
   users who build packets by hand.
@@ -109,10 +110,10 @@ Per crate:
   builds a `CacheClientStore` over an origin `ObjectStore`. The implementer reads
   `rust/object-cache/src/client.rs:160-190` for the constructor. Links:
   `architecture/caching/`, `admin/object-cache/`, docs.rs, repo.
-- **datafusion-extensions**: keep the existing function list. Add a short "Usage" section that
-  shows how to register the UDFs on a `SessionContext` (the implementer reads the crate's
-  registration entry points; if there is no single entry point, show one module's
-  registration). Replace the home-page link with
+- **datafusion-extensions**: extend the existing function list to cover everything
+  `register_extension_udfs` registers (add Color, Math, Binning and Properties groups plus the
+  missing JSONB entries). Add a short "Usage" section that calls
+  `micromegas_datafusion_extensions::register_extension_udfs(&ctx)` on a `SessionContext`. Replace the home-page link with
   `https://micromegas.info/docs/query-guide/functions-reference/` and keep the repo link. The
   issue says the README is already good, so keep this edit small.
 - **transit**: what it is (memcpy-style serialization of `#[repr(C)]` POD values plus
@@ -200,9 +201,6 @@ There is no runtime behavior to unit-test. The automated checks are:
 - `cargo doc --no-deps` for the same crates, with `RUSTDOCFLAGS="-D warnings"`, to catch broken
   intra-doc links.
 - `python3 ../build/rust_ci.py` (fmt, clippy, tests, doc tests) as the normal CI gate.
-- `python3 build/check_wasm_deps.py` (or the wasm build it drives), confirming
-  `datafusion-extensions` still builds for `wasm32-unknown-unknown`. `include_str!` is
-  target-independent, so this is only a safety net.
 
 ## Manual Verification
 
