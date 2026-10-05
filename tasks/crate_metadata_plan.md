@@ -90,8 +90,7 @@ READMEs that get included (treatment 1) become rustdoc, so they must follow thes
 - Use absolute URLs only. Relative links break on docs.rs.
 - Tag every non-Rust fenced block (`toml`, `sql`, `text`, `bash`). An untagged block is compiled
   as a Rust doctest.
-- Rust examples must compile and pass under `cargo test --doc`. Use `no_run` only when the
-  example needs network access (object-cache).
+- Rust examples must compile and pass under `cargo test --doc`.
 
 Per crate:
 - **perfetto**: what it is (a streaming Perfetto `TracePacket` writer over any `AsyncWriter`
@@ -106,9 +105,9 @@ Per crate:
 - **object-cache**: what the two halves are (the range cache engine with its memory/foyer
   backends, and the `CacheClientStore` client with circuit breaker and origin fallback), when to
   use it (several processes reading overlapping ranges of the same immutable objects), the
-  write-once/no-invalidation assumption, and the `foyer` feature. Include a `no_run` example that
-  builds a `CacheClientStore` over an origin `ObjectStore`. The implementer reads
-  `rust/object-cache/src/client.rs:160-190` for the constructor. Links:
+  write-once/no-invalidation assumption, and the `foyer` feature. Include an example that
+  constructs a `CacheClientStore` with `CacheClientStore::new(cache_base_url, api_key, direct)`
+  over an in-memory origin (`object_store::memory::InMemory`) without issuing reads. Links:
   `architecture/caching/`, `admin/object-cache/`, docs.rs, repo.
 - **datafusion-extensions**: extend the existing function list to cover everything
   `register_extension_udfs` registers (add Color, Math, Binning and Properties groups plus the
@@ -123,7 +122,7 @@ Per crate:
   `read_consume_pod`. Links: docs.rs, repo.
 - **tracing / otel-ingestion / auth** (README only, crates.io-facing): one or two sentences on
   what it does, a short usage snippet or pointer (for `tracing`, a `Cargo.toml` dependency line
-  plus the `span!`/`info!`-style macros already documented in `lib.rs`), and the specific docs
+  plus `#[span_fn]`, `span_scope!` and `info!` already documented in `lib.rs`), and the specific docs
   link (`otlp/`, `admin/authentication/`). For `tracing`, link to docs.rs as the primary
   reference plus the Unreal and getting-started pages. These READMEs are not included in
   rustdoc, but Rust code blocks should still be tagged `rust` and kept correct.
@@ -171,12 +170,9 @@ Per crate:
   of the generic micromegas.info home. crates.io already shows a docs.rs link through its
   `documentation` fallback, so this duplicates that link. But it keeps visitors of a standalone
   crate from landing on an unrelated product homepage, and it is what the issue asks for.
-  Setting `documentation` explicitly instead was rejected: the fallback already produces that
-  link.
-- **`tracing` homepage diverges from the issue** (`/docs/native/`). That page documents the C
-  ABI, so linking it from the Rust crate would mislead.
+- **`tracing` homepage diverges from the issue** (`/docs/native/`); see Current State.
 - **`datafusion-extensions` homepage diverges from the issue**
-  (`/docs/admin/functions-reference/`). That page documents admin UDTFs, not this crate's UDFs.
+  (`/docs/admin/functions-reference/`); see Current State.
 - **`object-cache` homepage: architecture page over admin page.** `architecture/caching/`
   explains the library-level design (tiers, no invalidation) that matters to someone embedding
   the crate. The admin page is about deploying the `-srv` binary. The README links both.
@@ -184,8 +180,6 @@ Per crate:
   hand-written `//!` docs stay where they already exist.
 - **Doctests over `ignore`.** Compiled examples can't silently rot. The cost is that examples
   must be written against the real API.
-
-## Decisions
 
 ## Documentation
 
