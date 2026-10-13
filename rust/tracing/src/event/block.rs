@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::property_arena::PropertyArena;
 
 /// Blocks are a batch of events sent as a unit
 #[derive(Debug)]
@@ -9,6 +10,12 @@ pub struct EventBlock<Q> {
     pub events: Q,
     pub end: Option<DualTime>,
     pub event_offset: usize,
+    /// Owns the dynamic property sets referenced by `events`.
+    ///
+    /// Events may hold addresses into this arena. Both live in the same block, which is only
+    /// dropped as a whole; `extract()` runs while the block is alive, and arena entries are
+    /// never removed or mutated once inserted. Only log and metrics dispatch insert into it.
+    pub properties: PropertyArena,
 }
 
 impl<Q> EventBlock<Q>
@@ -75,11 +82,12 @@ where
             events: Q::new(buffer_size),
             end: None,
             event_offset,
+            properties: PropertyArena::default(),
         }
     }
 
     fn len_bytes(&self) -> usize {
-        self.events.len_bytes()
+        self.events.len_bytes() + self.properties.len_bytes()
     }
 
     fn capacity_bytes(&self) -> usize {

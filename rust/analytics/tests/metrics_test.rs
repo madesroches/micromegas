@@ -6,7 +6,7 @@ use micromegas_analytics::{
 };
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
-    dispatch::make_process_info,
+    dispatch::{DynProperty, make_process_info, merge_properties},
     event::TracingBlock,
     intern_string,
     metrics::{
@@ -208,4 +208,91 @@ fn test_tagged_measures() {
     let state = guard.sink.state.lock().unwrap();
     assert!(state.process_info.is_some());
     assert!(state.metrics_stream_desc.is_some());
+}
+
+#[test]
+#[serial]
+fn test_dynamic_tagged_measures() {
+    let process_id = uuid::Uuid::new_v4();
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
+    let mut stream = MetricsStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
+        lod: Verbosity::Med,
+        name: "static_name",
+        unit: "static_unit",
+        target: "static_target",
+        file: "file",
+        line: 123,
+    };
+    let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
+    let correlation_id = String::from("abc");
+    let merged = merge_properties(
+        static_set,
+        &[DynProperty {
+            name: "correlation_id",
+            value: &correlation_id,
+        }],
+    );
+    let (events, arena) = stream.get_block_mut_parts();
+    let properties = arena.get_or_insert(&merged);
+    events.push(TaggedIntegerMetricEvent {
+        desc: &METRIC_DESC,
+        properties,
+        value: 2,
+        time: now(),
+    });
+    // same content, so it must resolve to the same wire set
+    let properties = arena.get_or_insert(&merged);
+    events.push(TaggedFloatMetricEvent {
+        desc: &METRIC_DESC,
+        properties,
+        value: 2.0,
+        time: now(),
+    });
+
+    let mut block =
+        stream.replace_block(Arc::new(MetricsBlock::new(8192, process_id, stream_id, 0)));
+    Arc::get_mut(&mut block).unwrap().close();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
+    let received_block: micromegas_telemetry::block_wire_format::Block =
+        ciborium::from_reader(&encoded[..]).unwrap();
+    let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
+    let mut set_ptrs = vec![];
+    parse_block(&stream_metadata, &received_block.payload, |val| {
+        let measure = measure_from_value(
+            process_info.clone(),
+            stream_metadata.stream_id.to_string().into(),
+            received_block.block_id.to_string().into(),
+            0,
+            &convert_ticks,
+            val,
+        )
+        .unwrap()
+        .unwrap();
+        let mut props = vec![];
+        measure
+            .properties
+            .for_each_property(|k, v| {
+                props.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            })
+            .unwrap();
+        assert!(props.contains(&("correlation_id".to_owned(), "abc".to_owned())));
+        assert!(props.contains(&("animal".to_owned(), "chicken".to_owned())));
+        set_ptrs.push(measure.properties.object_ptr() as usize);
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(set_ptrs.len(), 2);
+    assert_eq!(set_ptrs[0], set_ptrs[1]);
 }

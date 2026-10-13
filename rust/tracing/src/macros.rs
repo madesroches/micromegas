@@ -159,6 +159,25 @@ macro_rules! instrument_named {
 /// imetric!("Frame Time", "ticks", 1000);
 /// # }
 /// ```
+///
+/// Properties with values that are not `'static` go in a slice of `DynProperty`, passed after
+/// the interned property set:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+/// use micromegas_tracing::dispatch::empty_property_set;
+///
+/// # fn main() {
+/// let correlation_id = String::from("c0ffee");
+/// imetric!(
+///     "rows_fetched",
+///     "count",
+///     empty_property_set(),
+///     &[DynProperty { name: "correlation_id", value: &correlation_id }],
+///     3
+/// );
+/// # }
+/// ```
 #[macro_export]
 macro_rules! imetric {
     ($name:expr, $unit:expr, $value:expr) => {{
@@ -185,6 +204,23 @@ macro_rules! imetric {
             };
         $crate::dispatch::tagged_integer_metric(&METRIC_METADATA, $properties, $value);
     }};
+    ($name:expr, $unit:expr, $properties:expr, $dyn_properties:expr, $value:expr) => {{
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
+        $crate::dispatch::tagged_integer_metric_dyn(
+            &METRIC_METADATA,
+            $properties,
+            $dyn_properties,
+            $value,
+        );
+    }};
 }
 
 /// Records a float metric.
@@ -199,6 +235,9 @@ macro_rules! imetric {
 /// fmetric!("Frame Time", "ticks", 1000.0);
 /// # }
 /// ```
+///
+/// Properties with values that are not `'static` go in a slice of `DynProperty`, passed after
+/// the interned property set, as with [`imetric!`].
 #[macro_export]
 macro_rules! fmetric {
     ($name:expr, $unit:expr, $value:expr) => {{
@@ -226,6 +265,24 @@ macro_rules! fmetric {
             };
         $crate::dispatch::tagged_float_metric(&METRIC_METADATA, $properties, $value);
     }};
+
+    ($name:expr, $unit:expr, $properties:expr, $dyn_properties:expr, $value:expr) => {{
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
+        $crate::dispatch::tagged_float_metric_dyn(
+            &METRIC_METADATA,
+            $properties,
+            $dyn_properties,
+            $value,
+        );
+    }};
 }
 
 /// The standard logging macro.
@@ -247,6 +304,22 @@ macro_rules! fmetric {
 ///     data.0, data.1, private_data);
 /// # }
 /// ```
+///
+/// Properties with values that are not `'static` (a request or correlation id, for example)
+/// go in `dyn_properties:`, alone or next to an interned `properties:` set. The values are
+/// copied into the current block, so nothing leaks:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let correlation_id = String::from("c0ffee");
+/// info!(
+///     dyn_properties: &[DynProperty { name: "correlation_id", value: &correlation_id }],
+///     "fetched {} rows", 3
+/// );
+/// # }
+/// ```
 #[macro_export]
 macro_rules! log {
     (target: $target:expr, $lvl:expr, $($arg:tt)+) => ({
@@ -263,6 +336,20 @@ macro_rules! log {
             $crate::dispatch::log(&LOG_DESC, format_args!($($arg)+));
         }
     });
+    ($lvl:expr, properties: $properties:expr, dyn_properties: $dyn_properties:expr, $($arg:tt)+) => ({
+        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
+            level: $lvl,
+            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
+            fmt_str: $crate::__first_arg!($($arg)+),
+            target: $crate::__log_module_path!(),
+            module_path: $crate::__log_module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
+            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $properties, $dyn_properties, format_args!($($arg)+));
+        }
+    });
     ($lvl:expr, properties: $properties:expr, $($arg:tt)+) => ({
         static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
             level: $lvl,
@@ -275,6 +362,20 @@ macro_rules! log {
         };
         if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
             $crate::dispatch::log_tagged(&LOG_DESC, $properties, format_args!($($arg)+));
+        }
+    });
+    ($lvl:expr, dyn_properties: $dyn_properties:expr, $($arg:tt)+) => ({
+        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
+            level: $lvl,
+            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
+            fmt_str: $crate::__first_arg!($($arg)+),
+            target: $crate::__log_module_path!(),
+            module_path: $crate::__log_module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
+            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $crate::dispatch::empty_property_set(), $dyn_properties, format_args!($($arg)+));
         }
     });
     ($lvl:expr, $($arg:tt)+) => ($crate::log!(target: $crate::__log_module_path!(), $lvl, $($arg)+));

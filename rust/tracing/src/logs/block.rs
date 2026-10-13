@@ -1,10 +1,10 @@
 use super::{
     LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent, LogStringEvent,
-    LogStringInteropEvent, TaggedLogString,
+    LogStringInteropEvent, TaggedLogInteropEvent, TaggedLogString,
 };
 use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
-    property_set::{PropertySet, PropertySetDependency},
+    property_set::{PropertySetDependency, record_properties},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use std::collections::HashSet;
@@ -16,6 +16,7 @@ declare_queue_struct!(
         LogStaticStrInteropEvent,
         LogStringInteropEvent,
         TaggedLogString,
+        TaggedLogInteropEvent,
     > {}
 );
 
@@ -63,25 +64,6 @@ fn record_log_event_dependencies(
     }
 }
 
-fn record_properties(
-    set: &'static PropertySet,
-    recorded_deps: &mut HashSet<u64>,
-    deps: &mut LogDepsQueue,
-) {
-    let id = set as *const _ as u64;
-    if recorded_deps.insert(id) {
-        for prop in set.get_properties() {
-            if recorded_deps.insert(prop.name.id()) {
-                deps.push(prop.name.into_dependency());
-            }
-            if recorded_deps.insert(prop.value.id()) {
-                deps.push(prop.value.into_dependency());
-            }
-        }
-        deps.push(PropertySetDependency::new(set));
-    }
-}
-
 impl ExtractDeps for LogMsgQueue {
     type DepsQueue = LogDepsQueue;
 
@@ -109,9 +91,33 @@ impl ExtractDeps for LogMsgQueue {
                         deps.push(evt.target.into_dependency());
                     }
                 }
+                LogMsgQueueAny::TaggedLogInteropEvent(evt) => {
+                    if recorded_deps.insert(evt.target.id()) {
+                        deps.push(evt.target.into_dependency());
+                    }
+                    // SAFETY: the set is interned or owned by this block's arena.
+                    unsafe {
+                        record_properties(
+                            evt.properties,
+                            &mut recorded_deps,
+                            &mut deps,
+                            |q, d| q.push(d),
+                            |q, d| q.push(d),
+                        );
+                    }
+                }
                 LogMsgQueueAny::TaggedLogString(evt) => {
                     record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    record_properties(evt.properties, &mut recorded_deps, &mut deps);
+                    // SAFETY: the set is interned or owned by this block's arena.
+                    unsafe {
+                        record_properties(
+                            evt.properties,
+                            &mut recorded_deps,
+                            &mut deps,
+                            |q, d| q.push(d),
+                            |q, d| q.push(d),
+                        );
+                    }
                 }
             }
         }

@@ -48,6 +48,32 @@
 //! fmetric!("response_time", "ms", elapsed_ms);
 //! ```
 //!
+//! # Dynamic properties
+//!
+//! Properties with values that are not `'static` (a correlation, request or session id) can be
+//! attached to individual log entries and metric measures. The values are copied into the
+//! current block and freed with it, so nothing is retained per distinct value:
+//!
+//! ```rust,ignore
+//! use micromegas_tracing::prelude::*;
+//!
+//! let cid = request.correlation_id(); // String
+//! info!(dyn_properties: &[DynProperty { name: "correlation_id", value: &cid }], "fetched {n} rows");
+//! imetric!("rows_fetched", "count", &*STATIC_PROPS, &[DynProperty { name: "correlation_id", value: &cid }], n);
+//! ```
+//!
+//! Property names stay `'static` so that the set of names remains bounded; values are free.
+//! A static interned set can be passed alongside (`properties: set, dyn_properties: ...`), and a
+//! dynamic value replaces a static property of the same name. Interned sets (`properties:`
+//! alone) remain the cheapest option for bounded-cardinality properties.
+//!
+//! On the query side the values are ordinary properties:
+//! `property_get(properties, 'correlation_id')`.
+//!
+//! Some property names override the row's columns in analytics: `level` and `target` for logs,
+//! `target`, `name` and `unit` for metrics. A dynamic `level` must be a valid level name or the
+//! block fails to parse.
+//!
 //! # Manual Span Scopes
 //!
 //! For fine-grained control within a function, use [`span_scope!`]:
@@ -123,6 +149,8 @@ pub mod time;
 
 // Native-only: full on native, stubs in lib.rs for wasm32
 #[cfg(not(target_arch = "wasm32"))]
+pub mod property_arena;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod property_set;
 
 #[cfg(target_arch = "wasm32")]
@@ -157,6 +185,7 @@ mod macros;
 
 /// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {
+    pub use crate::dispatch::DynProperty;
     pub use crate::levels::*;
     pub use crate::process_info::*;
     #[cfg(feature = "tokio")]

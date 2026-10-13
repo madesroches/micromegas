@@ -2,8 +2,8 @@
 //! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
 use internment::Intern;
-use micromegas_transit::{UserDefinedType, prelude::*};
-use std::{hash::Hash, sync::Arc};
+use micromegas_transit::{StaticStringDependency, UserDefinedType, prelude::*};
+use std::{collections::HashSet, hash::Hash, sync::Arc};
 
 lazy_static::lazy_static! {
     pub static ref PROPERTY_SET_DEP_TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
@@ -36,13 +36,17 @@ pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a st
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PropertySet {
-    properties: Vec<Property>,
+    pub(crate) properties: Vec<Property>,
+}
+
+/// Canonical property order, so that equal sets hash equally.
+pub fn sort_properties(properties: &mut [Property]) {
+    properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
 }
 
 impl PropertySet {
     pub fn find_or_create(mut properties: Vec<Property>) -> &'static Self {
-        // sort properties by name to get the same hash
-        properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
+        sort_properties(&mut properties);
         let set = PropertySet { properties };
         Intern::<PropertySet>::new(set).as_ref()
     }
@@ -54,12 +58,46 @@ impl PropertySet {
 
 #[derive(Debug)]
 pub struct PropertySetDependency {
-    set: &'static PropertySet,
+    set: *const PropertySet,
 }
 
 impl PropertySetDependency {
-    pub fn new(set: &'static PropertySet) -> Self {
+    /// `set` must stay valid until the dependency is written: interned sets always are,
+    /// arena sets live as long as the block that `extract` runs on.
+    pub fn new(set: *const PropertySet) -> Self {
         Self { set }
+    }
+
+    fn set(&self) -> &PropertySet {
+        // SAFETY: see `new`.
+        unsafe { &*self.set }
+    }
+}
+
+/// Emits the dependencies of a property set once per block.
+///
+/// # Safety
+/// `set` must be an interned set or belong to the arena of the block being extracted.
+pub unsafe fn record_properties<D>(
+    set: *const PropertySet,
+    recorded_deps: &mut HashSet<u64>,
+    deps: &mut D,
+    push_string: fn(&mut D, StaticStringDependency),
+    push_set: fn(&mut D, PropertySetDependency),
+) {
+    let id = set as u64;
+    if recorded_deps.insert(id) {
+        // SAFETY: guaranteed by the caller.
+        let set_ref = unsafe { &*set };
+        for prop in set_ref.get_properties() {
+            if recorded_deps.insert(prop.name.id()) {
+                push_string(deps, prop.name.into_dependency());
+            }
+            if recorded_deps.insert(prop.value.id()) {
+                push_string(deps, prop.value.into_dependency());
+            }
+        }
+        push_set(deps, PropertySetDependency::new(set));
     }
 }
 
@@ -82,17 +120,17 @@ impl InProcSerialize for PropertySetDependency {
         let header_size: u32 = std::mem::size_of::<u64>() as u32 + // id
 			std::mem::size_of::<u32>() as u32; // number of properties
         let container_size: u32 =
-            self.set.get_properties().len() as u32 * std::mem::size_of::<Property>() as u32;
+            self.set().get_properties().len() as u32 * std::mem::size_of::<Property>() as u32;
         let size = header_size + container_size;
         Some(size)
     }
 
     fn write_value(&self, buffer: &mut Vec<u8>) {
-        let id = self.set as *const _ as u64;
+        let id = self.set as u64;
         write_any(buffer, &id);
-        let nb_properties: u32 = self.set.get_properties().len() as u32;
+        let nb_properties: u32 = self.set().get_properties().len() as u32;
         write_any(buffer, &nb_properties);
-        for prop in self.set.get_properties() {
+        for prop in self.set().get_properties() {
             write_any(buffer, prop);
         }
     }

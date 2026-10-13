@@ -42,7 +42,7 @@ impl InProcSerialize for FloatMetricEvent {}
 #[derive(Debug, TransitReflect)]
 pub struct TaggedFloatMetricEvent {
     pub desc: &'static StaticMetricMetadata,
-    pub properties: &'static PropertySet,
+    pub properties: *const PropertySet,
     pub value: f64,
     pub time: i64,
 }
@@ -53,7 +53,7 @@ impl InProcSerialize for TaggedFloatMetricEvent {}
 #[derive(Debug, TransitReflect)]
 pub struct TaggedIntegerMetricEvent {
     pub desc: &'static StaticMetricMetadata,
-    pub properties: &'static PropertySet,
+    pub properties: *const PropertySet,
     pub value: u64,
     pub time: i64,
 }

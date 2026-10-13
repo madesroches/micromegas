@@ -18,6 +18,8 @@ pub trait EventSink: Send + Sync {
     fn on_shutdown(&self);
 
     fn on_log_enabled(&self, metadata: &LogMetadata) -> bool;
+    /// `properties` is only valid for the duration of the call: dynamic values point at
+    /// the caller's strings, so a sink must not keep a `Property` past it.
     fn on_log(
         &self,
         desc: &LogMetadata,

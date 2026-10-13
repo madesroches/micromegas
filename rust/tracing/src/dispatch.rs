@@ -2,10 +2,11 @@
 pub use crate::errors::{Error, Result};
 use crate::images::{ImageBlock, ImageEvent, ImageStream};
 use crate::intern_string::intern_string;
-use crate::logs::TaggedLogString;
+use crate::logs::{TaggedLogInteropEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
-use crate::property_set::PropertySet;
+use crate::property_set::{Property, PropertySet, sort_properties};
+use crate::static_string_ref::StaticStringRef;
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
     info,
@@ -120,6 +121,96 @@ pub fn tagged_integer_metric(
 ) {
     if let Some(d) = G_DISPATCH.get() {
         d.tagged_integer_metric(desc, properties, value);
+    }
+}
+
+/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
+/// bounded.
+///
+/// Analytics treats some names as column overrides: `level`/`target` (logs) and
+/// `target`/`name`/`unit` (metrics). A dynamic `level` must be a valid level name or the
+/// block fails to parse.
+#[derive(Debug, Clone, Copy)]
+pub struct DynProperty<'a> {
+    pub name: &'static str,
+    pub value: &'a str,
+}
+
+/// The interned set with no properties, for calls that only carry dynamic ones.
+pub fn empty_property_set() -> &'static PropertySet {
+    lazy_static::lazy_static! {
+        static ref EMPTY: &'static PropertySet = PropertySet::find_or_create(vec![]);
+    }
+    *EMPTY
+}
+
+/// Combines a static set with dynamic properties into one sorted list.
+///
+/// A dynamic value replaces a static property of the same name (compared case-insensitively
+/// to match `property_get`). The refs of the dynamic entries point at the caller's strings
+/// and are only valid while those strings are.
+pub fn merge_properties(
+    static_set: &PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) -> Vec<Property> {
+    let mut merged: Vec<Property> = static_set.get_properties().to_vec();
+    for dyn_prop in dyn_properties {
+        merged.retain(|p| !p.name.as_str().eq_ignore_ascii_case(dyn_prop.name));
+        merged.push(Property {
+            name: dyn_prop.name.into(),
+            // SAFETY: the merged list is only used for the duration of the dispatch call,
+            // and the arena copies the value before keeping it.
+            value: unsafe { StaticStringRef::from_str_unchecked(dyn_prop.value) },
+        });
+    }
+    sort_properties(&mut merged);
+    merged
+}
+
+#[inline(always)]
+pub fn tagged_float_metric_dyn(
+    desc: &'static StaticMetricMetadata,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    value: f64,
+) {
+    if let Some(d) = G_DISPATCH.get() {
+        d.tagged_float_metric_dyn(desc, properties, dyn_properties, value);
+    }
+}
+
+#[inline(always)]
+pub fn tagged_integer_metric_dyn(
+    desc: &'static StaticMetricMetadata,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    value: u64,
+) {
+    if let Some(d) = G_DISPATCH.get() {
+        d.tagged_integer_metric_dyn(desc, properties, dyn_properties, value);
+    }
+}
+
+#[inline(always)]
+pub fn log_dyn_tagged(
+    desc: &'static LogMetadata,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    if let Some(d) = G_DISPATCH.get() {
+        d.log_dyn_tagged(desc, properties, dyn_properties, args);
+    }
+}
+
+#[inline(always)]
+pub fn log_interop_dyn_tagged(
+    metadata: &LogMetadata,
+    dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    if let Some(d) = G_DISPATCH.get() {
+        d.log_interop_dyn_tagged(metadata, dyn_properties, args);
     }
 }
 
@@ -694,6 +785,56 @@ impl Dispatch {
     }
 
     #[inline]
+    fn tagged_float_metric_dyn(
+        &self,
+        desc: &'static StaticMetricMetadata,
+        properties: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        value: f64,
+    ) {
+        let time = now();
+        let merged = merge_properties(properties, dyn_properties);
+        let mut metrics_stream = self.metrics_stream.lock().unwrap();
+        let (events, arena) = metrics_stream.get_block_mut_parts();
+        let properties = arena.get_or_insert(&merged);
+        events.push(TaggedFloatMetricEvent {
+            desc,
+            properties,
+            value,
+            time,
+        });
+        if metrics_stream.is_full() {
+            drop(metrics_stream);
+            self.flush_metrics_buffer();
+        }
+    }
+
+    #[inline]
+    fn tagged_integer_metric_dyn(
+        &self,
+        desc: &'static StaticMetricMetadata,
+        properties: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        value: u64,
+    ) {
+        let time = now();
+        let merged = merge_properties(properties, dyn_properties);
+        let mut metrics_stream = self.metrics_stream.lock().unwrap();
+        let (events, arena) = metrics_stream.get_block_mut_parts();
+        let properties = arena.get_or_insert(&merged);
+        events.push(TaggedIntegerMetricEvent {
+            desc,
+            properties,
+            value,
+            time,
+        });
+        if metrics_stream.is_full() {
+            drop(metrics_stream);
+            self.flush_metrics_buffer();
+        }
+    }
+
+    #[inline]
     fn flush_metrics_buffer(&self) {
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         if metrics_stream.is_empty() {
@@ -795,6 +936,64 @@ impl Dispatch {
         }
         if log_stream.is_full() {
             // Release the lock before calling flush_log_buffer
+            drop(log_stream);
+            self.flush_log_buffer();
+        }
+    }
+
+    #[inline]
+    fn log_dyn_tagged(
+        &self,
+        desc: &'static LogMetadata,
+        properties: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        args: fmt::Arguments<'_>,
+    ) {
+        if !self.log_enabled(desc) {
+            return;
+        }
+        let time = now();
+        let merged = merge_properties(properties, dyn_properties);
+        // Before taking the lock, so that local sinks can log without deadlocking.
+        self.get_sink().on_log(desc, &merged, time, args);
+        let msg = micromegas_transit::DynString(args.to_string());
+        let mut log_stream = self.log_stream.lock().unwrap();
+        let (events, arena) = log_stream.get_block_mut_parts();
+        let properties = arena.get_or_insert(&merged);
+        events.push(TaggedLogString {
+            desc,
+            properties,
+            time,
+            msg,
+        });
+        if log_stream.is_full() {
+            drop(log_stream);
+            self.flush_log_buffer();
+        }
+    }
+
+    #[inline]
+    fn log_interop_dyn_tagged(
+        &self,
+        desc: &LogMetadata,
+        dyn_properties: &[DynProperty<'_>],
+        args: fmt::Arguments<'_>,
+    ) {
+        let time = now();
+        let merged = merge_properties(empty_property_set(), dyn_properties);
+        self.get_sink().on_log(desc, &merged, time, args);
+        let msg = micromegas_transit::DynString(args.to_string());
+        let mut log_stream = self.log_stream.lock().unwrap();
+        let (events, arena) = log_stream.get_block_mut_parts();
+        let properties = arena.get_or_insert(&merged);
+        events.push(TaggedLogInteropEvent {
+            time,
+            level: desc.level as u8,
+            target: intern_string(desc.target).into(),
+            properties,
+            msg,
+        });
+        if log_stream.is_full() {
             drop(log_stream);
             self.flush_log_buffer();
         }

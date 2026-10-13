@@ -57,6 +57,18 @@ impl StaticStringRef {
         }
     }
 
+    /// Builds a ref to `src` without requiring `'static`.
+    ///
+    /// # Safety
+    /// `src` must outlive every use of the returned ref.
+    pub(crate) unsafe fn from_str_unchecked(src: &str) -> Self {
+        Self {
+            len: src.len() as u32,
+            ptr: src.as_ptr() as u64,
+            codec: StringCodec::Utf8,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         unsafe {
             let slice = std::slice::from_raw_parts(self.ptr as *const u8, self.len as usize);

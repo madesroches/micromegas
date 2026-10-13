@@ -4,6 +4,20 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Add dynamic properties for logs and metrics (#1623): properties with
+  non-`'static` values, such as a correlation id, attached to individual log entries and measures
+  with `dyn_properties:` in `log!`/`info!`/... and a five-argument form of `imetric!`/`fmetric!`.
+  Each block owns an arena holding the values, which counts against the block's size budget and
+  is freed with the block, so nothing leaks. The wire format, the `log_entries` and `measures`
+  schemas and `property_get(properties, 'correlation_id')` are unchanged. The `tracing` interop
+  layer now maps event fields to dynamic properties (the message text is unchanged).
+  **Minor breaking change:** the `properties` field of `TaggedLogString`,
+  `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent` is now `*const PropertySet`,
+  `PropertySetDependency` holds and takes `*const PropertySet`, `EventBlock` has a new
+  `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant,
+  `FieldFormatVisitor` has a new `pub` field for the collected fields (breaking struct-literal
+  construction), and the `properties` passed to `EventSink::on_log` are only valid for the
+  duration of the call.
 * **Packaging:** Give `micromegas-perfetto`, `micromegas-object-cache`,
   `micromegas-datafusion-extensions`, `micromegas-transit`, `micromegas-tracing`,
   `micromegas-otel-ingestion` and `micromegas-auth` their own crates.io description, keywords and

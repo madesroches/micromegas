@@ -1,5 +1,5 @@
 use micromegas_tracing::{
-    dispatch::log_interop,
+    dispatch::{DynProperty, log_interop, log_interop_dyn_tagged},
     levels::LevelFilter,
     logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
 };
@@ -11,22 +11,42 @@ use tracing::field::{Field, Visit};
 pub struct FieldFormatVisitor<'a> {
     pub buffer: &'a mut String,
     pub target: Option<String>,
+    /// Event fields that become dynamic properties, in addition to their message text.
+    pub properties: Vec<(&'static str, String)>,
+}
+
+impl FieldFormatVisitor<'_> {
+    fn write_message_part(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == "message" {
+            write!(self.buffer, "{value:?} ").unwrap();
+        } else {
+            write!(self.buffer, "{}={:?} ", field.name(), value).unwrap();
+        }
+    }
+
+    // `log.*` fields only carry the origin of a bridged `log` record.
+    fn is_property(field: &Field) -> bool {
+        field.name() != "message" && !field.name().starts_with("log.")
+    }
 }
 
 impl Visit for FieldFormatVisitor<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "log.target" {
             self.target = Some(value.to_owned());
-        } else {
-            self.record_debug(field, &value)
+            return;
         }
+        if Self::is_property(field) {
+            self.properties.push((field.name(), value.to_owned()));
+        }
+        self.write_message_part(field, &value);
     }
+
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if field.name() == "message" {
-            write!(self.buffer, "{value:?} ").unwrap();
-        } else {
-            write!(self.buffer, "{}={:?} ", field.name(), value).unwrap();
+        if Self::is_property(field) {
+            self.properties.push((field.name(), format!("{value:?}")));
         }
+        self.write_message_part(field, value);
     }
 }
 
@@ -59,22 +79,31 @@ where
         let mut formatter = FieldFormatVisitor {
             buffer: &mut buffer,
             target: None,
+            properties: vec![],
         };
         event.record(&mut formatter);
+        let FieldFormatVisitor {
+            target, properties, ..
+        } = formatter;
         let log_desc = LogMetadata {
             level,
             level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
             fmt_str: "{}",
-            target: formatter
-                .target
-                .as_deref()
-                .unwrap_or(event.metadata().target()),
+            target: target.as_deref().unwrap_or(event.metadata().target()),
             module_path: event.metadata().module_path().unwrap_or_default(),
             file: "",
             line: 0,
         };
 
-        log_interop(&log_desc, format_args!("{}", buffer));
+        if properties.is_empty() {
+            log_interop(&log_desc, format_args!("{}", buffer));
+        } else {
+            let dyn_properties: Vec<DynProperty<'_>> = properties
+                .iter()
+                .map(|(name, value)| DynProperty { name, value })
+                .collect();
+            log_interop_dyn_tagged(&log_desc, &dyn_properties, format_args!("{}", buffer));
+        }
     }
 }
 

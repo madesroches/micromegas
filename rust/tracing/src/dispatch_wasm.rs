@@ -83,6 +83,57 @@ pub fn tagged_integer_metric(
 ) {
 }
 
+/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
+/// bounded.
+#[derive(Debug, Clone, Copy)]
+pub struct DynProperty<'a> {
+    pub name: &'static str,
+    pub value: &'a str,
+}
+
+/// The set with no properties, for calls that only carry dynamic ones.
+pub fn empty_property_set() -> &'static PropertySet {
+    static EMPTY: PropertySet = PropertySet;
+    &EMPTY
+}
+
+#[inline(always)]
+pub fn tagged_float_metric_dyn(
+    _desc: &'static StaticMetricMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    _value: f64,
+) {
+}
+
+#[inline(always)]
+pub fn tagged_integer_metric_dyn(
+    _desc: &'static StaticMetricMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    _value: u64,
+) {
+}
+
+#[inline(always)]
+pub fn log_dyn_tagged(
+    desc: &'static LogMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    log(desc, args);
+}
+
+#[inline(always)]
+pub fn log_interop_dyn_tagged(
+    metadata: &LogMetadata,
+    _dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    log_interop(metadata, args);
+}
+
 #[inline(always)]
 pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
     if let Some(d) = G_DISPATCH.get() {

@@ -4,8 +4,11 @@ use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
-use micromegas_tracing::dispatch::make_process_info;
+use micromegas_tracing::dispatch::{
+    DynProperty, empty_property_set, make_process_info, merge_properties,
+};
 use micromegas_tracing::event::TracingBlock;
+use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::levels::Level;
 use micromegas_tracing::logs;
 use micromegas_tracing::logs::LogBlock;
@@ -13,6 +16,7 @@ use micromegas_tracing::logs::LogStaticStrInteropEvent;
 use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
+use micromegas_tracing::logs::TaggedLogInteropEvent;
 use micromegas_tracing::logs::TaggedLogString;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::Property;
@@ -283,4 +287,147 @@ fn test_tagged_log_entries() {
     let state = guard.sink.state.lock().unwrap();
     assert!(state.process_info.is_some());
     assert!(state.log_stream_desc.is_some());
+}
+
+/// `(msg, properties, wire property set identity)` per parsed entry
+type ParsedEntry = (String, Vec<(String, String)>, usize);
+
+fn parse_tagged_entries(
+    block: &mut Arc<LogBlock>,
+    stream: &LogStream,
+    process_id: uuid::Uuid,
+) -> Vec<ParsedEntry> {
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
+    Arc::get_mut(block).unwrap().close();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
+    let received_block: micromegas_telemetry::block_wire_format::Block =
+        ciborium::from_reader(&encoded[..]).unwrap();
+    let stream_info = make_stream_info(stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
+    let mut entries = vec![];
+    parse_block(&stream_metadata, &received_block.payload, |val| {
+        let entry = log_entry_from_value(
+            &convert_ticks,
+            process_info.clone(),
+            stream.stream_id().to_string().into(),
+            received_block.block_id.to_string().into(),
+            0,
+            val,
+        )
+        .unwrap()
+        .unwrap();
+        let mut props = vec![];
+        entry
+            .properties
+            .for_each_property(|k, v| {
+                props.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            })
+            .unwrap();
+        entries.push((
+            entry.msg.to_owned(),
+            props,
+            entry.properties.object_ptr() as usize,
+        ));
+        Ok(true)
+    })
+    .unwrap();
+    entries
+}
+
+#[test]
+#[serial]
+fn test_dynamic_tagged_log_entries() {
+    let process_id = uuid::Uuid::new_v4();
+    let mut stream = LogStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "",
+        target: "target_name",
+        module_path: "module_path",
+        file: file!(),
+        line: line!(),
+    };
+    let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
+    for (cid, msg) in [("abc", "one"), ("abc", "two"), ("xyz", "three")] {
+        let cid = String::from(cid);
+        let merged = merge_properties(
+            static_set,
+            &[DynProperty {
+                name: "correlation_id",
+                value: &cid,
+            }],
+        );
+        let (events, arena) = stream.get_block_mut_parts();
+        let properties = arena.get_or_insert(&merged);
+        events.push(TaggedLogString {
+            desc: &LOG_DESC,
+            properties,
+            time: 1,
+            msg: DynString(msg.into()),
+        });
+    }
+
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(8192, process_id, stream_id, 0)));
+    let entries = parse_tagged_entries(&mut block, &stream, process_id);
+    assert_eq!(entries.len(), 3);
+    for (_, props, _) in &entries {
+        assert!(props.contains(&("animal".to_owned(), "chicken".to_owned())));
+    }
+    let cid = |i: usize| {
+        entries[i]
+            .1
+            .iter()
+            .find(|(k, _)| k == "correlation_id")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(cid(0).as_deref(), Some("abc"));
+    assert_eq!(cid(1).as_deref(), Some("abc"));
+    assert_eq!(cid(2).as_deref(), Some("xyz"));
+    // one wire property set per distinct content within a block
+    assert_eq!(entries[0].2, entries[1].2);
+    assert_ne!(entries[0].2, entries[2].2);
+}
+
+#[test]
+#[serial]
+fn test_tagged_log_interop_event() {
+    let process_id = uuid::Uuid::new_v4();
+    let mut stream = LogStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    let merged = merge_properties(
+        empty_property_set(),
+        &[DynProperty {
+            name: "correlation_id",
+            value: "abc",
+        }],
+    );
+    let (events, arena) = stream.get_block_mut_parts();
+    let properties = arena.get_or_insert(&merged);
+    events.push(TaggedLogInteropEvent {
+        time: 1,
+        level: Level::Warn as u8,
+        target: intern_string("interop_target").into(),
+        properties,
+        msg: DynString("interop message".into()),
+    });
+
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(8192, process_id, stream_id, 0)));
+    let entries = parse_tagged_entries(&mut block, &stream, process_id);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].0, "interop message");
+    assert_eq!(
+        entries[0].1,
+        vec![("correlation_id".to_owned(), "abc".to_owned())]
+    );
 }
