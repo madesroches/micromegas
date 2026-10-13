@@ -1,6 +1,7 @@
 //! Per-block storage for property sets whose values are not `'static`.
 use crate::{
-    property_set::{Property, PropertySet},
+    dispatch::DynProperty,
+    property_set::{Property, PropertySet, sort_properties},
     static_string_ref::StaticStringRef,
 };
 use std::{
@@ -24,6 +25,33 @@ pub struct PropertyArena {
     len_bytes: usize,
 }
 
+/// Combines a static set with dynamic properties into one sorted list.
+///
+/// A dynamic value replaces a static property of the same name (compared case-insensitively
+/// to match `property_get`). The refs of the dynamic entries point at the caller's strings
+/// and are only valid while those strings are.
+///
+/// # Safety
+/// The strings referenced by `dyn_properties` must outlive every use of the returned list, and
+/// the list must never be passed to `PropertySet::find_or_create`, which would intern the refs.
+pub unsafe fn merge_properties(
+    static_set: &PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) -> Vec<Property> {
+    let mut merged: Vec<Property> = static_set.get_properties().to_vec();
+    for dyn_prop in dyn_properties {
+        merged.retain(|p| !p.name.as_str().eq_ignore_ascii_case(dyn_prop.name));
+        merged.push(Property {
+            name: dyn_prop.name.into(),
+            // SAFETY: the merged list is only used for the duration of the dispatch call,
+            // and the arena copies the value before keeping it.
+            value: unsafe { StaticStringRef::from_str_unchecked(dyn_prop.value) },
+        });
+    }
+    sort_properties(&mut merged);
+    merged
+}
+
 fn content_hash(properties: &[Property]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for prop in properties {
@@ -45,7 +73,7 @@ impl PropertyArena {
     /// values) on first sight. A hit allocates nothing.
     ///
     /// `properties` must already be sorted the way [`PropertySet::find_or_create`] sorts them
-    /// (see `dispatch::merge_properties`), otherwise equal sets may be stored twice.
+    /// (see `merge_properties`), otherwise equal sets may be stored twice.
     pub fn get_or_insert(&mut self, properties: &[Property]) -> *const PropertySet {
         let hash = content_hash(properties);
         if let Some(candidates) = self.index.get(&hash) {

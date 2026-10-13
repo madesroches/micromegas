@@ -1,8 +1,8 @@
 use micromegas_tracing::{
     dispatch::{
         DynProperty, empty_property_set, flush_log_buffer, flush_metrics_buffer, force_uninit,
-        init_event_dispatch, log_dyn_tagged, log_tagged, merge_properties, shutdown_dispatch,
-        tagged_float_metric, tagged_float_metric_dyn,
+        init_event_dispatch, log_dyn_tagged, log_tagged, shutdown_dispatch, tagged_float_metric,
+        tagged_float_metric_dyn,
     },
     event::{EventSink, TracingBlock},
     levels::Level,
@@ -16,6 +16,7 @@ use micromegas_tracing::{
     prelude::*,
     process_info::ProcessInfo,
     property_arena::PropertyArena,
+    property_arena::merge_properties,
     property_set::{Property, PropertySet, property_get},
     spans::{ThreadBlock, ThreadStream},
 };

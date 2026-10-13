@@ -13,7 +13,7 @@ This file documents the historical progress of the Micromegas project. For curre
   layer now maps event fields to dynamic properties (the message text is unchanged).
   **Minor breaking change:** the `properties` field of `TaggedLogString`,
   `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent` is now `*const PropertySet`,
-  `PropertySetDependency` holds and takes `*const PropertySet` (`new` is now crate-private), `dispatch::merge_properties` is `unsafe`, `EventBlock` has a new
+  `PropertySetDependency` holds and takes `*const PropertySet` (`new` is now crate-private), `property_arena::merge_properties` is `unsafe`, `EventBlock` has a new
   `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant,
   `FieldFormatVisitor` has a new `pub` field for the collected fields (breaking struct-literal
   construction), and the `properties` passed to `EventSink::on_log` are only valid for the

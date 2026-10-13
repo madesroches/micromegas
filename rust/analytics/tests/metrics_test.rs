@@ -6,7 +6,7 @@ use micromegas_analytics::{
 };
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
-    dispatch::{DynProperty, make_process_info, merge_properties},
+    dispatch::{DynProperty, make_process_info},
     event::TracingBlock,
     intern_string,
     metrics::{
@@ -14,6 +14,7 @@ use micromegas_tracing::{
         TaggedFloatMetricEvent, TaggedIntegerMetricEvent,
     },
     prelude::*,
+    property_arena::merge_properties,
     property_set::{Property, PropertySet},
     test_utils::init_in_memory_tracing,
     time::now,

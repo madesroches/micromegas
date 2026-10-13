@@ -4,9 +4,7 @@ use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
-use micromegas_tracing::dispatch::{
-    DynProperty, empty_property_set, make_process_info, merge_properties,
-};
+use micromegas_tracing::dispatch::{DynProperty, empty_property_set, make_process_info};
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::levels::Level;
@@ -19,6 +17,7 @@ use micromegas_tracing::logs::LogStringInteropEvent;
 use micromegas_tracing::logs::TaggedLogInteropEvent;
 use micromegas_tracing::logs::TaggedLogString;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::property_arena::merge_properties;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
 use micromegas_tracing::test_utils::init_in_memory_tracing;

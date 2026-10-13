@@ -5,8 +5,8 @@ use crate::intern_string::intern_string;
 use crate::logs::{TaggedLogInteropEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
-use crate::property_set::{Property, PropertySet, sort_properties};
-use crate::static_string_ref::StaticStringRef;
+use crate::property_arena::merge_properties;
+use crate::property_set::PropertySet;
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
     info,
@@ -143,33 +143,6 @@ pub fn empty_property_set() -> &'static PropertySet {
         static ref EMPTY: &'static PropertySet = PropertySet::find_or_create(vec![]);
     }
     *EMPTY
-}
-
-/// Combines a static set with dynamic properties into one sorted list.
-///
-/// A dynamic value replaces a static property of the same name (compared case-insensitively
-/// to match `property_get`). The refs of the dynamic entries point at the caller's strings
-/// and are only valid while those strings are.
-///
-/// # Safety
-/// The strings referenced by `dyn_properties` must outlive every use of the returned list, and
-/// the list must never be passed to `PropertySet::find_or_create`, which would intern the refs.
-pub unsafe fn merge_properties(
-    static_set: &PropertySet,
-    dyn_properties: &[DynProperty<'_>],
-) -> Vec<Property> {
-    let mut merged: Vec<Property> = static_set.get_properties().to_vec();
-    for dyn_prop in dyn_properties {
-        merged.retain(|p| !p.name.as_str().eq_ignore_ascii_case(dyn_prop.name));
-        merged.push(Property {
-            name: dyn_prop.name.into(),
-            // SAFETY: the merged list is only used for the duration of the dispatch call,
-            // and the arena copies the value before keeping it.
-            value: unsafe { StaticStringRef::from_str_unchecked(dyn_prop.value) },
-        });
-    }
-    sort_properties(&mut merged);
-    merged
 }
 
 #[inline(always)]
