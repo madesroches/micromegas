@@ -24,23 +24,6 @@ Issues:
 - Choosing the cheap path is left to the caller. If every value is a `'static` string, the set
   should be interned automatically instead of being copied into the block's arena.
 
-## To do
-- Survey how other instrumentation libraries attach per-call key-values, and how they handle
-  static and dynamic values:
-  - `tracing`: `info!(correlation_id = %cid, n = 3, "msg")`
-  - `log` with the `kv` feature: `info!(correlation_id = cid; "msg")`
-  - `slog`: `o!("key" => value)`
-  - OpenTelemetry: `counter.add(3, &[KeyValue::new("key", value)])`
-  - the `metrics` crate: `counter!("name", "key" => value)` and its static-label handling
-- Propose a single property argument with key-value syntax for `log!`/`info!`/... and
-  `imetric!`/`fmetric!`.
-- Decide where the "all values are static" decision happens: at compile time in the macro
-  (literal values), or at runtime in dispatch.
-- Keep the existing `properties:` form working, or record the break in `CHANGELOG.md`.
-- The SQL surface (`log_entries`/`measures` schemas, `property_get`) and the wire format stay
-  unchanged.
-- Write a short comparison with a recommendation before changing the macros.
-
 ## Survey
 
 | Library | Per-call syntax | Keys | Values | Static/dynamic handling |
@@ -78,20 +61,39 @@ Takeaways:
   macro to a single expansion.
 - **Nothing has shipped.** `dyn_properties:` and the 5-argument metric arms exist only on this
   branch (CHANGELOG `Unreleased`, no callers outside tests and docs). They can be replaced
-  outright. The `properties: set` log arm and the 4-argument metric arm have about 20 callers
-  (`object-cache/src/metric_tags.rs`, `auth/src/db_api_key.rs`,
-  `public/src/servers/pg_stats.rs`, ...). Removing them is a Rust API break (see
-  Recommendation), which the project accepts.
-- **Existing callers that would benefit:**
-  - Callers that rebuild an all-literal set on every call:
-    `ingestion/src/web_ingestion_service.rs:423` and `object-cache/src/metric_tags.rs:78`
-    (`class_tags`). Each call pays a `Vec` allocation, a sort and the global intern lock; this
-    would drop to one atomic load.
-  - Callers that `intern_string` runtime values: `pg_stats.rs`, `view_registry.rs`,
-    `query_deny_list.rs`, `maintenance.rs`. The leak is bounded by design, but
-    `maintenance.rs:105` interns `view_instance_id`, which looks unbounded.
-  - `public/src/utils/log_json_rows.rs` builds runtime property *names*, so it would stay on the
-    function API (`log_dyn_tagged` + `DynProperty`) with interned names.
+  outright. The `properties: set` log arm and the 4-argument metric arm have about 78 non-test
+  callsites (77 four-argument `imetric!`/`fmetric!` plus one `properties:` log) across 14
+  files, mostly `redis-exporter/src/sampler.rs` (31), `public/src/servers/pg_stats.rs` (13),
+  `object-cache/src/foyer_backend.rs` (7), `object-cache/src/range_cache/fetch.rs` (6),
+  `object-cache-srv/src/handlers.rs` (5), `redis-exporter/src/main.rs` (4) and
+  `object-cache/src/range_cache/mod.rs` (4). `object-cache/src/metric_tags.rs` only builds
+  sets. Removing the arms is a Rust API break (see Recommendation), which the project
+  accepts.
+- **Existing callers by migration target:**
+  - Callers that rebuild an all-literal set on every call, which become kv literals: the
+    4-argument callsites whose set is built from literals inline. Each call pays a `Vec`
+    allocation, a sort and the global intern lock; this drops to one atomic load.
+  - `ingestion/src/web_ingestion_service.rs:423` moves to `imetric!(target: ..)` and carries no
+    properties, so the `target:` arm removes its per-call `find_or_create` entirely.
+  - `class_tags` (`object-cache/src/metric_tags.rs:77`) takes a runtime `class_label`, so a
+    literal arm can't match it. Its callers (`range_cache/fetch.rs:326`, `:340`) already use
+    the precomputed `run_demand_tag` / `run_prefetch_tag` sets (`fetch.rs:318-322`) and move to
+    `..set`.
+  - Callers that `intern_string` bounded runtime values per call become dynamic kv pairs, so the
+    interning goes away: `pg_stats.rs:46-59`, `view_registry.rs:43-48`,
+    `query_deny_list.rs:355-360`, `maintenance.rs:103-106`. Where a set is already precomputed
+    once (not rebuilt per call) it becomes `..set` instead. `maintenance.rs:105` interns
+    `view_instance_id`, which looks unbounded; as a dynamic kv value it is borrowed and the
+    leak disappears.
+  - `object-cache-srv/src/handlers.rs:200/255/400/463/609` do a per-call `find_or_create`
+    with runtime values; they become dynamic kv pairs.
+  - `redis-exporter/src/sampler.rs:22-33` interns user-supplied property names and values.
+    The names are runtime, so it stays on the function API (`DynProperty` with interned
+    names) or on interned sets passed as `..set`.
+  - `public/src/utils/log_json_rows.rs` builds runtime property *names*, so it stays on the
+    function API (`log_dyn_tagged` + `DynProperty`) with interned names and borrowed values.
+    This also removes the per-row value-interning leak. It relies on the log `target`
+    override (`Property::new("target", target)`), which survives through `DynProperty`.
 
 ## Prototype
 
@@ -129,6 +131,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   macros then read the same and produce the same rows. For metrics, the fields go between the
   unit and the value, so the value stays last as in the 3-argument arm. The kv arms must come
   before `($name, $unit, $value)`, because `$value:expr` fails hard on `k = %v`.
+- **`target:`** (logs and metrics) is a separate arm that takes no properties, as today.
 - **Keys:** an ident, which is `stringify!`-ed, or a string literal for dotted or semconv names.
   Keys are always `'static`.
 - **Values:**
@@ -148,22 +151,22 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   ```rust
   imetric!("object_cache_disk_tier_hit", "count", ..t.prefix, 1_u64);
   imetric!("range_cache_block_request", "count", ..block_tag, correlation_id = cid, 1_u64);
-  info!(..pset, "{}", from_utf8(&buffer)?);
+  imetric!("object_cache_disk_tier_miss", "count", ..t.prefix, 1_u64);
   ```
 
   A list can hold at most one `..set`. With a spread present, literal pairs go to the dynamic
   bucket, because merging two static sets would cost an intern lookup on every call. The
   muncher handles this with an extra `{set}` accumulator (prototyped).
-- **Routing:** the macro always calls the `*_dyn` entry point with one static set (the spread
+- **Routing:** calls with no properties keep today's untagged path (`log!` to
+  `dispatch::log`, the 3-argument metric arm to `int_metric` / `float_metric`). Only
+  property-bearing calls go through the `*_dyn` entry point with one static set (the spread
   set, the callsite literal set, or `PropertySet::empty()`) and the dynamic slice. Dispatch
   takes the arena-free path when the slice is empty. The cases that are optimal today keep
   their cost:
-  - `..set` only → today's `properties: set` (pointer pass-through, no merge, no arena);
-  - literals only → the same, after one atomic load of the per-callsite `OnceLock`. This
-    beats today's per-call `find_or_create` callers (`web_ingestion_service.rs:423`,
-    `class_tags`);
-  - no properties → the untagged `int_metric` / `log` path, unchanged;
-  - dynamic values → today's `dyn_properties:` cost (one merge and content hash, plus an arena
+  - `..set` only: today's `properties: set` (pointer pass-through, no merge, no arena);
+  - literals only: the same, after one atomic load of the per-callsite `OnceLock`. This beats
+    today's per-call `find_or_create` callers that build all-literal sets inline;
+  - dynamic values: today's `dyn_properties:` cost (one merge and content hash, plus an arena
     copy once per block).
 - **Removed (breaking):** `properties:` (logs), the 4-argument `imetric!`/`fmetric!` arm,
   `dyn_properties:` and the 5-argument arms. All in-repo callers move to `..set` or kv pairs.
@@ -187,8 +190,11 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     hatch.
   - **Metric macros gain `target:`** (`imetric!(target: "micromegas::ingestion", "name",
     "unit", v)`), matching the log macros. It sets `StaticMetricMetadata::target` instead of
-    `module_path!()`. `web_ingestion_service.rs:423`, the only in-repo caller of the `target`
-    override, moves to it.
+    `module_path!()`. Like the log `target:` arm today (`macros.rs:325` vs the property arms),
+    it takes no properties and does not combine with kv pairs or `..set`.
+    `web_ingestion_service.rs:423`, the only in-repo *metric* caller of the `target` override,
+    moves to it and needs no properties. `log_json_rows.rs` also relies on the log `target`
+    override, which it keeps only through the function / `DynProperty` path or a spread.
   - **Analytics keeps the override** (SQL and wire format are stable, and blocks already
     ingested rely on it). One fix: an unparseable `level` override no longer fails the whole
     block. `log_entry_from_value` keeps the descriptor's level and logs a warning instead of
@@ -197,3 +203,39 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     `level` property parses, and the row keeps the descriptor level.
 - **Other notes:** the wasm stubs need the callsite-set helper. The `target:` metric arm also
   needs wasm-compatible expansion (it only changes the static metadata).
+
+## Implementation Steps
+
+1. Per-callsite literal-set helper (`OnceLock<&'static PropertySet>` filled by `find_or_create`)
+   in `rust/tracing`, plus the matching wasm32 stub next to the `property_set` stub in
+   `rust/tracing/src/lib.rs` (~157-177).
+2. Short-circuit an empty dynamic slice before `merge_properties` in
+   `rust/tracing/src/dispatch.rs` (or in the free functions).
+3. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
+   (kv muncher, `..set`, reserved-key `compile_error!` arms, metric `target:` arm).
+4. Migrate the ~78 callsites (see Constraints) to kv pairs or `..set`; keep `log_json_rows.rs`
+   and the `redis-exporter` sampler on the function API.
+5. `analytics/src/log_entry.rs`: keep the descriptor level and warn on an unparseable `level`
+   override.
+6. Tests (below).
+7. Docs and CHANGELOG (below).
+
+### Tests
+- Update `rust/tracing/tests/test_macros.rs` (`properties:` at 29-45, 4-argument metrics at
+  86-103) to the new syntax.
+- Each kv form: literal, expr, `%`, `?`, string-literal key, `..set`, `..set` mixed with kv.
+- Pointer equality of the per-callsite literal set across calls.
+- Named format args after the format string.
+- Metric `target:` arm.
+- No-property calls still emit untagged events.
+- `compile_fail` doctests in `macros.rs` (none exist today) for reserved keys and a double
+  `..set`.
+- No-DB unit test in `analytics/tests/log_tests.rs` for the invalid `level` override.
+
+### Docs
+- `rust/tracing/src/lib.rs:51-76` (Dynamic properties section; lines 73-75 say an invalid level
+  fails the block, which is wrong after the analytics fix).
+- `rust/tracing/src/macros.rs` doc comments (~163-180, ~239, ~308-322).
+- `rust/tracing/README.md:25`.
+- `CHANGELOG.md:7-9` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
+  arm and reserved-name rejection, with the **Minor breaking change** clause.
