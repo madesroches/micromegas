@@ -234,13 +234,16 @@ fn test_dynamic_tagged_measures() {
     };
     let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
     let correlation_id = String::from("abc");
-    let merged = merge_properties(
-        static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: &correlation_id,
-        }],
-    );
+    // SAFETY: `correlation_id` outlives `merged`, which is never interned.
+    let merged = unsafe {
+        merge_properties(
+            static_set,
+            &[DynProperty {
+                name: "correlation_id",
+                value: &correlation_id,
+            }],
+        )
+    };
     let (events, arena) = stream.get_block_mut_parts();
     let properties = arena.get_or_insert(&merged);
     events.push(TaggedIntegerMetricEvent {

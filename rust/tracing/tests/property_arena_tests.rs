@@ -51,7 +51,8 @@ fn owned_props(props: &[(&'static str, &str)]) -> Vec<Property> {
         .iter()
         .map(|(name, value)| DynProperty { name, value })
         .collect();
-    merge_properties(empty_property_set(), &dyn_props)
+    // SAFETY: callers keep the value strings alive while using the result, and never intern it.
+    unsafe { merge_properties(empty_property_set(), &dyn_props) }
 }
 
 fn set_as_pairs(set: *const PropertySet) -> Vec<(String, String)> {
@@ -113,19 +114,22 @@ fn merge_dynamic_overrides_static_case_insensitively() {
         Property::new("Region", "eu"),
         Property::new("kind", "t"),
     ]);
-    let merged = merge_properties(
-        static_set,
-        &[
-            DynProperty {
-                name: "region",
-                value: "us",
-            },
-            DynProperty {
-                name: "correlation_id",
-                value: "abc",
-            },
-        ],
-    );
+    // SAFETY: the values are string literals and `merged` is never interned.
+    let merged = unsafe {
+        merge_properties(
+            static_set,
+            &[
+                DynProperty {
+                    name: "region",
+                    value: "us",
+                },
+                DynProperty {
+                    name: "correlation_id",
+                    value: "abc",
+                },
+            ],
+        )
+    };
     assert_eq!(merged.len(), 3);
     assert_eq!(property_get(&merged, "region"), Some("us"));
     assert_eq!(property_get(&merged, "kind"), Some("t"));

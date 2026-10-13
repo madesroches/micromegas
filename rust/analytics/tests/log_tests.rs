@@ -361,13 +361,16 @@ fn test_dynamic_tagged_log_entries() {
     let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
     for (cid, msg) in [("abc", "one"), ("abc", "two"), ("xyz", "three")] {
         let cid = String::from(cid);
-        let merged = merge_properties(
-            static_set,
-            &[DynProperty {
-                name: "correlation_id",
-                value: &cid,
-            }],
-        );
+        // SAFETY: `cid` outlives `merged`, which is never interned.
+        let merged = unsafe {
+            merge_properties(
+                static_set,
+                &[DynProperty {
+                    name: "correlation_id",
+                    value: &cid,
+                }],
+            )
+        };
         let (events, arena) = stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
         events.push(TaggedLogString {
@@ -405,13 +408,16 @@ fn test_tagged_log_interop_event() {
     let process_id = uuid::Uuid::new_v4();
     let mut stream = LogStream::new(8192, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
-    let merged = merge_properties(
-        empty_property_set(),
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
-    );
+    // SAFETY: the value is a string literal and `merged` is never interned.
+    let merged = unsafe {
+        merge_properties(
+            empty_property_set(),
+            &[DynProperty {
+                name: "correlation_id",
+                value: "abc",
+            }],
+        )
+    };
     let (events, arena) = stream.get_block_mut_parts();
     let properties = arena.get_or_insert(&merged);
     events.push(TaggedLogInteropEvent {

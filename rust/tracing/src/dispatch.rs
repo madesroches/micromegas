@@ -149,7 +149,11 @@ pub fn empty_property_set() -> &'static PropertySet {
 /// A dynamic value replaces a static property of the same name (compared case-insensitively
 /// to match `property_get`). The refs of the dynamic entries point at the caller's strings
 /// and are only valid while those strings are.
-pub fn merge_properties(
+///
+/// # Safety
+/// The strings referenced by `dyn_properties` must outlive every use of the returned list, and
+/// the list must never be passed to `PropertySet::find_or_create`, which would intern the refs.
+pub unsafe fn merge_properties(
     static_set: &PropertySet,
     dyn_properties: &[DynProperty<'_>],
 ) -> Vec<Property> {
@@ -793,7 +797,8 @@ impl Dispatch {
         value: f64,
     ) {
         let time = now();
-        let merged = merge_properties(properties, dyn_properties);
+        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
+        let merged = unsafe { merge_properties(properties, dyn_properties) };
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         let (events, arena) = metrics_stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
@@ -818,7 +823,8 @@ impl Dispatch {
         value: u64,
     ) {
         let time = now();
-        let merged = merge_properties(properties, dyn_properties);
+        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
+        let merged = unsafe { merge_properties(properties, dyn_properties) };
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         let (events, arena) = metrics_stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
@@ -953,7 +959,8 @@ impl Dispatch {
             return;
         }
         let time = now();
-        let merged = merge_properties(properties, dyn_properties);
+        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
+        let merged = unsafe { merge_properties(properties, dyn_properties) };
         // Before taking the lock, so that local sinks can log without deadlocking.
         self.get_sink().on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
@@ -980,7 +987,8 @@ impl Dispatch {
         args: fmt::Arguments<'_>,
     ) {
         let time = now();
-        let merged = merge_properties(empty_property_set(), dyn_properties);
+        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
+        let merged = unsafe { merge_properties(empty_property_set(), dyn_properties) };
         self.get_sink().on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();

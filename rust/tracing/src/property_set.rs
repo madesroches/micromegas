@@ -64,7 +64,7 @@ pub struct PropertySetDependency {
 impl PropertySetDependency {
     /// `set` must stay valid until the dependency is written: interned sets always are,
     /// arena sets live as long as the block that `extract` runs on.
-    pub fn new(set: *const PropertySet) -> Self {
+    pub(crate) fn new(set: *const PropertySet) -> Self {
         Self { set }
     }
 

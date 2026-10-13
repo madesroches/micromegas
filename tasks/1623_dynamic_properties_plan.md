@@ -407,3 +407,19 @@ All of these are no-DB unit tests under `rust/tracing/tests/`, `rust/telemetry-s
     to the one analytics parser.
 - Existing `parse_corrupt_block_tests.rs` and the property-set tests keep passing against the
   changed field types.
+
+## Implementation Status
+
+- Steps 1-8 are implemented in one commit on the `properties` branch, with the new tests
+  (`property_arena_tests.rs`, `tracing_interop_tests.rs`, and the dynamic round-trip tests in
+  `log_tests.rs` / `metrics_test.rs`). `cargo fmt`, `cargo clippy --workspace --all-targets
+  -- -D warnings` and the tracing, transit, telemetry-sink and analytics tests pass. The
+  object-cache tests compile but were not run.
+- Deviations from the plan as written:
+  - `dispatch::empty_property_set()` is public (native and wasm), so the dyn-only `log!` arm
+    doesn't need `lazy_static` in user crates.
+  - `record_properties` is an `unsafe fn`, because it dereferences a raw pointer.
+- Review loop round 1 found that `merge_properties` (safe, public) returns refs that borrow the
+  caller's strings, and that `PropertySetDependency::new` is a safe constructor over a raw
+  pointer. The fix makes `merge_properties` an `unsafe fn` and narrows
+  `PropertySetDependency::new`. Further review rounds are still running.
