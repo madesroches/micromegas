@@ -80,15 +80,18 @@ Takeaways:
     calls passing `props`) become `..set` with no other change. The 7 `sampler.rs` calls through
     `with_extra` belong to the sampler bullet below.
   - `rule_tags` (analytics, `query_deny_list.rs` ~616-619 and `flight_sql_service_impl.rs`
-    ~828) builds the set per call at both callers, so both become `rule_id = %rule_id`;
-    `rule_tags`, its doc comment (`query_deny_list.rs:352-355`), its import at
-    `flight_sql_service_impl.rs:43` and the `intern_string` (:21) and `Property, PropertySet`
+    ~828) builds the set per call at both callers: the `query_deny_list.rs` caller becomes
+    `rule_id = %rule_id` and the `flight_sql_service_impl.rs` caller `rule_id = %rule.row.rule_id`;
+    `rule_tags`, its doc comment (`query_deny_list.rs:352-355`), `rule_tags` in the
+    grouped `use` list at `flight_sql_service_impl.rs:43`, and the `intern_string` (:21) and `Property, PropertySet`
     (:23) imports in `query_deny_list.rs` are deleted.
   - `auth/src/db_api_key.rs:390` (`table_tags`, a per-call `find_or_create` defined at `:215`)
     becomes a dynamic `table = ..` pair, and `table_tags` is deleted. The values are `&'static str` from a fixed table set,
     and as dynamic kv they pay a merge plus an arena copy; that cost is accepted.
   - Callers that `intern_string` bounded runtime values per call become dynamic kv pairs, so the
-    interning goes away: `pg_stats.rs:46-59`, `view_registry.rs:43-48`,
+    interning goes away: the `pg_stats.rs` callers (:84, :137, :267; at :84 and :137 the pairs
+    repeat at each of the 12 `imetric!` calls sharing the `tags` local), the `view_registry.rs`
+    caller (~:105),
     `maintenance.rs:103-106` (its `Arc<String>` value is a bare value). The helpers and imports
     left dead are deleted with their doc comments: in `pg_stats.rs` `table_tags` (:45),
     `index_tags` (:50), `state_tags` (:58) and the `intern_string` (:22) and
@@ -99,13 +102,15 @@ Takeaways:
     with runtime values; they become dynamic kv pairs, and the `Property, PropertySet` import
     (:18) is deleted.
   - `redis-exporter/src/sampler.rs:22-33` interns user-supplied property names and values. The
-    realistic path is kv pairs plus a trailing `..props` (e.g. `event = event, ..props` for
-    `with_extra`)
+    realistic path is kv pairs plus a trailing `..props` (`with_extra`'s three callsites become
+    `event = event, ..props`, `db = %entry.db, ..props` (`db` is a `u32`, which has no bare
+    `PropertyValue` impl) and `command = stat.name, ..props`)
     rather than hand-written `StaticMetricMetadata` at its 31 callsites. `with_extra` (private)
     has no callers left and is deleted.
   - `public/src/utils/log_json_rows.rs` is deleted, along with its `pub mod log_json_rows;` line
     in `public/src/utils/mod.rs`. That leaves `utils/mod.rs` empty and the `utils` module unused,
-    so `utils/mod.rs` and the `pub mod utils;` line in `public/src/lib.rs` (:190) are removed too.
+    so `utils/mod.rs` and the `pub mod utils;` line in `public/src/lib.rs` are removed too (lines 189-190, together with its
+    `#[cfg(feature = "server")]` attribute).
 
 ## Prototype
 
@@ -217,11 +222,9 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     copy once per block).
 - **Removed (breaking):** `properties:` (logs), the 4-argument `imetric!`/`fmetric!` arm,
   `dyn_properties:` and the 5-argument arms. All in-repo callers move to `..set` or kv pairs.
-  The CHANGELOG entry gets a **Minor breaking change** clause for the `properties:` / 4-argument
-  forms and the removed public helpers `class_tags`, `rule_tags` and the `log_json_rows` module, and notes the dropped
-  `target` property on `payload_size_inserted`. The `dyn_properties:` forms were never released and just disappear from the entry.
 - **Kept:** the dispatch functions (`log_tagged`, `log_dyn_tagged`, `tagged_*_metric[_dyn]`)
-  and `DynProperty`, for lists built at runtime (`tracing` interop).
+  stay as the macros' expansion targets; `DynProperty` stays for lists built at runtime (the
+  `tracing` interop, via `log_interop_dyn_tagged`).
 - **Unchanged:** the SQL surface, the wire format, and the arena.
 - **Reserved names.** Analytics treats some property names as column overrides:
   - logs (`analytics/src/log_entry.rs`, `TaggedLogString` arm): `target` and `level`;
@@ -262,7 +265,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
    `property_set.rs`.
 3. Short-circuit an empty dynamic slice in the `Dispatch` methods in
    `rust/tracing/src/dispatch.rs`: `log_dyn_tagged` forwards to `log_tagged`, before its own
-   enabled check and before `merge_properties`, so the sink check never runs three times;
+   enabled check and before `merge_properties`, so the sink check runs once instead of twice;
    `tagged_integer_metric_dyn` / `tagged_float_metric_dyn` forward to `tagged_integer_metric` /
    `tagged_float_metric`, before `merge_properties` and `get_or_insert`.
 4. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
@@ -333,7 +336,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   high-cardinality values).
 - `CHANGELOG.md:7-20` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
   arm and reserved-name rejection, appending to the existing **Minor breaking change** clause
-  at 14-20 (including the removed `class_tags` in `micromegas-object-cache` `metric_tags` and
+  at 14-20 (including the removed `properties:` / 4-argument forms, `class_tags` in `micromegas-object-cache` `metric_tags` and
   `rule_tags` in analytics, and the removed `micromegas::utils::log_json_rows` module, and the dropped `target` property on `payload_size_inserted`).
 
 ## Decisions
