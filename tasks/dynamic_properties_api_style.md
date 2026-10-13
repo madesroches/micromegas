@@ -106,9 +106,11 @@ Takeaways:
 
 I checked the macro mechanics in a throwaway crate (stable Rust, edition 2024) with a
 `macro_rules` tt-muncher that sorts each pair into a static bucket or a dynamic bucket:
-- `$k:ident = $v:literal` and `$k:literal = $v:literal` (listed before the `expr` arm) go to
-  the static bucket. `$k = %$v`, `$k = ?$v` and `$k = $v:expr` go to the dynamic bucket.
-  Unlike `expr`, a `literal` fragment that doesn't match falls through to the next arm cleanly.
+- Keys are matched as `$k:tt =`, and values `$v:literal` go to the static bucket. `$k = %$v`,
+  `$k = ?$v` and `$k = $v:expr` go to the dynamic bucket. A `tt` never fails fatally, whereas a
+  `$k:literal` key arm turns a metric value starting with `-` (`fmetric!("n", "u", -x)`) into a
+  hard parse error, since `-` can begin a literal. A helper classifies the key: an ident is
+  `stringify!`-ed, a literal passes through, anything else is a `compile_error!`.
 - Temporaries such as `&*$v.to_string()` inside the inline `&[DynProperty { .. }]` array live
   until the end of the dispatch call, so no `let` bindings or generated identifiers are needed.
 - Both shapes parse: tracing-style `k = v, .., "fmt", args` (a string-literal key is told apart
@@ -140,7 +142,9 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   macros then read the same and produce the same rows. For metrics, the fields go between the
   unit and the value, so the value stays last as in the 3-argument arm. The kv arms must come
   before `($name, $unit, $value)`, because `$value:expr` fails hard on `k = %v`.
-- **`target:`** (logs and metrics) is a separate arm that takes no properties, as today.
+- **`target:`** (logs and metrics) enters the same kv muncher, with the target as an
+  accumulator that defaults to `module_path!()`: `info!(target: "x", k = v, "msg")` and
+  `imetric!(target: "x", "n", "u", k = v, value)` work.
 - **Keys:** an ident, which is `stringify!`-ed, or a string literal for dotted or semconv names.
   Keys are always `'static`.
 - **Values:**
@@ -194,13 +198,13 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   - **Macros reject them.** Arms ahead of the generic kv arms match, for the log macros,
     `level` and `target`, and for `imetric!`/`fmetric!`, `target`, `name` and `unit`, as ident keys or as string-literal keys, and expand to a `compile_error!` that
     names the real argument. This keeps `info!(target = x, ..)` from being confused with
-    `info!(target: x, ..)`. The macros can't see inside a `..set` spread or a runtime
+    `info!(target: x, ..)`. The error is a `compile_error!` from a classifier arm on the `tt` key
+  (reserved-key arms stay exact-token arms). The macros can't see inside a `..set` spread or a runtime
     `DynProperty` slice, so overrides through those still work; this is the documented escape
     hatch.
   - **Metric macros gain `target:`** (`imetric!(target: "micromegas::ingestion", "name",
     "unit", v)`), matching the log macros. It sets `StaticMetricMetadata::target` instead of
-    `module_path!()`. Like the log `target:` arm today (`macros.rs:325` vs the property arms),
-    it takes no properties and does not combine with kv pairs or `..set`.
+    `module_path!()`, and combines with kv pairs and `..set` through the shared muncher.
     `web_ingestion_service.rs:423`, the only in-repo *metric* caller of the `target` override,
     moves to it and needs no properties. `log_json_rows.rs` also relies on the log `target`
     override, which it keeps only through the function / `DynProperty` path or a spread.
@@ -234,7 +238,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 2. Short-circuit an empty dynamic slice before `merge_properties` in
    `rust/tracing/src/dispatch.rs` (or in the free functions).
 3. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
-   (kv muncher, `..set`, reserved-key `compile_error!` arms, metric `target:` arm).
+   (kv muncher matching keys as `$k:tt =` with a key-classifying helper, `..set`, reserved-key
+   `compile_error!` arms, `target:` arms feeding the muncher on logs and metrics).
 4. Migrate the ~77 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
    `dispatch::log_dyn_tagged` with a hand-written `static LogMetadata` and the level gate, and
    the `redis-exporter` sampler to `..props` plus kv pairs.
@@ -251,7 +256,9 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - Each kv form: literal, expr, `%`, `?`, string-literal key, `..set`, `..set` mixed with kv.
 - Pointer equality of the per-callsite literal set across calls.
 - Named format args after the format string.
-- Metric `target:` arm.
+- Metric `target:` arm, and `target:` combined with kv pairs on logs (`info!(target: "x", k = v,
+  "msg")`) and metrics.
+- A metric value starting with `-`: `fmetric!("n", "u", -x)` and `fmetric!("n", "u", k = v, -x)`.
 - A cfg-gated test in `rust/datafusion-wasm` (covered by `run_wasm()` in `build/rust_ci.py`,
   which only runs fmt/clippy/tests there) that expands the kv, `..PropertySet::empty()` (the
   only `&'static PropertySet` on wasm32) and metric `target:` arms under
