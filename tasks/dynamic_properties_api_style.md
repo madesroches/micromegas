@@ -59,9 +59,9 @@ Takeaways:
   macro to a single expansion.
 - **Nothing has shipped.** `dyn_properties:` and the 5-argument metric arms exist only on this
   branch (CHANGELOG `Unreleased`, no callers outside tests and docs). They can be replaced
-  outright. The `properties: set` log arm and the 4-argument metric arm have about 77 non-test
-  callsites (76 four-argument `imetric!`/`fmetric!` plus one `properties:` log) across 14
-  files. Removing the arms is a Rust API break (see Recommendation), which the project
+  outright. The `properties: set` log arm and the 4-argument metric arm have about 76 non-test
+  callsites (76 four-argument `imetric!`/`fmetric!`; the one `properties:` log, in
+  `log_json_rows.rs`, is deleted with that file) across 13 files. Removing the arms is a Rust API break (see Recommendation), which the project
   accepts.
 - **Existing callers by migration target:**
   - `ingestion/src/web_ingestion_service.rs:420` moves to `imetric!(target: "micromegas::ingestion", ..)`
@@ -103,9 +103,9 @@ Takeaways:
     `with_extra`)
     rather than hand-written `StaticMetricMetadata` at its 31 callsites. `with_extra` (private)
     has no callers left and is deleted.
-  - `public/src/utils/log_json_rows.rs` already builds a `&'static PropertySet` per row
-    (`find_or_create`, :45), so it becomes `info!(..pset, "{}", ...)`. The `target` override
-    (`Property::new("target", target)`) survives through the spread.
+  - `public/src/utils/log_json_rows.rs` is deleted, along with its `pub mod log_json_rows;` line
+    in `public/src/utils/mod.rs`. That leaves `utils/mod.rs` empty and the `utils` module unused,
+    so `utils/mod.rs` and the `pub mod utils;` line in `public/src/lib.rs` (:190) are removed too.
 
 ## Prototype
 
@@ -218,7 +218,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - **Removed (breaking):** `properties:` (logs), the 4-argument `imetric!`/`fmetric!` arm,
   `dyn_properties:` and the 5-argument arms. All in-repo callers move to `..set` or kv pairs.
   The CHANGELOG entry gets a **Minor breaking change** clause for the `properties:` / 4-argument
-  forms and the removed public helpers `class_tags` and `rule_tags`, and notes the dropped
+  forms and the removed public helpers `class_tags`, `rule_tags` and the `log_json_rows` module, and notes the dropped
   `target` property on `payload_size_inserted`. The `dyn_properties:` forms were never released and just disappear from the entry.
 - **Kept:** the dispatch functions (`log_tagged`, `log_dyn_tagged`, `tagged_*_metric[_dyn]`)
   and `DynProperty`, for lists built at runtime (`tracing` interop).
@@ -236,8 +236,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     `compile_error!` naming the real argument. This keeps `info!(target = x, ..)` from being
     confused with `info!(target: x, ..)`. The macros can't see inside a `..set` spread or a
     runtime `DynProperty` slice, so overrides through those still work; this is the documented
-    escape hatch. `log_json_rows.rs` relies on the log `target` override, which it keeps through a
-    spread.
+    escape hatch.
   - **Analytics keeps the override** (SQL and wire format are stable, and blocks already
     ingested rely on it).
 - **Other notes:** the wasm stubs need the callsite-set helper. The `target:` metric arm also
@@ -261,9 +260,11 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 2. Add the `PropertyValue` trait (with the explicit impls above) to `rust/tracing`, in a module
    compiled on both targets (it only needs `std::borrow::Cow`), not in the native-only
    `property_set.rs`.
-3. Short-circuit an empty dynamic slice in `rust/tracing/src/dispatch.rs`, before
-   `log_dyn_tagged`'s own enabled check and before `merge_properties`, so the sink check never
-   runs three times.
+3. Short-circuit an empty dynamic slice in the `Dispatch` methods in
+   `rust/tracing/src/dispatch.rs`: `log_dyn_tagged` forwards to `log_tagged`, before its own
+   enabled check and before `merge_properties`, so the sink check never runs three times;
+   `tagged_integer_metric_dyn` / `tagged_float_metric_dyn` forward to `tagged_integer_metric` /
+   `tagged_float_metric`, before `merge_properties` and `get_or_insert`.
 4. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
    (kv muncher matching keys as `$k:tt =` with a key-classifying helper, trailing `..set` only,
    `PropertyValue` for bare values, `$k = - $v:literal` and the token-forwarding `-` fallback
@@ -272,8 +273,9 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
    `LogMetadata.fmt_str` is taken from the format-string tokens the muncher separates out, not
    from the whole argument list (today's arms use `$crate::__first_arg!($($arg)+)`, which on
    `k = v, "msg"` returns `k`).
-5. Migrate the ~77 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
-   `info!(..pset, ..)`, and the `redis-exporter` sampler to kv pairs plus a trailing `..props`.
+5. Migrate the ~76 callsites (see Constraints) to kv pairs or `..set`, move the `redis-exporter`
+   sampler to kv pairs plus a trailing `..props`, and delete `log_json_rows.rs` (and the now-empty
+   `utils` module).
 6. Tests (below).
 7. Docs and CHANGELOG (below).
 
@@ -296,7 +298,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   pattern of `rust/tracing/tests/property_arena_tests.rs` (~187-250, and
   `static_path_does_not_touch_arena` ~310-337), compare the event's `properties` pointer for one
   callsite across iterations/flushes and assert the block arena stays empty for the literal
-  path.
+  path, for logs and for `imetric!`/`fmetric!` (literal-only and `..set`-only calls).
 - Named format args after the format string.
 - Metric `target:` arm, and `target:` combined with kv pairs on logs (`info!(target: "x", k = v,
   "msg")`) and metrics.
@@ -332,13 +334,13 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - `CHANGELOG.md:7-20` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
   arm and reserved-name rejection, appending to the existing **Minor breaking change** clause
   at 14-20 (including the removed `class_tags` in `micromegas-object-cache` `metric_tags` and
-  `rule_tags` in analytics, and the dropped `target` property on `payload_size_inserted`).
+  `rule_tags` in analytics, and the removed `micromegas::utils::log_json_rows` module, and the dropped `target` property on `payload_size_inserted`).
 
 ## Decisions
 - `class_tags` is deleted; its callers use a dynamic `class = class` pair.
 - The analytics invalid-`level` handling (`log_entry.rs`) is out of scope; to be done as its own change.
 - Bare values go through a project-owned value trait with explicit impls (strings now; integer/bool impls can be added later without a break).
 - `..set` must be last in the property list.
-- `log_json_rows`'s value-interning leak is out of scope for this change.
+- `log_json_rows` is deleted rather than migrated: it has no callers.
 - On enabled dynamic logs the sink-enabled check runs twice (the macro gate and `log_dyn_tagged`); this duplicate is accepted.
 - No dedicated `compile_error!` arms for the removed `properties:` / `dyn_properties:` forms; the CHANGELOG breaking-change entry points users to `..set` and kv pairs.
