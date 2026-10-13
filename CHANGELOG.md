@@ -8,7 +8,8 @@ This file documents the historical progress of the Micromegas project. For curre
   `log!`/`info!`/... and `imetric!`/`fmetric!`, in the style of the `tracing` crate:
   `info!(correlation_id = cid, region = "eu", "fetched {n} rows")` and
   `imetric!("rows_fetched", "count", correlation_id = cid, region = "eu", n)`. Keys are identifiers
-  or string literals. Literal values are interned once per callsite; other values (a bare string,
+  or string literals. Literal values are interned once per callsite (unless a `..set` is
+  spread, which copies every pair into the block); other values (a bare string,
   `%value` for `Display`, `?value` for `Debug`) are copied into the block's arena, which counts
   against the block's size budget and is freed with the block, so nothing leaks, and they are
   only evaluated when the log entry is enabled. A precomputed `&'static PropertySet` is spread as

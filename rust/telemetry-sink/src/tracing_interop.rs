@@ -44,10 +44,12 @@ impl Visit for FieldFormatVisitor<'_> {
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        let formatted = format!("{value:?}");
+        // `Arguments` debug-prints verbatim, so the value is not formatted a second time.
+        self.write_message_part(field, &format_args!("{formatted}"));
         if Self::is_property(field) {
-            self.properties.push((field.name(), format!("{value:?}")));
+            self.properties.push((field.name(), formatted));
         }
-        self.write_message_part(field, value);
     }
 }
 
