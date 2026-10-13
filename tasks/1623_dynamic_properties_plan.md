@@ -232,8 +232,10 @@ Those events have no properties.
   collects each field other than `message` and those whose name starts with `log.` (the
   `log.target` / `log.module_path` / `log.file` / `log.line` fields added by `tracing-log` for
   bridged `log` records) as `(name, value)`:
-  `record_str` keeps the `&str` as an owned copy, and the other `record_*` methods format with
-  `Debug`, as they do for the message today. The collected `(name, value)` list is a `pub` field
+  `record_str` pushes the `&str` as an owned copy and writes its `name=value` message text through
+  a non-collecting helper rather than the collecting `record_debug` path (otherwise a `&str` field
+  is collected twice, raw and Debug-quoted); the other `record_*` methods format with `Debug`, as
+  they do for the message today. The collected `(name, value)` list is a `pub` field
   of `FieldFormatVisitor` so the external test can read it. The message text stays exactly as it is
   (`name=value` included), so existing queries that match on `msg` keep working.
 - **Wire event.** A Rust `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`) mirrors
@@ -419,8 +421,8 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   - Routing (`rust/telemetry-sink/tests/tracing_interop_tests.rs`, new, `#[serial]`): install
     `TracingCaptureLayer` with `tracing::subscriber::with_default` under
     `micromegas_tracing::test_utils::init_in_memory_tracing()`, emit events, flush, and inspect
-    `InMemorySink.state.log_blocks`. An event with fields (`correlation_id = %id`, `n = 3`) lands
-    as a `TaggedLogInteropEvent` carrying those properties, with `message` and a `log.*` field
+    `InMemorySink.state.log_blocks`. An event with fields (`correlation_id = %id`, `n = 3`, `user = "bob"`) lands
+    as a `TaggedLogInteropEvent` carrying those properties, with `user` appearing exactly once, unquoted, and with `message` and a `log.*` field
     (e.g. `log.module_path`) excluded and the msg text unchanged. An event without fields lands
     as `LogStaticStrInteropEvent` / `LogStringInteropEvent`.
   - Round trip: a block holding a Rust `TaggedLogInteropEvent` parses through
