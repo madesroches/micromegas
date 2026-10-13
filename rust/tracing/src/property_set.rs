@@ -24,6 +24,19 @@ impl Property {
     }
 }
 
+/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
+/// bounded.
+///
+/// For `log!` and metric macros, analytics treats some names as column overrides:
+/// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). A dynamic `level` must be a
+/// valid level name or the block fails to parse. Interop logs (the `tracing` layer) keep their
+/// level and target unchanged.
+#[derive(Debug, Clone, Copy)]
+pub struct DynProperty<'a> {
+    pub name: &'static str,
+    pub value: &'a str,
+}
+
 pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a str> {
     properties.iter().find_map(|p| {
         if p.name.as_str().eq_ignore_ascii_case(name) {
@@ -40,7 +53,7 @@ pub struct PropertySet {
 }
 
 /// Canonical property order, so that equal sets hash equally.
-pub fn sort_properties(properties: &mut [Property]) {
+pub(crate) fn sort_properties(properties: &mut [Property]) {
     properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
 }
 
@@ -49,6 +62,14 @@ impl PropertySet {
         sort_properties(&mut properties);
         let set = PropertySet { properties };
         Intern::<PropertySet>::new(set).as_ref()
+    }
+
+    /// The interned set with no properties, for calls that only carry dynamic ones.
+    pub fn empty() -> &'static Self {
+        lazy_static::lazy_static! {
+            static ref EMPTY: &'static PropertySet = PropertySet::find_or_create(vec![]);
+        }
+        *EMPTY
     }
 
     pub fn get_properties(&self) -> &[Property] {
@@ -78,7 +99,7 @@ impl PropertySetDependency {
 ///
 /// # Safety
 /// `set` must be an interned set or belong to the arena of the block being extracted.
-pub unsafe fn record_properties<D>(
+pub(crate) unsafe fn record_properties<D>(
     set: *const PropertySet,
     recorded_deps: &mut HashSet<u64>,
     deps: &mut D,

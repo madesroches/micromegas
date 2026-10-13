@@ -4,7 +4,7 @@ use crate::event::EventSink;
 use crate::logs::LogMetadata;
 use crate::metrics::StaticMetricMetadata;
 use crate::process_info::ProcessInfo;
-use crate::property_set::PropertySet;
+use crate::property_set::{DynProperty, PropertySet};
 use crate::spans::{SpanLocation, SpanMetadata, ThreadStream};
 use crate::time::{frequency, now};
 use std::collections::HashMap;
@@ -81,20 +81,6 @@ pub fn tagged_integer_metric(
     _properties: &'static PropertySet,
     _value: u64,
 ) {
-}
-
-/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
-/// bounded.
-#[derive(Debug, Clone, Copy)]
-pub struct DynProperty<'a> {
-    pub name: &'static str,
-    pub value: &'a str,
-}
-
-/// The set with no properties, for calls that only carry dynamic ones.
-pub fn empty_property_set() -> &'static PropertySet {
-    static EMPTY: PropertySet = PropertySet;
-    &EMPTY
 }
 
 #[inline(always)]

@@ -4,7 +4,7 @@ use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
-use micromegas_tracing::dispatch::{DynProperty, empty_property_set, make_process_info};
+use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::levels::Level;
@@ -410,7 +410,7 @@ fn test_tagged_log_interop_event() {
     // SAFETY: the value is a string literal and `merged` is never interned.
     let merged = unsafe {
         merge_properties(
-            empty_property_set(),
+            PropertySet::empty(),
             &[DynProperty {
                 name: "correlation_id",
                 value: "abc",

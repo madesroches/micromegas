@@ -1,7 +1,6 @@
 //! Per-block storage for property sets whose values are not `'static`.
 use crate::{
-    dispatch::DynProperty,
-    property_set::{Property, PropertySet, sort_properties},
+    property_set::{DynProperty, Property, PropertySet, sort_properties},
     static_string_ref::StaticStringRef,
 };
 use std::{

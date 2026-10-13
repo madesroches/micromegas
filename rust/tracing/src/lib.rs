@@ -158,8 +158,23 @@ pub mod property_set;
 pub mod property_set {
     /// Stub for EventSink trait compatibility — never constructed on wasm32
     pub struct Property;
-    /// Stub for dispatch function signatures — never constructed on wasm32
+    /// Stub for dispatch function signatures — only the empty set exists on wasm32
     pub struct PropertySet;
+
+    impl PropertySet {
+        pub fn empty() -> &'static Self {
+            static EMPTY: PropertySet = PropertySet;
+            &EMPTY
+        }
+    }
+
+    /// A property whose value is not `'static`. Names stay `'static`: name cardinality must
+    /// remain bounded.
+    #[derive(Debug, Clone, Copy)]
+    pub struct DynProperty<'a> {
+        pub name: &'static str,
+        pub value: &'a str,
+    }
 }
 
 // Native-only modules (entirely transit-dependent)
@@ -186,9 +201,9 @@ mod macros;
 
 /// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {
-    pub use crate::dispatch::DynProperty;
     pub use crate::levels::*;
     pub use crate::process_info::*;
+    pub use crate::property_set::DynProperty;
     #[cfg(feature = "tokio")]
     pub use crate::runtime::TracingRuntimeExt;
     #[cfg(feature = "tokio")]

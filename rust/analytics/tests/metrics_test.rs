@@ -6,7 +6,7 @@ use micromegas_analytics::{
 };
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
-    dispatch::{DynProperty, make_process_info},
+    dispatch::make_process_info,
     event::TracingBlock,
     intern_string,
     metrics::{

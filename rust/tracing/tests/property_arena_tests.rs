@@ -1,8 +1,7 @@
 use micromegas_tracing::{
     dispatch::{
-        DynProperty, empty_property_set, flush_log_buffer, flush_metrics_buffer, force_uninit,
-        init_event_dispatch, log_dyn_tagged, log_tagged, shutdown_dispatch, tagged_float_metric,
-        tagged_float_metric_dyn,
+        flush_log_buffer, flush_metrics_buffer, force_uninit, init_event_dispatch, log_dyn_tagged,
+        log_tagged, shutdown_dispatch, tagged_float_metric, tagged_float_metric_dyn,
     },
     event::{EventSink, TracingBlock},
     levels::Level,
@@ -53,7 +52,7 @@ fn owned_props(props: &[(&'static str, &str)]) -> Vec<Property> {
         .map(|(name, value)| DynProperty { name, value })
         .collect();
     // SAFETY: callers keep the value strings alive while using the result, and never intern it.
-    unsafe { merge_properties(empty_property_set(), &dyn_props) }
+    unsafe { merge_properties(PropertySet::empty(), &dyn_props) }
 }
 
 fn set_as_pairs(set: *const PropertySet) -> Vec<(String, String)> {
@@ -348,7 +347,7 @@ fn dynamic_metric_lands_in_arena() {
     let value = String::from("req-1");
     tagged_float_metric_dyn(
         &METRIC_DESC,
-        empty_property_set(),
+        PropertySet::empty(),
         &[DynProperty {
             name: "request_id",
             value: &value,

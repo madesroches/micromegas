@@ -165,14 +165,14 @@ macro_rules! instrument_named {
 ///
 /// ```
 /// use micromegas_tracing::prelude::*;
-/// use micromegas_tracing::dispatch::empty_property_set;
+/// use micromegas_tracing::property_set::PropertySet;
 ///
 /// # fn main() {
 /// let correlation_id = String::from("c0ffee");
 /// imetric!(
 ///     "rows_fetched",
 ///     "count",
-///     empty_property_set(),
+///     PropertySet::empty(),
 ///     &[DynProperty { name: "correlation_id", value: &correlation_id }],
 ///     3
 /// );
@@ -375,7 +375,7 @@ macro_rules! log {
             line: line!(),
         };
         if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
-            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $crate::dispatch::empty_property_set(), $dyn_properties, format_args!($($arg)+));
+            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $crate::property_set::PropertySet::empty(), $dyn_properties, format_args!($($arg)+));
         }
     });
     ($lvl:expr, $($arg:tt)+) => ($crate::log!(target: $crate::__log_module_path!(), $lvl, $($arg)+));

@@ -6,7 +6,7 @@ use crate::logs::{TaggedLogInteropEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
 use crate::property_arena::merge_properties;
-use crate::property_set::PropertySet;
+use crate::property_set::{DynProperty, PropertySet};
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
     info,
@@ -122,27 +122,6 @@ pub fn tagged_integer_metric(
     if let Some(d) = G_DISPATCH.get() {
         d.tagged_integer_metric(desc, properties, value);
     }
-}
-
-/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
-/// bounded.
-///
-/// For `log!` and metric macros, analytics treats some names as column overrides:
-/// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). A dynamic `level` must be a
-/// valid level name or the block fails to parse. Interop logs (the `tracing` layer) keep their
-/// level and target unchanged.
-#[derive(Debug, Clone, Copy)]
-pub struct DynProperty<'a> {
-    pub name: &'static str,
-    pub value: &'a str,
-}
-
-/// The interned set with no properties, for calls that only carry dynamic ones.
-pub fn empty_property_set() -> &'static PropertySet {
-    lazy_static::lazy_static! {
-        static ref EMPTY: &'static PropertySet = PropertySet::find_or_create(vec![]);
-    }
-    *EMPTY
 }
 
 #[inline(always)]
@@ -962,7 +941,7 @@ impl Dispatch {
     ) {
         let time = now();
         // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
-        let merged = unsafe { merge_properties(empty_property_set(), dyn_properties) };
+        let merged = unsafe { merge_properties(PropertySet::empty(), dyn_properties) };
         self.get_sink().on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
