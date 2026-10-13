@@ -138,9 +138,7 @@ their API and cost don't change:
   `recorded_deps`.
 
 The arena is used only when a call passes `dyn_properties`. When a call combines a static set
-with dynamic properties, the merged arena set reuses the static entries' `StaticStringRef`s
-(their strings are still emitted once per block as `'static` dependencies). Only the dynamic
-values are copied.
+with dynamic properties, the merged arena set is built by `get_or_insert`, which copies every value.
 
 ### Event field types
 
@@ -158,8 +156,9 @@ invariant above. This also does away with the `transmute::<u64, &PropertySet>` i
 `tasks/backlog/pointer-provenance.md`.
 
 DRY: move the duplicated `record_properties` into `property_set.rs`. The two deps queues share
-no trait exposing `push`, so the helper takes two callbacks, `impl FnMut(StaticStringDependency)`
-and `impl FnMut(PropertySetDependency)`, which each `extract` wraps around its own queue's `push`.
+no trait exposing `push`, so the helper takes the deps queue once (`deps: &mut D`) plus two
+non-capturing pushers, `fn(&mut D, StaticStringDependency)` and `fn(&mut D, PropertySetDependency)`.
+Each `extract` passes `|q, d| q.push(d)`, so only one mutable borrow of the queue exists.
 `PropertySetDependency`'s field and `new` change from `&'static PropertySet` to
 `*const PropertySet`, dereferenced under the block invariant.
 
@@ -184,7 +183,9 @@ Shared step `merge_properties(static_set, dyn_properties) -> Vec<Property>`: sta
 from the static set's properties, apply each dynamic property (a dynamic value replaces a static
 property of the same name, compared case-insensitively to match `property_get`), then sort the
 same way `find_or_create` does. The dynamic entries' refs point at the caller's strings and are
-only valid for the duration of the call.
+only valid for the duration of the call. `EventSink::on_log`
+(`rust/tracing/src/event/sink.rs`) gets a rustdoc note saying `properties` is only valid for the
+duration of the call, so a sink must not keep a `Property` past it.
 
 `log_dyn_tagged` follows `log_tagged`: level check, `sink.on_log(desc, &merged, …)` *before*
 locking (so local sinks keep their lock-free re-entrancy), then take the log-stream lock, call
@@ -270,8 +271,7 @@ receiving code found nothing that relies on it:
   metadata. Property-set ids are dropped by the custom reader (`parser.rs:101-107`), and string
   dependencies become plain strings, so no arena address ever reaches SQL output.
 
-So the analytics side needs **no code change**. The new contract (ids are scoped to one block)
-is pinned by the cross-block test below. On the producer side, the audit found two
+So the analytics side needs **no code change**. On the producer side, the audit found two
 requirements, and the block-owned arena meets both:
 
 - Arena entries must live until the block is *encoded*, not merely closed. The arena is owned by
@@ -291,8 +291,8 @@ requirements, and the block-owned arena meets both:
    (`rust/analytics/tests/log_tests.rs`, `parse_corrupt_block_tests.rs`,
    `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`).
    The object-cache tests dereference the pointer while the sink still holds the block.
-4. **Deps.** Move `record_properties` into `property_set.rs` (taking `*const PropertySet` and two
-   push callbacks) and call it from both `extract` impls. Change `PropertySetDependency`'s field
+4. **Deps.** Move `record_properties` into `property_set.rs` (taking `*const PropertySet`, the deps
+   queue once as `&mut D`, and two non-capturing `fn(&mut D, _)` pushers) and call it from both `extract` impls. Change `PropertySetDependency`'s field
    and `new` to `*const PropertySet`.
 5. **Dispatch.** Add `DynProperty`, `merge_properties`, `log_dyn_tagged`,
    `tagged_{float,integer}_metric_dyn` (plus wasm stubs), and re-export `DynProperty` from the
@@ -312,7 +312,8 @@ requirements, and the block-owned arena meets both:
 - `rust/tracing/src/property_arena.rs` (new)
 - `rust/tracing/src/lib.rs`, `rust/tracing/src/static_string_ref.rs`,
   `rust/tracing/src/property_set.rs`
-- `rust/tracing/src/event/block.rs`, `rust/tracing/src/event/stream.rs`
+- `rust/tracing/src/event/block.rs`, `rust/tracing/src/event/stream.rs`,
+  `rust/tracing/src/event/sink.rs`
 - `rust/tracing/src/logs/log_events.rs`, `rust/tracing/src/logs/block.rs`
 - `rust/tracing/src/metrics/metric_events.rs`, `rust/tracing/src/metrics/block.rs`
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`,
@@ -362,13 +363,15 @@ requirements, and the block-owned arena meets both:
   clause: the `properties` field of `TaggedLogString`, `TaggedFloatMetricEvent` and
   `TaggedIntegerMetricEvent` is now `*const PropertySet`, `PropertySetDependency` holds and takes
   `*const PropertySet`, `EventBlock` has a new
-  `properties` field, and `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant.
+  `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant, and the
+  `properties` passed to `EventSink::on_log` are only valid for the duration of the call.
 - `rust/tracing/README.md` (the crate's docs.rs landing page): a short "Dynamic properties"
   section with the log and metric examples above and the cardinality note (names static, values
   free), plus the column-override note: `level`/`target` (logs) and `target`/`name`/`unit`
   (metrics) override the row's columns, and a dynamic `level` must be a valid level name or the
   block fails to parse.
-- Rustdoc on the new macros arms, `DynProperty` and `PropertyArena`.
+- Rustdoc on the new macros arms, `DynProperty` and `PropertyArena`, and the lifetime note on
+  `EventSink::on_log`.
 - The `log_entries` / `measures` schema docs (`mkdocs/docs/query-guide/schema-reference.md`)
   need no change, since the columns are unchanged.
 
@@ -398,11 +401,6 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   `properties` contains `correlation_id` with the right value next to the static properties.
   Also assert that two events with the same dynamic set in one block share one
   `PropertySetDependency`.
-- **Cross-block** (`rust/analytics/tests/`): two blocks of the same stream whose property-set
-  and value ids are *identical* but whose contents differ (built by hand-encoding the dependency
-  buffers, so address reuse is forced rather than left to chance) parse to their own values.
-  This pins the new contract that ids are scoped to one block, so a future cross-block cache
-  keyed on wire ids fails here instead of silently mislabeling rows.
 - **`tracing` interop**:
   - Visitor (`rust/telemetry-sink/tests/tracing_interop_tests.rs`, new): run a `tracing` event
     under `tracing::subscriber::with_default` with a test layer that drives
