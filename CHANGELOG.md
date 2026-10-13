@@ -29,8 +29,8 @@ This file documents the historical progress of the Micromegas project. For curre
   `PropertySetDependency` holds and takes `*const PropertySet` (`new` is now crate-private),
   `EventBlock` has a new `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant,
   `FieldFormatVisitor` has a new `pub` field for the collected fields (breaking struct-literal
-  construction), and the `properties` passed to `EventSink::on_log` are only valid for the
-  duration of the call.
+  construction), and `EventSink::on_log` takes its properties as `&[DynProperty<'_>]` instead of
+  `&[Property]`.
 * **Packaging:** Give `micromegas-perfetto`, `micromegas-object-cache`,
   `micromegas-datafusion-extensions`, `micromegas-transit`, `micromegas-tracing`,
   `micromegas-otel-ingestion` and `micromegas-auth` their own crates.io description, keywords and

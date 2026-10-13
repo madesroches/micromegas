@@ -60,6 +60,13 @@ pub fn callsite_set(
     })
 }
 
+pub fn dyn_property_get<'a>(properties: &[DynProperty<'a>], name: &str) -> Option<&'a str> {
+    properties
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name))
+        .map(|p| p.value)
+}
+
 pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a str> {
     properties.iter().find_map(|p| {
         if p.name.as_str().eq_ignore_ascii_case(name) {
@@ -80,6 +87,11 @@ pub(crate) fn sort_properties(properties: &mut [Property]) {
     properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
 }
 
+/// Same order as `sort_properties`, so a merged list matches the arena set built from it.
+pub(crate) fn sort_dyn_properties(properties: &mut [DynProperty<'_>]) {
+    properties.sort_by(|a, b| b.name.cmp(a.name));
+}
+
 impl PropertySet {
     pub fn find_or_create(mut properties: Vec<Property>) -> &'static Self {
         sort_properties(&mut properties);
@@ -97,6 +109,13 @@ impl PropertySet {
 
     pub fn get_properties(&self) -> &[Property] {
         &self.properties
+    }
+
+    pub fn dyn_properties(&'static self) -> impl Iterator<Item = DynProperty<'static>> {
+        self.properties.iter().map(|p| DynProperty {
+            name: p.name.as_str(),
+            value: p.value.as_str(),
+        })
     }
 }
 

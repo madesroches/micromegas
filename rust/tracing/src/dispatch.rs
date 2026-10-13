@@ -753,8 +753,7 @@ impl Dispatch {
             return self.tagged_float_metric(desc, properties, value);
         }
         let time = now();
-        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
-        let merged = unsafe { merge_properties(properties, dyn_properties) };
+        let merged = merge_properties(properties, dyn_properties);
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         let (events, arena) = metrics_stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
@@ -782,8 +781,7 @@ impl Dispatch {
             return self.tagged_integer_metric(desc, properties, value);
         }
         let time = now();
-        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
-        let merged = unsafe { merge_properties(properties, dyn_properties) };
+        let merged = merge_properties(properties, dyn_properties);
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         let (events, arena) = metrics_stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
@@ -863,8 +861,8 @@ impl Dispatch {
             return;
         }
         let time = now();
-        self.get_sink()
-            .on_log(desc, properties.get_properties(), time, args);
+        let sink_properties: Vec<DynProperty<'static>> = properties.dyn_properties().collect();
+        self.get_sink().on_log(desc, &sink_properties, time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
@@ -921,8 +919,7 @@ impl Dispatch {
             return;
         }
         let time = now();
-        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
-        let merged = unsafe { merge_properties(properties, dyn_properties) };
+        let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
         self.get_sink().on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
@@ -949,8 +946,7 @@ impl Dispatch {
         args: fmt::Arguments<'_>,
     ) {
         let time = now();
-        // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
-        let merged = unsafe { merge_properties(PropertySet::empty(), dyn_properties) };
+        let merged = merge_properties(PropertySet::empty(), dyn_properties);
         self.get_sink().on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();

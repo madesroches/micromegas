@@ -6,7 +6,7 @@ use crate::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    property_set::Property,
+    property_set::DynProperty,
     spans::{ThreadBlock, ThreadStream},
 };
 
@@ -18,12 +18,10 @@ pub trait EventSink: Send + Sync {
     fn on_shutdown(&self);
 
     fn on_log_enabled(&self, metadata: &LogMetadata) -> bool;
-    /// `properties` is only valid for the duration of the call: dynamic values point at
-    /// the caller's strings, so a sink must not keep a `Property` past it.
     fn on_log(
         &self,
         desc: &LogMetadata,
-        properties: &[Property],
+        properties: &[DynProperty<'_>],
         time: i64,
         args: fmt::Arguments<'_>,
     );
@@ -57,7 +55,7 @@ impl EventSink for NullEventSink {
     fn on_log(
         &self,
         _desc: &LogMetadata,
-        _properties: &[Property],
+        _properties: &[DynProperty<'_>],
         _time: i64,
         _args: fmt::Arguments<'_>,
     ) {

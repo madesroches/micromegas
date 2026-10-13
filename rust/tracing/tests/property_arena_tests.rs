@@ -16,7 +16,7 @@ use micromegas_tracing::{
     process_info::ProcessInfo,
     property_arena::PropertyArena,
     property_arena::merge_properties,
-    property_set::{Property, PropertySet, property_get},
+    property_set::{Property, PropertySet, dyn_property_get},
     spans::{ThreadBlock, ThreadStream},
 };
 use micromegas_transit::{DynString, HeterogeneousQueue};
@@ -46,13 +46,12 @@ static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
     line: line!(),
 };
 
-fn owned_props(props: &[(&'static str, &str)]) -> Vec<Property> {
+fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> Vec<DynProperty<'a>> {
     let dyn_props: Vec<DynProperty<'_>> = props
         .iter()
         .map(|(name, value)| DynProperty { name, value })
         .collect();
-    // SAFETY: callers keep the value strings alive while using the result, and never intern it.
-    unsafe { merge_properties(PropertySet::empty(), &dyn_props) }
+    merge_properties(PropertySet::empty(), &dyn_props)
 }
 
 fn set_as_pairs(set: *const PropertySet) -> Vec<(String, String)> {
@@ -115,26 +114,23 @@ fn merge_dynamic_overrides_static_case_insensitively() {
         Property::new("Region", "eu"),
         Property::new("kind", "t"),
     ]);
-    // SAFETY: the values are string literals and `merged` is never interned.
-    let merged = unsafe {
-        merge_properties(
-            static_set,
-            &[
-                DynProperty {
-                    name: "region",
-                    value: "us",
-                },
-                DynProperty {
-                    name: "correlation_id",
-                    value: "abc",
-                },
-            ],
-        )
-    };
+    let merged = merge_properties(
+        static_set,
+        &[
+            DynProperty {
+                name: "region",
+                value: "us",
+            },
+            DynProperty {
+                name: "correlation_id",
+                value: "abc",
+            },
+        ],
+    );
     assert_eq!(merged.len(), 3);
-    assert_eq!(property_get(&merged, "region"), Some("us"));
-    assert_eq!(property_get(&merged, "kind"), Some("t"));
-    assert_eq!(property_get(&merged, "correlation_id"), Some("abc"));
+    assert_eq!(dyn_property_get(&merged, "region"), Some("us"));
+    assert_eq!(dyn_property_get(&merged, "kind"), Some("t"));
+    assert_eq!(dyn_property_get(&merged, "correlation_id"), Some("abc"));
 }
 
 #[test]
@@ -200,11 +196,17 @@ impl EventSink for CapturingSink {
     fn on_log_enabled(&self, _: &LogMetadata) -> bool {
         true
     }
-    fn on_log(&self, _: &LogMetadata, properties: &[Property], _: i64, _: fmt::Arguments<'_>) {
+    fn on_log(
+        &self,
+        _: &LogMetadata,
+        properties: &[DynProperty<'_>],
+        _: i64,
+        _: fmt::Arguments<'_>,
+    ) {
         self.state.lock().unwrap().on_log_properties.push(
             properties
                 .iter()
-                .map(|p| (p.name.as_str().to_owned(), p.value.as_str().to_owned()))
+                .map(|p| (p.name.to_owned(), p.value.to_owned()))
                 .collect(),
         );
     }

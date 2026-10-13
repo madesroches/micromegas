@@ -4,7 +4,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    property_set::Property,
+    property_set::DynProperty,
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{fmt, sync::Arc};
@@ -104,7 +104,7 @@ impl EventSink for CompositeSink {
     fn on_log(
         &self,
         metadata: &LogMetadata,
-        properties: &[Property],
+        properties: &[DynProperty<'_>],
         time: i64,
         args: fmt::Arguments<'_>,
     ) {

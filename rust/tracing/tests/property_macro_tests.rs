@@ -61,14 +61,19 @@ impl EventSink for CapturingSink {
     fn on_log(
         &self,
         metadata: &LogMetadata,
-        properties: &[Property],
+        properties: &[DynProperty<'_>],
         _: i64,
         args: fmt::Arguments<'_>,
     ) {
+        let mut sorted: Pairs = properties
+            .iter()
+            .map(|p| (p.name.to_owned(), p.value.to_owned()))
+            .collect();
+        sorted.sort();
         self.state.lock().unwrap().logs.push(LogRecord {
             target: metadata.target.to_owned(),
             msg: args.to_string(),
-            properties: sorted_pairs(properties),
+            properties: sorted,
         });
     }
     fn on_init_log_stream(&self, _: &LogStream) {}
