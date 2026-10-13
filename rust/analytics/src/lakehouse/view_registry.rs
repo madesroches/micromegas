@@ -14,9 +14,7 @@ use super::{
 use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
 use std::collections::HashSet;
 use std::future::Future;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -38,13 +36,6 @@ fn refresh_interval() -> Duration {
         .unwrap_or(DEFAULT_REFRESH_SECONDS)
         .max(1);
     Duration::from_secs(secs)
-}
-
-fn failure_tags(view_set_name: &str) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![Property::new(
-        "view_set_name",
-        intern_string(view_set_name),
-    )])
 }
 
 /// Hashes the `(view_set_name, updated_at)` tuples of `rows`, in the order given (already
@@ -105,7 +96,7 @@ fn skip(
         imetric!(
             "view_definition_load_failure",
             "count",
-            failure_tags(&view_set_name),
+            view_set_name = view_set_name,
             1_u64
         );
     }

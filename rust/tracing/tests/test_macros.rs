@@ -28,17 +28,20 @@ fn test_log_str(state: &SharedState) {
 
 fn test_log_properties(state: &SharedState) {
     for x in 0..5 {
-        log!(Level::Info,
-			 properties: PropertySet::find_or_create(vec![
-				 Property::new("world", "some_world"),
-				 Property::new("mode", "some_mode")]),
-			 "test");
+        log!(
+            Level::Info,
+            world = "some_world",
+            mode = "some_mode",
+            "test"
+        );
         expect_state!(state, Some(State::Log(String::from("test"))));
-        log!(Level::Info,
-			 properties: PropertySet::find_or_create(vec![
-				 Property::new("world", "some_world"),
-				 Property::new("mode", "some_mode")]),
-			 "test {}", x);
+        log!(
+            Level::Info,
+            world = "some_world",
+            mode = "some_mode",
+            "test {}",
+            x
+        );
         expect_state!(state, Some(State::Log(format!("test {}", x))));
     }
     flush_log_buffer();
@@ -83,24 +86,13 @@ fn test_thread_spans(state: &SharedState) {
 fn test_metrics(state: &SharedState) {
     imetric!("Frame Time", "ticks", 1000);
     fmetric!("Frame Time", "ticks", 1.0);
-    fmetric!(
-        "",
-        "",
-        PropertySet::find_or_create(vec![
-            Property::new("name", "road_width"),
-            Property::new("animal", "chicken"),
-        ]),
-        1.0
-    );
-    imetric!(
-        "",
-        "",
-        PropertySet::find_or_create(vec![
-            Property::new("name", "road_width"),
-            Property::new("animal", "chicken"),
-        ]),
-        2
-    );
+    let road = PropertySet::find_or_create(vec![
+        Property::new("name", "road_width"),
+        Property::new("animal", "chicken"),
+    ]);
+    // `name` is a reserved key, so it only gets through a `..set` spread
+    fmetric!("", "", ..road, 1.0);
+    imetric!("", "", ..road, 2);
     flush_metrics_buffer();
     expect_state!(state, Some(State::ProcessMetricsBlock(4)));
 }

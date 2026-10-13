@@ -697,3 +697,27 @@ async fn test_properties_length_jsonb() {
     assert_eq!(len_col.value(0), 3);
     assert_eq!(len_col.value(1), 1);
 }
+
+/// The log and metric macros expand under wasm32, which has only the empty `PropertySet`.
+#[wasm_bindgen_test]
+fn test_tracing_property_macros() {
+    use micromegas_tracing::prelude::*;
+    use micromegas_tracing::property_set::PropertySet;
+
+    let owned = String::from("owned");
+    let borrowed: &str = "borrowed";
+    let n = 3;
+    info!(region = "eu", "literal only");
+    info!(who = owned, other = borrowed, shown = %n, "dynamic {}", n);
+    info!(
+        region = "eu",
+        who = borrowed,
+        ..PropertySet::empty(),
+        "spread"
+    );
+    info!(target: "wasm_test", "http.method" = "GET", "targeted");
+    imetric!("wasm_metric", "count", region = "eu", who = owned, 1_u64);
+    fmetric!("wasm_metric", "ms", ..PropertySet::empty(), 1.0);
+    imetric!(target: "wasm_test", "wasm_metric", "count", region = "eu", 1_u64);
+    fmetric!(target: "wasm_test", "wasm_metric", "ms", who = borrowed, -1.0);
+}

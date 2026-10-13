@@ -40,7 +40,7 @@ use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::query_deny_list::{
-    QueryAttribution, fingerprint_of, rule_tags, skip_for_admin_recovery,
+    QueryAttribution, fingerprint_of, skip_for_admin_recovery,
 };
 use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
@@ -825,7 +825,7 @@ impl FlightSqlServiceImpl {
                     &query_id,
                 )
             );
-            imetric!("query_denied", "count", rule_tags(&rule.row.rule_id), 1_u64);
+            imetric!("query_denied", "count", rule_id = %rule.row.rule_id, 1_u64);
             rule.record_hit();
             return Err(audit_state.fail_with_class(status, "denied"));
         }

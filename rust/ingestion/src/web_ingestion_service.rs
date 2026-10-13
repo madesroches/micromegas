@@ -12,7 +12,6 @@ use micromegas_telemetry::property::make_properties;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set;
 use moka::sync::Cache;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
@@ -411,19 +410,14 @@ impl WebIngestionService {
                 imetric!("block_object_recreated", "count", 1_u64);
             }
         }
-        // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
-        // the cost in this context should be reasonnable
         // Only count bytes that were actually stored: on the AlreadyExists arms, put_if_absent
         // rejected the write and the payload was discarded, so counting payload_size there would
         // inflate reported ingest volume by the redelivery/duplicate rate.
         if put_outcome == PutIfAbsent::Created {
             imetric!(
+                target: "micromegas::ingestion",
                 "payload_size_inserted",
                 "bytes",
-                property_set::PropertySet::find_or_create(vec![property_set::Property::new(
-                    "target",
-                    "micromegas::ingestion"
-                ),]),
                 payload_size as u64
             );
         }

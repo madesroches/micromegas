@@ -3,7 +3,11 @@
 use crate::static_string_ref::StaticStringRef;
 use internment::Intern;
 use micromegas_transit::{StaticStringDependency, UserDefinedType, prelude::*};
-use std::{collections::HashSet, hash::Hash, sync::Arc};
+use std::{
+    collections::HashSet,
+    hash::Hash,
+    sync::{Arc, OnceLock},
+};
 
 lazy_static::lazy_static! {
     pub static ref PROPERTY_SET_DEP_TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
@@ -28,13 +32,32 @@ impl Property {
 /// bounded.
 ///
 /// For `log!` and metric macros, analytics treats some names as column overrides:
-/// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). A dynamic `level` must be a
-/// valid level name or the block fails to parse. Interop logs (the `tracing` layer) keep their
-/// level and target unchanged.
+/// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). The macros reject those names
+/// as keys, so an override only arrives through a `..set` spread or a slice of `DynProperty`
+/// built at runtime. A dynamic `level` must be a valid level name or the block fails to parse.
+/// Interop logs (the `tracing` layer) keep their level and target unchanged.
 #[derive(Debug, Clone, Copy)]
 pub struct DynProperty<'a> {
     pub name: &'static str,
     pub value: &'a str,
+}
+
+/// Interns the literal properties of one macro callsite on first use. `cell` is a `static`
+/// emitted by the macro, so each callsite pays one atomic load afterwards.
+///
+/// Duplicate names are resolved the way `merge_properties` does: case-insensitive, last wins.
+pub fn callsite_set(
+    cell: &'static OnceLock<&'static PropertySet>,
+    pairs: &'static [(&'static str, &'static str)],
+) -> &'static PropertySet {
+    cell.get_or_init(|| {
+        let mut properties: Vec<Property> = Vec::with_capacity(pairs.len());
+        for (name, value) in pairs {
+            properties.retain(|p| !p.name.as_str().eq_ignore_ascii_case(name));
+            properties.push(Property::new(name, value));
+        }
+        PropertySet::find_or_create(properties)
+    })
 }
 
 pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a str> {

@@ -161,7 +161,7 @@ impl RangeCache {
                     let expected_range = block_byte_range(idx, self.block_size, file_size);
                     let expected_len = expected_range.end - expected_range.start;
                     async move {
-                        imetric!("range_cache_block_request", "count", block_tag, 1_u64);
+                        imetric!("range_cache_block_request", "count", ..block_tag, 1_u64);
                         let probe = instrument_named!(
                             backend.get(&block_key, expected_len),
                             "range_cache_backend_read"
@@ -194,7 +194,7 @@ impl RangeCache {
                             missing.push(idx);
                             continue;
                         }
-                        imetric!("range_cache_block_backend_hit", "count", block_tag, 1_u64);
+                        imetric!("range_cache_block_backend_hit", "count", ..block_tag, 1_u64);
                         // A prefetch has nothing to do with an already-cached
                         // block, so drop the bytes immediately instead of
                         // accumulating every hit for the whole call.
@@ -323,7 +323,7 @@ impl RangeCache {
             fmetric!(
                 "range_cache_fetch_permit_wait_ms",
                 "ms",
-                metric_tags::class_tags(class),
+                class = class,
                 permit_wait_start.elapsed().as_secs_f64() * 1000.0
             );
 
@@ -337,7 +337,7 @@ impl RangeCache {
             fmetric!(
                 "range_cache_origin_get_ms",
                 "ms",
-                metric_tags::class_tags(class),
+                class = class,
                 origin_get_start.elapsed().as_secs_f64() * 1000.0
             );
             drop(count_permit);
@@ -416,13 +416,13 @@ impl RangeCache {
             imetric!(
                 "range_cache_origin_block_fetch",
                 "count",
-                run_class_tag,
+                ..run_class_tag,
                 run_len as u64
             );
             imetric!(
                 "range_cache_origin_block_bytes",
                 "bytes",
-                run_class_tag,
+                ..run_class_tag,
                 data.len() as u64
             );
             debug!(

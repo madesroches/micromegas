@@ -13,9 +13,7 @@ use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -100,11 +98,13 @@ pub async fn materialize_all_views(
         .await
         {
             error!("materialize_all_views: {view_set_name} {view_instance_id} failed: {e:?}");
-            let tags = PropertySet::find_or_create(vec![
-                Property::new("view_set_name", intern_string(view_set_name.as_str())),
-                Property::new("view_instance_id", intern_string(view_instance_id.as_str())),
-            ]);
-            imetric!("materialize_view_failure", "count", tags, 1);
+            imetric!(
+                "materialize_view_failure",
+                "count",
+                view_set_name = view_set_name,
+                view_instance_id = view_instance_id,
+                1
+            );
             failures.push(format!("{view_set_name} {view_instance_id}"));
         }
     }

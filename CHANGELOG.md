@@ -4,14 +4,27 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
-* **Tracing:** Add dynamic properties for logs and metrics (#1623): properties with
-  non-`'static` values, such as a correlation id, attached to individual log entries and measures
-  with `dyn_properties:` in `log!`/`info!`/... and a five-argument form of `imetric!`/`fmetric!`.
-  Each block owns an arena holding the values, which counts against the block's size budget and
-  is freed with the block, so nothing leaks. The wire format, the `log_entries` and `measures`
+* **Tracing:** Add dynamic properties for logs and metrics (#1623), as `key = value` pairs in
+  `log!`/`info!`/... and `imetric!`/`fmetric!`, in the style of the `tracing` crate:
+  `info!(correlation_id = cid, region = "eu", "fetched {n} rows")` and
+  `imetric!("rows_fetched", "count", correlation_id = cid, region = "eu", n)`. Keys are identifiers
+  or string literals. Literal values are interned once per callsite; other values (a bare string,
+  `%value` for `Display`, `?value` for `Debug`) are copied into the block's arena, which counts
+  against the block's size budget and is freed with the block, so nothing leaks, and they are
+  only evaluated when the log entry is enabled. A precomputed `&'static PropertySet` is spread as
+  the last entry with `..set`, and the pairs override its entries. `imetric!`/`fmetric!` also
+  accept `target: "name"` before the metric name. `level` and `target` (logs) and `target`, `name`
+  and `unit` (metrics) are column overrides in analytics, so the macros reject them as keys; they
+  can still be set through a `..set` spread. The wire format, the `log_entries` and `measures`
   schemas and `property_get(properties, 'correlation_id')` are unchanged. The `tracing` interop
   layer now maps event fields to dynamic properties (the message text is unchanged).
-  **Minor breaking change:** the `properties` field of `TaggedLogString`,
+  **Minor breaking change:** the `properties: set` form of the log macros and the
+  four-argument form of `imetric!`/`fmetric!` (a `PropertySet` before the value) are removed in
+  favor of `..set` and `key = value` pairs; `class_tags` in `micromegas-object-cache`'s
+  `metric_tags` and `rule_tags` in analytics' `query_deny_list` are removed; the
+  `micromegas::utils::log_json_rows` module (and the empty `utils` module) is removed; the
+  `payload_size_inserted` metric no longer carries a `target` property (its `target` column is
+  unchanged); the `properties` field of `TaggedLogString`,
   `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent` is now `*const PropertySet`,
   `PropertySetDependency` holds and takes `*const PropertySet` (`new` is now crate-private),
   `EventBlock` has a new `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant,

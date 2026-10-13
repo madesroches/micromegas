@@ -50,28 +50,38 @@
 //!
 //! # Dynamic properties
 //!
-//! Properties with values that are not `'static` (a correlation, request or session id) can be
-//! attached to individual log entries and metric measures. The values are copied into the
-//! current block and freed with it, so nothing is retained per distinct value:
+//! Properties are `key = value` pairs, written before the format string in logs and before the
+//! value in metrics. Keys are identifiers or string literals and are always `'static`. A literal
+//! value is interned once per callsite and costs one atomic load afterwards. Any other value (a
+//! correlation, request or session id) is attached to the individual log entry or measure and
+//! copied into the current block, freed with it, so nothing is retained per distinct value:
 //!
 //! ```rust,ignore
 //! use micromegas_tracing::prelude::*;
 //!
 //! let cid = request.correlation_id(); // String
-//! info!(dyn_properties: &[DynProperty { name: "correlation_id", value: &cid }], "fetched {n} rows");
-//! imetric!("rows_fetched", "count", &*STATIC_PROPS, &[DynProperty { name: "correlation_id", value: &cid }], n);
+//! info!(correlation_id = cid, region = "eu", rows = %n, "fetched {n} rows");
+//! imetric!("rows_fetched", "count", correlation_id = cid, region = "eu", n);
+//! fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 //! ```
 //!
-//! Property names stay `'static` so that the set of names remains bounded; values are free.
-//! A static interned set can be passed alongside (`properties: set, dyn_properties: ...`), and a
-//! dynamic value replaces a static property of the same name. Interned sets (`properties:`
-//! alone) remain the cheapest option for bounded-cardinality properties.
+//! A bare value must implement [`PropertyValue`](property_value::PropertyValue) (strings do and
+//! are borrowed without a copy). `%value` formats with `Display` and `?value` with `Debug`, at
+//! the cost of one `String` allocation; those and bare values are only evaluated when the log
+//! entry is enabled. A precomputed `&'static PropertySet` is spread as the last entry with
+//! `..set`, and the pairs before it override its entries:
+//!
+//! ```rust,ignore
+//! imetric!("rows_fetched", "count", correlation_id = cid, ..SET, n);
+//! ```
 //!
 //! On the query side the values are ordinary properties:
 //! `property_get(properties, 'correlation_id')`.
 //!
-//! For `log!` and the metric macros, some property names override the row's columns in
-//! analytics: `level` and `target` for logs, `target`, `name` and `unit` for metrics. A dynamic
+//! In analytics some property names override the row's columns: `level` and `target` for logs,
+//! `target`, `name` and `unit` for metrics. The macros reject those names as keys (`target`
+//! belongs in `target: ..` before the other arguments); an override can only arrive through a
+//! `..set` spread or a runtime [`DynProperty`](property_set::DynProperty) slice. A dynamic
 //! `level` must be a valid level name or the block fails to parse. Interop logs (the `tracing`
 //! layer) keep their level and target unchanged.
 //!
@@ -145,6 +155,7 @@ pub mod logs;
 pub mod metrics;
 pub mod panic_hook;
 pub mod process_info;
+pub mod property_value;
 pub mod spans;
 pub mod time;
 
@@ -166,6 +177,14 @@ pub mod property_set {
             static EMPTY: PropertySet = PropertySet;
             &EMPTY
         }
+    }
+
+    /// Only the empty set exists on wasm32.
+    pub fn callsite_set(
+        _cell: &'static std::sync::OnceLock<&'static PropertySet>,
+        _pairs: &'static [(&'static str, &'static str)],
+    ) -> &'static PropertySet {
+        PropertySet::empty()
     }
 
     /// A property whose value is not `'static`. Names stay `'static`: name cardinality must

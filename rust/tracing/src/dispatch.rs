@@ -749,6 +749,9 @@ impl Dispatch {
         dyn_properties: &[DynProperty<'_>],
         value: f64,
     ) {
+        if dyn_properties.is_empty() {
+            return self.tagged_float_metric(desc, properties, value);
+        }
         let time = now();
         // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
         let merged = unsafe { merge_properties(properties, dyn_properties) };
@@ -775,6 +778,9 @@ impl Dispatch {
         dyn_properties: &[DynProperty<'_>],
         value: u64,
     ) {
+        if dyn_properties.is_empty() {
+            return self.tagged_integer_metric(desc, properties, value);
+        }
         let time = now();
         // SAFETY: `merged` is dropped before this call returns, while `dyn_properties` is borrowed.
         let merged = unsafe { merge_properties(properties, dyn_properties) };
@@ -908,6 +914,9 @@ impl Dispatch {
         dyn_properties: &[DynProperty<'_>],
         args: fmt::Arguments<'_>,
     ) {
+        if dyn_properties.is_empty() {
+            return self.log_tagged(desc, properties, args);
+        }
         if !self.log_enabled(desc) {
             return;
         }

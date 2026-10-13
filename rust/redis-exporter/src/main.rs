@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             warn!("redis connection failed: {e:#}");
-                            imetric!("redis_up", "count", props, 0u64);
+                            imetric!("redis_up", "count", ..props, 0u64);
                             continue;
                         }
                     }
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
             result = sample_once(manager, config.preset, props, now_unix_secs) => {
                 match result {
                     Ok(()) => {
-                        imetric!("redis_up", "count", props, 1u64);
+                        imetric!("redis_up", "count", ..props, 1u64);
                     }
                     Err(e) => {
                         // Don't rely on the ConnectionManager's own background
@@ -133,14 +133,14 @@ async fn main() -> Result<()> {
                         // the loop rebuild a fresh manager next tick through
                         // our own bounded connect path instead.
                         warn!("redis sample failed: {e:#}");
-                        imetric!("redis_up", "count", props, 0u64);
+                        imetric!("redis_up", "count", ..props, 0u64);
                         conn = None;
                     }
                 }
                 fmetric!(
                     "redis_scrape_duration_ms",
                     "ms",
-                    props,
+                    ..props,
                     start.elapsed().as_secs_f64() * 1000.0
                 );
             }
