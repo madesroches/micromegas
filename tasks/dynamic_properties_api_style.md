@@ -64,11 +64,13 @@ Takeaways:
   files. Removing the arms is a Rust API break (see Recommendation), which the project
   accepts.
 - **Existing callers by migration target:**
-  - `ingestion/src/web_ingestion_service.rs:423` moves to `imetric!(target: "micromegas::ingestion", ..)`
+  - `ingestion/src/web_ingestion_service.rs:420` moves to `imetric!(target: "micromegas::ingestion", ..)`
     with no properties, so the `target:` arm removes its per-call `find_or_create` entirely. This
     drops the overridden `target` property: `property_get(properties,'target')` returns NULL for
-    `payload_size_inserted` afterwards (the `target` column is unchanged). The comment above the
-    call (it exists to exercise tagged metrics) goes stale and is deleted with the migration.
+    `payload_size_inserted` afterwards (the `target` column is unchanged). The two-line comment
+    at 414-415 ("this measure does not benefit from a dynamic property...") goes stale and is
+    deleted with the migration; the comment at 416-418 (explaining the `PutIfAbsent::Created`
+    guard) stays.
   - `class_tags` (`object-cache/src/metric_tags.rs:77`) is deleted. Its callers
     (`range_cache/fetch.rs:326`, `:340`) become a dynamic kv pair `class = class` (a runtime
     `&'static str`). They must not use `..run_class_tag`: that set carries a prefix as well, and
@@ -81,25 +83,26 @@ Takeaways:
     ~828) builds the set per call at both callers, so both become `rule_id = %rule_id`;
     `rule_tags` and its import at `flight_sql_service_impl.rs:43` are deleted.
   - `auth/src/db_api_key.rs:390` (`table_tags`, a per-call `find_or_create` defined at `:215`)
-    becomes a dynamic `table = ..` pair. The values are `&'static str` from a fixed table set,
+    becomes a dynamic `table = ..` pair, and `table_tags` is deleted. The values are `&'static str` from a fixed table set,
     and as dynamic kv they pay a merge plus an arena copy; that cost is accepted.
   - Callers that `intern_string` bounded runtime values per call become dynamic kv pairs, so the
     interning goes away: `pg_stats.rs:46-59`, `view_registry.rs:43-48`,
-    `maintenance.rs:103-106` (its `Arc<String>` value is a bare value). Where a set is already
-    precomputed once (not rebuilt per call) it becomes `..set` instead.
+    `maintenance.rs:103-106` (its `Arc<String>` value is a bare value). The helpers and imports
+    left dead are deleted with their doc comments: in `pg_stats.rs` `table_tags` (:45),
+    `index_tags` (:50), `state_tags` (:58) and the `intern_string` (:22) and
+    `Property, PropertySet` (:24) imports; in `view_registry.rs` `failure_tags` (:43) and its
+    imports (:17, :19); in `public/src/servers/maintenance.rs` the `intern_string` (:16) and
+    `Property, PropertySet` (:18) imports.
   - `object-cache-srv/src/handlers.rs:200/255/400/463/609` do a per-call `find_or_create`
     with runtime values; they become dynamic kv pairs.
   - `redis-exporter/src/sampler.rs:22-33` interns user-supplied property names and values. The
     realistic path is kv pairs plus a trailing `..props` (e.g. `event = event, ..props` for
     `with_extra`)
-    rather than hand-written `StaticMetricMetadata` at its 31 callsites.
-  - `public/src/utils/log_json_rows.rs` builds runtime property *names*, and today uses
-    `info!(properties: pset, ..)` (interning both name and value per row). It migrates to
-    `dispatch::log_dyn_tagged`, which takes a `&'static LogMetadata`: it needs a hand-written
-    `static LogMetadata` and the `STATIC_MAX_LEVEL` / `max_level()` gate the macro provided.
-    Column names stay `intern_string`'d (bounded); values are borrowed, which removes the
-    per-row value-interning leak. It relies on the log `target` override
-    (`Property::new("target", target)`), which survives through `DynProperty`.
+    rather than hand-written `StaticMetricMetadata` at its 31 callsites. `with_extra` (private)
+    has no callers left and is deleted.
+  - `public/src/utils/log_json_rows.rs` already builds a `&'static PropertySet` per row
+    (`find_or_create`, :45), so it becomes `info!(..pset, "{}", ...)`. The `target` override
+    (`Property::new("target", target)`) survives through the spread.
 
 ## Prototype
 
@@ -107,8 +110,10 @@ I checked the macro mechanics in a throwaway crate (stable Rust, edition 2024) w
 `macro_rules` tt-muncher that sorts each pair into a static bucket or a dynamic bucket:
 - Keys are matched as `$k:tt =`, and values `$v:literal` go to the static bucket. A value
   starting with `-` that is not a literal (`k = -x`) hard-errors in a `$v:literal` arm, so
-  `$k = - $v:literal` (concat with a leading `-`) and a dynamic fallback come ahead of the plain
-  `$v:literal` arm. `$k = %$v`,
+  `$k = - $v:literal` (concat with a leading `-`) and a fallback come ahead of the plain
+  `$v:literal` arm. The fallback forwards `$k = - $($rest)*` unchanged to an expr-only arm, so
+  the whole `-...` expression is parsed as one `$v:expr` and `-$v` is never emitted (`-$v` would
+  turn `-a + b` into `-(a + b)`). `$k = %$v`,
   `$k = ?$v` and `$k = $v:expr` go to the dynamic bucket. A `tt` never fails fatally, whereas a
   `$k:literal` key arm turns a metric value starting with `-` (`fmetric!("n", "u", -x)`) into a
   hard parse error, since `-` can begin a literal. A helper classifies the key: an ident is
@@ -169,19 +174,21 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     trait for foreign types (orphan rules);
   - `%expr` (Display) and `?expr` (Debug) cost a `String` allocation per call. When a log list has `%`/`?`
     or bare-value dynamic entries, the expansion also gates on
-    `$crate::dispatch::log_enabled(&LOG_DESC)` before building the slice (the pattern of
-    `log_enabled!`, `macros.rs` ~546-561; `dispatch_wasm.rs` has a stub), so they are
+    `$crate::dispatch::log_enabled(&LOG_DESC)` after `STATIC_MAX_LEVEL` and `max_level()` and
+    before building the slice (the pattern of
+    `log_enabled!`, `macros.rs:545-565`; `dispatch_wasm.rs` has a stub), so they are
     evaluated only when the level and target are enabled; metrics always evaluate them.
-  - A literal's text comes from `concat!`, which normalizes integers but keeps float spelling,
-    whereas `%x` uses `Display`; this known inconsistency is documented in the macro docs.
 
   `tracing`'s bare-ident shorthand (`info!(cid, "...")`) is left out for now and can be added
   later.
 - **Precomputed sets** go in the same list as a spread element, `..set`, where `set` is a
   `&'static PropertySet`. `..set` is allowed only last in the list (struct-update style) and at
-  most once; any other position is a `compile_error!`. kv pairs override the set's entries; for
-  duplicate keys the last pair wins, and the per-callsite literal-set helper dedups
-  case-insensitively like `merge_properties` (`PropertySet::find_or_create` only sorts). This
+  most once; any other position is a `compile_error!`. kv pairs override the set's entries. For
+  duplicate keys, a dynamic value overrides a literal one with the same key regardless of
+  position (`merge_properties` lets dynamic entries replace static ones); within each bucket the
+  last pair wins, and the per-callsite literal-set helper dedups case-insensitively like
+  `merge_properties` (`PropertySet::find_or_create` only sorts). With a trailing `..set` all
+  pairs are dynamic, so the last wins. This
   replaces `properties: set` and the 4-argument metric arm, so
   each macro takes exactly one property argument:
 
@@ -211,10 +218,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   forms and the removed public helpers `class_tags` and `rule_tags`, and notes the dropped
   `target` property on `payload_size_inserted`. The `dyn_properties:` forms were never released and just disappear from the entry.
 - **Kept:** the dispatch functions (`log_tagged`, `log_dyn_tagged`, `tagged_*_metric[_dyn]`)
-  and `DynProperty`, for lists built at runtime (`tracing` interop, `log_json_rows`).
-- **Unchanged:** the SQL surface, the wire format, and the arena. One exception: moving
-  `web_ingestion_service.rs:423` to `imetric!(target: ..)` drops its overridden `target`
-  property, so `property_get(properties,'target')` is NULL for `payload_size_inserted`.
+  and `DynProperty`, for lists built at runtime (`tracing` interop).
+- **Unchanged:** the SQL surface, the wire format, and the arena.
 - **Reserved names.** Analytics treats some property names as column overrides:
   - logs (`analytics/src/log_entry.rs`, `TaggedLogString` arm): `target` and `level`;
   - metrics (`analytics/src/measure.rs`, tagged arms): `target`, `name` and `unit`.
@@ -228,8 +233,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     `compile_error!` naming the real argument. This keeps `info!(target = x, ..)` from being
     confused with `info!(target: x, ..)`. The macros can't see inside a `..set` spread or a
     runtime `DynProperty` slice, so overrides through those still work; this is the documented
-    escape hatch. `log_json_rows.rs` relies on the log `target` override, which it keeps only
-    through the function / `DynProperty` path or a spread.
+    escape hatch. `log_json_rows.rs` relies on the log `target` override, which it keeps through a
+    spread.
   - **Analytics keeps the override** (SQL and wire format are stable, and blocks already
     ingested rely on it).
 - **Other notes:** the wasm stubs need the callsite-set helper. The `target:` metric arm also
@@ -253,16 +258,19 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 2. Add the `PropertyValue` trait (with the explicit impls above) to `rust/tracing`, in a module
    compiled on both targets (it only needs `std::borrow::Cow`), not in the native-only
    `property_set.rs`.
-3. Short-circuit an empty dynamic slice before `merge_properties` in
-   `rust/tracing/src/dispatch.rs` (or in the free functions).
+3. Short-circuit an empty dynamic slice in `rust/tracing/src/dispatch.rs`, before
+   `log_dyn_tagged`'s own enabled check and before `merge_properties`, so the sink check never
+   runs three times.
 4. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
    (kv muncher matching keys as `$k:tt =` with a key-classifying helper, trailing `..set` only,
-   `PropertyValue` for bare values, `$k = - $v:literal` and a dynamic fallback ahead of the
-   `$v:literal` arm, the `log_enabled` gate for dynamic log entries, reserved-key
+   `PropertyValue` for bare values, `$k = - $v:literal` and the token-forwarding `-` fallback
+   ahead of the `$v:literal` arm, the `log_enabled` gate for dynamic log entries, reserved-key
    `compile_error!` arms, `target:` arms feeding the muncher on logs and metrics).
+   `LogMetadata.fmt_str` is taken from the format-string tokens the muncher separates out, not
+   from the whole argument list (today's arms use `$crate::__first_arg!($($arg)+)`, which on
+   `k = v, "msg"` returns `k`).
 5. Migrate the ~77 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
-   `dispatch::log_dyn_tagged` with a hand-written `static LogMetadata` and the level gate, and
-   the `redis-exporter` sampler to kv pairs plus a trailing `..props`.
+   `info!(..pset, ..)`, and the `redis-exporter` sampler to kv pairs plus a trailing `..props`.
 6. Tests (below).
 7. Docs and CHANGELOG (below).
 
@@ -276,7 +284,10 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - A bare `String`, `&str`, `Arc<String>` and `Cow` value compile and record the expected value;
   a bare `u32` fails to compile (doc-comment `compile_fail` example, as below).
 - `..set` not in last position fails to compile with a clear `compile_error!`.
-- Duplicate keys: the last pair wins, including a case-insensitive duplicate.
+- Duplicate keys: within a bucket the last pair wins, including a case-insensitive duplicate;
+  a dynamic value overrides a literal one with the same key in both orders
+  (`k = x, k = "a"` and `k = "a", k = x` both record `x`); with a trailing `..set` the last
+  pair wins.
 - Trailing comma in log and metric lists.
 - Pointer equality of the per-callsite literal set: with the `CapturingSink` + `DispatchGuard`
   pattern of `rust/tracing/tests/property_arena_tests.rs` (~187-250, and
@@ -287,17 +298,20 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - Metric `target:` arm, and `target:` combined with kv pairs on logs (`info!(target: "x", k = v,
   "msg")`) and metrics.
 - A metric value starting with `-`: `fmetric!("n", "u", -x)` and `fmetric!("n", "u", k = v, -x)`;
-  a kv value `k = -1` and `k = -x`.
+  a kv value `k = -1` (literal, via `concat!`) and `k = %-x` (dynamic). A bare `k = -x` is a
+  `compile_fail` case (the `Neg` output has no `PropertyValue` impl).
 - A `#[wasm_bindgen_test]` in `rust/datafusion-wasm/tests/wasm_integration.rs` (compiled and run
   by `build.py --test` from `run_wasm()` in `build/rust_ci.py`) that uses the kv,
   trailing `..PropertySet::empty()` (the only `&'static PropertySet` on wasm32), a bare
   `&str`/`String` value, and metric `target:` arms under `wasm32-unknown-unknown`.
-- Lazy evaluation: a value type whose `Display` impl bumps a counter. With the level or target
-  disabled, `%`, `?` and bare-value expressions are not evaluated (counter stays 0); with it
-  enabled, they are.
+- Lazy evaluation: count evaluations of the value expression itself (a block
+  `{ n += 1; s }`) for the bare, `%` and `?` forms. Disable the callsite with a test sink whose
+  `on_log_enabled` returns false for a chosen target (e.g. a target filter on `CapturingSink`
+  in `property_arena_tests.rs`): the counter stays 0; with the target enabled it is 1. A
+  level-disabled case is only a sanity check, since the `max_level()` check already short-circuits it.
 - No-property calls still emit untagged events.
 - `compile_fail` doctests in `macros.rs` (none exist today) for reserved keys, a double
-  `..set` and a bare `u32` value.
+  `..set`, a bare `u32` value and a bare `k = -x`.
 
 ### Docs
 - `rust/auth/src/db_api_key.rs:248` (doc comment showing the 4-argument `imetric!` form).
@@ -307,15 +321,11 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   `info!(dyn_properties: ..)`, the 5-argument `imetric!` and `properties:` prose). The
   "some property names override the row's columns" text must say override names now only
   arrive through `..set` or a runtime `DynProperty` slice.
-- `rust/tracing/src/property_set.rs:28-33` (`DynProperty` doc), same override wording.
-- `rust/redis-exporter/src/sampler.rs:5-8` module doc (values "interned to `'static`") and the
-  `with_extra` docs (~17 and ~29).
+- `rust/tracing/src/property_set.rs:27-33` (`DynProperty` doc), same override wording.
+- `rust/redis-exporter/src/sampler.rs:5-8` module doc (values "interned to `'static`").
 - `rust/object-cache/src/metric_tags.rs:1-9` module doc (class/prefix centralization).
 - `rust/public/src/servers/query_audit.rs:5-7` (says `imetric!` sets can't carry
   high-cardinality values).
-- `rust/public/src/servers/pg_stats.rs:40-43` and
-  `rust/analytics/src/lakehouse/query_deny_list.rs:351-354` (comments justifying the intern
-  leak).
 - `CHANGELOG.md:7-20` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
   arm and reserved-name rejection, appending to the existing **Minor breaking change** clause
   at 14-20 (including the removed `class_tags` in `micromegas-object-cache` `metric_tags` and
@@ -326,3 +336,5 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - The analytics invalid-`level` handling (`log_entry.rs`) is out of scope; to be done as its own change.
 - Bare values go through a project-owned value trait with explicit impls (strings now; integer/bool impls can be added later without a break).
 - `..set` must be last in the property list.
+- `log_json_rows`'s value-interning leak is out of scope for this change.
+- On enabled dynamic logs the sink-enabled check runs twice (the macro gate and `log_dyn_tagged`); this duplicate is accepted.
