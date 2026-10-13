@@ -61,8 +61,8 @@ Takeaways:
   macro to a single expansion.
 - **Nothing has shipped.** `dyn_properties:` and the 5-argument metric arms exist only on this
   branch (CHANGELOG `Unreleased`, no callers outside tests and docs). They can be replaced
-  outright. The `properties: set` log arm and the 4-argument metric arm have about 78 non-test
-  callsites (77 four-argument `imetric!`/`fmetric!` plus one `properties:` log) across 14
+  outright. The `properties: set` log arm and the 4-argument metric arm have about 77 non-test
+  callsites (76 four-argument `imetric!`/`fmetric!` plus one `properties:` log) across 14
   files, mostly `redis-exporter/src/sampler.rs` (31), `public/src/servers/pg_stats.rs` (13),
   `object-cache/src/foyer_backend.rs` (7), `object-cache/src/range_cache/fetch.rs` (6),
   `object-cache-srv/src/handlers.rs` (5), `redis-exporter/src/main.rs` (4) and
@@ -92,7 +92,7 @@ Takeaways:
   - `object-cache-srv/src/handlers.rs:200/255/400/463/609` do a per-call `find_or_create`
     with runtime values; they become dynamic kv pairs.
   - `redis-exporter/src/sampler.rs:22-33` interns user-supplied property names and values. The
-    realistic path is `..props` plus kv pairs (e.g. `..props, event = %event` for `with_extra`)
+    realistic path is `..props` plus kv pairs (e.g. `..props, event = event` for `with_extra`)
     rather than hand-written `StaticMetricMetadata` at its 31 callsites.
   - `public/src/utils/log_json_rows.rs` builds runtime property *names*, and today uses
     `info!(properties: pset, ..)` (interning both name and value per row). It migrates to
@@ -114,9 +114,11 @@ I checked the macro mechanics in a throwaway crate (stable Rust, edition 2024) w
 - Both shapes parse: tracing-style `k = v, .., "fmt", args` (a string-literal key is told apart
   from the format string by the following `=`) and log-style `k = v; "fmt", args`.
   Named format args (`x = 1` after the format string) still work.
-- An integer literal value put in a `&'static str` slot fails to compile. Building the static
-  set in the `OnceLock` initializer with `intern_string(&$v.to_string())` avoids this, so
-  `n = 3` and `ok = true` work too.
+- An integer literal value put in a `&'static str` slot fails to compile, but `concat!($v)`
+  through a `$v:literal` fragment is a compile-time `&'static str` for string, integer
+  (including negative, suffixed and hex), float, bool and char literals (only byte strings
+  fail). So `n = 3` and `ok = true` work with no allocation. `concat!` keeps a float's
+  spelling (`1e3` stays `1e3`), whereas `to_string()` would normalize it.
 - A `.. $set:expr` element parses next to the kv arms (including `..t.prefix` field access),
   and an accumulator records whether a set was spread.
 - Each pair adds one level of recursion (the default limit is 128). A final
@@ -146,8 +148,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     arena;
   - `expr` (`AsRef<str>`: `&str`, `String`) is borrowed with no copy, and the arena copies it
     once per block;
-  - `%expr` (Display) and `?expr` (Debug) cost a `String` allocation per call, and are only
-    evaluated when the level is enabled.
+  - `%expr` (Display) and `?expr` (Debug) cost a `String` allocation per call. Log macros
+    evaluate them only when the level is enabled; metrics always do.
 
   `tracing`'s bare-ident shorthand (`info!(cid, "...")`) is left out for now and can be added
   later.
@@ -164,8 +166,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   A list can hold at most one `..set`. With a spread present, literal pairs go to the dynamic
   bucket, because merging two static sets would cost an intern lookup on every call. The
   muncher handles this with an extra `{set}` accumulator (prototyped). In that dynamic bucket,
-  string literals go in as-is (`DynProperty.value` is a `&str`); other literals take the same
-  path as `%$v`, a `&*$v.to_string()` temporary.
+  literal values use `concat!($v)` as well, so there is no per-call allocation.
 - **Routing:** calls with no properties keep today's untagged path (`log!` to
   `dispatch::log`, the 3-argument metric arm to `int_metric` / `float_metric`). Only
   property-bearing calls go through the `*_dyn` entry point with one static set (the spread
@@ -190,8 +191,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   The property also stays in `properties`. `TaggedLogInteropEvent` doesn't apply overrides.
   Analytics matches these names case-sensitively, whereas `merge_properties` and
   `property_get` compare case-insensitively. Changes:
-  - **Macros reject them.** Arms ahead of the generic kv arms match `level`, `target`, `name`
-    and `unit` as ident keys or as string-literal keys, and expand to a `compile_error!` that
+  - **Macros reject them.** Arms ahead of the generic kv arms match, for the log macros,
+    `level` and `target`, and for `imetric!`/`fmetric!`, `target`, `name` and `unit`, as ident keys or as string-literal keys, and expand to a `compile_error!` that
     names the real argument. This keeps `info!(target = x, ..)` from being confused with
     `info!(target: x, ..)`. The macros can't see inside a `..set` spread or a runtime
     `DynProperty` slice, so overrides through those still work; this is the documented escape
@@ -213,21 +214,22 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   needs wasm-compatible expansion (it only changes the static metadata). On wasm32 the
   `property_set` stub has no `Property::new` / `find_or_create`, and `intern_string` /
   `static_string_ref` are native-only, and a closure passed to the helper is still type-checked
-  there. The macro expansion must therefore name only the helper (passing it the raw key and
-  literal pairs, which its native implementation converts and interns), `DynProperty` and the
+  there. The macro expansion must therefore name only the helper (passing it the
+  `&'static [(&'static str, &'static str)]` literal pairs, built with `concat!`), `DynProperty` and the
   dispatch functions, so the wasm32 stub can ignore its input.
 
 ## Implementation Steps
 
 1. Per-callsite literal-set helper (`OnceLock<&'static PropertySet>` filled by `find_or_create`)
    in `rust/tracing`, plus the matching wasm32 stub next to the `property_set` stub in
-   `rust/tracing/src/lib.rs` (~157-177). The helper takes raw key/literal pairs so the macro
-   never names native-only items.
+   `rust/tracing/src/lib.rs` (~157-177). The helper takes a
+   `&'static [(&'static str, &'static str)]` (values via `concat!`), so the macro never names
+   native-only items.
 2. Short-circuit an empty dynamic slice before `merge_properties` in
    `rust/tracing/src/dispatch.rs` (or in the free functions).
 3. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
    (kv muncher, `..set`, reserved-key `compile_error!` arms, metric `target:` arm).
-4. Migrate the ~78 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
+4. Migrate the ~77 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
    `dispatch::log_dyn_tagged` with a hand-written `static LogMetadata` and the level gate, and
    the `redis-exporter` sampler to `..props` plus kv pairs.
 5. `analytics/src/log_entry.rs`: keep the descriptor level and warn on an unparseable `level`
@@ -237,25 +239,33 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 
 ### Tests
 - Update `rust/tracing/tests/test_macros.rs` (`properties:` at 29-45, 4-argument metrics at
-  86-103) to the new syntax.
+  86-103) to the new syntax. The calls at `:90` and `:99` pass `Property::new("name", ..)`;
+  they keep `name` through a `..set` spread, as a deliberate test of the escape hatch
+  (`name = ..` would hit the reserved-key `compile_error!`).
 - Each kv form: literal, expr, `%`, `?`, string-literal key, `..set`, `..set` mixed with kv.
 - Pointer equality of the per-callsite literal set across calls.
 - Named format args after the format string.
 - Metric `target:` arm.
-- A wasm32 build check that expands the kv, `..set` and metric `target:` arms (the wasm CI
-  clippy only builds `rust/datafusion-wasm`, which uses plain `info!`).
+- A cfg-gated test in `rust/datafusion-wasm` (covered by `run_wasm()` in `build/rust_ci.py`,
+  which only runs fmt/clippy/tests there) that expands the kv, `..PropertySet::empty()` (the
+  only `&'static PropertySet` on wasm32) and metric `target:` arms under
+  `wasm32-unknown-unknown`.
 - No-property calls still emit untagged events.
 - `compile_fail` doctests in `macros.rs` (none exist today) for reserved keys and a double
   `..set`.
 - No-DB unit test in `analytics/tests/log_tests.rs` for the invalid `level` override.
 
 ### Docs
-- `rust/tracing/src/lib.rs:51-76` (Dynamic properties section; lines 73-75 say an invalid level
+- `rust/tracing/src/lib.rs:51-76` (Dynamic properties section; lines 74-75 say an invalid level
   fails the block, which is wrong after the analytics fix).
+- `rust/tracing/src/property_set.rs:30-33` (`DynProperty` doc says an invalid dynamic level
+  fails the block; same fix).
+- `rust/auth/src/db_api_key.rs:248` (doc comment showing the 4-argument `imetric!` form).
 - `rust/tracing/src/macros.rs` doc comments (~163-180, ~239, ~308-322).
 - `rust/tracing/README.md:25`.
-- `CHANGELOG.md:7-9` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
-  arm and reserved-name rejection, with the **Minor breaking change** clause.
+- `CHANGELOG.md:7-20` (Unreleased entry): rewrite for kv syntax, `..set`, the metric `target:`
+  arm and reserved-name rejection, appending to the existing **Minor breaking change** clause
+  at 14-20.
 
 ## Decisions
 - `class_tags` is deleted; its callers use a dynamic `class = class` pair.
