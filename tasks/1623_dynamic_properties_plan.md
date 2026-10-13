@@ -118,8 +118,7 @@ cardinality. The next block starts with an empty arena, and a value still in use
 re-emitted there.
 
 Thread and image blocks carry an always-empty arena: no allocation until first insert, and no
-API inserts into it. That is cheaper than splitting `EventBlock` into two types just to keep the
-field off spans.
+API inserts into it.
 
 **Safety invariant** (documented on the field): events in `events` may hold addresses into
 `properties`. Both live in the same `EventBlock`, which is only dropped as a whole. `extract()`
@@ -144,13 +143,11 @@ with dynamic properties, the merged arena set is built by `get_or_insert`, which
 
 `TaggedLogString.properties` and the two tagged metric events' `properties` change from
 `&'static PropertySet` to `*const PropertySet`. This is internal plumbing so the same event type
-can carry either an interned set or an arena set; the static paths above just store
-`set as *const PropertySet`. With arena-backed sets, keeping the field `&'static` would be a lie.
+can carry either an interned set or an arena set.
 The reflection derive already treats `syn::Type::Ptr` as a reference member
 (`rust/transit/derive/src/derive_reflect.rs:17`), so the UDT stays a reference to the
 `PropertySetDependency` id. Only the reflected member `type_name` string changes, and parsing
-ignores it for reference members. The static-set paths cast `&'static PropertySet` to the
-pointer. `record_properties` takes `*const PropertySet` and dereferences it under the block
+ignores it for reference members. `record_properties` takes `*const PropertySet` and dereferences it under the block
 invariant above. This also does away with the `transmute::<u64, &PropertySet>` in
 `TaggedLogString::read_value`, leaving one small piece of
 `tasks/backlog/pointer-provenance.md`.
@@ -203,7 +200,10 @@ stub), so the prelude re-export and the macros compile on wasm32.
 
 - `log!(lvl, properties: set, dyn_properties: dyn, …)` and
   `log!(lvl, dyn_properties: dyn, …)` (static set = a `lazy_static` empty interned set), both
-  calling `log_dyn_tagged`. They flow through `info!`/`warn!`/`error!`/`debug!`/`trace!`/`fatal!`
+  calling `log_dyn_tagged`. `macro_rules` takes the first matching arm, so the
+  `properties:` + `dyn_properties:` arm goes before the existing `properties:` arm (which would
+  otherwise swallow `dyn_properties: …`), and the dyn-only arm goes before the generic
+  `($lvl:expr, $($arg:tt)+)` arm. They flow through `info!`/`warn!`/`error!`/`debug!`/`trace!`/`fatal!`
   through the existing generic arm.
 - `imetric!` / `fmetric!` gain a 5-argument arm `(name, unit, properties, dyn_properties, value)`.
 
@@ -233,7 +233,8 @@ Those events have no properties.
   `log.target` / `log.module_path` / `log.file` / `log.line` fields added by `tracing-log` for
   bridged `log` records) as `(name, value)`:
   `record_str` keeps the `&str` as an owned copy, and the other `record_*` methods format with
-  `Debug`, as they do for the message today. The message text stays exactly as it is
+  `Debug`, as they do for the message today. The collected `(name, value)` list is a `pub` field
+  of `FieldFormatVisitor` so the external test can read it. The message text stays exactly as it is
   (`name=value` included), so existing queries that match on `msg` keep working.
 - **Wire event.** A Rust `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`) mirrors
   the existing Unreal event of the same name (`unreal/MicromegasTracing/Public/MicromegasTracing/LogEvents.h:26-75`):
@@ -281,16 +282,21 @@ requirements, and the block-owned arena meets both:
 
 ## Implementation Steps
 
-1. **Arena.** Add `rust/tracing/src/property_arena.rs` (`PropertyArena`), export it from
-   `lib.rs`, and add `StaticStringRef::from_str_unchecked`.
+1. **Arena.** Add `rust/tracing/src/property_arena.rs` (`PropertyArena`), declare
+   `pub mod property_arena;` in `lib.rs` under `#[cfg(not(target_arch = "wasm32"))]` like
+   `static_string_ref`, and add `StaticStringRef::from_str_unchecked`. Make
+   `PropertySet::properties` `pub(crate)` so the arena can build owned, non-interned sets
+   (`find_or_create` is the only constructor today and it interns).
 2. **Block.** Add the `properties` field to `EventBlock`, initialize it in `TracingBlock::new`,
-   fold it into `len_bytes`, and document the invariant. Add `EventStream::get_block_mut_parts`.
+   fold it into `len_bytes`, and document the invariant. Add `EventStream::get_block_mut_parts`
+   in an `impl<Q> EventStream<EventBlock<Q>>` block, reading `events` and `properties` directly
+   after `Arc::get_mut` (the generic `Block: TracingBlock` bound only exposes `events_mut()`).
 3. **Events.** Switch `TaggedLogString`, `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent`
-   `properties` to `*const PropertySet`, and update the static-set call sites in `dispatch.rs`
-   plus the tests that build or read these events
-   (`rust/analytics/tests/log_tests.rs`, `parse_corrupt_block_tests.rs`,
-   `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`).
-   The object-cache tests dereference the pointer while the sink still holds the block.
+   `properties` to `*const PropertySet`. Code that only builds events relies on the implicit
+   `&'static PropertySet` to `*const PropertySet` coercion and compiles unchanged. Only code that
+   reads the field breaks: `rust/object-cache/tests/foyer_backend_tests.rs` and
+   `rust/object-cache-srv/tests/telemetry_tests.rs`, which dereference the pointer while the sink
+   still holds the block.
 4. **Deps.** Move `record_properties` into `property_set.rs` (taking `*const PropertySet`, the deps
    queue once as `&mut D`, and two non-capturing `fn(&mut D, _)` pushers) and call it from both `extract` impls. Change `PropertySetDependency`'s field
    and `new` to `*const PropertySet`.
@@ -319,10 +325,12 @@ requirements, and the block-owned arena meets both:
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`,
   `rust/tracing/src/macros.rs`
 - `rust/telemetry-sink/src/tracing_interop.rs`
-- Tests constructing tagged events: `rust/analytics/tests/log_tests.rs`,
-  `rust/analytics/tests/parse_corrupt_block_tests.rs`,
+- Tests reading the tagged events' `properties` field:
   `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`
 - `rust/tracing/tests/utils.rs` (new `LogMsgQueueAny` match arm)
+- New or extended tests: `rust/tracing/tests/property_arena_tests.rs` (new),
+  `rust/telemetry-sink/tests/tracing_interop_tests.rs` (new),
+  `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`
 - `CHANGELOG.md`, `rust/tracing/README.md`
 
 ## Trade-offs
@@ -363,7 +371,8 @@ requirements, and the block-owned arena meets both:
   clause: the `properties` field of `TaggedLogString`, `TaggedFloatMetricEvent` and
   `TaggedIntegerMetricEvent` is now `*const PropertySet`, `PropertySetDependency` holds and takes
   `*const PropertySet`, `EventBlock` has a new
-  `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant, and the
+  `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant, `FieldFormatVisitor` has a new
+  `pub` field for the collected fields (breaking struct-literal construction), and the
   `properties` passed to `EventSink::on_log` are only valid for the duration of the call.
 - `rust/tracing/README.md` (the crate's docs.rs landing page): a short "Dynamic properties"
   section with the log and metric examples above and the cardinality note (names static, values
@@ -397,7 +406,7 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   again, flush, and assert each captured block's arena holds its own copy of the set and the
   first captured block's sets are still intact after the second flush.
 - **Round trip** (extending `rust/analytics/tests/log_tests.rs` and the metrics equivalent):
-  build a block with dynamic-tagged logs and metrics, encode it with `encode_block`, parse it
+  build a block with dynamic-tagged logs and metrics, encode it with `StreamBlock::encode_bin`, parse it
   through `parse_block` / `log_entry_from_value` / the measure path, and assert
   `properties` contains `correlation_id` with the right value next to the static properties.
   Also assert that two events with the same dynamic set in one block share one
