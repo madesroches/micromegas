@@ -506,7 +506,7 @@ macro_rules! __props {
     (@end metric $ctx:tt [] [] [] [] $value:expr) => {
         $crate::__metric_call!(plain $ctx $value)
     };
-    (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] $value:expr) => {
+    (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
             $set, $crate::__dyn_slice!(metric $($a)*), $value)
     };

@@ -349,8 +349,13 @@ fn spread_sets() {
     imetric!("spread", "count", ..set, 1);
     imetric!("spread_pair", "count", kind = "pair", ..set, 1_u64);
     fmetric!("spread_float", "count", cid = cid, ..set, 1.0);
+    imetric!("spread_trailing_comma", "count", ..set, 1,);
     assert_eq!(
         metric_props(&guard, "spread"),
+        pairs(&[("region", "eu"), ("kind", "set")])
+    );
+    assert_eq!(
+        metric_props(&guard, "spread_trailing_comma"),
         pairs(&[("region", "eu"), ("kind", "set")])
     );
     assert_eq!(
