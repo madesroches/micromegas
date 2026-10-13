@@ -238,8 +238,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   `static_string_ref` are native-only, and a closure passed to the helper is still type-checked
   there. The per-callsite `OnceLock<&'static PropertySet>` must be a `static` emitted by the
   macro expansion (a `static` inside a plain helper fn would be shared by all callsites). The
-  expansion may name `PropertySet`, `OnceLock`, the helper, `DynProperty` and the dispatch
-  functions (the wasm32 stub defines `PropertySet` and `OnceLock::new()` is const).
+  expansion may name `PropertySet`, `OnceLock`, the helper, `PropertyValue`, `DynProperty` and the
+  dispatch functions (the wasm32 stub defines `PropertySet` and `OnceLock::new()` is const).
 
 ## Implementation Steps
 
@@ -250,7 +250,9 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
    `OnceLock` static and a `&'static [(&'static str, &'static str)]` (values via `concat!`), or a
    const-constructible struct holding both, so the macro never names `Property::new`,
    `find_or_create`, `intern_string` or `static_string_ref`.
-2. Add the `PropertyValue` trait (with the explicit impls above) to `rust/tracing`.
+2. Add the `PropertyValue` trait (with the explicit impls above) to `rust/tracing`, in a module
+   compiled on both targets (it only needs `std::borrow::Cow`), not in the native-only
+   `property_set.rs`.
 3. Short-circuit an empty dynamic slice before `merge_properties` in
    `rust/tracing/src/dispatch.rs` (or in the free functions).
 4. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
@@ -288,8 +290,11 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   a kv value `k = -1` and `k = -x`.
 - A `#[wasm_bindgen_test]` in `rust/datafusion-wasm/tests/wasm_integration.rs` (compiled and run
   by `build.py --test` from `run_wasm()` in `build/rust_ci.py`) that uses the kv,
-  trailing `..PropertySet::empty()` (the only `&'static PropertySet` on wasm32) and metric
-  `target:` arms under `wasm32-unknown-unknown`.
+  trailing `..PropertySet::empty()` (the only `&'static PropertySet` on wasm32), a bare
+  `&str`/`String` value, and metric `target:` arms under `wasm32-unknown-unknown`.
+- Lazy evaluation: a value type whose `Display` impl bumps a counter. With the level or target
+  disabled, `%`, `?` and bare-value expressions are not evaluated (counter stays 0); with it
+  enabled, they are.
 - No-property calls still emit untagged events.
 - `compile_fail` doctests in `macros.rs` (none exist today) for reserved keys, a double
   `..set` and a bare `u32` value.
