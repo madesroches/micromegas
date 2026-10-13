@@ -316,7 +316,7 @@ requirements, and the block-owned arena meets both:
 ## Files to Modify
 
 - `rust/tracing/src/property_arena.rs` (new)
-- `rust/tracing/src/lib.rs`, `rust/tracing/src/static_string_ref.rs`,
+- `rust/tracing/src/lib.rs` (module declaration and crate docs), `rust/tracing/src/static_string_ref.rs`,
   `rust/tracing/src/property_set.rs`
 - `rust/tracing/src/event/block.rs`, `rust/tracing/src/event/stream.rs`,
   `rust/tracing/src/event/sink.rs`
@@ -331,7 +331,7 @@ requirements, and the block-owned arena meets both:
 - New or extended tests: `rust/tracing/tests/property_arena_tests.rs` (new),
   `rust/telemetry-sink/tests/tracing_interop_tests.rs` (new),
   `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`
-- `CHANGELOG.md`, `rust/tracing/README.md`
+- `CHANGELOG.md`, `rust/tracing/README.md` (short pointer only)
 
 ## Trade-offs
 
@@ -374,11 +374,11 @@ requirements, and the block-owned arena meets both:
   `properties` field, `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant, `FieldFormatVisitor` has a new
   `pub` field for the collected fields (breaking struct-literal construction), and the
   `properties` passed to `EventSink::on_log` are only valid for the duration of the call.
-- `rust/tracing/README.md` (the crate's docs.rs landing page): a short "Dynamic properties"
-  section with the log and metric examples above and the cardinality note (names static, values
+- `rust/tracing/src/lib.rs` crate docs (the docs.rs page), next to `# Logging` / `# Metrics`: a
+  "Dynamic properties" section with the log and metric examples above and the cardinality note (names static, values
   free), plus the column-override note: `level`/`target` (logs) and `target`/`name`/`unit`
   (metrics) override the row's columns, and a dynamic `level` must be a valid level name or the
-  block fails to parse.
+  block fails to parse. `rust/tracing/README.md` (the crates.io page) gets at most a short pointer.
 - Rustdoc on the new macros arms, `DynProperty` and `PropertyArena`, and the lifetime note on
   `EventSink::on_log`.
 - The `log_entries` / `measures` schema docs (`mkdocs/docs/query-guide/schema-reference.md`)
@@ -412,10 +412,13 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   Also assert that two events with the same dynamic set in one block share one
   `PropertySetDependency`.
 - **`tracing` interop**:
-  - Visitor (`rust/telemetry-sink/tests/tracing_interop_tests.rs`, new): run a `tracing` event
-    under `tracing::subscriber::with_default` with a test layer that drives
-    `FieldFormatVisitor`. Assert that `correlation_id = %id` and `n = 3` become properties, that
-    `message` and a `log.*` field (e.g. `log.module_path`) do not, and that the message text is unchanged.
+  - Routing (`rust/telemetry-sink/tests/tracing_interop_tests.rs`, new, `#[serial]`): install
+    `TracingCaptureLayer` with `tracing::subscriber::with_default` under
+    `micromegas_tracing::test_utils::init_in_memory_tracing()`, emit events, flush, and inspect
+    `InMemorySink.state.log_blocks`. An event with fields (`correlation_id = %id`, `n = 3`) lands
+    as a `TaggedLogInteropEvent` carrying those properties, with `message` and a `log.*` field
+    (e.g. `log.module_path`) excluded and the msg text unchanged. An event without fields lands
+    as `LogStaticStrInteropEvent` / `LogStringInteropEvent`.
   - Round trip: a block holding a Rust `TaggedLogInteropEvent` parses through
     `log_entry_from_value` with its properties and target. This pins the Rust and Unreal layouts
     to the one analytics parser.
