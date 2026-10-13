@@ -84,7 +84,7 @@ receiving-side code that carries a wire id across blocks has to change (see
 pub struct PropertyArena {
     sets: Vec<Box<PropertySet>>,        // id = address of the boxed set
     values: Vec<Box<str>>,              // owned dynamic values
-    index: HashMap<u64, SmallVec<[u32; 1]>>, // content hash -> indices into `sets`
+    index: HashMap<u64, Vec<u32>>,      // content hash -> indices into `sets`
     len_bytes: usize,
 }
 
@@ -175,7 +175,7 @@ pub fn tagged_integer_metric_dyn(desc: &'static StaticMetricMetadata, properties
                                  dyn_properties: &[DynProperty<'_>], value: u64);
 ```
 
-Shared step `merge_properties(static_set, dyn_properties) -> SmallVec<[Property; 8]>`: start
+Shared step `merge_properties(static_set, dyn_properties) -> Vec<Property>`: start
 from the static set's properties, apply each dynamic property (a dynamic value replaces a static
 property of the same name, compared case-insensitively to match `property_get`), then sort the
 same way `find_or_create` does. The dynamic entries' refs point at the caller's strings and are
@@ -188,6 +188,10 @@ returned pointer, and do the usual `is_full` flush. The arena is reached through
 `EventStream::get_block_mut_parts() -> (&mut Queue, &mut PropertyArena)`, which uses the same
 `Arc::get_mut` as `get_events_mut`. The metric variants do the same under the metrics lock,
 without `on_log`. `dispatch_wasm.rs` gets matching no-op/forwarding stubs.
+
+`DynProperty` and the empty static `PropertySet` reference used by the dyn-only `log!` arm must
+exist on both native and wasm32 (also defined in `dispatch_wasm.rs` and the wasm `property_set`
+stub), so the prelude re-export and the macros compile on wasm32.
 
 ### Macros (`rust/tracing/src/macros.rs`)
 
@@ -219,7 +223,9 @@ Those events have no properties.
 
 - **Fields become dynamic properties.** `tracing`'s `Field::name()` is `&'static str` (it comes
   from the callsite), so field names satisfy the static-name rule as they are. The visitor also
-  collects each field other than `message` and `log.target` as `(name, value)`:
+  collects each field other than `message` and those whose name starts with `log.` (the
+  `log.target` / `log.module_path` / `log.file` / `log.line` fields added by `tracing-log` for
+  bridged `log` records) as `(name, value)`:
   `record_str` keeps the `&str` as an owned copy, and the other `record_*` methods format with
   `Debug`, as they do for the message today. The message text stays exactly as it is
   (`name=value` included), so existing queries that match on `msg` keep working.
@@ -276,17 +282,20 @@ requirements, and the block-owned arena meets both:
    fold it into `len_bytes`, and document the invariant. Add `EventStream::get_block_mut_parts`.
 3. **Events.** Switch `TaggedLogString`, `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent`
    `properties` to `*const PropertySet`, and update the static-set call sites in `dispatch.rs`
-   plus the tests that build these events
-   (`rust/analytics/tests/log_tests.rs`, `parse_corrupt_block_tests.rs`, `rust/tracing/tests/`).
+   plus the tests that build or read these events
+   (`rust/analytics/tests/log_tests.rs`, `parse_corrupt_block_tests.rs`,
+   `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`).
+   The object-cache tests dereference the pointer while the sink still holds the block.
 4. **Deps.** Move `record_properties` into `property_set.rs` (generic, `*const PropertySet`) and
    call it from both `extract` impls.
 5. **Dispatch.** Add `DynProperty`, `merge_properties`, `log_dyn_tagged`,
-   `tagged_{float,integer}_metric_dyn` (plus wasm stubs) and re-export `DynProperty` from the
-   prelude.
+   `tagged_{float,integer}_metric_dyn` (plus wasm stubs), and re-export `DynProperty` from the
+   prelude. `DynProperty` and the empty-set reference are available on wasm32 too.
 6. **Macros.** Add the `dyn_properties:` log arms and the 5-argument metric arms, with rustdoc
    examples.
 7. **`tracing` interop.** Add the Rust `TaggedLogInteropEvent` (plus its `LogMsgQueue` entry
-   and `extract` arm) and `log_interop_dyn_tagged` (plus a wasm stub). Then extend
+   and `extract` arm), the new match arm in `rust/tracing/tests/utils.rs` (it matches
+   `LogMsgQueueAny` exhaustively), and `log_interop_dyn_tagged` (plus a wasm stub). Then extend
    `FieldFormatVisitor` to collect the fields and route `on_event` to the new dispatch when
    there are any.
 8. **Docs and changelog** (below). No analytics code changes (see
@@ -304,7 +313,9 @@ requirements, and the block-owned arena meets both:
   `rust/tracing/src/macros.rs`
 - `rust/telemetry-sink/src/tracing_interop.rs`
 - Tests constructing tagged events: `rust/analytics/tests/log_tests.rs`,
-  `rust/analytics/tests/parse_corrupt_block_tests.rs`, `rust/tracing/tests/*`
+  `rust/analytics/tests/parse_corrupt_block_tests.rs`,
+  `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`
+- `rust/tracing/tests/utils.rs` (new `LogMsgQueueAny` match arm)
 - `CHANGELOG.md`, `rust/tracing/README.md`
 
 ## Trade-offs
@@ -343,8 +354,8 @@ requirements, and the block-owned arena meets both:
 
 - `CHANGELOG.md` (Unreleased): new dynamic-properties API, plus a **Minor breaking change**
   clause: the `properties` field of `TaggedLogString`, `TaggedFloatMetricEvent` and
-  `TaggedIntegerMetricEvent` is now `*const PropertySet`, and `EventBlock` has a new
-  `properties` field.
+  `TaggedIntegerMetricEvent` is now `*const PropertySet`, `EventBlock` has a new
+  `properties` field, and `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant.
 - `rust/tracing/README.md` (the crate's docs.rs landing page): a short "Dynamic properties"
   section with the log and metric examples above and the cardinality note (names static, values
   free).
@@ -367,9 +378,11 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
 - **Budget**: push dynamic-tagged logs with unique large values into a `LogStream` of small
   capacity and assert `is_full()` trips on events-plus-arena bytes before the queue alone would.
   Do the same for a `MetricsStream`.
-- **Dispatch** (pattern of `rust/tracing/tests/` with the in-memory sink): `log_dyn_tagged`
-  delivers the merged properties to `on_log`, and a flush yields a block whose fresh stream block
-  has an empty arena.
+- **Dispatch**: a test-local `EventSink` records the `on_log` properties (the in-memory sink
+  ignores them); install it with `init_event_dispatch` under `#[serial]`, like
+  `InMemoryTracingGuard`. Assert `log_dyn_tagged` delivers the merged properties to `on_log`,
+  and that after a flush the stream's new current block has an empty arena while the flushed
+  block keeps its sets.
 - **Round trip** (extending `rust/analytics/tests/log_tests.rs` and the metrics equivalent):
   build a block with dynamic-tagged logs and metrics, encode it with `encode_block`, parse it
   through `parse_block` / `log_entry_from_value` / the measure path, and assert
@@ -385,7 +398,7 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   - Visitor (`rust/telemetry-sink/tests/tracing_interop_tests.rs`, new): run a `tracing` event
     under `tracing::subscriber::with_default` with a test layer that drives
     `FieldFormatVisitor`. Assert that `correlation_id = %id` and `n = 3` become properties, that
-    `message` / `log.target` do not, and that the message text is unchanged.
+    `message` and a `log.*` field (e.g. `log.module_path`) do not, and that the message text is unchanged.
   - Round trip: a block holding a Rust `TaggedLogInteropEvent` parses through
     `log_entry_from_value` with its properties and target. This pins the Rust and Unreal layouts
     to the one analytics parser.
