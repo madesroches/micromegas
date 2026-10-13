@@ -56,6 +56,7 @@ fn owned_props(props: &[(&'static str, &str)]) -> Vec<Property> {
 }
 
 fn set_as_pairs(set: *const PropertySet) -> Vec<(String, String)> {
+    // SAFETY: callers pass sets from the arena, which outlives this call.
     let set = unsafe { &*set };
     set.get_properties()
         .iter()

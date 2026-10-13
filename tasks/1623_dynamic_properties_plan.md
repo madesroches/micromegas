@@ -419,7 +419,9 @@ All of these are no-DB unit tests under `rust/tracing/tests/`, `rust/telemetry-s
   - `dispatch::empty_property_set()` is public (native and wasm), so the dyn-only `log!` arm
     doesn't need `lazy_static` in user crates.
   - `record_properties` is an `unsafe fn`, because it dereferences a raw pointer.
-- Review loop round 1 found that `merge_properties` (safe, public) returns refs that borrow the
-  caller's strings, and that `PropertySetDependency::new` is a safe constructor over a raw
-  pointer. The fix makes `merge_properties` an `unsafe fn` and narrows
-  `PropertySetDependency::new`. Further review rounds are still running.
+- Review loop (opus reviewer): round 1 found that `merge_properties` (safe, public) returns refs
+  that borrow the caller's strings, and that `PropertySetDependency::new` is a safe constructor
+  over a raw pointer. `merge_properties` is now an `unsafe fn` and `PropertySetDependency::new`
+  is `pub(crate)`. Round 2 found only trivial issues (column-override docs overstated for
+  `tracing` interop logs, two test derefs without `// SAFETY:` comments), which a final pass
+  fixed.

@@ -127,9 +127,10 @@ pub fn tagged_integer_metric(
 /// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
 /// bounded.
 ///
-/// Analytics treats some names as column overrides: `level`/`target` (logs) and
-/// `target`/`name`/`unit` (metrics). A dynamic `level` must be a valid level name or the
-/// block fails to parse.
+/// For `log!` and metric macros, analytics treats some names as column overrides:
+/// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). A dynamic `level` must be a
+/// valid level name or the block fails to parse. Interop logs (the `tracing` layer) keep their
+/// level and target unchanged.
 #[derive(Debug, Clone, Copy)]
 pub struct DynProperty<'a> {
     pub name: &'static str,

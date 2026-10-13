@@ -70,9 +70,10 @@
 //! On the query side the values are ordinary properties:
 //! `property_get(properties, 'correlation_id')`.
 //!
-//! Some property names override the row's columns in analytics: `level` and `target` for logs,
-//! `target`, `name` and `unit` for metrics. A dynamic `level` must be a valid level name or the
-//! block fails to parse.
+//! For `log!` and the metric macros, some property names override the row's columns in
+//! analytics: `level` and `target` for logs, `target`, `name` and `unit` for metrics. A dynamic
+//! `level` must be a valid level name or the block fails to parse. Interop logs (the `tracing`
+//! layer) keep their level and target unchanged.
 //!
 //! # Manual Span Scopes
 //!

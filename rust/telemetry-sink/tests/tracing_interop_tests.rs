@@ -20,6 +20,7 @@ fn captured_interop_events(
             match evt {
                 LogMsgQueueAny::TaggedLogInteropEvent(e) => {
                     let DynString(msg) = &e.msg;
+                    // SAFETY: the sink still holds the block, which owns the property set.
                     let props = unsafe { &*e.properties }
                         .get_properties()
                         .iter()
