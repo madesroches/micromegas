@@ -947,7 +947,17 @@ impl Dispatch {
     ) {
         let time = now();
         let merged = merge_properties(PropertySet::empty(), dyn_properties);
-        self.get_sink().on_log(desc, &merged, time, args);
+        // Sinks treat `target`/`level` properties as overrides; interop logs must keep their own.
+        let is_override = |p: &DynProperty<'_>| {
+            p.name.eq_ignore_ascii_case("target") || p.name.eq_ignore_ascii_case("level")
+        };
+        if merged.iter().any(is_override) {
+            let filtered: Vec<DynProperty<'_>> =
+                merged.iter().copied().filter(|p| !is_override(p)).collect();
+            self.get_sink().on_log(desc, &filtered, time, args);
+        } else {
+            self.get_sink().on_log(desc, &merged, time, args);
+        }
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, arena) = log_stream.get_block_mut_parts();
