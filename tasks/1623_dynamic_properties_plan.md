@@ -157,14 +157,19 @@ invariant above. This also does away with the `transmute::<u64, &PropertySet>` i
 `TaggedLogString::read_value`, leaving one small piece of
 `tasks/backlog/pointer-provenance.md`.
 
-DRY: move the duplicated `record_properties` into `property_set.rs`, generic over a deps queue
-that can `push` `StaticStringDependency` and `PropertySetDependency`. Both `extract` impls call
-it.
+DRY: move the duplicated `record_properties` into `property_set.rs`. The two deps queues share
+no trait exposing `push`, so the helper takes two callbacks, `impl FnMut(StaticStringDependency)`
+and `impl FnMut(PropertySetDependency)`, which each `extract` wraps around its own queue's `push`.
+`PropertySetDependency`'s field and `new` change from `&'static PropertySet` to
+`*const PropertySet`, dereferenced under the block invariant.
 
 ### Dispatch API (`rust/tracing/src/dispatch.rs`)
 
 ```rust
 /// A property whose value is not 'static. Names stay 'static: name cardinality must remain bounded.
+/// Analytics treats some names as column overrides: `level`/`target` (logs) and
+/// `target`/`name`/`unit` (metrics). A dynamic `level` must be a valid level name or the block
+/// fails to parse.
 pub struct DynProperty<'a> { pub name: &'static str, pub value: &'a str }
 
 pub fn log_dyn_tagged(desc: &'static LogMetadata, properties: &'static PropertySet,
@@ -286,8 +291,9 @@ requirements, and the block-owned arena meets both:
    (`rust/analytics/tests/log_tests.rs`, `parse_corrupt_block_tests.rs`,
    `rust/object-cache/tests/foyer_backend_tests.rs`, `rust/object-cache-srv/tests/telemetry_tests.rs`).
    The object-cache tests dereference the pointer while the sink still holds the block.
-4. **Deps.** Move `record_properties` into `property_set.rs` (generic, `*const PropertySet`) and
-   call it from both `extract` impls.
+4. **Deps.** Move `record_properties` into `property_set.rs` (taking `*const PropertySet` and two
+   push callbacks) and call it from both `extract` impls. Change `PropertySetDependency`'s field
+   and `new` to `*const PropertySet`.
 5. **Dispatch.** Add `DynProperty`, `merge_properties`, `log_dyn_tagged`,
    `tagged_{float,integer}_metric_dyn` (plus wasm stubs), and re-export `DynProperty` from the
    prelude. `DynProperty` and the empty-set reference are available on wasm32 too.
@@ -354,11 +360,14 @@ requirements, and the block-owned arena meets both:
 
 - `CHANGELOG.md` (Unreleased): new dynamic-properties API, plus a **Minor breaking change**
   clause: the `properties` field of `TaggedLogString`, `TaggedFloatMetricEvent` and
-  `TaggedIntegerMetricEvent` is now `*const PropertySet`, `EventBlock` has a new
+  `TaggedIntegerMetricEvent` is now `*const PropertySet`, `PropertySetDependency` holds and takes
+  `*const PropertySet`, `EventBlock` has a new
   `properties` field, and `LogMsgQueueAny` has a new `TaggedLogInteropEvent` variant.
 - `rust/tracing/README.md` (the crate's docs.rs landing page): a short "Dynamic properties"
   section with the log and metric examples above and the cardinality note (names static, values
-  free).
+  free), plus the column-override note: `level`/`target` (logs) and `target`/`name`/`unit`
+  (metrics) override the row's columns, and a dynamic `level` must be a valid level name or the
+  block fails to parse.
 - Rustdoc on the new macros arms, `DynProperty` and `PropertyArena`.
 - The `log_entries` / `measures` schema docs (`mkdocs/docs/query-guide/schema-reference.md`)
   need no change, since the columns are unchanged.
