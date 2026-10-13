@@ -214,17 +214,23 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
   needs wasm-compatible expansion (it only changes the static metadata). On wasm32 the
   `property_set` stub has no `Property::new` / `find_or_create`, and `intern_string` /
   `static_string_ref` are native-only, and a closure passed to the helper is still type-checked
-  there. The macro expansion must therefore name only the helper (passing it the
-  `&'static [(&'static str, &'static str)]` literal pairs, built with `concat!`), `DynProperty` and the
-  dispatch functions, so the wasm32 stub can ignore its input.
+  there. The per-callsite `OnceLock<&'static PropertySet>` must be a `static` emitted by the
+  macro expansion (a `static` inside a plain helper fn would be shared by all callsites); it is
+  passed to the helper with the `&'static [(&'static str, &'static str)]` literal pairs (built
+  with `concat!`), or both are held in a const-constructible helper struct. The expansion may
+  name `PropertySet`, `OnceLock`, the helper, `DynProperty` and the dispatch functions (the
+  wasm32 stub defines `PropertySet` and `OnceLock::new()` is const), and must avoid only
+  `Property::new` / `find_or_create` / `intern_string` / `static_string_ref`, so the wasm32
+  stub can ignore its input.
 
 ## Implementation Steps
 
-1. Per-callsite literal-set helper (`OnceLock<&'static PropertySet>` filled by `find_or_create`)
-   in `rust/tracing`, plus the matching wasm32 stub next to the `property_set` stub in
-   `rust/tracing/src/lib.rs` (~157-177). The helper takes a
-   `&'static [(&'static str, &'static str)]` (values via `concat!`), so the macro never names
-   native-only items.
+1. Per-callsite literal-set helper in `rust/tracing` (fills the macro-emitted per-callsite
+   `static OnceLock<&'static PropertySet>` via `find_or_create`), plus the matching wasm32 stub
+   next to the `property_set` stub in `rust/tracing/src/lib.rs` (~157-177). The helper takes the
+   `OnceLock` static and a `&'static [(&'static str, &'static str)]` (values via `concat!`), or a
+   const-constructible struct holding both, so the macro never names `Property::new`,
+   `find_or_create`, `intern_string` or `static_string_ref`.
 2. Short-circuit an empty dynamic slice before `merge_properties` in
    `rust/tracing/src/dispatch.rs` (or in the free functions).
 3. Rewrite `rust/tracing/src/macros.rs`: `log!`, `imetric!`, `fmetric!` and the level macros
