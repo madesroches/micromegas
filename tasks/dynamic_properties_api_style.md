@@ -92,7 +92,7 @@ Takeaways:
     and as dynamic kv they pay a merge plus an arena copy; that cost is accepted.
   - Callers that `intern_string` bounded runtime values per call become dynamic kv pairs, so the
     interning goes away: the `pg_stats.rs` callers (:84, :137, :267; at :84 and :137 the pairs
-    repeat at each of the 12 `imetric!` calls sharing the `tags` local), the `view_registry.rs`
+    repeat at each of the 12 `imetric!`/`fmetric!` calls sharing the `tags` local), the `view_registry.rs`
     caller (~:105),
     `maintenance.rs:103-106` (its `Arc<String>` value is a bare value). The helpers and imports
     left dead are deleted with their doc comments: in `pg_stats.rs` `table_tags` (:45),
