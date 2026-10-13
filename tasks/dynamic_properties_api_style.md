@@ -209,11 +209,7 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
     moves to it and needs no properties. `log_json_rows.rs` also relies on the log `target`
     override, which it keeps only through the function / `DynProperty` path or a spread.
   - **Analytics keeps the override** (SQL and wire format are stable, and blocks already
-    ingested rely on it). One fix: an unparseable `level` override no longer fails the whole
-    block. `log_entry_from_value` keeps the descriptor's level and logs a warning instead of
-    `Level::parse(..)?`. Before, one bad dynamic value dropped every event in its block.
-    This needs a no-DB unit test in `analytics/tests/log_tests.rs`: a block with an invalid
-    `level` property parses, and the row keeps the descriptor level.
+    ingested rely on it).
 - **Other notes:** the wasm stubs need the callsite-set helper. The `target:` metric arm also
   needs wasm-compatible expansion (it only changes the static metadata). On wasm32 the
   `property_set` stub has no `Property::new` / `find_or_create`, and `intern_string` /
@@ -243,10 +239,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 4. Migrate the ~77 callsites (see Constraints) to kv pairs or `..set`; move `log_json_rows.rs` to
    `dispatch::log_dyn_tagged` with a hand-written `static LogMetadata` and the level gate, and
    the `redis-exporter` sampler to `..props` plus kv pairs.
-5. `analytics/src/log_entry.rs`: keep the descriptor level and warn on an unparseable `level`
-   override.
-6. Tests (below).
-7. Docs and CHANGELOG (below).
+5. Tests (below).
+6. Docs and CHANGELOG (below).
 
 ### Tests
 - Update `rust/tracing/tests/test_macros.rs` (`properties:` at 29-45, 4-argument metrics at
@@ -266,13 +260,8 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - No-property calls still emit untagged events.
 - `compile_fail` doctests in `macros.rs` (none exist today) for reserved keys and a double
   `..set`.
-- No-DB unit test in `analytics/tests/log_tests.rs` for the invalid `level` override.
 
 ### Docs
-- `rust/tracing/src/lib.rs:51-76` (Dynamic properties section; lines 74-75 say an invalid level
-  fails the block, which is wrong after the analytics fix).
-- `rust/tracing/src/property_set.rs:30-33` (`DynProperty` doc says an invalid dynamic level
-  fails the block; same fix).
 - `rust/auth/src/db_api_key.rs:248` (doc comment showing the 4-argument `imetric!` form).
 - `rust/tracing/src/macros.rs` doc comments (~163-180, ~239, ~308-322).
 - `rust/tracing/README.md:25`.
@@ -282,3 +271,4 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 
 ## Decisions
 - `class_tags` is deleted; its callers use a dynamic `class = class` pair.
+- The analytics invalid-`level` handling (`log_entry.rs`) is out of scope; to be done as its own change.
