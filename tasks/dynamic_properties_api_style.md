@@ -70,7 +70,7 @@ Takeaways:
     `payload_size_inserted` afterwards (the `target` column is unchanged). The two-line comment
     at 414-415 ("this measure does not benefit from a dynamic property...") goes stale and is
     deleted with the migration; the comment at 416-418 (explaining the `PutIfAbsent::Created`
-    guard) stays.
+    guard) stays. The `use micromegas_tracing::property_set;` import (:15) is deleted.
   - `class_tags` (`object-cache/src/metric_tags.rs:77`) is deleted. Its callers
     (`range_cache/fetch.rs:326`, `:340`) become a dynamic kv pair `class = class` (a runtime
     `&'static str`). They must not use `..run_class_tag`: that set carries a prefix as well, and
@@ -81,7 +81,9 @@ Takeaways:
     `with_extra` belong to the sampler bullet below.
   - `rule_tags` (analytics, `query_deny_list.rs` ~616-619 and `flight_sql_service_impl.rs`
     ~828) builds the set per call at both callers, so both become `rule_id = %rule_id`;
-    `rule_tags` and its import at `flight_sql_service_impl.rs:43` are deleted.
+    `rule_tags`, its doc comment (`query_deny_list.rs:352-355`), its import at
+    `flight_sql_service_impl.rs:43` and the `intern_string` (:21) and `Property, PropertySet`
+    (:23) imports in `query_deny_list.rs` are deleted.
   - `auth/src/db_api_key.rs:390` (`table_tags`, a per-call `find_or_create` defined at `:215`)
     becomes a dynamic `table = ..` pair, and `table_tags` is deleted. The values are `&'static str` from a fixed table set,
     and as dynamic kv they pay a merge plus an arena copy; that cost is accepted.
@@ -94,7 +96,8 @@ Takeaways:
     imports (:17, :19); in `public/src/servers/maintenance.rs` the `intern_string` (:16) and
     `Property, PropertySet` (:18) imports.
   - `object-cache-srv/src/handlers.rs:200/255/400/463/609` do a per-call `find_or_create`
-    with runtime values; they become dynamic kv pairs.
+    with runtime values; they become dynamic kv pairs, and the `Property, PropertySet` import
+    (:18) is deleted.
   - `redis-exporter/src/sampler.rs:22-33` interns user-supplied property names and values. The
     realistic path is kv pairs plus a trailing `..props` (e.g. `event = event, ..props` for
     `with_extra`)
