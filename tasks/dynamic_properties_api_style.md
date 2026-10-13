@@ -1,5 +1,7 @@
 # Dynamic Properties: More Idiomatic Call Syntax
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1623
+
 Follow-up to `tasks/completed/1623_dynamic_properties_plan.md`.
 
 ## Problem
