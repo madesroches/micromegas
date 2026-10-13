@@ -338,3 +338,4 @@ fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 - `..set` must be last in the property list.
 - `log_json_rows`'s value-interning leak is out of scope for this change.
 - On enabled dynamic logs the sink-enabled check runs twice (the macro gate and `log_dyn_tagged`); this duplicate is accepted.
+- No dedicated `compile_error!` arms for the removed `properties:` / `dyn_properties:` forms; the CHANGELOG breaking-change entry points users to `..set` and kv pairs.
