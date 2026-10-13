@@ -73,7 +73,7 @@ records it parses today. Results:
 What does change is the meaning of an id: *the same id in two different blocks no longer implies
 the same content*, because a freed arena address can be reused by the next block. Any
 receiving-side code that carries a wire id across blocks has to change (see
-[Cross-block handle stability](#cross-block-handle-stability)).
+`## Decisions`).
 
 ### `PropertyArena` (new, `rust/tracing/src/property_arena.rs`)
 
@@ -176,7 +176,8 @@ pub fn tagged_integer_metric_dyn(desc: &'static StaticMetricMetadata, properties
                                  dyn_properties: &[DynProperty<'_>], value: u64);
 ```
 
-Shared step `merge_properties(static_set, dyn_properties) -> Vec<Property>`: start
+Shared step `pub fn merge_properties(static_set, dyn_properties) -> Vec<Property>` in
+`micromegas_tracing::dispatch`: start
 from the static set's properties, apply each dynamic property (a dynamic value replaces a static
 property of the same name, compared case-insensitively to match `property_get`), then sort the
 same way `find_or_create` does. The dynamic entries' refs point at the caller's strings and are
@@ -188,7 +189,7 @@ duration of the call, so a sink must not keep a `Property` past it.
 locking (so local sinks keep their lock-free re-entrancy), then take the log-stream lock, call
 `get_or_insert(&merged)` on the current block's arena, push a `TaggedLogString` with the
 returned pointer, and do the usual `is_full` flush. The arena is reached through a new
-`EventStream::get_block_mut_parts() -> (&mut Queue, &mut PropertyArena)`, which uses the same
+`pub fn EventStream::get_block_mut_parts() -> (&mut Queue, &mut PropertyArena)`, which uses the same
 `Arc::get_mut` as `get_events_mut`. The metric variants do the same under the metrics lock,
 without `on_log`. `dispatch_wasm.rs` gets matching no-op/forwarding stubs.
 
@@ -236,7 +237,7 @@ Those events have no properties.
   a non-collecting helper rather than the collecting `record_debug` path (otherwise a `&str` field
   is collected twice, raw and Debug-quoted); the other `record_*` methods format with `Debug`, as
   they do for the message today. The collected `(name, value)` list is a `pub` field
-  of `FieldFormatVisitor` so the external test can read it. The message text stays exactly as it is
+  of `FieldFormatVisitor` like the existing `buffer`/`target` fields. The message text stays exactly as it is
   (`name=value` included), so existing queries that match on `msg` keep working.
 - **Wire event.** A Rust `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`) mirrors
   the existing Unreal event of the same name (`unreal/MicromegasTracing/Public/MicromegasTracing/LogEvents.h:26-75`):
@@ -255,32 +256,6 @@ Those events have no properties.
   touch the arena.
 - Span fields aren't propagated, since scope inheritance is out of scope. Only the event's own
   fields count.
-
-### Cross-block handle stability
-
-Code on the receiving side could assume that a wire dependency id ("handle") means the same
-thing in every block of a process. Arena addresses break that assumption. An audit of the
-receiving code found nothing that relies on it:
-
-- **Per-block.** These are built fresh for every block: the dependency map
-  (`read_dependencies`, `rust/transit/src/parser.rs:31`), the bump arena (`parse_block`,
-  `rust/analytics/src/payload.rs:75-86`), `PropertySetJsonbDictionaryBuilder` (keyed on
-  *parse-arena* object addresses, and only used by the per-block `LogEntriesRecordBuilder` /
-  `MetricsRecordBuilder`), and the producers' `recorded_deps` / Unreal `Ids` sets.
-- **Content-keyed.** Code that does merge blocks keys on content, never on wire ids:
-  the call tree (`compute_scope_hash`), `NetSpanTreeBuilder`, and the perfetto intern maps.
-- **Not exposed.** No lakehouse table stores a dependency id. The `parse_block()` UDTF does
-  expose `id` members of POD dependency records (e.g. `desc.id`), but those stay `'static`
-  metadata. Property-set ids are dropped by the custom reader (`parser.rs:101-107`), and string
-  dependencies become plain strings, so no arena address ever reaches SQL output.
-
-So the analytics side needs **no code change**. On the producer side, the audit found two
-requirements, and the block-owned arena meets both:
-
-- Arena entries must live until the block is *encoded*, not merely closed. The arena is owned by
-  the `Arc`'d block that the sink encodes.
-- No address may be reused within one block, otherwise `recorded_deps` would emit only the first
-  content behind it. The arena never frees an entry before the whole block is dropped.
 
 ## Implementation Steps
 
@@ -313,7 +288,7 @@ requirements, and the block-owned arena meets both:
    `FieldFormatVisitor` to collect the fields and route `on_event` to the new dispatch when
    there are any.
 8. **Docs and changelog** (below). No analytics code changes (see
-   [Cross-block handle stability](#cross-block-handle-stability)).
+   `## Decisions`).
 
 ## Files to Modify
 
@@ -365,7 +340,9 @@ requirements, and the block-owned arena meets both:
 - `tracing` interop ships in the same PR, with event fields mapped to dynamic properties (user
   call). The message keeps its `name=value` text so `msg`-matching queries don't change.
 - Handles in analytics: an audit found no code that carries a wire id across blocks, so there
-  is no analytics change. The `desc.id` shown by `parse_block()` stays `'static` and is out of
+  is no analytics change. The audited structures are per-block: the dependency map in
+  `rust/transit/src/parser.rs`, the parse arena, and `PropertySetJsonbDictionaryBuilder` (keyed on
+  parse-arena pointers). The `desc.id` shown by `parse_block()` stays `'static` and is out of
   scope.
 
 ## Documentation
@@ -392,7 +369,7 @@ requirements, and the block-owned arena meets both:
 
 ## Testing Strategy
 
-All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytics/tests/`:
+All of these are no-DB unit tests under `rust/tracing/tests/`, `rust/telemetry-sink/tests/` and `rust/analytics/tests/`:
 
 - **Arena** (`tracing/tests/property_arena_tests.rs`): the same content returns the same
   pointer, and `len_bytes` doesn't grow on a hit; different values return different sets; the
@@ -424,7 +401,7 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
     `InMemorySink.state.log_blocks`. An event with fields (`correlation_id = %id`, `n = 3`, `user = "bob"`) lands
     as a `TaggedLogInteropEvent` carrying those properties, with `user` appearing exactly once, unquoted, and with `message` and a `log.*` field
     (e.g. `log.module_path`) excluded and the msg text unchanged. An event without fields lands
-    as `LogStaticStrInteropEvent` / `LogStringInteropEvent`.
+    as `LogStringInteropEvent`.
   - Round trip: a block holding a Rust `TaggedLogInteropEvent` parses through
     `log_entry_from_value` with its properties and target. This pins the Rust and Unreal layouts
     to the one analytics parser.
