@@ -391,10 +391,11 @@ All of these are no-DB unit tests under `rust/tracing/tests/` and `rust/analytic
   capacity and assert `is_full()` trips on events-plus-arena bytes before the queue alone would.
   Do the same for a `MetricsStream`.
 - **Dispatch**: a test-local `EventSink` records the `on_log` properties (the in-memory sink
-  ignores them); install it with `init_event_dispatch` under `#[serial]`, like
-  `InMemoryTracingGuard`. Assert `log_dyn_tagged` delivers the merged properties to `on_log`,
-  and that after a flush the stream's new current block has an empty arena while the flushed
-  block keeps its sets.
+  ignores them) and also records the blocks passed to `on_process_log_block`; install it with
+  `init_event_dispatch` under `#[serial]`, like `InMemoryTracingGuard`. Assert `log_dyn_tagged`
+  delivers the merged properties to `on_log`. Then log a dynamic set, flush, log the same set
+  again, flush, and assert each captured block's arena holds its own copy of the set and the
+  first captured block's sets are still intact after the second flush.
 - **Round trip** (extending `rust/analytics/tests/log_tests.rs` and the metrics equivalent):
   build a block with dynamic-tagged logs and metrics, encode it with `encode_block`, parse it
   through `parse_block` / `log_entry_from_value` / the measure path, and assert
