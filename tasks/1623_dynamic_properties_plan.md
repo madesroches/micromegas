@@ -332,6 +332,7 @@ requirements, and the block-owned arena meets both:
   `rust/telemetry-sink/tests/tracing_interop_tests.rs` (new),
   `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`
 - `CHANGELOG.md`, `rust/tracing/README.md` (short pointer only)
+- `mkdocs/docs/when-to-use/index.md` (cardinality sentence, line 151)
 
 ## Trade-offs
 
@@ -381,6 +382,9 @@ requirements, and the block-owned arena meets both:
   block fails to parse. `rust/tracing/README.md` (the crates.io page) gets at most a short pointer.
 - Rustdoc on the new macros arms, `DynProperty` and `PropertyArena`, and the lifetime note on
   `EventSink::on_log`.
+- `mkdocs/docs/when-to-use/index.md` line 151: reword the producer-side cardinality sentence so only
+  metric names, log targets, property names and static property sets must stay bounded, and
+  high-cardinality values can go in dynamic properties instead of the log message body.
 - The `log_entries` / `measures` schema docs (`mkdocs/docs/query-guide/schema-reference.md`)
   need no change, since the columns are unchanged.
 
