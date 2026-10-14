@@ -95,9 +95,8 @@ pub fn local_connect_addr(listen: SocketAddr) -> SocketAddr;
 - `WebListenArgs::resolve`: `--web-listen-addr` wins. If only `--port`/`MICROMEGAS_PORT` is set,
   it returns `0.0.0.0:{port}` and logs a `warn!` naming the replacement. If neither is set, it
   returns `DEFAULT_WEB_LISTEN_ADDR`. If both are set it bails, because silently ignoring one of
-  them would hide a misconfiguration. `MICROMEGAS_PORT` gets this handling because it's an env
-  var, it's documented, and it's set by existing scripts and deployments. A clap alias can't
-  cover it, since the type changes from a port to an address.
+  them would hide a misconfiguration. A clap alias can't cover it, since the type changes from
+  a port to an address.
 - `FlightSqlServer`'s builder default (`flight_sql_server.rs:112`) uses
   `DEFAULT_FLIGHTSQL_LISTEN_ADDR` instead of parsing a string literal, so the default lives in
   one place.
@@ -113,10 +112,11 @@ pub fn local_connect_addr(listen: SocketAddr) -> SocketAddr;
 | `--listen-endpoint-http` (ingestion, monolith, gateway) | clap `alias` on the new arg; works silently |
 | `--listen` (object-cache) | clap `alias` |
 | `-p/--port`, `MICROMEGAS_PORT` (web) | hidden arg plus `warn!` in `resolve` (above) |
-| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; resolution falls back to the old env with a `warn!`, the same shape as `WebListenArgs::resolve` |
+| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; a resolve method falls back to the old env with a `warn!` and bails when both are set, the same shape as `WebListenArgs::resolve` |
 
 These follow the v0.31.0 upgrade-shim precedent (a `warn!` naming the replacement), and the
-shims get removed in a later release. A clap alias can't warn, so the renamed flags just keep
+shims are removed in v0.33.0, with a follow-up issue filed. A clap alias can't warn, and a
+warning on a renamed flag would need a duplicate hidden arg each, so the renamed flags just keep
 working; their deprecation is recorded in docs and CHANGELOG.
 
 ### Per-binary wiring
@@ -134,8 +134,13 @@ working; their deprecation is recorded in docs and CHANGELOG.
   directly (`web_server.rs:903`).
 - **`telemetry-ingestion-srv`**: flatten `IngestionListenArgs`.
 - **`http-gateway-srv`**: rename the arg to `gateway_listen_addr` with env, keeping the alias.
-- **`object-cache-srv`**: rename `listen` to `object_cache_listen_addr` with the new env, the
-  `--listen` alias, and the old-env fallback.
+- **`object-cache-srv`**: rename `listen` to `object_cache_listen_addr` (now `Option`) with the
+  new env and the `--listen` alias. `cli.rs` gets a resolve method taking the legacy env value
+  as an `Option<String>` parameter (following `redis-exporter`'s
+  `into_config(self, redis_password: Option<String>)`). `main` reads
+  `MICROMEGAS_OBJECT_CACHE_LISTEN` and calls it after `validate()`; the result replaces
+  `args.listen` at `object_cache_srv.rs:214-218`. It bails when both are set, matching
+  `WebListenArgs::resolve`.
 
 ## Implementation Steps
 
@@ -155,7 +160,8 @@ working; their deprecation is recorded in docs and CHANGELOG.
    `local_connect_addr`, and the remaining default consts.
 6. `rust/telemetry-ingestion-srv/src/main.rs`: flatten `IngestionListenArgs`.
 7. `rust/analytics-web-srv/src/main.rs`, `web_server.rs`: flatten `WebListenArgs`, and replace
-   `port` with `listen_addr` in `WebCliArgs` / `WebServerConfig`.
+   `port` with `listen_addr` in `WebCliArgs` / `WebServerConfig`, and update the `WebCliArgs`
+   construction in `rust/analytics-web-srv/tests/web_server_config_tests.rs:42-47`.
 8. `rust/monolith/src/main.rs`: flatten all three, wire the flightsql listen addr, and derive
    the seeded URL from it.
 9. `rust/http-gateway/src/http_gateway_srv.rs`, `rust/object-cache-srv/src/cli.rs` (+ its uses
@@ -166,11 +172,17 @@ working; their deprecation is recorded in docs and CHANGELOG.
 10. Move scripts, Dockerfiles, and compose files to the new flags. The aliases mean nothing
     breaks if one is missed, so this step is about consistency:
     `docker/ingestion.Dockerfile`, `docker/monolith.Dockerfile`,
-    `docker/analytics-web.Dockerfile`, `docker/docker-compose.monolith.yaml`,
-    `docker/all-in-one.Dockerfile` (comment), `local_test_env/ai_scripts/start_services.py`,
+    `docker/analytics-web.Dockerfile` (drop `--port 3000` from CMD rather than replacing it; the
+    default is already `0.0.0.0:3000`, and an env-only `MICROMEGAS_PORT` keeps working with the
+    warning), `docker/docker-compose.monolith.yaml`,
+    `docker/all-in-one.Dockerfile` (comment),
+    `local_test_env/ai_scripts/start_services.py` (take `web_port` from the port of
+    `MICROMEGAS_WEB_LISTEN_ADDR` when set, else `MICROMEGAS_PORT`, else 3000, so the CORS origin,
+    auth redirect URI, and printed URL stay correct),
     `local_test_env/ai_scripts/start_services_with_oidc.py`, `local_test_env/dev.py`,
-    `build/run_ingestion_container.py`, `build/run_analytics_web_container.py`,
-    `analytics-web-app/start_analytics_web.py`, `analytics-web-app/start_analytics_web_docker.py`.
+    `build/run_ingestion_container.py`,
+    `analytics-web-app/start_analytics_web.py` (it passes `--port` from its own port option; leave
+    it, since switching to `--web-listen-addr` would conflict with an ambient `MICROMEGAS_PORT`), `analytics-web-app/start_analytics_web_docker.py`.
 11. Docs (see Documentation) and the CHANGELOG entry.
 
 ## Files to Modify
@@ -178,32 +190,17 @@ working; their deprecation is recorded in docs and CHANGELOG.
 - `rust/public/src/config.rs`
 - `rust/public/src/servers/flight_sql_server.rs`
 - `rust/public/tests/listen_args_tests.rs` (new)
+- `rust/public/Cargo.toml` (`[[test]] name = "listen_args_tests"`, `required-features = ["server"]`)
+- `rust/public/src/lib.rs` (crate doc example)
 - `rust/flight-sql-srv/src/flight_sql_srv.rs`
 - `rust/monolith/src/main.rs`
-- `rust/analytics-web-srv/src/main.rs`, `rust/analytics-web-srv/src/web_server.rs`
+- `rust/analytics-web-srv/src/main.rs`, `rust/analytics-web-srv/src/web_server.rs`, `rust/analytics-web-srv/tests/web_server_config_tests.rs`
 - `rust/telemetry-ingestion-srv/src/main.rs`
 - `rust/http-gateway/src/http_gateway_srv.rs`
 - `rust/object-cache-srv/src/cli.rs`, `rust/object-cache-srv/src/object_cache_srv.rs:214-218`, `rust/object-cache-srv/tests/cli_tests.rs`
 - Dockerfiles, compose, and scripts listed in step 10
+- `rust/object-cache-srv/README.md`
 - Docs listed below, `CHANGELOG.md`, `CLAUDE.md`
-
-## Trade-offs
-
-- **Role-prefixed flag everywhere vs. a bare `--listen-addr` in standalone binaries.** The bare
-  flag is shorter on the standalone binaries, but the monolith can't use it because it has three
-  listeners. The flag would then differ between a standalone binary and its monolith role, and
-  the arg couldn't be one shared struct. A role-prefixed flag gives one definition per listener
-  and zero drift.
-- **Role-prefixed env vs. a generic `MICROMEGAS_LISTEN_ADDR`.** The generic name works for
-  one-binary-per-container deployments, but it collides as soon as several binaries share an
-  environment (local scripts, the all-in-one image).
-- **Gateway and object-cache args stay in their binaries.** They have exactly one user each, so
-  a shared struct would add facade surface for no reuse. The naming rule is what keeps them
-  uniform.
-- **Silent aliases for renamed flags, a `warn!` only for changed semantics or env names.**
-  Getting a warning for a renamed flag would mean a duplicate hidden arg for each one. A flag
-  that keeps working costs nothing, while `--port` → address and the object-cache env rename are
-  real behavior or lookup changes that an operator should hear about.
 
 ## Decisions
 
@@ -215,6 +212,9 @@ working; their deprecation is recorded in docs and CHANGELOG.
   address. Accepted: the seed is a first-run convenience, and the row can be edited in the web
   app.
 
+- The `--port`/`MICROMEGAS_PORT` and `MICROMEGAS_OBJECT_CACHE_LISTEN` warn shims are removed in
+  v0.33.0, and the clap aliases stay.
+
 ## Documentation
 
 - `mkdocs/docs/admin/flight-sql.md`: new flag and env, drop the fixed-address note, add the
@@ -224,6 +224,8 @@ working; their deprecation is recorded in docs and CHANGELOG.
 - `mkdocs/docs/admin/service-lifecycle.md`: add a short "Listen addresses" section with the
   convention table, and link it from each admin page. This page already covers the other
   cross-binary args (shutdown grace, health probes).
+- `rust/object-cache-srv/README.md`: replace `--listen` / `MICROMEGAS_OBJECT_CACHE_LISTEN`.
+- `rust/public/src/lib.rs`: the crate doc example's `--listen-endpoint-http 127.0.0.1:9000`.
 - `mkdocs/docs/gateway/configuration.md`, `gateway/index.md`, `getting-started.md`,
   `development/build.md`, `docker/README.md`, `doc/GETTING_STARTED.md`,
   `analytics-web-app/README.md`, `CLAUDE.md`: update the example commands.
@@ -231,13 +233,18 @@ working; their deprecation is recorded in docs and CHANGELOG.
   since it's historical and its flags still work through the aliases.
 - `CHANGELOG.md`: one Unreleased entry. It lists the new flags and env vars and the deprecated
   names, plus a **Minor breaking change** clause: `WebServerConfig.port` / `WebCliArgs.port` are
-  replaced by `listen_addr: SocketAddr`, and `object-cache-srv`'s `Cli.listen` is renamed.
+  replaced by `listen_addr: SocketAddr`, and `object-cache-srv`'s `Cli.listen` is renamed. It also
+notes that setting both the new web address and `MICROMEGAS_PORT` now fails at startup.
 
 ## Testing Strategy
 
-No-DB unit tests in `rust/public/tests/listen_args_tests.rs`. They parse with `try_parse_from`
-on a test `#[derive(Parser)]` wrapper and only pass flags, so a developer's shell env can't leak
-in (`resolve` is also tested on constructed structs):
+No-DB unit tests in `rust/public/tests/listen_args_tests.rs`, registered in
+`rust/public/Cargo.toml` with a `[[test]] name = "listen_args_tests"
+required-features = ["server"]` block, since `config` is gated behind `server`. They parse with `try_parse_from`
+on a test `#[derive(Parser)]` wrapper. The default-path parse cases carry the same shell-env
+exposure as the existing `rust/object-cache-srv/tests/cli_tests.rs` and
+`rust/redis-exporter/tests/cli_tests.rs`, since clap's `env` feature reads env vars inside
+`try_parse_from`. The `resolve` cases run on constructed structs, which are env-free:
 
 - Each struct parses its new flag and its alias, and with neither given yields its default.
 - `WebListenArgs::resolve`: addr only, port only (`0.0.0.0:{port}`), neither (default), both
@@ -251,7 +258,8 @@ in (`resolve` is also tested on constructed structs):
 - `rust/object-cache-srv/tests/cli_tests.rs` gets
   cases for `--listen` and the new flag. The old-env fallback is tested by passing the env value
   into the resolve function as a parameter, following `redis-exporter`'s `into_config(password)`
-  pattern, so the test never touches process env.
+  pattern, so the test never touches process env. A resolve case covers new only, old env only,
+  neither (default), and both (error).
 
 ## Manual Verification
 
@@ -266,9 +274,3 @@ startup:
    Expected: `Listening on 127.0.0.1:50062`, and `micromegas-query` connects there.
 3. `MICROMEGAS_PORT=8000 cargo run --bin analytics-web-srv -- --disable-auth`. Expected: binds
    `0.0.0.0:8000` and logs the deprecation warning.
-
-## Open Questions
-
-- Should the shims for `--port`/`MICROMEGAS_PORT` and `MICROMEGAS_OBJECT_CACHE_LISTEN` be
-  removed in the next minor release (the v0.31 shim precedent), or kept indefinitely like the
-  silent flag aliases?
