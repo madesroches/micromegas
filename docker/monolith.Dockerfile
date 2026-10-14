@@ -102,5 +102,5 @@ ENV MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:3000 \
 
 ENTRYPOINT ["micromegas-monolith"]
 CMD ["--roles", "all", \
-     "--listen-endpoint-http", "0.0.0.0:9000", \
+     "--ingestion-listen-addr", "0.0.0.0:9000", \
      "--frontend-dir", "/app/frontend"]

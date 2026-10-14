@@ -31,6 +31,7 @@ use micromegas::auth::db_api_key::{ApiKeyTable, dedicated_key_store_pool};
 use micromegas::auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas::auth::default_provider::ProviderBuilder;
 use micromegas::auth::policy::{AudienceReadPolicy, ReadPolicy};
+use micromegas::config::local_connect_addr;
 use micromegas::ingestion::data_lake_config::DataLakeConfig;
 use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
@@ -139,13 +140,14 @@ struct Cli {
     #[clap(long, env = "MICROMEGAS_MONOLITH_ROLES", default_value = "all")]
     roles: String,
 
-    /// HTTP ingestion listen address
-    #[clap(long, default_value = "127.0.0.1:8081")]
-    listen_endpoint_http: SocketAddr,
+    #[command(flatten)]
+    ingestion: micromegas::config::IngestionListenArgs,
 
-    /// Web server port
-    #[clap(long, default_value = "3000", env = "MICROMEGAS_PORT")]
-    port: u16,
+    #[command(flatten)]
+    flightsql: micromegas::config::FlightSqlListenArgs,
+
+    #[command(flatten)]
+    web: micromegas::config::WebListenArgs,
 
     /// Frontend build directory (web role)
     #[clap(long, default_value = "/app/frontend")]
@@ -306,7 +308,7 @@ async fn main() -> Result<()> {
             .as_ref()
             .clone();
         let shutdown = fanout.subscribe();
-        let listen_addr = args.listen_endpoint_http;
+        let listen_addr = args.ingestion.ingestion_listen_addr;
         let grace_c = grace;
         let auth = ingestion_auth;
         join_set.spawn(
@@ -322,11 +324,13 @@ async fn main() -> Result<()> {
             .clone();
         let shutdown = fanout.subscribe();
         let grace_c = grace;
+        let listen_addr = args.flightsql.flightsql_listen_addr;
         let auth = analytics_auth;
         let read_policy = analytics_read_policy;
         join_set.spawn(async move {
             let mut builder = FlightSqlServer::builder()
                 .with_lakehouse(lh)
+                .with_listen_addr(listen_addr)
                 .with_shutdown(shutdown)
                 .with_shutdown_grace(grace_c);
             if let Some(provider) = auth {
@@ -377,7 +381,7 @@ async fn main() -> Result<()> {
     // ── Web ────────────────────────────────────────────────────────────────
     if roles.web {
         let web_config = WebServerConfig::from_cli_and_env(WebCliArgs {
-            port: args.port,
+            listen_addr: args.web.resolve()?,
             frontend_dir: args.frontend_dir.clone(),
             disable_auth: args.disable_auth,
         })?;
@@ -385,7 +389,11 @@ async fn main() -> Result<()> {
         // Auto-seed the local FlightSQL data source when web + flightsql are both enabled
         if roles.flightsql
             && !args.no_seed_data_source
-            && let Err(e) = seed_local_data_source(&web_config.app_db_string).await
+            && let Err(e) = seed_local_data_source(
+                &web_config.app_db_string,
+                args.flightsql.flightsql_listen_addr,
+            )
+            .await
         {
             warn!("Failed to seed local FlightSQL data source: {e}");
         }
@@ -423,7 +431,8 @@ async fn main() -> Result<()> {
 
 /// Idempotent first-run seed: insert a "local" FlightSQL data source pointing
 /// at the in-process loopback listener when the app DB has no data sources.
-async fn seed_local_data_source(app_db_string: &str) -> Result<()> {
+async fn seed_local_data_source(app_db_string: &str, flightsql_addr: SocketAddr) -> Result<()> {
+    let url = format!("http://{}", local_connect_addr(flightsql_addr));
     let pool = read_write_pool_options()
         .connect(app_db_string)
         .await
@@ -440,10 +449,21 @@ async fn seed_local_data_source(app_db_string: &str) -> Result<()> {
             "INSERT INTO data_sources (name, config, is_default, created_by, updated_by) \
              VALUES ('local', $1, TRUE, 'monolith', 'monolith')",
         )
-        .bind(serde_json::json!({"url": "http://127.0.0.1:50051"}))
+        .bind(serde_json::json!({"url": url}))
         .execute(&pool)
         .await?;
-        info!("Seeded local FlightSQL data source pointing at http://127.0.0.1:50051");
+        info!("Seeded local FlightSQL data source pointing at {url}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
 }

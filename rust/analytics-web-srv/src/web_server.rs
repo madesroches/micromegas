@@ -30,14 +30,15 @@ use micromegas::tracing::prelude::*;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, services::ServeDir};
 
 /// Configuration for the analytics web server.
 pub struct WebServerConfig {
-    /// HTTP port to listen on (default 3000).
-    pub port: u16,
+    /// Address to bind the HTTP listener to.
+    pub listen_addr: SocketAddr,
     /// Path to the built frontend `dist/` directory.
     pub frontend_dir: String,
     /// Base path for the app (e.g. `""` or `"/micromegas"`).
@@ -67,7 +68,7 @@ pub struct WebServerConfig {
 /// by `from_cli_and_env`. A named struct (not positional args) so the two
 /// String fields can't be transposed.
 pub struct WebCliArgs {
-    pub port: u16,
+    pub listen_addr: SocketAddr,
     pub frontend_dir: String,
     pub disable_auth: bool,
 }
@@ -87,7 +88,7 @@ impl WebServerConfig {
             .and_then(|v| v.parse::<usize>().ok());
         let analytics_keys_db_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING").ok();
         Ok(Self {
-            port: cli.port,
+            listen_addr: cli.listen_addr,
             frontend_dir: cli.frontend_dir,
             base_path,
             cors_origin,
@@ -698,7 +699,7 @@ async fn auth_logout_no_auth() -> impl IntoResponse {
 
 /// Start the analytics web server.
 ///
-/// Binds to `config.port`, wires all routes, and shuts down gracefully when
+/// Binds to `config.listen_addr`, wires all routes, and shuts down gracefully when
 /// `shutdown` resolves.  This is called by both the standalone binary and the
 /// monolith.
 pub async fn run_web_server(
@@ -900,7 +901,7 @@ pub async fn run_web_server(
         ))
         .layer(build_cors_layer(&config.cors_origin)?);
 
-    let addr = format!("0.0.0.0:{}", config.port);
+    let addr = config.listen_addr;
     println!("Analytics web server starting on {addr}");
     println!("CORS origin: {}", config.cors_origin);
     if !config.base_path.is_empty() {
@@ -915,7 +916,7 @@ pub async fn run_web_server(
         }
     );
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     serve_axum_with_graceful_shutdown(
         listener,
         ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<

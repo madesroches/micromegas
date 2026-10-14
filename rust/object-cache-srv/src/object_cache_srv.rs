@@ -36,6 +36,8 @@ use std::time::Instant;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     args.validate()?;
+    let listen_addr =
+        args.resolve_listen_addr(std::env::var("MICROMEGAS_OBJECT_CACHE_LISTEN").ok())?;
 
     let ns = if args.namespace.is_empty() {
         // Strip any `scheme://` prefix so the namespace is stable regardless of
@@ -211,11 +213,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = health_router.merge(obj_router);
 
-    let listener = tokio::net::TcpListener::bind(args.listen)
+    let listener = tokio::net::TcpListener::bind(listen_addr)
         .await
-        .with_context(|| format!("binding to {}", args.listen))?;
+        .with_context(|| format!("binding to {listen_addr}"))?;
 
-    info!("object-cache-srv listening on {}", args.listen);
+    info!("object-cache-srv listening on {listen_addr}");
 
     let grace = args.common.grace();
 

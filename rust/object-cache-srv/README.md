@@ -64,7 +64,7 @@ All flags can be set via the listed environment variables.
 
 | Flag                            | Env var                              | Default        | Description                                                        |
 |---------------------------------|--------------------------------------|----------------|--------------------------------------------------------------------|
-| `--listen`                      | `MICROMEGAS_OBJECT_CACHE_LISTEN`     | `0.0.0.0:8080` | Listen address.                                                    |
+| `--object-cache-listen-addr`    | `MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR` | `0.0.0.0:8080` | Listen address. `--listen` and the older `MICROMEGAS_OBJECT_CACHE_LISTEN` still work (the env var logs a warning). |
 | `--origin-uri`                  | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | _(required)_   | Origin object store URI. Must be bucket-only with no path component. |
 | `--ram-mb`                      | `MICROMEGAS_OBJECT_CACHE_RAM_MB`     | `512`          | RAM cache size, in MB.                                             |
 | `--disk-path`                   | `MICROMEGAS_OBJECT_CACHE_DISK_PATH`  | _(required)_   | Directory for the on-disk cache, used exclusively by the cache. Its contents are wiped on startup after a format-changing upgrade and rewarmed from origin (safe for cache data); point it at a dedicated volume, never a shared directory. |

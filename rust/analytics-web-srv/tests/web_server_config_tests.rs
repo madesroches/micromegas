@@ -41,7 +41,7 @@ fn set_required_vars(base_path: &str) {
 
 fn cli_args() -> WebCliArgs {
     WebCliArgs {
-        port: 3000,
+        listen_addr: "0.0.0.0:3000".parse().unwrap(),
         frontend_dir: "dist".to_string(),
         disable_auth: true,
     }

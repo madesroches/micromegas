@@ -293,7 +293,7 @@ def main():
                 "-p",
                 "telemetry-ingestion-srv",
                 "--",
-                "--listen-endpoint-http",
+                "--ingestion-listen-addr",
                 "127.0.0.1:9000",
             ],
             stdout=log_file,

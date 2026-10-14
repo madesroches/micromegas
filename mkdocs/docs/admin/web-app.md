@@ -323,7 +323,7 @@ Backend proxies FlightSQL with user's ID token. No direct data access.
 analytics-web-srv [OPTIONS]
 
 Options:
-  -p, --port <PORT>              Server port [default: 3000]
+      --web-listen-addr <ADDR>   Listen address [default: 0.0.0.0:3000]
       --frontend-dir <DIR>       Frontend build directory [default: ../analytics-web-app/dist]
       --disable-auth             Disable authentication (dev only)
   -h, --help                     Print help
@@ -331,7 +331,9 @@ Options:
 
 Example:
 ```bash
-analytics-web-srv --port 8000 --frontend-dir ./dist --disable-auth
+analytics-web-srv --web-listen-addr 0.0.0.0:8000 --frontend-dir ./dist --disable-auth
 ```
+
+The listen address can also be set with `MICROMEGAS_WEB_LISTEN_ADDR`. The deprecated `--port` / `MICROMEGAS_PORT` still works on its own (bound to `0.0.0.0`) and logs a warning; setting it together with `--web-listen-addr` is a startup error. See [Listen addresses](service-lifecycle.md#listen-addresses).
 
 **Warning:** `--disable-auth` removes authentication middleware. Do not use in production.

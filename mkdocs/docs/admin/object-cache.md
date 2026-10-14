@@ -39,7 +39,7 @@ docker run -d -p 8080:8080 \
 | `MICROMEGAS_OBJECT_CACHE_ORIGIN_URI` | Yes | Bucket-only origin (`s3://bucket`, `gs://bucket`, `az://container`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_PATH` | Yes | Local disk path for the on-disk cache tier. The disk store carries an internal format version; on startup, a build whose format differs from the persisted store wipes the store directory once and rewarms from origin (no data loss). Same-format restarts reuse the store warm. |
 | `MICROMEGAS_API_KEYS` | Yes, unless `--disable-auth` | JSON array of `{"name":"...","key":"...","allowed_cidrs":[...]?}`. `allowed_cidrs` (CIDR ranges or bare IPs) is optional and defaults to unrestricted when omitted/empty -- see [IP allowlisting](api-keys.md#ip-allowlisting) (that section otherwise covers the DB-backed key tables; this is the env-keyring equivalent, the sole construction site of this keyring shape outside tests) |
-| `MICROMEGAS_OBJECT_CACHE_LISTEN` | No | Bind address (default `0.0.0.0:8080`) |
+| `MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR` | No | Bind address (default `0.0.0.0:8080`; flag `--object-cache-listen-addr`, alias `--listen`). The earlier `MICROMEGAS_OBJECT_CACHE_LISTEN` still works with a warning; setting both is a startup error. See [Listen addresses](service-lifecycle.md#listen-addresses). |
 | `MICROMEGAS_OBJECT_CACHE_RAM_MB` | No | In-memory cache tier size (default `512`) |
 | `MICROMEGAS_OBJECT_CACHE_DISK_GB` | No | On-disk cache tier size (default `50`) |
 | `MICROMEGAS_OBJECT_CACHE_BLOCK_SIZE` | No | Cache block size in bytes (default `1048576`); must be in `1..=1073741824` (1 GiB) |
@@ -66,7 +66,7 @@ Authenticating *against the origin* uses the same environment variables as every
 
 | Flag | Default | Description |
 |---|---|---|
-| `--listen` | `0.0.0.0:8080` | Bind address |
+| `--object-cache-listen-addr` | `0.0.0.0:8080` | Bind address (`--listen` is still accepted as a deprecated alias) |
 | `--origin-uri` | — | Bucket-only origin URI (required) |
 | `--disk-path` | — | Local disk path for the cache (required) |
 | `--ram-mb` | `512` | In-memory cache tier size |

@@ -77,7 +77,7 @@ For an architecture overview (core crates, services, data flow), see `.github/co
   ```
   cargo run --bin micromegas-monolith -- \
     --roles all \
-    --listen-endpoint-http 127.0.0.1:9000 \
+    --ingestion-listen-addr 127.0.0.1:9000 \
     --frontend-dir ../analytics-web-app/dist \
     --disable-auth
   ```

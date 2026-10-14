@@ -46,7 +46,7 @@ Use `--disable-auth` to skip OIDC authentication during development.
 
 ```bash
 cd rust
-cargo run --bin analytics-web-srv -- --port 8000 --disable-auth
+cargo run --bin analytics-web-srv -- --web-listen-addr 127.0.0.1:8000 --disable-auth
 ```
 
 ### WASM Engine (optional, for Local Query screens)

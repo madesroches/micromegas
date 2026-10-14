@@ -16,8 +16,11 @@ struct Cli {
     disable_auth: bool,
 
     /// Optional address for the HTTP health/readiness sidecar (e.g. 127.0.0.1:8082)
-    #[clap(long)]
+    #[clap(long, env = "MICROMEGAS_FLIGHTSQL_HEALTH_LISTEN_ADDR")]
     health_listen_addr: Option<SocketAddr>,
+
+    #[command(flatten)]
+    listen: micromegas::config::FlightSqlListenArgs,
 
     #[command(flatten)]
     common: micromegas::config::CommonServerArgs,
@@ -27,7 +30,9 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
 
-    let mut builder = FlightSqlServer::builder().with_shutdown_grace(args.common.grace());
+    let mut builder = FlightSqlServer::builder()
+        .with_listen_addr(args.listen.flightsql_listen_addr)
+        .with_shutdown_grace(args.common.grace());
 
     if !args.disable_auth {
         builder = builder.with_default_auth();

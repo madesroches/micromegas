@@ -14,7 +14,7 @@ materialization work; those belong to [FlightSQL](flight-sql.md) and the
 ```bash
 # from the rust/ directory
 cargo run --release --bin telemetry-ingestion-srv -- \
-  --listen-endpoint-http 0.0.0.0:9000
+  --ingestion-listen-addr 0.0.0.0:9000
 ```
 
 The Docker image (`ingestion.Dockerfile`) exposes port `9000` and runs the same
@@ -34,7 +34,7 @@ binary as its entrypoint.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--listen-endpoint-http` | `127.0.0.1:8081` | HTTP bind address |
+| `--ingestion-listen-addr` | `127.0.0.1:8081` | HTTP bind address (env `MICROMEGAS_INGESTION_LISTEN_ADDR`; the former `--listen-endpoint-http` still works as an alias). See [Listen addresses](service-lifecycle.md#listen-addresses). |
 | `--disable-auth` | off | Disable authentication (development only) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain in-flight requests on `SIGTERM` |
 
@@ -42,7 +42,7 @@ binary as its entrypoint.
     The binary defaults to `127.0.0.1:8081`, which only accepts local
     connections. To accept traffic from other hosts (or from inside a
     container), bind to `0.0.0.0` and the port you intend to publish, e.g.
-    `--listen-endpoint-http 0.0.0.0:9000`.
+    `--ingestion-listen-addr 0.0.0.0:9000`.
 
 ## Authentication
 

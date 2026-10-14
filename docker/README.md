@@ -109,7 +109,7 @@ docker run -d -p 9000:9000 -p 50051:50051 -p 3000:3000 \
   -e MICROMEGAS_OBJECT_STORE_URI \
   marcantoinedesroches/micromegas-monolith:latest \
   --roles all \
-  --listen-endpoint-http 0.0.0.0:9000 \
+  --ingestion-listen-addr 0.0.0.0:9000 \
   --frontend-dir /app/frontend
 ```
 
@@ -166,7 +166,7 @@ docker run -d --name ingestion \
   -e MICROMEGAS_SQL_CONNECTION_STRING \
   -e MICROMEGAS_OBJECT_STORE_URI \
   micromegas-all:latest \
-  telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
+  telemetry-ingestion-srv --ingestion-listen-addr 0.0.0.0:9000
 
 # FlightSQL server
 docker run -d --name flight-sql \

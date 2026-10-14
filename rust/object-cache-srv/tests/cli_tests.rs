@@ -4,7 +4,9 @@
 //! rejects zero for either.
 
 use clap::Parser;
-use micromegas_object_cache_srv::cli::{Cli, validate_write_tuning};
+use micromegas_object_cache_srv::cli::{
+    Cli, DEFAULT_OBJECT_CACHE_LISTEN_ADDR, validate_write_tuning,
+};
 
 /// The minimal argv `Cli::parse_from` needs to succeed: `--origin-uri` and
 /// `--disk-path` have no default and are otherwise required.
@@ -141,4 +143,81 @@ fn try_parse_from_rejects_out_of_range_max_coalesced_get_bytes() {
     // 1 GiB + 1 byte -- one past the `1..=1 GiB` clap range.
     argv.extend(["--max-coalesced-get-bytes", "1073741825"]);
     assert!(Cli::try_parse_from(argv).is_err());
+}
+
+fn argv_with(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut argv = minimal_argv();
+    argv.extend_from_slice(extra);
+    argv
+}
+
+#[test]
+fn listen_flag_parses_new_name() {
+    let cli = Cli::parse_from(argv_with(&["--object-cache-listen-addr", "127.0.0.1:9090"]));
+    assert_eq!(
+        cli.object_cache_listen_addr,
+        Some("127.0.0.1:9090".parse().unwrap())
+    );
+}
+
+#[test]
+fn listen_flag_parses_legacy_alias() {
+    let cli = Cli::parse_from(argv_with(&["--listen", "127.0.0.1:9090"]));
+    assert_eq!(
+        cli.object_cache_listen_addr,
+        Some("127.0.0.1:9090".parse().unwrap())
+    );
+}
+
+#[test]
+fn resolve_new_only() {
+    let cli = Cli::parse_from(argv_with(&["--object-cache-listen-addr", "127.0.0.1:9090"]));
+    assert_eq!(
+        cli.resolve_listen_addr(None).unwrap(),
+        "127.0.0.1:9090".parse().unwrap()
+    );
+}
+
+#[test]
+fn resolve_legacy_env_only() {
+    let mut cli = Cli::parse_from(minimal_argv());
+    cli.object_cache_listen_addr = None;
+    assert_eq!(
+        cli.resolve_listen_addr(Some("127.0.0.1:9091".to_string()))
+            .unwrap(),
+        "127.0.0.1:9091".parse().unwrap()
+    );
+}
+
+#[test]
+fn resolve_neither_uses_default() {
+    let mut cli = Cli::parse_from(minimal_argv());
+    cli.object_cache_listen_addr = None;
+    assert_eq!(
+        cli.resolve_listen_addr(None).unwrap(),
+        DEFAULT_OBJECT_CACHE_LISTEN_ADDR
+    );
+    assert_eq!(
+        DEFAULT_OBJECT_CACHE_LISTEN_ADDR,
+        "0.0.0.0:8080".parse().unwrap()
+    );
+}
+
+#[test]
+fn resolve_both_is_error() {
+    let cli = Cli::parse_from(argv_with(&["--object-cache-listen-addr", "127.0.0.1:9090"]));
+    assert!(
+        cli.resolve_listen_addr(Some("127.0.0.1:9091".to_string()))
+            .is_err()
+    );
+}
+
+#[test]
+fn resolve_unparseable_legacy_env_is_error() {
+    let mut cli = Cli::parse_from(minimal_argv());
+    cli.object_cache_listen_addr = None;
+    let err = cli
+        .resolve_listen_addr(Some("not-an-addr".to_string()))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("MICROMEGAS_OBJECT_CACHE_LISTEN"));
 }

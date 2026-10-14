@@ -282,7 +282,7 @@ def main():
     docker_cmd.append(args.image)
 
     # Add command arguments (base path is env var only, not CLI arg)
-    cmd_args = ["--port", "3000", "--frontend-dir", "/app/frontend"]
+    cmd_args = ["--frontend-dir", "/app/frontend"]
     if args.disable_auth or "MICROMEGAS_OIDC_CONFIG" not in os.environ:
         cmd_args.append("--disable-auth")
         print_status("Authentication disabled", "warning")
