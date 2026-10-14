@@ -20,7 +20,7 @@ This file documents the historical progress of the Micromegas project. For curre
   `analytics-web-app`, `welcome`), `dompurify` to `^3.4.16` (root, `doc/intro-micromegas`,
   `doc/high-frequency-observability`), `fast-uri` to `^3.1.8` (root), `xxhash-rust` to 0.8.19 and
   `urllib3` to 2.8.0. `braces` (alert 568) has no patched release yet and stays at 3.0.3.
-* **Dependencies:** Bump `quinn-proto` to 0.11.19 in both the main `rust/` workspace and the excluded
+* **Dependencies:** Bump `quinn-proto` to 0.11.19 (#1656) in both the main `rust/` workspace and the excluded
   `rust/datafusion-wasm` sub-workspace to resolve RUSTSEC-2026-0338, RUSTSEC-2026-0339,
   RUSTSEC-2026-0340, RUSTSEC-2026-0341 and RUSTSEC-2026-0342 (remote panics and memory-exhaustion
   limit bypasses), and replace the yanked `chacha20` 0.10.0/0.10.1 with 0.10.2.
