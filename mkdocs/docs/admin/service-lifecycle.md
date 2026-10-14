@@ -152,8 +152,9 @@ flag is the same in the standalone binary and in the monolith.
 
 Deprecated names that still work: `--listen-endpoint-http` (ingestion and gateway),
 `--listen` (object cache), `--port` / `MICROMEGAS_PORT` (web, logs a warning), and
-`MICROMEGAS_OBJECT_CACHE_LISTEN` (logs a warning). Setting a deprecated web or object
-cache env var together with its replacement is a startup error.
+`MICROMEGAS_OBJECT_CACHE_LISTEN` (logs a warning). Setting `--port`/`MICROMEGAS_PORT` or
+`MICROMEGAS_OBJECT_CACHE_LISTEN` together with its replacement is a startup error
+(`--listen` is an alias of `--object-cache-listen-addr`, so it never conflicts).
 
 ## Readiness probes
 

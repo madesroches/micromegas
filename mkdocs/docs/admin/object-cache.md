@@ -66,7 +66,7 @@ Authenticating *against the origin* uses the same environment variables as every
 
 | Flag | Default | Description |
 |---|---|---|
-| `--listen` | `0.0.0.0:8080` | Bind address |
+| `--object-cache-listen-addr` | `0.0.0.0:8080` | Bind address (`--listen` is still accepted as a deprecated alias) |
 | `--origin-uri` | — | Bucket-only origin URI (required) |
 | `--disk-path` | — | Local disk path for the cache (required) |
 | `--ram-mb` | `512` | In-memory cache tier size |

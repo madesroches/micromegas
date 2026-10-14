@@ -9,11 +9,11 @@ use micromegas::object_cache::range_cache::{
 use micromegas::tracing::prelude::warn;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-/// One MiB, in bytes -- the unit every `*_mb`/`*_gb` CLI knob converts
-/// through.
 pub const DEFAULT_OBJECT_CACHE_LISTEN_ADDR: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080);
 
+/// One MiB, in bytes -- the unit every `*_mb`/`*_gb` CLI knob converts
+/// through.
 const MIB: u64 = 1024 * 1024;
 /// Clap range for `--block-size` and `--max-coalesced-get-bytes`: capping
 /// both at 1 GiB keeps `max_run_bytes` -- a byte count passed directly as
