@@ -141,7 +141,11 @@ def start_object_cache(target_dir):
     print(f"   origin={origin} prefixes={allowed_prefixes} disk={disk_path}")
     with open("/tmp/object_cache.log", "w") as log_file:
         cache_process = subprocess.Popen(
-            [str(target_dir / "micromegas-object-cache-srv"), "--object-cache-listen-addr", listen],
+            [
+                str(target_dir / "micromegas-object-cache-srv"),
+                "--object-cache-listen-addr",
+                listen,
+            ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
