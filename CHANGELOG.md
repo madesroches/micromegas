@@ -4,6 +4,22 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Servers:** Uniform listen-address flags and env vars across server binaries (#1659):
+  `--ingestion-listen-addr` / `MICROMEGAS_INGESTION_LISTEN_ADDR`, `--flightsql-listen-addr` /
+  `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR`, `--web-listen-addr` / `MICROMEGAS_WEB_LISTEN_ADDR`,
+  `--gateway-listen-addr` / `MICROMEGAS_GATEWAY_LISTEN_ADDR` and `--object-cache-listen-addr` /
+  `MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR`. `flight-sql-srv` now takes its listen address from
+  `--flightsql-listen-addr` and `--health-listen-addr` also reads
+  `MICROMEGAS_FLIGHTSQL_HEALTH_LISTEN_ADDR`. Defaults are unchanged. Deprecated names keep
+  working: `--listen-endpoint-http` (alias of the ingestion and gateway flags), `--port` /
+  `MICROMEGAS_PORT` (web), and `--listen` / `MICROMEGAS_OBJECT_CACHE_LISTEN` (object cache; the
+  env var logs a deprecation warning).
+  **Minor breaking change:** `WebServerConfig.port` and `WebCliArgs.port` are replaced by
+  `listen_addr: SocketAddr`, and object-cache's `Cli.listen` is replaced by
+  `object_cache_listen_addr: Option<SocketAddr>`; the web server and the object-cache server now
+  fail at startup when both a new setting and its deprecated counterpart are set
+  (`--web-listen-addr` with `--port`/`MICROMEGAS_PORT`, `MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR` with
+  `MICROMEGAS_OBJECT_CACHE_LISTEN`).
 * **Tracing:** Add dynamic properties for logs and metrics (#1623), as `key = value` pairs in
   `log!`/`info!`/... and `imetric!`/`fmetric!`, in the style of the `tracing` crate:
   `info!(correlation_id = cid, region = "eu", "fetched {n} rows")` and
