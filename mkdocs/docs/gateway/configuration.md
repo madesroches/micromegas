@@ -5,6 +5,7 @@
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `MICROMEGAS_FLIGHTSQL_URL` | FlightSQL backend endpoint (required) | `grpc://127.0.0.1:50051` |
+| `MICROMEGAS_GATEWAY_LISTEN_ADDR` | Gateway bind address (flag `--gateway-listen-addr`, alias `--listen-endpoint-http`) | `0.0.0.0:3000` |
 | `MICROMEGAS_GATEWAY_HEADERS` | Header forwarding config (optional) | See below |
 
 ## Header Forwarding
@@ -72,7 +73,7 @@ cargo run --bin http-gateway-srv
 ## Server Options
 
 ```bash
-cargo run --bin http-gateway-srv -- --listen-endpoint-http 0.0.0.0:3000
+cargo run --bin http-gateway-srv -- --gateway-listen-addr 0.0.0.0:3000
 ```
 
 Default listen address: `0.0.0.0:3000`

@@ -176,3 +176,8 @@ required-features = ["server"]
 name = "view_ddl_parse_tests"
 path = "tests/view_ddl_parse_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "listen_args_tests"
+path = "tests/listen_args_tests.rs"
+required-features = ["server"]

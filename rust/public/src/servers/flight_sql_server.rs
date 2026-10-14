@@ -1,3 +1,4 @@
+use crate::config::DEFAULT_FLIGHTSQL_LISTEN_ADDR;
 use anyhow::{Context, Result};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
@@ -109,9 +110,7 @@ impl Default for FlightSqlServerBuilder {
             isolation_config: None,
             use_default_auth: false,
             max_decoding_message_size: 100 * 1024 * 1024,
-            listen_addr: "0.0.0.0:50051"
-                .parse()
-                .expect("valid default listen address"),
+            listen_addr: DEFAULT_FLIGHTSQL_LISTEN_ADDR,
             shutdown_grace: Duration::from_secs(25),
             injected_lakehouse: None,
             injected_shutdown: None,
@@ -190,7 +189,7 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set the listen address (default: `0.0.0.0:50051`).
+    /// Set the listen address (default: [`DEFAULT_FLIGHTSQL_LISTEN_ADDR`], `0.0.0.0:50051`).
     pub fn with_listen_addr(mut self, addr: SocketAddr) -> Self {
         self.listen_addr = addr;
         self

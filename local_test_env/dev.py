@@ -192,7 +192,7 @@ def start_services(build_mode):
     # Start Ingestion Server and wait for it to be ready
     print("📥 Starting Ingestion Server...")
     run_command(
-        f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run {run_flags} -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000 --disable-auth' C-m"
+        f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run {run_flags} -p telemetry-ingestion-srv -- --ingestion-listen-addr 127.0.0.1:9000 --disable-auth' C-m"
     )
 
     # Wait for ingestion service to be ready

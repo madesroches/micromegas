@@ -26,14 +26,13 @@ use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::tracing::prelude::*;
-use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Telemetry Ingestion Server")]
 #[clap(about = "Telemetry Ingestion Server", version, author)]
 struct Cli {
-    #[clap(long, default_value = "127.0.0.1:8081")]
-    listen_endpoint_http: SocketAddr,
+    #[command(flatten)]
+    listen: micromegas::config::IngestionListenArgs,
 
     /// Disable authentication (development mode only)
     #[clap(long)]
@@ -72,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let grace = args.common.grace();
     serve_ingestion(
-        args.listen_endpoint_http,
+        args.listen.ingestion_listen_addr,
         data_lake,
         auth_provider,
         micromegas::servers::shutdown::wait_for_sigterm(),

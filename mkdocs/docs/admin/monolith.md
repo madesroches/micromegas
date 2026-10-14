@@ -30,7 +30,7 @@ Builds `micromegas-monolith` from source and starts it together with PostgreSQL.
 # from the rust/ directory
 cargo run --bin micromegas-monolith -- \
   --roles all \
-  --listen-endpoint-http 127.0.0.1:9000 \
+  --ingestion-listen-addr 127.0.0.1:9000 \
   --frontend-dir ../analytics-web-app/dist \
   --disable-auth
 ```
@@ -45,7 +45,9 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_WEB_CORS_ORIGIN` | Yes (web role) | Allowed CORS origin (e.g. `http://localhost:3000`) |
 | `MICROMEGAS_BASE_PATH` | Yes (web role) | URL prefix (e.g. `/` or `/micromegas`) |
 | `MICROMEGAS_MONOLITH_ROLES` | No | Comma-separated roles or `all` (default: `all`) |
-| `MICROMEGAS_PORT` | No | Web server port (default: `3000`) |
+| `MICROMEGAS_INGESTION_LISTEN_ADDR` | No | Ingestion HTTP bind address (default: `127.0.0.1:8081`) |
+| `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR` | No | FlightSQL bind address (default: `0.0.0.0:50051`) |
+| `MICROMEGAS_WEB_LISTEN_ADDR` | No | Web server bind address (default: `0.0.0.0:3000`). The deprecated `MICROMEGAS_PORT` still works on its own, but setting both is a startup error |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint route falls back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
@@ -71,13 +73,16 @@ cargo run --bin micromegas-monolith -- \
 | Flag | Default | Description |
 |---|---|---|
 | `--roles` | `all` | Enable specific roles: `ingestion`, `flightsql`, `maintenance`, `web`, or `all` |
-| `--listen-endpoint-http` | `127.0.0.1:8081` | Ingestion HTTP bind address |
-| `--port` | `3000` | Web server port |
+| `--ingestion-listen-addr` | `127.0.0.1:8081` | Ingestion HTTP bind address (alias: `--listen-endpoint-http`) |
+| `--flightsql-listen-addr` | `0.0.0.0:50051` | FlightSQL bind address |
+| `--web-listen-addr` | `0.0.0.0:3000` | Web server bind address (deprecated: `--port`) |
 | `--frontend-dir` | `/app/frontend` | Path to the built analytics web app |
 | `--disable-auth` | off | Disable authentication for all roles |
 | `--disable-ingestion-auth` | off | Disable auth for ingestion only (useful with OIDC on web) |
 | `--no-seed-data-source` | off | Skip auto-seeding the local FlightSQL data source |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
+
+See [Listen addresses](service-lifecycle.md#listen-addresses).
 
 ## Authentication
 

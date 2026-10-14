@@ -59,7 +59,7 @@
 //! 3. In a new shell, start the ingestion server
 //! ```text
 //! > cd micromegas/rust
-//! > cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000
+//! > cargo run -p telemetry-ingestion-srv -- --ingestion-listen-addr 127.0.0.1:9000
 //! ```
 //!
 //!

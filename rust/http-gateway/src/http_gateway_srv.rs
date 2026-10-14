@@ -17,8 +17,14 @@ use micromegas::{axum, tracing::info};
 #[clap(name = "Micromegas http gateway server")]
 #[clap(about = "Micromegas http gateway server", version, author)]
 struct Cli {
-    #[clap(long, default_value = "0.0.0.0:3000")]
-    listen_endpoint_http: SocketAddr,
+    /// Gateway listen address
+    #[clap(
+        long,
+        env = "MICROMEGAS_GATEWAY_LISTEN_ADDR",
+        default_value = "0.0.0.0:3000",
+        alias = "listen-endpoint-http"
+    )]
+    gateway_listen_addr: SocketAddr,
 
     /// Upstream FlightSQL endpoint the gateway proxies to.
     #[clap(long, env = "MICROMEGAS_FLIGHTSQL_URL")]
@@ -37,8 +43,8 @@ async fn main() -> Result<()> {
         .layer(Extension(gateway_config))
         .into_make_service_with_connect_info::<SocketAddr>();
 
-    let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http).await?;
-    info!("Server running on {}", args.listen_endpoint_http);
+    let listener = tokio::net::TcpListener::bind(args.gateway_listen_addr).await?;
+    info!("Server running on {}", args.gateway_listen_addr);
     axum::serve(listener, app).await?;
     Ok(())
 }

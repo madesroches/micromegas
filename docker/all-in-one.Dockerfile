@@ -116,7 +116,7 @@ COPY --from=rust-builder /build/analytics-web-srv /usr/local/bin/
 COPY --from=frontend-builder /app/dist /app/frontend
 
 # No default entrypoint - specify service when running:
-#   docker run micromegas-all telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000
+#   docker run micromegas-all telemetry-ingestion-srv --ingestion-listen-addr 0.0.0.0:9000
 #   docker run micromegas-all flight-sql-srv
 #   docker run micromegas-all analytics-web-srv --frontend-dir /app/frontend
 

@@ -1,15 +1,19 @@
 use crate::handlers::{permits_for_bytes, stream_window_bytes};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use micromegas::object_cache::blocks::max_run_bytes;
 use micromegas::object_cache::range_cache::{
     DEFAULT_DEMAND_RESERVED_FETCH_PERMITS, DEFAULT_FETCH_MEMORY_BUDGET_BYTES,
     DEFAULT_MAX_COALESCED_GET_BYTES, DEFAULT_PROMOTE_WHOLE_BATCH, DEFAULT_TOTAL_FETCH_PERMITS,
 };
-use std::net::SocketAddr;
+use micromegas::tracing::prelude::warn;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// One MiB, in bytes -- the unit every `*_mb`/`*_gb` CLI knob converts
 /// through.
+pub const DEFAULT_OBJECT_CACHE_LISTEN_ADDR: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080);
+
 const MIB: u64 = 1024 * 1024;
 /// Clap range for `--block-size` and `--max-coalesced-get-bytes`: capping
 /// both at 1 GiB keeps `max_run_bytes` -- a byte count passed directly as
@@ -20,12 +24,9 @@ const MAX_BYTES_KNOB: u64 = 1024 * 1024 * 1024; // 1 GiB
 #[clap(name = "micromegas-object-cache-srv")]
 #[clap(about = "Shared object range cache service", version, author)]
 pub struct Cli {
-    #[clap(
-        long,
-        env = "MICROMEGAS_OBJECT_CACHE_LISTEN",
-        default_value = "0.0.0.0:8080"
-    )]
-    pub listen: SocketAddr,
+    /// Listen address (default 0.0.0.0:8080)
+    #[clap(long, env = "MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR", alias = "listen")]
+    pub object_cache_listen_addr: Option<SocketAddr>,
 
     #[clap(long, env = "MICROMEGAS_OBJECT_CACHE_ORIGIN_URI")]
     pub origin_uri: String,
@@ -208,6 +209,30 @@ pub fn validate_write_tuning(flushers: usize, write_buffer_mb: usize) -> Result<
 }
 
 impl Cli {
+    /// Pick the listen address, falling back to the legacy
+    /// `MICROMEGAS_OBJECT_CACHE_LISTEN` value (passed in so tests never touch
+    /// process env).
+    pub fn resolve_listen_addr(&self, legacy_env: Option<String>) -> Result<SocketAddr> {
+        match (self.object_cache_listen_addr, legacy_env) {
+            (Some(_), Some(_)) => Err(anyhow!(
+                "both --object-cache-listen-addr/--listen/MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR and \
+                 the deprecated MICROMEGAS_OBJECT_CACHE_LISTEN are set; remove \
+                 MICROMEGAS_OBJECT_CACHE_LISTEN"
+            )),
+            (Some(addr), None) => Ok(addr),
+            (None, Some(legacy)) => {
+                let addr = legacy.parse::<SocketAddr>().with_context(|| {
+                    format!("parsing MICROMEGAS_OBJECT_CACHE_LISTEN value {legacy:?}")
+                })?;
+                warn!(
+                    "MICROMEGAS_OBJECT_CACHE_LISTEN is deprecated, use MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR"
+                );
+                Ok(addr)
+            }
+            (None, None) => Ok(DEFAULT_OBJECT_CACHE_LISTEN_ADDR),
+        }
+    }
+
     /// Validate all numeric knobs. Fatal-at-startup config errors, kept next to
     /// the type and unit-testable from the integration-test crate (like
     /// `validate_write_tuning`).

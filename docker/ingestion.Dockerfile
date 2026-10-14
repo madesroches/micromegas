@@ -36,4 +36,4 @@ COPY --from=builder /build/telemetry-ingestion-srv /usr/local/bin/
 
 EXPOSE 9000
 ENTRYPOINT ["telemetry-ingestion-srv"]
-CMD ["--listen-endpoint-http", "0.0.0.0:9000"]
+CMD ["--ingestion-listen-addr", "0.0.0.0:9000"]

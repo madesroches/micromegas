@@ -16,7 +16,8 @@ all connect here.
 cargo run --release --bin flight-sql-srv
 ```
 
-The gRPC listener binds to `0.0.0.0:50051`. The Docker image
+The gRPC listener binds to `0.0.0.0:50051` by default; change it with
+`--flightsql-listen-addr`. See [Listen addresses](service-lifecycle.md#listen-addresses). The Docker image
 (`flight-sql.Dockerfile`) exposes that port as its entrypoint.
 
 ## Environment variables
@@ -45,14 +46,10 @@ functions](functions-reference.md) — see [Materialized Views](materialized-vie
 
 | Flag | Default | Description |
 |---|---|---|
+| `--flightsql-listen-addr` | `0.0.0.0:50051` | gRPC bind address (env `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR`) |
 | `--disable-auth` | off | Disable authentication (development only) |
-| `--health-listen-addr` | none | Address for the HTTP health/readiness sidecar (e.g. `0.0.0.0:8082`) |
+| `--health-listen-addr` | none | Address for the HTTP health/readiness sidecar (e.g. `0.0.0.0:8082`; env `MICROMEGAS_FLIGHTSQL_HEALTH_LISTEN_ADDR`) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain in-flight RPCs on `SIGTERM` |
-
-!!! note "Listen address is fixed"
-    Unlike ingestion, the split `flight-sql-srv` binary always binds
-    `0.0.0.0:50051`; there is no listen-address flag. Publish or remap the port
-    at the container / load-balancer layer.
 
 ## Authentication
 

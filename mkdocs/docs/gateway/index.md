@@ -21,7 +21,7 @@ The HTTP Gateway acts as a transparent proxy between HTTP clients and the Flight
 export MICROMEGAS_FLIGHTSQL_URL=grpc://127.0.0.1:50051
 
 # Start gateway on port 3000
-cargo run --bin http-gateway-srv -- --listen-endpoint-http 0.0.0.0:3000
+cargo run --bin http-gateway-srv -- --gateway-listen-addr 0.0.0.0:3000
 ```
 
 ### Making Your First Query

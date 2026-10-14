@@ -172,7 +172,7 @@ def start_split_mode(rust_dir, target_dir, postgres_pid, enable_object_cache=Tru
         ingestion_process = subprocess.Popen(
             [
                 str(target_dir / "telemetry-ingestion-srv"),
-                "--listen-endpoint-http",
+                "--ingestion-listen-addr",
                 "127.0.0.1:9000",
                 "--disable-auth",
             ],
@@ -252,7 +252,10 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid, disable_auth=False):
     frontend_dir = repo_root / "analytics-web-app" / "dist"
 
     # Web role requires these vars; set dev defaults if not already in the environment.
-    web_port = int(env.get("MICROMEGAS_PORT", "3000"))
+    if "MICROMEGAS_WEB_LISTEN_ADDR" in env:
+        web_port = int(env["MICROMEGAS_WEB_LISTEN_ADDR"].rsplit(":", 1)[1])
+    else:
+        web_port = int(env.get("MICROMEGAS_PORT", "3000"))
     if "MICROMEGAS_WEB_CORS_ORIGIN" not in env:
         env["MICROMEGAS_WEB_CORS_ORIGIN"] = f"http://localhost:{web_port}"
         print(f"Set MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:{web_port}")
@@ -289,7 +292,7 @@ def start_monolith_mode(rust_dir, target_dir, postgres_pid, disable_auth=False):
         str(target_dir / "micromegas-monolith"),
         "--roles",
         "all",
-        "--listen-endpoint-http",
+        "--ingestion-listen-addr",
         "127.0.0.1:9000",
         auth_flag,
     ]

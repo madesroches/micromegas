@@ -135,6 +135,26 @@ The residual risk is a client that cannot complete its request within the grace
 period *and* does not retry. If you need end-to-end guarantees under load, raise
 the grace period and ensure your producers retry on connection errors.
 
+## Listen addresses
+
+Every main listener is a full `SocketAddr` named `--<role>-listen-addr` /
+`MICROMEGAS_<ROLE>_LISTEN_ADDR`, where the role is the monolith's role name. The
+flag is the same in the standalone binary and in the monolith.
+
+| Listener | Flag | Env | Default |
+|---|---|---|---|
+| ingestion | `--ingestion-listen-addr` | `MICROMEGAS_INGESTION_LISTEN_ADDR` | `127.0.0.1:8081` |
+| flightsql | `--flightsql-listen-addr` | `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR` | `0.0.0.0:50051` |
+| web | `--web-listen-addr` | `MICROMEGAS_WEB_LISTEN_ADDR` | `0.0.0.0:3000` |
+| gateway | `--gateway-listen-addr` | `MICROMEGAS_GATEWAY_LISTEN_ADDR` | `0.0.0.0:3000` |
+| object cache | `--object-cache-listen-addr` | `MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR` | `0.0.0.0:8080` |
+| health sidecar | `--health-listen-addr` | `MICROMEGAS_<SERVICE>_HEALTH_LISTEN_ADDR` | off |
+
+Deprecated names that still work: `--listen-endpoint-http` (ingestion and gateway),
+`--listen` (object cache), `--port` / `MICROMEGAS_PORT` (web, logs a warning), and
+`MICROMEGAS_OBJECT_CACHE_LISTEN` (logs a warning). Setting a deprecated web or object
+cache env var together with its replacement is a startup error.
+
 ## Readiness probes
 
 In addition to graceful shutdown, every service exposes a `/ready` endpoint so

@@ -55,7 +55,7 @@ Either way, Docker pulls `marcantoinedesroches/micromegas-monolith:latest` and s
         command:
           - "--roles"
           - "all"
-          - "--listen-endpoint-http"
+          - "--ingestion-listen-addr"
           - "0.0.0.0:9000"
           - "--frontend-dir"
           - "/app/frontend"

@@ -95,4 +95,4 @@ COPY --from=frontend-builder /app/dist /app/frontend
 
 EXPOSE 3000
 ENTRYPOINT ["analytics-web-srv"]
-CMD ["--port", "3000", "--frontend-dir", "/app/frontend"]
+CMD ["--frontend-dir", "/app/frontend"]
