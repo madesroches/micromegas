@@ -112,7 +112,7 @@ pub fn local_connect_addr(listen: SocketAddr) -> SocketAddr;
 | `--listen-endpoint-http` (ingestion, monolith, gateway) | clap `alias` on the new arg; works silently |
 | `--listen` (object-cache) | clap `alias` |
 | `-p/--port`, `MICROMEGAS_PORT` (web) | hidden arg plus `warn!` in `resolve` (above) |
-| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; a resolve method falls back to the old env with a `warn!` and bails when both are set, the same shape as `WebListenArgs::resolve`; the legacy value is parsed as `SocketAddr`, and a parse failure bails with context naming `MICROMEGAS_OBJECT_CACHE_LISTEN` |
+| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; a resolve method falls back to the old env with a `warn!` (see Per-binary wiring) |
 
 These follow the v0.31.0 upgrade-shim precedent (a `warn!` naming the replacement), and the
 shims are removed in v0.33.0, with a follow-up issue filed. A clap alias can't warn, and a
@@ -161,16 +161,21 @@ working; their deprecation is recorded in docs and CHANGELOG.
 ### Phase 2: shared args for the remaining listeners
 
 5. `rust/public/src/config.rs`: add `IngestionListenArgs`, `WebListenArgs` + `resolve`,
-   `local_connect_addr`, and the remaining default consts.
+   `local_connect_addr`, and the remaining default consts. Add
+   `rust/public/tests/listen_args_tests.rs` and its `rust/public/Cargo.toml`
+   `[[test]] name = "listen_args_tests"` block (`required-features = ["server"]`).
 6. `rust/telemetry-ingestion-srv/src/main.rs`: flatten `IngestionListenArgs`.
-7. `rust/analytics-web-srv/src/main.rs`, `web_server.rs`: flatten `WebListenArgs`, add a `#[cfg(test)]` test calling `Cli::command().debug_assert()`, and replace
+7. `rust/analytics-web-srv/src/main.rs`, `web_server.rs`: flatten `WebListenArgs`, add a `#[cfg(test)]` test calling `Args::command().debug_assert()`, and replace
    `port` with `listen_addr` in `WebCliArgs` / `WebServerConfig` (built from `args.web.resolve()?`), and update the `WebCliArgs`
-   construction in `rust/analytics-web-srv/tests/web_server_config_tests.rs:42-47`.
+   construction in `rust/analytics-web-srv/tests/web_server_config_tests.rs:42-47`. Also update
+   the `listen_addr` field doc (`web_server.rs:39`, "HTTP port to listen on (default 3000)") and
+   the `run_web_server` doc (`web_server.rs:701`, "Binds to `config.port`").
 8. `rust/monolith/src/main.rs`: flatten all three, wire the flightsql listen addr, derive
    the seeded URL from it, and call `args.web.resolve()?` only inside the `roles.web` branch
    (`378-382`). Add a `#[cfg(test)]` test calling `Cli::command().debug_assert()`.
 9. `rust/http-gateway/src/http_gateway_srv.rs`, `rust/object-cache-srv/src/cli.rs` (+ its uses
-   of `args.listen` in `object_cache_srv.rs`): rename the args and add the env, aliases, and fallback.
+   of `args.listen` in `object_cache_srv.rs`): rename the args and add the env, aliases, and fallback. Add the
+   `--listen` and new-flag cases and the resolve cases to `rust/object-cache-srv/tests/cli_tests.rs`.
 
 ### Phase 3: callers and docs
 
@@ -217,9 +222,6 @@ working; their deprecation is recorded in docs and CHANGELOG.
   address. Accepted: the seed is a first-run convenience, and the row can be edited in the web
   app.
 
-- The `--port`/`MICROMEGAS_PORT` and `MICROMEGAS_OBJECT_CACHE_LISTEN` warn shims are removed in
-  v0.33.0, and the clap aliases stay.
-
 ## Documentation
 
 - `mkdocs/docs/admin/flight-sql.md`: new flag and env, drop the fixed-address note, add the
@@ -253,14 +255,17 @@ exposure as the existing `rust/object-cache-srv/tests/cli_tests.rs` and
 `rust/redis-exporter/tests/cli_tests.rs`, since clap's `env` feature reads env vars inside
 `try_parse_from`. The `resolve` cases run on constructed structs, which are env-free:
 
-- Each struct parses its new flag and its alias, and with neither given yields its default.
+- Each struct parses its new flag; `IngestionListenArgs` also parses `--listen-endpoint-http`;
+  with no flags, `IngestionListenArgs` and `FlightSqlListenArgs` yield their defaults and
+  `WebListenArgs` yields `None`/`None`.
 - `WebListenArgs::resolve`: addr only, port only (`0.0.0.0:{port}`), neither (default), both
   (error).
 - `local_connect_addr`: `0.0.0.0:p` → `127.0.0.1:p`, `[::]:p` → `[::1]:p`, a specific IP passes
   through unchanged.
 - A `#[cfg(test)]` test in each of `rust/monolith/src/main.rs` and
-  `rust/analytics-web-srv/src/main.rs` calling `Cli::command().debug_assert()` (via
-  `clap::CommandFactory`) on the real composed `Cli`. This catches a flag, alias, or short-option
+  `rust/analytics-web-srv/src/main.rs` calling `command().debug_assert()` (via
+  `clap::CommandFactory`) on the real composed clap struct (`Cli` in the monolith, `Args` in
+  analytics-web-srv). This catches a flag, alias, or short-option
   collision introduced in a shared struct, which would otherwise only panic at startup.
 - `rust/object-cache-srv/tests/cli_tests.rs` gets
   cases for `--listen` and the new flag. The old-env fallback is tested by passing the env value
