@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Dependencies:** Bump `datafusion` from `55.1` to `55.2` in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace (lockfile-only; no API changes).
 * **Servers:** Uniform listen-address flags and env vars across server binaries (#1659):
   `--ingestion-listen-addr` / `MICROMEGAS_INGESTION_LISTEN_ADDR`, `--flightsql-listen-addr` /
   `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR`, `--web-listen-addr` / `MICROMEGAS_WEB_LISTEN_ADDR`,
