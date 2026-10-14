@@ -102,8 +102,8 @@ pub fn local_connect_addr(listen: SocketAddr) -> SocketAddr;
   one place.
 - The gateway and object-cache listeners belong to one binary each, so their arg stays in that
   binary's own `Cli` and follows the same shape there. Keeping them local avoids pushing
-  single-binary structs into the facade crate. The convention table and the shared consts are
-  what keep them uniform.
+  single-binary structs into the facade crate. The convention table is what keeps them
+  uniform.
 
 ### Legacy flags
 
@@ -143,7 +143,8 @@ working; their deprecation is recorded in docs and CHANGELOG.
   `into_config(self, redis_password: Option<String>)`). `main` reads
   `MICROMEGAS_OBJECT_CACHE_LISTEN` and calls it after `validate()`; the result replaces
   `args.listen` at `object_cache_srv.rs:214-218`. It bails when both are set, matching
-  `WebListenArgs::resolve`.
+  `WebListenArgs::resolve`. When neither value is set it returns a local
+  `DEFAULT_OBJECT_CACHE_LISTEN_ADDR` const in `cli.rs` (`0.0.0.0:8080`).
 
 ## Implementation Steps
 
@@ -238,7 +239,9 @@ working; their deprecation is recorded in docs and CHANGELOG.
 - `CHANGELOG.md`: one Unreleased entry. It lists the new flags and env vars and the deprecated
   names, plus a **Minor breaking change** clause: `WebServerConfig.port` / `WebCliArgs.port` are
   replaced by `listen_addr: SocketAddr`, and `object-cache-srv`'s `Cli.listen` is renamed. It also
-notes that setting both the new web address and `MICROMEGAS_PORT` now fails at startup.
+notes that setting both the new web address and `MICROMEGAS_PORT` now fails at startup, and that
+`object-cache-srv` now fails at startup when `--object-cache-listen-addr`/`--listen`/
+`MICROMEGAS_OBJECT_CACHE_LISTEN_ADDR` and the legacy `MICROMEGAS_OBJECT_CACHE_LISTEN` are both set.
 
 ## Testing Strategy
 
