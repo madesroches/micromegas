@@ -751,10 +751,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"commander@npm:^8.3.0":
-  version: 8.3.0
-  resolution: "commander@npm:8.3.0"
-  checksum: 10c0/8b043bb8322ea1c39664a1598a95e0495bfe4ca2fad0d84a92d7d1d8d213e2a155b441d2470c8e08de7c4a28cf2bc6e169211c49e1b21d9f7edc6ae4d9356060
+"commander@npm:^15.0.0":
+  version: 15.0.0
+  resolution: "commander@npm:15.0.0"
+  checksum: 10c0/539229c171914ea1ccd45ee5f10d924289a12a684ea3a7a44147abe54003c35ed6de9ae4ad198d88c29fdf403dca0428451a388234e6dc01b6faa978fb207206
   languageName: node
   linkType: hard
 
@@ -1404,14 +1404,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"katex@npm:^0.16.45":
-  version: 0.16.47
-  resolution: "katex@npm:0.16.47"
+"katex@npm:^0.18.2":
+  version: 0.18.10
+  resolution: "katex@npm:0.18.10"
   dependencies:
-    commander: "npm:^8.3.0"
+    commander: "npm:^15.0.0"
   bin:
     katex: cli.js
-  checksum: 10c0/b10f4d0651c60771a48444879e4227255e26e2b2ec061b1ee4b08934863ad2324ba8dbb772455f7768aeb14dfcc13bcd309174a0ddd5ef954a607f644a197710
+  checksum: 10c0/3864a236334e9c7aef906b2fdd70defb76edfe8362372ccd5504167e8b22bbc1a48210e5d03e30e464c0c0f669e6d467b3b8b01120598fb1968c275fa5059721
   languageName: node
   linkType: hard
 
@@ -1746,10 +1746,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"source-map-js@npm:^1.2.1":
-  version: 1.2.1
-  resolution: "source-map-js@npm:1.2.1"
-  checksum: 10c0/7bda1fc4c197e3c6ff17de1b8b2c20e60af81b63a52cb32ec5a5d67a20a7d42651e2cb34ebe93833c5a2a084377e17455854fee3e21e7925c64a51b6a52b0faf
+"source-map-js@npm:^1.2.2":
+  version: 1.2.2
+  resolution: "source-map-js@npm:1.2.2"
+  checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
   languageName: node
   linkType: hard
 

@@ -20,6 +20,9 @@ This file documents the historical progress of the Micromegas project. For curre
   `analytics-web-app`, `welcome`), `dompurify` to `^3.4.16` (root, `doc/intro-micromegas`,
   `doc/high-frequency-observability`), `fast-uri` to `^3.1.8` (root), `xxhash-rust` to 0.8.19 and
   `urllib3` to 2.8.0. `braces` (alert 568) has no patched release yet and stays at 3.0.3.
+* **Dependencies:** Resolve Dependabot alerts 569-580: bump `source-map-js` to 1.2.2 (`analytics-web-app`,
+  `welcome` and all `doc/*` sites), `postcss-selector-parser` to `^7.1.6` (`analytics-web-app`,
+  `welcome`) and `katex` to `^0.18.2` (`doc/intro-micromegas`, `doc/high-frequency-observability`).
 * **Dependencies:** Bump `quinn-proto` to 0.11.19 (#1656) in both the main `rust/` workspace and the excluded
   `rust/datafusion-wasm` sub-workspace to resolve RUSTSEC-2026-0338, RUSTSEC-2026-0339,
   RUSTSEC-2026-0340, RUSTSEC-2026-0341 and RUSTSEC-2026-0342 (remote panics and memory-exhaustion
