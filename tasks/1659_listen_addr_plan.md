@@ -20,7 +20,7 @@ value is always a full `SocketAddr`, defaults stay as they are, and the old flag
 | `monolith` flightsql role | none | `0.0.0.0:50051` | `rust/monolith/src/main.rs:317-339` |
 | `monolith` seed | hard-coded `http://127.0.0.1:50051` | | `rust/monolith/src/main.rs:425-449` |
 | `analytics-web-srv` | `-p/--port` u16, `MICROMEGAS_PORT` | `3000`, bound `0.0.0.0` | `rust/analytics-web-srv/src/main.rs:16-17`, `web_server.rs:40,70,903` |
-| `monolith` web role | `--port` u16, `MICROMEGAS_PORT` | `3000` | `rust/monolith/src/main.rs:147-148,393-397` |
+| `monolith` web role | `--port` u16, `MICROMEGAS_PORT` | `3000` | `rust/monolith/src/main.rs:147-148,378-382` |
 | `telemetry-ingestion-srv` | `--listen-endpoint-http`, no env | `127.0.0.1:8081` | `rust/telemetry-ingestion-srv/src/main.rs:35-36` |
 | `monolith` ingestion role | `--listen-endpoint-http`, no env | `127.0.0.1:8081` | `rust/monolith/src/main.rs:143-144,309` |
 | `http-gateway-srv` | `--listen-endpoint-http`, no env | `0.0.0.0:3000` | `rust/http-gateway/src/http_gateway_srv.rs:20-21` |
@@ -112,7 +112,7 @@ pub fn local_connect_addr(listen: SocketAddr) -> SocketAddr;
 | `--listen-endpoint-http` (ingestion, monolith, gateway) | clap `alias` on the new arg; works silently |
 | `--listen` (object-cache) | clap `alias` |
 | `-p/--port`, `MICROMEGAS_PORT` (web) | hidden arg plus `warn!` in `resolve` (above) |
-| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; a resolve method falls back to the old env with a `warn!` and bails when both are set, the same shape as `WebListenArgs::resolve` |
+| `MICROMEGAS_OBJECT_CACHE_LISTEN` (object-cache, released in v0.27) | the new arg becomes `Option`; a resolve method falls back to the old env with a `warn!` and bails when both are set, the same shape as `WebListenArgs::resolve`; the legacy value is parsed as `SocketAddr`, and a parse failure bails with context naming `MICROMEGAS_OBJECT_CACHE_LISTEN` |
 
 These follow the v0.31.0 upgrade-shim precedent (a `warn!` naming the replacement), and the
 shims are removed in v0.33.0, with a follow-up issue filed. A clap alias can't warn, and a
@@ -131,12 +131,15 @@ working; their deprecation is recorded in docs and CHANGELOG.
   IPv6 addresses.
 - **`analytics-web-srv`**: flatten `WebListenArgs`. `WebCliArgs.port` and
   `WebServerConfig.port: u16` become `listen_addr: SocketAddr`, and `run_web_server` binds it
-  directly (`web_server.rs:903`).
+  directly (`web_server.rs:903`). Both this binary and the monolith call `args.web.resolve()?`
+  when building `WebCliArgs`; the monolith does so only inside the `roles.web` branch
+  (`main.rs:378-382`), so a monolith running without the web role never hits the "both set" bail.
 - **`telemetry-ingestion-srv`**: flatten `IngestionListenArgs`.
 - **`http-gateway-srv`**: rename the arg to `gateway_listen_addr` with env, keeping the alias.
 - **`object-cache-srv`**: rename `listen` to `object_cache_listen_addr` (now `Option`) with the
   new env and the `--listen` alias. `cli.rs` gets a resolve method taking the legacy env value
-  as an `Option<String>` parameter (following `redis-exporter`'s
+  as an `Option<String>` parameter, parses it as `SocketAddr`, and bails with context naming
+  `MICROMEGAS_OBJECT_CACHE_LISTEN` if it doesn't parse (following `redis-exporter`'s
   `into_config(self, redis_password: Option<String>)`). `main` reads
   `MICROMEGAS_OBJECT_CACHE_LISTEN` and calls it after `validate()`; the result replaces
   `args.listen` at `object_cache_srv.rs:214-218`. It bails when both are set, matching
@@ -159,11 +162,12 @@ working; their deprecation is recorded in docs and CHANGELOG.
 5. `rust/public/src/config.rs`: add `IngestionListenArgs`, `WebListenArgs` + `resolve`,
    `local_connect_addr`, and the remaining default consts.
 6. `rust/telemetry-ingestion-srv/src/main.rs`: flatten `IngestionListenArgs`.
-7. `rust/analytics-web-srv/src/main.rs`, `web_server.rs`: flatten `WebListenArgs`, and replace
-   `port` with `listen_addr` in `WebCliArgs` / `WebServerConfig`, and update the `WebCliArgs`
+7. `rust/analytics-web-srv/src/main.rs`, `web_server.rs`: flatten `WebListenArgs`, add a `#[cfg(test)]` test calling `Cli::command().debug_assert()`, and replace
+   `port` with `listen_addr` in `WebCliArgs` / `WebServerConfig` (built from `args.web.resolve()?`), and update the `WebCliArgs`
    construction in `rust/analytics-web-srv/tests/web_server_config_tests.rs:42-47`.
-8. `rust/monolith/src/main.rs`: flatten all three, wire the flightsql listen addr, and derive
-   the seeded URL from it.
+8. `rust/monolith/src/main.rs`: flatten all three, wire the flightsql listen addr, derive
+   the seeded URL from it, and call `args.web.resolve()?` only inside the `roles.web` branch
+   (`378-382`). Add a `#[cfg(test)]` test calling `Cli::command().debug_assert()`.
 9. `rust/http-gateway/src/http_gateway_srv.rs`, `rust/object-cache-srv/src/cli.rs` (+ its uses
    of `args.listen` in `object_cache_srv.rs`): rename the args and add the env, aliases, and fallback.
 
@@ -182,7 +186,7 @@ working; their deprecation is recorded in docs and CHANGELOG.
     `local_test_env/ai_scripts/start_services_with_oidc.py`, `local_test_env/dev.py`,
     `build/run_ingestion_container.py`,
     `analytics-web-app/start_analytics_web.py` (it passes `--port` from its own port option; leave
-    it, since switching to `--web-listen-addr` would conflict with an ambient `MICROMEGAS_PORT`), `analytics-web-app/start_analytics_web_docker.py`.
+    it, since switching to `--web-listen-addr` would conflict with an ambient `MICROMEGAS_PORT`), `analytics-web-app/start_analytics_web_docker.py` (drop `"--port", "3000"` from `cmd_args`, line 285, like `docker/analytics-web.Dockerfile`; leave the script's own argparse `--port` at line 135 and the docker `-p {port}:3000` mapping at line 212).
 11. Docs (see Documentation) and the CHANGELOG entry.
 
 ## Files to Modify
@@ -193,8 +197,8 @@ working; their deprecation is recorded in docs and CHANGELOG.
 - `rust/public/Cargo.toml` (`[[test]] name = "listen_args_tests"`, `required-features = ["server"]`)
 - `rust/public/src/lib.rs` (crate doc example)
 - `rust/flight-sql-srv/src/flight_sql_srv.rs`
-- `rust/monolith/src/main.rs`
-- `rust/analytics-web-srv/src/main.rs`, `rust/analytics-web-srv/src/web_server.rs`, `rust/analytics-web-srv/tests/web_server_config_tests.rs`
+- `rust/monolith/src/main.rs` (incl. `debug_assert` test)
+- `rust/analytics-web-srv/src/main.rs` (incl. `debug_assert` test), `rust/analytics-web-srv/src/web_server.rs`, `rust/analytics-web-srv/tests/web_server_config_tests.rs`
 - `rust/telemetry-ingestion-srv/src/main.rs`
 - `rust/http-gateway/src/http_gateway_srv.rs`
 - `rust/object-cache-srv/src/cli.rs`, `rust/object-cache-srv/src/object_cache_srv.rs:214-218`, `rust/object-cache-srv/tests/cli_tests.rs`
@@ -251,15 +255,15 @@ exposure as the existing `rust/object-cache-srv/tests/cli_tests.rs` and
   (error).
 - `local_connect_addr`: `0.0.0.0:p` → `127.0.0.1:p`, `[::]:p` → `[::1]:p`, a specific IP passes
   through unchanged.
-- A wrapper that flattens `IngestionListenArgs`, `FlightSqlListenArgs`, `WebListenArgs`, and
-  `CommonServerArgs` the way the monolith does, then calls `Command::debug_assert()`. This catches
-  a flag, alias, or short-option collision introduced in a shared struct, which would otherwise
-  only panic when the monolith starts.
+- A `#[cfg(test)]` test in each of `rust/monolith/src/main.rs` and
+  `rust/analytics-web-srv/src/main.rs` calling `Cli::command().debug_assert()` (via
+  `clap::CommandFactory`) on the real composed `Cli`. This catches a flag, alias, or short-option
+  collision introduced in a shared struct, which would otherwise only panic at startup.
 - `rust/object-cache-srv/tests/cli_tests.rs` gets
   cases for `--listen` and the new flag. The old-env fallback is tested by passing the env value
   into the resolve function as a parameter, following `redis-exporter`'s `into_config(password)`
   pattern, so the test never touches process env. A resolve case covers new only, old env only,
-  neither (default), and both (error).
+  neither (default), both (error), and old env unparseable (error).
 
 ## Manual Verification
 
