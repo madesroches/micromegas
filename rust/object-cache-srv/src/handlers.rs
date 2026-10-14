@@ -15,7 +15,6 @@ use micromegas::object_cache::prefetch::{PrefetchItem, PrefetchResponse};
 use micromegas::object_cache::range_cache::{DEMAND_WINDOW_BLOCKS, RangeError, StreamRangesCaller};
 use micromegas::object_cache::validation::validate_key;
 use micromegas::tracing::prelude::*;
-use micromegas::tracing::property_set::{Property, PropertySet};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -200,10 +199,8 @@ pub async fn head_handler(
     imetric!(
         "object_cache_head_requests",
         "count",
-        PropertySet::find_or_create(vec![
-            Property::new("status", status_label(status)),
-            Property::new("prefix", prefix),
-        ]),
+        status = status_label(status),
+        prefix = prefix,
         1_u64
     );
     result
@@ -255,10 +252,8 @@ pub async fn get_range_handler(
     imetric!(
         "object_cache_get_requests",
         "count",
-        PropertySet::find_or_create(vec![
-            Property::new("status", status_label(status)),
-            Property::new("prefix", prefix),
-        ]),
+        status = status_label(status),
+        prefix = prefix,
         1_u64
     );
     result
@@ -400,7 +395,7 @@ async fn get_range_handler_inner(
     fmetric!(
         "object_cache_ttfb_ms",
         "ms",
-        PropertySet::find_or_create(vec![Property::new("prefix", state.cache.classify(&key))]),
+        prefix = state.cache.classify(&key),
         request_start.elapsed().as_secs_f64() * 1000.0
     );
 
@@ -463,10 +458,8 @@ pub async fn post_ranges_handler(
     imetric!(
         "object_cache_ranges_requests",
         "count",
-        PropertySet::find_or_create(vec![
-            Property::new("status", status_label(status)),
-            Property::new("prefix", prefix),
-        ]),
+        status = status_label(status),
+        prefix = prefix,
         1_u64
     );
     result
@@ -609,7 +602,7 @@ async fn post_ranges_handler_inner(
     fmetric!(
         "object_cache_ttfb_ms",
         "ms",
-        PropertySet::find_or_create(vec![Property::new("prefix", state.cache.classify(&key))]),
+        prefix = state.cache.classify(&key),
         request_start.elapsed().as_secs_f64() * 1000.0
     );
 

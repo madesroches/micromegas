@@ -138,6 +138,69 @@ impl Reflect for LogStringInteropEvent {
     }
 }
 
+/// Interop log with properties. Mirrors the event of the same name in the Unreal
+/// instrumentation so that one analytics parser reads both.
+#[derive(Debug)]
+pub struct TaggedLogInteropEvent {
+    pub time: i64,
+    pub level: u8,
+    pub target: StaticStringRef,
+    pub properties: *const PropertySet,
+    pub msg: DynString,
+}
+
+impl InProcSerialize for TaggedLogInteropEvent {
+    const IN_PROC_SIZE: InProcSize = InProcSize::Dynamic;
+
+    fn get_value_size(&self) -> Option<u32> {
+        Some(
+            std::mem::size_of::<i64>() as u32 // time
+                + std::mem::size_of::<u8>() as u32 // level
+                + std::mem::size_of::<StaticStringRef>() as u32 // target
+                + std::mem::size_of::<u64>() as u32 // properties ptr
+                + self.msg.get_value_size().unwrap(), // message
+        )
+    }
+
+    fn write_value(&self, buffer: &mut Vec<u8>) {
+        write_any(buffer, &self.time);
+        write_any(buffer, &self.level);
+        write_any(buffer, &self.target);
+        write_any(buffer, &self.properties);
+        self.msg.write_value(buffer);
+    }
+
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let time: i64 = read_consume_pod(&mut window);
+        let level: u8 = read_consume_pod(&mut window);
+        let target: StaticStringRef = read_consume_pod(&mut window);
+        let properties_id: u64 = read_consume_pod(&mut window);
+        let msg = DynString(read_advance_string(&mut window).unwrap());
+        Self {
+            time,
+            level,
+            target,
+            properties: properties_id as usize as *const PropertySet,
+            msg,
+        }
+    }
+}
+
+impl Reflect for TaggedLogInteropEvent {
+    fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("TaggedLogInteropEvent".into());
+        }
+        UserDefinedType {
+            name: TYPE_NAME.clone(),
+            size: 0,
+            members: vec![],
+            is_reference: false,
+            secondary_udts: vec![StaticStringRef::reflect()],
+        }
+    }
+}
+
 #[derive(Debug, TransitReflect)]
 pub struct LogMetadataRecord {
     pub id: u64,
@@ -154,7 +217,7 @@ impl InProcSerialize for LogMetadataRecord {}
 #[derive(Debug)]
 pub struct TaggedLogString {
     pub desc: &'static LogMetadata<'static>,
-    pub properties: &'static PropertySet,
+    pub properties: *const PropertySet,
     pub time: i64,
     pub msg: DynString,
 }
@@ -202,7 +265,7 @@ impl InProcSerialize for TaggedLogString {
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
             desc: unsafe { std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id) },
-            properties: unsafe { std::mem::transmute::<u64, &PropertySet>(properties_id) },
+            properties: properties_id as usize as *const PropertySet,
             time,
             msg,
         }

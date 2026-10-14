@@ -4,7 +4,7 @@ use micromegas_tracing::event::EventSink;
 use micromegas_tracing::logs::{LogBlock, LogMetadata, LogStream};
 use micromegas_tracing::metrics::{MetricsBlock, MetricsStream};
 use micromegas_tracing::process_info::ProcessInfo;
-use micromegas_tracing::property_set::Property;
+use micromegas_tracing::property_set::DynProperty;
 use micromegas_tracing::spans::{ThreadBlock, ThreadStream};
 
 pub struct ConsoleEventSink;
@@ -19,7 +19,7 @@ impl EventSink for ConsoleEventSink {
     fn on_log(
         &self,
         desc: &LogMetadata,
-        _properties: &[Property],
+        _properties: &[DynProperty<'_>],
         time: i64,
         args: fmt::Arguments<'_>,
     ) {

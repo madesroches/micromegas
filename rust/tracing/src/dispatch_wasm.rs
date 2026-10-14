@@ -4,7 +4,7 @@ use crate::event::EventSink;
 use crate::logs::LogMetadata;
 use crate::metrics::StaticMetricMetadata;
 use crate::process_info::ProcessInfo;
-use crate::property_set::PropertySet;
+use crate::property_set::{DynProperty, PropertySet};
 use crate::spans::{SpanLocation, SpanMetadata, ThreadStream};
 use crate::time::{frequency, now};
 use std::collections::HashMap;
@@ -81,6 +81,43 @@ pub fn tagged_integer_metric(
     _properties: &'static PropertySet,
     _value: u64,
 ) {
+}
+
+#[inline(always)]
+pub fn tagged_float_metric_dyn(
+    _desc: &'static StaticMetricMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    _value: f64,
+) {
+}
+
+#[inline(always)]
+pub fn tagged_integer_metric_dyn(
+    _desc: &'static StaticMetricMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    _value: u64,
+) {
+}
+
+#[inline(always)]
+pub fn log_dyn_tagged(
+    desc: &'static LogMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    log(desc, args);
+}
+
+#[inline(always)]
+pub fn log_interop_dyn_tagged(
+    metadata: &LogMetadata,
+    _dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    log_interop(metadata, args);
 }
 
 #[inline(always)]

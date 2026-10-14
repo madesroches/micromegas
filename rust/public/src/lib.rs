@@ -185,6 +185,3 @@ pub mod servers;
 
 #[cfg(feature = "server")]
 pub mod client;
-
-#[cfg(feature = "server")]
-pub mod utils;

@@ -3,7 +3,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    property_set::{Property, property_get},
+    property_set::{DynProperty, dyn_property_get},
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{fmt, sync::Arc};
@@ -31,7 +31,7 @@ impl EventSink for LocalEventSink {
     fn on_log(
         &self,
         metadata: &LogMetadata,
-        properties: &[Property],
+        properties: &[DynProperty<'_>],
         _time: i64,
         args: fmt::Arguments<'_>,
     ) {
@@ -50,7 +50,7 @@ impl EventSink for LocalEventSink {
             metadata.module_path
         };
 
-        if let Some(t) = property_get(properties, "target") {
+        if let Some(t) = dyn_property_get(properties, "target") {
             target = t;
         }
 

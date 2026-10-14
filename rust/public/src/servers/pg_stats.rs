@@ -19,9 +19,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 use std::sync::Arc;
@@ -36,27 +34,6 @@ use super::cron_task::TaskCallback;
 fn get_counter(row: &PgRow, col: &str) -> Result<u64> {
     let value: Option<i64> = row.try_get(col).with_context(|| col.to_string())?;
     Ok(value.unwrap_or(0) as u64)
-}
-
-/// `{table}` tags for a per-table metric. `table` is a runtime string (read
-/// from `pg_stat_user_tables`) — the metadata schema's relation set is fixed
-/// and small (see the collector's design notes), so interning it is a bounded,
-/// one-time-per-distinct-name leak.
-fn table_tags(table: &str) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![Property::new("table", intern_string(table))])
-}
-
-/// `{table, index}` tags for a per-index metric.
-fn index_tags(table: &str, index: &str) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![
-        Property::new("table", intern_string(table)),
-        Property::new("index", intern_string(index)),
-    ])
-}
-
-/// `{state}` tags for a `pg_stat_activity` connection-count metric.
-fn state_tags(state: &str) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![Property::new("state", intern_string(state))])
 }
 
 /// Per-index metrics: `pg_stat_user_indexes` joined with
@@ -81,30 +58,32 @@ async fn collect_index_stats(pool: &sqlx::PgPool) -> Result<()> {
     for row in rows {
         let table: String = row.try_get("table_name").with_context(|| "table_name")?;
         let index: String = row.try_get("index_name").with_context(|| "index_name")?;
-        let tags = index_tags(&table, &index);
-
         imetric!(
             "pg_index_scans",
             "count",
-            tags,
+            table = table,
+            index = index,
             get_counter(&row, "idx_scan")?
         );
         imetric!(
             "pg_index_tuples_read",
             "count",
-            tags,
+            table = table,
+            index = index,
             get_counter(&row, "idx_tup_read")?
         );
         imetric!(
             "pg_index_tuples_fetched",
             "count",
-            tags,
+            table = table,
+            index = index,
             get_counter(&row, "idx_tup_fetch")?
         );
         imetric!(
             "pg_index_size_bytes",
             "bytes",
-            tags,
+            table = table,
+            index = index,
             get_counter(&row, "index_size_bytes")?
         );
     }
@@ -134,48 +113,46 @@ async fn collect_table_stats(pool: &sqlx::PgPool) -> Result<()> {
 
     for row in rows {
         let table: String = row.try_get("table_name").with_context(|| "table_name")?;
-        let tags = table_tags(&table);
-
         imetric!(
             "pg_table_seq_scans",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "seq_scan")?
         );
         imetric!(
             "pg_table_idx_scans",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "idx_scan")?
         );
         imetric!(
             "pg_table_live_tuples",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "n_live_tup")?
         );
         imetric!(
             "pg_table_dead_tuples",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "n_dead_tup")?
         );
         imetric!(
             "pg_table_tuples_inserted",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "n_tup_ins")?
         );
         imetric!(
             "pg_table_tuples_updated",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "n_tup_upd")?
         );
         imetric!(
             "pg_table_tuples_deleted",
             "count",
-            tags,
+            table = table,
             get_counter(&row, "n_tup_del")?
         );
 
@@ -183,7 +160,12 @@ async fn collect_table_stats(pool: &sqlx::PgPool) -> Result<()> {
             .try_get("seconds_since_autovacuum")
             .with_context(|| "seconds_since_autovacuum")?;
         if let Some(age) = seconds_since_autovacuum {
-            fmetric!("pg_table_seconds_since_autovacuum", "seconds", tags, age);
+            fmetric!(
+                "pg_table_seconds_since_autovacuum",
+                "seconds",
+                table = table,
+                age
+            );
         }
     }
     Ok(())
@@ -264,7 +246,7 @@ async fn collect_activity_stats(pool: &sqlx::PgPool) -> Result<()> {
         imetric!(
             "pg_activity_connections",
             "count",
-            state_tags(&state),
+            state = state,
             get_counter(&row, "connections")?
         );
     }

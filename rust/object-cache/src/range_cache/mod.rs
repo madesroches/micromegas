@@ -245,10 +245,10 @@ impl RangeCache {
         {
             let size = decode_size(&data)?;
             if size <= MAX_PLAUSIBLE_OBJECT_SIZE {
-                imetric!("range_cache_size_backend_hit", "count", prefix_tag, 1_u64);
+                imetric!("range_cache_size_backend_hit", "count", ..prefix_tag, 1_u64);
                 return Ok(size);
             }
-            imetric!("range_cache_size_implausible", "count", prefix_tag, 1_u64);
+            imetric!("range_cache_size_implausible", "count", ..prefix_tag, 1_u64);
             warn!("range_cache implausible cached size {size} for key={key}; treating as miss");
             // fall through to origin HEAD, which repopulates meta:{ns}:{key}
         }
@@ -274,7 +274,7 @@ impl RangeCache {
                         scheduler.clone(),
                         vec![(meta_key_owned.clone(), task_entry.clone())],
                     );
-                    imetric!("range_cache_origin_head", "count", prefix_tag, 1_u64);
+                    imetric!("range_cache_origin_head", "count", ..prefix_tag, 1_u64);
                     let head_path = Path::from(key_owned.as_str());
                     let head_result = instrument_named!(
                         origin.head(&head_path),
@@ -295,7 +295,7 @@ impl RangeCache {
                                 imetric!(
                                     "range_cache_size_implausible",
                                     "count",
-                                    prefix_tag,
+                                    ..prefix_tag,
                                     1_u64
                                 );
                                 task_entry.fulfill(Err(Arc::new(anyhow::anyhow!(

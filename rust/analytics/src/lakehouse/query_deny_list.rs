@@ -18,9 +18,7 @@ use datafusion::logical_expr::{ColumnarValue, ExprSchemable};
 use datafusion::physical_plan::PhysicalExpr;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::tokenizer::{Token, Tokenizer};
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
 use sqlx::Row;
 use std::future::Future;
 use std::sync::Arc;
@@ -349,17 +347,6 @@ impl QueryDenyRule {
     }
 }
 
-/// Tags a `query_denied`/`query_deny_compile_error_count` metric with the rule id it concerns.
-/// Interned via [`intern_string`] (same pattern as `maintenance.rs`'s per-view-set metric tags):
-/// bounded cardinality (a rule id exists only while it's part of a deployment's rule set, capped
-/// at [`max_rules`]), so leaking one interned string per rule id that has ever existed is cheap.
-pub fn rule_tags(rule_id: &Uuid) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![Property::new(
-        "rule_id",
-        intern_string(&rule_id.to_string()),
-    )])
-}
-
 /// The compiled rules, ordered by `(created_at, rule_id)`, oldest first -- so the first match is
 /// always the oldest matching rule, on every replica. An alias, not a newtype: nothing hangs
 /// behind it. `Arc<[_]>` rather than `Arc<Vec<_>>`:
@@ -616,7 +603,7 @@ impl QueryDenyList {
                     imetric!(
                         "query_deny_compile_error_count",
                         "count",
-                        rule_tags(&rule_id),
+                        rule_id = %rule_id,
                         1_u64
                     );
                     warn!(

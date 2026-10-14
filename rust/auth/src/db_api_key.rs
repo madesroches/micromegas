@@ -212,12 +212,6 @@ enum LookupError {
     Invalid(anyhow::Error),
 }
 
-fn table_tags(table: &'static str) -> &'static micromegas_tracing::property_set::PropertySet {
-    micromegas_tracing::property_set::PropertySet::find_or_create(vec![
-        micromegas_tracing::property_set::Property::new("table", table),
-    ])
-}
-
 /// Shared throttle primitive: true at most once per `window_secs`, checked-and-set
 /// via a single `AtomicI64` "last logged at" timestamp. Backs both `maybe_log_error`
 /// and the read-only-fallback `warn!` in `lookup_key_row` -- each keeps its own
@@ -245,7 +239,7 @@ fn maybe_log_error(last_logged_at: &AtomicI64, window_secs: i64, table: &str, er
 /// DB-backed API key authentication provider, bound to one [`ApiKeyTable`].
 ///
 /// Every DB error is wrapped in [`ProviderUnavailable`] before being returned and
-/// emits `imetric!("db_api_key_error_count", "count", {table}, 1)` unconditionally
+/// emits `imetric!("db_api_key_error_count", "count", table = name, 1)` unconditionally
 /// — the metric is unconditional even on requests whose `error!` line was
 /// suppressed by `maybe_log_error`'s rate limit.
 pub struct DbApiKeyAuthProvider {
@@ -390,7 +384,7 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     micromegas_tracing::imetric!(
                         "db_api_key_error_count",
                         "count",
-                        table_tags(table.table_name()),
+                        table = table.table_name(),
                         1_u64
                     );
                     maybe_log_error(&last_logged_at, window_secs, table.table_name(), &err);

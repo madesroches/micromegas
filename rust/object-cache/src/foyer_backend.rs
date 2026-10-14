@@ -227,7 +227,7 @@ impl EventListener for RamEvictionListener {
         imetric!(
             "object_cache_ram_tier_eviction_count",
             "count",
-            t.count_for(reason_str(reason)),
+            ..t.count_for(reason_str(reason)),
             1_u64
         );
         if reason == Event::Evict {
@@ -237,7 +237,7 @@ impl EventListener for RamEvictionListener {
             fmetric!(
                 "object_cache_ram_tier_eviction_age_ms",
                 "ms",
-                t.prefix,
+                ..t.prefix,
                 age_ms
             );
         }
@@ -413,17 +413,17 @@ fn promote_if_valid(
     }
     if is_block_key(key) {
         let t = tags.classify(key);
-        imetric!("object_cache_disk_tier_hit", "count", t.prefix, 1_u64);
+        imetric!("object_cache_disk_tier_hit", "count", ..t.prefix, 1_u64);
         // Promotion volume. This length-validated insert below is the
         // single disk->RAM crossing, so promotion_count == disk_tier_hit by
         // construction; it exists as the named companion and denominator to
         // promotion_bytes (mean promoted block size = bytes / count) -- the
         // churn signal weighed against object_cache_ram_tier_eviction_*.
-        imetric!("object_cache_promotion_count", "count", t.prefix, 1_u64);
+        imetric!("object_cache_promotion_count", "count", ..t.prefix, 1_u64);
         imetric!(
             "object_cache_promotion_bytes",
             "bytes",
-            t.prefix,
+            ..t.prefix,
             value.bytes.len() as u64
         );
     }
@@ -436,7 +436,7 @@ fn promote_if_valid(
         fmetric!(
             "object_cache_disk_tier_read_age_ms",
             "ms",
-            t.prefix,
+            ..t.prefix,
             age_ms.max(0.0)
         );
     }
@@ -538,7 +538,7 @@ impl RangeCacheBackend for FoyerBackend {
         if let Some(entry) = self.cache.memory().get(key) {
             if is_block_key(key) {
                 let t = self.tags.classify(key);
-                imetric!("object_cache_ram_tier_hit", "count", t.prefix, 1_u64);
+                imetric!("object_cache_ram_tier_hit", "count", ..t.prefix, 1_u64);
             }
             return Some(entry.value().bytes.clone());
         }

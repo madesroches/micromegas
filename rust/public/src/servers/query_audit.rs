@@ -3,8 +3,8 @@
 //! `execute_query` (see `flight_sql_service_impl`) emits one JSON-serialized
 //! [`crate::servers::query_audit::QueryAuditRecord`] per query, at completion, under the dedicated
 //! `flightsql_query_audit` log target. Unlike the untagged `imetric!` cost
-//! metrics (whose `PropertySet` can't carry high-cardinality values such as
-//! SQL text), a free-text log `msg` has no cardinality constraint, so it can
+//! metrics (whose properties are meant for bounded-cardinality dimensions, not
+//! values such as SQL text), a free-text log `msg` has no cardinality constraint, so it can
 //! carry both attribution and cost in one self-contained, queryable record.
 //!
 //! `peak_memory_bytes`/`spilled_bytes`/`spill_count` complement the cost

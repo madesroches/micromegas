@@ -1,12 +1,14 @@
-//! Bounded, `'static`-safe tag construction for the object cache's
-//! dimensioned metrics (`prefix`, `class`).
+//! Precomputed tag sets for the object cache's dimensioned metrics (`prefix`,
+//! `class`, `reason`), spread into the metric macros with `..set`.
 //!
 //! Every dimension used here is a small, closed label set so cardinality
 //! stays bounded and every value is a compile-time (or leaked-once-at-
 //! startup) `&'static str`, per the tagged-metric contract documented on
 //! `micromegas_tracing::property_set::PropertySet` ("the user is expected to
 //! manage the cardinality"). Centralizing the `Property`/`PropertySet`
-//! construction here keeps the label taxonomy in one place (DRY).
+//! construction here keeps the label taxonomy in one place (DRY). The
+//! run-level latency metrics that aren't split by `prefix` pass `class = ..`
+//! as a plain pair instead.
 
 use std::sync::Arc;
 
@@ -67,15 +69,6 @@ impl PrefixTags {
             self.prefix_prefetch
         }
     }
-}
-
-/// A `{class}`-only tag set, for the run-level latency metrics
-/// (`range_cache_fetch_permit_wait_ms`, `range_cache_origin_get_ms`) that
-/// aren't dimensioned by `prefix`. Not precomputed like `PrefixTags`: these
-/// fire once per coalesced origin run rather than once per block probe, so
-/// the per-call intern cost is immaterial.
-pub fn class_tags(class_label: &'static str) -> &'static PropertySet {
-    PropertySet::find_or_create(vec![Property::new("class", class_label)])
 }
 
 /// Longest-prefix match of `key` against `labels`, using the same

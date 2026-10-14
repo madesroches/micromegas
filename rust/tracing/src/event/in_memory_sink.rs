@@ -4,7 +4,7 @@ use crate::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    property_set::Property,
+    property_set::DynProperty,
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{
@@ -68,7 +68,7 @@ impl EventSink for InMemorySink {
     fn on_log(
         &self,
         _desc: &LogMetadata,
-        _properties: &[Property],
+        _properties: &[DynProperty<'_>],
         _time: i64,
         _args: fmt::Arguments<'_>,
     ) {

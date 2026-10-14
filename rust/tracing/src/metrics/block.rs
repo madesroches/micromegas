@@ -4,7 +4,7 @@ use crate::{
     metrics::{
         FloatMetricEvent, IntegerMetricEvent, MetricMetadataDependency, StaticMetricMetadata,
     },
-    property_set::{PropertySet, PropertySetDependency},
+    property_set::{PropertySetDependency, record_properties},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use std::collections::HashSet;
@@ -62,25 +62,6 @@ fn record_metric_event_dependencies(
     }
 }
 
-fn record_properties(
-    set: &'static PropertySet,
-    recorded_deps: &mut HashSet<u64>,
-    deps: &mut MetricsDepsQueue,
-) {
-    let id = set as *const _ as u64;
-    if recorded_deps.insert(id) {
-        for prop in set.get_properties() {
-            if recorded_deps.insert(prop.name.id()) {
-                deps.push(prop.name.into_dependency());
-            }
-            if recorded_deps.insert(prop.value.id()) {
-                deps.push(prop.value.into_dependency());
-            }
-        }
-        deps.push(PropertySetDependency::new(set));
-    }
-}
-
 impl ExtractDeps for MetricsMsgQueue {
     type DepsQueue = MetricsDepsQueue;
 
@@ -97,11 +78,29 @@ impl ExtractDeps for MetricsMsgQueue {
                 }
                 MetricsMsgQueueAny::TaggedFloatMetricEvent(evt) => {
                     record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    record_properties(evt.properties, &mut recorded_deps, &mut deps);
+                    // SAFETY: the set is interned or owned by this block's arena.
+                    unsafe {
+                        record_properties(
+                            evt.properties,
+                            &mut recorded_deps,
+                            &mut deps,
+                            |q, d| q.push(d),
+                            |q, d| q.push(d),
+                        );
+                    }
                 }
                 MetricsMsgQueueAny::TaggedIntegerMetricEvent(evt) => {
                     record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    record_properties(evt.properties, &mut recorded_deps, &mut deps);
+                    // SAFETY: the set is interned or owned by this block's arena.
+                    unsafe {
+                        record_properties(
+                            evt.properties,
+                            &mut recorded_deps,
+                            &mut deps,
+                            |q, d| q.push(d),
+                            |q, d| q.push(d),
+                        );
+                    }
                 }
             }
         }
