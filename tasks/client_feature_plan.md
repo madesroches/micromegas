@@ -177,28 +177,14 @@ it is non-empty.
 - `.github/workflows/rust.yml`
 - `CHANGELOG.md` (handled by `/pr`)
 
-## Trade-offs
-
-- **Move `TimeRange` (issue option 1) vs. a client-local range type (option 2).** Moving it keeps
-  the client signature and every existing import path unchanged, and keeps one type rather than two
-  plus a `From` impl. The struct depends only on `chrono`, which `micromegas-telemetry` already has.
-- **`micromegas-telemetry` vs. a new tiny crate.** A new crate adds a publish target for a
-  two-field struct; `micromegas-telemetry` is already the "shared between stacks" crate and an
-  always-on dependency.
-- **Direct `arrow` dep vs. reaching arrow types through `arrow-flight`.** `arrow-flight` does not
-  re-export `RecordBatch`/`SchemaRef` as a stable path; a direct `arrow` dep (no default features) is
-  cheap because `arrow-flight` already pulls `arrow-array`/`arrow-schema`, and re-exporting it lets
-  callers name the types without matching versions.
-- **Clippy + `cargo tree` script vs. `cargo tree` alone.** The tree check proves the dependency set;
-  only compiling the client-only configuration proves no server-only import exists in the client
-  modules. Both are needed for the acceptance criteria.
-
 ## Decisions
 
 - `axum` and `tower-http` are not in the forbidden list: `axum` arrives through `arrow-flight` →
   `tonic/router`, and `tower-http` is already in the featureless tree via the telemetry sink. The
   issue's acceptance list is adjusted accordingly.
 - No `client-analytics` feature; the analytics-dependent helpers stay on `server`.
+- Move `TimeRange` to `micromegas-telemetry` (issue option 1) rather than add a client-local type or a new crate (avoids a new publish target).
+- Direct `arrow` dep, because `arrow-flight` does not re-export `RecordBatch`/`SchemaRef` at a stable path.
 
 ## Documentation
 
