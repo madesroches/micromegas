@@ -4,7 +4,7 @@
 
 ## Overview
 Add a criterion bench to `rust/tracing` that measures enabled log and metric calls, including
-every property shape the macros accept (literals, `..set`, dynamic values of low and high
+the property shapes listed below (literals, `..set`, dynamic values of low and high
 cardinality), the cost of `ExtractDeps::extract` on blocks holding high-cardinality properties,
 and contention when several threads log at once. Today's benches measure no logging work at all,
 so there is no baseline for the upcoming property-path optimizations.
@@ -13,9 +13,9 @@ so there is no baseline for the upcoming property-path optimizations.
 - `rust/tracing/benches/with_dispatch.rs` installs `NullEventSink`
   (`rust/tracing/src/event/sink.rs:46`), whose `on_log_enabled` returns `false`. It also never
   calls `set_max_level`, and `MAX_LEVEL_FILTER` starts at `0` (Off,
-  `rust/tracing/src/levels.rs:703`), so `error!("test")` returns at the macro's level check
+  `rust/tracing/src/levels.rs:702`), so `error!("test")` returns at the macro's level check
   (`__log_call!`, `rust/tracing/src/macros.rs:527`) before reaching dispatch. `dispatch/log`
-  therefore measures two atomic loads.
+  therefore measures one relaxed atomic load (`max_level()`).
 - `dispatch/metric` measures `imetric!` without properties. No bench covers properties.
 - Macro paths (`rust/tracing/src/macros.rs:421-605`):
   - no properties → `dispatch::log` / `int_metric`
@@ -23,8 +23,10 @@ so there is no baseline for the upcoming property-path optimizations.
     `tagged_integer_metric` (via the `_dyn` entry point with an empty slice)
   - `..set` only → same as above with the spread set
   - literals + `..set` → every pair becomes a `DynProperty`, merged into the block arena
-  - any dynamic value → gated on `log_enabled` for logs, then `merge_properties` +
-    `PropertyArena::get_or_insert` (`rust/tracing/src/dispatch.rs:908`, `:773`)
+  - any dynamic value → gated on `log_enabled` for logs, then in `log_dyn_tagged` /
+    `tagged_integer_metric_dyn` (`rust/tracing/src/dispatch.rs:908`, `:773`), via
+    `merge_properties` + `PropertyArena::get_or_insert`
+    (`rust/tracing/src/property_arena.rs:31`, `:67`)
 - Extraction: `ExtractDeps for LogMsgQueue` (`rust/tracing/src/logs/block.rs:67`) and
   `for MetricsMsgQueue` (`rust/tracing/src/metrics/block.rs:65`) walk the queue and call
   `record_properties` for tagged events.
@@ -45,7 +47,10 @@ A `BenchSink` defined in the bench file:
 - Every other callback is a no-op; `is_busy` returns `false`.
 
 Setup: `TracingSystemGuard::new(10 MiB, 1 MiB, 10 MiB, sink, HashMap::new(), false)` (the
-`telemetry-sink` defaults) and `set_max_level(LevelFilter::Trace)`.
+`telemetry-sink` defaults) and `set_max_level(LevelFilter::Trace)`. A single `criterion_benchmark`
+function binds `let _tracing_guard = TracingSystemGuard::new(..).expect("init telemetry");` and
+runs all four groups before returning (as `with_dispatch.rs` does), since dropping the guard
+swaps the sink to `NullEventSink` and re-init fails.
 
 Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once with
 `PropertySet::find_or_create(vec![Property::new(..), ..])` holding three pairs `x = "1"`,
@@ -81,9 +86,11 @@ Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once w
    exactly one.
 2. Print, with `println!` before benchmarking, `object bytes/event = block.events.len_bytes() /
    nb_objects` and `dependency bytes/event = extract().len_bytes() / nb_objects` (criterion has
-   no custom-metric output; a printed line is the simplest report).
-3. Bench `block.events.extract()` with `Throughput::Elements(nb_objects)` so criterion reports
-   time per event.
+   no custom-metric output; a printed line is the simplest report). The bench imports
+   `micromegas_transit::HeterogeneousQueue` (for `len_bytes()` / `nb_objects()`) and
+   `micromegas_tracing::event::ExtractDeps`; transit is already a regular dependency of tracing.
+3. Bench `block.events.extract()` with `Throughput::Elements(nb_objects)`; `time:` is per
+   `extract()` call and criterion's `thrpt:` reports events/s.
 
 `contention` group — for `log/static`, `log/dyn_high_card`, `metric/plain`,
 `metric/dyn_high_card`, at 1, 4 and 8 threads (`BenchmarkId::new(case, threads)`):
@@ -106,10 +113,7 @@ Each case is one non-capturing closure taking the counter (e.g. `|i: usize| info
    name = "properties"
    harness = false
    ```
-3. Run `cargo bench -p micromegas-tracing --bench properties -- --quick` (or a short
-   `--measurement-time`) to confirm it runs and that numbers are in the issue's orders of
-   magnitude (e.g. `log/static` tens of ns, not ~1 ns).
-4. Run `cargo clippy --all-targets` and `cargo fmt` from `rust/`.
+3. Run `cargo clippy --all-targets` and `cargo fmt` from `rust/`.
 
 ## Files to Modify
 - `rust/tracing/benches/properties.rs` (new)
@@ -131,7 +135,7 @@ None; benches are not documented in `mkdocs/`.
 ## Testing Strategy
 This change is itself a benchmark; there is no logic to unit-test. The single-block assertion in
 the extraction setup guards against measuring a partial block. Bench compilation is
-checked only locally by Implementation Step 4's `cargo clippy --all-targets`; CI does not build
+checked only locally by Implementation Step 3's `cargo clippy --all-targets`; CI does not build
 benches.
 
 ## Manual Verification
