@@ -8,6 +8,7 @@ This file documents the historical progress of the Micromegas project. For curre
   calls across property shapes (literals, `..set`, low- and high-cardinality dynamic values),
   `ExtractDeps::extract` cost with object and dependency bytes per event, and 1/4/8-thread
   contention.
+* **Dependencies:** Bump `source-map-js` to `1.2.2` and `postcss-selector-parser` to `7.1.6` in the root `yarn.lock` (lockfile-only; resolves Dependabot alerts #579 and #580).
 * **Client:** Add a `client` feature to the `micromegas` crate (#1662) exposing the FlightSQL
   client (`client::flightsql_client`, `client::flightsql_client_factory`) and re-exporting
   `arrow`, `arrow_flight` and `tonic`, without the server stack (no DataFusion, sqlx,
