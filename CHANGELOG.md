@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Add a `properties` criterion bench (#1664) that measures enabled log and metric
+  calls across property shapes (literals, `..set`, low- and high-cardinality dynamic values),
+  `ExtractDeps::extract` cost with object and dependency bytes per event, and 1/4/8-thread
+  contention.
 * **Client:** Add a `client` feature to the `micromegas` crate (#1662) exposing the FlightSQL
   client (`client::flightsql_client`, `client::flightsql_client_factory`) and re-exporting
   `arrow`, `arrow_flight` and `tonic`, without the server stack (no DataFusion, sqlx,
