@@ -46,8 +46,7 @@ cannot creep back into the client modules.
 
 The CI check therefore forbids the crates that matter and that this crate controls: `datafusion`,
 `sqlx`, `object_store`, `foyer`, `micromegas-analytics`, `micromegas-ingestion`, `micromegas-auth`,
-`micromegas-object-cache`, `micromegas-otel-ingestion`, `micromegas-perfetto`. `axum` and
-`tower-http` are left out of the forbidden list on purpose (see Decisions).
+`micromegas-object-cache`, `micromegas-otel-ingestion`, `micromegas-perfetto`.
 
 ## Design
 
@@ -135,11 +134,13 @@ Two new sequential steps in `run_native()` in `build/rust_ci.py`, after Clippy L
    `cargo tree -p micromegas --no-default-features --features client -e normal --prefix none` (cwd
    `rust/`) and fails if any forbidden crate name appears.
 
-`build/check_client_deps.py` follows `check_wasm_deps.py`'s shape: a `FORBIDDEN_CRATES` tuple, a
+`build/check_client_deps.py` has a `FORBIDDEN_CRATES` tuple, a
 pure function `find_forbidden(tree_output: str) -> list[str]` that parses the crate name (first token
 of each line) and returns the sorted forbidden names present, and a `main()` that runs `cargo tree`
-via `subprocess.run(..., check=True, capture_output=True, text=True)` and exits 1 with the list if
-it is non-empty.
+via `subprocess.run(..., check=True, capture_output=True, text=True,
+cwd=pathlib.Path(__file__).parent.parent / "rust")` (the CI step runs from `repo_root`) and exits 1
+with the list if it is non-empty. `build/check_docs_site.py` / `build/test_check_docs_site.py` are
+the precedent for the pure-function + pytest layout.
 
 ## Implementation Steps
 
@@ -179,9 +180,7 @@ it is non-empty.
 
 ## Decisions
 
-- `axum` and `tower-http` are not in the forbidden list: `axum` arrives through `arrow-flight` →
-  `tonic/router`, and `tower-http` is already in the featureless tree via the telemetry sink. The
-  issue's acceptance list is adjusted accordingly.
+- `axum`/`tower-http` not forbidden (see Dependency facts); the issue's acceptance list is adjusted accordingly.
 - No `client-analytics` feature; the analytics-dependent helpers stay on `server`.
 - Move `TimeRange` to `micromegas-telemetry` (issue option 1) rather than add a client-local type or a new crate (avoids a new publish target).
 - Direct `arrow` dep, because `arrow-flight` does not re-export `RecordBatch`/`SchemaRef` at a stable path.
@@ -203,6 +202,7 @@ it is non-empty.
   and `sqlx v0.8.6` returns both; a crate whose name merely contains a forbidden name as a prefix
   (e.g. `datafusion-wasm-bindgen`, or `sqlx-core` vs `sqlx`) is matched only on the exact name;
   `(*)` duplicate markers and feature suffixes are tolerated.
-- The `Client Feature Clippy` CI step is the build-level regression guard for the client modules.
-- Existing tests: `flightsql_client_factory_scheme_tests` now runs under `client`; the full
-  workspace `cargo nextest run` confirms `server` behaves as before.
+- Existing tests: `flightsql_client_factory_scheme_tests` now requires only `client` but still runs
+  in the workspace `server` build (nextest unifies features); the `Client Feature Clippy` step is
+  what covers `client` on its own (library only). The full workspace `cargo nextest run` confirms
+  `server` behaves as before.
