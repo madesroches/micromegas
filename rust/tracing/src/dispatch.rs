@@ -160,6 +160,40 @@ pub fn log_dyn_tagged(
     }
 }
 
+/// A sink that has accepted a log callsite; obtained from `enabled_log_sink`.
+#[doc(hidden)]
+pub struct EnabledLogSink {
+    dispatch: &'static Dispatch,
+    sink: Arc<dyn EventSink>,
+}
+
+/// Fetches the sink once and checks the callsite against it, so that the gated macro arm
+/// neither re-checks nor re-fetches.
+#[doc(hidden)]
+#[inline(always)]
+pub fn enabled_log_sink(desc: &LogMetadata) -> Option<EnabledLogSink> {
+    let dispatch = G_DISPATCH.get()?;
+    let sink = dispatch.get_sink();
+    if sink.on_log_enabled(desc) {
+        Some(EnabledLogSink { dispatch, sink })
+    } else {
+        None
+    }
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn log_dyn_tagged_enabled(
+    sink: EnabledLogSink,
+    desc: &'static LogMetadata,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    sink.dispatch
+        .log_dyn_tagged_to_sink(&*sink.sink, desc, properties, dyn_properties, args);
+}
+
 #[inline(always)]
 pub fn log_interop_dyn_tagged(
     metadata: &LogMetadata,
@@ -825,11 +859,12 @@ impl Dispatch {
 
     #[inline]
     fn log(&self, metadata: &'static LogMetadata, args: fmt::Arguments<'_>) {
-        if !self.log_enabled(metadata) {
+        let sink = self.get_sink();
+        if !sink.on_log_enabled(metadata) {
             return;
         }
         let time = now();
-        self.get_sink().on_log(metadata, &[], time, args);
+        sink.on_log(metadata, &[], time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         if args.as_str().is_some() {
             log_stream.get_events_mut().push(LogStaticStrEvent {
@@ -857,12 +892,24 @@ impl Dispatch {
         properties: &'static PropertySet,
         args: fmt::Arguments<'_>,
     ) {
-        if !self.log_enabled(desc) {
+        let sink = self.get_sink();
+        if !sink.on_log_enabled(desc) {
             return;
         }
+        self.log_tagged_to_sink(&*sink, desc, properties, args);
+    }
+
+    #[inline]
+    fn log_tagged_to_sink(
+        &self,
+        sink: &dyn EventSink,
+        desc: &'static LogMetadata,
+        properties: &'static PropertySet,
+        args: fmt::Arguments<'_>,
+    ) {
         let time = now();
         let sink_properties: Vec<DynProperty<'static>> = properties.dyn_properties().collect();
-        self.get_sink().on_log(desc, &sink_properties, time, args);
+        sink.on_log(desc, &sink_properties, time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
@@ -912,16 +959,29 @@ impl Dispatch {
         dyn_properties: &[DynProperty<'_>],
         args: fmt::Arguments<'_>,
     ) {
-        if dyn_properties.is_empty() {
-            return self.log_tagged(desc, properties, args);
-        }
-        if !self.log_enabled(desc) {
+        let sink = self.get_sink();
+        if !sink.on_log_enabled(desc) {
             return;
+        }
+        self.log_dyn_tagged_to_sink(&*sink, desc, properties, dyn_properties, args);
+    }
+
+    #[inline]
+    fn log_dyn_tagged_to_sink(
+        &self,
+        sink: &dyn EventSink,
+        desc: &'static LogMetadata,
+        properties: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        args: fmt::Arguments<'_>,
+    ) {
+        if dyn_properties.is_empty() {
+            return self.log_tagged_to_sink(sink, desc, properties, args);
         }
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
-        self.get_sink().on_log(desc, &merged, time, args);
+        sink.on_log(desc, &merged, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, arena) = log_stream.get_block_mut_parts();
