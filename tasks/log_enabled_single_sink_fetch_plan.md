@@ -179,10 +179,3 @@ Unit tests in `rust/tracing/tests/property_macro_tests.rs`, using its existing
 
 The number of `get_sink()` calls can't be observed through the sink. It follows from the
 structure (one fetch per entry point), and the benchmark confirms the effect.
-
-## Performance
-
-Benchmark before and after with the `properties` criterion bench (steps 1 and 6). The PR
-description must include the before/after numbers for the `log/*` and `contention/*` groups. The
-change is expected to help most where there are dynamic properties (3 → 1 sink fetch, 2 → 1
-enabled check) and under multi-thread contention.
