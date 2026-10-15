@@ -6,7 +6,7 @@
 
 An enabled log call with dynamic properties checks `log_enabled` twice and fetches the event sink
 three times. Each fetch takes the sink `RwLock` read lock and clones its `Arc`. Both are atomic
-read-modify-writes on cache lines that every logging thread shares. This plan changes every log
+read-modify-writes on cache lines that every logging thread shares. This plan changes every macro log
 path so that it checks `on_log_enabled` once and calls `get_sink()` once. That cuts per-call
 overhead and cross-thread cache-line traffic. The wire format, the SQL surface and the
 `EventSink` trait don't change.
@@ -24,7 +24,7 @@ Per-call sink fetches in `rust/tracing/src/dispatch.rs`:
 | `Dispatch::log_tagged` (`:854`) | `log_dyn_tagged` with an empty dynamic slice | 2 | 1 |
 | `Dispatch::log_dyn_tagged` (`:908`), `nogate` arm (literals / `..set` only) | `nogate` macro arm | 2 (via `log_tagged` when the slice is empty, otherwise its own) | 1 |
 | `Dispatch::log_dyn_tagged`, `gate` arm (dynamic values) | `gate` macro arm, after `dispatch::log_enabled` | **3** (macro gate + `log_enabled` + `on_log`) | **2** |
-| `Dispatch::log_interop` / `log_interop_dyn_tagged` | `log`/`tracing` interop, capi | 1 | 0 (the caller already checked) |
+| `Dispatch::log_interop` / `log_interop_dyn_tagged` | `log`/`tracing` interop, capi | 1 | 0 (interop callers gate on level only, or not at all) |
 
 The `gate` arm (`rust/tracing/src/macros.rs:557`) has to check `dispatch::log_enabled` before
 it builds the dynamic slice, because evaluating a dynamic value can allocate. It then calls
@@ -61,7 +61,10 @@ Add a hidden public token type and two free functions in `dispatch.rs`:
 ```rust
 /// A sink that has accepted a log callsite; obtained from `enabled_log_sink`.
 #[doc(hidden)]
-pub struct EnabledLogSink(Arc<dyn EventSink>);
+pub struct EnabledLogSink {
+    dispatch: &'static Dispatch,
+    sink: Arc<dyn EventSink>,
+}
 
 #[doc(hidden)]
 #[inline(always)]
@@ -78,9 +81,11 @@ pub fn log_dyn_tagged_enabled(
 );
 ```
 
-`enabled_log_sink` fetches the sink once, returns `None` when there is no dispatch or the sink
-rejects the callsite, and otherwise wraps the `Arc`. `log_dyn_tagged_enabled` forwards to the
-`log_dyn_tagged` worker with that sink. Because the token can only be built by
+`enabled_log_sink` gets the dispatch from `G_DISPATCH.get()`, fetches the sink once, returns `None`
+when there is no dispatch or the sink rejects the callsite, and otherwise stores both the
+`&'static Dispatch` and the `Arc` in the token. `log_dyn_tagged_enabled` calls
+`token.dispatch.log_dyn_tagged_to_sink(&*token.sink, ...)`, since the worker is a `&self` method
+that needs `self.log_stream` and `self.flush_log_buffer()`. Because the token can only be built by
 `enabled_log_sink`, it is impossible to skip the check.
 
 The `gate` arm becomes:
@@ -97,8 +102,10 @@ The dynamic slice is still built only after the gate passes, so the lazy-evaluat
 (`property_macro_tests.rs:611-619`) holds. An enabled gated call now does one `get_sink()` and
 one `on_log_enabled`, down from three and two.
 
-`dispatch_wasm.rs` gets the same two functions and token type, wrapping `d.sink.clone()`, so
-the macros compile unchanged on wasm.
+`dispatch_wasm.rs` gets a token type of the same name and two functions with the same signatures.
+The wasm token holds `&'static WasmDispatch` and uses `d.sink` by reference, with no `Arc` clone.
+Only the type name and signatures must match the native ones, not the layout, because `lib.rs`
+compiles exactly one dispatch module per target. The macros compile unchanged on wasm.
 
 The public `log_enabled` function and the `log_enabled!` macro stay as they are. The interop
 paths already fetch the sink once and are not touched.
@@ -114,7 +121,7 @@ paths already fetch the sink once and are not touched.
 ## Implementation Steps
 
 1. **Baseline benchmark** (on the branch, before any code change), from `rust/`:
-   `cargo bench -p micromegas-tracing --bench properties -- --save-baseline before 'log/|contention/'`.
+   `cargo bench -p micromegas-tracing --bench properties -- --save-baseline before '^(log|contention)/'`.
    Record the `log/*` and `contention/*` timings.
 2. `rust/tracing/src/dispatch.rs`:
    - Add the private `log_tagged_to_sink` and `log_dyn_tagged_to_sink` workers. Each
@@ -122,19 +129,20 @@ paths already fetch the sink once and are not touched.
      `self.get_sink()` replaced by `sink`.
    - Rewrite `Dispatch::log` to fetch the sink once inline, and `log_tagged` and `log_dyn_tagged`
      as "fetch once, check, call worker". Make the empty-slice branch call `log_tagged_to_sink`.
-   - Add `EnabledLogSink`, `enabled_log_sink` and `log_dyn_tagged_enabled`.
-3. `rust/tracing/src/dispatch_wasm.rs`: add the same token type and the two functions.
+   - Add `EnabledLogSink` (holding `&'static Dispatch` and the sink `Arc`), `enabled_log_sink` and
+     `log_dyn_tagged_enabled`.
+3. `rust/tracing/src/dispatch_wasm.rs`: add the wasm token type (holding `&'static WasmDispatch`) and the two functions.
 4. `rust/tracing/src/macros.rs`: switch the `gate` arm to `enabled_log_sink` /
    `log_dyn_tagged_enabled`.
 5. Add the test from **Testing Strategy**.
 6. **After benchmark**:
-   `cargo bench -p micromegas-tracing --bench properties -- --baseline before 'log/|contention/'`.
+   `cargo bench -p micromegas-tracing --bench properties -- --baseline before '^(log|contention)/'`.
    Record the before/after table in the PR description. The cases to watch most are
    `log/dyn_low_card`, `log/dyn_high_card` and `log/dyn_mixed`, which use the gated path, and
    `contention/*`. `log/static`, `log/literals` and `log/set` should also improve slightly (2 → 1
    fetch).
 7. `cargo fmt`, `cargo clippy --workspace -- -D warnings`, `cargo test -p micromegas-tracing`.
-   Also build for wasm if the workspace CI covers it: `python3 ../build/rust_ci.py`.
+   Also run the wasm CI: `python3 ../build/rust_ci.py wasm`.
 
 ## Files to Modify
 
@@ -169,8 +177,8 @@ Unit tests in `rust/tracing/tests/property_macro_tests.rs`, using its existing
 
 - Add an `enabled_checks: usize` counter to `CapturedState`, incremented in
   `CapturingSink::on_log_enabled`, plus a `DispatchGuard::enabled_checks()` accessor.
-- New `#[serial]` test `log_enabled_checked_once_per_call`. For each macro form, reset the
-  counter, log once, and assert that the counter is exactly 1 and the log was captured. The
+- New `#[serial]` test `log_enabled_checked_once_per_call`. For each macro form, log once and assert that the
+  `enabled_checks()` delta around the call is exactly 1 and the log was captured. The
   forms are plain (`info!("m")`), literals (`info!(a = "1", "m")`), `..set` only, `..set` plus a literal (`info!(a = "1", ..set, "m")`), a dynamic value
   (`info!(id = %i, "m")`), a literal mixed with a dynamic value, and `..set` plus a dynamic value.
   This pins the double check in the gated path (it is 2 today).
