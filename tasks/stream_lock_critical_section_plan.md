@@ -13,9 +13,7 @@ done while holding them adds to contention. Today that work includes more than t
 - the property-arena hash
 
 This plan moves all of that out of the lock, so the critical section is a push, plus a block
-swap when the block is full. Allocating the replacement block stays under the lock: it is a single
-untouched allocation and costs microseconds. Its pages still fault in lazily during later pushes,
-as they do today. The stream layout, the wire format, the `EventSink` trait and the SQL
+swap when the block is full. The stream layout, the wire format, the `EventSink` trait and the SQL
 surface don't change. A criterion run before and after the change measures the effect, using the
 `properties` bench from #1664.
 
@@ -53,8 +51,8 @@ block. They can also push past the 128-byte `hint_max_obj_size` margin, which ma
 | `log` (`:861`), non-static message | `args.to_string()` (`:878`) |
 | `log_tagged_to_sink` (`:903`) | `args.to_string()` (`:918`) |
 | `log_interop` (`:928`) | `intern_string(desc.target)` (a global interner) and `args.to_string()` (`:936-944`) |
-| `log_dyn_tagged_to_sink` (`:995`), `log_interop_dyn_tagged` (`:1032`) | `arena.get_or_insert(&merged)`: hashes the set, and on a miss allocates the owned copy |
-| `log_interop_dyn_tagged` (`:1032`) | also `intern_string(desc.target)` (`:1028`) |
+| `log_dyn_tagged_to_sink` (`:970`), `log_interop_dyn_tagged` (`:1002`) | `arena.get_or_insert(&merged)`: hashes the set, and on a miss allocates the owned copy |
+| `log_interop_dyn_tagged` (`:1002`) | also `intern_string(desc.target)` (`:1028`) |
 | `tagged_*_metric_dyn` (`:779`, `:807`) | same `get_or_insert` |
 | every push into a fresh block | the minor page faults for the buffer pages it touches first |
 
@@ -104,13 +102,13 @@ The two callers:
   `on_log_pushed(guard)` / `on_metrics_pushed(guard)`. If the block is full, that function swaps
   **while still holding the guard from the push**, drops the guard, then calls the sink. The full
   block is replaced in the same critical section that filled it, so no other thread can push into
-  it, nothing pushes past the margin, and duplicate flushes of nearly empty blocks are no longer
+  it, nothing pushes past the margin for events within the 128-byte size hint, and duplicate flushes of nearly empty blocks are no longer
   possible.
 - **`flush_log_buffer` / `flush_metrics_buffer`** (explicit flushes and the flush monitor):
   lock, return if empty, `swap_block`, drop the guard, then call the sink. The sink still has the
   block when the function returns.
 
-Log and metrics share both helpers. Today `flush_log_buffer` and `flush_metrics_buffer` are
+Log and metrics share `swap_block`; `on_log_pushed` / `on_metrics_pushed` each name their stream's sink method. Today `flush_log_buffer` and `flush_metrics_buffer` are
 copies of each other. After this change, each is a few lines naming its stream, buffer size and
 sink method. Image and thread streams don't change.
 
@@ -194,10 +192,8 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 
 ## Trade-offs
 
-- **Swap in the push path, not drop-then-flush.** This costs one `DualTime::now()` under the
-  lock per full block. In exchange, the window where threads push past the full margin is gone,
-  and so are the redundant tiny-block flushes. The replacement is allocated in that critical
-  section too, which is cheap because the allocation is untouched memory.
+- **Swap in the push path, not drop-then-flush.** The window where threads push past the full margin is gone,
+  and so are the redundant tiny-block flushes.
 - **Arena misses still allocate under the lock.** Building the owned copy before the lock would
   add allocations to every hit, which are the low-cardinality case that is free today. Only
   high-cardinality properties miss, and they also pay for formatting their value, which is
@@ -257,7 +253,7 @@ sink (see below):
   with a dynamic `id`. Assert that the block event counts sum to 8·N, that offsets are
   contiguous once the blocks are sorted by offset, and that every block except possibly the last
   is above the full threshold (no tiny duplicate flushes), and that every block's
-  `capacity_bytes()` is still 1024. This is the concurrency check that
+  `capacity_bytes()` is still 1024. Keep messages under 128 bytes. This is the concurrency check that
   would otherwise fail silently.
 - **Arena.** Update `property_arena_tests.rs`: equal merged sets still dedup, different sets
   don't, and `MergedProperties` hashes identical content identically however the static and
