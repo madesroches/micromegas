@@ -46,11 +46,11 @@ Micromegas consists of several key components:
 
 1.  **Instrumentation Libraries:** Lightweight libraries that send telemetry from your applications — native SDKs for Rust and Unreal Engine, a C ABI (`micromegas-capi`) for C/C++ and other FFI-capable languages, and a Blender add-on. See [Optimism](https://github.com/madesroches/optimism) for an example Bevy project using Micromegas.
 2.  **Ingestion Service (`telemetry-ingestion-srv`):** A scalable service that receives telemetry (native transit/CBOR and OTLP/HTTP) and writes it to blob storage.
-3.  **Analytics Service (`flight-sql-srv`):** A DataFusion-powered service that exposes a FlightSQL endpoint for running queries against your data.
+3.  **Analytics Service (`flight-sql-srv`):** A DataFusion-powered service that exposes a FlightSQL endpoint for running queries against your data, materializing process-scoped views just in time when they are queried.
 4.  **Analytics Web App (`analytics-web-srv`):** A browser UI for exploring data through interactive notebooks.
-5.  **Maintenance Daemon (`telemetry-maintenance-srv`):** Runs the on-demand and continuous ETL that materializes raw blocks into Parquet views, so data is only processed when it's worth querying.
+5.  **Maintenance Daemon (`telemetry-maintenance-srv`):** Continuously materializes recent raw blocks into global Parquet views and enforces data retention.
 6.  **PostgreSQL Database:** Stores metadata about processes, streams, and data blocks, keeping the object storage indexable and fast to query.
-7.  **Object Storage (S3/GCS/Azure):** Stores all raw telemetry payloads and materialized query results in Parquet format.
+7.  **Object Storage (S3/GCS/Azure):** Stores raw telemetry payloads as compressed binary blocks and materialized views as Parquet files.
 
 These roles can run as independent, horizontally-scalable services or bundled into a single `micromegas-monolith` process for local development and single-machine deployments. An optional shared read cache (`micromegas-object-cache-srv`) can front the object store to cut egress cost and read latency across services.
 
