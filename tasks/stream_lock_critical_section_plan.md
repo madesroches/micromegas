@@ -76,7 +76,11 @@ and the bench runs with production buffer sizes (10 MiB logs, 1 MiB metrics).
 
 ## Design
 
-### 1. A ready spare block per stream
+### 1. A ready spare block for the log and metrics streams
+
+Only the two process-wide streams get a spare. CPU (thread) streams never do: there is one per
+thread, so a spare each would hold an extra `threads_buffer_size` (10 MiB by default) per
+recording thread, and with no shared lock there is no contention for it to relieve.
 
 Add a generic `SpareBlock<Q>` in a new module `rust/tracing/src/event/spare_block.rs`. It holds
 one pre-built, pre-faulted replacement block:
@@ -166,7 +170,7 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
   racing flushes of the same stream can reach the sink in reverse order. For example, a
   push-path flush can race the flush monitor. Swaps are still serialized, so `event_offset` and
   `begin`/`end` stay contiguous and correct. The image stream already behaves this way.
-- **Memory.** Each process keeps one extra resident block per stream: 10 MiB for logs plus 1 MiB
+- **Memory.** Each process keeps one extra resident block for logs and one for metrics, not per thread: 10 MiB for logs plus 1 MiB
   for metrics at the defaults. Today the next block's pages fault in gradually.
 - **Fault cost.** The page faults move to the thread that triggered the flush, or to the flush
   monitor, and happen outside the lock. The total CPU cost stays the same. Waiting threads no
@@ -265,6 +269,8 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
   and the results are recorded in this plan and the CHANGELOG (user request).
 - Image and thread streams are out of scope. The image stream already releases the lock before
   calling the sink. Thread streams have no shared lock.
+- CPU (thread) streams get no spare block: the memory would scale with the number of recording
+  threads (user call).
 - Sharding the streams is out of scope. Whether to do it depends on the after numbers.
 
 ## Documentation
@@ -312,5 +318,5 @@ threads) and the single-thread `log`/`metric` groups._
 
 ## Open Questions
 
-- Is one extra resident block per stream (11 MiB at the defaults) acceptable for every embedder,
+- Is one extra resident log block and one extra metrics block (11 MiB at the defaults) acceptable for every embedder,
   including capi hosts? If not, the spare could be sized lazily or kept only for logs.
