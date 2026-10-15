@@ -60,3 +60,7 @@ harness = false
 [[bench]]
 name = "with_dispatch"
 harness = false
+
+[[bench]]
+name = "properties"
+harness = false
