@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Check `on_log_enabled` and fetch the event sink once per log call (#1667).
+  Log calls with dynamic properties used to fetch the sink three times and check it twice;
+  every log macro path now does one of each. Uncontended `info!("static")` is about 29% faster,
+  and so is the 4- and 8-thread contention case.
 * **Tracing:** Add a `properties` criterion bench (#1664) that measures enabled log and metric
   calls across property shapes (literals, `..set`, low- and high-cardinality dynamic values),
   `ExtractDeps::extract` cost with object and dependency bytes per event, and 1/4/8-thread
