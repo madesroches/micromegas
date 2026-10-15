@@ -205,8 +205,9 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 
 ### Phase 3: Spare block and swap
 
-7. Create `rust/tracing/src/event/spare_block.rs` with `SpareBlock`, and export it from
-   `event/mod.rs`.
+7. Create `rust/tracing/src/event/spare_block.rs` with `SpareBlock`, and declare and
+   re-export it in `event/mod.rs` under `#[cfg(not(target_arch = "wasm32"))]`, like `block` and
+   `stream`.
 8. `dispatch.rs`: add `log_spare` and `metrics_spare`, the `swap_block` helper, and
    `on_log_pushed` / `on_metrics_pushed`. Rewrite `flush_log_buffer` and `flush_metrics_buffer`
    on top of them, and switch all eleven push sites over: log paths `log`, `log_tagged_to_sink`, `log_interop`,
@@ -295,11 +296,12 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 ## Testing Strategy
 
 No-DB unit tests in a new `rust/tracing/tests/stream_flush_tests.rs`. They use
-`init_in_memory_tracing()`, whose 1 KiB buffers force frequent flushes, and are marked `#[serial]`,
-except the sink re-entrancy test, which needs its own sink (see below):
+`init_in_memory_tracing()`, whose 1 KiB buffers force frequent flushes, and all are marked `#[serial]`.
+The sink re-entrancy test skips `init_in_memory_tracing()` and uses its own `DispatchGuard` and
+sink (see below):
 
 - **Sink can log during block processing.** `init_in_memory_tracing()` can't be
-  used, since it always installs `InMemorySink`. Build it on the `property_arena_tests.rs` pattern:
+  used, since it always installs `InMemorySink`; the test is still `#[serial]`. Build it on the `property_arena_tests.rs` pattern:
   a `CapturingSink` and a `DispatchGuard` that calls `init_event_dispatch` with 1024-byte buffers
   and runs `shutdown_dispatch` + `force_uninit` on drop. The sink calls `info!` once (one-shot
   flag) from inside `on_process_log_block`. Run the body in a spawned thread and wait with
