@@ -4,6 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Client:** Add a `client` feature to the `micromegas` crate (#1662) exposing the FlightSQL
+  client (`client::flightsql_client`, `client::flightsql_client_factory`) and re-exporting
+  `arrow`, `arrow_flight` and `tonic`, without the server stack (no DataFusion, sqlx,
+  object_store, foyer, or the analytics/ingestion/auth crates). `server` implies `client`; the
+  analytics-dependent client helpers stay on `server`. `TimeRange` moves to
+  `micromegas_telemetry::time_range` and is re-exported from `micromegas_analytics::time`. CI now
+  builds the `client` feature alone and checks its dependency tree.
 * **Dependencies:** Bump `datafusion` from `55.1` to `55.2` in both the main `rust/` workspace and the excluded `rust/datafusion-wasm` sub-workspace (lockfile-only; no API changes).
 * **Servers:** Uniform listen-address flags and env vars across server binaries (#1659):
   `--ingestion-listen-addr` / `MICROMEGAS_INGESTION_LISTEN_ADDR`, `--flightsql-listen-addr` /
