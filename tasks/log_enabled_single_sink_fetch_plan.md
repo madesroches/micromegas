@@ -39,7 +39,7 @@ gate check.
 ### 1. One sink fetch inside each `Dispatch` log method
 
 In `Dispatch::log`, `log_tagged` and `log_dyn_tagged`, fetch the sink once at the top and use it
-for both the enabled check and `on_log`:
+for both the enabled check and `on_log`. `Dispatch::log` does this inline, with no worker:
 
 ```rust
 let sink = self.get_sink();
@@ -49,8 +49,8 @@ sink.on_log(desc, ..., time, args);
 ```
 
 `log_dyn_tagged` currently delegates to `log_tagged` when the dynamic slice is empty. Split the
-body of each method into a private `*_to_sink(&self, sink: &dyn EventSink, ...)` worker that
-does no enabled check. The public-facing methods then become "fetch, check, call worker". The
+body of `log_tagged` and `log_dyn_tagged` into a private `*_to_sink(&self, sink: &dyn EventSink, ...)`
+worker that does no enabled check. Those methods then become "fetch, check, call worker". The
 empty-slice delegation calls the `log_tagged` worker directly instead of re-entering the
 checking method.
 
@@ -117,11 +117,11 @@ paths already fetch the sink once and are not touched.
    `cargo bench -p micromegas-tracing --bench properties -- --save-baseline before 'log/|contention/'`.
    Record the `log/*` and `contention/*` timings.
 2. `rust/tracing/src/dispatch.rs`:
-   - Add the private `log_to_sink`, `log_tagged_to_sink` and `log_dyn_tagged_to_sink` workers. Each
+   - Add the private `log_tagged_to_sink` and `log_dyn_tagged_to_sink` workers. Each
      takes `sink: &dyn EventSink`, does no enabled check, and has the current bodies with
      `self.get_sink()` replaced by `sink`.
-   - Rewrite `Dispatch::log`, `log_tagged` and `log_dyn_tagged` as "fetch once, check, call
-     worker". Make the empty-slice branch call `log_tagged_to_sink`.
+   - Rewrite `Dispatch::log` to fetch the sink once inline, and `log_tagged` and `log_dyn_tagged`
+     as "fetch once, check, call worker". Make the empty-slice branch call `log_tagged_to_sink`.
    - Add `EnabledLogSink`, `enabled_log_sink` and `log_dyn_tagged_enabled`.
 3. `rust/tracing/src/dispatch_wasm.rs`: add the same token type and the two functions.
 4. `rust/tracing/src/macros.rs`: switch the `gate` arm to `enabled_log_sink` /
@@ -171,7 +171,7 @@ Unit tests in `rust/tracing/tests/property_macro_tests.rs`, using its existing
   `CapturingSink::on_log_enabled`, plus a `DispatchGuard::enabled_checks()` accessor.
 - New `#[serial]` test `log_enabled_checked_once_per_call`. For each macro form, reset the
   counter, log once, and assert that the counter is exactly 1 and the log was captured. The
-  forms are plain (`info!("m")`), literals (`info!(a = "1", "m")`), `..set` only, a dynamic value
+  forms are plain (`info!("m")`), literals (`info!(a = "1", "m")`), `..set` only, `..set` plus a literal (`info!(a = "1", ..set, "m")`), a dynamic value
   (`info!(id = %i, "m")`), a literal mixed with a dynamic value, and `..set` plus a dynamic value.
   This pins the double check in the gated path (it is 2 today).
 - The existing lazy-evaluation test (`:611-619`) keeps covering "a disabled gated call does not
