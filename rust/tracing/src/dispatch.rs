@@ -910,27 +910,23 @@ impl Dispatch {
         let time = now();
         self.get_sink().on_log(desc, &[], time, args);
         let target = intern_string(desc.target);
-        let msg = match args.as_str() {
-            Some(_) => None,
-            None => Some(micromegas_transit::DynString(args.to_string())),
-        };
+        let msg = args
+            .as_str()
+            .ok_or_else(|| micromegas_transit::DynString(args.to_string()));
         let mut log_stream = self.log_stream.lock().unwrap();
-        match (msg, args.as_str()) {
-            (None, Some(static_msg)) => {
-                log_stream.get_events_mut().push(LogStaticStrInteropEvent {
-                    time,
-                    level: desc.level as u32,
-                    target: target.into(),
-                    msg: static_msg.into(),
-                })
-            }
-            (Some(msg), _) => log_stream.get_events_mut().push(LogStringInteropEvent {
+        match msg {
+            Ok(static_msg) => log_stream.get_events_mut().push(LogStaticStrInteropEvent {
+                time,
+                level: desc.level as u32,
+                target: target.into(),
+                msg: static_msg.into(),
+            }),
+            Err(msg) => log_stream.get_events_mut().push(LogStringInteropEvent {
                 time,
                 level: desc.level as u8,
                 target: target.into(),
                 msg,
             }),
-            (None, None) => unreachable!(),
         }
         self.on_log_pushed(log_stream);
     }
