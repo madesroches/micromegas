@@ -4,6 +4,17 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Shorten the log and metric stream critical sections (#1669). A full block is now
+  swapped in the same critical section that filled it, and the sink call, message formatting,
+  target interning and property-set hashing all run outside the stream lock; the flush paths no
+  longer call the sink under it, so a sink may log from `on_process_*_block` without
+  deadlocking. Contended `info!("... {}", x)` is about 22% faster at 4 threads and 16% faster
+  at 8; contended static logs and plain metrics are unchanged, and the uncontended path is
+  unchanged within noise. Contention at 4 and 8 threads is still significant, and sharding the
+  streams is the next step. Blocks from racing flushes of one stream can now reach the sink out
+  of order; their offsets and `begin`/`end` times stay contiguous. **Minor breaking change:**
+  `merge_properties` returns `MergedProperties` (derefs to `[DynProperty]`) instead of a
+  `Vec`, and `PropertyArena::get_or_insert` takes `&MergedProperties`.
 * **Tracing:** Check `on_log_enabled` and fetch the event sink once per log call (#1667).
   Log calls with dynamic properties used to fetch the sink three times and check it twice;
   every log macro path now does one of each. Uncontended `info!("static")` is about 29% faster,

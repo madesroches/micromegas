@@ -264,5 +264,65 @@ tests.
 
 ## Results
 
-_Fill in during Phase 3: before/after criterion numbers for the `contention` group (1/4/8
-threads) and the single-thread `log`/`metric` groups._
+Median time per call (per round of threads for `contention`), `cargo bench -p micromegas-tracing
+--bench properties`, release profile, 24-core WSL machine, not otherwise idle. The baseline
+(`--save-baseline lock-before`) was re-taken on the unchanged code immediately before the
+"after" run, because the first baseline had drifted by tens of percent by the time the change
+was ready (see Noise below).
+
+### Contention group
+
+| Case | Before | After | Change |
+|---|---|---|---|
+| contention/log/static/1 | 15.257 ns | 15.886 ns | +4.1% |
+| contention/log/static/4 | 342.18 ns | 333.62 ns | -2.5% |
+| contention/log/static/8 | 875.11 ns | 876.54 ns | +0.2% |
+| contention/log/formatted/1 | 55.539 ns | 57.564 ns | +3.6% |
+| contention/log/formatted/4 | 687.59 ns | 536.64 ns | -22.0% |
+| contention/log/formatted/8 | 2.0124 us | 1.6991 us | -15.6% |
+| contention/log/dyn_high_card/1 | 325.82 ns | 361.09 ns | +10.8% |
+| contention/log/dyn_high_card/4 | 3.5723 us | 4.4229 us | +23.8% |
+| contention/log/dyn_high_card/8 | 8.3473 us | 10.034 us | +20.2% |
+| contention/metric/plain/1 | 8.8725 ns | 9.7954 ns | +10.4% |
+| contention/metric/plain/4 | 201.72 ns | 189.63 ns | -6.0% |
+| contention/metric/plain/8 | 507.54 ns | 513.90 ns | +1.3% |
+| contention/metric/dyn_high_card/1 | 245.93 ns | 307.26 ns | +24.9% |
+| contention/metric/dyn_high_card/4 | 2.6441 us | 3.2430 us | +22.7% |
+| contention/metric/dyn_high_card/8 | 5.9818 us | 8.0262 us | +34.2% |
+
+### Single-thread groups
+
+| Case | Before | After | Change |
+|---|---|---|---|
+| log/static | 15.430 ns | 15.826 ns | +2.6% |
+| log/formatted | 57.187 ns | 60.603 ns | +6.0% |
+| log/literals | 44.986 ns | 45.418 ns | +1.0% |
+| log/set | 43.618 ns | 45.770 ns | +4.9% |
+| log/dyn_low_card | 88.012 ns | 94.530 ns | +7.4% |
+| log/dyn_high_card | 335.33 ns | 366.58 ns | +9.3% |
+| log/dyn_mixed | 656.08 ns | 527.79 ns | -19.6% |
+| metric/plain | 9.7111 ns | 9.8739 ns | +1.7% |
+| metric/literals | 11.405 ns | 11.567 ns | +1.4% |
+| metric/set | 10.213 ns | 10.987 ns | +7.6% |
+| metric/literals_set | 145.67 ns | 130.93 ns | -10.1% |
+| metric/dyn_low_card | 67.754 ns | 70.842 ns | +4.6% |
+| metric/dyn_high_card | 241.58 ns | 244.23 ns | +1.1% |
+
+### Reading the numbers
+
+- `log/formatted` under contention is the clearest win: moving formatting out of the lock gives
+  -22% at 4 threads and -16% at 8 threads. Single-thread cost is unchanged within noise.
+- `log/static` and `metric/plain` under contention are unchanged within noise: their critical
+  section was already a plain push.
+- Single-thread `log` and `metric` are within about +-8% apart from two cases (`log/dyn_mixed`
+  -20%, `metric/literals_set` -10%) that vary by that much between identical runs; no
+  uncontended regression is visible.
+- `dyn_high_card` (every event inserts a new set, so the arena miss allocates under the lock)
+  reads +20-35% slower in this run, including at one thread where there is no contention. This
+  is noise from the allocator-bound case, not the change: two identical baseline runs differed
+  by up to 15% on these cases, and re-running the *unchanged* code against the first baseline
+  read +18% (1 thread), +31-37% (4) and +43-46% (8). Measured back to back, the changed code was
+  slightly faster than the unchanged code on `contention/log/dyn_high_card` (about 333 ns / 4.0
+  us / 9.5-9.8 us against 340-352 ns / 4.3-4.4 us / 11.0-11.4 us at 1/4/8 threads).
+- Contention is still significant at 4 and 8 threads for every case (8 threads cost 30-60x the
+  single-thread call). Sharding the streams is the next step.

@@ -24,6 +24,24 @@ pub struct PropertyArena {
     len_bytes: usize,
 }
 
+/// A sorted property list together with its content hash.
+///
+/// The hash is computed when the list is built so that [`PropertyArena::get_or_insert`], which
+/// runs under the stream lock, only has to do the lookup.
+#[derive(Debug, Clone)]
+pub struct MergedProperties<'a> {
+    properties: Vec<DynProperty<'a>>,
+    hash: u64,
+}
+
+impl<'a> std::ops::Deref for MergedProperties<'a> {
+    type Target = [DynProperty<'a>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.properties
+    }
+}
+
 /// Combines a static set with dynamic properties into one sorted list.
 ///
 /// A dynamic value replaces a static property of the same name (compared case-insensitively
@@ -31,14 +49,18 @@ pub struct PropertyArena {
 pub fn merge_properties<'a>(
     static_set: &'static PropertySet,
     dyn_properties: &[DynProperty<'a>],
-) -> Vec<DynProperty<'a>> {
+) -> MergedProperties<'a> {
     let mut merged: Vec<DynProperty<'a>> = static_set.dyn_properties().collect();
     for dyn_prop in dyn_properties {
         merged.retain(|p| !p.name.eq_ignore_ascii_case(dyn_prop.name));
         merged.push(*dyn_prop);
     }
     sort_dyn_properties(&mut merged);
-    merged
+    let hash = content_hash(merged.iter().map(|p| (p.name, p.value)));
+    MergedProperties {
+        properties: merged,
+        hash,
+    }
 }
 
 fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64 {
@@ -62,10 +84,9 @@ impl PropertyArena {
     /// Returns the arena-owned set equal to `properties`, inserting a copy (with owned
     /// values) on first sight. A hit allocates nothing.
     ///
-    /// `properties` must already be sorted the way [`PropertySet::find_or_create`] sorts them
-    /// (see `merge_properties`), otherwise equal sets may be stored twice.
-    pub fn get_or_insert(&mut self, properties: &[DynProperty<'_>]) -> *const PropertySet {
-        let hash = content_hash(properties.iter().map(|p| (p.name, p.value)));
+    pub fn get_or_insert(&mut self, merged: &MergedProperties<'_>) -> *const PropertySet {
+        let hash = merged.hash;
+        let properties: &[DynProperty<'_>] = merged;
         if let Some(candidates) = self.index.get(&hash) {
             for &idx in candidates {
                 let set = &self.sets[idx as usize];

@@ -14,8 +14,7 @@ use micromegas_tracing::{
     },
     prelude::*,
     process_info::ProcessInfo,
-    property_arena::PropertyArena,
-    property_arena::merge_properties,
+    property_arena::{MergedProperties, PropertyArena, merge_properties},
     property_set::{Property, PropertySet, dyn_property_get},
     spans::{ThreadBlock, ThreadStream},
 };
@@ -46,7 +45,7 @@ static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
     line: line!(),
 };
 
-fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> Vec<DynProperty<'a>> {
+fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> MergedProperties<'a> {
     let dyn_props: Vec<DynProperty<'_>> = props
         .iter()
         .map(|(name, value)| DynProperty { name, value })
@@ -72,6 +71,23 @@ fn same_content_same_pointer() {
     let second = arena.get_or_insert(&props);
     assert_eq!(first, second);
     assert_eq!(arena.len_bytes(), len_after_first);
+}
+
+#[test]
+fn split_between_static_and_dynamic_does_not_change_identity() {
+    let static_set = PropertySet::find_or_create(vec![Property::new("kind", "t")]);
+    let split = merge_properties(
+        static_set,
+        &[DynProperty {
+            name: "correlation_id",
+            value: "abc",
+        }],
+    );
+    let all_dynamic = owned_props(&[("kind", "t"), ("correlation_id", "abc")]);
+    let mut arena = PropertyArena::default();
+    let first = arena.get_or_insert(&split);
+    let second = arena.get_or_insert(&all_dynamic);
+    assert_eq!(first, second);
 }
 
 #[test]
