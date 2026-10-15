@@ -11,5 +11,6 @@ pub mod property;
 pub mod property_names;
 pub mod serde_byte_buf;
 pub mod stream_info;
+pub mod time_range;
 pub mod types;
 pub mod wire_format;

@@ -12,6 +12,12 @@ def run_native():
     sequential_steps = [
         ("Formatting Check", "cargo fmt --check", None),
         ("Clippy Linting", "cargo clippy --workspace -- -D warnings", None),
+        (
+            "Client Feature Clippy",
+            "cargo clippy -p micromegas --no-default-features --features client -- -D warnings",
+            None,
+        ),
+        ("Client Feature Dependency Check", "python3 build/check_client_deps.py", repo_root),
         ("Running Tests", "cargo nextest run", None),
         ("Doc Tests", "cargo test --doc", None),
     ]

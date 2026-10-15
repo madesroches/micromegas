@@ -14,17 +14,22 @@ authors.workspace = true
 [features]
 default = []
 jemalloc-metrics = ["micromegas-telemetry-sink/jemalloc"]
-server = [
+client = [
     "dep:anyhow",
+    "dep:arrow",
     "dep:arrow-flight",
-    "dep:async-stream",
     "dep:async-trait",
+    "dep:futures",
+    "dep:http",
+    "dep:tonic",
+]
+server = [
+    "client",
+    "dep:async-stream",
     "dep:axum",
     "dep:bytes",
     "dep:clap",
     "dep:datafusion",
-    "dep:futures",
-    "dep:http",
     "dep:micromegas-analytics",
     "dep:micromegas-auth",
     "dep:micromegas-ingestion",
@@ -38,7 +43,6 @@ server = [
     "dep:sqlx",
     "dep:thiserror",
     "dep:tokio",
-    "dep:tonic",
     "dep:tower",
     "dep:tower-http",
     "micromegas-object-cache/foyer",
@@ -56,17 +60,21 @@ micromegas-transit.workspace = true
 serde.workspace = true
 uuid.workspace = true
 
-# Server-only (optional)
+# Client (optional)
 anyhow = { workspace = true, optional = true }
+arrow = { workspace = true, optional = true }
 arrow-flight = { workspace = true, optional = true }
-async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+
+# Server-only (optional)
+async-stream = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 datafusion = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
-http = { workspace = true, optional = true }
 micromegas-analytics = { workspace = true, optional = true }
 micromegas-auth = { workspace = true, optional = true }
 micromegas-ingestion = { workspace = true, optional = true }
@@ -80,7 +88,6 @@ serde_json = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
 
@@ -150,7 +157,7 @@ required-features = ["server"]
 [[test]]
 name = "flightsql_client_factory_scheme_tests"
 path = "tests/flightsql_client_factory_scheme_tests.rs"
-required-features = ["server"]
+required-features = ["client"]
 
 [[test]]
 name = "auth_observability_tests"

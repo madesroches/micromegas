@@ -33,6 +33,7 @@ micromegas-transit = { path = "transit", version = "0.32.0" }
 micromegas = { path = "public", version = "0.32.0" }
 
 anyhow = "1.0"
+arrow = { version = "59.2", default-features = false }
 arrow-flight = { version = "59.2", features = ["flight-sql-experimental"] }
 arrow-ipc = { version = "59.2", features = ["lz4"] }
 async-stream = "0.3"

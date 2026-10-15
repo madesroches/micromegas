@@ -14,6 +14,13 @@
 //! └─────────────────┘
 //!
 //! ```
+//! ## Cargo features
+//! - default: instrumentation only (`micromegas::tracing` and the telemetry sink).
+//! - `client`: the FlightSQL query client in `micromegas::client::flightsql_client` and its factory,
+//!   without the service stack. Re-exports `arrow`, `arrow_flight` and `tonic`; `TimeRange` is at
+//!   `micromegas::telemetry::time_range::TimeRange`.
+//! - `server`: everything (ingestion, analytics, auth, servers). Implies `client`.
+//!
 //! ## Rust Instrumentation
 //! For rust applications, use micromegas::tracing for minimal overhead. Interoperability with tokio tracing's logs is also enabled by default.
 //!
@@ -101,9 +108,15 @@
 pub use chrono;
 pub use uuid;
 
-/// re-exports (server-only)
-#[cfg(feature = "server")]
+/// re-exports (client)
+#[cfg(feature = "client")]
+pub use arrow;
+#[cfg(feature = "client")]
 pub use arrow_flight;
+#[cfg(feature = "client")]
+pub use tonic;
+
+/// re-exports (server-only)
 #[cfg(feature = "server")]
 pub use axum;
 #[cfg(feature = "server")]
@@ -114,8 +127,6 @@ pub use object_store;
 pub use prost;
 #[cfg(feature = "server")]
 pub use sqlx;
-#[cfg(feature = "server")]
-pub use tonic;
 
 /// telemetry protocol
 pub mod telemetry {
@@ -183,5 +194,5 @@ pub mod config;
 #[cfg(feature = "server")]
 pub mod servers;
 
-#[cfg(feature = "server")]
+#[cfg(feature = "client")]
 pub mod client;
