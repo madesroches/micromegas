@@ -44,12 +44,11 @@ A `BenchSink` defined in the bench file:
   `Mutex<Vec<Arc<MetricsBlock>>>`. Capture is only used by the extraction group.
 - Every other callback is a no-op; `is_busy` returns `false`.
 
-Setup: `TracingSystemGuard::new(64 MiB, 64 MiB, 10 MiB, sink, HashMap::new(), false)` and
-`set_max_level(LevelFilter::Trace)`. Buffers are large so the extraction run fits in one block;
-steady-state benches still flush whenever a block fills, which is the realistic amortized cost.
+Setup: `TracingSystemGuard::new(10 MiB, 1 MiB, 10 MiB, sink, HashMap::new(), false)` (the
+`telemetry-sink` defaults) and `set_max_level(LevelFilter::Trace)`.
 
 Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once with
-`PropertySet::find_or_create`, and a `u64` counter `i` incremented inside each iteration so
+`PropertySet::find_or_create`, and a `usize` counter `i` incremented inside each iteration so
 `id = %i` produces a new value every call.
 
 ### Groups and cases
@@ -76,15 +75,14 @@ Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once w
 | `dyn_high_card` | `imetric!("name", "unit", id = %i, 1)` |
 
 `extract` group — for `log/dyn_high_card`, `log/dyn_mixed` and `metric/dyn_high_card`:
-1. Flush, set `capture`, emit `N = 10_000` events of that case, flush, clear `capture`, take the
-   captured blocks and assert there is exactly one.
-2. Print, with `println!` before benchmarking, `object bytes/event = block.len_bytes() /
+1. Flush, set `capture`, emit `N = 10_000` events of that case (`N = 5_000` for
+   `metric/dyn_high_card`), flush, clear `capture`, take the captured blocks and assert there is
+   exactly one.
+2. Print, with `println!` before benchmarking, `object bytes/event = block.events.len_bytes() /
    nb_objects` and `dependency bytes/event = extract().len_bytes() / nb_objects` (criterion has
    no custom-metric output; a printed line is the simplest report).
 3. Bench `block.events.extract()` with `Throughput::Elements(nb_objects)` so criterion reports
    time per event.
-
-`TracingBlock::len_bytes` includes the property arena, so arena-owned property sets are counted.
 
 `contention` group — for `log/static`, `log/dyn_high_card`, `metric/plain`,
 `metric/dyn_high_card`, at 1, 4 and 8 threads (`BenchmarkId::new(case, threads)`):
@@ -93,9 +91,9 @@ Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once w
 an `Instant`, and joins. It returns the elapsed time. `Throughput::Elements(threads)` makes
 criterion report aggregate calls/s alongside the per-round latency.
 
-A small `macro_rules!` local to the bench file expands each case into both its `log`/`metric`
-bench and, where listed, its `extract` and `contention` uses, so each call expression is written
-once (macros are required since each call site must be its own static callsite).
+Each case is one non-capturing closure taking the counter (e.g. `|i: usize| info!(id = %i,
+"static")`, with `set` from a static), called by the `log`/`metric` bench and, where listed, the
+`extract` and `contention` groups, so each call expression is written once.
 
 ## Implementation Steps
 1. Create `rust/tracing/benches/properties.rs` with `BenchSink`, setup, and the four groups.
@@ -129,8 +127,9 @@ None; benches are not documented in `mkdocs/`.
 
 ## Testing Strategy
 This change is itself a benchmark; there is no logic to unit-test. The single-block assertion in
-the extraction setup guards against measuring a partial block. `cargo clippy --all-targets`
-covers compilation of the bench target in CI.
+the extraction setup guards against measuring a partial block. Bench compilation is
+checked only locally by Implementation Step 4's `cargo clippy --all-targets`; CI does not build
+benches.
 
 ## Manual Verification
 1. `cd rust && cargo bench -p micromegas-tracing --bench properties -- --quick` — every group
