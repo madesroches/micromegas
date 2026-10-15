@@ -36,6 +36,7 @@ struct CapturedState {
     log_blocks: Vec<Arc<LogBlock>>,
     metrics_blocks: Vec<Arc<MetricsBlock>>,
     disabled_target: Option<String>,
+    enabled_checks: usize,
 }
 
 #[derive(Default)]
@@ -56,7 +57,9 @@ impl EventSink for CapturingSink {
     fn on_startup(&self, _: Arc<ProcessInfo>) {}
     fn on_shutdown(&self) {}
     fn on_log_enabled(&self, metadata: &LogMetadata) -> bool {
-        self.state.lock().unwrap().disabled_target.as_deref() != Some(metadata.target)
+        let mut state = self.state.lock().unwrap();
+        state.enabled_checks += 1;
+        state.disabled_target.as_deref() != Some(metadata.target)
     }
     fn on_log(
         &self,
@@ -113,6 +116,10 @@ impl DispatchGuard {
 
     fn disable_target(&self, target: &str) {
         self.sink.state.lock().unwrap().disabled_target = Some(target.to_owned());
+    }
+
+    fn enabled_checks(&self) -> usize {
+        self.sink.state.lock().unwrap().enabled_checks
     }
 
     fn logs(&self) -> Vec<(String, Pairs)> {
@@ -628,4 +635,27 @@ fn dynamic_values_are_evaluated_lazily() {
         "too verbose"
     );
     assert_eq!(bare, 1);
+}
+
+#[test]
+#[serial]
+fn log_enabled_checked_once_per_call() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("kind", "spread")]);
+    let i = 7;
+    let mut nb_logs = 0;
+    let mut check = |label: &str, log: &dyn Fn()| {
+        let before = guard.enabled_checks();
+        log();
+        assert_eq!(guard.enabled_checks() - before, 1, "{label}");
+        nb_logs += 1;
+        assert_eq!(guard.logs().len(), nb_logs, "{label} was not captured");
+    };
+    check("plain", &|| info!("m"));
+    check("literals", &|| info!(a = "1", "m"));
+    check("set only", &|| info!(..set, "m"));
+    check("set plus literal", &|| info!(a = "1", ..set, "m"));
+    check("dynamic", &|| info!(id = %i, "m"));
+    check("literal plus dynamic", &|| info!(a = "1", id = %i, "m"));
+    check("set plus dynamic", &|| info!(id = %i, ..set, "m"));
 }

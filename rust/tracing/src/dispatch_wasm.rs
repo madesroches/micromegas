@@ -111,6 +111,34 @@ pub fn log_dyn_tagged(
     log(desc, args);
 }
 
+#[doc(hidden)]
+pub struct EnabledLogSink {
+    dispatch: &'static WasmDispatch,
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn enabled_log_sink(desc: &LogMetadata) -> Option<EnabledLogSink> {
+    let dispatch = G_DISPATCH.get()?;
+    if dispatch.sink.on_log_enabled(desc) {
+        Some(EnabledLogSink { dispatch })
+    } else {
+        None
+    }
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn log_dyn_tagged_enabled(
+    sink: EnabledLogSink,
+    desc: &'static LogMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+    args: fmt::Arguments<'_>,
+) {
+    sink.dispatch.sink.on_log(desc, &[], now(), args);
+}
+
 #[inline(always)]
 pub fn log_interop_dyn_tagged(
     metadata: &LogMetadata,

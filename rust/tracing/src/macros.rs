@@ -564,11 +564,16 @@ macro_rules! __log_call {
             file: file!(),
             line: line!(),
         };
-        if $lvl <= $crate::levels::STATIC_MAX_LEVEL
-            && $lvl <= $crate::levels::max_level()
-            && $crate::dispatch::log_enabled(&LOG_DESC)
-        {
-            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $set, $slice, format_args!($($fmt)+));
+        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
+            if let Some(sink) = $crate::dispatch::enabled_log_sink(&LOG_DESC) {
+                $crate::dispatch::log_dyn_tagged_enabled(
+                    sink,
+                    &LOG_DESC,
+                    $set,
+                    $slice,
+                    format_args!($($fmt)+),
+                );
+            }
         }
     });
 }
