@@ -5,16 +5,20 @@ on:
     branches: [ "main" ]
     paths:
       - 'rust/**'
+      - 'build/check_client_deps.py'
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
+      - 'build/test_check_client_deps.py'
       - 'build/test_rust_ci.py'
       - '.github/workflows/rust.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rust/**'
+      - 'build/check_client_deps.py'
       - 'build/rust_ci.py'
       - 'build/rust_command.py'
+      - 'build/test_check_client_deps.py'
       - 'build/test_rust_ci.py'
       - '.github/workflows/rust.yml'
   workflow_dispatch:  # Allow manual runs from the Actions UI
@@ -84,7 +88,7 @@ jobs:
       run: python3 -m pip install --quiet pytest
 
     - name: Test rust_ci.py orchestration
-      run: python3 -m pytest build/test_rust_ci.py
+      run: python3 -m pytest build/test_rust_ci.py build/test_check_client_deps.py
 
     - name: Run native CI
       run: |

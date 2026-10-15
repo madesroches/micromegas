@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
+use arrow::{array::RecordBatch, datatypes::SchemaRef};
 use arrow_flight::{
     decode::FlightRecordBatchStream, flight_service_client::FlightServiceClient,
     sql::client::FlightSqlServiceClient,
 };
-use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use futures::stream::StreamExt;
-use micromegas_analytics::time::TimeRange;
+use micromegas_telemetry::time_range::TimeRange;
 use std::sync::Arc;
 use tonic::transport::Channel;
 
