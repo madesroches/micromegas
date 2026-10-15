@@ -182,8 +182,9 @@ fn bench_extraction_group(c: &mut Criterion, sink: &BenchSink) {
 }
 
 fn bench_contention_group(c: &mut Criterion) {
-    let cases: [(&str, Case); 4] = [
+    let cases: [(&str, Case); 5] = [
         ("log/static", log_case("static")),
+        ("log/formatted", log_case("formatted")),
         ("log/dyn_high_card", log_case("dyn_high_card")),
         ("metric/plain", metric_case("plain")),
         ("metric/dyn_high_card", metric_case("dyn_high_card")),
