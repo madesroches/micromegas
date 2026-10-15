@@ -50,7 +50,7 @@ Setup: `TracingSystemGuard::new(10 MiB, 1 MiB, 10 MiB, sink, HashMap::new(), fal
 Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once with
 `PropertySet::find_or_create(vec![Property::new(..), ..])` holding three pairs `x = "1"`,
 `y = "2"`, `z = "3"` (keys not clashing with `tier`, `l`, `id`, `a`, `b`, `c`), and a `usize` counter `i` incremented inside each iteration so
-`id = %i` produces a new value every call.
+`id = %i` produces a new value every call. In the log/metric groups the counter lives outside `bench_function` (captured by the outer closure) so it persists across criterion warm-up and sample rounds instead of restarting at 0 and hitting the per-block arena dedup.
 
 ### Groups and cases
 
@@ -89,7 +89,7 @@ Shared inputs: `static LABELS: [&str; 4]`, a `&'static PropertySet` built once w
 `metric/dyn_high_card`, at 1, 4 and 8 threads (`BenchmarkId::new(case, threads)`):
 `b.iter_custom(|iters| ...)` spawns `threads` scoped threads that each wait on a
 `Barrier(threads + 1)`, then perform `iters` calls with a thread-local counter over a disjoint range (thread `t` runs
-`for i in t * iters..(t + 1) * iters { case(i as usize) }`), so `id = %i` is unique across threads
+`for i in base + t * iters..base + (t + 1) * iters { case(i as usize) }`, with `base` kept outside `bench_function` and advanced by `threads * iters` after each `iter_custom` call), so `id = %i` is unique across threads
 with no shared atomic; the main thread waits on the barrier, starts
 an `Instant`, and joins. It returns the elapsed time. `Throughput::Elements(threads)` makes
 criterion report aggregate calls/s alongside the per-round latency.
