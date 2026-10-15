@@ -35,7 +35,7 @@ following under the stream lock:
 `flush_image_buffer` (`:635`) already drops the lock before calling the sink. The thread-stream
 flush has no lock and is out of scope.
 
-**Push paths.** All six log paths and four metric paths end with the same code:
+**Push paths.** All five log paths and six metric paths (eleven push sites) end with the same code:
 
 ```rust
 if stream.is_full() { drop(stream); self.flush_*_buffer(); }
@@ -53,7 +53,8 @@ block. They can also push past the 128-byte `hint_max_obj_size` margin, which ma
 | `log` (`:861`), non-static message | `args.to_string()` (`:878`) |
 | `log_tagged_to_sink` (`:903`) | `args.to_string()` (`:918`) |
 | `log_interop` (`:928`) | `intern_string(desc.target)` (a global interner) and `args.to_string()` (`:936-944`) |
-| `log_dyn_tagged_to_sink` (`:970`), `log_interop_dyn_tagged` (`:1002`) | `arena.get_or_insert(&merged)`: hashes the set, and on a miss allocates the owned copy |
+| `log_dyn_tagged_to_sink` (`:995`), `log_interop_dyn_tagged` (`:1032`) | `arena.get_or_insert(&merged)`: hashes the set, and on a miss allocates the owned copy |
+| `log_interop_dyn_tagged` (`:1032`) | also `intern_string(desc.target)` (`:1028`) |
 | `tagged_*_metric_dyn` (`:779`, `:807`) | same `get_or_insert` |
 | every push into a fresh block | the minor page faults for the buffer pages it touches first |
 
@@ -94,6 +95,8 @@ pub struct SpareBlock<Q> {
 }
 ```
 
+- `SpareBlock::new(buffer_size, process_id, stream_id)` leaves the slot empty. `Dispatch::new`
+  calls `refill()` explicitly after constructing each spare.
 - `refill(&self)` returns early if the slot is full. Otherwise it builds
   `EventBlock::new(buffer_size, process_id, stream_id, 0)` and calls `events.prefault()`, both
   outside any lock. Then it stores the block if the slot is still empty, and drops it otherwise.
@@ -101,7 +104,7 @@ pub struct SpareBlock<Q> {
   fallback has the same cost as today and only happens when a refill hasn't finished yet.
 
 `Dispatch` gets `log_spare: SpareBlock<LogMsgQueue>` and `metrics_spare: SpareBlock<MetricsMsgQueue>`.
-Both are created in `Dispatch::new` from the streams' ids and filled once there.
+Both are created in `Dispatch::new` from the streams' ids and filled once there with `refill()`.
 
 Lock order is always stream lock, then spare slot. `refill` takes only the slot lock, so the
 order cannot be inverted.
@@ -162,7 +165,8 @@ under the lock (see Trade-offs).
 ### 5. Format and intern before the lock
 
 In `log`, `log_tagged_to_sink` and `log_interop`, build the `DynString` message and look up the
-interned target before taking the lock, as `log_dyn_tagged_to_sink` already does.
+interned target before taking the lock, as `log_dyn_tagged_to_sink` already does. In
+`log_interop_dyn_tagged`, intern `desc.target` before the lock too.
 
 ### Behavior notes
 
@@ -205,9 +209,12 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
    `event/mod.rs`.
 8. `dispatch.rs`: add `log_spare` and `metrics_spare`, the `swap_block` helper, and
    `on_log_pushed` / `on_metrics_pushed`. Rewrite `flush_log_buffer` and `flush_metrics_buffer`
-   on top of them, and switch all ten push sites over.
+   on top of them, and switch all eleven push sites over: log paths `log`, `log_tagged_to_sink`, `log_interop`,
+   `log_dyn_tagged_to_sink`, `log_interop_dyn_tagged`; metric paths `int_metric`, `float_metric`,
+   `tagged_float_metric`, `tagged_integer_metric`, `tagged_float_metric_dyn`,
+   `tagged_integer_metric_dyn`.
 9. `dispatch.rs`: move message formatting and `intern_string` above the lock in `log`,
-   `log_tagged_to_sink` and `log_interop`.
+   `log_tagged_to_sink` and `log_interop`, and `intern_string` in `log_interop_dyn_tagged`.
 
 ### Phase 4: Measure after
 
@@ -236,6 +243,7 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 - `rust/tracing/src/dispatch.rs`: spares, swap helper, push and flush paths, formatting moved out of the lock
 - `rust/tracing/tests/property_arena_tests.rs`: new signature
 - `rust/tracing/tests/stream_flush_tests.rs` (new)
+- `rust/telemetry-sink/src/http_event_sink.rs`: restate the `try_push` comments (`:94-99`, `:202`, `:234`)
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -278,30 +286,40 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 - `CHANGELOG.md`: a Tracing entry with the before/after numbers. Add a **Minor breaking change**
   clause covering `HeterogeneousQueue::prefault`, the `merge_properties` return type and the
   `PropertyArena::get_or_insert` signature.
+- `rust/telemetry-sink/src/http_event_sink.rs`: the comments that say `try_push` must not emit
+  telemetry because dispatch calls `on_process_*_block` under the stream mutex are no longer true.
+  Restate the reason as recursion into the sink, or drop them.
 - No mkdocs change. The capi threading-model note (`mkdocs/docs/native/index.md:171`, "per-stream
   `Mutex`") is still accurate.
 
 ## Testing Strategy
 
 No-DB unit tests in a new `rust/tracing/tests/stream_flush_tests.rs`. They use
-`init_in_memory_tracing()`, whose 1 KiB buffers force frequent flushes, and are marked `#[serial]`:
+`init_in_memory_tracing()`, whose 1 KiB buffers force frequent flushes, and are marked `#[serial]`,
+except the sink re-entrancy test, which needs its own sink (see below):
 
-- **Sink can log during block processing.** A test sink calls `info!` once from inside
-  `on_process_log_block`. Fill and flush the log stream, then assert that the call returns and
-  that the nested event lands in a later block. This deadlocks today, so it shows that the sink
-  is called outside the lock.
+- **Sink can log during block processing.** `init_in_memory_tracing()` can't be
+  used, since it always installs `InMemorySink`. Build it on the `property_arena_tests.rs` pattern:
+  a `CapturingSink` and a `DispatchGuard` that calls `init_event_dispatch` with 1024-byte buffers
+  and runs `shutdown_dispatch` + `force_uninit` on drop. The sink calls `info!` once (one-shot
+  flag) from inside `on_process_log_block`. Run the body in a spawned thread and wait with
+  `recv_timeout`, so a regression fails instead of hanging. Fill and flush the log stream, call
+  `flush_log_buffer()` a second time, and assert that the nested event is observed in a later
+  block. This deadlocks today, so it shows that the sink is called outside the lock.
 - **Contiguous blocks after many flushes, single thread.** Log and record metrics until several
   blocks have flushed, then flush explicitly. For each stream, assert that
-  `offset[k+1] == offset[k] + nb_objects[k]`, `end[k] == begin[k+1]`, and that no block's
-  `len_bytes` exceeds its `capacity_bytes`.
+  `offset[k+1] == offset[k] + nb_objects[k]`, `end[k] == begin[k+1]`, and that
+  `block.events.capacity_bytes() == 1024` (the configured size, so any reallocation is caught) for
+  every log and metrics block. Keep messages under 128 bytes.
 - **Concurrent recording, no lost or duplicated events.** Use 8 threads, each logging N events
   with a dynamic `id`. Assert that the block event counts sum to 8·N, that offsets are
   contiguous once the blocks are sorted by offset, and that every block except possibly the last
-  is above the full threshold (no tiny duplicate flushes). This is the concurrency check that
+  is above the full threshold (no tiny duplicate flushes), and that every block's
+  `capacity_bytes()` is still 1024. This is the concurrency check that
   would otherwise fail silently.
-- **Fallback when the spare is missing.** Flush twice with no refill between the two swaps, by
-  calling `SpareBlock::take_or_new` on an empty slot directly. Assert that a valid block is
-  returned with the right `stream_id`.
+- **Fallback when the spare is missing.** Construct a `SpareBlock` with `SpareBlock::new` (reachable through
+  `pub mod event`), which leaves the slot empty, and call `take_or_new` on it. Assert that the
+  returned block has the right `stream_id` and an empty queue.
 - **`prefault` keeps the queue empty.** In transit's tests: after `prefault()`, `len_bytes() == 0`,
   `nb_objects() == 0`, `capacity_bytes()` is unchanged, and pushes and iteration still work.
 - **Arena.** Update `property_arena_tests.rs`: equal merged sets still dedup, different sets
