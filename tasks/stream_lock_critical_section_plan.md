@@ -237,8 +237,8 @@ The sink re-entrancy test skips `init_in_memory_tracing()` and uses its own `Dis
 sink (see below):
 
 - **Sink can log during block processing.** `init_in_memory_tracing()` can't be
-  used, since it always installs `InMemorySink`; the test is still `#[serial]`. Build it on the `property_arena_tests.rs` pattern:
-  a `CapturingSink` and a `DispatchGuard` that calls `init_event_dispatch` with 1024-byte buffers
+  used, since it always installs `InMemorySink`; the test is still `#[serial]`. The new test file defines its own `CapturingSink` and `DispatchGuard`, modeled on
+  `property_arena_tests.rs` (whose guard uses 64 KiB buffers): the guard calls `init_event_dispatch` with 1024-byte buffers
   and runs `shutdown_dispatch` + `force_uninit` on drop. The sink calls `info!` once (one-shot
   flag) from inside `on_process_log_block`. Run the body in a spawned thread and wait with
   `recv_timeout`, so a regression fails instead of hanging. Fill and flush the log stream, call
@@ -252,7 +252,7 @@ sink (see below):
 - **Concurrent recording, no lost or duplicated events.** Use 8 threads, each logging N events
   with a dynamic `id`. Assert that the block event counts sum to 8·N, that offsets are
   contiguous once the blocks are sorted by offset, and that every block except possibly the last
-  is above the full threshold (no tiny duplicate flushes), and that every block's
+  is above the full threshold, i.e. its `len_bytes()` (events + arena) exceeds `capacity - 128` (no tiny duplicate flushes), and that every block's
   `capacity_bytes()` is still 1024. Keep messages under 128 bytes. This is the concurrency check that
   would otherwise fail silently.
 - **Arena.** Update `property_arena_tests.rs`: equal merged sets still dedup, different sets
