@@ -53,9 +53,10 @@
 //! Properties are `key = value` pairs, written before the format string in logs and before the
 //! value in metrics. Keys are identifiers or string literals and are always `'static`. A literal
 //! value is interned once per callsite and costs one atomic load afterwards (unless a `..set` is
-//! spread: then every pair, literals included, is copied into the block like a dynamic value). Any other value (a
-//! correlation, request or session id) is attached to the individual log entry or measure and
-//! copied into the current block, freed with it, so nothing is retained per distinct value:
+//! spread: then the literals before it are copied into the block like dynamic values, while the
+//! spread set's own values are not). Any other value (a correlation, request or session id) is
+//! attached to the individual log entry or measure and copied into the current block, once per
+//! distinct value, and freed with it, so nothing is retained per distinct value:
 //!
 //! ```rust,ignore
 //! use micromegas_tracing::prelude::*;
@@ -162,7 +163,7 @@ pub mod time;
 
 // Native-only: full on native, stubs in lib.rs for wasm32
 #[cfg(not(target_arch = "wasm32"))]
-pub mod property_arena;
+pub mod dyn_deps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod property_set;
 

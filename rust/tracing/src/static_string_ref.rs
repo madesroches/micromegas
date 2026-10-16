@@ -51,6 +51,7 @@ impl StaticStringRef {
 
     pub fn into_dependency(&self) -> StaticStringDependency {
         StaticStringDependency {
+            id: self.ptr,
             codec: self.codec,
             len: self.len,
             ptr: self.ptr as *const u8,

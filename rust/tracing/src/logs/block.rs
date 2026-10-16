@@ -3,8 +3,9 @@ use super::{
     LogStringInteropEvent, TaggedLogInteropEvent, TaggedLogString,
 };
 use crate::{
+    dyn_deps::DynDeps,
     event::{EventBlock, EventStream, ExtractDeps},
-    property_set::{PropertySetDependency, record_properties},
+    property_set::{PropertyDepsQueue, PropertySetDependency, PropertySetId, record_properties},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use rustc_hash::FxHashSet;
@@ -67,11 +68,11 @@ fn record_log_event_dependencies(
 impl ExtractDeps for LogMsgQueue {
     type DepsQueue = LogDepsQueue;
 
-    fn extract(&self) -> Self::DepsQueue {
+    fn extract(&self, dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
         let mut deps = LogDepsQueue::new(1024 * 1024);
         let mut recorded_deps = FxHashSet::default();
         let mut last_desc = 0u64;
-        let mut last_set = 0u64;
+        let mut last_set = PropertySetId(0);
         for x in self.iter() {
             match x {
                 LogMsgQueueAny::LogStaticStrEvent(evt) => {
@@ -105,18 +106,10 @@ impl ExtractDeps for LogMsgQueue {
                     if recorded_deps.insert(evt.target.id()) {
                         deps.push(evt.target.into_dependency());
                     }
-                    let set = evt.properties as u64;
-                    if set != last_set {
-                        last_set = set;
-                        // SAFETY: the set is interned or owned by this block's arena.
-                        unsafe {
-                            record_properties(
-                                evt.properties,
-                                &mut recorded_deps,
-                                &mut deps,
-                                |q, d| q.push(d),
-                                |q, d| q.push(d),
-                            );
+                    if evt.properties != last_set {
+                        last_set = evt.properties;
+                        if let Some(set) = evt.properties.as_interned() {
+                            record_properties(set, &mut recorded_deps, &mut deps);
                         }
                     }
                 }
@@ -126,24 +119,28 @@ impl ExtractDeps for LogMsgQueue {
                         last_desc = desc;
                         record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
                     }
-                    let set = evt.properties as u64;
-                    if set != last_set {
-                        last_set = set;
-                        // SAFETY: the set is interned or owned by this block's arena.
-                        unsafe {
-                            record_properties(
-                                evt.properties,
-                                &mut recorded_deps,
-                                &mut deps,
-                                |q, d| q.push(d),
-                                |q, d| q.push(d),
-                            );
+                    if evt.properties != last_set {
+                        last_set = evt.properties;
+                        if let Some(set) = evt.properties.as_interned() {
+                            record_properties(set, &mut recorded_deps, &mut deps);
                         }
                     }
                 }
             }
         }
+        dyn_deps.record_static_refs(&mut recorded_deps, &mut deps);
+        deps.extend_from(dyn_deps.queue());
         deps
+    }
+}
+
+impl PropertyDepsQueue for LogDepsQueue {
+    fn push_string(&mut self, dep: StaticStringDependency) {
+        self.push(dep);
+    }
+
+    fn push_set(&mut self, dep: PropertySetDependency) {
+        self.push(dep);
     }
 }
 

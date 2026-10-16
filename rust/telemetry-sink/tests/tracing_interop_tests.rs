@@ -32,11 +32,11 @@ fn captured_interop_events(
             match evt {
                 LogMsgQueueAny::TaggedLogInteropEvent(e) => {
                     let DynString(msg) = &e.msg;
-                    // SAFETY: the sink still holds the block, which owns the property set.
-                    let props = unsafe { &*e.properties }
-                        .get_properties()
-                        .iter()
-                        .map(|p| (p.name.as_str().to_owned(), p.value.as_str().to_owned()))
+                    let props = block
+                        .dyn_deps
+                        .set_properties(e.properties)
+                        .into_iter()
+                        .map(|(name, value)| (name.to_owned(), value.to_owned()))
                         .collect();
                     tagged.push((msg.clone(), props));
                 }

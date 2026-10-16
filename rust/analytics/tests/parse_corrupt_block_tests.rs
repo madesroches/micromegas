@@ -34,7 +34,7 @@ use micromegas_tracing::logs::{
 };
 use micromegas_tracing::parsing::make_custom_readers;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::{Property, PropertySet};
+use micromegas_tracing::property_set::{Property, PropertySet, PropertySetId};
 use micromegas_tracing::spans::{
     BeginThreadNamedSpanEvent, SpanLocation, ThreadBlock, ThreadStream,
 };
@@ -107,10 +107,10 @@ fn build_log_block() -> (StreamMetadata, BlockPayload) {
         // TaggedLogString (property_set custom-reader dependency)
         stream.get_events_mut().push(TaggedLogString {
             desc: &LOG_DESC,
-            properties: PropertySet::find_or_create(vec![
+            properties: PropertySetId::interned(PropertySet::find_or_create(vec![
                 Property::new("name", "road_width"),
                 Property::new("animal", "chicken"),
-            ]),
+            ])),
             time: i as i64,
             msg: DynString(format!("tagged message {i}")),
         });

@@ -10,7 +10,10 @@ mod derive_reflect;
 use proc_macro::TokenStream;
 
 /// generate reflection code
-#[proc_macro_derive(TransitReflect)]
+///
+/// `#[transit(reference)]` on a field marks it as a reference, for a type that is not
+/// syntactically a pointer but holds a dependency id.
+#[proc_macro_derive(TransitReflect, attributes(transit))]
 pub fn derive_reflect(input: TokenStream) -> TokenStream {
     derive_reflect::derive_reflect_impl(input)
 }

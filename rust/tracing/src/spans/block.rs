@@ -4,6 +4,7 @@ use super::{
     SpanLocation, SpanLocationRecord, SpanMetadata, SpanRecord,
 };
 use crate::{
+    dyn_deps::DynDeps,
     event::{EventBlock, EventStream, ExtractDeps},
     string_id::StringId,
 };
@@ -100,7 +101,7 @@ fn record_named_scope_event_dependencies(
 impl ExtractDeps for ThreadEventQueue {
     type DepsQueue = ThreadDepsQueue;
 
-    fn extract(&self) -> Self::DepsQueue {
+    fn extract(&self, _dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
         let mut deps = ThreadDepsQueue::new(1024 * 1024);
         let mut recorded_deps = HashSet::new();
         for x in self.iter() {

@@ -1,4 +1,4 @@
-use crate::{property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId};
+use crate::{property_set::PropertySetId, static_string_ref::StaticStringRef, string_id::StringId};
 use micromegas_transit::{
     DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod,
 };
@@ -145,7 +145,7 @@ pub struct TaggedLogInteropEvent {
     pub time: i64,
     pub level: u8,
     pub target: StaticStringRef,
-    pub properties: *const PropertySet,
+    pub properties: PropertySetId,
     pub msg: DynString,
 }
 
@@ -166,7 +166,7 @@ impl InProcSerialize for TaggedLogInteropEvent {
         write_any(buffer, &self.time);
         write_any(buffer, &self.level);
         write_any(buffer, &self.target);
-        write_any(buffer, &self.properties);
+        write_any(buffer, &self.properties.0);
         self.msg.write_value(buffer);
     }
 
@@ -180,7 +180,7 @@ impl InProcSerialize for TaggedLogInteropEvent {
             time,
             level,
             target,
-            properties: properties_id as usize as *const PropertySet,
+            properties: PropertySetId(properties_id),
             msg,
         }
     }
@@ -217,7 +217,7 @@ impl InProcSerialize for LogMetadataRecord {}
 #[derive(Debug)]
 pub struct TaggedLogString {
     pub desc: &'static LogMetadata<'static>,
-    pub properties: *const PropertySet,
+    pub properties: PropertySetId,
     pub time: i64,
     pub msg: DynString,
 }
@@ -251,7 +251,7 @@ impl InProcSerialize for TaggedLogString {
 
     fn write_value(&self, buffer: &mut Vec<u8>) {
         write_any(buffer, &self.desc);
-        write_any(buffer, &self.properties);
+        write_any(buffer, &self.properties.0);
         write_any(buffer, &self.time);
         self.msg.write_value(buffer);
     }
@@ -265,7 +265,7 @@ impl InProcSerialize for TaggedLogString {
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
             desc: unsafe { std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id) },
-            properties: properties_id as usize as *const PropertySet,
+            properties: PropertySetId(properties_id),
             time,
             msg,
         }

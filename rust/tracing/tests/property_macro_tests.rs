@@ -9,7 +9,7 @@ use micromegas_tracing::{
     metrics::{MetricsBlock, MetricsMsgQueueAny, MetricsStream},
     prelude::*,
     process_info::ProcessInfo,
-    property_set::{Property, PropertySet},
+    property_set::{Property, PropertySet, PropertySetId},
     spans::{ThreadBlock, ThreadStream},
 };
 use micromegas_transit::HeterogeneousQueue;
@@ -44,10 +44,10 @@ struct CapturingSink {
     state: Mutex<CapturedState>,
 }
 
-fn sorted_pairs(properties: &[Property]) -> Pairs {
+fn sorted_pairs(properties: &[(&str, &str)]) -> Pairs {
     let mut pairs: Pairs = properties
         .iter()
-        .map(|p| (p.name.as_str().to_owned(), p.value.as_str().to_owned()))
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect();
     pairs.sort();
     pairs
@@ -153,7 +153,7 @@ impl DispatchGuard {
             .clone()
     }
 
-    /// (name, target, properties pointer or null, properties, arena bytes of the block) of
+    /// (name, target, properties id or none, properties, dynamic dependency bytes of the block) of
     /// every metric event.
     fn metrics(&self) -> Vec<MetricRecord> {
         flush_metrics_buffer();
@@ -171,24 +171,22 @@ impl DispatchGuard {
                         (e.desc, Some(e.properties), true)
                     }
                 };
-                // SAFETY: the set is interned or owned by the block, which `state` keeps alive.
-                let set = props.map(|p| unsafe { &*p });
                 out.push(MetricRecord {
                     name: desc.name.to_owned(),
                     target: desc.target.to_owned(),
                     tagged,
-                    set_ptr: props.map(|p| p as usize),
-                    properties: set
-                        .map(|s| sorted_pairs(s.get_properties()))
+                    set_id: props,
+                    properties: props
+                        .map(|id| sorted_pairs(&block.dyn_deps.set_properties(id)))
                         .unwrap_or_default(),
-                    arena_bytes: block.properties.len_bytes(),
+                    dyn_deps_bytes: block.dyn_deps.len_bytes(),
                 });
             }
         }
         out
     }
 
-    /// (kind, set pointer, properties) of every log event, and the arena bytes of its block.
+    /// (kind, set id) of every log event, and the dynamic dependency bytes of its block.
     fn log_events(&self) -> Vec<LogEventRecord> {
         flush_log_buffer();
         let state = self.sink.state.lock().unwrap();
@@ -199,13 +197,13 @@ impl DispatchGuard {
                     LogMsgQueueAny::LogStaticStrEvent(_) | LogMsgQueueAny::LogStringEvent(_) => out
                         .push(LogEventRecord {
                             tagged: false,
-                            set_ptr: 0,
-                            arena_bytes: block.properties.len_bytes(),
+                            set_id: None,
+                            dyn_deps_bytes: block.dyn_deps.len_bytes(),
                         }),
                     LogMsgQueueAny::TaggedLogString(e) => out.push(LogEventRecord {
                         tagged: true,
-                        set_ptr: e.properties as usize,
-                        arena_bytes: block.properties.len_bytes(),
+                        set_id: Some(e.properties),
+                        dyn_deps_bytes: block.dyn_deps.len_bytes(),
                     }),
                     _ => {}
                 }
@@ -219,15 +217,15 @@ struct MetricRecord {
     name: String,
     target: String,
     tagged: bool,
-    set_ptr: Option<usize>,
+    set_id: Option<PropertySetId>,
     properties: Pairs,
-    arena_bytes: usize,
+    dyn_deps_bytes: usize,
 }
 
 struct LogEventRecord {
     tagged: bool,
-    set_ptr: usize,
-    arena_bytes: usize,
+    set_id: Option<PropertySetId>,
+    dyn_deps_bytes: usize,
 }
 
 impl Drop for DispatchGuard {
@@ -555,30 +553,25 @@ fn literal_sets_are_interned_per_callsite() {
     let logs = guard.log_events();
     let tagged: Vec<_> = logs.iter().filter(|l| l.tagged).collect();
     assert_eq!(tagged.len(), 6);
-    assert!(logs.iter().all(|l| l.arena_bytes == 0));
-    let literal_ptrs: Vec<_> = tagged.iter().step_by(2).map(|l| l.set_ptr).collect();
-    let spread_ptrs: Vec<_> = tagged
-        .iter()
-        .skip(1)
-        .step_by(2)
-        .map(|l| l.set_ptr)
-        .collect();
+    assert!(logs.iter().all(|l| l.dyn_deps_bytes == 0));
+    let literal_ptrs: Vec<_> = tagged.iter().step_by(2).map(|l| l.set_id).collect();
+    let spread_ptrs: Vec<_> = tagged.iter().skip(1).step_by(2).map(|l| l.set_id).collect();
     assert!(literal_ptrs.windows(2).all(|w| w[0] == w[1]));
     assert!(
         spread_ptrs
             .iter()
-            .all(|p| *p == set as *const PropertySet as usize)
+            .all(|p| *p == Some(PropertySetId::interned(set)))
     );
     assert_ne!(literal_ptrs[0], spread_ptrs[0]);
 
     let metrics = guard.metrics();
     assert_eq!(metrics.len(), 9);
-    assert!(metrics.iter().all(|m| m.arena_bytes == 0));
+    assert!(metrics.iter().all(|m| m.dyn_deps_bytes == 0));
     for name in ["literal_metric", "literal_metric_float"] {
         let ptrs: Vec<_> = metrics
             .iter()
             .filter(|m| m.name == name)
-            .map(|m| m.set_ptr.unwrap())
+            .map(|m| m.set_id.unwrap())
             .collect();
         assert_eq!(ptrs.len(), 3);
         assert!(ptrs.windows(2).all(|w| w[0] == w[1]));
@@ -587,20 +580,20 @@ fn literal_sets_are_interned_per_callsite() {
         metrics
             .iter()
             .filter(|m| m.name == "spread_metric")
-            .all(|m| m.set_ptr == Some(set as *const PropertySet as usize))
+            .all(|m| m.set_id == Some(PropertySetId::interned(set)))
     );
 }
 
 #[test]
 #[serial]
-fn dynamic_entries_use_the_arena() {
+fn dynamic_entries_use_dynamic_deps() {
     let guard = DispatchGuard::new();
     let cid = String::from("c");
     info!(cid = cid, "dynamic");
     imetric!("dynamic", "count", cid = cid, 1);
     let logs = guard.log_events();
-    assert!(logs.iter().all(|l| l.tagged && l.arena_bytes > 0));
-    assert!(guard.metrics().iter().all(|m| m.arena_bytes > 0));
+    assert!(logs.iter().all(|l| l.tagged && l.dyn_deps_bytes > 0));
+    assert!(guard.metrics().iter().all(|m| m.dyn_deps_bytes > 0));
 }
 
 fn count_and_return<'a>(counter: &mut u32, s: &'a str) -> &'a str {
