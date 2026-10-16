@@ -61,7 +61,7 @@ pub fn callsite_set(
 
 /// Adds `pairs` in order, each one replacing an earlier property of the same name
 /// (case-insensitive), so the last one wins.
-pub(crate) fn apply_pairs(
+pub fn apply_pairs(
     properties: &mut Vec<Property>,
     pairs: impl IntoIterator<Item = (&'static str, &'static str)>,
 ) {

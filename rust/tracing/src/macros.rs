@@ -247,8 +247,9 @@ macro_rules! instrument_named_dyn {
 ///
 /// Properties go between the unit and the value, as `key = value` pairs. A key is an
 /// identifier or a string literal. Literal values are interned once per callsite, unless a `..set`
-/// is spread without a `static` value, in which case the literals are copied into the block (the spread set's own values
-/// are not); any other value is attached to the measure and copied into the current block. A
+/// is spread without a `static` value, in which case the literals are copied into the block
+/// (the spread set's own values are not); any other value is attached to the measure and copied
+/// into the current block. A
 /// bare value must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings
 /// do); use `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
 /// allocation.
@@ -296,8 +297,7 @@ macro_rules! instrument_named_dyn {
 /// dynamic values and a trailing `..set`. Among literals and static values the last one wins
 /// (case-insensitive), a dynamic value beats both, and any pair overrides a `..set` entry. With
 /// `..set` and a static value in the same call, literals and static values are interned over the
-/// set, so dynamic values beat them whatever the order. A static expression is only evaluated
-/// when the entry is enabled.
+/// set, so dynamic values beat them whatever the order.
 ///
 /// ```
 /// use micromegas_tracing::prelude::*;
@@ -448,10 +448,9 @@ macro_rules! fmetric {
 /// Properties go before the format string, as `key = value` pairs. A key is an identifier or a
 /// string literal. A literal value is interned once per callsite, unless a `..set` is spread
 /// without a `static` value, in which case the literals are copied into the block (the spread
-/// set's own values are not). Any
-/// other value (a request or correlation id, for example) is copied into the current block, so
-/// nothing leaks. A bare value
-/// must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use
+/// set's own values are not). Any other value (a request or correlation id, for example) is
+/// copied into the current block, so nothing leaks. A bare value must implement
+/// [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use
 /// `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
 /// allocation. Dynamic values are only evaluated when the entry is enabled.
 ///
@@ -664,13 +663,17 @@ macro_rules! __props {
         $crate::__log_call!(gate $ctx [$($fmt)+]
             $crate::__static_set!(log [$set] $($s)+), $crate::__dyn_slice!(log $($d)*))
     };
-    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static] $value:expr $(,)?) => {
+    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static]
+        $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
-            $crate::__static_set!(metric [] $($s)+), $crate::__dyn_slice!(metric $($d)*), $value)
+            $crate::__static_set!(metric [] $($s)+),
+            $crate::__dyn_slice!(metric $($d)*), $value)
     };
-    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static] $value:expr $(,)?) => {
+    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static]
+        $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
-            $crate::__static_set!(metric [$set] $($s)+), $crate::__dyn_slice!(metric $($d)*), $value)
+            $crate::__static_set!(metric [$set] $($s)+),
+            $crate::__dyn_slice!(metric $($d)*), $value)
     };
 
     // The cheapest call that carries the properties: no properties at all, a spread set only,
