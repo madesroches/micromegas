@@ -1,6 +1,7 @@
 use super::{
-    LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent, LogStringEvent,
-    LogStringInteropEvent, TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString,
+    LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent,
+    LogStaticStrInteropEventV2, LogStringEvent, LogStringInteropEvent, TaggedLogInteropEvent,
+    TaggedLogStaticStrEvent, TaggedLogString,
 };
 use crate::{
     dyn_deps::DynDeps,
@@ -17,6 +18,7 @@ declare_queue_struct!(
         LogStaticStrEvent,
         LogStringEvent,
         LogStaticStrInteropEvent,
+        LogStaticStrInteropEventV2,
         LogStringInteropEvent,
         TaggedLogString,
         TaggedLogStaticStrEvent,
@@ -101,6 +103,11 @@ impl ExtractDeps for LogMsgQueue {
                     }
                 }
                 // The target of the interop events below is in the dynamic queue.
+                LogMsgQueueAny::LogStaticStrInteropEventV2(evt) => {
+                    if recorded_deps.insert(evt.msg.id()) {
+                        deps.push(Utf8StaticStringDependency::from(&evt.msg));
+                    }
+                }
                 LogMsgQueueAny::LogStringInteropEvent(_) => {}
                 LogMsgQueueAny::TaggedLogInteropEvent(evt) => {
                     if evt.properties != last_set {

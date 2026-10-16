@@ -1,7 +1,7 @@
 use crate::{
     property_set::PropertySetId,
     static_string_ref::{BlockStringRef, StaticStringRef},
-    string_id::StringId,
+    string_id::{DynStringId, StringId},
 };
 use micromegas_transit::{
     DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod,
@@ -95,6 +95,16 @@ pub struct LogStaticStrInteropEvent {
 }
 
 impl InProcSerialize for LogStaticStrInteropEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct LogStaticStrInteropEventV2 {
+    pub time: i64,
+    pub level: u32,
+    pub target: DynStringId,
+    pub msg: StringId,
+}
+
+impl InProcSerialize for LogStaticStrInteropEventV2 {}
 
 #[derive(Debug)]
 pub struct LogStringInteropEvent {

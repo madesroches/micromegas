@@ -9,7 +9,10 @@ use crate::property_set::{DynProperty, PropertySet, PropertySetId};
 use crate::{
     event::{EventBlock, EventSink, EventStream, ExtractDeps, NullEventSink, TracingBlock},
     info,
-    logs::{LogMetadata, LogStaticStrEvent, LogStream, LogStringEvent, LogStringInteropEvent},
+    logs::{
+        LogMetadata, LogStaticStrEvent, LogStaticStrInteropEventV2, LogStream, LogStringEvent,
+        LogStringInteropEvent,
+    },
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricsStream, StaticMetricMetadata},
     spans::{
         BeginAsyncDynNamedSpanEvent, BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent,
@@ -1009,19 +1012,31 @@ impl Dispatch {
     fn log_interop(&self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
         let time = now();
         self.get_sink().on_log(desc, &[], time, args);
-        let msg = micromegas_transit::DynString(
-            args.as_str()
-                .map_or_else(|| args.to_string(), str::to_owned),
-        );
+        let msg = args
+            .as_str()
+            .ok_or_else(|| micromegas_transit::DynString(args.to_string()));
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, dyn_deps) = log_stream.get_block_mut_parts();
-        let target = dyn_deps.intern_str_ref(desc.target);
-        events.push(LogStringInteropEvent {
-            time,
-            level: desc.level as u8,
-            target,
-            msg,
-        });
+        match msg {
+            Ok(static_msg) => {
+                let id = dyn_deps.intern_str(desc.target);
+                events.push(LogStaticStrInteropEventV2 {
+                    time,
+                    level: desc.level as u32,
+                    target: DynStringId { id },
+                    msg: static_msg.into(),
+                });
+            }
+            Err(msg) => {
+                let target = dyn_deps.intern_str_ref(desc.target);
+                events.push(LogStringInteropEvent {
+                    time,
+                    level: desc.level as u8,
+                    target,
+                    msg,
+                });
+            }
+        }
         self.on_log_pushed(log_stream);
     }
 

@@ -144,7 +144,7 @@ fn the_next_block_writes_the_target_again() {
             .events
             .iter()
             .filter_map(|evt| match evt {
-                LogMsgQueueAny::LogStringInteropEvent(e) => Some(e.target.id),
+                LogMsgQueueAny::LogStaticStrInteropEventV2(e) => Some(e.target.id),
                 _ => None,
             })
             .collect();
@@ -155,7 +155,7 @@ fn the_next_block_writes_the_target_again() {
 
 #[test]
 #[serial]
-fn static_message_is_stored_as_a_string_interop_event() {
+fn static_message_keeps_its_pointer_and_gets_a_block_scoped_target() {
     let guard = DispatchGuard::new();
     let desc = interop_desc("static_msg", Level::Warn);
     log_interop(&desc, format_args!("a static message"));
@@ -164,14 +164,22 @@ fn static_message_is_stored_as_a_string_interop_event() {
     let mut seen = 0;
     for evt in block.events.iter() {
         match evt {
-            LogMsgQueueAny::LogStringInteropEvent(e) => {
+            LogMsgQueueAny::LogStaticStrInteropEventV2(e) => {
                 seen += 1;
-                assert_eq!(e.msg.0, "a static message");
-                assert_eq!(e.level, Level::Warn as u8);
+                assert_eq!(e.level, Level::Warn as u32);
                 assert_eq!(block.dyn_deps.str(e.target.id), "static_msg");
+                // SAFETY: the message is a `'static` string literal.
+                let msg = unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        e.msg.ptr,
+                        e.msg.len as usize,
+                    ))
+                };
+                assert_eq!(msg, "a static message");
             }
-            LogMsgQueueAny::LogStaticStrInteropEvent(_) => {
-                panic!("static interop messages are no longer written as static events")
+            LogMsgQueueAny::LogStaticStrInteropEvent(_)
+            | LogMsgQueueAny::LogStringInteropEvent(_) => {
+                panic!("static interop messages are written as LogStaticStrInteropEventV2")
             }
             _ => {}
         }

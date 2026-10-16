@@ -96,7 +96,10 @@ pub fn log_entry_from_value<'a>(
                     properties: PropertySet::empty(),
                 }))
             }
-            "LogStaticStrInteropEvent" | "LogStringInteropEventV2" | "LogStringInteropEventV3" => {
+            "LogStaticStrInteropEvent"
+            | "LogStaticStrInteropEventV2"
+            | "LogStringInteropEventV2"
+            | "LogStringInteropEventV3" => {
                 let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| format!("reading time from {}", obj.type_name))?;

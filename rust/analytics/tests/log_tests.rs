@@ -11,6 +11,7 @@ use micromegas_tracing::levels::Level;
 use micromegas_tracing::logs;
 use micromegas_tracing::logs::LogBlock;
 use micromegas_tracing::logs::LogStaticStrInteropEvent;
+use micromegas_tracing::logs::LogStaticStrInteropEventV2;
 use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
@@ -21,6 +22,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
 use micromegas_tracing::property_set::PropertySetId;
+use micromegas_tracing::string_id::DynStringId;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::DynString;
 use micromegas_transit::value::{Object, Value};
@@ -47,6 +49,14 @@ fn test_log_interop_metadata() {
     obj_meta
         .iter()
         .position(|udt| *udt.name == "StringId")
+        .unwrap();
+    obj_meta
+        .iter()
+        .position(|udt| *udt.name == "LogStaticStrInteropEventV2")
+        .unwrap();
+    obj_meta
+        .iter()
+        .position(|udt| *udt.name == "DynStringId")
         .unwrap();
 }
 
@@ -560,6 +570,13 @@ fn test_block_scoped_interop_targets() {
         target,
         msg: DynString("interop two".into()),
     });
+    let id = dyn_deps.intern_str("runtime_target");
+    events.push(LogStaticStrInteropEventV2 {
+        time: 4,
+        level: Level::Trace as u32,
+        target: DynStringId { id },
+        msg: "interop static".into(),
+    });
     let key = String::from("region_key");
     let merged = merge_properties(
         PropertySet::empty(),
@@ -568,7 +585,7 @@ fn test_block_scoped_interop_targets() {
     let target = dyn_deps.intern_str_ref("tagged_target");
     let properties = dyn_deps.intern_set(&merged);
     events.push(TaggedLogInteropEvent {
-        time: 4,
+        time: 5,
         level: Level::Debug as u8,
         target,
         properties,
@@ -609,6 +626,7 @@ fn test_block_scoped_interop_targets() {
             expected("static message", "shared_target", Level::Info, vec![]),
             expected("interop one", "shared_target", Level::Warn, vec![]),
             expected("interop two", "runtime_target", Level::Error, vec![]),
+            expected("interop static", "runtime_target", Level::Trace, vec![]),
             expected(
                 "interop tagged",
                 "tagged_target",
