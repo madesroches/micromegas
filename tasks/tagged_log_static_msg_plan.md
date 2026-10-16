@@ -145,6 +145,11 @@ pub struct PropertySet {
 - `find_or_create` builds `dyn_view` after `sort_properties`, before interning. A lookup that
   finds an existing set throws its copy away. That happens once per callsite or `..set`, not per
   log.
+- `StaticStringRef::as_str(&self)` ties its lifetime to `&self`, so the view is built with
+  `dyn_deps::static_ref_str` (made `pub(crate)`, or moved next to `StaticStringRef`), which
+  yields `&'static str`. SAFETY note on the call: the refs come from `Property::new`'s
+  `&'static str` arguments and don't point into the set, so moving the set into `Intern` is
+  sound.
 - Write `PartialEq`, `Eq` and `Hash` by hand over `properties` only, so the view never changes
   identity or interning. `DynProperty<'static>` is `Send + Sync`, which `Intern` requires.
 - `dyn_properties(&'static self) -> &'static [DynProperty<'static>]` returns the view.
@@ -179,9 +184,10 @@ CHANGELOG entry says so. Unreal instrumentation is unaffected: it doesn't emit t
 
 ### Phase 1: Property set view
 
-2. `rust/tracing/src/property_set.rs`: add `dyn_view`, the manual `PartialEq`/`Eq`/`Hash`, and
-   change `dyn_properties` to return the slice.
-3. `rust/tracing/src/dyn_deps.rs`: in `merge_properties`, use `static_set.dyn_properties().to_vec()`.
+2. `rust/tracing/src/property_set.rs`: add `dyn_view` (built with `dyn_deps::static_ref_str`), the
+   manual `PartialEq`/`Eq`/`Hash`, and change `dyn_properties` to return the slice.
+3. `rust/tracing/src/dyn_deps.rs`: make `static_ref_str` `pub(crate)`; in `merge_properties`, use
+   `static_set.dyn_properties().to_vec()`.
 
 ### Phase 2: Event and dispatch
 
@@ -191,10 +197,11 @@ CHANGELOG entry says so. Unreal instrumentation is unaffected: it doesn't emit t
    `log_dyn_tagged_to_sink`, and pass the cached slice to `on_log` in `log_tagged_to_sink`.
 7. Update the in-process readers that match `LogMsgQueueAny`:
    - `rust/tracing/tests/utils.rs:70` (exhaustive match): add the arm.
-   - `rust/tracing/tests/property_macro_tests.rs:203`: record the new event as `tagged: true`
-     with its set id.
-   - `rust/tracing/tests/stream_flush_tests.rs:110` and `rust/tracing/tests/dyn_deps_tests.rs`
-     (`:479`, `:543`): match both tagged log events wherever they read `properties`.
+   - `rust/tracing/tests/property_macro_tests.rs:190-214`: add an event-kind field and an optional
+     `msg` to `LogEventRecord`, and record all four log event variants
+     (`LogStaticStrEvent`, `LogStringEvent`, `TaggedLogStaticStrEvent`, `TaggedLogString`).
+   - `rust/tracing/tests/stream_flush_tests.rs:110`: match both tagged log events wherever it
+     reads `properties`.
 
 ### Phase 3: Analytics
 
