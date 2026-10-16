@@ -1,0 +1,409 @@
+# Per-Block Dynamic Dependency Queue Plan
+
+**GitHub Issues**: https://github.com/madesroches/micromegas/issues/1654,
+https://github.com/madesroches/micromegas/issues/1665
+
+## Overview
+
+Events that carry runtime data (dynamic property values today) store that data in a per-block
+`PropertyArena` of boxed copies whose addresses act as dependency ids. At send time,
+`extract` walks every event again and serializes the same data. This plan replaces the arena
+with a **dynamic dependency queue**: a per-block queue of dependency records already in their
+wire form, with block-scoped ids. Calls that carry dynamic data write their records when the
+event is pushed. `extract` runs its usual walk for static dependencies, then appends the
+queue's bytes. Events that refer only to static data do no extra work on the calling thread.
+
+The queue deduplicates dynamic strings by content within a block, not only whole property
+sets. It is the shared mechanism for any future event type that carries runtime strings. This
+plan applies it to log and metric properties. That covers #1654 and folds in #1665, because
+static values inside a dynamic set keep their pointer ids. The wire format and SQL surface
+don't change.
+
+## Current State
+
+**Arena** (`rust/tracing/src/property_arena.rs`):
+
+- `PropertyArena` (`:15`) holds `Vec<Box<PropertySet>>`, `Vec<Box<str>>`, an
+  `FxHashMap<u64, Vec<u32>>` content index and an approximate `len_bytes`.
+- `get_or_insert` (`:63`) hashes the merged content with chained xxh3. A hit compares content
+  and allocates nothing. A miss allocates a `Box<PropertySet>`, its `Vec<Property>` and one
+  `Box<str>` per value, including values that came from the interned static set (#1665). Those
+  copies get new addresses, so they're never deduplicated against the interned originals.
+- `merge_properties` (`:29`) combines the callsite's interned static set with the dynamic
+  values into one sorted `Vec<DynProperty>`. Once merged, there's no record of which values
+  were `'static`.
+- The arena lives in `EventBlock::properties` (`rust/tracing/src/event/block.rs:16`), and
+  `EventBlock::len_bytes` (`:93`) adds the arena's approximation to the events' bytes.
+  `EventStream::get_block_mut_parts` (`rust/tracing/src/event/stream.rs:128`) hands out the
+  queue and the arena together.
+
+**Dispatch** (`rust/tracing/src/dispatch.rs`): the four dynamic paths call `get_or_insert`
+under the stream lock: `tagged_float_metric_dyn` (`:775`), `tagged_integer_metric_dyn`
+(`:800`), `log_dyn_tagged_to_sink` (`:968`) and `log_interop_dyn_tagged` (`:1002`). Each
+stores the returned `*const PropertySet` in the event.
+
+**Events:**
+
+- `TaggedLogString` and `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`) have a
+  manual `InProcSerialize` that writes `properties` as a `u64`.
+- `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent`
+  (`rust/tracing/src/metrics/metric_events.rs:43`, `:53`) derive `TransitReflect`. The derive
+  marks `*const` members as references (`rust/transit/derive/src/derive_reflect.rs:17`), which
+  makes the analytics parser resolve `properties` through the dependency map.
+
+**Extraction:**
+
+- `LogMsgQueue::extract` (`rust/tracing/src/logs/block.rs:66`) and `MetricsMsgQueue::extract`
+  (`rust/tracing/src/metrics/block.rs:64`) walk every event. For each tagged event they call
+  `unsafe record_properties` (`rust/tracing/src/property_set.rs:144`), which dereferences the
+  set pointer (interned or arena-owned) and emits its name and value strings followed by a
+  `PropertySetDependency`, deduplicated by address.
+- `PropertySetDependency` (`property_set.rs:122`) holds a raw `*const PropertySet`. Its
+  validity contract covers arena sets.
+- `StaticStringDependency` (`rust/transit/src/static_string.rs`) derives its id from `ptr` in
+  `write_value`, so the id is always an address.
+- The only production caller is `encode_block` (`rust/telemetry-sink/src/stream_block.rs:35`),
+  which runs on the sink side, outside the stream lock.
+
+**Parser constraints** (`rust/transit/src/parser.rs`):
+
+- `read_dependencies` (`:25`) builds a `HashMap<u64, Value>` in stream order and bails on a
+  duplicate id. Ids are opaque `u64` keys scoped to one block.
+- `parse_property_set` (`rust/tracing/src/parsing.rs:216`) resolves each property's name and
+  value through `parse_pod_instance`. That function looks the reference up in the map built so
+  far and bails with `dependency not found` if it's missing (`parser.rs:182`). **So a record
+  must come after every record it references.**
+
+**In-process readers** that dereference `properties`:
+`rust/tracing/tests/stream_flush_tests.rs:112`,
+`rust/tracing/tests/property_arena_tests.rs:67` (`set_as_pairs`), and the pointer comparisons
+in `rust/tracing/tests/property_macro_tests.rs`. `rust/analytics/tests/log_tests.rs:363` and
+`rust/analytics/tests/metrics_test.rs:238` build blocks through `merge_properties` and the
+arena.
+
+## Design
+
+### Reference direction and output order
+
+A dynamic record can point at static data: a dynamic set references `'static` names, and
+`'static` values from the callsite set. Static data can never point at a dynamic record, since
+block-scoped ids don't exist when static data is created. So the dependency stream is always
+**static records first, dynamic queue appended**:
+
+```
+deps = [ static walk over events + static_refs, deduplicated ] ++ [ dynamic queue bytes ]
+```
+
+The dynamic queue contains only records with tagged ids, and the static walk never emits a
+tagged id. So nothing is emitted twice, and the two parts don't share a dedup set. Within the
+dynamic queue, a value string is always pushed before the set that references it.
+
+### Block-scoped ids
+
+```rust
+pub const DYN_ID_TAG: u64 = 1 << 63;
+```
+
+A dynamic record's id is `DYN_ID_TAG | offset`, where `offset` is the byte offset of the record
+in the dynamic queue. User-space addresses on supported 64-bit targets stay below 2⁴⁸, so a
+tagged id can't collide with the pointer ids of interned or `'static` data. The offset also gives
+in-process readers O(1) decoding. Ids stay `u64` on the wire, so neither the analytics parser
+nor the Unreal instrumentation changes.
+
+### `DynDeps<D>` (new `rust/tracing/src/dyn_deps.rs`, replaces `property_arena.rs`)
+
+```rust
+pub struct DynDeps<D> {
+    queue: D,                          // dynamic records only, tagged ids
+    static_refs: Vec<StaticStringRef>, // 'static strings that `queue` records reference
+    strings: FxHashMap<u64, Vec<u32>>, // content hash -> string record offsets
+    sets: FxHashMap<u64, Vec<u32>>,    // content hash -> set record offsets
+}
+```
+
+- `D` is the stream's own deps queue type (`LogDepsQueue`, `MetricsDepsQueue`). Each record in
+  a queue starts with a type-index byte that refers to that queue type's UDT list, so the
+  dynamic queue must be the same type as the output for its bytes to mean the same thing there.
+  That makes the append a plain `memcpy`, with no re-encoding.
+  `DynDeps::new()` uses `D::new(0)` and doesn't allocate, so thread and image blocks, which
+  never insert, pay nothing.
+- `len_bytes()` returns `queue.len_bytes()`. That's exact: the budget no longer uses an
+  approximation. Bytes from `static_refs` aren't counted, the same as for static dependencies
+  today.
+- `static_refs` may repeat a name once per miss. The send-time walk deduplicates them, and the
+  list only grows with misses.
+
+Pushing records from generic code needs a small trait, implemented for `LogDepsQueue` and
+`MetricsDepsQueue`:
+
+```rust
+pub trait PropertyDepsQueue: HeterogeneousQueue {
+    fn push_string(&mut self, dep: StaticStringDependency);
+    fn push_set(&mut self, dep: PropertySetDependency);
+}
+```
+
+This trait also replaces the two `fn` pointer parameters of `record_properties`.
+
+**`intern_set(&mut self, merged: &MergedProperties) -> PropertySetId`** (requires
+`D: PropertyDepsQueue`):
+
+1. Hash the content the same way as today (chained xxh3 over names and values).
+2. **Hit check.** For each candidate offset in `sets[hash]`, decode the set record from the
+   queue bytes and compare it with `merged` by content:
+   - Names are `'static`, so they're compared through `as_str`.
+   - A value with a tagged id is resolved to its string record in the queue. An untagged value
+     is a `'static` pointer.
+
+   On a match, return `DYN_ID_TAG | offset`. A hit makes one probe and allocates nothing, the
+   same as today.
+3. **Miss.** Build one `Vec<Property>` for the set:
+   - **Names** stay `StaticStringRef::from(&'static str)` and are pushed onto `static_refs`.
+   - **Static values** (marked in the `static_values` mask) keep their `'static` pointer and are
+     pushed onto `static_refs`. This is the #1665 fix.
+   - **Dynamic values** go through `intern_str`, and the property stores the returned tagged id
+     as its `StaticStringRef::ptr`, with the real `len` and `codec`. That ref is only serialized,
+     never dereferenced: it's written into the queue and dropped.
+
+   Then push the set record with id `DYN_ID_TAG | queue.len_bytes()` and record the offset in
+   `sets[hash]`.
+
+**`intern_str(&mut self, value: &str) -> u64`**:
+
+- Hash the value with xxh3 and probe `strings`. Candidates are compared against the bytes of
+  the string record at their offset.
+- On a miss, push a `StaticStringDependency { id: DYN_ID_TAG | offset, codec: Utf8, len, ptr }`.
+  `push` copies the bytes into the queue right away, so the caller's `&str` only needs to live
+  for the duration of the call.
+- Dynamic values are therefore deduplicated across sets. For example, a `correlation_id` used
+  with two different property combinations is sent once.
+
+**`set_properties(&self, id: PropertySetId) -> Vec<(&str, &str)>`**: decodes an interned or
+tagged set for in-process readers (test helpers).
+
+### `MergedProperties` (#1665)
+
+`merge_properties` moves into `dyn_deps.rs` and returns:
+
+```rust
+pub struct MergedProperties<'a> {
+    pub properties: Vec<DynProperty<'a>>,
+    static_values: u64, // bit i set: properties[i].value comes from the &'static set
+}
+```
+
+- Sinks still receive `&merged.properties`, so `EventSink` doesn't change.
+- Callsite literal pairs are already folded into the interned static set by `callsite_set`, so
+  they're covered.
+- A set with more than 64 properties treats the extra ones as dynamic. That's still correct;
+  those values just aren't deduplicated against their originals.
+- The mask is what justifies building `StaticStringRef` values from the merged `&str` (with the
+  existing `from_str_unchecked`).
+
+### Event field: `PropertySetId`
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PropertySetId(u64);
+impl PropertySetId {
+    pub fn interned(set: &'static PropertySet) -> Self;
+    pub fn as_interned(self) -> Option<&'static PropertySet>; // None for tagged ids
+}
+```
+
+- The four tagged events replace `properties: *const PropertySet` with
+  `properties: PropertySetId`.
+- `as_interned` is safe, because an untagged id can only come from a `&'static PropertySet`.
+  This removes the `unsafe` from `record_properties` and the arena clause of the validity
+  contract on `PropertySetDependency`.
+- Log events already serialize the field by hand as a `u64`, so their wire layout is unchanged.
+- The metric events derive `TransitReflect`, which only marks pointer and reference types as
+  references. Add a field attribute `#[transit(reference)]` to the derive
+  (`rust/transit/derive/src/derive_reflect.rs`) and put it on both metric `properties` fields.
+  Their UDT keeps the same member name, offset, size and `is_reference: true`.
+- The member's `type_name` string changes, from the pointer type's text to `PropertySetId`. The
+  parser reads reference members before it looks at `type_name` (`parser.rs:174`), so nothing
+  reads that string.
+
+### Dependency record changes
+
+- **`StaticStringDependency`** (transit) gains an explicit `id: u64` field, and `write_value`
+  writes it instead of `ptr as u64`. Existing constructors (for example
+  `StaticStringRef::into_dependency`) set `id = ptr`. The wire format is unchanged.
+- **`PropertySetDependency`** becomes `{ id: u64, properties: Cow<'static, [Property]> }`.
+  - At extraction, interned sets borrow their `&'static` slice.
+  - Dynamic sets own the `Vec` built on a miss, which is dropped right after `push`. That's one
+    allocation per miss, against 2 + N today.
+  - The raw pointer and its safety contract go away.
+
+### Block, stream and extraction
+
+- `EventBlock::properties: PropertyArena` becomes `dyn_deps: DynDeps<Q::DepsQueue>`, with an
+  `ExtractDeps` bound on `Q`.
+- `ExtractDeps::DepsQueue` gets a `HeterogeneousQueue` bound. `TracingBlock::len_bytes` uses
+  `dyn_deps.len_bytes()`.
+- `get_block_mut_parts` returns `(&mut Q, &mut DynDeps<Q::DepsQueue>)`.
+- `ExtractDeps::extract(&self)` becomes `extract(&self, dyn_deps: &DynDeps<Self::DepsQueue>)`.
+  For log and metric queues:
+  1. Walk the events as today, including the `last_desc`/`last_set` shortcuts. For a tagged
+     event, call `record_properties` only when `as_interned()` is `Some`; skip tagged ids.
+  2. For each entry in `dyn_deps.static_refs()`, push it if `recorded.insert(id)`.
+  3. Append the dynamic queue with `deps.extend_from(dyn_deps.queue())`. This is a new
+     `HeterogeneousQueue` method generated by `declare_queue_struct` that takes `&Self`, so
+     only a queue of the same type, with the same type indices, can be appended. It does
+     `buffer.extend_from_slice(other.as_bytes())` (a `memcpy`) and adds `other`'s object count.
+- Thread and image queues ignore the argument.
+- `encode_block` calls `block.events.extract(&block.dyn_deps)`.
+
+### Cost on the calling thread
+
+- **Static-only events:** unchanged. They push the event and nothing else; their dependencies
+  are still found at send time.
+- **Dynamic events that hit:** one hash and probe, as today.
+- **Dynamic events that miss:** one string probe per dynamic value, plus appends to a single
+  growing buffer and one short-lived `Vec`. Today a miss costs one boxed allocation per value
+  plus three more.
+
+## Implementation Steps
+
+1. **Transit.**
+   - Add the `id` field to `StaticStringDependency` and update every constructor.
+   - Add `extend_from` to `HeterogeneousQueue` and generate it in
+     `rust/transit/derive/src/declare_queue.rs`.
+   - Add the `#[transit(reference)]` field attribute in
+     `rust/transit/derive/src/derive_reflect.rs`.
+2. **Property types** (`rust/tracing/src/property_set.rs`):
+   - Add `PropertySetId`.
+   - Reshape `PropertySetDependency` to `{ id, properties: Cow }`.
+   - Make `record_properties` safe: it takes `&'static PropertySet` and a
+     `D: PropertyDepsQueue`.
+3. **`dyn_deps.rs`**: add `DYN_ID_TAG`, `PropertyDepsQueue`, `DynDeps`, `MergedProperties` and
+   `merge_properties`. Delete `property_arena.rs` and update `rust/tracing/src/lib.rs` (same
+   native-only `cfg`).
+4. **Queues** (`logs/block.rs`, `metrics/block.rs`):
+   - Implement `PropertyDepsQueue`.
+   - Change `extract` to the new signature and three-step order.
+   - Update `spans/block.rs` and `images/block.rs` to the new signature.
+5. **Events**: switch the four tagged events to `PropertySetId` (`logs/log_events.rs`,
+   `metrics/metric_events.rs`).
+6. **Block and stream**: change the `dyn_deps` field, its bounds and `len_bytes` in
+   `event/block.rs`, and `get_block_mut_parts` in `event/stream.rs`.
+7. **Dispatch**: switch the four dynamic paths in `dispatch.rs` to `merge_properties` →
+   `intern_set`, pass `&merged.properties` to sinks, and wrap the static paths' sets with
+   `PropertySetId::interned`.
+8. **Sink**: update `encode_block` in `rust/telemetry-sink/src/stream_block.rs`.
+9. **Callers**: update the bench (`rust/tracing/benches/properties.rs`), the tracing tests and
+   the analytics tests listed above. Rename `property_arena_tests.rs` to `dyn_deps_tests.rs`.
+10. **Measure**: run the `properties` bench before and after (`cargo bench -p
+    micromegas-tracing --bench properties`) and add a `CHANGELOG.md` entry with the results and
+    a **Minor breaking change** clause.
+
+## Files to Modify
+
+- `rust/transit/src/static_string.rs`, `rust/transit/src/heterogeneous_queue.rs`
+- `rust/transit/derive/src/declare_queue.rs`, `rust/transit/derive/src/derive_reflect.rs`
+- `rust/tracing/src/dyn_deps.rs` (new), `rust/tracing/src/property_arena.rs` (deleted),
+  `rust/tracing/src/lib.rs`
+- `rust/tracing/src/property_set.rs`, `rust/tracing/src/static_string_ref.rs`
+- `rust/tracing/src/event/block.rs`, `rust/tracing/src/event/stream.rs`
+- `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/log_events.rs`
+- `rust/tracing/src/metrics/block.rs`, `rust/tracing/src/metrics/metric_events.rs`
+- `rust/tracing/src/spans/block.rs`, `rust/tracing/src/images/block.rs`
+- `rust/tracing/src/dispatch.rs`
+- `rust/telemetry-sink/src/stream_block.rs`
+- `rust/tracing/benches/properties.rs`
+- `rust/tracing/tests/property_arena_tests.rs` → `dyn_deps_tests.rs`,
+  `rust/tracing/tests/stream_flush_tests.rs`, `rust/tracing/tests/property_macro_tests.rs`
+- `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`
+- `CHANGELOG.md`
+
+## Trade-offs
+
+- **Pre-build the whole dependency list at push time** (the comment on #1654): rejected. Every
+  static event would pay a dedup probe under the stream lock. The send-time walk with its
+  repeat shortcuts is cheaper and runs off the calling thread.
+- **Dynamic queue first, self-contained**, so that it also holds the static strings it
+  references: rejected. It needs a dedup set shared with the static walk, and it hashes static
+  ids at push time. Appending after the static records follows the direction references can go,
+  and leaves all static dedup to a single pass.
+- **Two-level set key `(name_ptr, value_id)`**, which makes hit comparisons integer-only:
+  rejected. It costs one string probe per dynamic value on every hit, and hits are the hot path.
+  Here, value strings are only probed on a miss.
+- **A dedicated `DynDepsQueue<StaticStringDependency, PropertySetDependency>`**: rejected. Its
+  type indices (0 and 1) differ from those of `LogDepsQueue` and `MetricsDepsQueue`, so
+  appending would mean decoding and pushing each record again instead of a `memcpy`.
+- **Pointer ids from a stable bump allocator**: rejected. It would need memory that stays
+  addressable for the whole block. Tagged offsets need no stable memory, and readers decode
+  them in O(1).
+- **A hand-written `Reflect` for the two metric events** instead of a derive attribute: works,
+  but duplicates layout code. The attribute is small and serves any future id-typed field.
+
+## Decisions
+
+- The dynamic queue is appended after the static dependencies, never prepended. It holds only
+  tagged records.
+- The dynamic queue is the same type as the stream's static deps queue, so the type-index
+  bytes match and the append is a `memcpy`.
+- Events that carry only static data get no new work on the calling thread.
+- Property names stay `'static` and are deduplicated by pointer, under the existing cardinality
+  contract.
+- Log message bodies stay inline `DynString`s. They're too high-cardinality for dedup to pay
+  off.
+- #1665 is folded into this plan through `MergedProperties::static_values`.
+
+## Documentation
+
+No mkdocs page describes the arena or the dependency stream. The only documentation update is
+the `CHANGELOG.md` entry.
+
+## Testing Strategy
+
+All of these are no-DB unit tests.
+
+**`rust/tracing/tests/dyn_deps_tests.rs`**, which replaces the arena tests:
+
+- Interning the same set twice returns the same id and doesn't grow `len_bytes`.
+- Different values give different ids.
+- A set given as static plus dynamic values and the same set given as all-dynamic values get
+  the same id.
+- A dynamic value used in two different sets produces one string record.
+- Static values from the callsite set produce no string record in the queue, and they appear in
+  `static_refs` with their original pointer (#1665).
+- `len_bytes()` equals the queue's byte length.
+- Every id has `DYN_ID_TAG` set.
+- `set_properties` decodes both interned and tagged sets.
+
+**Round trip through the real parser** (`rust/analytics/tests/log_tests.rs` and
+`metrics_test.rs`, which already encode blocks and parse them):
+
+- A block that mixes interned sets, dynamic sets sharing names with them, and static values
+  inside dynamic sets parses without `duplicate dependency id` or `dependency not found`, with
+  the right properties on every event. This pins the ordering constraint that is the main
+  correctness risk.
+- Tagged metric events still resolve `properties`.
+
+**Wire layout:** `TaggedFloatMetricEvent::reflect()` and `TaggedIntegerMetricEvent::reflect()`
+keep the `properties` member at the same offset and size with `is_reference: true`.
+
+**Existing coverage:** `stream_flush_tests.rs` and `property_macro_tests.rs` keep their
+assertions through `set_properties` and `PropertySetId` equality.
+
+**Bench:** the `properties` bench reports `extract` time and dependency bytes per event. The
+#1665 example (about 226 bytes per event against 73) should get close to the
+dynamic-value-only figure.
+
+## Follow-ups (not in this plan)
+
+`DynDeps::intern_str` is the general mechanism for runtime strings referenced by events. Two
+places could adopt it once this lands:
+
+- **Named spans with runtime names.** Today callers leak a process-wide `intern_string` per
+  name (`rust/tracing/examples/named_async_spans.rs`). A dynamic variant needs:
+  - a span name field type that holds a block-scoped id;
+  - the future or guard to own its name, because the end event may land in a different block,
+    or on a different thread's stream, than the begin event, and must intern the name again
+    there.
+- **Interop log targets.** `log_interop*` calls `intern_string(desc.target)` on every call.
+  A block-scoped string would avoid the process-wide lookup and the leak for dynamic targets,
+  but it would move a probe back under the log stream lock, which #1669 just shortened.
+  Measure before switching.
