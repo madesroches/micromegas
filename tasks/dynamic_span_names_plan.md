@@ -248,6 +248,7 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 - `rust/tracing/examples/named_async_spans.rs`, `rust/tracing/benches/with_dispatch.rs`
 - `rust/tracing/tests/string_id_tests.rs`, `rust/tracing/tests/dynamic_span_names_tests.rs`
   (new), `rust/analytics/tests/span_tests.rs`
+- `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -277,7 +278,8 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 - The `span_scope_named!` doc comment (`macros.rs:42-56`).
 - `examples/named_async_spans.rs`, which shows the dynamic macro in place of `intern_string`.
 - The `CHANGELOG.md` entry.
-- No mkdocs page covers named spans in Rust.
+- `mkdocs/docs/when-to-use/index.md` ("Code vs. data" paragraph): say a Rust span name can be a
+  statically allocated string or built at runtime with the `_dyn` macros.
 
 ## Testing Strategy
 
