@@ -59,12 +59,11 @@
 //!
 //! Properties are `key = value` pairs, written before the format string in logs and before the
 //! value in metrics. Keys written in the macros are identifiers or string literals and are always
-//! `'static`. A literal
-//! value is interned once per callsite and costs one atomic load afterwards (unless a `..set` is
-//! spread: then the literals before it are copied into the block like dynamic values, while the
-//! spread set's own values are not). Any other value (a correlation, request or session id) is
-//! attached to the individual log entry or measure and copied into the current block, once per
-//! distinct value, and freed with it, so nothing is retained per distinct value:
+//! `'static`. A literal value is interned once per callsite and costs one atomic load afterwards
+//! (unless a `..set` is spread: then the literals before it are copied into the block like dynamic
+//! values, while the spread set's own values are not). Any other value (a correlation, request or
+//! session id) is attached to the individual log entry or measure and copied into the current
+//! block, once per distinct value, and freed with it, so nothing is retained per distinct value:
 //!
 //! ```rust,ignore
 //! use micromegas_tracing::prelude::*;

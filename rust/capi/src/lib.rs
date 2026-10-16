@@ -24,17 +24,8 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::atomic::AtomicU32;
 
-// Name and unit travel as `name` and `unit` property overrides, so the descriptors are shared.
-static INT_METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
-    lod: Verbosity::Min,
-    name: "",
-    unit: "",
-    target: "capi",
-    file: "micromegas-capi",
-    line: 0,
-};
-
-static FLOAT_METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
+// Name and unit travel as `name` and `unit` property overrides, so one descriptor serves both paths.
+static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
     lod: Verbosity::Min,
     name: "",
     unit: "",
@@ -339,7 +330,7 @@ pub unsafe extern "C" fn mm_metric_i_tagged(
             unit_str,
         )
     };
-    dispatch::tagged_integer_metric_dyn(&INT_METRIC_DESC, PropertySet::empty(), &properties, value);
+    dispatch::tagged_integer_metric_dyn(&METRIC_DESC, PropertySet::empty(), &properties, value);
 }
 
 /// Emit a floating-point metric.
@@ -390,7 +381,7 @@ pub unsafe extern "C" fn mm_metric_f_tagged(
             unit_str,
         )
     };
-    dispatch::tagged_float_metric_dyn(&FLOAT_METRIC_DESC, PropertySet::empty(), &properties, value);
+    dispatch::tagged_float_metric_dyn(&METRIC_DESC, PropertySet::empty(), &properties, value);
 }
 
 /// Flush all in-memory log and metric buffers to the transport.
