@@ -5,7 +5,7 @@ use micromegas_tracing::{
     error,
     event::NullEventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
-    imetric, span_scope,
+    imetric, span_scope, span_scope_named,
 };
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -32,6 +32,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("dispatch/span_scope", |b| {
         b.iter(|| {
             span_scope!("test");
+        });
+    });
+    c.bench_function("dispatch/span_scope_named", |b| {
+        b.iter(|| {
+            span_scope_named!("test");
         });
     });
 }
