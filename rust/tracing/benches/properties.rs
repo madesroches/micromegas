@@ -180,12 +180,20 @@ fn capture_metrics_block(sink: &BenchSink, case: Case, nb_events: usize) -> Arc<
 
 fn bench_extraction_group(c: &mut Criterion, sink: &BenchSink) {
     let mut group = c.benchmark_group("extract");
-    for name in ["dyn_high_card", "dyn_mixed"] {
+    for name in [
+        "static",
+        "set",
+        "dyn_low_card",
+        "dyn_high_card",
+        "dyn_mixed",
+    ] {
         let block = capture_log_block(sink, log_case(name), 10_000);
         bench_extract(&mut group, &format!("log/{name}"), &block.events);
     }
-    let block = capture_metrics_block(sink, metric_case("dyn_high_card"), 5_000);
-    bench_extract(&mut group, "metric/dyn_high_card", &block.events);
+    for name in ["plain", "set", "dyn_low_card", "dyn_high_card"] {
+        let block = capture_metrics_block(sink, metric_case(name), 5_000);
+        bench_extract(&mut group, &format!("metric/{name}"), &block.events);
+    }
     group.finish();
 }
 

@@ -1,9 +1,10 @@
 use micromegas_tracing::{
     dispatch::{
-        flush_log_buffer, flush_metrics_buffer, force_uninit, init_event_dispatch, log_dyn_tagged,
-        log_tagged, shutdown_dispatch, tagged_float_metric, tagged_float_metric_dyn,
+        float_metric, flush_log_buffer, flush_metrics_buffer, force_uninit, init_event_dispatch,
+        log, log_dyn_tagged, log_tagged, shutdown_dispatch, tagged_float_metric,
+        tagged_float_metric_dyn,
     },
-    event::{EventSink, TracingBlock},
+    event::{EventSink, ExtractDeps, TracingBlock},
     levels::Level,
     logs::{
         FILTER_LEVEL_UNSET_VALUE, LogBlock, LogMetadata, LogMsgQueueAny, LogStream, TaggedLogString,
@@ -27,6 +28,16 @@ use std::{
 };
 
 static LOG_DESC: LogMetadata = LogMetadata {
+    level: Level::Info,
+    level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
+    fmt_str: "",
+    target: "arena_tests",
+    module_path: "arena_tests",
+    file: file!(),
+    line: line!(),
+};
+
+static LOG_DESC_2: LogMetadata = LogMetadata {
     level: Level::Info,
     level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
     fmt_str: "",
@@ -388,4 +399,137 @@ fn dynamic_metric_lands_in_arena() {
         }
     }
     assert!(found);
+}
+
+fn log_deps(guard: &DispatchGuard, record: impl FnOnce()) -> usize {
+    guard.sink.state.lock().unwrap().log_blocks.clear();
+    record();
+    flush_log_buffer();
+    let state = guard.sink.state.lock().unwrap();
+    let blocks: Vec<_> = state
+        .log_blocks
+        .iter()
+        .filter(|b| b.events.nb_objects() > 0)
+        .collect();
+    assert_eq!(blocks.len(), 1, "events must fit in a single block");
+    blocks[0].events.extract().nb_objects()
+}
+
+fn metric_deps(guard: &DispatchGuard, record: impl FnOnce()) -> usize {
+    guard.sink.state.lock().unwrap().metrics_blocks.clear();
+    record();
+    flush_metrics_buffer();
+    let state = guard.sink.state.lock().unwrap();
+    let blocks: Vec<_> = state
+        .metrics_blocks
+        .iter()
+        .filter(|b| b.events.nb_objects() > 0)
+        .collect();
+    assert_eq!(blocks.len(), 1, "events must fit in a single block");
+    blocks[0].events.extract().nb_objects()
+}
+
+fn dyn_log(desc: &'static LogMetadata, set: &'static PropertySet, value: &str) {
+    log_dyn_tagged(
+        desc,
+        set,
+        &[DynProperty { name: "k", value }],
+        format_args!("m"),
+    );
+}
+
+#[test]
+#[serial]
+fn tagged_events_emit_dependencies() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("x", "1")]);
+    let untagged = log_deps(&guard, || log(&LOG_DESC, format_args!("m")));
+    let tagged = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    assert!(tagged > untagged);
+
+    let untagged = metric_deps(&guard, || float_metric(&METRIC_DESC, 1.0));
+    let tagged = metric_deps(&guard, || tagged_float_metric(&METRIC_DESC, set, 1.0));
+    assert!(tagged > untagged);
+}
+
+#[test]
+#[serial]
+fn repeated_events_emit_dependencies_once() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("x", "1")]);
+    let one = log_deps(&guard, || dyn_log(&LOG_DESC, PropertySet::empty(), "v"));
+    let many = log_deps(&guard, || {
+        for _ in 0..200 {
+            dyn_log(&LOG_DESC, PropertySet::empty(), "v");
+        }
+    });
+    assert_eq!(one, many);
+
+    let one = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    let many = log_deps(&guard, || {
+        for _ in 0..200 {
+            log_tagged(&LOG_DESC, set, format_args!("m"));
+        }
+    });
+    assert_eq!(one, many);
+
+    let one = metric_deps(&guard, || tagged_float_metric(&METRIC_DESC, set, 1.0));
+    let many = metric_deps(&guard, || {
+        for _ in 0..200 {
+            tagged_float_metric(&METRIC_DESC, set, 1.0);
+        }
+    });
+    assert_eq!(one, many);
+
+    let dyn_metric = || {
+        tagged_float_metric_dyn(
+            &METRIC_DESC,
+            PropertySet::empty(),
+            &[DynProperty {
+                name: "k",
+                value: "v",
+            }],
+            1.0,
+        )
+    };
+    let one = metric_deps(&guard, dyn_metric);
+    let many = metric_deps(&guard, || {
+        for _ in 0..200 {
+            dyn_metric();
+        }
+    });
+    assert_eq!(one, many);
+}
+
+#[test]
+#[serial]
+fn interleaved_sets_still_dedup() {
+    let guard = DispatchGuard::new();
+    let a = log_deps(&guard, || dyn_log(&LOG_DESC, PropertySet::empty(), "A"));
+    let interleaved = log_deps(&guard, || {
+        for v in ["A", "B", "A", "B", "A"] {
+            dyn_log(&LOG_DESC, PropertySet::empty(), v);
+        }
+    });
+    assert_eq!(interleaved, a + 2);
+}
+
+#[test]
+#[serial]
+fn interleaved_callsites_still_dedup() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("x", "1")]);
+    let one = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    let each = log_deps(&guard, || {
+        log_tagged(&LOG_DESC, set, format_args!("m"));
+        log_tagged(&LOG_DESC_2, set, format_args!("m"));
+    });
+    let alternating = log_deps(&guard, || {
+        for _ in 0..50 {
+            log_tagged(&LOG_DESC, set, format_args!("m"));
+            log_tagged(&LOG_DESC_2, set, format_args!("m"));
+        }
+    });
+    assert!(each > one);
+    assert_eq!(alternating, each);
 }

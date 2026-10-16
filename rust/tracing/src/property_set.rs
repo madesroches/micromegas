@@ -3,8 +3,8 @@
 use crate::static_string_ref::StaticStringRef;
 use internment::Intern;
 use micromegas_transit::{StaticStringDependency, UserDefinedType, prelude::*};
+use rustc_hash::FxHashSet;
 use std::{
-    collections::HashSet,
     hash::Hash,
     sync::{Arc, OnceLock},
 };
@@ -143,7 +143,7 @@ impl PropertySetDependency {
 /// `set` must be an interned set or belong to the arena of the block being extracted.
 pub(crate) unsafe fn record_properties<D>(
     set: *const PropertySet,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut D,
     push_string: fn(&mut D, StaticStringDependency),
     push_set: fn(&mut D, PropertySetDependency),

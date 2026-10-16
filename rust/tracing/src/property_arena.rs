@@ -3,10 +3,8 @@ use crate::{
     property_set::{DynProperty, Property, PropertySet, sort_dyn_properties},
     static_string_ref::StaticStringRef,
 };
-use std::{
-    collections::HashMap,
-    hash::{Hash, Hasher},
-};
+use rustc_hash::FxHashMap;
+use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 /// Owns the dynamic property sets referenced by one block's events.
 ///
@@ -20,7 +18,7 @@ pub struct PropertyArena {
     sets: Vec<Box<PropertySet>>,
     // The sets' value refs point into these boxes.
     values: Vec<Box<str>>,
-    index: HashMap<u64, Vec<u32>>,
+    index: FxHashMap<u64, Vec<u32>>,
     len_bytes: usize,
 }
 
@@ -42,12 +40,9 @@ pub fn merge_properties<'a>(
 }
 
 fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for (name, value) in properties {
-        name.hash(&mut hasher);
-        value.hash(&mut hasher);
-    }
-    hasher.finish()
+    properties.fold(0, |h, (name, value)| {
+        xxh3_64_with_seed(value.as_bytes(), xxh3_64_with_seed(name.as_bytes(), h))
+    })
 }
 
 fn same_content(stored: &[Property], properties: &[DynProperty<'_>]) -> bool {
