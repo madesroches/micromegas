@@ -220,19 +220,28 @@ depends on the fast path. It only removes lookups that would have returned "alre
 ## Testing Strategy
 
 No-DB unit tests in `rust/tracing/tests/property_arena_tests.rs`. They reuse its existing
-capturing sink and `DispatchGuard`. Each test captures one block and counts the variants that
-`block.events.extract().iter()` returns:
+capturing sink and `DispatchGuard`. Each test captures one block and asserts
+`block.events.extract().nb_objects()` (`HeterogeneousQueue`, with `ExtractDeps` imported) against
+an expected total. It does not count variants through `.iter()`: `read_value` is
+`unimplemented!()` for `StaticStringDependency` and `PropertySetDependency`, so iterating the
+deps queue panics. Keep N to a few hundred so all events fit in one 64 KiB block. Expected
+totals:
+
+- A log desc contributes one `Utf8StaticStringDependency` per distinct pointer among `fmt_str`,
+  `target`, `module_path` and `file` (at most 4), plus one `LogMetadataRecord`. A metric desc
+  does the same over `name`, `unit`, `target` and `file`, plus one `MetricMetadataDependency`.
+- Each distinct property set contributes one `StaticStringDependency` per distinct name or value
+  pointer not already recorded, plus one `PropertySetDependency`.
 
 - **Repeated events emit dependencies once.** Log N events from one callsite with the same
-  dynamic value, then N with an `..set` static set. Expect one `LogMetadataRecord` per callsite
-  and one `PropertySetDependency` per distinct set. Do the same for metrics, counting
-  `MetricMetadataDependency`.
+  dynamic value, then N with an `..set` static set. The total equals one desc plus one set.
+  Do the same for metrics.
 - **Interleaved sets still dedup.** Log values A, B, A, B, A from one callsite, which makes the
-  fast path miss every time. Expect exactly two `PropertySetDependency` and one
-  `LogMetadataRecord`, and the value strings as `StaticStringDependency` once each. This
-  catches a fast path that skips the set entirely, or one whose `last_*` is updated wrong.
-- **Interleaved callsites.** Alternate two log callsites that share one set. Expect two
-  metadata records and one set dependency.
+  fast path miss every time. The total equals one desc plus two sets, with each value string
+  counted once. This catches a fast path that skips the set entirely, or one whose `last_*` is
+  updated wrong.
+- **Interleaved callsites.** Alternate two log callsites that share one set. The total equals
+  two descs plus one set.
 
 The existing arena tests (`same_content_same_pointer`, `different_values_different_sets`,
 `split_between_static_and_dynamic_does_not_change_identity`) cover the content hash and index
