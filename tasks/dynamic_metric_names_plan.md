@@ -382,8 +382,8 @@ All of these are no-DB unit tests.
   interned twice returns the same id and doesn't grow `len_bytes`.
 - A dynamic name equal to a dynamic value, or to another set's dynamic name, shares one string
   record.
-- The same text as a static name and as a dynamic name gives equal content: `set_properties`
-  returns the same pairs. The ids differ, since one name is a pointer and the other a record.
+- The same text as a static name and as a dynamic name gives equal content: both sets resolve
+  to the same id and `set_properties` returns the same pairs.
 - `set_properties` decodes dynamic names; `extract` emits only static names before the queue.
 
 **Interop targets** (`rust/tracing/tests/log_events_tests.rs` or a new
