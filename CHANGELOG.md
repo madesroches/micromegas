@@ -16,7 +16,8 @@ This file documents the historical progress of the Micromegas project. For curre
   `mm_metric_i` and `mm_metric_f` keep their signatures and no longer intern or leak anything.
   Interop log targets (`mm_log`, the `tracing` and `log` bridges) are string records of the
   block instead of process-lifetime interned strings, and a static interop message is written
-  as a `LogStringInteropEvent`; `LogStaticStrInteropEvent` stays readable for old data. The
+  as a new `LogStaticStrInteropEventV2` whose target is a `DynStringId` and whose message stays a
+  pointer; `LogStaticStrInteropEvent` stays readable for old data. The
   Blender add-on exposes `log(.., properties=)`, `metric_i` and `metric_f` to other add-ons.
   Medians on the `with_dispatch` benchmark: `dispatch/metric_dyn` 65.2 ns (same name every
   call) and `dispatch/metric_dyn_high_card` 136.2 ns (10k rotating names), against 46.7 ns for

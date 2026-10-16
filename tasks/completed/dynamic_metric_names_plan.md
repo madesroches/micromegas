@@ -150,14 +150,17 @@ the member's value becomes the id of a string record in the block's queue, writt
 - `log_interop` and `log_interop_dyn_tagged` call `get_block_mut_parts()` (`log_interop`
   currently uses `get_events_mut()`) and intern the target. The formatted-message handling doesn't
   change.
-- `log_interop` also emits `LogStringInteropEvent` when `args.as_str()` yields a static message,
-  copying the message into its `DynString` and using the block-scoped target, as the
-  formatted-message path does. `LogStaticStrInteropEvent` (`target: StringId`) is no longer
-  written, but stays a readable event type: its reflection, its `extract` arm and its analytics
-  parsing are unchanged, so old data and the analytics tests and bench that push it with
-  `'static` targets keep working.
+- When `args.as_str()` yields a static message, `log_interop` emits a new
+  `LogStaticStrInteropEventV2 { time, level: u32, target: DynStringId, msg: StringId }`
+  (`#[derive(TransitReflect)]`, the `DynStringId` precedent of the dynamic span name events): the
+  message stays a pointer and the target is a string record of the block. Analytics parses it in
+  the same arm as `LogStaticStrInteropEvent`. `LogStaticStrInteropEvent` (`target: StringId`) is
+  no longer written, but stays a readable event type: its reflection, its `extract` arm and its
+  analytics parsing are unchanged, so old data and the analytics tests and bench that push it
+  with `'static` targets keep working.
 - `extract`: the `LogStringInteropEvent` and `TaggedLogInteropEvent` arms stop emitting the
-  target, since it is in the appended queue. The `LogStaticStrInteropEvent` arm is unchanged.
+  target, since it is in the appended queue, and the `LogStaticStrInteropEventV2` arm emits only
+  its `msg`. The `LogStaticStrInteropEvent` arm is unchanged.
 - `analytics/tests/log_tests.rs`, which pushes `LogStringInteropEvent` and
   `TaggedLogInteropEvent`, builds the target through `dyn_deps.intern_str_ref`.
 
@@ -292,7 +295,7 @@ regenerate it with cbindgen, which would drop the hand-written content.
 3. **Interop targets** (`rust/tracing/src/static_string_ref.rs`, `dyn_deps.rs`,
    `logs/log_events.rs`, `logs/block.rs`, `dispatch.rs`): `BlockStringRef`, `intern_str_ref`,
    `str`, the `target` type of `LogStringInteropEvent` and `TaggedLogInteropEvent`, the two
-   dispatch functions (`log_interop`'s static-message path emits `LogStringInteropEvent`) and
+   dispatch functions (`log_interop`'s static-message path emits `LogStaticStrInteropEventV2`) and
    their `extract` arms. Migrate `analytics/tests/log_tests.rs` (the only analytics file that
    builds those two events; the tests and bench that push `LogStaticStrInteropEvent` are
    unchanged), and `extract_interop` in
@@ -357,10 +360,10 @@ regenerate it with cbindgen, which would drop the hand-written content.
 - **`BlockStringRef` vs. reusing `StaticStringRef`** for interop targets. Reusing the type
   needs no new type, but a dynamic id stored in a dereferenceable type is only kept safe by
   convention. A distinct type with the same layout makes the compiler find every reader.
-- **Static interop messages as `LogStringInteropEvent` (chosen) vs. a block-scoped variant of
-  `LogStaticStrInteropEvent`.** A static interop message is now copied into the block instead of
-  referenced by pointer, in exchange for no new reflection type and no change to
-  `LogStaticStrInteropEvent`.
+- **`LogStaticStrInteropEventV2` (chosen) vs. writing static interop messages as
+  `LogStringInteropEvent`.** The latter needs no new event type but copies every static message
+  into the block. The new event keeps the message a pointer; an older analytics server can't
+  parse it, as with the dynamic span name events.
 
 ## Decisions
 
@@ -371,7 +374,8 @@ regenerate it with cbindgen, which would drop the hand-written content.
 - No leaks (user call): nothing received by the C API, keys included, outlives its block, so
   `DynProperty` gains block-scoped names. Rust callers keep `'static` keys through
   `DynProperty::new`.
-- `LogStaticStrInteropEvent` is no longer emitted; static-message interop logs use `LogStringInteropEvent` so its `StringId` target needs no block-scoped variant.
+- `LogStaticStrInteropEvent` is no longer emitted; static-message interop logs use a new
+  `LogStaticStrInteropEventV2` with a `DynStringId` target, so the message is not copied.
 - The pre-existing interop target leak is fixed here, since `mm_log` and `mm_log_tagged` go
   through it.
 - The per-call `Vec` of `merge_properties` is acceptable for dynamic metrics (user call).
@@ -442,8 +446,8 @@ All of these are no-DB unit tests.
 - After `flush_log_buffer()`, the next block writes the target again.
 - `dyn_deps.str(evt.target.id)` returns the target text.
 - A `log_interop` call whose `args.as_str()` is a static message produces a
-  `LogStringInteropEvent` (not a `LogStaticStrInteropEvent`) whose target resolves from the block
-  and whose `msg` equals the static text.
+  `LogStaticStrInteropEventV2` whose target resolves from the block and whose `msg` points to the
+  static text; the analytics round trip parses it.
 - `log_interop_dyn_tagged` with a `with_dyn_name` key: the set resolves, the sink's `on_log`
   sees no `target`/`level` keys, and the event keeps its own target and level. This case uses a
   custom recording `EventSink` (modeled on `rust/telemetry-sink/tests/tracing_interop_tests.rs`)
