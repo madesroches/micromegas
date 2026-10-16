@@ -903,24 +903,25 @@ impl Dispatch {
         let time = now();
         sink.on_log(desc, properties.dyn_properties(), time, args);
         let properties = PropertySetId::interned(properties);
-        if is_static_msg(desc, &args) {
-            let mut log_stream = self.log_stream.lock().unwrap();
-            log_stream.get_events_mut().push(TaggedLogStaticStrEvent {
+        let msg = if is_static_msg(desc, &args) {
+            None
+        } else {
+            Some(micromegas_transit::DynString(args.to_string()))
+        };
+        let mut log_stream = self.log_stream.lock().unwrap();
+        match msg {
+            None => log_stream.get_events_mut().push(TaggedLogStaticStrEvent {
                 desc,
                 properties,
                 time,
-            });
-            self.on_log_pushed(log_stream);
-            return;
+            }),
+            Some(msg) => log_stream.get_events_mut().push(TaggedLogString {
+                desc,
+                properties,
+                time,
+                msg,
+            }),
         }
-        let msg = micromegas_transit::DynString(args.to_string());
-        let mut log_stream = self.log_stream.lock().unwrap();
-        log_stream.get_events_mut().push(TaggedLogString {
-            desc,
-            properties,
-            time,
-            msg,
-        });
         self.on_log_pushed(log_stream);
     }
 
