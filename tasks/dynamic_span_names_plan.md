@@ -9,8 +9,9 @@ Named spans only accept a `&'static str` name. To use a name built at runtime, y
 through `intern_string`, and the process keeps it forever. With high-cardinality names, that
 memory has no bound. This plan gives thread blocks the per-block dynamic dependency queue
 (`DynDeps`) that logs and metrics already have. A dynamic name is written to the block's queue
-as a string record with a block-scoped id, and that record is freed along with the block. The
-`&'static str` paths don't change. Nothing changes in the wire format or the SQL surface.
+as a string record with a block-scoped id, and that record is freed along with the block.
+Dynamic names get their own four event types, so the `&'static str` events and their paths don't
+change. The SQL surface doesn't change.
 
 ## Current State
 
@@ -19,12 +20,10 @@ as a string record with a block-scoped id, and that record is freed along with t
 `EndAsyncNamedSpanEvent`) store `name: StringId`. All of them derive `TransitReflect` and are
 serialized by copying the raw struct.
 
-**`StringId`** (`rust/tracing/src/string_id.rs`): `{ pub ptr: *const u8, pub len: u32 }`, which
-takes 16 bytes because of 4 bytes of padding. It has a hand-written `Reflect` with a single
-reference member `id` at the offset of `ptr`, so the parser resolves it through the dependency
-map. It is also used by `LogStaticStrInteropEvent` (`logs/log_events.rs:85`). There, the value
-is always static, and `parsing.rs:183` reads it through the `StringId` UDT.
-`From<&StringId> for Utf8StaticStringDependency` dereferences `ptr`.
+**`StringId`** (`rust/tracing/src/string_id.rs`): `{ pub ptr: *const u8, pub len: u32 }`, with
+a hand-written `Reflect` (the derive doesn't support reference UDTs) exposing one reference
+member `id`. The parser resolves any `is_reference` member by looking its 8-byte key up in the
+dependency map (`transit/src/parser.rs:174`); it doesn't care which UDT carries the key.
 
 **Dispatch** (`rust/tracing/src/dispatch.rs:356-445`): `on_begin_named_scope`,
 `on_end_named_scope`, `on_begin_async_named_scope` and `on_end_async_named_scope` take
@@ -59,46 +58,33 @@ are wasm no-op stubs in `dispatch_wasm.rs:213-255`.
   requires both `push_string` and `push_set`, and the thread queue has no
   `PropertySetDependency`.
 
-**Analytics**: `thread_block_processor.rs:44` and `async_block_processing.rs` read `name` as a
-resolved `&str`. `BorrowedScopeDesc` hashes by content. The parser handles
-`StaticStringDependency` records by UDT name (`transit/src/parser.rs:79`), so it already knows
-how to read them in any stream.
+**Analytics**: `thread_block_processor.rs:79-101` and `async_block_processing.rs:104-139` match
+events by type name and read `name` as a resolved `&str`; unknown types are skipped
+(`thread_block_processor` logs `unknown event type`). `BorrowedScopeDesc` hashes by content. The
+parser handles `StaticStringDependency` records by UDT name (`transit/src/parser.rs:79`), so it
+already knows how to read them in any stream.
+
+**Test sink**: `tracing/tests/utils.rs:105-116` matches `ThreadEventQueueAny` exhaustively.
 
 ## Design
 
-### Static vs. dynamic `StringId`
+### Dynamic named events
 
-`StringId` stores an explicit `is_dyn` flag in its existing padding:
+A reference UDT for a block-scoped id, next to `StringId` in `string_id.rs`, with a hand-written
+`Reflect` like `StringId`'s (name `DynStringId`, size 8, reference member `id`):
 
 ```rust
 #[derive(Debug)]
-pub struct StringId {
-    id: u64,      // address of a `&'static str`, or a block-scoped dynamic id
-    len: u32,
-    is_dyn: bool, // fits in the existing padding: size stays 16
+pub struct DynStringId {
+    pub id: u64,
 }
-
-impl StringId {
-    pub fn dynamic(id: u64, len: u32) -> Self;            // is_dyn = true
-    pub fn id(&self) -> u64;
-    pub fn len(&self) -> u32;
-    pub fn as_static(&self) -> Option<&'static str>;     // None when is_dyn
-}
-impl From<&'static str> for StringId { /* is_dyn = false */ }
 ```
 
-- The fields become private. The only way to get `is_dyn == false` is `From<&'static str>`,
-  which makes the safe `as_static` sound. This is the same argument as
-  `PropertySetId::as_interned`. `dynamic` can be `pub`: a bad id can only cause a parser
-  `dependency not found` error, never undefined behavior.
-- `id` becomes a `u64` instead of `*const u8`, the same as `StaticStringRef::ptr`.
-  `as_static` rebuilds the slice from `id`/`len`.
-- `Reflect` keeps the name `StringId`, size `size_of::<Self>()`, and member `id` at
-  `offset_of!(Self, id)` with `is_reference: true`. Add a `const` assert that
-  `size_of::<StringId>() == 16` so that the named events keep their sizes.
-- Replace `From<&StringId> for Utf8StaticStringDependency` with
-  `as_static().map(Utf8StaticStringDependency::from)` at the call sites in `logs/block.rs:95,98`
-  and `spans/block.rs`.
+Four new events in `span_events.rs`, each a copy of its static counterpart with
+`name: DynStringId`: `BeginThreadDynNamedSpanEvent`, `EndThreadDynNamedSpanEvent`,
+`BeginAsyncDynNamedSpanEvent` and `EndAsyncDynNamedSpanEvent`. Append them last to
+`ThreadEventQueue`'s type list. The existing events, `StringId`, and the log interop path are
+untouched, so a dynamic id can never reach code that dereferences `StringId::ptr`.
 
 ### Queue trait split
 
@@ -123,17 +109,14 @@ and their behavior doesn't change.
   `<SpanRecord, SpanLocationRecord, Utf8StaticStringDependency, StaticStringDependency>`. This
   is the record type that `intern_str` writes and that `string_at` decodes.
 - Implement `StringDepsQueue` for `ThreadDepsQueue`.
-- New thread streams declare one more dependency UDT in their stream metadata. Every analytics
-  version that reads log or metric properties already parses `StaticStringDependency`, so the
-  change is forward compatible.
 
 ### Extraction
 
 `ThreadEventQueue::extract(&self, dyn_deps)`:
 
-1. Walk the events as today. In `record_named_scope_event_dependencies`, always record the
-   `'static` location, and push the name only `if let Some(s) = name.as_static()`. Dynamic
-   names are skipped.
+1. Walk the events as today. Split the location half of `record_named_scope_event_dependencies`
+   into `record_span_location_dependencies`; the four dynamic arms call only that, since their
+   name lives in `dyn_deps`.
 2. `deps.extend_from(dyn_deps.queue())`. String records reference nothing, so unlike the
    property case there are no `'static` refs to emit first.
 
@@ -144,13 +127,12 @@ by tests:
 
 ```rust
 impl ThreadStream {
-    /// Interns `name` in the current block and pushes the event built with its id.
-    pub fn push_dyn_named<T>(&mut self, name: &str, make: impl FnOnce(StringId) -> T)
+    pub fn push_dyn_named<T>(&mut self, name: &str, make: impl FnOnce(DynStringId) -> T)
     where T: InProcSerialize + ThreadEventQueueTypeIndex
     {
         let (events, dyn_deps) = self.get_block_mut_parts();
         let id = dyn_deps.intern_str(name);
-        events.push(make(StringId::dynamic(id, name.len() as u32)));
+        events.push(make(DynStringId { id }));
     }
 }
 ```
@@ -173,6 +155,13 @@ different thread streams. So the end path always interns the name again in the b
 current at that point; it never reuses the id from begin. A new block starts with an empty
 `DynDeps`, so the record is written again there. When begin and end fall in the same block, the
 end path pays one hash probe and a content compare, and allocates nothing.
+
+### Analytics
+
+Add each dynamic event name as an alternative in the matching static arm, e.g.
+`"BeginThreadNamedSpanEvent" | "BeginThreadDynNamedSpanEvent"`, in `thread_block_processor.rs`
+(including the ignored async arm) and `async_block_processing.rs`. The members have the same
+names, so the arm bodies don't change.
 
 ### Guards, futures and macros
 
@@ -206,47 +195,50 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 
 ## Implementation Steps
 
-1. **`StringId`** (`string_id.rs`): private `id`/`len`/`is_dyn` fields, `dynamic`, `id`,
-   `len`, `as_static`, the size assert, and an updated `Reflect`. Drop
-   `From<&StringId> for Utf8StaticStringDependency` and fix `logs/block.rs` and
-   `tests/string_id_tests.rs`.
+1. **Events**: `DynStringId` (`string_id.rs`) and the four `*DynNamedSpanEvent` types
+   (`span_events.rs`).
 2. **Trait split**: add `StringDepsQueue` to `dyn_deps.rs`, make `PropertyDepsQueue` extend it
    (`property_set.rs`), move `intern_str` to the `StringDepsQueue` impl block, and split the
    impls in `logs/block.rs` and `metrics/block.rs`.
-3. **Thread block** (`spans/block.rs`): append `StaticStringDependency` to `ThreadDepsQueue`,
-   implement `StringDepsQueue`, skip dynamic names during the walk, append the dynamic queue in
-   `extract`, and add `ThreadStream::push_dyn_named`.
+3. **Thread block** (`spans/block.rs`): append the four events to `ThreadEventQueue` and
+   `StaticStringDependency` to `ThreadDepsQueue`, implement `StringDepsQueue`, add the location-only
+   arms to the walk, append the dynamic queue in `extract`, and add `ThreadStream::push_dyn_named`.
+   Add the four arms to `tests/utils.rs`.
 4. **Dispatch**: add `on_thread_dyn_named_event` and the four `*_dyn` functions to
    `dispatch.rs`, plus wasm stubs in `dispatch_wasm.rs`.
-5. **Callers**: add `SpanName`/`DynSpanName` (new `spans/span_name.rs`, re-exported from
+5. **Analytics**: the match alternatives in `thread_block_processor.rs` and
+   `async_block_processing.rs`.
+6. **Callers**: add `SpanName`/`DynSpanName` (new `spans/span_name.rs`, re-exported from
    `spans/mod.rs`), make `ThreadNamedSpanGuard` (`guards.rs`) and `InstrumentedNamedFuture`
    (`instrumented_future.rs`) generic, and add the hidden `InstrumentFuture` method.
-6. **Macros** (`macros.rs`): add `span_scope_named_dyn!`, `span_async_named_dyn!` and
+7. **Macros** (`macros.rs`): add `span_scope_named_dyn!`, `span_async_named_dyn!` and
    `instrument_named_dyn!`. Change the `span_scope_named!` doc to point at the dynamic variant
    instead of "needs to be statically allocated". Add them to the prelude.
-7. **Example**: change Example 5 of `examples/named_async_spans.rs` to `span_async_named_dyn!`
+8. **Example**: change Example 5 of `examples/named_async_spans.rs` to `span_async_named_dyn!`
    with a `format!` name, and drop the `intern_string` import.
-8. **Bench + changelog**: add `dispatch/span_scope_named`, `dispatch/span_scope_named_dyn`
+9. **Bench + changelog**: add `dispatch/span_scope_named`, `dispatch/span_scope_named_dyn`
    (same name every call) and `dispatch/span_scope_named_dyn_high_card` (a name from a rotating
    set of 10k precomputed strings) to `benches/with_dispatch.rs`. Add `dispatch/span_scope_named`
    in its own commit before the functional change, so it can be run against the pre-change code
    as the baseline (or cherry-picked onto main). Run all three tracing benches on that baseline
    and on the branch. Add a `CHANGELOG.md` entry with the numbers and a **Minor breaking
-   change** clause: `StringId` fields become private, `PropertyDepsQueue::push_string` moves to
-   `StringDepsQueue`, and the guard and future types gain a type parameter.
+   change** clause: `PropertyDepsQueue::push_string` moves to `StringDepsQueue`,
+   `ThreadEventQueueAny` gains four variants, and the guard and future types gain a type
+   parameter.
 
 ## Files to Modify
 
 - `rust/tracing/src/string_id.rs`, `rust/tracing/src/dyn_deps.rs`,
-  `rust/tracing/src/property_set.rs`
+  `rust/tracing/src/property_set.rs`, `rust/tracing/src/spans/span_events.rs`
 - `rust/tracing/src/spans/block.rs`, `rust/tracing/src/spans/mod.rs`,
   `rust/tracing/src/spans/span_name.rs` (new), `rust/tracing/src/spans/instrumented_future.rs`
-- `rust/tracing/src/logs/block.rs`, `rust/tracing/src/metrics/block.rs`
+- `rust/tracing/src/logs/block.rs`, `rust/tracing/src/metrics/block.rs` (trait split only)
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`,
   `rust/tracing/src/guards.rs`, `rust/tracing/src/macros.rs`, `rust/tracing/src/lib.rs`
 - `rust/tracing/examples/named_async_spans.rs`, `rust/tracing/benches/with_dispatch.rs`
-- `rust/tracing/tests/string_id_tests.rs`, `rust/tracing/tests/dynamic_span_names_tests.rs`
-  (new), `rust/analytics/tests/span_tests.rs`
+- `rust/tracing/tests/utils.rs`, `rust/tracing/tests/dynamic_span_names_tests.rs` (new)
+- `rust/analytics/src/thread_block_processor.rs`, `rust/analytics/src/async_block_processing.rs`,
+  `rust/analytics/tests/span_tests.rs`
 - `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
 
@@ -265,43 +257,41 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 
 All of these are no-DB unit tests.
 
-**`rust/tracing/tests/string_id_tests.rs`**: `From<&'static str>` round-trips through
-`as_static`. `StringId::dynamic(..).as_static()` is `None`. `size_of::<StringId>() == 16`, and
-`write_value` still writes 16 bytes.
-
 **`rust/tracing/tests/dynamic_span_names_tests.rs`** (new), using `init_in_memory_tracing` and
 `init_thread_stream`:
 - Two `span_scope_named_dyn!` scopes with the same runtime name in one block produce four
-  events with the same dynamic id and one string record (`dyn_deps.len_bytes()` equals one
+  `*ThreadDynNamedSpanEvent`s with the same id and one string record (`dyn_deps.len_bytes()` equals one
   record's size).
 - Distinct names produce distinct ids.
-- A static `span_scope_named!` leaves `dyn_deps` empty.
+- A static `span_scope_named!` emits the static event types and leaves `dyn_deps` empty.
 - Begin, then `flush_thread_buffer()`, then end: the second block's `dyn_deps` holds a record
   for the name, and its end event's id points at it.
 - `instrument_named_dyn!` with an owned `String`, polled to completion: the begin and end async
-  events carry dynamic ids that resolve to records in their block.
+  events are the `*AsyncDynNamedSpanEvent` types and carry ids that resolve to records in their block.
 
 **Round trip through the real parser** (`rust/analytics/tests/span_tests.rs`, which already
 encodes a `ThreadBlock` and calls `parse_block`): add a test that builds a block with
-`ThreadStream::push_dyn_named` for all four named event types. It mixes in static named events,
+`ThreadStream::push_dyn_named` for all four dynamic event types. It mixes in static named events,
 including a static name with the same text as a dynamic one, and a `span_scope!` event.
-Encode, parse, and assert:
+Encode, parse through `parse_thread_block_payload` and the async block parser, and assert:
 - each event's resolved `name`,
 - no `duplicate dependency id`,
 - no `dependency not found`.
 
 **Bench**: the step 8 runs. Acceptance:
-- No regression beyond noise on any `with_dispatch` case (including `dispatch/span_scope_named`
-  and `dispatch/log`), or on any case of the `properties` and `with_no_dispatch` benches.
+- No regression beyond noise on any case of the `with_dispatch` (including
+  `dispatch/span_scope_named`), `properties` and `with_no_dispatch` benches.
 - Measured, reported numbers for the two `_dyn` cases.
 
 ## Decisions
 
 - The end path always interns again in the current block. It never carries the begin id.
-- The dynamic/static distinction lives in a `StringId` flag stored in the existing padding,
-  never in the id's bits.
-- The wire format and SQL surface don't change. Thread streams gain a
-  `StaticStringDependency` dependency type, which every analytics version already parses.
-- Declined: separate `*DynNamedSpanEvent` types (a forward-incompatible wire change).
+- Dynamic names use separate `*DynNamedSpanEvent` types rather than a flag in `StringId`. Older
+  analytics skip them as unknown events; accepted, since the next release is already
+  forward-incompatible.
+- Declined: an `is_dyn` flag in `StringId`'s padding. It kept the event types but made every
+  `StringId` consumer branch at runtime, and a dynamic id reaching a `ptr` dereference was only
+  prevented by convention.
+- The SQL surface doesn't change.
 - Declined for now: caching the begin id with a block generation; can be added behind
   `push_dyn_named` if the bench shows the end probe matters.
