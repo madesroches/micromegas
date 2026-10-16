@@ -231,8 +231,10 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
    with a `format!` name, and drop the `intern_string` import.
 8. **Bench + changelog**: add `dispatch/span_scope_named`, `dispatch/span_scope_named_dyn`
    (same name every call) and `dispatch/span_scope_named_dyn_high_card` (a name from a rotating
-   set of 10k precomputed strings) to `benches/with_dispatch.rs`. Run all three tracing benches
-   on main and on the branch. Add a `CHANGELOG.md` entry with the numbers and a **Minor breaking
+   set of 10k precomputed strings) to `benches/with_dispatch.rs`. Add `dispatch/span_scope_named`
+   in its own commit before the functional change, so it can be run against the pre-change code
+   as the baseline (or cherry-picked onto main). Run all three tracing benches on that baseline
+   and on the branch. Add a `CHANGELOG.md` entry with the numbers and a **Minor breaking
    change** clause: `StringId` fields become private, `PropertyDepsQueue::push_string` moves to
    `StringDepsQueue`, and the guard and future types gain a type parameter.
 
@@ -250,27 +252,6 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
   (new), `rust/analytics/tests/span_tests.rs`
 - `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
-
-## Trade-offs
-
-- **Flag in `StringId` padding vs. new event types.** Separate `*DynNamedSpanEvent` types would
-  avoid the flag, but analytics would have to learn four new event types, which is a
-  forward-incompatible wire change. The flag costs nothing: the byte was padding, and the
-  parser never reads it.
-- **Flag vs. the `DYN_ID_TAG` bit.** Testing bit 63 breaks with top-byte-tagged heap pointers
-  (the `intern_string` output on Android). That violates the platform rule set by the previous
-  plan.
-- **Re-intern on end vs. caching the begin id with a block generation.** For async spans, the
-  cache key would have to identify both the stream and the block, since an end on another
-  thread lands in a different stream. That means more state in every guard and future to save
-  one probe. If the bench shows the end probe matters, caching can be added behind
-  `push_dyn_named` later.
-- **Generic guard and future via `SpanName` vs. separate dyn types.** Separate types would
-  duplicate the `poll` body. The trait keeps a single implementation, and the static path
-  compiles to the same calls it makes today.
-- **Owned `N: AsRef<str>` names vs. borrowed `&'a str`.** When the guard owns the name,
-  `span_scope_named_dyn!(format!(..))` works without a separate binding. Passing `&s` still
-  borrows.
 
 ## Documentation
 
@@ -314,8 +295,8 @@ This pins the main correctness risk: the static walk must skip dynamic ids, and 
 queue must resolve them.
 
 **Bench**: the step 8 runs. Acceptance:
-- No regression beyond noise on `dispatch/span_scope` or on any case of the `properties` and
-  `with_no_dispatch` benches.
+- No regression beyond noise on any `with_dispatch` case (including `dispatch/span_scope_named`
+  and `dispatch/log`), or on any case of the `properties` and `with_no_dispatch` benches.
 - Measured, reported numbers for the two `_dyn` cases.
 
 ## Decisions
@@ -325,3 +306,6 @@ queue must resolve them.
   never in the id's bits.
 - The wire format and SQL surface don't change. Thread streams gain a
   `StaticStringDependency` dependency type, which every analytics version already parses.
+- Declined: separate `*DynNamedSpanEvent` types (a forward-incompatible wire change).
+- Declined for now: caching the begin id with a block generation; can be added behind
+  `push_dyn_named` if the bench shows the end probe matters.
