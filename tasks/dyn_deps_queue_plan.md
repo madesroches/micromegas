@@ -75,8 +75,9 @@ stores the returned `*const PropertySet` in the event.
 
 **In-process readers** that dereference `properties`:
 `rust/tracing/tests/stream_flush_tests.rs:112`,
-`rust/tracing/tests/property_arena_tests.rs:67` (`set_as_pairs`), and the pointer comparisons
-in `rust/tracing/tests/property_macro_tests.rs`, which also reads `block.properties.len_bytes()`
+`rust/tracing/tests/property_arena_tests.rs:67` (`set_as_pairs`), and `rust/tracing/tests/property_macro_tests.rs`, where the `props.map(|p| unsafe { &*p })` deref
+at `:175` (metric sets can be arena-owned) migrates to `dyn_deps.set_properties` and the
+`as usize` casts at `:180`/`:207` become `PropertySetId` equality. It also reads `block.properties.len_bytes()`
 at `:184`, `:203` and `:208` (migrate to `dyn_deps.len_bytes()`). `rust/analytics/tests/log_tests.rs:363`,
 `:407-420` (`test_tagged_log_interop_event`) and `rust/analytics/tests/metrics_test.rs:238` build
 blocks through `merge_properties`, `get_block_mut_parts` and the arena's `get_or_insert`.
@@ -124,9 +125,7 @@ fn dyn_offset(id: u64) -> u32 { ((id & !DYN_ID_TAG) >> 1) as u32 }
 O(1) decoding. Ids stay `u64` on the wire, so neither the analytics parser nor the Unreal
 instrumentation changes.
 
-The design must hold on every platform, including arm64 with heap pointer tagging (Android 11+
-puts `0xB4` in the top byte of heap pointers; MTE and HWASan put a tag there too). So nothing
-in-process tells dynamic from static data by testing a pointer's high bits:
+Nothing in-process tells dynamic from static data by testing a pointer's high bits (see Decisions):
 
 - **Sets** are told apart by bit 0. An interned set id is a `&'static PropertySet` address,
   which is at least 8-byte aligned on every platform (pointer tagging only touches the top
@@ -138,7 +137,8 @@ in-process tells dynamic from static data by testing a pointer's high bits:
 
 `DYN_ID_TAG` only keeps dynamic ids out of the range of pointer ids on the wire, so the parser
 never sees a duplicate. A dynamic id is `0x80` in the top byte with an address below `2^33`,
-which no supported platform's allocator or loader produces.
+which no supported platform's allocator or loader produces. Heap pointer tagging only changes the
+top byte to a different value (Android 11+ puts `0xB4` there; MTE and HWASan put a tag there too).
 
 ### `DynDeps<D>` (new `rust/tracing/src/dyn_deps.rs`, replaces `property_arena.rs`)
 
@@ -150,6 +150,7 @@ pub struct DynDeps<D> {
     sets: FxHashMap<u64, Vec<DynSet>>, // content hash -> set records
 }
 
+#[derive(Debug)]
 struct DynSet {
     offset: u32,
     static_values: u64, // the MergedProperties mask the record was built with
@@ -164,17 +165,11 @@ struct DynSet {
   never insert, pay nothing.
 - On the first insert (`queue.capacity_bytes() == 0`), `intern_set`/`intern_str` replace the
   empty queue with `D::new(64 * 1024)`, which uses only the existing `HeterogeneousQueue` API.
-  Unlike the arena's `Vec<Box<_>>` of pointers,
-  this buffer holds the full dependency bytes, so growing it by doubling from zero would mean
-  repeated multi-MB `realloc` + copies under the stream lock on a large block. The reservation
-  removes the early small reallocations; the remaining doublings are amortized and accepted.
+  This avoids the early small reallocations under the stream lock; later doublings are amortized
+  and accepted.
 - `len_bytes()` returns `queue.len_bytes()`. That's exact: the budget no longer uses an
   approximation. The `'static` names and values that dynamic sets reference aren't counted, the
   same as for static dependencies today.
-- There is no list of the `'static` strings that dynamic sets reference: `extract` derives them
-  from the set records (see Block, stream and extraction). Recording them on each miss would put
-  N pushes per miss under the stream lock, work the arena does on the sink thread today, and with
-  per-call unique values it would grow by N refs per event outside the block budget.
 
 Pushing records from generic code needs a small trait, implemented for `LogDepsQueue` and
 `MetricsDepsQueue`:
@@ -290,6 +285,9 @@ impl PropertySetId {
   references. Add a field attribute `#[transit(reference)]` to the derive
   (`rust/transit/derive/src/derive_reflect.rs`, registered through `attributes(transit)` on the
   derive in `rust/transit/derive/src/lib.rs`) and put it on both metric `properties` fields.
+  The attribute forces the same `is_reference` flag that the derive otherwise computes from the
+  syntactic type; that flag feeds both the emitted `Member` and the secondary-UDT loop, which must
+  skip the field (otherwise the derive emits a nonexistent `PropertySetId::reflect()`).
   Their UDT keeps the same member name, offset, size and `is_reference: true`.
 - The member's `type_name` string changes, from the pointer type's text to `PropertySetId`. The
   parser reads reference members before it looks at `type_name` (`parser.rs:174`), so nothing
@@ -338,7 +336,8 @@ impl PropertySetId {
    - Add `extend_from` to `HeterogeneousQueue` and generate it in
      `rust/transit/derive/src/declare_queue.rs`.
    - Add the `#[transit(reference)]` field attribute in
-     `rust/transit/derive/src/derive_reflect.rs`.
+     `rust/transit/derive/src/derive_reflect.rs`, overriding `is_reference` for both the `Member`
+     emission and the secondary-UDT skip.
    - Register the attribute in `rust/transit/derive/src/lib.rs`:
      `#[proc_macro_derive(TransitReflect, attributes(transit))]`. Without it,
      `#[transit(reference)]` fails to compile.
@@ -364,7 +363,7 @@ impl PropertySetId {
    propagate, so add `Q: ExtractDeps` to `impl<Q> EventBlock<Q>` (`close`/`close_at`) and
    `impl<Q> EventStream<EventBlock<Q>>`.
 7. **Dispatch**: add `Q: ExtractDeps` to `swap_block<Q>`, switch the four dynamic paths in `dispatch.rs` to `merge_properties` →
-   `intern_set`, pass `&merged.properties` to sinks, and wrap the static paths' sets with
+   `intern_set`, pass `&merged.properties` to sinks in the two log paths (`log_dyn_tagged_to_sink`, and `log_interop_dyn_tagged`, which builds its `filtered` list from `merged.properties`; the metric paths call no sink), and wrap the static paths' sets with
    `PropertySetId::interned`.
 8. **Sink**: update `encode_block` in `rust/telemetry-sink/src/stream_block.rs`.
 9. **Callers**: update the bench (`rust/tracing/benches/properties.rs`), the tracing tests and
@@ -468,7 +467,8 @@ All of these are no-DB unit tests.
 - Tagged metric events still resolve `properties`.
 
 **Wire layout:** `TaggedFloatMetricEvent::reflect()` and `TaggedIntegerMetricEvent::reflect()`
-keep the `properties` member at the same offset and size with `is_reference: true`.
+keep the `properties` member at the same offset and size with `is_reference: true`. The
+assertions go in `rust/tracing/tests/dyn_deps_tests.rs`.
 
 **Existing coverage:** `stream_flush_tests.rs` and `property_macro_tests.rs` keep their
 assertions through `set_properties` and `PropertySetId` equality.
