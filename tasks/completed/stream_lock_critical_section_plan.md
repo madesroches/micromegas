@@ -207,6 +207,11 @@ interned target before taking the lock, as `log_dyn_tagged_to_sink` already does
 
 ## Decisions
 
+- `MergedProperties` (Design section 2, Phase 1) was implemented, then reverted after the
+  corrected benchmark showed no measurable effect from hashing before the lock. It only
+  enforced the sorted-input precondition of `get_or_insert`, which every caller already meets
+  through `merge_properties`, at the cost of a new type and a Rust API break. The arena test
+  for static/dynamic split identity was kept.
 - Benchmark before and after is a required step: a baseline is saved before any tracing change,
   and the results are recorded in this plan and the CHANGELOG (user request).
 - Image and thread streams are out of scope. The image stream already releases the lock before
@@ -330,8 +335,8 @@ thread that drops them, like the HTTP sink, and the numbers below use it.
 - Every case is within noise of the unchanged code. The largest deltas (`extract/log/dyn_high_card`,
   `metric/dyn_high_card`, `metric/literals_set`) vary by as much between the two runs of the
   *same* code, and `extract` doesn't exercise the stream lock at all.
-- So, on this benchmark, the work moved out of the lock (formatting, interning, the property
-  hash, the sink call) was not what limited throughput. What remains is presumably the lock
+- So, on this benchmark, the work moved out of the lock (formatting, interning, the sink
+  call) was not what limited throughput. What remains is presumably the lock
   handoff and the cache-line traffic on the shared stream (not profiled): 8 threads still cost
   30-60x the single-thread call. Sharding the streams is the next step.
 - What the change does deliver is correctness rather than speed: a sink may log from

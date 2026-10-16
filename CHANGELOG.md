@@ -5,8 +5,8 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Tracing:** Shorten the log and metric stream critical sections (#1669). A full block is now
-  swapped in the same critical section that filled it, and the sink call, message formatting,
-  target interning and property-set hashing all run outside the stream lock; the flush paths no
+  swapped in the same critical section that filled it, and the sink call, message formatting
+  and target interning all run outside the stream lock; the flush paths no
   longer call the sink under it, so a sink may log from `on_process_*_block` without
   deadlocking, and a full block can no longer be pushed into past its size margin or flushed a
   second time nearly empty. Throughput on the `properties` benchmark is unchanged within noise,
@@ -15,9 +15,6 @@ This file documents the historical progress of the Micromegas project. For curre
   a background thread, like the HTTP sink; freeing them on the recording thread had skewed
   contended results by up to 35% in either direction. Blocks from racing flushes of one stream
   can now reach the sink out of order; their offsets and `begin`/`end` times stay contiguous.
-  **Minor breaking change:**
-  `merge_properties` returns `MergedProperties` (derefs to `[DynProperty]`) instead of a
-  `Vec`, and `PropertyArena::get_or_insert` takes `&MergedProperties`.
 * **Tracing:** Check `on_log_enabled` and fetch the event sink once per log call (#1667).
   Log calls with dynamic properties used to fetch the sink three times and check it twice;
   every log macro path now does one of each. Uncontended `info!("static")` is about 29% faster,

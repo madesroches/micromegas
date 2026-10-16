@@ -14,7 +14,7 @@ use micromegas_tracing::{
     },
     prelude::*,
     process_info::ProcessInfo,
-    property_arena::{MergedProperties, PropertyArena, merge_properties},
+    property_arena::{PropertyArena, merge_properties},
     property_set::{Property, PropertySet, dyn_property_get},
     spans::{ThreadBlock, ThreadStream},
 };
@@ -45,7 +45,7 @@ static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
     line: line!(),
 };
 
-fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> MergedProperties<'a> {
+fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> Vec<DynProperty<'a>> {
     let dyn_props: Vec<DynProperty<'_>> = props
         .iter()
         .map(|(name, value)| DynProperty { name, value })

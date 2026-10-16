@@ -97,7 +97,7 @@ fn concurrent_recording_loses_and_duplicates_nothing() {
     flush_log_buffer();
 
     let state = guard.sink.state.lock().unwrap();
-    let mut blocks: Vec<_> = state.log_blocks.iter().cloned().collect();
+    let mut blocks: Vec<_> = state.log_blocks.to_vec();
     blocks.sort_by_key(|b| b.object_offset());
     let nb_events: usize = blocks.iter().map(|b| b.nb_objects()).sum();
     assert_eq!(nb_events, NB_THREADS * NB_EVENTS);
