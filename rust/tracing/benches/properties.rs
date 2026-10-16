@@ -38,6 +38,15 @@ fn shared_set() -> &'static PropertySet {
     })
 }
 
+static LABEL_SETS: OnceLock<[&'static PropertySet; 4]> = OnceLock::new();
+
+/// One precomputed set per label: the alternative to `l = static label`.
+fn label_sets() -> &'static [&'static PropertySet; 4] {
+    LABEL_SETS.get_or_init(|| {
+        LABELS.map(|label| PropertySet::find_or_create(vec![Property::new("l", label)]))
+    })
+}
+
 /// Accepts every log and discards every block, unless `capture` is set.
 struct BenchSink {
     capture: AtomicBool,
@@ -84,12 +93,16 @@ impl EventSink for BenchSink {
 
 type Case = fn(usize);
 
-const LOG_CASES: [(&str, Case); 7] = [
+const LOG_CASES: [(&str, Case); 8] = [
     ("static", |_| info!("static")),
     ("formatted", |i| info!("value {}", i)),
     ("literals", |_| info!(a = "1", b = "2", c = "3", "static")),
     ("set", |_| info!(..shared_set(), "static")),
     ("dyn_low_card", |i| info!(l = LABELS[i % 4], "static")),
+    (
+        "static_low_card",
+        |i| info!(l = static LABELS[i % 4], "static"),
+    ),
     ("dyn_high_card", |i| info!(id = %i, "static")),
     (
         "dyn_mixed",
@@ -97,7 +110,7 @@ const LOG_CASES: [(&str, Case); 7] = [
     ),
 ];
 
-const METRIC_CASES: [(&str, Case); 6] = [
+const METRIC_CASES: [(&str, Case); 8] = [
     ("plain", |_| imetric!("name", "unit", 1)),
     ("literals", |_| imetric!("name", "unit", tier = "ram", 1)),
     ("set", |_| imetric!("name", "unit", ..shared_set(), 1)),
@@ -106,6 +119,13 @@ const METRIC_CASES: [(&str, Case); 6] = [
     }),
     ("dyn_low_card", |i| {
         imetric!("name", "unit", l = LABELS[i % 4], 1)
+    }),
+    (
+        "static_low_card",
+        |i| imetric!("name", "unit", l = static LABELS[i % 4], 1),
+    ),
+    ("set_low_card", |i| {
+        imetric!("name", "unit", ..label_sets()[i % 4], 1)
     }),
     ("dyn_high_card", |i| imetric!("name", "unit", id = %i, 1)),
 ];

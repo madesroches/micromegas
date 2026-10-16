@@ -4,6 +4,18 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** `key = static expr` properties on `log!`, `imetric!` and `fmetric!` (#1655). A
+  `&'static str` chosen at runtime from a small closed set is interned once per distinct tuple
+  of static values in a per-callsite `RwLock<FxHashMap>` cache, instead of taking the dynamic
+  path, while the property names stay at the call site. With a `..set` spread, literals and
+  static values are interned over the set, so dynamic values beat them regardless of order.
+  Medians on the `properties` benchmark, same run: `metric/dyn_low_card` 52.4 ns,
+  `metric/static_low_card` 34.6 ns, `metric/set_low_card` (precomputed sets) 23.8 ns;
+  `log/dyn_low_card` 69.7 ns, `log/static_low_card` 53.7 ns. The object cache uses it for its
+  `prefix`, `class` and `reason` dimensions. No SQL, wire format or `SCHEMA_VERSION` change.
+  **Minor breaking change:** `PrefixTags` and `EvictionTags` are removed from
+  `micromegas_object_cache::metric_tags`, `EvictionTagTable::classify` returns the label, and
+  `RangeCache::classify_tags` is gone.
 * **Tracing:** Span names built at runtime (#1677). `span_scope_named_dyn!`,
   `span_async_named_dyn!` and `instrument_named_dyn!` take any `AsRef<str>` name, such as
   `format!(..)`, a `&String` or an `Arc<str>`. The name is written to the thread block's

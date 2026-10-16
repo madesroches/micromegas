@@ -166,6 +166,36 @@ pub mod time;
 pub mod dyn_deps;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod property_set;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod static_set_cache;
+
+#[cfg(target_arch = "wasm32")]
+pub mod static_set_cache {
+    use crate::property_set::PropertySet;
+
+    /// Only the empty set exists on wasm32.
+    pub struct StaticSetCache<const M: usize>;
+
+    impl<const M: usize> StaticSetCache<M> {
+        pub const fn new() -> Self {
+            Self
+        }
+
+        pub fn get(
+            &self,
+            _base: &'static PropertySet,
+            _pairs: [(&'static str, &'static str); M],
+        ) -> &'static PropertySet {
+            PropertySet::empty()
+        }
+    }
+
+    impl<const M: usize> Default for StaticSetCache<M> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 pub mod property_set {
@@ -187,6 +217,10 @@ pub mod property_set {
         _pairs: &'static [(&'static str, &'static str)],
     ) -> &'static PropertySet {
         PropertySet::empty()
+    }
+
+    pub fn static_value(v: &'static str) -> &'static str {
+        v
     }
 
     /// A property whose value is not `'static`. Names stay `'static`: name cardinality must

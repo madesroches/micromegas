@@ -22,7 +22,7 @@ fn parse_config() {
 }
 ```
 
-`#[span_fn]` records the wall-clock time of sync and async functions, `span_scope!` times a block, and `info!` (and its siblings) emit log entries. Properties with per-request values (a correlation id, for example) can be attached to logs and metrics as `key = value` pairs, as in `info!(correlation_id = cid, "fetched {n} rows")`. See the crate documentation for metrics, dynamic properties, sinks and initialization.
+`#[span_fn]` records the wall-clock time of sync and async functions, `span_scope!` times a block, and `info!` (and its siblings) emit log entries. Properties with per-request values (a correlation id, for example) can be attached to logs and metrics as `key = value` pairs, as in `info!(correlation_id = cid, "fetched {n} rows")`. A `&'static str` picked at runtime from a small closed set is attached with `key = static value`, which interns each distinct combination once per callsite. See the crate documentation for metrics, dynamic properties, sinks and initialization.
 
 ## Documentation
 

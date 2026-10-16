@@ -247,8 +247,9 @@ macro_rules! instrument_named_dyn {
 ///
 /// Properties go between the unit and the value, as `key = value` pairs. A key is an
 /// identifier or a string literal. Literal values are interned once per callsite, unless a `..set`
-/// is spread, in which case the literals are copied into the block (the spread set's own values
-/// are not); any other value is attached to the measure and copied into the current block. A
+/// is spread without a `static` value, in which case the literals are copied into the block
+/// (the spread set's own values are not); any other value is attached to the measure and copied
+/// into the current block. A
 /// bare value must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings
 /// do); use `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
 /// allocation.
@@ -286,6 +287,43 @@ macro_rules! instrument_named_dyn {
 /// # fn main() {
 /// imetric!(target: "my_crate::cache", "hits", "count", kind = "disk", 1);
 /// # }
+/// ```
+///
+/// `key = static expr` takes a `&'static str` chosen at runtime, from a small closed set (a
+/// label or an enum variant name, for example). Each distinct tuple of static values is interned
+/// once per callsite and then looked up, a few nanoseconds more than a `..set` spread and far
+/// cheaper than a dynamic value. Every distinct value is kept forever, so the cardinality
+/// contract of `PropertySet` applies: never use it for ids. It mixes freely with literals,
+/// dynamic values and a trailing `..set`. Among literals and static values the last one wins
+/// (case-insensitive), a dynamic value beats both, and any pair overrides a `..set` entry. With
+/// `..set` and a static value in the same call, literals and static values are interned over the
+/// set, so dynamic values beat them whatever the order.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let label: &'static str = "alpha";
+/// imetric!("rows_fetched", "count", prefix = static label, tier = "ram", 3);
+/// fmetric!("fetch_ms", "ms", prefix = static label, 1.5);
+/// # }
+/// ```
+///
+/// The value must be `'static`; a borrowed string is a compile error:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// let s = String::from("alpha");
+/// imetric!("rows_fetched", "count", prefix = static s.as_str(), 3);
+/// ```
+///
+/// `static` doesn't combine with `%` or `?`:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// imetric!("rows_fetched", "count", prefix = static %"x", 3);
 /// ```
 ///
 /// `target`, `name` and `unit` are reserved keys, because analytics treats them as column
@@ -340,12 +378,12 @@ macro_rules! imetric {
     (target: $target:expr, $name:expr, $unit:expr, $($rest:tt)+) => {
         $crate::__props!(@m metric
             [$name, $unit, $target, int_metric, tagged_integer_metric_dyn]
-            [] [] [] [] $($rest)+)
+            [] [] [] [] [] $($rest)+)
     };
     ($name:expr, $unit:expr, $($rest:tt)+) => {
         $crate::__props!(@m metric
             [$name, $unit, module_path!(), int_metric, tagged_integer_metric_dyn]
-            [] [] [] [] $($rest)+)
+            [] [] [] [] [] $($rest)+)
     };
 }
 
@@ -378,12 +416,12 @@ macro_rules! fmetric {
     (target: $target:expr, $name:expr, $unit:expr, $($rest:tt)+) => {
         $crate::__props!(@m metric
             [$name, $unit, $target, float_metric, tagged_float_metric_dyn]
-            [] [] [] [] $($rest)+)
+            [] [] [] [] [] $($rest)+)
     };
     ($name:expr, $unit:expr, $($rest:tt)+) => {
         $crate::__props!(@m metric
             [$name, $unit, module_path!(), float_metric, tagged_float_metric_dyn]
-            [] [] [] [] $($rest)+)
+            [] [] [] [] [] $($rest)+)
     };
 }
 
@@ -408,11 +446,11 @@ macro_rules! fmetric {
 /// ```
 ///
 /// Properties go before the format string, as `key = value` pairs. A key is an identifier or a
-/// string literal. A literal value is interned once per callsite, unless a `..set` is spread, in
-/// which case the literals are copied into the block (the spread set's own values are not). Any
-/// other value (a request or correlation id, for example) is copied into the current block, so
-/// nothing leaks. A bare value
-/// must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use
+/// string literal. A literal value is interned once per callsite, unless a `..set` is spread
+/// without a `static` value, in which case the literals are copied into the block (the spread
+/// set's own values are not). Any other value (a request or correlation id, for example) is
+/// copied into the current block, so nothing leaks. A bare value must implement
+/// [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use
 /// `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
 /// allocation. Dynamic values are only evaluated when the entry is enabled.
 ///
@@ -439,6 +477,45 @@ macro_rules! fmetric {
 /// info!(..set, "from a set");
 /// info!(correlation_id = "c0ffee", ..set, "from a set and a pair");
 /// # }
+/// ```
+///
+/// `key = static expr` takes a `&'static str` chosen at runtime, from a small closed set (a
+/// label or an enum variant name, for example). Each distinct tuple of static values is interned
+/// once per callsite and then looked up, a few nanoseconds more than a `..set` spread and far
+/// cheaper than a dynamic value. Every distinct value is kept forever, so the cardinality
+/// contract of `PropertySet` applies: never use it for ids. It mixes freely with literals,
+/// dynamic values and a trailing `..set`. Among literals and static values the last one wins
+/// (case-insensitive), a dynamic value beats both, and any pair overrides a `..set` entry. With
+/// `..set` and a static value in the same call, literals and static values are interned over the
+/// set, so dynamic values beat them whatever the order. A static expression is only evaluated
+/// when the entry is enabled.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let label: &'static str = "alpha";
+/// info!(prefix = static label, request = %"id", "fetched");
+/// # use micromegas_tracing::property_set::PropertySet;
+/// info!(prefix = static label, kind = "a", ..PropertySet::empty(), "with a set");
+/// # }
+/// ```
+///
+/// The value must be `'static`; a borrowed string is a compile error:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// let s = String::from("alpha");
+/// info!(prefix = static s.as_str(), "fetched");
+/// ```
+///
+/// `static` doesn't combine with `%` or `?`:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// info!(prefix = static %"x", "fetched");
 /// ```
 ///
 /// `level` and `target` are reserved keys, because analytics treats them as column overrides.
@@ -491,7 +568,7 @@ macro_rules! fmetric {
 #[macro_export]
 macro_rules! log {
     (target: $target:expr, $lvl:expr, $($rest:tt)+) => (
-        $crate::__props!(@m log [$target, $lvl] [] [] [] [] $($rest)+)
+        $crate::__props!(@m log [$target, $lvl] [] [] [] [] [] $($rest)+)
     );
     ($lvl:expr, $($rest:tt)+) => (
         $crate::log!(target: $crate::__log_module_path!(), $lvl, $($rest)+)
@@ -500,110 +577,141 @@ macro_rules! log {
 
 /// Muncher behind the property lists of `log!`, `imetric!` and `fmetric!`.
 ///
-/// Accumulators, in order: literal pairs `(key, (value))` for the per-callsite interned set,
-/// dynamic entries `(key, kind, value)`, every entry in source order (used when a `..set` is
-/// spread, so that the last pair wins), and the spread set.
+/// Accumulators, in order: literal and static pairs `(key, lit|stat, (value))` for the
+/// per-callsite set, dynamic entries `(key, kind, value)`, every non-static entry in source
+/// order (used when a `..set` is spread without a static value, so that the last pair wins),
+/// the spread set, and `[static]` once a `static` value was seen.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __props {
     // `..set` is only accepted as the last property.
-    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt
+    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         .. $new_set:expr, $k:tt = $($x:tt)*) => {
         compile_error!("`..set` must be the last entry of the property list")
     };
-    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt
+    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         .. $new_set:expr, .. $($x:tt)*) => {
         compile_error!("`..set` can only appear once, as the last entry of the property list")
     };
-    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt
+    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         .. $new_set:expr, $($rest:tt)+) => {
-        $crate::__props!(@end $kind $ctx $s $d $a [$new_set] $($rest)+)
+        $crate::__props!(@end $kind $ctx $s $d $a [$new_set] $t $($rest)+)
+    };
+    // `static` never starts a literal or a bare expression, so this arm can come first.
+    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
+        $k:tt = static $v:expr $(, $($rest:tt)*)?) => {
+        $crate::__props!(@m $kind $ctx
+            [$($s)* ($k, stat, ($v))] [$($d)*] [$($a)*] $set [static] $($($rest)*)?)
     };
     // The negative literal arm precedes the `-` fallback, which precedes the plain literal arm:
     // `$v:literal` is a hard parse error on `-x`.
-    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt
+    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
         $k:tt = - $v:literal $(, $($rest:tt)*)?) => {
         $crate::__props!(@m $kind $ctx
-            [$($s)* ($k, (concat!("-", $v)))] [$($d)*]
-            [$($a)* ($k, lit, (concat!("-", $v)))] $set $($($rest)*)?)
+            [$($s)* ($k, lit, (concat!("-", $v)))] [$($d)*]
+            [$($a)* ($k, lit, (concat!("-", $v)))] $set $t $($($rest)*)?)
     };
-    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt
+    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         $k:tt = - $($rest:tt)*) => {
-        $crate::__props!(@e $kind $ctx $s $d $a $set $k = - $($rest)*)
+        $crate::__props!(@e $kind $ctx $s $d $a $set $t $k = - $($rest)*)
     };
-    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt
+    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
         $k:tt = % $v:expr $(, $($rest:tt)*)?) => {
         $crate::__props!(@m $kind $ctx
-            [$($s)*] [$($d)* ($k, disp, $v)] [$($a)* ($k, disp, $v)] $set $($($rest)*)?)
+            [$($s)*] [$($d)* ($k, disp, $v)] [$($a)* ($k, disp, $v)] $set $t $($($rest)*)?)
     };
-    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt
+    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
         $k:tt = ? $v:expr $(, $($rest:tt)*)?) => {
         $crate::__props!(@m $kind $ctx
-            [$($s)*] [$($d)* ($k, dbg, $v)] [$($a)* ($k, dbg, $v)] $set $($($rest)*)?)
+            [$($s)*] [$($d)* ($k, dbg, $v)] [$($a)* ($k, dbg, $v)] $set $t $($($rest)*)?)
     };
-    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt
+    (@m $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
         $k:tt = $v:literal $(, $($rest:tt)*)?) => {
         $crate::__props!(@m $kind $ctx
-            [$($s)* ($k, (concat!($v)))] [$($d)*]
-            [$($a)* ($k, lit, (concat!($v)))] $set $($($rest)*)?)
+            [$($s)* ($k, lit, (concat!($v)))] [$($d)*]
+            [$($a)* ($k, lit, (concat!($v)))] $set $t $($($rest)*)?)
     };
-    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt
+    (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         $k:tt = $($rest:tt)+) => {
-        $crate::__props!(@e $kind $ctx $s $d $a $set $k = $($rest)+)
+        $crate::__props!(@e $kind $ctx $s $d $a $set $t $k = $($rest)+)
     };
     // A bare value
-    (@e $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt
+    (@e $kind:ident $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] $set:tt $t:tt
         $k:tt = $v:expr $(, $($rest:tt)*)?) => {
         $crate::__props!(@m $kind $ctx
-            [$($s)*] [$($d)* ($k, bare, $v)] [$($a)* ($k, bare, $v)] $set $($($rest)*)?)
+            [$($s)*] [$($d)* ($k, bare, $v)] [$($a)* ($k, bare, $v)] $set $t $($($rest)*)?)
     };
     // The end of the property list: a format string for logs, a value for metrics.
-    (@m log $ctx:tt $s:tt $d:tt $a:tt $set:tt) => {
+    (@m log $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt) => {
         compile_error!("log macros require a format string")
     };
-    (@m log $ctx:tt $s:tt $d:tt $a:tt $set:tt $($fmt:tt)+) => {
-        $crate::__props!(@end log $ctx $s $d $a $set $($fmt)+)
+    (@m log $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt $($fmt:tt)+) => {
+        $crate::__props!(@end log $ctx $s $d $a $set $t $($fmt)+)
     };
-    (@m metric $ctx:tt $s:tt $d:tt $a:tt $set:tt $value:expr $(,)?) => {
-        $crate::__props!(@end metric $ctx $s $d $a $set $value)
+    (@m metric $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt $value:expr $(,)?) => {
+        $crate::__props!(@end metric $ctx $s $d $a $set $t $value)
+    };
+
+    // A static value: literals and static values are interned together (over the spread set,
+    // if any) by a per-callsite cache, and only dynamic values go to the slice. Always `gate`:
+    // it is the only log form that evaluates the set expression for an enabled entry alone.
+    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static] $($fmt:tt)+) => {
+        $crate::__log_call!(gate $ctx [$($fmt)+]
+            $crate::__static_set!(log [] $($s)+), $crate::__dyn_slice!(log $($d)*))
+    };
+    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static] $($fmt:tt)+) => {
+        $crate::__log_call!(gate $ctx [$($fmt)+]
+            $crate::__static_set!(log [$set] $($s)+), $crate::__dyn_slice!(log $($d)*))
+    };
+    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static]
+        $value:expr $(,)?) => {
+        $crate::__metric_call!(tagged $ctx
+            $crate::__static_set!(metric [] $($s)+),
+            $crate::__dyn_slice!(metric $($d)*), $value)
+    };
+    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static]
+        $value:expr $(,)?) => {
+        $crate::__metric_call!(tagged $ctx
+            $crate::__static_set!(metric [$set] $($s)+),
+            $crate::__dyn_slice!(metric $($d)*), $value)
     };
 
     // The cheapest call that carries the properties: no properties at all, a spread set only,
     // the per-callsite literal set only, or any of those plus dynamic values.
-    (@end log $ctx:tt [] [] [] [] $($fmt:tt)+) => {
+    (@end log $ctx:tt [] [] [] [] [] $($fmt:tt)+) => {
         $crate::__log_call!(plain $ctx [$($fmt)+])
     };
-    (@end log $ctx:tt [$($s:tt)*] [] [$($a:tt)*] [$set:tt] $($fmt:tt)+) => {
+    (@end log $ctx:tt [$($s:tt)*] [] [$($a:tt)*] [$set:tt] [] $($fmt:tt)+) => {
         $crate::__log_call!(nogate $ctx [$($fmt)+] $set, $crate::__dyn_slice!(log $($a)*))
     };
-    (@end log $ctx:tt [$($s:tt)*] [$($d:tt)+] [$($a:tt)*] [$set:tt] $($fmt:tt)+) => {
+    (@end log $ctx:tt [$($s:tt)*] [$($d:tt)+] [$($a:tt)*] [$set:tt] [] $($fmt:tt)+) => {
         $crate::__log_call!(gate $ctx [$($fmt)+] $set, $crate::__dyn_slice!(log $($a)*))
     };
-    (@end log $ctx:tt [$($s:tt)+] [] [$($a:tt)*] [] $($fmt:tt)+) => {
+    (@end log $ctx:tt [$($s:tt)+] [] [$($a:tt)*] [] [] $($fmt:tt)+) => {
         $crate::__log_call!(nogate $ctx [$($fmt)+]
             $crate::__callsite_set!(log $($s)+), $crate::__dyn_slice!(log))
     };
-    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)+] [$($a:tt)*] [] $($fmt:tt)+) => {
+    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)+] [$($a:tt)*] [] [] $($fmt:tt)+) => {
         $crate::__log_call!(gate $ctx [$($fmt)+]
             $crate::__callsite_set!(log $($s)+), $crate::__dyn_slice!(log $($d)+))
     };
-    (@end log $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] $($fmt:tt)+) => {
+    (@end log $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] [] $($fmt:tt)+) => {
         $crate::__log_call!(gate $ctx [$($fmt)+]
             $crate::property_set::PropertySet::empty(), $crate::__dyn_slice!(log $($d)+))
     };
 
-    (@end metric $ctx:tt [] [] [] [] $value:expr) => {
+    (@end metric $ctx:tt [] [] [] [] [] $value:expr) => {
         $crate::__metric_call!(plain $ctx $value)
     };
-    (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] $value:expr $(,)?) => {
+    (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] [] $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
             $set, $crate::__dyn_slice!(metric $($a)*), $value)
     };
-    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] $value:expr) => {
+    (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [] $value:expr) => {
         $crate::__metric_call!(tagged $ctx
             $crate::__callsite_set!(metric $($s)+), $crate::__dyn_slice!(metric $($d)*), $value)
     };
-    (@end metric $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] $value:expr) => {
+    (@end metric $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] [] $value:expr) => {
         $crate::__metric_call!(tagged $ctx
             $crate::property_set::PropertySet::empty(), $crate::__dyn_slice!(metric $($d)+), $value)
     };
@@ -699,12 +807,45 @@ macro_rules! __metric_call {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __callsite_set {
-    ($kind:ident $(($k:tt, ($($v:tt)*)))+) => {{
+    ($kind:ident $(($k:tt, lit, ($($v:tt)*)))+) => {{
         static CELL: ::std::sync::OnceLock<&'static $crate::property_set::PropertySet> =
             ::std::sync::OnceLock::new();
         static PAIRS: &[(&str, &str)] = &[$(($crate::__prop_key!($kind $k), $($v)*)),+];
         $crate::property_set::callsite_set(&CELL, PAIRS)
     }};
+}
+
+/// The set of a callsite with `static` values: the literals and static values over the spread
+/// set (or the empty one), interned once per distinct tuple of values.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __static_set {
+    ($kind:ident [] $(($k:tt, $tag:ident, $v:tt))+) => {
+        $crate::__static_set!(@get $kind $crate::property_set::PropertySet::empty(),
+            $(($k, $tag, $v))+)
+    };
+    ($kind:ident [$set:expr] $(($k:tt, $tag:ident, $v:tt))+) => {
+        $crate::__static_set!(@get $kind $set, $(($k, $tag, $v))+)
+    };
+    (@get $kind:ident $base:expr, $(($k:tt, $tag:ident, $v:tt))+) => {{
+        static CACHE: $crate::static_set_cache::StaticSetCache<{ [$(stringify!($k)),+].len() }> =
+            $crate::static_set_cache::StaticSetCache::new();
+        CACHE.get(
+            $base,
+            [$(($crate::__prop_key!($kind $k), $crate::__static_value!($tag $v))),+],
+        )
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __static_value {
+    (lit ($($v:tt)*)) => {
+        $($v)*
+    };
+    (stat ($($v:tt)*)) => {
+        $crate::property_set::static_value($($v)*)
+    };
 }
 
 // The temporaries created for `bare`, `disp` and `dbg` values live until the end of the
