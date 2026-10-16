@@ -178,8 +178,7 @@ literals and static values regardless of order.
 ### Dependencies
 
 `scc` becomes a native-only normal dependency of `micromegas-tracing`, added to the workspace
-`rust/Cargo.toml` (`scc = "3.8"`), and pulls in `sdd` and `saa`. Both are pure Rust with no
-target-specific code; `scc` runs loom model tests.
+`rust/Cargo.toml` (`scc = "3.8"`), and pulls in `sdd` and `saa`.
 
 ## Implementation Steps
 
@@ -216,13 +215,19 @@ target-specific code; `scc` runs loom model tests.
 
 8. `rust/object-cache/src/metric_tags.rs`: delete `PrefixTags`, `EvictionTags` and their sets.
    Keep the label constants, `longest_prefix_match`, and a label table: `EvictionTagTable`
-   becomes a `classify(key) -> &'static str` over the configured labels.
+   becomes a `classify(key) -> &'static str` over the configured labels. Rewrite the module doc
+   (lines 1-11) to describe label resolution only: it no longer mentions precomputed sets,
+   `..set` or `class = ..` as a plain pair.
 9. `rust/object-cache/src/range_cache/mod.rs`: replace `prefix_tags` / `other_tags` with the
-   labels; delete `classify_tags` in favor of the existing `classify` (`:179`).
+   labels; `with_prefix_labels` (`:158`) just stores them, and `classify` (`:179`) becomes
+   `longest_prefix_match(&self.prefix_labels, key)` falling back to `PREFIX_OTHER`. Delete
+   `classify_tags` and update the `prefix_labels` field doc (`:93-102`) and the method docs
+   (`:164-167`) that refer to `prefix_tags` / `classify_tags`.
 10. `rust/object-cache/src/range_cache/fetch.rs` and `foyer_backend.rs`: write
     `prefix = static label` (plus `class = static class` / `reason = static reason_str(reason)`)
     at each spread site, including `range_cache/mod.rs:241-298` (`prefix_tag` becomes the label
-    from `classify`); `probe_blocks`, the function at `fetch.rs:267` and the helper at
+    from `classify`); also change the existing `class = class` pairs at `fetch.rs:326,340` to
+    `class = static class`; `probe_blocks`, the function at `fetch.rs:267` and the helper at
     `fetch.rs:384` take labels instead of sets.
 11. `CHANGELOG.md`: Unreleased entry with before/after numbers from step 6, plus a
     **Minor breaking change** clause for the removed `PrefixTags` / `EvictionTags`.
@@ -279,8 +284,6 @@ Prototype (`rust/tracing/benches/static_values.rs`, on top of #1679). Each call 
 - **Thread-local map**: as fast, no atomics, but each thread warms up separately (short-lived
   threads approach intern-every-call) and logging during thread teardown needs a fallback.
 - **`papaya`, `dashmap`, `RwLock<HashMap>`**: slower than `scc` and no simpler to use.
-- **`scc::HashIndex`**: chosen. Maintained, loom-tested, one warm cache shared by all threads;
-  ~5–8 ns over `..set` and two transitive crates.
 
 ## Decisions
 
@@ -306,7 +309,7 @@ All no-DB unit tests and doctests.
 - `rust/tracing/tests/static_set_cache_tests.rs` (cache directly):
   - same values return the same `&'static PropertySet` pointer;
   - different values return different sets with the expected properties;
-  - equal content at two addresses returns two entries but one interned set;
+  - equal content at two addresses returns the same interned set;
   - the base set is part of the key, and pairs override its entries;
   - duplicate names among pairs resolve last-wins case-insensitively;
   - 8 threads racing on a cold key all get the same set.
