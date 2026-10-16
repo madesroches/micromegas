@@ -172,9 +172,13 @@ impl PropertySetId {
     }
 }
 
-/// A dependency queue that can receive the records of a property set.
-pub trait PropertyDepsQueue: HeterogeneousQueue {
+/// A dependency queue that can receive string records.
+pub trait StringDepsQueue: HeterogeneousQueue {
     fn push_string(&mut self, dep: StaticStringDependency);
+}
+
+/// A dependency queue that can receive the records of a property set.
+pub trait PropertyDepsQueue: StringDepsQueue {
     fn push_set(&mut self, dep: PropertySetDependency);
 }
 

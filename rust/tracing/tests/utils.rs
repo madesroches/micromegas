@@ -113,6 +113,10 @@ impl EventSink for DebugEventSink {
                 ThreadEventQueueAny::EndAsyncSpanEvent(_evt) => {}
                 ThreadEventQueueAny::BeginAsyncNamedSpanEvent(_evt) => {}
                 ThreadEventQueueAny::EndAsyncNamedSpanEvent(_evt) => {}
+                ThreadEventQueueAny::BeginThreadDynNamedSpanEvent(_evt) => {}
+                ThreadEventQueueAny::EndThreadDynNamedSpanEvent(_evt) => {}
+                ThreadEventQueueAny::BeginAsyncDynNamedSpanEvent(_evt) => {}
+                ThreadEventQueueAny::EndAsyncDynNamedSpanEvent(_evt) => {}
             }
         }
         *self.0.lock().unwrap() = Some(State::ProcessThreadBlock(thread_block.events.nb_objects()));

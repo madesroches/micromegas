@@ -5,7 +5,9 @@ use super::{
 use crate::{
     dyn_deps::DynDeps,
     event::{EventBlock, EventStream, ExtractDeps},
-    property_set::{PropertyDepsQueue, PropertySetDependency, PropertySetId, record_properties},
+    property_set::{
+        PropertyDepsQueue, PropertySetDependency, PropertySetId, StringDepsQueue, record_properties,
+    },
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use rustc_hash::FxHashSet;
@@ -148,11 +150,13 @@ impl ExtractDeps for LogMsgQueue {
     }
 }
 
-impl PropertyDepsQueue for LogDepsQueue {
+impl StringDepsQueue for LogDepsQueue {
     fn push_string(&mut self, dep: StaticStringDependency) {
         self.push(dep);
     }
+}
 
+impl PropertyDepsQueue for LogDepsQueue {
     fn push_set(&mut self, dep: PropertySetDependency) {
         self.push(dep);
     }

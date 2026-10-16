@@ -253,6 +253,32 @@ pub fn on_end_async_named_scope(
 ) {
 }
 
+#[inline(always)]
+pub fn on_begin_named_scope_dyn(_thread_span_location: &'static SpanLocation, _name: &str) {}
+
+#[inline(always)]
+pub fn on_end_named_scope_dyn(_thread_span_location: &'static SpanLocation, _name: &str) {}
+
+#[inline(always)]
+pub fn on_begin_async_named_scope_dyn(
+    _span_location: &'static SpanLocation,
+    _name: &str,
+    _parent_span_id: u64,
+    _depth: u32,
+) -> u64 {
+    G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline(always)]
+pub fn on_end_async_named_scope_dyn(
+    _span_id: u64,
+    _parent_span_id: u64,
+    _span_location: &'static SpanLocation,
+    _name: &str,
+    _depth: u32,
+) {
+}
+
 /// # Safety
 /// No-op on wasm32
 pub unsafe fn force_uninit() {}

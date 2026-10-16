@@ -16,11 +16,13 @@ use crate::{
     },
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricsStream, StaticMetricMetadata},
     spans::{
-        BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent,
-        BeginThreadSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent,
-        EndThreadSpanEvent, SpanLocation, SpanMetadata, ThreadBlock, ThreadEventQueueTypeIndex,
-        ThreadStream,
+        BeginAsyncDynNamedSpanEvent, BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent,
+        BeginThreadDynNamedSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
+        EndAsyncDynNamedSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent,
+        EndThreadDynNamedSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent, SpanLocation,
+        SpanMetadata, ThreadBlock, ThreadEventQueueTypeIndex, ThreadStream,
     },
+    string_id::DynStringId,
     warn,
 };
 
@@ -437,6 +439,72 @@ pub fn on_end_async_named_scope(
     });
 }
 
+/// Like `on_begin_named_scope`, for a name built at runtime. The name is copied into the
+/// current block, so it needs to outlive only this call.
+#[inline(always)]
+pub fn on_begin_named_scope_dyn(thread_span_location: &'static SpanLocation, name: &str) {
+    on_thread_dyn_named_event(name, |name| BeginThreadDynNamedSpanEvent {
+        thread_span_location,
+        name,
+        time: now(),
+    });
+}
+
+/// Like `on_end_named_scope`, for a name built at runtime. The name is written again to the
+/// block that is current now, which may differ from the block of the begin event.
+#[inline(always)]
+pub fn on_end_named_scope_dyn(thread_span_location: &'static SpanLocation, name: &str) {
+    let time = now();
+    on_thread_dyn_named_event(name, |name| EndThreadDynNamedSpanEvent {
+        thread_span_location,
+        name,
+        time,
+    });
+}
+
+/// Like `on_begin_async_named_scope`, for a name built at runtime. The name is copied into the
+/// current block, so it needs to outlive only this call.
+#[inline(always)]
+pub fn on_begin_async_named_scope_dyn(
+    span_location: &'static SpanLocation,
+    name: &str,
+    parent_span_id: u64,
+    depth: u32,
+) -> u64 {
+    let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    on_thread_dyn_named_event(name, |name| BeginAsyncDynNamedSpanEvent {
+        span_location,
+        name,
+        span_id: id as u64,
+        parent_span_id,
+        depth,
+        time: now(),
+    });
+    id as u64
+}
+
+/// Like `on_end_async_named_scope`, for a name built at runtime. The name is written again to
+/// the block that is current now, which may differ from the block of the begin event and from
+/// the thread it ran on.
+#[inline(always)]
+pub fn on_end_async_named_scope_dyn(
+    span_id: u64,
+    parent_span_id: u64,
+    span_location: &'static SpanLocation,
+    name: &str,
+    depth: u32,
+) {
+    let time = now();
+    on_thread_dyn_named_event(name, |name| EndAsyncDynNamedSpanEvent {
+        span_location,
+        name,
+        span_id,
+        parent_span_id,
+        depth,
+        time,
+    });
+}
+
 pub struct DispatchCell {
     // unsafecell is only necessary for force_uninit()
     inner: UnsafeCell<OnceCell<Dispatch>>,
@@ -487,6 +555,22 @@ where
         let opt_stream = &mut *cell.as_ptr();
         if let Some(stream) = opt_stream {
             stream.get_events_mut().push(event);
+            if stream.is_full() {
+                flush_thread_buffer();
+            }
+        }
+    });
+}
+
+#[inline(always)]
+fn on_thread_dyn_named_event<T>(name: &str, make: impl FnOnce(DynStringId) -> T)
+where
+    T: micromegas_transit::InProcSerialize + ThreadEventQueueTypeIndex,
+{
+    LOCAL_THREAD_STREAM.with(|cell| unsafe {
+        let opt_stream = &mut *cell.as_ptr();
+        if let Some(stream) = opt_stream {
+            stream.push_dyn_named(name, make);
             if stream.is_full() {
                 flush_thread_buffer();
             }

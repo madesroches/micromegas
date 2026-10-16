@@ -5,7 +5,6 @@
 
 use micromegas_tracing::event::NullEventSink;
 use micromegas_tracing::guards::TracingSystemGuard;
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,11 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result4 = instrument_named!(process_user(789), "background_user_sync").await;
     println!("Result 4: {}", result4);
 
-    // Example 5: Using interned strings for dynamic span names in a loop
+    // Example 5: Using the dynamic macro for span names built at runtime
     println!("Processing multiple batches...");
     for batch_id in 1..=3 {
-        let span_name = intern_string(&format!("process_batch_{}", batch_id));
-        span_async_named!(span_name, async move {
+        span_async_named_dyn!(format!("process_batch_{}", batch_id), async move {
             sleep(Duration::from_millis(30)).await;
             println!("Processed batch {}", batch_id);
             batch_id

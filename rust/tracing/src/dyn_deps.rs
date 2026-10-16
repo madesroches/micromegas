@@ -2,7 +2,7 @@
 use crate::{
     property_set::{
         DynProperty, Property, PropertyDepsQueue, PropertySet, PropertySetDependency,
-        PropertySetId, cmp_dyn_properties,
+        PropertySetId, StringDepsQueue, cmp_dyn_properties,
     },
     static_string_ref::StaticStringRef,
 };
@@ -270,7 +270,7 @@ impl<D: HeterogeneousQueue> DynDeps<D> {
     }
 }
 
-impl<D: PropertyDepsQueue> DynDeps<D> {
+impl<D: StringDepsQueue> DynDeps<D> {
     /// Returns the id of the string record holding `value`, pushing one on first sight.
     pub fn intern_str(&mut self, value: &str) -> u64 {
         self.reserve_on_first_insert();
@@ -292,7 +292,9 @@ impl<D: PropertyDepsQueue> DynDeps<D> {
         self.strings.insert(hash, offset);
         id
     }
+}
 
+impl<D: PropertyDepsQueue> DynDeps<D> {
     /// Returns the id of the set record equal to `merged`, pushing it (and the string records
     /// it needs) on first sight. A hit allocates nothing.
     #[inline]

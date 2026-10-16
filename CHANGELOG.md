@@ -4,6 +4,24 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Span names built at runtime (#1677). `span_scope_named_dyn!`,
+  `span_async_named_dyn!` and `instrument_named_dyn!` take any `AsRef<str>` name, such as
+  `format!(..)`, a `&String` or an `Arc<str>`. The name is written to the thread block's
+  dynamic dependency queue as a string record with a block-scoped id and is freed with the
+  block, instead of being kept forever by `intern_string`. Dynamic names use four new event
+  types (`BeginThreadDynNamedSpanEvent`, `EndThreadDynNamedSpanEvent`,
+  `BeginAsyncDynNamedSpanEvent`, `EndAsyncDynNamedSpanEvent`); the `&'static str` events and
+  their paths are unchanged. The end of a span interns the name again in the block that is
+  current then, so a span that straddles a block boundary or migrates threads resolves in
+  either block. Analytics reads the new events through the existing named-span arms; older
+  analytics services skip them as unknown events. Medians on the `with_dispatch` benchmark:
+  `dispatch/span_scope_named` 20.0 ns before and 17.3 ns after (no regression),
+  `dispatch/span_scope_named_dyn` 34.4 ns (same name every call) and
+  `dispatch/span_scope_named_dyn_high_card` 41.6 ns (10k rotating names). No SQL change.
+  **Minor breaking change:** `PropertyDepsQueue::push_string` moves to the new
+  `StringDepsQueue` supertrait, `ThreadEventQueueAny` gains four variants, and
+  `ThreadNamedSpanGuard` and `InstrumentedNamedFuture` gain a type parameter that defaults to
+  `StaticSpanName`, and their generic constructor is `with_name`.
 * **Tracing:** Tagged logs with a static message no longer allocate per call (#1666).
   **Not forward compatible — upgrade the analytics services (`flight-sql-srv`,
   `telemetry-maintenance-srv`, or the monolith) before deploying instrumented applications built
