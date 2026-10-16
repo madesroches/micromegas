@@ -8,11 +8,14 @@ This file documents the historical progress of the Micromegas project. For curre
   swapped in the same critical section that filled it, and the sink call, message formatting,
   target interning and property-set hashing all run outside the stream lock; the flush paths no
   longer call the sink under it, so a sink may log from `on_process_*_block` without
-  deadlocking. Contended `info!("... {}", x)` is about 22% faster at 4 threads and 16% faster
-  at 8; contended static logs and plain metrics are unchanged, and the uncontended path is
-  unchanged within noise. Contention at 4 and 8 threads is still significant, and sharding the
-  streams is the next step. Blocks from racing flushes of one stream can now reach the sink out
-  of order; their offsets and `begin`/`end` times stay contiguous. **Minor breaking change:**
+  deadlocking, and a full block can no longer be pushed into past its size margin or flushed a
+  second time nearly empty. Throughput on the `properties` benchmark is unchanged within noise,
+  contended and uncontended: the work moved out of the lock was not what limits contended
+  recording, so sharding the streams is the next step. The benchmark's sink now frees blocks on
+  a background thread, like the HTTP sink; freeing them on the recording thread had skewed
+  contended results by up to 35% in either direction. Blocks from racing flushes of one stream
+  can now reach the sink out of order; their offsets and `begin`/`end` times stay contiguous.
+  **Minor breaking change:**
   `merge_properties` returns `MergedProperties` (derefs to `[DynProperty]`) instead of a
   `Vec`, and `PropertyArena::get_or_insert` takes `&MergedProperties`.
 * **Tracing:** Check `on_log_enabled` and fetch the event sink once per log call (#1667).

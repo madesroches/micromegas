@@ -265,64 +265,76 @@ tests.
 ## Results
 
 Median time per call (per round of threads for `contention`), `cargo bench -p micromegas-tracing
---bench properties`, release profile, 24-core WSL machine, not otherwise idle. The baseline
-(`--save-baseline lock-before`) was re-taken on the unchanged code immediately before the
-"after" run, because the first baseline had drifted by tens of percent by the time the change
-was ready (see Noise below).
+--bench properties`, release profile, 24-core WSL machine, not otherwise idle. Unchanged code
+(`main`) and this branch were run alternately, twice each, with the same bench file, to keep
+machine drift from landing on one side of the comparison.
 
-### Contention group
+### Bench sink correction
 
-| Case | Before | After | Change |
+The first measurement used a `BenchSink` that dropped each block inside `on_process_*_block`,
+on the recording thread. That made the benchmark measure where a full block gets *freed*, which
+production never does on a recording thread: the HTTP sink queues the block and its sender
+thread frees it after encoding. Freeing a 10 MiB log block, and for high-cardinality cases
+tens of thousands of small arena allocations, is expensive:
+
+- On the unchanged code the sink ran under the stream lock, so every other thread waited for
+  the free. Moving the sink call out of the lock showed up as a -22% / -16% "win" on contended
+  `log/formatted` at 4 / 8 threads.
+- For `dyn_high_card` the free ran concurrently with threads busy allocating, and read as a
+  +20-35% "regression". An interleaved experiment confirmed the cause: calling the sink before
+  releasing the lock, with no other change, brought it back level with the unchanged code.
+
+Both effects were artifacts of the bench sink. `BenchSink` now hands blocks to a background
+thread that drops them, like the HTTP sink, and the numbers below use it.
+
+### All groups
+
+"Change" compares the mean of the two runs on each side.
+
+| Case | main (run 1 / 2) | branch (run 1 / 2) | Change (mean) |
 |---|---|---|---|
-| contention/log/static/1 | 15.257 ns | 15.886 ns | +4.1% |
-| contention/log/static/4 | 342.18 ns | 333.62 ns | -2.5% |
-| contention/log/static/8 | 875.11 ns | 876.54 ns | +0.2% |
-| contention/log/formatted/1 | 55.539 ns | 57.564 ns | +3.6% |
-| contention/log/formatted/4 | 687.59 ns | 536.64 ns | -22.0% |
-| contention/log/formatted/8 | 2.0124 us | 1.6991 us | -15.6% |
-| contention/log/dyn_high_card/1 | 325.82 ns | 361.09 ns | +10.8% |
-| contention/log/dyn_high_card/4 | 3.5723 us | 4.4229 us | +23.8% |
-| contention/log/dyn_high_card/8 | 8.3473 us | 10.034 us | +20.2% |
-| contention/metric/plain/1 | 8.8725 ns | 9.7954 ns | +10.4% |
-| contention/metric/plain/4 | 201.72 ns | 189.63 ns | -6.0% |
-| contention/metric/plain/8 | 507.54 ns | 513.90 ns | +1.3% |
-| contention/metric/dyn_high_card/1 | 245.93 ns | 307.26 ns | +24.9% |
-| contention/metric/dyn_high_card/4 | 2.6441 us | 3.2430 us | +22.7% |
-| contention/metric/dyn_high_card/8 | 5.9818 us | 8.0262 us | +34.2% |
-
-### Single-thread groups
-
-| Case | Before | After | Change |
-|---|---|---|---|
-| log/static | 15.430 ns | 15.826 ns | +2.6% |
-| log/formatted | 57.187 ns | 60.603 ns | +6.0% |
-| log/literals | 44.986 ns | 45.418 ns | +1.0% |
-| log/set | 43.618 ns | 45.770 ns | +4.9% |
-| log/dyn_low_card | 88.012 ns | 94.530 ns | +7.4% |
-| log/dyn_high_card | 335.33 ns | 366.58 ns | +9.3% |
-| log/dyn_mixed | 656.08 ns | 527.79 ns | -19.6% |
-| metric/plain | 9.7111 ns | 9.8739 ns | +1.7% |
-| metric/literals | 11.405 ns | 11.567 ns | +1.4% |
-| metric/set | 10.213 ns | 10.987 ns | +7.6% |
-| metric/literals_set | 145.67 ns | 130.93 ns | -10.1% |
-| metric/dyn_low_card | 67.754 ns | 70.842 ns | +4.6% |
-| metric/dyn_high_card | 241.58 ns | 244.23 ns | +1.1% |
+| contention/log/dyn_high_card/1 | 365.61 ns / 348.68 ns | 352.55 ns / 352.94 ns | -1.2% |
+| contention/log/dyn_high_card/4 | 3.931 us / 4.171 us | 3.918 us / 3.873 us | -3.8% |
+| contention/log/dyn_high_card/8 | 10.750 us / 9.983 us | 10.386 us / 9.976 us | -1.8% |
+| contention/log/formatted/1 | 57.03 ns / 57.04 ns | 56.39 ns / 56.70 ns | -0.8% |
+| contention/log/formatted/4 | 666.51 ns / 688.66 ns | 676.29 ns / 664.64 ns | -1.1% |
+| contention/log/formatted/8 | 2.021 us / 1.934 us | 2.033 us / 1.989 us | +1.7% |
+| contention/log/static/1 | 15.39 ns / 17.71 ns | 15.30 ns / 15.41 ns | -7.2% |
+| contention/log/static/4 | 306.92 ns / 315.73 ns | 315.02 ns / 303.99 ns | -0.6% |
+| contention/log/static/8 | 864.05 ns / 900.09 ns | 865.66 ns / 920.57 ns | +1.3% |
+| contention/metric/dyn_high_card/1 | 305.93 ns / 334.53 ns | 315.94 ns / 319.45 ns | -0.8% |
+| contention/metric/dyn_high_card/4 | 3.530 us / 3.210 us | 3.205 us / 3.291 us | -3.6% |
+| contention/metric/dyn_high_card/8 | 7.945 us / 7.929 us | 7.884 us / 8.999 us | +6.4% |
+| contention/metric/plain/1 | 9.48 ns / 9.37 ns | 9.29 ns / 9.38 ns | -1.0% |
+| contention/metric/plain/4 | 198.68 ns / 200.84 ns | 183.58 ns / 196.36 ns | -4.9% |
+| contention/metric/plain/8 | 490.52 ns / 511.98 ns | 548.10 ns / 501.78 ns | +4.7% |
+| extract/log/dyn_high_card | 2120.978 us / 1744.789 us | 1822.402 us / 1541.271 us | -13.0% |
+| extract/log/dyn_mixed | 3195.507 us / 3251.697 us | 3450.721 us / 2903.593 us | -1.4% |
+| extract/metric/dyn_high_card | 584.713 us / 571.686 us | 582.285 us / 577.680 us | +0.3% |
+| log/dyn_high_card | 343.97 ns / 342.28 ns | 340.97 ns / 345.37 ns | +0.0% |
+| log/dyn_low_card | 88.60 ns / 88.81 ns | 87.71 ns / 87.75 ns | -1.1% |
+| log/dyn_mixed | 1.756 us / 1.684 us | 1.694 us / 1.672 us | -2.2% |
+| log/formatted | 59.29 ns / 56.96 ns | 56.82 ns / 57.20 ns | -1.9% |
+| log/literals | 45.02 ns / 44.90 ns | 44.75 ns / 44.96 ns | -0.2% |
+| log/set | 43.99 ns / 44.56 ns | 43.92 ns / 44.77 ns | +0.1% |
+| log/static | 15.48 ns / 15.75 ns | 15.22 ns / 15.16 ns | -2.7% |
+| metric/dyn_high_card | 617.12 ns / 539.87 ns | 557.84 ns / 387.84 ns | -18.3% |
+| metric/dyn_low_card | 68.12 ns / 68.16 ns | 70.21 ns / 68.84 ns | +2.0% |
+| metric/literals | 11.38 ns / 11.21 ns | 11.71 ns / 11.47 ns | +2.6% |
+| metric/literals_set | 161.23 ns / 157.96 ns | 161.09 ns / 133.55 ns | -7.7% |
+| metric/plain | 9.51 ns / 9.83 ns | 9.55 ns / 9.57 ns | -1.1% |
+| metric/set | 10.50 ns / 10.54 ns | 10.52 ns / 10.54 ns | +0.1% |
 
 ### Reading the numbers
 
-- `log/formatted` under contention is the clearest win: moving formatting out of the lock gives
-  -22% at 4 threads and -16% at 8 threads. Single-thread cost is unchanged within noise.
-- `log/static` and `metric/plain` under contention are unchanged within noise: their critical
-  section was already a plain push.
-- Single-thread `log` and `metric` are within about +-8% apart from two cases (`log/dyn_mixed`
-  -20%, `metric/literals_set` -10%) that vary by that much between identical runs; no
-  uncontended regression is visible.
-- `dyn_high_card` (every event inserts a new set, so the arena miss allocates under the lock)
-  reads +20-35% slower in this run, including at one thread where there is no contention. This
-  is noise from the allocator-bound case, not the change: two identical baseline runs differed
-  by up to 15% on these cases, and re-running the *unchanged* code against the first baseline
-  read +18% (1 thread), +31-37% (4) and +43-46% (8). Measured back to back, the changed code was
-  slightly faster than the unchanged code on `contention/log/dyn_high_card` (about 333 ns / 4.0
-  us / 9.5-9.8 us against 340-352 ns / 4.3-4.4 us / 11.0-11.4 us at 1/4/8 threads).
-- Contention is still significant at 4 and 8 threads for every case (8 threads cost 30-60x the
-  single-thread call). Sharding the streams is the next step.
+- Every case is within noise of the unchanged code. The largest deltas (`extract/log/dyn_high_card`,
+  `metric/dyn_high_card`, `metric/literals_set`) vary by as much between the two runs of the
+  *same* code, and `extract` doesn't exercise the stream lock at all.
+- So, on this benchmark, the work moved out of the lock (formatting, interning, the property
+  hash, the sink call) was not what limited throughput. What remains is presumably the lock
+  handoff and the cache-line traffic on the shared stream (not profiled): 8 threads still cost
+  30-60x the single-thread call. Sharding the streams is the next step.
+- What the change does deliver is correctness rather than speed: a sink may log from
+  `on_process_*_block` without deadlocking, a full block can no longer be pushed into past its
+  size margin (no 10 MiB reallocation under the lock), and racing threads no longer flush
+  nearly empty blocks.
