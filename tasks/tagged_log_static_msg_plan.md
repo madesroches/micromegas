@@ -25,7 +25,7 @@ text that differs from what the process printed (see Current State).
 - `log_tagged_to_sink` (`:887`) collects `properties.dyn_properties()` into a
   `Vec<DynProperty<'static>>` (`:895`) for `sink.on_log`, then always pushes `TaggedLogString`
   with `msg: DynString(args.to_string())` (`:897`).
-- `log_dyn_tagged_to_sink` (`:951`) falls back to `log_tagged_to_sink` when `dyn_properties` is
+- `log_dyn_tagged_to_sink` (`:950`) falls back to `log_tagged_to_sink` when `dyn_properties` is
   empty. Otherwise it merges the properties, calls `on_log` with the merged slice, and pushes
   `TaggedLogString` with `msg: DynString(args.to_string())` (`:965`) and the set id that
   `dyn_deps.intern_set` returns.
@@ -36,7 +36,7 @@ text that differs from what the process printed (see Current State).
 
 **`as_str()` is not the format string.** `LogStaticStrEvent` assumes that when
 `args.as_str()` is `Some`, the message equals `desc.fmt_str`. With the current toolchain
-(rustc 1.96), that's false in two cases:
+(rustc 1.99), that's false in two cases:
 
 ```
 format_args!("a {{b}}").as_str()      == Some("a {b}")     // fmt_str "a {{b}}"
@@ -115,12 +115,10 @@ impl InProcSerialize for TaggedLogStaticStrEvent {}
 ```
 
 The event is a fixed-size POD: 24 bytes plus its type tag, versus 35 for `TaggedLogString` with a
-6-byte message. It's also the shape the deferred-formatting event in #1653 needs, so that work
-can reuse it as is.
+6-byte message.
 
 - Add it to `LogMsgQueue` (`logs/block.rs:13`) and export it from `logs`.
 - `extract`: add an arm identical to the `TaggedLogString` one (desc, then interned set).
-  Merge the two arms with an or-pattern if they bind the same fields.
 - No custom reader: the derive emits the layout, and the generic parser resolves `desc` and
   `properties` through the dependency map, the same as the tagged metric events.
 
@@ -164,8 +162,7 @@ HTTP, in-memory, the test sinks) needs to change.
 Add a `"TaggedLogStaticStrEvent"` arm in `log_entry_from_value`. Move the body of the
 `TaggedLogString` arm (desc, level/target overrides, properties, `LogEntry`) into a helper that
 takes `msg: &'a str`. The two arms call it with `obj.get("msg")` and `desc.get("fmt_str")`
-respectively. Analytics doesn't unescape anything: the process only emits the static event when
-`fmt_str` is the exact message.
+respectively.
 
 ### Wire compatibility
 
@@ -245,11 +242,7 @@ CHANGELOG entry says so. Unreal instrumentation is unaffected: it doesn't emit t
 
 ## Trade-offs
 
-- **Unescape in analytics (the issue's proposal) vs. an exact-match test in the process.**
-  Unescaping fixes `{{`, but not inlined literal arguments: `fmt_str` `value {}` can't be turned
-  into `value 3` after the fact. Comparing `as_str()` with `fmt_str` fixes both, costs a short
-  `memcmp`, and needs no analytics logic. Escaped-brace messages are rare, so the formatted
-  fallback they take doesn't matter.
+- Rejected the issue's unescape-in-analytics proposal: it can't recover inlined literal arguments.
 - **Cached slice on the set vs. changing `EventSink::on_log` to take the set.** Changing the
   trait would touch every sink and give them two property shapes to merge (set plus dynamic
   slice). The cached view costs one boxed slice per interned set, which is bounded by
@@ -275,15 +268,14 @@ test.
   `info!("a {{b}}")` push `LogStringEvent` with `value 3` and `a {b}`. This pins the
   `LogStaticStrEvent` fix.
 
-**`rust/tracing` property-set unit test** (existing property-set test file, or the dyn-deps
-tests): `dyn_properties()` matches `get_properties()` name for name and value for value, in the
+**`rust/tracing` property-set unit test** (in `rust/tracing/tests/dyn_deps_tests.rs`): `dyn_properties()` matches `get_properties()` name for name and value for value, in the
 same order, with value pointers equal to the `StaticStringRef` ids. Two `find_or_create` calls
 with the same properties return the same `&'static PropertySet`.
 
 **`rust/analytics/tests/log_tests.rs`**: following the existing `TaggedLogString` round-trip test
 (`:249`), build a block with a `TaggedLogStaticStrEvent` on an interned set, and another on a
 dynamic set (as `:385` does). Parse both with `log_entry_from_value` and assert `msg` equals
-`fmt_str` and the properties come through. Also check a `level` / `target` override property,
+`fmt_str` (the new `LogMetadata` uses a non-empty `fmt_str` such as "static", unlike the existing test's `""`) and the properties come through. Also check a `level` / `target` override property,
 since the shared helper carries that logic.
 
 The existing suites (`dyn_deps_tests`, `stream_flush_tests`, analytics log and corrupt-block
