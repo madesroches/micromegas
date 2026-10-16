@@ -68,10 +68,7 @@ how to read them in any stream.
 
 ### Static vs. dynamic `StringId`
 
-The previous plan settled that nothing in-process tells dynamic data from static data by
-testing a pointer's high bits. Android heap tagging puts `0xB4` in the top byte, which has
-bit 63 set, and `intern_string` returns heap memory. String pointers have no alignment bit to
-use either. So the flag is stored explicitly, in the padding that `StringId` already has:
+`StringId` stores an explicit `is_dyn` flag in its existing padding:
 
 ```rust
 #[derive(Debug)]
@@ -260,7 +257,9 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 - `examples/named_async_spans.rs`, which shows the dynamic macro in place of `intern_string`.
 - The `CHANGELOG.md` entry.
 - `mkdocs/docs/when-to-use/index.md` ("Code vs. data" paragraph): say a Rust span name can be a
-  statically allocated string or built at runtime with the `_dyn` macros.
+  statically allocated string or built at runtime with the `_dyn` macros. Also update the FAQ answer
+  to "How do I find which asset, script or query made my code slow", which says a Rust span name is
+  "a statically allocated string", to say the same.
 
 ## Testing Strategy
 
@@ -290,9 +289,6 @@ Encode, parse, and assert:
 - each event's resolved `name`,
 - no `duplicate dependency id`,
 - no `dependency not found`.
-
-This pins the main correctness risk: the static walk must skip dynamic ids, and the appended
-queue must resolve them.
 
 **Bench**: the step 8 runs. Acceptance:
 - No regression beyond noise on any `with_dispatch` case (including `dispatch/span_scope_named`
