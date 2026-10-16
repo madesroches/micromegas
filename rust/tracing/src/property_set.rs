@@ -2,9 +2,10 @@
 //! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
 use internment::Intern;
-use micromegas_transit::{StaticStringDependency, UserDefinedType, prelude::*};
+use micromegas_transit::{HeterogeneousQueue, StaticStringDependency, UserDefinedType, prelude::*};
 use rustc_hash::FxHashSet;
 use std::{
+    borrow::Cow,
     hash::Hash,
     sync::{Arc, OnceLock},
 };
@@ -87,9 +88,9 @@ pub(crate) fn sort_properties(properties: &mut [Property]) {
     properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
 }
 
-/// Same order as `sort_properties`, so a merged list matches the arena set built from it.
-pub(crate) fn sort_dyn_properties(properties: &mut [DynProperty<'_>]) {
-    properties.sort_by(|a, b| b.name.cmp(a.name));
+/// Same order as `sort_properties`, so a merged list matches the dynamic set built from it.
+pub(crate) fn cmp_dyn_properties(a: &DynProperty<'_>, b: &DynProperty<'_>) -> std::cmp::Ordering {
+    b.name.cmp(a.name)
 }
 
 impl PropertySet {
@@ -119,48 +120,62 @@ impl PropertySet {
     }
 }
 
+/// Identifies a property set within one block's events: the address of an interned set, or
+/// the id of a record in the block's dynamic dependency queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct PropertySetId(pub(crate) u64);
+
+// Dynamic set ids have bit 0 set, which is how they are told apart from interned addresses.
+const _: () = assert!(std::mem::align_of::<PropertySet>() >= 2);
+
+impl PropertySetId {
+    pub fn interned(set: &'static PropertySet) -> Self {
+        Self(set as *const PropertySet as u64)
+    }
+
+    /// `None` for the id of a dynamic set, which only its block's `DynDeps` can resolve.
+    pub fn as_interned(self) -> Option<&'static PropertySet> {
+        if self.0 & 1 != 0 {
+            return None;
+        }
+        // SAFETY: ids with bit 0 clear are only built by `interned`.
+        Some(unsafe { &*(self.0 as *const PropertySet) })
+    }
+}
+
+/// A dependency queue that can receive the records of a property set.
+pub trait PropertyDepsQueue: HeterogeneousQueue {
+    fn push_string(&mut self, dep: StaticStringDependency);
+    fn push_set(&mut self, dep: PropertySetDependency);
+}
+
 #[derive(Debug)]
 pub struct PropertySetDependency {
-    set: *const PropertySet,
+    pub id: u64,
+    pub properties: Cow<'static, [Property]>,
 }
 
-impl PropertySetDependency {
-    /// `set` must stay valid until the dependency is written: interned sets always are,
-    /// arena sets live as long as the block that `extract` runs on.
-    pub(crate) fn new(set: *const PropertySet) -> Self {
-        Self { set }
-    }
-
-    fn set(&self) -> &PropertySet {
-        // SAFETY: see `new`.
-        unsafe { &*self.set }
-    }
-}
-
-/// Emits the dependencies of a property set once per block.
-///
-/// # Safety
-/// `set` must be an interned set or belong to the arena of the block being extracted.
-pub(crate) unsafe fn record_properties<D>(
-    set: *const PropertySet,
+/// Emits the dependencies of an interned property set once per block.
+pub(crate) fn record_properties<D: PropertyDepsQueue>(
+    set: &'static PropertySet,
     recorded_deps: &mut FxHashSet<u64>,
     deps: &mut D,
-    push_string: fn(&mut D, StaticStringDependency),
-    push_set: fn(&mut D, PropertySetDependency),
 ) {
-    let id = set as u64;
+    let id = PropertySetId::interned(set).0;
     if recorded_deps.insert(id) {
-        // SAFETY: guaranteed by the caller.
-        let set_ref = unsafe { &*set };
-        for prop in set_ref.get_properties() {
+        for prop in set.get_properties() {
             if recorded_deps.insert(prop.name.id()) {
-                push_string(deps, prop.name.into_dependency());
+                deps.push_string(prop.name.into_dependency());
             }
             if recorded_deps.insert(prop.value.id()) {
-                push_string(deps, prop.value.into_dependency());
+                deps.push_string(prop.value.into_dependency());
             }
         }
-        push_set(deps, PropertySetDependency::new(set));
+        deps.push_set(PropertySetDependency {
+            id,
+            properties: Cow::Borrowed(set.get_properties()),
+        });
     }
 }
 
@@ -183,17 +198,16 @@ impl InProcSerialize for PropertySetDependency {
         let header_size: u32 = std::mem::size_of::<u64>() as u32 + // id
 			std::mem::size_of::<u32>() as u32; // number of properties
         let container_size: u32 =
-            self.set().get_properties().len() as u32 * std::mem::size_of::<Property>() as u32;
+            self.properties.len() as u32 * std::mem::size_of::<Property>() as u32;
         let size = header_size + container_size;
         Some(size)
     }
 
     fn write_value(&self, buffer: &mut Vec<u8>) {
-        let id = self.set as u64;
-        write_any(buffer, &id);
-        let nb_properties: u32 = self.set().get_properties().len() as u32;
+        write_any(buffer, &self.id);
+        let nb_properties: u32 = self.properties.len() as u32;
         write_any(buffer, &nb_properties);
-        for prop in self.set().get_properties() {
+        for prop in self.properties.iter() {
             write_any(buffer, prop);
         }
     }

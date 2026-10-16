@@ -107,6 +107,11 @@ fn gen_hetero_queue_impl(
                 &self.buffer
             }
 
+            fn extend_from(&mut self, other: &Self) {
+                self.buffer.extend_from_slice(&other.buffer);
+                self.obj_counter += other.obj_counter;
+            }
+
             #read_method
 
         }

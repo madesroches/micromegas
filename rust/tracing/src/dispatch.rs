@@ -1,14 +1,14 @@
 //! Where events are recorded and eventually sent to a sink
+use crate::dyn_deps::merge_properties;
 pub use crate::errors::{Error, Result};
 use crate::images::{ImageBlock, ImageEvent, ImageStream};
 use crate::intern_string::intern_string;
 use crate::logs::{TaggedLogInteropEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
-use crate::property_arena::merge_properties;
-use crate::property_set::{DynProperty, PropertySet};
+use crate::property_set::{DynProperty, PropertySet, PropertySetId};
 use crate::{
-    event::{EventBlock, EventSink, EventStream, NullEventSink, TracingBlock},
+    event::{EventBlock, EventSink, EventStream, ExtractDeps, NullEventSink, TracingBlock},
     info,
     logs::{
         LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream, LogStringEvent,
@@ -730,7 +730,7 @@ impl Dispatch {
             .get_events_mut()
             .push(TaggedFloatMetricEvent {
                 desc,
-                properties,
+                properties: PropertySetId::interned(properties),
                 value,
                 time,
             });
@@ -750,7 +750,7 @@ impl Dispatch {
             .get_events_mut()
             .push(TaggedIntegerMetricEvent {
                 desc,
-                properties,
+                properties: PropertySetId::interned(properties),
                 value,
                 time,
             });
@@ -771,8 +771,8 @@ impl Dispatch {
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
-        let (events, arena) = metrics_stream.get_block_mut_parts();
-        let properties = arena.get_or_insert(&merged);
+        let (events, dyn_deps) = metrics_stream.get_block_mut_parts();
+        let properties = dyn_deps.intern_set(&merged);
         events.push(TaggedFloatMetricEvent {
             desc,
             properties,
@@ -796,8 +796,8 @@ impl Dispatch {
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
-        let (events, arena) = metrics_stream.get_block_mut_parts();
-        let properties = arena.get_or_insert(&merged);
+        let (events, dyn_deps) = metrics_stream.get_block_mut_parts();
+        let properties = dyn_deps.intern_set(&merged);
         events.push(TaggedIntegerMetricEvent {
             desc,
             properties,
@@ -898,7 +898,7 @@ impl Dispatch {
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
-            properties,
+            properties: PropertySetId::interned(properties),
             time,
             msg,
         });
@@ -961,11 +961,11 @@ impl Dispatch {
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
-        sink.on_log(desc, &merged, time, args);
+        sink.on_log(desc, &merged.properties, time, args);
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
-        let (events, arena) = log_stream.get_block_mut_parts();
-        let properties = arena.get_or_insert(&merged);
+        let (events, dyn_deps) = log_stream.get_block_mut_parts();
+        let properties = dyn_deps.intern_set(&merged);
         events.push(TaggedLogString {
             desc,
             properties,
@@ -988,18 +988,22 @@ impl Dispatch {
         let is_override = |p: &DynProperty<'_>| {
             p.name.eq_ignore_ascii_case("target") || p.name.eq_ignore_ascii_case("level")
         };
-        if merged.iter().any(is_override) {
-            let filtered: Vec<DynProperty<'_>> =
-                merged.iter().copied().filter(|p| !is_override(p)).collect();
+        if merged.properties.iter().any(is_override) {
+            let filtered: Vec<DynProperty<'_>> = merged
+                .properties
+                .iter()
+                .copied()
+                .filter(|p| !is_override(p))
+                .collect();
             self.get_sink().on_log(desc, &filtered, time, args);
         } else {
-            self.get_sink().on_log(desc, &merged, time, args);
+            self.get_sink().on_log(desc, &merged.properties, time, args);
         }
         let msg = micromegas_transit::DynString(args.to_string());
         let target = intern_string(desc.target);
         let mut log_stream = self.log_stream.lock().unwrap();
-        let (events, arena) = log_stream.get_block_mut_parts();
-        let properties = arena.get_or_insert(&merged);
+        let (events, dyn_deps) = log_stream.get_block_mut_parts();
+        let properties = dyn_deps.intern_set(&merged);
         events.push(TaggedLogInteropEvent {
             time,
             level: desc.level as u8,
@@ -1062,7 +1066,7 @@ fn swap_block<Q>(
     process_id: uuid::Uuid,
 ) -> Arc<EventBlock<Q>>
 where
-    Q: micromegas_transit::HeterogeneousQueue,
+    Q: micromegas_transit::HeterogeneousQueue + ExtractDeps,
     EventBlock<Q>: TracingBlock,
 {
     let stream_id = stream.stream_id();

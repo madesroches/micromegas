@@ -161,11 +161,12 @@ macro_rules! instrument_named {
 /// ```
 ///
 /// Properties go between the unit and the value, as `key = value` pairs. A key is an
-/// identifier or a string literal. Literal values are interned once per callsite, unless a `..set` is spread, in which case
-/// all pairs are copied into the block; any other
-/// value is attached to the measure and copied into the current block. A bare value must
-/// implement [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use `%value`
-/// (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String` allocation.
+/// identifier or a string literal. Literal values are interned once per callsite, unless a `..set`
+/// is spread, in which case the literals are copied into the block (the spread set's own values
+/// are not); any other value is attached to the measure and copied into the current block. A
+/// bare value must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings
+/// do); use `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
+/// allocation.
 ///
 /// ```
 /// use micromegas_tracing::prelude::*;
@@ -322,9 +323,10 @@ macro_rules! fmetric {
 /// ```
 ///
 /// Properties go before the format string, as `key = value` pairs. A key is an identifier or a
-/// string literal. A literal value is interned once per callsite, unless a `..set` is spread, in which case
-/// all pairs, literals included, are copied into the block. Any other value (a request or
-/// correlation id, for example) is copied into the current block, so nothing leaks. A bare value
+/// string literal. A literal value is interned once per callsite, unless a `..set` is spread, in
+/// which case the literals are copied into the block (the spread set's own values are not). Any
+/// other value (a request or correlation id, for example) is copied into the current block, so
+/// nothing leaks. A bare value
 /// must implement [`PropertyValue`](crate::property_value::PropertyValue) (strings do); use
 /// `%value` (`Display`) or `?value` (`Debug`) for the rest, at the cost of one `String`
 /// allocation. Dynamic values are only evaluated when the entry is enabled.

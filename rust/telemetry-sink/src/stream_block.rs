@@ -32,7 +32,7 @@ where
     let end = block.end.as_ref().unwrap();
 
     let payload = block_wire_format::BlockPayload {
-        dependencies: compress(block.events.extract().as_bytes())?,
+        dependencies: compress(block.events.extract(&block.dyn_deps).as_bytes())?,
         objects: compress(block.events.as_bytes())?,
     };
 

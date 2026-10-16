@@ -1,4 +1,4 @@
-use crate::property_set::PropertySet;
+use crate::property_set::PropertySetId;
 use micromegas_transit::prelude::*;
 
 use super::StaticMetricMetadata;
@@ -42,7 +42,8 @@ impl InProcSerialize for FloatMetricEvent {}
 #[derive(Debug, TransitReflect)]
 pub struct TaggedFloatMetricEvent {
     pub desc: &'static StaticMetricMetadata,
-    pub properties: *const PropertySet,
+    #[transit(reference)]
+    pub properties: PropertySetId,
     pub value: f64,
     pub time: i64,
 }
@@ -53,7 +54,8 @@ impl InProcSerialize for TaggedFloatMetricEvent {}
 #[derive(Debug, TransitReflect)]
 pub struct TaggedIntegerMetricEvent {
     pub desc: &'static StaticMetricMetadata,
-    pub properties: *const PropertySet,
+    #[transit(reference)]
+    pub properties: PropertySetId,
     pub value: u64,
     pub time: i64,
 }

@@ -70,6 +70,8 @@ impl InProcSerialize for Utf8StaticStringDependency {
 /// It is designed to be wire-compatible with the unreal instrumentation
 #[derive(Debug)]
 pub struct StaticStringDependency {
+    /// Key of the string in the block's dependency map. Static strings use their address.
+    pub id: u64,
     pub codec: StringCodec,
     pub len: u32,
     pub ptr: *const u8,
@@ -107,8 +109,7 @@ impl InProcSerialize for StaticStringDependency {
 
     #[allow(unsafe_code)]
     fn write_value(&self, buffer: &mut Vec<u8>) {
-        let id = self.ptr as u64;
-        write_any(buffer, &id);
+        write_any(buffer, &self.id);
         let codec = self.codec as u8;
         write_any(buffer, &codec);
         write_any(buffer, &self.len);

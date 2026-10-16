@@ -26,6 +26,22 @@ fn metadata_from_type(t: &syn::Type) -> (QuoteRes, bool) {
     }
 }
 
+fn has_reference_attribute(field: &syn::Field) -> bool {
+    field.attrs.iter().any(|attr| {
+        attr.path().is_ident("transit") && {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("reference") {
+                    Ok(())
+                } else {
+                    Err(meta.error("unsupported transit attribute"))
+                }
+            })
+            .unwrap_or_else(|e| panic!("invalid #[transit(...)] attribute: {e}"));
+            true
+        }
+    })
+}
+
 pub fn derive_reflect_impl(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     let udt_identifier = ast.ident.clone();
@@ -36,8 +52,10 @@ pub fn derive_reflect_impl(input: TokenStream) -> TokenStream {
         syn::Data::Struct(s) => match s.fields {
             syn::Fields::Named(named_fields) => {
                 for field in named_fields.named {
+                    let force_reference = has_reference_attribute(&field);
                     let field_name = field.ident.unwrap().to_string();
                     let (field_type, is_reference) = metadata_from_type(&field.ty);
+                    let is_reference = is_reference || force_reference;
                     members.push((field_name, field_type, is_reference));
                 }
             }

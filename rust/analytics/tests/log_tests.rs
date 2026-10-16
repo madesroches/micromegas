@@ -5,6 +5,7 @@ use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
+use micromegas_tracing::dyn_deps::merge_properties;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::levels::Level;
@@ -17,9 +18,9 @@ use micromegas_tracing::logs::LogStringInteropEvent;
 use micromegas_tracing::logs::TaggedLogInteropEvent;
 use micromegas_tracing::logs::TaggedLogString;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_arena::merge_properties;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
+use micromegas_tracing::property_set::PropertySetId;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::DynString;
 use micromegas_transit::value::{Object, Value};
@@ -247,10 +248,10 @@ fn test_tagged_log_entries() {
 
     stream.get_events_mut().push(TaggedLogString {
         desc: &LOG_DESC,
-        properties: PropertySet::find_or_create(vec![
+        properties: PropertySetId::interned(PropertySet::find_or_create(vec![
             Property::new("name", "road_width"),
             Property::new("animal", "chicken"),
-        ]),
+        ])),
         time: 1,
         msg: DynString("my message".into()),
     });
@@ -358,17 +359,29 @@ fn test_dynamic_tagged_log_entries() {
         line: line!(),
     };
     let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
-    for (cid, msg) in [("abc", "one"), ("abc", "two"), ("xyz", "three")] {
-        let cid = String::from(cid);
-        let merged = merge_properties(
-            static_set,
-            &[DynProperty {
-                name: "correlation_id",
-                value: &cid,
-            }],
-        );
-        let (events, arena) = stream.get_block_mut_parts();
-        let properties = arena.get_or_insert(&merged);
+    // Interned sets are mixed with dynamic ones that share their names and static values.
+    for (cid, msg) in [
+        (None, "zero"),
+        (Some("abc"), "one"),
+        (Some("abc"), "two"),
+        (Some("xyz"), "three"),
+        (None, "four"),
+    ] {
+        let (events, dyn_deps) = stream.get_block_mut_parts();
+        let properties = match cid {
+            Some(cid) => {
+                let cid = String::from(cid);
+                let merged = merge_properties(
+                    static_set,
+                    &[DynProperty {
+                        name: "correlation_id",
+                        value: &cid,
+                    }],
+                );
+                dyn_deps.intern_set(&merged)
+            }
+            None => PropertySetId::interned(static_set),
+        };
         events.push(TaggedLogString {
             desc: &LOG_DESC,
             properties,
@@ -379,7 +392,7 @@ fn test_dynamic_tagged_log_entries() {
 
     let mut block = stream.replace_block(Arc::new(LogBlock::new(8192, process_id, stream_id, 0)));
     let entries = parse_tagged_entries(&mut block, &stream, process_id);
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), 5);
     for (_, props, _) in &entries {
         assert!(props.contains(&("animal".to_owned(), "chicken".to_owned())));
     }
@@ -390,12 +403,16 @@ fn test_dynamic_tagged_log_entries() {
             .find(|(k, _)| k == "correlation_id")
             .map(|(_, v)| v.clone())
     };
-    assert_eq!(cid(0).as_deref(), Some("abc"));
+    assert_eq!(cid(0), None);
     assert_eq!(cid(1).as_deref(), Some("abc"));
-    assert_eq!(cid(2).as_deref(), Some("xyz"));
+    assert_eq!(cid(2).as_deref(), Some("abc"));
+    assert_eq!(cid(3).as_deref(), Some("xyz"));
+    assert_eq!(cid(4), None);
     // one wire property set per distinct content within a block
-    assert_eq!(entries[0].2, entries[1].2);
-    assert_ne!(entries[0].2, entries[2].2);
+    assert_eq!(entries[1].2, entries[2].2);
+    assert_ne!(entries[1].2, entries[3].2);
+    assert_eq!(entries[0].2, entries[4].2);
+    assert_ne!(entries[0].2, entries[1].2);
 }
 
 #[test]
@@ -411,8 +428,8 @@ fn test_tagged_log_interop_event() {
             value: "abc",
         }],
     );
-    let (events, arena) = stream.get_block_mut_parts();
-    let properties = arena.get_or_insert(&merged);
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    let properties = dyn_deps.intern_set(&merged);
     events.push(TaggedLogInteropEvent {
         time: 1,
         level: Level::Warn as u8,

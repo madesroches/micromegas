@@ -4,6 +4,28 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Replace the per-block property arena with a dynamic dependency queue (#1654,
+  #1665). Dynamic property values are now written into the block as wire-format dependency
+  records when the event is pushed, with block-scoped ids, and `extract` appends them after the
+  static dependencies instead of walking and boxing them again. Dynamic strings are
+  deduplicated by content within a block, not only whole sets, and the `'static` values of a
+  callsite or `..set` inside a dynamic set keep their original id instead of being copied, so a
+  mixed event's dependency bytes drop from 223 to 166 per event (`log/dyn_mixed`). The block
+  budget counts the exact dependency bytes. Medians on the `properties` benchmark, before and
+  after: `log/dyn_high_card` 326 ns to 179 ns, `log/dyn_mixed` 1.62 us to 287 ns,
+  `metric/dyn_high_card` 508 ns to 147 ns, `metric/dyn_low_card` 56 ns to 50 ns,
+  `log/dyn_low_card` 69 ns to 70 ns; `extract` for `log/dyn_high_card` 746 us to 352 us,
+  `log/dyn_mixed` 1.53 ms to 596 us, `metric/dyn_high_card` 223 us to 65 us,
+  `metric/dyn_low_card` 29.5 us to 19.1 us; the 1/4/8-thread `dyn_high_card` contention cases
+  are 20-48% faster (log) and 35-48% faster (metric). The static and untagged cases
+  (`log/static`, `log/set`, `metric/plain`, `metric/set`, `with_dispatch`, `with_no_dispatch`)
+  are unchanged within the 3-5% run-to-run noise. No wire format or SQL change.
+  **Minor breaking change:** `PropertyArena` and the `property_arena` module are replaced by
+  `dyn_deps::DynDeps`; the tagged log and metric events hold a `PropertySetId` instead of a
+  `*const PropertySet`; `ExtractDeps::extract` takes the block's `DynDeps`;
+  `EventBlock::properties` is now `dyn_deps`; `merge_properties` returns `MergedProperties`;
+  `StaticStringDependency` gains an `id` field; `HeterogeneousQueue` gains `extend_from`; and
+  `TransitReflect` accepts a `#[transit(reference)]` field attribute.
 * **Tracing:** Use cheaper hashers for property sets (#1668). The arena content hash is now
   xxh3 and the arena index and the log and metric dependency-extraction sets are keyed with
   FxHash instead of SipHash; `extract` also skips the set lookups when an event repeats the

@@ -7,6 +7,7 @@ use micromegas_analytics::{
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
+    dyn_deps::merge_properties,
     event::TracingBlock,
     intern_string,
     metrics::{
@@ -14,8 +15,7 @@ use micromegas_tracing::{
         TaggedFloatMetricEvent, TaggedIntegerMetricEvent,
     },
     prelude::*,
-    property_arena::merge_properties,
-    property_set::{Property, PropertySet},
+    property_set::{Property, PropertySet, PropertySetId},
     test_utils::init_in_memory_tracing,
     time::now,
 };
@@ -100,12 +100,12 @@ fn test_stress_tagged_measures() {
         let value_str = intern_string(&format!("{}", i % 127));
         stream.get_events_mut().push(TaggedIntegerMetricEvent {
             desc: &METRIC_DESC,
-            properties: PropertySet::find_or_create(vec![
+            properties: PropertySetId::interned(PropertySet::find_or_create(vec![
                 Property::new("value", value_str),
                 Property::new("name", "override_name"),
                 Property::new("unit", "override_unit"),
                 Property::new("target", "override_target"),
-            ]),
+            ])),
             value: 2,
             time: now(),
         });
@@ -151,21 +151,21 @@ fn test_tagged_measures() {
 
     stream.get_events_mut().push(TaggedIntegerMetricEvent {
         desc: &METRIC_DESC,
-        properties: PropertySet::find_or_create(vec![
+        properties: PropertySetId::interned(PropertySet::find_or_create(vec![
             Property::new("name", "override_name"),
             Property::new("unit", "override_unit"),
             Property::new("target", "override_target"),
-        ]),
+        ])),
         value: 2,
         time: now(),
     });
     stream.get_events_mut().push(TaggedFloatMetricEvent {
         desc: &METRIC_DESC,
-        properties: PropertySet::find_or_create(vec![
+        properties: PropertySetId::interned(PropertySet::find_or_create(vec![
             Property::new("name", "override_name"),
             Property::new("unit", "override_unit"),
             Property::new("target", "override_target"),
-        ]),
+        ])),
         value: 2.0,
         time: 1,
     });
@@ -242,8 +242,15 @@ fn test_dynamic_tagged_measures() {
             value: &correlation_id,
         }],
     );
-    let (events, arena) = stream.get_block_mut_parts();
-    let properties = arena.get_or_insert(&merged);
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    // An interned set that shares names and static values with the dynamic one goes first.
+    events.push(TaggedFloatMetricEvent {
+        desc: &METRIC_DESC,
+        properties: PropertySetId::interned(static_set),
+        value: 1.0,
+        time: now(),
+    });
+    let properties = dyn_deps.intern_set(&merged);
     events.push(TaggedIntegerMetricEvent {
         desc: &METRIC_DESC,
         properties,
@@ -251,7 +258,7 @@ fn test_dynamic_tagged_measures() {
         time: now(),
     });
     // same content, so it must resolve to the same wire set
-    let properties = arena.get_or_insert(&merged);
+    let properties = dyn_deps.intern_set(&merged);
     events.push(TaggedFloatMetricEvent {
         desc: &METRIC_DESC,
         properties,
@@ -288,12 +295,17 @@ fn test_dynamic_tagged_measures() {
                 Ok(())
             })
             .unwrap();
-        assert!(props.contains(&("correlation_id".to_owned(), "abc".to_owned())));
         assert!(props.contains(&("animal".to_owned(), "chicken".to_owned())));
+        if measure.value == 1.0 {
+            assert_eq!(props.len(), 1);
+        } else {
+            assert!(props.contains(&("correlation_id".to_owned(), "abc".to_owned())));
+        }
         set_ptrs.push(measure.properties.object_ptr() as usize);
         Ok(true)
     })
     .unwrap();
-    assert_eq!(set_ptrs.len(), 2);
-    assert_eq!(set_ptrs[0], set_ptrs[1]);
+    assert_eq!(set_ptrs.len(), 3);
+    assert_ne!(set_ptrs[0], set_ptrs[1]);
+    assert_eq!(set_ptrs[1], set_ptrs[2]);
 }

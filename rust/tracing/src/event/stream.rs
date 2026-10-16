@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::event::{EventBlock, TracingBlock};
-use crate::property_arena::PropertyArena;
+use crate::dyn_deps::DynDeps;
+use crate::event::{EventBlock, ExtractDeps, TracingBlock};
 
 /// StreamDesc is the metadata associated with an event stream
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,12 +118,12 @@ where
 
 impl<Q> EventStream<EventBlock<Q>>
 where
+    Q: ExtractDeps,
     EventBlock<Q>: TracingBlock,
 {
-    /// The event queue together with the arena that owns the dynamic properties its events
-    /// point into.
-    pub fn get_block_mut_parts(&mut self) -> (&mut Q, &mut PropertyArena) {
+    /// The event queue together with the records of the dynamic ids its events refer to.
+    pub fn get_block_mut_parts(&mut self) -> (&mut Q, &mut DynDeps<Q::DepsQueue>) {
         let block = Arc::get_mut(&mut self.current_block).unwrap();
-        (&mut block.events, &mut block.properties)
+        (&mut block.events, &mut block.dyn_deps)
     }
 }

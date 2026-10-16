@@ -67,18 +67,16 @@ fn tagged_status_prefix_pairs(sink: &InMemorySink, name: &str) -> Vec<(String, S
             if let MetricsMsgQueueAny::TaggedIntegerMetricEvent(e) = evt
                 && e.desc.name == name
             {
-                // SAFETY: the sink still holds the block that owns or interns the set.
-                let props = unsafe { &*e.properties }.get_properties();
-                let status = props
-                    .iter()
-                    .find(|p| p.name.as_str() == "status")
-                    .map(|p| p.value.as_str().to_string())
-                    .unwrap_or_default();
-                let prefix = props
-                    .iter()
-                    .find(|p| p.name.as_str() == "prefix")
-                    .map(|p| p.value.as_str().to_string())
-                    .unwrap_or_default();
+                let props = block.dyn_deps.set_properties(e.properties);
+                let tag = |name: &str| {
+                    props
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map(|(_, v)| (*v).to_string())
+                        .unwrap_or_default()
+                };
+                let status = tag("status");
+                let prefix = tag("prefix");
                 out.push((status, prefix));
             }
         }

@@ -1,4 +1,5 @@
 use super::ImageEvent;
+use crate::dyn_deps::DynDeps;
 use crate::event::{EventBlock, EventStream, ExtractDeps};
 use micromegas_transit::prelude::*;
 
@@ -12,7 +13,7 @@ declare_queue_struct!(
 impl ExtractDeps for ImageMsgQueue {
     type DepsQueue = ImageDepsQueue;
 
-    fn extract(&self) -> Self::DepsQueue {
+    fn extract(&self, _dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
         ImageDepsQueue::new(0)
     }
 }

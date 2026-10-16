@@ -12,6 +12,7 @@ use std::{
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use micromegas_tracing::{
     dispatch::{flush_log_buffer, flush_metrics_buffer},
+    dyn_deps::DynDeps,
     event::{EventSink, ExtractDeps},
     guards::TracingSystemGuard,
     imetric, info,
@@ -120,7 +121,7 @@ fn metric_case(name: &str) -> Case {
 fn bench_cases(c: &mut Criterion, group_name: &str, cases: &[(&str, Case)]) {
     let mut group = c.benchmark_group(group_name);
     for (name, case) in cases {
-        // Persists across warm-up and sample rounds so ids keep being new to the block arena.
+        // Persists across warm-up and sample rounds so ids keep being new to the block.
         let mut i = 0usize;
         group.bench_function(*name, |b| {
             b.iter(|| {
@@ -136,18 +137,18 @@ fn bench_extract<Q>(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     id: &str,
     events: &Q,
+    dyn_deps: &DynDeps<Q::DepsQueue>,
 ) where
     Q: ExtractDeps + HeterogeneousQueue,
-    Q::DepsQueue: HeterogeneousQueue,
 {
     let nb_objects = events.nb_objects();
     println!(
         "{id}: object bytes/event = {}, dependency bytes/event = {}",
         events.len_bytes() / nb_objects,
-        events.extract().len_bytes() / nb_objects
+        events.extract(dyn_deps).len_bytes() / nb_objects
     );
     group.throughput(Throughput::Elements(nb_objects as u64));
-    group.bench_function(id, |b| b.iter(|| events.extract()));
+    group.bench_function(id, |b| b.iter(|| events.extract(dyn_deps)));
 }
 
 fn capture_log_block(sink: &BenchSink, case: Case, nb_events: usize) -> Arc<LogBlock> {
@@ -188,11 +189,21 @@ fn bench_extraction_group(c: &mut Criterion, sink: &BenchSink) {
         "dyn_mixed",
     ] {
         let block = capture_log_block(sink, log_case(name), 10_000);
-        bench_extract(&mut group, &format!("log/{name}"), &block.events);
+        bench_extract(
+            &mut group,
+            &format!("log/{name}"),
+            &block.events,
+            &block.dyn_deps,
+        );
     }
     for name in ["plain", "set", "dyn_low_card", "dyn_high_card"] {
         let block = capture_metrics_block(sink, metric_case(name), 5_000);
-        bench_extract(&mut group, &format!("metric/{name}"), &block.events);
+        bench_extract(
+            &mut group,
+            &format!("metric/{name}"),
+            &block.events,
+            &block.dyn_deps,
+        );
     }
     group.finish();
 }

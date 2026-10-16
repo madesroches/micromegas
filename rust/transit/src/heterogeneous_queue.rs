@@ -12,6 +12,9 @@ pub trait HeterogeneousQueue {
     fn new(buffer_size: usize) -> Self;
     fn reflect_contained() -> Vec<UserDefinedType>;
     fn as_bytes(&self) -> &[u8];
+    /// Appends the records of `other`, which must be a queue of the same type so that the
+    /// type indices mean the same thing.
+    fn extend_from(&mut self, other: &Self);
 }
 
 pub struct QueueIterator<'a, QueueT, ValueT> {

@@ -32,8 +32,7 @@ fn tagged_float_metric_values(sink: &InMemorySink, name: &str) -> Vec<(f64, &'st
             if let MetricsMsgQueueAny::TaggedFloatMetricEvent(e) = evt
                 && e.desc.name == name
             {
-                // SAFETY: these metrics are tagged with interned sets, which are never freed.
-                out.push((e.value, unsafe { &*e.properties }));
+                out.push((e.value, e.properties.as_interned().expect("interned set")));
             }
         }
     }
@@ -53,8 +52,7 @@ fn tagged_integer_metric_values(
             if let MetricsMsgQueueAny::TaggedIntegerMetricEvent(e) = evt
                 && e.desc.name == name
             {
-                // SAFETY: these metrics are tagged with interned sets, which are never freed.
-                out.push((e.value, unsafe { &*e.properties }));
+                out.push((e.value, e.properties.as_interned().expect("interned set")));
             }
         }
     }

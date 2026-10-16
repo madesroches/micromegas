@@ -108,11 +108,9 @@ fn concurrent_recording_loses_and_duplicates_nothing() {
     for block in &blocks {
         for evt in block.events.iter() {
             if let LogMsgQueueAny::TaggedLogString(e) = evt {
-                // SAFETY: the set lives in the block's arena, which is alive here.
-                let set = unsafe { &*e.properties };
-                for p in set.get_properties() {
-                    if p.name.as_str() == "id" {
-                        assert!(ids.insert(p.value.as_str().to_owned()), "duplicated event");
+                for (name, value) in block.dyn_deps.set_properties(e.properties) {
+                    if name == "id" {
+                        assert!(ids.insert(value.to_owned()), "duplicated event");
                     }
                 }
             }
