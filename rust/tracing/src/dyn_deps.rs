@@ -64,7 +64,7 @@ pub fn merge_properties<'a>(
     static_set: &'static PropertySet,
     dyn_properties: &[DynProperty<'a>],
 ) -> MergedProperties<'a> {
-    let mut merged: Vec<DynProperty<'a>> = static_set.dyn_properties().collect();
+    let mut merged: Vec<DynProperty<'a>> = static_set.dyn_properties().to_vec();
     for dyn_prop in dyn_properties {
         merged.retain(|p| !p.name.eq_ignore_ascii_case(dyn_prop.name));
         merged.push(*dyn_prop);
@@ -131,7 +131,7 @@ fn set_property(bytes: &[u8], offset: u32, index: usize) -> Property {
 ///
 /// # Safety
 /// `r` must have been built from a `&'static str`.
-unsafe fn static_ref_str(r: &StaticStringRef) -> &'static str {
+pub(crate) unsafe fn static_ref_str(r: &StaticStringRef) -> &'static str {
     unsafe {
         let slice = std::slice::from_raw_parts(r.ptr as *const u8, r.len as usize);
         std::str::from_utf8_unchecked(slice)

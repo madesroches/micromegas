@@ -3,7 +3,7 @@ use crate::dyn_deps::merge_properties;
 pub use crate::errors::{Error, Result};
 use crate::images::{ImageBlock, ImageEvent, ImageStream};
 use crate::intern_string::intern_string;
-use crate::logs::{TaggedLogInteropEvent, TaggedLogString};
+use crate::logs::{TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
 use crate::property_set::{DynProperty, PropertySet, PropertySetId};
@@ -146,6 +146,7 @@ pub fn tagged_integer_metric_dyn(
     }
 }
 
+/// Logs with an interned property set plus dynamic values.
 #[inline(always)]
 pub fn log_dyn_tagged(
     desc: &'static LogMetadata,
@@ -210,6 +211,7 @@ pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
     }
 }
 
+/// Logs with an interned property set only.
 #[inline(always)]
 pub fn log_tagged(
     desc: &'static LogMetadata,
@@ -503,6 +505,12 @@ struct Dispatch {
     metrics_stream: Mutex<MetricsStream>,
     thread_streams: Mutex<Vec<*mut ThreadStream>>, // very very unsafe - threads would need to be unregistered before they are destroyed
     sink: RwLock<Arc<dyn EventSink>>,
+}
+
+/// The message is `fmt_str` verbatim, so analytics can read it from the metadata.
+#[inline(always)]
+fn is_static_msg(desc: &LogMetadata, args: &fmt::Arguments<'_>) -> bool {
+    args.as_str() == Some(desc.fmt_str)
 }
 
 impl Dispatch {
@@ -850,9 +858,10 @@ impl Dispatch {
         }
         let time = now();
         sink.on_log(metadata, &[], time, args);
-        let msg = match args.as_str() {
-            Some(_) => None,
-            None => Some(micromegas_transit::DynString(args.to_string())),
+        let msg = if is_static_msg(metadata, &args) {
+            None
+        } else {
+            Some(micromegas_transit::DynString(args.to_string()))
         };
         let mut log_stream = self.log_stream.lock().unwrap();
         match msg {
@@ -892,16 +901,27 @@ impl Dispatch {
         args: fmt::Arguments<'_>,
     ) {
         let time = now();
-        let sink_properties: Vec<DynProperty<'static>> = properties.dyn_properties().collect();
-        sink.on_log(desc, &sink_properties, time, args);
-        let msg = micromegas_transit::DynString(args.to_string());
+        sink.on_log(desc, properties.dyn_properties(), time, args);
+        let properties = PropertySetId::interned(properties);
+        let msg = if is_static_msg(desc, &args) {
+            None
+        } else {
+            Some(micromegas_transit::DynString(args.to_string()))
+        };
         let mut log_stream = self.log_stream.lock().unwrap();
-        log_stream.get_events_mut().push(TaggedLogString {
-            desc,
-            properties: PropertySetId::interned(properties),
-            time,
-            msg,
-        });
+        match msg {
+            None => log_stream.get_events_mut().push(TaggedLogStaticStrEvent {
+                desc,
+                properties,
+                time,
+            }),
+            Some(msg) => log_stream.get_events_mut().push(TaggedLogString {
+                desc,
+                properties,
+                time,
+                msg,
+            }),
+        }
         self.on_log_pushed(log_stream);
     }
 
@@ -962,16 +982,27 @@ impl Dispatch {
         let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
         sink.on_log(desc, &merged.properties, time, args);
-        let msg = micromegas_transit::DynString(args.to_string());
+        let msg = if is_static_msg(desc, &args) {
+            None
+        } else {
+            Some(micromegas_transit::DynString(args.to_string()))
+        };
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, dyn_deps) = log_stream.get_block_mut_parts();
         let properties = dyn_deps.intern_set(&merged);
-        events.push(TaggedLogString {
-            desc,
-            properties,
-            time,
-            msg,
-        });
+        match msg {
+            None => events.push(TaggedLogStaticStrEvent {
+                desc,
+                properties,
+                time,
+            }),
+            Some(msg) => events.push(TaggedLogString {
+                desc,
+                properties,
+                time,
+                msg,
+            }),
+        }
         self.on_log_pushed(log_stream);
     }
 

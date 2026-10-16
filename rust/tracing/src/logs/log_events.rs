@@ -17,6 +17,18 @@ pub struct LogStaticStrEvent {
 
 impl InProcSerialize for LogStaticStrEvent {}
 
+/// A log with a property set attached, either interned or built from dynamic values.
+/// Its message is `desc.fmt_str`.
+#[derive(Debug, TransitReflect)]
+pub struct TaggedLogStaticStrEvent {
+    pub desc: &'static LogMetadata<'static>,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedLogStaticStrEvent {}
+
 #[derive(Debug)]
 pub struct LogStringEvent {
     pub desc: &'static LogMetadata<'static>,
@@ -214,6 +226,7 @@ pub struct LogMetadataRecord {
 
 impl InProcSerialize for LogMetadataRecord {}
 
+/// A log with a property set attached, either interned or built from dynamic values.
 #[derive(Debug)]
 pub struct TaggedLogString {
     pub desc: &'static LogMetadata<'static>,

@@ -16,6 +16,7 @@ use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
 use micromegas_tracing::logs::TaggedLogInteropEvent;
+use micromegas_tracing::logs::TaggedLogStaticStrEvent;
 use micromegas_tracing::logs::TaggedLogString;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::Property;
@@ -292,11 +293,12 @@ fn test_tagged_log_entries() {
 /// `(msg, properties, wire property set identity)` per parsed entry
 type ParsedEntry = (String, Vec<(String, String)>, usize);
 
-fn parse_tagged_entries(
+fn parse_entries<T>(
     block: &mut Arc<LogBlock>,
     stream: &LogStream,
     process_id: uuid::Uuid,
-) -> Vec<ParsedEntry> {
+    mut convert: impl FnMut(&micromegas_analytics::log_entry::LogEntry<'_>) -> T,
+) -> Vec<T> {
     let process_info_for_encode =
         make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let process_info = Arc::new(make_process_metadata(
@@ -323,6 +325,19 @@ fn parse_tagged_entries(
         )
         .unwrap()
         .unwrap();
+        entries.push(convert(&entry));
+        Ok(true)
+    })
+    .unwrap();
+    entries
+}
+
+fn parse_tagged_entries(
+    block: &mut Arc<LogBlock>,
+    stream: &LogStream,
+    process_id: uuid::Uuid,
+) -> Vec<ParsedEntry> {
+    parse_entries(block, stream, process_id, |entry| {
         let mut props = vec![];
         entry
             .properties
@@ -331,15 +346,12 @@ fn parse_tagged_entries(
                 Ok(())
             })
             .unwrap();
-        entries.push((
+        (
             entry.msg.to_owned(),
             props,
             entry.properties.object_ptr() as usize,
-        ));
-        Ok(true)
+        )
     })
-    .unwrap();
-    entries
 }
 
 #[test]
@@ -446,4 +458,80 @@ fn test_tagged_log_interop_event() {
         entries[0].1,
         vec![("correlation_id".to_owned(), "abc".to_owned())]
     );
+}
+
+#[test]
+#[serial]
+fn test_tagged_log_static_str_entries() {
+    let process_id = uuid::Uuid::new_v4();
+    let mut stream = LogStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "static",
+        target: "target_name",
+        module_path: "module_path",
+        file: file!(),
+        line: line!(),
+    };
+    let static_set = PropertySet::find_or_create(vec![Property::new("animal", "chicken")]);
+    let override_set = PropertySet::find_or_create(vec![
+        Property::new("level", "error"),
+        Property::new("target", "overridden"),
+    ]);
+    let cid = String::from("abc");
+    let merged = merge_properties(
+        static_set,
+        &[DynProperty {
+            name: "correlation_id",
+            value: &cid,
+        }],
+    );
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    let dynamic_set = dyn_deps.intern_set(&merged);
+    for properties in [
+        PropertySetId::interned(static_set),
+        dynamic_set,
+        PropertySetId::interned(override_set),
+    ] {
+        events.push(TaggedLogStaticStrEvent {
+            desc: &LOG_DESC,
+            properties,
+            time: 1,
+        });
+    }
+
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(8192, process_id, stream_id, 0)));
+    let entries = parse_entries(&mut block, &stream, process_id, |entry| {
+        let mut props = vec![];
+        entry
+            .properties
+            .for_each_property(|k, v| {
+                props.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            })
+            .unwrap();
+        (
+            entry.msg.to_owned(),
+            props,
+            entry.level,
+            entry.target.to_owned(),
+        )
+    });
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|e| e.0 == "static"));
+    let animal = ("animal".to_owned(), "chicken".to_owned());
+    assert_eq!(entries[0].1, vec![animal.clone()]);
+    assert!(entries[1].1.contains(&animal));
+    assert!(
+        entries[1]
+            .1
+            .contains(&("correlation_id".to_owned(), "abc".to_owned()))
+    );
+    assert_eq!(entries[0].2, Level::Info as i32);
+    assert_eq!(entries[0].3, "target_name");
+    assert_eq!(entries[2].2, Level::Error as i32);
+    assert_eq!(entries[2].3, "overridden");
 }

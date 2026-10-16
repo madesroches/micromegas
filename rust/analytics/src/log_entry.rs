@@ -151,47 +151,34 @@ pub fn log_entry_from_value<'a>(
                 }))
             }
             "TaggedLogString" => {
-                let ticks = obj
-                    .get::<i64>("time")
-                    .with_context(|| format!("reading time from {}", obj.type_name))?;
                 let msg = obj
                     .get::<&str>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name))?;
-                let desc = obj
-                    .get::<&Object>("desc")
-                    .with_context(|| format!("reading desc from {}", obj.type_name))?;
-                let mut level = desc
-                    .get::<u32>("level")
-                    .with_context(|| format!("reading level from {}", obj.type_name))?;
-                let mut target = desc
-                    .get::<&str>("target")
-                    .with_context(|| format!("reading target from {}", obj.type_name))?;
-                let properties = obj
-                    .get::<&Object>("properties")
-                    .with_context(|| format!("reading properties from {}", obj.type_name))?;
-                for &(prop_name, prop_value) in properties.members {
-                    match (prop_name, prop_value) {
-                        ("target", Value::String(value_str)) => {
-                            target = value_str;
-                        }
-                        ("level", Value::String(level_str)) => {
-                            level = Level::parse(level_str).with_context(|| "parsing log level")?
-                                as u32;
-                        }
-                        (_, _) => {}
-                    }
-                }
-                Ok(Some(LogEntry {
+                tagged_log_entry(
+                    convert_ticks,
                     process,
                     stream_id,
                     block_id,
-                    insert_time: block_insert_time_ns,
-                    time: convert_ticks.ticks_to_nanoseconds(ticks),
-                    level: level as i32,
-                    target,
+                    block_insert_time_ns,
+                    obj,
                     msg,
-                    properties: properties.into(),
-                }))
+                )
+            }
+            "TaggedLogStaticStrEvent" => {
+                let msg = obj
+                    .get::<&Object>("desc")
+                    .with_context(|| format!("reading desc from {}", obj.type_name))?
+                    .get::<&str>("fmt_str")
+                    .with_context(|| format!("reading fmt_str from {}", obj.type_name))?;
+                tagged_log_entry(
+                    convert_ticks,
+                    process,
+                    stream_id,
+                    block_id,
+                    block_insert_time_ns,
+                    obj,
+                    msg,
+                )
             }
 
             _ => {
@@ -245,4 +232,52 @@ where
     })
     .with_context(|| format!("parse_block {}", block.block_id))?;
     Ok(continue_iterating)
+}
+
+fn tagged_log_entry<'a>(
+    convert_ticks: &ConvertTicks,
+    process: Arc<ProcessMetadata>,
+    stream_id: Arc<String>,
+    block_id: Arc<String>,
+    block_insert_time_ns: i64,
+    obj: &Object<'a>,
+    msg: &'a str,
+) -> Result<Option<LogEntry<'a>>> {
+    let ticks = obj
+        .get::<i64>("time")
+        .with_context(|| format!("reading time from {}", obj.type_name))?;
+    let desc = obj
+        .get::<&Object>("desc")
+        .with_context(|| format!("reading desc from {}", obj.type_name))?;
+    let mut level = desc
+        .get::<u32>("level")
+        .with_context(|| format!("reading level from {}", obj.type_name))?;
+    let mut target = desc
+        .get::<&str>("target")
+        .with_context(|| format!("reading target from {}", obj.type_name))?;
+    let properties = obj
+        .get::<&Object>("properties")
+        .with_context(|| format!("reading properties from {}", obj.type_name))?;
+    for &(prop_name, prop_value) in properties.members {
+        match (prop_name, prop_value) {
+            ("target", Value::String(value_str)) => {
+                target = value_str;
+            }
+            ("level", Value::String(level_str)) => {
+                level = Level::parse(level_str).with_context(|| "parsing log level")? as u32;
+            }
+            (_, _) => {}
+        }
+    }
+    Ok(Some(LogEntry {
+        process,
+        stream_id,
+        block_id,
+        insert_time: block_insert_time_ns,
+        time: convert_ticks.ticks_to_nanoseconds(ticks),
+        level: level as i32,
+        target,
+        msg,
+        properties: properties.into(),
+    }))
 }

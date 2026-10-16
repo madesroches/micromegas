@@ -186,7 +186,7 @@ impl DispatchGuard {
         out
     }
 
-    /// (kind, set id) of every log event, and the dynamic dependency bytes of its block.
+    /// Event kind, set id, stored message and dynamic dependency bytes of every log event.
     fn log_events(&self) -> Vec<LogEventRecord> {
         flush_log_buffer();
         let state = self.sink.state.lock().unwrap();
@@ -194,15 +194,32 @@ impl DispatchGuard {
         for block in &state.log_blocks {
             for evt in block.events.iter() {
                 match evt {
-                    LogMsgQueueAny::LogStaticStrEvent(_) | LogMsgQueueAny::LogStringEvent(_) => out
-                        .push(LogEventRecord {
-                            tagged: false,
-                            set_id: None,
-                            dyn_deps_bytes: block.dyn_deps.len_bytes(),
-                        }),
-                    LogMsgQueueAny::TaggedLogString(e) => out.push(LogEventRecord {
+                    LogMsgQueueAny::LogStaticStrEvent(_) => out.push(LogEventRecord {
+                        kind: "LogStaticStrEvent",
+                        tagged: false,
+                        set_id: None,
+                        msg: None,
+                        dyn_deps_bytes: block.dyn_deps.len_bytes(),
+                    }),
+                    LogMsgQueueAny::LogStringEvent(e) => out.push(LogEventRecord {
+                        kind: "LogStringEvent",
+                        tagged: false,
+                        set_id: None,
+                        msg: Some(e.msg.0.clone()),
+                        dyn_deps_bytes: block.dyn_deps.len_bytes(),
+                    }),
+                    LogMsgQueueAny::TaggedLogStaticStrEvent(e) => out.push(LogEventRecord {
+                        kind: "TaggedLogStaticStrEvent",
                         tagged: true,
                         set_id: Some(e.properties),
+                        msg: None,
+                        dyn_deps_bytes: block.dyn_deps.len_bytes(),
+                    }),
+                    LogMsgQueueAny::TaggedLogString(e) => out.push(LogEventRecord {
+                        kind: "TaggedLogString",
+                        tagged: true,
+                        set_id: Some(e.properties),
+                        msg: Some(e.msg.0.clone()),
                         dyn_deps_bytes: block.dyn_deps.len_bytes(),
                     }),
                     _ => {}
@@ -223,8 +240,11 @@ struct MetricRecord {
 }
 
 struct LogEventRecord {
+    kind: &'static str,
     tagged: bool,
     set_id: Option<PropertySetId>,
+    /// `None` for the events that leave the message to the metadata.
+    msg: Option<String>,
     dyn_deps_bytes: usize,
 }
 
@@ -651,4 +671,88 @@ fn log_enabled_checked_once_per_call() {
     check("dynamic", &|| info!(id = %i, "m"));
     check("literal plus dynamic", &|| info!(a = "1", id = %i, "m"));
     check("set plus dynamic", &|| info!(id = %i, ..set, "m"));
+}
+
+#[test]
+#[serial]
+fn tagged_static_messages_use_the_static_event() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("kind", "spread")]);
+    info!(a = "1", "static");
+    info!(..set, "static");
+    let logs = guard.log_events();
+    assert_eq!(logs.len(), 2);
+    assert!(
+        logs.iter()
+            .all(|l| l.kind == "TaggedLogStaticStrEvent" && l.msg.is_none())
+    );
+    assert_eq!(logs[1].set_id, Some(PropertySetId::interned(set)));
+    assert!(logs.iter().all(|l| l.dyn_deps_bytes == 0));
+    let sink_logs = guard.logs();
+    assert_eq!(sink_logs[0], ("static".to_owned(), pairs(&[("a", "1")])));
+    assert_eq!(
+        sink_logs[1],
+        ("static".to_owned(), pairs(&[("kind", "spread")]))
+    );
+}
+
+#[test]
+#[serial]
+fn dynamic_static_message_uses_the_static_event() {
+    let guard = DispatchGuard::new();
+    let x = String::from("x1");
+    info!(id = %x, "static");
+    let logs = guard.log_events();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].kind, "TaggedLogStaticStrEvent");
+    assert!(logs[0].dyn_deps_bytes > 0);
+    assert_eq!(guard.log_props("static"), pairs(&[("id", "x1")]));
+    let state = guard.sink.state.lock().unwrap();
+    let block = &state.log_blocks[0];
+    let id = block
+        .events
+        .iter()
+        .find_map(|evt| match evt {
+            LogMsgQueueAny::TaggedLogStaticStrEvent(e) => Some(e.properties),
+            _ => None,
+        })
+        .expect("static tagged event");
+    assert!(block.dyn_deps.set_properties(id).contains(&("id", "x1")));
+}
+
+#[test]
+#[serial]
+fn tagged_messages_that_differ_from_the_format_string_are_formatted() {
+    let guard = DispatchGuard::new();
+    let n = 12;
+    info!(a = "1", "value {}", 3);
+    info!(a = "1", "a {{b}}");
+    info!(a = "1", "v {}", n);
+    let logs = guard.log_events();
+    let msgs: Vec<_> = logs.iter().map(|l| l.msg.clone()).collect();
+    assert!(logs.iter().all(|l| l.kind == "TaggedLogString"));
+    assert_eq!(
+        msgs,
+        vec![
+            Some("value 3".to_owned()),
+            Some("a {b}".to_owned()),
+            Some("v 12".to_owned())
+        ]
+    );
+}
+
+#[test]
+#[serial]
+fn untagged_messages_are_stored_as_printed() {
+    let guard = DispatchGuard::new();
+    info!("static");
+    info!("value {}", 3);
+    info!("a {{b}}");
+    let logs = guard.log_events();
+    assert_eq!(logs.len(), 3);
+    assert_eq!(logs[0].kind, "LogStaticStrEvent");
+    assert_eq!(logs[1].kind, "LogStringEvent");
+    assert_eq!(logs[1].msg.as_deref(), Some("value 3"));
+    assert_eq!(logs[2].kind, "LogStringEvent");
+    assert_eq!(logs[2].msg.as_deref(), Some("a {b}"));
 }
