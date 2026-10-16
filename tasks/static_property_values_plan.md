@@ -135,11 +135,11 @@ static's type is never inferred).
 type Key<const M: usize> = (usize, [(usize, usize); M]);  // base ptr, (ptr, len) per value
 
 pub struct StaticSetCache<const M: usize> {
-    map: LazyLock<scc::HashIndex<Key<M>, &'static PropertySet, FxBuildHasher>>,
+    map: scc::HashIndex<Key<M>, &'static PropertySet, FxBuildHasher>,
 }
 
 impl<const M: usize> StaticSetCache<M> {
-    pub const fn new() -> Self;
+    pub const fn new() -> Self;  // HashIndex::with_hasher(FxBuildHasher), const without scc's loom feature
     pub fn get(
         &self,
         base: &'static PropertySet,
@@ -163,8 +163,9 @@ impl<const M: usize> StaticSetCache<M> {
   as `PropertySet`, which the docs state for `static` explicitly.
 
 **wasm32**: add a stub `static_set_cache` module next to the `property_set` stub in `lib.rs`.
-`StaticSetCache::get` returns `PropertySet::empty()`, and `static_value` is the identity, so call
-sites compile unchanged and type-check the same.
+`StaticSetCache::get` returns `PropertySet::empty()`. Also add an identity
+`pub fn static_value(v: &'static str) -> &'static str` to the `property_set` stub module, since the
+macro calls `$crate::property_set::static_value`. Call sites compile unchanged and type-check the same.
 
 ### Precedence
 
@@ -185,11 +186,14 @@ target-specific code; `scc` runs loom model tests.
 ### Phase 1: Cache
 
 1. `rust/Cargo.toml`: add `scc` to `[workspace.dependencies]`. `rust/tracing/Cargo.toml`: add
-   `scc.workspace = true` under the native-only dependencies.
+   `scc.workspace = true` under the native-only dependencies. Regenerate
+   `rust/datafusion-wasm/Cargo.lock` (excluded from the workspace, audited in CI), which gains
+   `scc`, `sdd` and `saa`.
 2. `rust/tracing/src/property_set.rs`: extract `apply_pairs` from `callsite_set`; add
    `static_value`.
 3. `rust/tracing/src/static_set_cache.rs`: `StaticSetCache` as above. Register it in
-   `rust/tracing/src/lib.rs` under `cfg(not(wasm32))`, plus the wasm stub.
+   `rust/tracing/src/lib.rs` under `cfg(not(wasm32))`, plus the wasm stub: a `static_set_cache` stub
+   module and an identity `static_value` in the `property_set` stub module.
 
 ### Phase 2: Macros
 
@@ -225,7 +229,7 @@ target-specific code; `scc` runs loom model tests.
 
 ## Files to Modify
 
-- `rust/Cargo.toml`, `rust/Cargo.lock`
+- `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/datafusion-wasm/Cargo.lock`
 - `rust/tracing/Cargo.toml`
 - `rust/tracing/src/lib.rs`
 - `rust/tracing/src/property_set.rs`
@@ -277,8 +281,6 @@ Prototype (`rust/tracing/benches/static_values.rs`, on top of #1679). Each call 
 - **`papaya`, `dashmap`, `RwLock<HashMap>`**: slower than `scc` and no simpler to use.
 - **`scc::HashIndex`**: chosen. Maintained, loom-tested, one warm cache shared by all threads;
   ~5–8 ns over `..set` and two transitive crates.
-- **Key on values only, not on the literals too**: would need a second ordered accumulator to keep
-  source-order precedence between literals and static values; literals cost a few bytes of hashing.
 
 ## Decisions
 
