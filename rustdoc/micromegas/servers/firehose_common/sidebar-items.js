@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["firehose_auth_middleware"]};

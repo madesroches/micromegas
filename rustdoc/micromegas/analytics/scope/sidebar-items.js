@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["compute_scope_hash"],"struct":["BorrowedScopeDesc","ScopeDesc"],"type":["ScopeHashMap"]};

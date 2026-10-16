@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["main"],"static":["ALLOC","MICROMEGAS_MALLOC_CONF"],"struct":["Cli"]};

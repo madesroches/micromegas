@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["log_stats_ddl_text","log_stats_view_definition","make_log_stats_view"]};

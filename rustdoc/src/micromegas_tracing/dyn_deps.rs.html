@@ -1,0 +1,414 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `tracing/src/dyn_deps.rs`."><title>dyn_deps.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="micromegas_tracing" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.0 (b940084d7 2026-09-28)" data-channel="1.99.0" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">micromegas_tracing/</div>dyn_deps.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Per-block dependency records for runtime property values, kept in their wire form.
+<a href=#2 id=2 data-nosnippet>2</a></span><span class="kw">use crate</span>::{
+<a href=#3 id=3 data-nosnippet>3</a>    property_set::{
+<a href=#4 id=4 data-nosnippet>4</a>        DynProperty, Property, PropertyDepsQueue, PropertySet, PropertySetDependency,
+<a href=#5 id=5 data-nosnippet>5</a>        PropertySetId, StringDepsQueue, cmp_dyn_properties,
+<a href=#6 id=6 data-nosnippet>6</a>    },
+<a href=#7 id=7 data-nosnippet>7</a>    static_string_ref::{BlockStringRef, StaticStringRef},
+<a href=#8 id=8 data-nosnippet>8</a>};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>micromegas_transit::{
+<a href=#10 id=10 data-nosnippet>10</a>    HeterogeneousQueue, StaticStringDependency, read_any, string_codec::StringCodec,
+<a href=#11 id=11 data-nosnippet>11</a>};
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>rustc_hash::{FxHashMap, FxHashSet};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>std::{borrow::Cow, collections::hash_map::Entry, fmt};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
+<a href=#15 id=15 data-nosnippet>15</a>
+<a href=#16 id=16 data-nosnippet>16</a><span class="doccomment">/// Keeps dynamic ids out of the range of pointer ids, which the parser requires to be unique
+<a href=#17 id=17 data-nosnippet>17</a>/// within a block. No supported platform hands out addresses with this bit set.
+<a href=#18 id=18 data-nosnippet>18</a></span><span class="kw">pub const </span>DYN_ID_TAG: u64 = <span class="number">1 </span>&lt;&lt; <span class="number">63</span>;
+<a href=#19 id=19 data-nosnippet>19</a>
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">const </span>FIRST_INSERT_CAPACITY: usize = <span class="number">64 </span>* <span class="number">1024</span>;
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a><span class="comment">// Each record is a type byte and a u32 size, followed by the payload.
+<a href=#23 id=23 data-nosnippet>23</a></span><span class="kw">const </span>RECORD_HEADER: usize = <span class="number">1 </span>+ std::mem::size_of::&lt;u32&gt;();
+<a href=#24 id=24 data-nosnippet>24</a><span class="comment">// String payload: id, codec, len, then the bytes.
+<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">const </span>STRING_HEADER: usize = std::mem::size_of::&lt;u64&gt;() + <span class="number">1 </span>+ std::mem::size_of::&lt;u32&gt;();
+<a href=#26 id=26 data-nosnippet>26</a><span class="comment">// Set payload: id, count, then the properties.
+<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">const </span>SET_HEADER: usize = std::mem::size_of::&lt;u64&gt;() + std::mem::size_of::&lt;u32&gt;();
+<a href=#28 id=28 data-nosnippet>28</a>
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">fn </span>dyn_string_id(offset: u32) -&gt; u64 {
+<a href=#30 id=30 data-nosnippet>30</a>    DYN_ID_TAG | (u64::from(offset) &lt;&lt; <span class="number">1</span>)
+<a href=#31 id=31 data-nosnippet>31</a>}
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">fn </span>dyn_set_id(offset: u32) -&gt; u64 {
+<a href=#34 id=34 data-nosnippet>34</a>    DYN_ID_TAG | (u64::from(offset) &lt;&lt; <span class="number">1</span>) | <span class="number">1
+<a href=#35 id=35 data-nosnippet>35</a></span>}
+<a href=#36 id=36 data-nosnippet>36</a>
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">fn </span>dyn_offset(id: u64) -&gt; u32 {
+<a href=#38 id=38 data-nosnippet>38</a>    ((id &amp; !DYN_ID_TAG) &gt;&gt; <span class="number">1</span>) <span class="kw">as </span>u32
+<a href=#39 id=39 data-nosnippet>39</a>}
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a><span class="doccomment">/// The result of combining a callsite's static set with runtime properties.
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="kw">pub struct </span>MergedProperties&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="kw">pub </span>properties: Vec&lt;DynProperty&lt;<span class="lifetime">'a</span>&gt;&gt;,
+<a href=#44 id=44 data-nosnippet>44</a>    <span class="comment">// Bit i set: properties[i].value comes from the `&amp;'static` set.
+<a href=#45 id=45 data-nosnippet>45</a>    </span>static_values: u64,
+<a href=#46 id=46 data-nosnippet>46</a>    <span class="comment">// Bit i set: properties[i].name is `'static`.
+<a href=#47 id=47 data-nosnippet>47</a>    </span>static_names: u64,
+<a href=#48 id=48 data-nosnippet>48</a>}
+<a href=#49 id=49 data-nosnippet>49</a>
+<a href=#50 id=50 data-nosnippet>50</a><span class="kw">impl </span>MergedProperties&lt;<span class="lifetime">'_</span>&gt; {
+<a href=#51 id=51 data-nosnippet>51</a>    <span class="kw">fn </span>is_static_value(<span class="kw-2">&amp;</span><span class="self">self</span>, index: usize) -&gt; bool {
+<a href=#52 id=52 data-nosnippet>52</a>        is_static_bit(<span class="self">self</span>.static_values, index)
+<a href=#53 id=53 data-nosnippet>53</a>    }
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">fn </span>is_static_name(<span class="kw-2">&amp;</span><span class="self">self</span>, index: usize) -&gt; bool {
+<a href=#56 id=56 data-nosnippet>56</a>        is_static_bit(<span class="self">self</span>.static_names, index)
+<a href=#57 id=57 data-nosnippet>57</a>    }
+<a href=#58 id=58 data-nosnippet>58</a>}
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a><span class="kw">fn </span>is_static_bit(mask: u64, index: usize) -&gt; bool {
+<a href=#61 id=61 data-nosnippet>61</a>    index &lt; <span class="number">64 </span>&amp;&amp; (mask &gt;&gt; index) &amp; <span class="number">1 </span>!= <span class="number">0
+<a href=#62 id=62 data-nosnippet>62</a></span>}
+<a href=#63 id=63 data-nosnippet>63</a>
+<a href=#64 id=64 data-nosnippet>64</a><span class="doccomment">/// Combines a static set with dynamic properties into one sorted list.
+<a href=#65 id=65 data-nosnippet>65</a>///
+<a href=#66 id=66 data-nosnippet>66</a>/// A dynamic value replaces a static property of the same name (compared case-insensitively
+<a href=#67 id=67 data-nosnippet>67</a>/// to match `property_get`).
+<a href=#68 id=68 data-nosnippet>68</a></span><span class="attr">#[inline]
+<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub fn </span>merge_properties&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#70 id=70 data-nosnippet>70</a>    static_set: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>PropertySet,
+<a href=#71 id=71 data-nosnippet>71</a>    dyn_properties: <span class="kw-2">&amp;</span>[DynProperty&lt;<span class="lifetime">'a</span>&gt;],
+<a href=#72 id=72 data-nosnippet>72</a>) -&gt; MergedProperties&lt;<span class="lifetime">'a</span>&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">let </span><span class="kw-2">mut </span>merged: Vec&lt;DynProperty&lt;<span class="lifetime">'a</span>&gt;&gt; = static_set.dyn_properties().to_vec();
+<a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">for </span>dyn_prop <span class="kw">in </span>dyn_properties {
+<a href=#75 id=75 data-nosnippet>75</a>        merged.retain(|p| !p.name().eq_ignore_ascii_case(dyn_prop.name()));
+<a href=#76 id=76 data-nosnippet>76</a>        merged.push(<span class="kw-2">*</span>dyn_prop);
+<a href=#77 id=77 data-nosnippet>77</a>    }
+<a href=#78 id=78 data-nosnippet>78</a>    merged.sort_by(cmp_dyn_properties);
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="comment">// A value that is the very memory of a static property's value is `'static` whoever
+<a href=#80 id=80 data-nosnippet>80</a>    // passed it. This avoids carrying a flag through the retain and the sort.
+<a href=#81 id=81 data-nosnippet>81</a>    </span><span class="kw">let </span>(static_values, static_names) =
+<a href=#82 id=82 data-nosnippet>82</a>        merged
+<a href=#83 id=83 data-nosnippet>83</a>            .iter()
+<a href=#84 id=84 data-nosnippet>84</a>            .take(<span class="number">64</span>)
+<a href=#85 id=85 data-nosnippet>85</a>            .enumerate()
+<a href=#86 id=86 data-nosnippet>86</a>            .fold((<span class="number">0u64</span>, <span class="number">0u64</span>), |(values, names), (i, p)| {
+<a href=#87 id=87 data-nosnippet>87</a>                <span class="kw">let </span>is_static = static_set.get_properties().iter().any(|s| {
+<a href=#88 id=88 data-nosnippet>88</a>                    s.value.id() == p.value().as_ptr() <span class="kw">as </span>u64
+<a href=#89 id=89 data-nosnippet>89</a>                        &amp;&amp; s.value.len <span class="kw">as </span>usize == p.value().len()
+<a href=#90 id=90 data-nosnippet>90</a>                        &amp;&amp; s.name.as_str() == p.name()
+<a href=#91 id=91 data-nosnippet>91</a>                });
+<a href=#92 id=92 data-nosnippet>92</a>                (
+<a href=#93 id=93 data-nosnippet>93</a>                    values | (u64::from(is_static) &lt;&lt; i),
+<a href=#94 id=94 data-nosnippet>94</a>                    names | (u64::from(p.is_static_name()) &lt;&lt; i),
+<a href=#95 id=95 data-nosnippet>95</a>                )
+<a href=#96 id=96 data-nosnippet>96</a>            });
+<a href=#97 id=97 data-nosnippet>97</a>    MergedProperties {
+<a href=#98 id=98 data-nosnippet>98</a>        properties: merged,
+<a href=#99 id=99 data-nosnippet>99</a>        static_values,
+<a href=#100 id=100 data-nosnippet>100</a>        static_names,
+<a href=#101 id=101 data-nosnippet>101</a>    }
+<a href=#102 id=102 data-nosnippet>102</a>}
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="kw">fn </span>content_hash&lt;<span class="lifetime">'a</span>&gt;(properties: <span class="kw">impl </span>Iterator&lt;Item = (<span class="kw-2">&amp;</span><span class="lifetime">'a </span>str, <span class="kw-2">&amp;</span><span class="lifetime">'a </span>str)&gt;) -&gt; u64 {
+<a href=#105 id=105 data-nosnippet>105</a>    properties.fold(<span class="number">0</span>, |h, (name, value)| {
+<a href=#106 id=106 data-nosnippet>106</a>        xxh3_64_with_seed(value.as_bytes(), xxh3_64_with_seed(name.as_bytes(), h))
+<a href=#107 id=107 data-nosnippet>107</a>    })
+<a href=#108 id=108 data-nosnippet>108</a>}
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a><span class="attr">#[inline]
+<a href=#111 id=111 data-nosnippet>111</a></span><span class="kw">fn </span>read_u32(bytes: <span class="kw-2">&amp;</span>[u8], at: usize) -&gt; u32 {
+<a href=#112 id=112 data-nosnippet>112</a>    u32::from_ne_bytes(bytes[at..at + <span class="number">4</span>].try_into().unwrap())
+<a href=#113 id=113 data-nosnippet>113</a>}
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a><span class="attr">#[inline]
+<a href=#116 id=116 data-nosnippet>116</a></span><span class="kw">fn </span>string_at(bytes: <span class="kw-2">&amp;</span>[u8], offset: u32) -&gt; <span class="kw-2">&amp;</span>str {
+<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">let </span>payload = offset <span class="kw">as </span>usize + RECORD_HEADER;
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>len = read_u32(bytes, payload + std::mem::size_of::&lt;u64&gt;() + <span class="number">1</span>) <span class="kw">as </span>usize;
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">let </span>begin = payload + STRING_HEADER;
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="comment">// SAFETY: the bytes were copied from a `&amp;str` by `intern_str`.
+<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">unsafe </span>{ std::str::from_utf8_unchecked(<span class="kw-2">&amp;</span>bytes[begin..begin + len]) }
+<a href=#122 id=122 data-nosnippet>122</a>}
+<a href=#123 id=123 data-nosnippet>123</a>
+<a href=#124 id=124 data-nosnippet>124</a><span class="attr">#[inline]
+<a href=#125 id=125 data-nosnippet>125</a></span><span class="kw">fn </span>set_len(bytes: <span class="kw-2">&amp;</span>[u8], offset: u32) -&gt; usize {
+<a href=#126 id=126 data-nosnippet>126</a>    read_u32(
+<a href=#127 id=127 data-nosnippet>127</a>        bytes,
+<a href=#128 id=128 data-nosnippet>128</a>        offset <span class="kw">as </span>usize + RECORD_HEADER + std::mem::size_of::&lt;u64&gt;(),
+<a href=#129 id=129 data-nosnippet>129</a>    ) <span class="kw">as </span>usize
+<a href=#130 id=130 data-nosnippet>130</a>}
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a><span class="attr">#[inline]
+<a href=#133 id=133 data-nosnippet>133</a></span><span class="kw">fn </span>set_property(bytes: <span class="kw-2">&amp;</span>[u8], offset: u32, index: usize) -&gt; Property {
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">let </span>size = std::mem::size_of::&lt;Property&gt;();
+<a href=#135 id=135 data-nosnippet>135</a>    <span class="kw">let </span>begin = offset <span class="kw">as </span>usize + RECORD_HEADER + SET_HEADER + index * size;
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="kw">let </span>window = <span class="kw-2">&amp;</span>bytes[begin..begin + size];
+<a href=#137 id=137 data-nosnippet>137</a>    <span class="comment">// SAFETY: the window holds a `Property` written by `write_any`.
+<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="kw">unsafe </span>{ read_any::&lt;Property&gt;(window.as_ptr()) }
+<a href=#139 id=139 data-nosnippet>139</a>}
+<a href=#140 id=140 data-nosnippet>140</a>
+<a href=#141 id=141 data-nosnippet>141</a><span class="doccomment">/// Resolves a ref that was built from a `&amp;'static str`.
+<a href=#142 id=142 data-nosnippet>142</a>///
+<a href=#143 id=143 data-nosnippet>143</a>/// # Safety
+<a href=#144 id=144 data-nosnippet>144</a>/// `r` must have been built from a `&amp;'static str`.
+<a href=#145 id=145 data-nosnippet>145</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">unsafe fn </span>static_ref_str(r: <span class="kw-2">&amp;</span>StaticStringRef) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">unsafe </span>{
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw">let </span>slice = std::slice::from_raw_parts(r.ptr <span class="kw">as </span><span class="kw-2">*const </span>u8, r.len <span class="kw">as </span>usize);
+<a href=#148 id=148 data-nosnippet>148</a>        std::str::from_utf8_unchecked(slice)
+<a href=#149 id=149 data-nosnippet>149</a>    }
+<a href=#150 id=150 data-nosnippet>150</a>}
+<a href=#151 id=151 data-nosnippet>151</a>
+<a href=#152 id=152 data-nosnippet>152</a><span class="doccomment">/// Records keyed by content hash. A collision is vanishingly rare, so the common case stores
+<a href=#153 id=153 data-nosnippet>153</a>/// one record inline and allocates nothing per key.
+<a href=#154 id=154 data-nosnippet>154</a></span><span class="kw">struct </span>HashIndex&lt;T&gt; {
+<a href=#155 id=155 data-nosnippet>155</a>    first: FxHashMap&lt;u64, T&gt;,
+<a href=#156 id=156 data-nosnippet>156</a>    collisions: FxHashMap&lt;u64, Vec&lt;T&gt;&gt;,
+<a href=#157 id=157 data-nosnippet>157</a>}
+<a href=#158 id=158 data-nosnippet>158</a>
+<a href=#159 id=159 data-nosnippet>159</a><span class="kw">impl</span>&lt;T&gt; HashIndex&lt;T&gt; {
+<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#161 id=161 data-nosnippet>161</a>        <span class="self">Self </span>{
+<a href=#162 id=162 data-nosnippet>162</a>            first: FxHashMap::default(),
+<a href=#163 id=163 data-nosnippet>163</a>            collisions: FxHashMap::default(),
+<a href=#164 id=164 data-nosnippet>164</a>        }
+<a href=#165 id=165 data-nosnippet>165</a>    }
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">fn </span>candidates(<span class="kw-2">&amp;</span><span class="self">self</span>, hash: u64) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>T&gt; {
+<a href=#168 id=168 data-nosnippet>168</a>        <span class="kw">let </span>extra = <span class="kw">if </span><span class="self">self</span>.collisions.is_empty() {
+<a href=#169 id=169 data-nosnippet>169</a>            <span class="prelude-val">None
+<a href=#170 id=170 data-nosnippet>170</a>        </span>} <span class="kw">else </span>{
+<a href=#171 id=171 data-nosnippet>171</a>            <span class="self">self</span>.collisions.get(<span class="kw-2">&amp;</span>hash)
+<a href=#172 id=172 data-nosnippet>172</a>        };
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="self">self</span>.first
+<a href=#174 id=174 data-nosnippet>174</a>            .get(<span class="kw-2">&amp;</span>hash)
+<a href=#175 id=175 data-nosnippet>175</a>            .into_iter()
+<a href=#176 id=176 data-nosnippet>176</a>            .chain(extra.into_iter().flatten())
+<a href=#177 id=177 data-nosnippet>177</a>    }
+<a href=#178 id=178 data-nosnippet>178</a>
+<a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">fn </span>insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>, hash: u64, record: T) {
+<a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">match </span><span class="self">self</span>.first.entry(hash) {
+<a href=#181 id=181 data-nosnippet>181</a>            Entry::Vacant(slot) =&gt; {
+<a href=#182 id=182 data-nosnippet>182</a>                slot.insert(record);
+<a href=#183 id=183 data-nosnippet>183</a>            }
+<a href=#184 id=184 data-nosnippet>184</a>            Entry::Occupied(<span class="kw">_</span>) =&gt; <span class="self">self</span>.collisions.entry(hash).or_default().push(record),
+<a href=#185 id=185 data-nosnippet>185</a>        }
+<a href=#186 id=186 data-nosnippet>186</a>    }
+<a href=#187 id=187 data-nosnippet>187</a>
+<a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">fn </span>iter(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span>T&gt; {
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="self">self</span>.first
+<a href=#190 id=190 data-nosnippet>190</a>            .values()
+<a href=#191 id=191 data-nosnippet>191</a>            .chain(<span class="self">self</span>.collisions.values().flatten())
+<a href=#192 id=192 data-nosnippet>192</a>    }
+<a href=#193 id=193 data-nosnippet>193</a>}
+<a href=#194 id=194 data-nosnippet>194</a>
+<a href=#195 id=195 data-nosnippet>195</a><span class="attr">#[derive(Debug)]
+<a href=#196 id=196 data-nosnippet>196</a></span><span class="kw">struct </span>DynSet {
+<a href=#197 id=197 data-nosnippet>197</a>    offset: u32,
+<a href=#198 id=198 data-nosnippet>198</a>    <span class="comment">// The masks of the `MergedProperties` the record was built with.
+<a href=#199 id=199 data-nosnippet>199</a>    </span>static_values: u64,
+<a href=#200 id=200 data-nosnippet>200</a>    static_names: u64,
+<a href=#201 id=201 data-nosnippet>201</a>}
+<a href=#202 id=202 data-nosnippet>202</a>
+<a href=#203 id=203 data-nosnippet>203</a><span class="doccomment">/// The dependency records of one block that only exist at run time.
+<a href=#204 id=204 data-nosnippet>204</a>///
+<a href=#205 id=205 data-nosnippet>205</a>/// Records are serialized when the event is pushed, with ids that are scoped to the block, and
+<a href=#206 id=206 data-nosnippet>206</a>/// appended as-is after the static dependencies when the block is extracted. A record only
+<a href=#207 id=207 data-nosnippet>207</a>/// references records pushed before it, or `'static` data.
+<a href=#208 id=208 data-nosnippet>208</a></span><span class="kw">pub struct </span>DynDeps&lt;D&gt; {
+<a href=#209 id=209 data-nosnippet>209</a>    queue: D,
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="comment">// offsets of string records
+<a href=#211 id=211 data-nosnippet>211</a>    </span>strings: HashIndex&lt;u32&gt;,
+<a href=#212 id=212 data-nosnippet>212</a>    sets: HashIndex&lt;DynSet&gt;,
+<a href=#213 id=213 data-nosnippet>213</a>}
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a><span class="kw">impl</span>&lt;D&gt; fmt::Debug <span class="kw">for </span>DynDeps&lt;D&gt; {
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#217 id=217 data-nosnippet>217</a>        f.debug_struct(<span class="string">"DynDeps"</span>).finish_non_exhaustive()
+<a href=#218 id=218 data-nosnippet>218</a>    }
+<a href=#219 id=219 data-nosnippet>219</a>}
+<a href=#220 id=220 data-nosnippet>220</a>
+<a href=#221 id=221 data-nosnippet>221</a><span class="kw">impl</span>&lt;D: HeterogeneousQueue&gt; Default <span class="kw">for </span>DynDeps&lt;D&gt; {
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#223 id=223 data-nosnippet>223</a>        <span class="self">Self</span>::new()
+<a href=#224 id=224 data-nosnippet>224</a>    }
+<a href=#225 id=225 data-nosnippet>225</a>}
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a><span class="kw">impl</span>&lt;D: HeterogeneousQueue&gt; DynDeps&lt;D&gt; {
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="doccomment">/// Allocates nothing until the first insert.
+<a href=#229 id=229 data-nosnippet>229</a>    </span><span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="self">Self </span>{
+<a href=#231 id=231 data-nosnippet>231</a>            queue: D::new(<span class="number">0</span>),
+<a href=#232 id=232 data-nosnippet>232</a>            strings: HashIndex::new(),
+<a href=#233 id=233 data-nosnippet>233</a>            sets: HashIndex::new(),
+<a href=#234 id=234 data-nosnippet>234</a>        }
+<a href=#235 id=235 data-nosnippet>235</a>    }
+<a href=#236 id=236 data-nosnippet>236</a>
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// Exact size of the dependency bytes this adds to the encoded block.
+<a href=#238 id=238 data-nosnippet>238</a>    </span><span class="kw">pub fn </span>len_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#239 id=239 data-nosnippet>239</a>        <span class="self">self</span>.queue.len_bytes()
+<a href=#240 id=240 data-nosnippet>240</a>    }
+<a href=#241 id=241 data-nosnippet>241</a>
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">pub fn </span>queue(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>D {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.queue
+<a href=#244 id=244 data-nosnippet>244</a>    }
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">fn </span>reserve_on_first_insert(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw">if </span><span class="self">self</span>.queue.capacity_bytes() == <span class="number">0 </span>{
+<a href=#248 id=248 data-nosnippet>248</a>            <span class="self">self</span>.queue = D::new(FIRST_INSERT_CAPACITY);
+<a href=#249 id=249 data-nosnippet>249</a>        }
+<a href=#250 id=250 data-nosnippet>250</a>    }
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="doccomment">/// Decodes a set for in-process readers.
+<a href=#253 id=253 data-nosnippet>253</a>    </span><span class="kw">pub fn </span>set_properties(<span class="kw-2">&amp;</span><span class="self">self</span>, id: PropertySetId) -&gt; Vec&lt;(<span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str)&gt; {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(set) = id.as_interned() {
+<a href=#255 id=255 data-nosnippet>255</a>            <span class="kw">return </span>set
+<a href=#256 id=256 data-nosnippet>256</a>                .get_properties()
+<a href=#257 id=257 data-nosnippet>257</a>                .iter()
+<a href=#258 id=258 data-nosnippet>258</a>                .map(|p| (p.name.as_str(), p.value.as_str()))
+<a href=#259 id=259 data-nosnippet>259</a>                .collect();
+<a href=#260 id=260 data-nosnippet>260</a>        }
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">let </span>offset = dyn_offset(id.<span class="number">0</span>);
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>bytes = <span class="self">self</span>.queue.as_bytes();
+<a href=#263 id=263 data-nosnippet>263</a>        <span class="kw">let </span>set = <span class="self">self
+<a href=#264 id=264 data-nosnippet>264</a>            </span>.sets
+<a href=#265 id=265 data-nosnippet>265</a>            .iter()
+<a href=#266 id=266 data-nosnippet>266</a>            .find(|s| s.offset == offset)
+<a href=#267 id=267 data-nosnippet>267</a>            .expect(<span class="string">"unknown dynamic set id"</span>);
+<a href=#268 id=268 data-nosnippet>268</a>        (<span class="number">0</span>..set_len(bytes, offset))
+<a href=#269 id=269 data-nosnippet>269</a>            .map(|i| {
+<a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">let </span>prop = set_property(bytes, offset, i);
+<a href=#271 id=271 data-nosnippet>271</a>                (
+<a href=#272 id=272 data-nosnippet>272</a>                    ref_str(bytes, <span class="kw-2">&amp;</span>prop.name, set.static_names, i),
+<a href=#273 id=273 data-nosnippet>273</a>                    ref_str(bytes, <span class="kw-2">&amp;</span>prop.value, set.static_values, i),
+<a href=#274 id=274 data-nosnippet>274</a>                )
+<a href=#275 id=275 data-nosnippet>275</a>            })
+<a href=#276 id=276 data-nosnippet>276</a>            .collect()
+<a href=#277 id=277 data-nosnippet>277</a>    }
+<a href=#278 id=278 data-nosnippet>278</a>
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="doccomment">/// The text of a string record written by `intern_str`.
+<a href=#280 id=280 data-nosnippet>280</a>    </span><span class="kw">pub fn </span>str(<span class="kw-2">&amp;</span><span class="self">self</span>, id: u64) -&gt; <span class="kw-2">&amp;</span>str {
+<a href=#281 id=281 data-nosnippet>281</a>        string_at(<span class="self">self</span>.queue.as_bytes(), dyn_offset(id))
+<a href=#282 id=282 data-nosnippet>282</a>    }
+<a href=#283 id=283 data-nosnippet>283</a>}
+<a href=#284 id=284 data-nosnippet>284</a>
+<a href=#285 id=285 data-nosnippet>285</a><span class="doccomment">/// Resolves a name or value of a dynamic set: a `'static` string when its bit is set in
+<a href=#286 id=286 data-nosnippet>286</a>/// `mask`, a string record of the block otherwise.
+<a href=#287 id=287 data-nosnippet>287</a></span><span class="attr">#[inline]
+<a href=#288 id=288 data-nosnippet>288</a></span><span class="kw">fn </span>ref_str&lt;<span class="lifetime">'b</span>&gt;(bytes: <span class="kw-2">&amp;</span><span class="lifetime">'b </span>[u8], r: <span class="kw-2">&amp;</span>StaticStringRef, mask: u64, index: usize) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'b </span>str {
+<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">if </span>is_static_bit(mask, index) {
+<a href=#290 id=290 data-nosnippet>290</a>        <span class="comment">// SAFETY: masked refs were built from `&amp;'static str`s.
+<a href=#291 id=291 data-nosnippet>291</a>        </span><span class="kw">unsafe </span>{ static_ref_str(r) }
+<a href=#292 id=292 data-nosnippet>292</a>    } <span class="kw">else </span>{
+<a href=#293 id=293 data-nosnippet>293</a>        string_at(bytes, dyn_offset(r.ptr))
+<a href=#294 id=294 data-nosnippet>294</a>    }
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="kw">impl</span>&lt;D: StringDepsQueue&gt; DynDeps&lt;D&gt; {
+<a href=#298 id=298 data-nosnippet>298</a>    <span class="doccomment">/// Returns the id of the string record holding `value`, pushing one on first sight.
+<a href=#299 id=299 data-nosnippet>299</a>    </span><span class="kw">pub fn </span>intern_str(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: <span class="kw-2">&amp;</span>str) -&gt; u64 {
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="self">self</span>.reserve_on_first_insert();
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>hash = xxh3_64(value.as_bytes());
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">let </span>bytes = <span class="self">self</span>.queue.as_bytes();
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>offset <span class="kw">in </span><span class="self">self</span>.strings.candidates(hash) {
+<a href=#304 id=304 data-nosnippet>304</a>            <span class="kw">if </span>string_at(bytes, offset) == value {
+<a href=#305 id=305 data-nosnippet>305</a>                <span class="kw">return </span>dyn_string_id(offset);
+<a href=#306 id=306 data-nosnippet>306</a>            }
+<a href=#307 id=307 data-nosnippet>307</a>        }
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>offset = u32::try_from(<span class="self">self</span>.queue.len_bytes()).expect(<span class="string">"dynamic queue exceeds 4 GiB"</span>);
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>id = dyn_string_id(offset);
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="self">self</span>.queue.push_string(StaticStringDependency {
+<a href=#311 id=311 data-nosnippet>311</a>            id,
+<a href=#312 id=312 data-nosnippet>312</a>            codec: StringCodec::Utf8,
+<a href=#313 id=313 data-nosnippet>313</a>            len: value.len() <span class="kw">as </span>u32,
+<a href=#314 id=314 data-nosnippet>314</a>            ptr: value.as_ptr(),
+<a href=#315 id=315 data-nosnippet>315</a>        });
+<a href=#316 id=316 data-nosnippet>316</a>        <span class="self">self</span>.strings.insert(hash, offset);
+<a href=#317 id=317 data-nosnippet>317</a>        id
+<a href=#318 id=318 data-nosnippet>318</a>    }
+<a href=#319 id=319 data-nosnippet>319</a>
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="doccomment">/// Like `intern_str`, as the reference an event stores.
+<a href=#321 id=321 data-nosnippet>321</a>    </span><span class="kw">pub fn </span>intern_str_ref(<span class="kw-2">&amp;mut </span><span class="self">self</span>, value: <span class="kw-2">&amp;</span>str) -&gt; BlockStringRef {
+<a href=#322 id=322 data-nosnippet>322</a>        BlockStringRef {
+<a href=#323 id=323 data-nosnippet>323</a>            id: <span class="self">self</span>.intern_str(value),
+<a href=#324 id=324 data-nosnippet>324</a>            len: value.len() <span class="kw">as </span>u32,
+<a href=#325 id=325 data-nosnippet>325</a>            codec: StringCodec::Utf8,
+<a href=#326 id=326 data-nosnippet>326</a>        }
+<a href=#327 id=327 data-nosnippet>327</a>    }
+<a href=#328 id=328 data-nosnippet>328</a>}
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a><span class="kw">impl</span>&lt;D: PropertyDepsQueue&gt; DynDeps&lt;D&gt; {
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="doccomment">/// Returns the id of the set record equal to `merged`, pushing it (and the string records
+<a href=#332 id=332 data-nosnippet>332</a>    /// it needs) on first sight. A hit allocates nothing.
+<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="attr">#[inline]
+<a href=#334 id=334 data-nosnippet>334</a>    </span><span class="kw">pub fn </span>intern_set(<span class="kw-2">&amp;mut </span><span class="self">self</span>, merged: <span class="kw-2">&amp;</span>MergedProperties&lt;<span class="lifetime">'_</span>&gt;) -&gt; PropertySetId {
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="self">self</span>.reserve_on_first_insert();
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="kw">let </span>hash = content_hash(merged.properties.iter().map(|p| (p.name(), p.value())));
+<a href=#337 id=337 data-nosnippet>337</a>        <span class="kw">let </span>bytes = <span class="self">self</span>.queue.as_bytes();
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">for </span>candidate <span class="kw">in </span><span class="self">self</span>.sets.candidates(hash) {
+<a href=#339 id=339 data-nosnippet>339</a>            <span class="kw">if </span><span class="self">Self</span>::same_content(bytes, candidate, merged) {
+<a href=#340 id=340 data-nosnippet>340</a>                <span class="kw">return </span>PropertySetId(dyn_set_id(candidate.offset));
+<a href=#341 id=341 data-nosnippet>341</a>            }
+<a href=#342 id=342 data-nosnippet>342</a>        }
+<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">let </span><span class="kw-2">mut </span>properties = Vec::with_capacity(merged.properties.len());
+<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">for </span>(i, prop) <span class="kw">in </span>merged.properties.iter().enumerate() {
+<a href=#345 id=345 data-nosnippet>345</a>            <span class="comment">// Only ever serialized: the ptr of a dynamic ref is the id of the string record.
+<a href=#346 id=346 data-nosnippet>346</a>            </span><span class="kw">let </span>name = <span class="kw">if </span>merged.is_static_name(i) {
+<a href=#347 id=347 data-nosnippet>347</a>                <span class="comment">// SAFETY: the mask marks names that were built from a `&amp;'static str`.
+<a href=#348 id=348 data-nosnippet>348</a>                </span><span class="kw">unsafe </span>{ StaticStringRef::from_str_unchecked(prop.name()) }
+<a href=#349 id=349 data-nosnippet>349</a>            } <span class="kw">else </span>{
+<a href=#350 id=350 data-nosnippet>350</a>                StaticStringRef {
+<a href=#351 id=351 data-nosnippet>351</a>                    ptr: <span class="self">self</span>.intern_str(prop.name()),
+<a href=#352 id=352 data-nosnippet>352</a>                    len: prop.name().len() <span class="kw">as </span>u32,
+<a href=#353 id=353 data-nosnippet>353</a>                    codec: StringCodec::Utf8,
+<a href=#354 id=354 data-nosnippet>354</a>                }
+<a href=#355 id=355 data-nosnippet>355</a>            };
+<a href=#356 id=356 data-nosnippet>356</a>            <span class="kw">let </span>value = <span class="kw">if </span>merged.is_static_value(i) {
+<a href=#357 id=357 data-nosnippet>357</a>                <span class="comment">// SAFETY: the mask marks values that came from a `&amp;'static` set.
+<a href=#358 id=358 data-nosnippet>358</a>                </span><span class="kw">unsafe </span>{ StaticStringRef::from_str_unchecked(prop.value()) }
+<a href=#359 id=359 data-nosnippet>359</a>            } <span class="kw">else </span>{
+<a href=#360 id=360 data-nosnippet>360</a>                StaticStringRef {
+<a href=#361 id=361 data-nosnippet>361</a>                    ptr: <span class="self">self</span>.intern_str(prop.value()),
+<a href=#362 id=362 data-nosnippet>362</a>                    len: prop.value().len() <span class="kw">as </span>u32,
+<a href=#363 id=363 data-nosnippet>363</a>                    codec: StringCodec::Utf8,
+<a href=#364 id=364 data-nosnippet>364</a>                }
+<a href=#365 id=365 data-nosnippet>365</a>            };
+<a href=#366 id=366 data-nosnippet>366</a>            properties.push(Property { name, value });
+<a href=#367 id=367 data-nosnippet>367</a>        }
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">let </span>offset = u32::try_from(<span class="self">self</span>.queue.len_bytes()).expect(<span class="string">"dynamic queue exceeds 4 GiB"</span>);
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>id = dyn_set_id(offset);
+<a href=#370 id=370 data-nosnippet>370</a>        <span class="self">self</span>.queue.push_set(PropertySetDependency {
+<a href=#371 id=371 data-nosnippet>371</a>            id,
+<a href=#372 id=372 data-nosnippet>372</a>            properties: Cow::Owned(properties),
+<a href=#373 id=373 data-nosnippet>373</a>        });
+<a href=#374 id=374 data-nosnippet>374</a>        <span class="self">self</span>.sets.insert(
+<a href=#375 id=375 data-nosnippet>375</a>            hash,
+<a href=#376 id=376 data-nosnippet>376</a>            DynSet {
+<a href=#377 id=377 data-nosnippet>377</a>                offset,
+<a href=#378 id=378 data-nosnippet>378</a>                static_values: merged.static_values,
+<a href=#379 id=379 data-nosnippet>379</a>                static_names: merged.static_names,
+<a href=#380 id=380 data-nosnippet>380</a>            },
+<a href=#381 id=381 data-nosnippet>381</a>        );
+<a href=#382 id=382 data-nosnippet>382</a>        PropertySetId(id)
+<a href=#383 id=383 data-nosnippet>383</a>    }
+<a href=#384 id=384 data-nosnippet>384</a>
+<a href=#385 id=385 data-nosnippet>385</a>    <span class="attr">#[inline]
+<a href=#386 id=386 data-nosnippet>386</a>    </span><span class="kw">fn </span>same_content(bytes: <span class="kw-2">&amp;</span>[u8], candidate: <span class="kw-2">&amp;</span>DynSet, merged: <span class="kw-2">&amp;</span>MergedProperties&lt;<span class="lifetime">'_</span>&gt;) -&gt; bool {
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="kw">if </span>set_len(bytes, candidate.offset) != merged.properties.len() {
+<a href=#388 id=388 data-nosnippet>388</a>            <span class="kw">return </span><span class="bool-val">false</span>;
+<a href=#389 id=389 data-nosnippet>389</a>        }
+<a href=#390 id=390 data-nosnippet>390</a>        merged.properties.iter().enumerate().all(|(i, wanted)| {
+<a href=#391 id=391 data-nosnippet>391</a>            <span class="kw">let </span>prop = set_property(bytes, candidate.offset, i);
+<a href=#392 id=392 data-nosnippet>392</a>            ref_str(bytes, <span class="kw-2">&amp;</span>prop.name, candidate.static_names, i) == wanted.name()
+<a href=#393 id=393 data-nosnippet>393</a>                &amp;&amp; ref_str(bytes, <span class="kw-2">&amp;</span>prop.value, candidate.static_values, i) == wanted.value()
+<a href=#394 id=394 data-nosnippet>394</a>        })
+<a href=#395 id=395 data-nosnippet>395</a>    }
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>    <span class="doccomment">/// Emits the `'static` names and values that dynamic sets reference, once each. Block-scoped
+<a href=#398 id=398 data-nosnippet>398</a>    /// ones are already in the queue.
+<a href=#399 id=399 data-nosnippet>399</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>record_static_refs(<span class="kw-2">&amp;</span><span class="self">self</span>, recorded_deps: <span class="kw-2">&amp;mut </span>FxHashSet&lt;u64&gt;, deps: <span class="kw-2">&amp;mut </span>D) {
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">let </span>bytes = <span class="self">self</span>.queue.as_bytes();
+<a href=#401 id=401 data-nosnippet>401</a>        <span class="kw">for </span>set <span class="kw">in </span><span class="self">self</span>.sets.iter() {
+<a href=#402 id=402 data-nosnippet>402</a>            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..set_len(bytes, set.offset) {
+<a href=#403 id=403 data-nosnippet>403</a>                <span class="kw">let </span>prop = set_property(bytes, set.offset, i);
+<a href=#404 id=404 data-nosnippet>404</a>                <span class="kw">if </span>is_static_bit(set.static_names, i) &amp;&amp; recorded_deps.insert(prop.name.id()) {
+<a href=#405 id=405 data-nosnippet>405</a>                    deps.push_string(prop.name.into_dependency());
+<a href=#406 id=406 data-nosnippet>406</a>                }
+<a href=#407 id=407 data-nosnippet>407</a>                <span class="kw">if </span>is_static_bit(set.static_values, i) &amp;&amp; recorded_deps.insert(prop.value.id()) {
+<a href=#408 id=408 data-nosnippet>408</a>                    deps.push_string(prop.value.into_dependency());
+<a href=#409 id=409 data-nosnippet>409</a>                }
+<a href=#410 id=410 data-nosnippet>410</a>            }
+<a href=#411 id=411 data-nosnippet>411</a>        }
+<a href=#412 id=412 data-nosnippet>412</a>    }
+<a href=#413 id=413 data-nosnippet>413</a>}
+</code></pre></div></section></main></body></html>
