@@ -4,7 +4,13 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
-* **Tracing:** Tagged logs with a static message no longer allocate per call (#1666). A tagged
+* **Tracing:** Tagged logs with a static message no longer allocate per call (#1666).
+  **Not forward compatible — upgrade the analytics services (`flight-sql-srv`,
+  `telemetry-maintenance-srv`, or the monolith) before deploying instrumented applications built
+  with this version.** Older analytics services do not know the new `TaggedLogStaticStrEvent`:
+  they log a warning and drop those entries, so the affected logs (tagged logs whose message has
+  no format arguments) are missing from `log_entries` and from any view materialized while the
+  old service runs. Blocks still parse, and other events are unaffected. A tagged
   log whose message is its format string (`info!(a = "1", "static")`, `info!(..set, "static")`,
   and the same with dynamic values) now records a `TaggedLogStaticStrEvent` that carries no
   message; analytics reads it from the log metadata, as it does for `LogStaticStrEvent`. Each
@@ -18,9 +24,7 @@ This file documents the historical progress of the Micromegas project. For curre
   contended `log/static` cases are 4-9% slower. A message is stored as a static event only
   when it is byte-for-byte the format string, which also fixes `LogStaticStrEvent` for new data:
   `info!("value {}", 3)` and `info!("a {{b}}")` used to be stored as `value {}` and
-  `a {{b}}` and are now stored as printed. **Upgrade analytics before instrumented
-  processes:** an older analytics service drops `TaggedLogStaticStrEvent` entries with a
-  warning. No SQL change. **Minor breaking change:** `PropertySet::dyn_properties` returns a
+  `a {{b}}` and are now stored as printed. No SQL change. **Minor breaking change:** `PropertySet::dyn_properties` returns a
   slice instead of an iterator, and `LogMsgQueue` gains a variant, so exhaustive matches on
   `LogMsgQueueAny` must handle `TaggedLogStaticStrEvent`.
 * **Tracing:** Replace the per-block property arena with a dynamic dependency queue (#1654,
