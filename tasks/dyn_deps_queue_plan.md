@@ -81,6 +81,19 @@ in `rust/tracing/tests/property_macro_tests.rs`. `rust/analytics/tests/log_tests
 `rust/analytics/tests/metrics_test.rs:238` build blocks through `merge_properties` and the
 arena.
 
+More sites also stop compiling, each with its own migration:
+
+- `rust/object-cache/tests/foyer_backend_tests.rs:36,:57` dereference `e.properties` on
+  interned sets: use `as_interned()`.
+- `rust/object-cache-srv/tests/telemetry_tests.rs:71` may read an arena-owned set: use
+  `set_properties` on the block's `dyn_deps`.
+- `rust/telemetry-sink/tests/tracing_interop_tests.rs:36` reads interop events, which always
+  take the dynamic path: use `set_properties`.
+- `rust/analytics/tests/parse_corrupt_block_tests.rs:110`,
+  `rust/analytics/tests/metrics_test.rs:103,:154,:164` and
+  `rust/analytics/tests/log_tests.rs:250` build tagged events from
+  `PropertySet::find_or_create(..)` raw pointers: wrap with `PropertySetId::interned`.
+
 ## Design
 
 ### Reference direction and output order
@@ -181,6 +194,15 @@ This trait also replaces the two `fn` pointer parameters of `record_properties`.
 **`set_properties(&self, id: PropertySetId) -> Vec<(&str, &str)>`**: decodes an interned or
 tagged set for in-process readers (test helpers).
 
+The hit check and `set_properties` decode by parsing `queue.as_bytes()` at the stored offset,
+never through `read_value_at_offset` or `iter`: `StaticStringDependency::read_value` and
+`PropertySetDependency::read_value` are `unimplemented!()`. Each record is a type byte and a
+`u32` size (dynamic types), then:
+
+- string record: id `u64`, codec `u8`, len `u32`, bytes;
+- set record: id `u64`, count `u32`, then raw `Property` structs written with `write_any`.
+  They're padded, so read them unaligned with `read_any`.
+
 ### `MergedProperties` (#1665)
 
 `merge_properties` moves into `dyn_deps.rs` and returns:
@@ -193,8 +215,10 @@ pub struct MergedProperties<'a> {
 ```
 
 - Sinks still receive `&merged.properties`, so `EventSink` doesn't change.
-- Callsite literal pairs are already folded into the interned static set by `callsite_set`, so
-  they're covered.
+- Only the non-spread form folds callsite literal pairs into the interned static set (by
+  `callsite_set`). With a `..set` spread, the macros pass every literal as a `DynProperty`
+  through `__dyn_slice!`, so the literals stay dynamic: they get no `static_values` bit and are
+  still copied into the queue, but deduplicated by content through `intern_str`.
 - A set with more than 64 properties treats the extra ones as dynamic. That's still correct;
   those values just aren't deduplicated against their originals.
 - The mask is what justifies building `StaticStringRef` values from the merged `&str` (with the
@@ -219,7 +243,8 @@ impl PropertySetId {
 - Log events already serialize the field by hand as a `u64`, so their wire layout is unchanged.
 - The metric events derive `TransitReflect`, which only marks pointer and reference types as
   references. Add a field attribute `#[transit(reference)]` to the derive
-  (`rust/transit/derive/src/derive_reflect.rs`) and put it on both metric `properties` fields.
+  (`rust/transit/derive/src/derive_reflect.rs`, registered through `attributes(transit)` on the
+  derive in `rust/transit/derive/src/lib.rs`) and put it on both metric `properties` fields.
   Their UDT keeps the same member name, offset, size and `is_reference: true`.
 - The member's `type_name` string changes, from the pointer type's text to `PropertySetId`. The
   parser reads reference members before it looks at `type_name` (`parser.rs:174`), so nothing
@@ -255,15 +280,6 @@ impl PropertySetId {
 - Thread and image queues ignore the argument.
 - `encode_block` calls `block.events.extract(&block.dyn_deps)`.
 
-### Cost on the calling thread
-
-- **Static-only events:** unchanged. They push the event and nothing else; their dependencies
-  are still found at send time.
-- **Dynamic events that hit:** one hash and probe, as today.
-- **Dynamic events that miss:** one string probe per dynamic value, plus appends to a single
-  growing buffer and one short-lived `Vec`. Today a miss costs one boxed allocation per value
-  plus three more.
-
 ## Implementation Steps
 
 1. **Transit.**
@@ -272,6 +288,9 @@ impl PropertySetId {
      `rust/transit/derive/src/declare_queue.rs`.
    - Add the `#[transit(reference)]` field attribute in
      `rust/transit/derive/src/derive_reflect.rs`.
+   - Register the attribute in `rust/transit/derive/src/lib.rs`:
+     `#[proc_macro_derive(TransitReflect, attributes(transit))]`. Without it,
+     `#[transit(reference)]` fails to compile.
 2. **Property types** (`rust/tracing/src/property_set.rs`):
    - Add `PropertySetId`.
    - Reshape `PropertySetDependency` to `{ id, properties: Cow }`.
@@ -293,15 +312,19 @@ impl PropertySetId {
    `PropertySetId::interned`.
 8. **Sink**: update `encode_block` in `rust/telemetry-sink/src/stream_block.rs`.
 9. **Callers**: update the bench (`rust/tracing/benches/properties.rs`), the tracing tests and
-   the analytics tests listed above. Rename `property_arena_tests.rs` to `dyn_deps_tests.rs`.
-10. **Measure**: run the `properties` bench before and after (`cargo bench -p
-    micromegas-tracing --bench properties`) and add a `CHANGELOG.md` entry with the results and
-    a **Minor breaking change** clause.
+   the analytics, object-cache, object-cache-srv and telemetry-sink tests listed above, using
+   the migration named for each site. Rename `property_arena_tests.rs` to `dyn_deps_tests.rs`.
+10. **Measure**: run all three tracing benches (`cargo bench -p micromegas-tracing --bench
+    properties`, `--bench with_dispatch`, `--bench with_no_dispatch`) on the baseline (main,
+    before any change) and on the finished branch. Acceptance: no regression beyond noise on any
+    bench case. Add a `CHANGELOG.md` entry with the before/after numbers and a **Minor breaking
+    change** clause.
 
 ## Files to Modify
 
 - `rust/transit/src/static_string.rs`, `rust/transit/src/heterogeneous_queue.rs`
-- `rust/transit/derive/src/declare_queue.rs`, `rust/transit/derive/src/derive_reflect.rs`
+- `rust/transit/derive/src/declare_queue.rs`, `rust/transit/derive/src/derive_reflect.rs`,
+  `rust/transit/derive/src/lib.rs`
 - `rust/tracing/src/dyn_deps.rs` (new), `rust/tracing/src/property_arena.rs` (deleted),
   `rust/tracing/src/lib.rs`
 - `rust/tracing/src/property_set.rs`, `rust/tracing/src/static_string_ref.rs`
@@ -314,7 +337,11 @@ impl PropertySetId {
 - `rust/tracing/benches/properties.rs`
 - `rust/tracing/tests/property_arena_tests.rs` → `dyn_deps_tests.rs`,
   `rust/tracing/tests/stream_flush_tests.rs`, `rust/tracing/tests/property_macro_tests.rs`
-- `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`
+- `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/metrics_test.rs`,
+  `rust/analytics/tests/parse_corrupt_block_tests.rs`
+- `rust/object-cache/tests/foyer_backend_tests.rs`,
+  `rust/object-cache-srv/tests/telemetry_tests.rs`,
+  `rust/telemetry-sink/tests/tracing_interop_tests.rs`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -350,11 +377,18 @@ impl PropertySetId {
 - Log message bodies stay inline `DynString`s. They're too high-cardinality for dedup to pay
   off.
 - #1665 is folded into this plan through `MergedProperties::static_values`.
+- The user requires no performance degradation on any tracing bench.
 
 ## Documentation
 
-No mkdocs page describes the arena or the dependency stream. The only documentation update is
-the `CHANGELOG.md` entry.
+No mkdocs page describes the arena or the dependency stream. Documentation updates:
+
+- The `CHANGELOG.md` entry.
+- The "Dynamic properties" section of the crate docs in `rust/tracing/src/lib.rs`, which says
+  that with a spread every pair is copied. That no longer holds for the spread set's values.
+- Arena wording in comments: `rust/tracing/src/property_set.rs` (`merge_properties` and "the
+  arena set"), `event/stream.rs`, `event/block.rs`, and the SAFETY comments about "this block's
+  arena" in `logs/block.rs` and `metrics/block.rs`.
 
 ## Testing Strategy
 
@@ -388,9 +422,10 @@ keep the `properties` member at the same offset and size with `is_reference: tru
 **Existing coverage:** `stream_flush_tests.rs` and `property_macro_tests.rs` keep their
 assertions through `set_properties` and `PropertySetId` equality.
 
-**Bench:** the `properties` bench reports `extract` time and dependency bytes per event. The
-#1665 example (about 226 bytes per event against 73) should get close to the
-dynamic-value-only figure.
+**Bench:** all three tracing benches (`properties`, `with_dispatch`, `with_no_dispatch`) run on
+main and on the finished branch, with no regression beyond noise on any case. The `properties`
+bench reports `extract` time and dependency bytes per event. The #1665 example (about 226 bytes
+per event against 73) should get close to the dynamic-value-only figure.
 
 ## Follow-ups (not in this plan)
 
