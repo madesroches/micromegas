@@ -10,7 +10,7 @@ string literal. A value chosen at runtime goes through the dynamic path, even wh
 costs about 4× an interned set, so hot paths precompute a `PropertySet` per label combination
 and spread it with `..set` (`rust/object-cache/src/metric_tags.rs`). This plan adds a
 `key = static expr` form. Each callsite caches the interned set for each distinct tuple of its
-static values in an `scc::HashIndex`, so a call costs a few ns more than `..set` while the
+static values in an `RwLock<FxHashMap>`, so a call costs a few ns more than `..set` while the
 property names stay at the call site. `metric_tags.rs` then shrinks to label resolution. No SQL,
 wire format or `SCHEMA_VERSION` change: the events and sets emitted are the ones `..set`
 produces today.
@@ -135,11 +135,11 @@ static's type is never inferred).
 type Key<const M: usize> = (usize, [(usize, usize); M]);  // base ptr, (ptr, len) per value
 
 pub struct StaticSetCache<const M: usize> {
-    map: scc::HashIndex<Key<M>, &'static PropertySet, FxBuildHasher>,
+    map: RwLock<HashMap<Key<M>, &'static PropertySet, FxBuildHasher>>,
 }
 
 impl<const M: usize> StaticSetCache<M> {
-    pub const fn new() -> Self;  // HashIndex::with_hasher(FxBuildHasher), const without scc's loom feature
+    pub const fn new() -> Self;  // RwLock::new(HashMap::with_hasher(FxBuildHasher)), const since Rust 1.85
     pub fn get(
         &self,
         base: &'static PropertySet,
@@ -152,10 +152,14 @@ impl<const M: usize> StaticSetCache<M> {
   and stay out of the key. Literal values are in it because that keeps one ordered pair list
   (and so the source-order duplicate rule) without a second macro accumulator; they are constant,
   so they never add entries. Including `len` keeps two substrings sharing a start address apart.
-- **Hit**: `peek_with(&key, |_, v| *v)`. `HashIndex` reads take no lock.
+- **Hit**: take the read lock, `get(&key)`, copy out the `&'static PropertySet`. A std `RwLock`
+  has no thread-local state, so a static-valued log emitted from a TLS destructor cannot panic.
 - **Miss**: build the properties from `base`, then apply `pairs` in order with case-insensitive
-  last-wins, then `PropertySet::find_or_create`, then `insert_sync`. Two threads missing the same
-  key both intern the same set; the losing insert is ignored. The pair-application loop is shared
+  last-wins, then `PropertySet::find_or_create`. The read lock is dropped before interning; then take the
+  write lock and `entry(key).or_insert(set)`, so two threads missing the same key both intern the
+  same set and the map keeps one. Lock poisoning is recovered with
+  `unwrap_or_else(PoisonError::into_inner)`: the map holds only `&'static` values and inserts are
+  atomic from a reader's view, so its data stays valid. The pair-application loop is shared
   with `callsite_set` (extract it as `apply_pairs(&mut Vec<Property>, pairs)` in
   `property_set.rs`), so both forms resolve duplicates the same way.
 - **Growth**: one entry per distinct key, never removed. Equal strings at different addresses get
@@ -177,17 +181,13 @@ literals and static values regardless of order.
 
 ### Dependencies
 
-`scc` becomes a native-only normal dependency of `micromegas-tracing`, added to the workspace
-`rust/Cargo.toml` (`scc = "3.8"`), and pulls in `sdd` and `saa`.
+None added: `rustc-hash` is already a native-only dependency of `micromegas-tracing`.
 
 ## Implementation Steps
 
 ### Phase 1: Cache
 
-1. `rust/Cargo.toml`: add `scc` to `[workspace.dependencies]`. `rust/tracing/Cargo.toml`: add
-   `scc.workspace = true` under the native-only dependencies. Regenerate
-   `rust/datafusion-wasm/Cargo.lock` (excluded from the workspace, audited in CI), which gains
-   `scc`, `sdd` and `saa`.
+1. No dependency changes (`rustc-hash` is already native-only in `rust/tracing/Cargo.toml`).
 2. `rust/tracing/src/property_set.rs`: extract `apply_pairs` from `callsite_set`; add
    `static_value`.
 3. `rust/tracing/src/static_set_cache.rs`: `StaticSetCache` as above. Register it in
@@ -234,7 +234,7 @@ literals and static values regardless of order.
 
 ## Files to Modify
 
-- `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/datafusion-wasm/Cargo.lock`
+- `rust/Cargo.lock` (prototype dev-dependencies drop out)
 - `rust/tracing/Cargo.toml`
 - `rust/tracing/src/lib.rs`
 - `rust/tracing/src/property_set.rs`
@@ -283,11 +283,13 @@ Prototype (`rust/tracing/benches/static_values.rs`, on top of #1679). Each call 
   models on hardware we can't test (Android and others).
 - **Thread-local map**: as fast, no atomics, but each thread warms up separately (short-lived
   threads approach intern-every-call) and logging during thread teardown needs a fallback.
-- **`papaya`, `dashmap`, `RwLock<HashMap>`**: slower than `scc` and no simpler to use.
+- **`scc::HashIndex`**: a few ns faster, but its epoch guard uses a thread-local that panics
+  (aborting the process) when a log is emitted from a TLS destructor after it is destroyed.
+- **`papaya`, `dashmap`**: no faster than `RwLock<FxHashMap>`.
 
 ## Decisions
 
-- `scc::HashIndex` backs the cache (user call, over the hand-rolled table and thread-local map).
+- `RwLock<FxHashMap>` backs the cache (user call: teardown-safe, no new dependency; scc rejected for the TLS-destructor abort).
 - With `..set` and a static value, literals are interned over the set rather than copied into the
   block. Without a static value, the `..set` expansion is unchanged.
 - Speeding up the dynamic path itself (stack buffer instead of the merge `Vec`) is a separate
