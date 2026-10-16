@@ -28,16 +28,17 @@ fn metadata_from_type(t: &syn::Type) -> (QuoteRes, bool) {
 
 fn has_reference_attribute(field: &syn::Field) -> bool {
     field.attrs.iter().any(|attr| {
-        attr.path().is_ident("transit")
-            && attr
-                .parse_nested_meta(|meta| {
-                    if meta.path.is_ident("reference") {
-                        Ok(())
-                    } else {
-                        Err(meta.error("unsupported transit attribute"))
-                    }
-                })
-                .is_ok()
+        attr.path().is_ident("transit") && {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("reference") {
+                    Ok(())
+                } else {
+                    Err(meta.error("unsupported transit attribute"))
+                }
+            })
+            .unwrap_or_else(|e| panic!("invalid #[transit(...)] attribute: {e}"));
+            true
+        }
     })
 }
 
