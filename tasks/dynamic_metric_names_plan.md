@@ -303,7 +303,7 @@ regenerate it with cbindgen, which would drop the hand-written content.
   `blender/micromegas_blender/tests/test_public_log_api.py`,
   `blender/micromegas_blender/tests/test_public_metric_api.py` (new)
 - `mkdocs/docs/blender/index.md`, `blender/README.md`
-- `mkdocs/docs/native/index.md`
+- `mkdocs/docs/native/index.md`, `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -365,6 +365,9 @@ regenerate it with cbindgen, which would drop the hand-written content.
   `mm_metric_i`/`mm_metric_f` doc comments (`rust/capi/src/lib.rs:203-206`, `:233-235`) and the
   comment at `:26-27`.
 - `blender/README.md:256-268` (Cardinality section): same update as the native page.
+- `mkdocs/docs/when-to-use/index.md:151`: reword the cardinality contract so only static callsite
+  names, static targets and static property sets stay interned, and runtime names, targets and
+  keys are block-scoped.
 - `rust/capi/tests/smoke_test.rs:46,80`: the "interner deduplication" and "the interner must not
   grow" comments.
 - `mkdocs/docs/blender/index.md`: a short "Public API for other add-ons" section documenting
@@ -387,13 +390,15 @@ All of these are no-DB unit tests.
 - `set_properties` decodes dynamic names; `extract` emits only static names before the queue.
 
 **Interop targets** (`rust/tracing/tests/log_events_tests.rs` or a new
-`rust/tracing/tests/interop_log_tests.rs`, using `init_in_memory_tracing`):
+`rust/tracing/tests/interop_log_tests.rs`):
 - `log_interop` with a target built at run time leaves a string record for it in the block, and
   two logs with the same target share it.
 - After `flush_log_buffer()`, the next block writes the target again.
 - `dyn_deps.str(evt.target.id)` returns the target text.
 - `log_interop_dyn_tagged` with a `with_dyn_name` key: the set resolves, the sink's `on_log`
-  sees no `target`/`level` keys, and the event keeps its own target and level.
+  sees no `target`/`level` keys, and the event keeps its own target and level. This case uses a
+  custom recording `EventSink` (modeled on `rust/telemetry-sink/tests/tracing_interop_tests.rs`)
+  because `InMemorySink::on_log` ignores its properties.
 
 **Macros** (`rust/tracing/tests/property_macro_tests.rs`, through its `metrics()` helper and
 `dyn_deps.set_properties`):
