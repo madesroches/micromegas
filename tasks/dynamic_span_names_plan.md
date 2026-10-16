@@ -11,7 +11,7 @@ memory has no bound. This plan gives thread blocks the per-block dynamic depende
 (`DynDeps`) that logs and metrics already have. A dynamic name is written to the block's queue
 as a string record with a block-scoped id, and that record is freed along with the block.
 Dynamic names get their own four event types, so the `&'static str` events and their paths don't
-change. The SQL surface doesn't change.
+change.
 
 ## Current State
 
@@ -83,8 +83,7 @@ pub struct DynStringId {
 Four new events in `span_events.rs`, each a copy of its static counterpart with
 `name: DynStringId`: `BeginThreadDynNamedSpanEvent`, `EndThreadDynNamedSpanEvent`,
 `BeginAsyncDynNamedSpanEvent` and `EndAsyncDynNamedSpanEvent`. Append them last to
-`ThreadEventQueue`'s type list. The existing events, `StringId`, and the log interop path are
-untouched, so a dynamic id can never reach code that dereferences `StringId::ptr`.
+`ThreadEventQueue`'s type list.
 
 ### Queue trait split
 
@@ -232,6 +231,7 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
   `rust/tracing/src/property_set.rs`, `rust/tracing/src/spans/span_events.rs`
 - `rust/tracing/src/spans/block.rs`, `rust/tracing/src/spans/mod.rs`,
   `rust/tracing/src/spans/span_name.rs` (new), `rust/tracing/src/spans/instrumented_future.rs`
+- `rust/tracing/src/event/block.rs` (`dyn_deps` doc comment only)
 - `rust/tracing/src/logs/block.rs`, `rust/tracing/src/metrics/block.rs` (trait split only)
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`,
   `rust/tracing/src/guards.rs`, `rust/tracing/src/macros.rs`, `rust/tracing/src/lib.rs`
@@ -246,6 +246,8 @@ impl<N: AsRef<str>> SpanName for DynSpanName<N> { /* *_dyn dispatch fns */ }
 
 - Doc comments on the three new macros and the four `*_dyn` dispatch functions.
 - The `span_scope_named!` doc comment (`macros.rs:42-56`).
+- The `EventBlock::dyn_deps` doc comment (`event/block.rs:13-14`): say it holds dynamic property sets
+  and dynamic string records, inserted by log, metrics and thread dispatch.
 - `examples/named_async_spans.rs`, which shows the dynamic macro in place of `intern_string`.
 - The `CHANGELOG.md` entry.
 - `mkdocs/docs/when-to-use/index.md` ("Code vs. data" paragraph): say a Rust span name can be a
@@ -278,7 +280,7 @@ Encode, parse through `parse_thread_block_payload` and the async block parser, a
 - no `duplicate dependency id`,
 - no `dependency not found`.
 
-**Bench**: the step 8 runs. Acceptance:
+**Bench**: the step 9 runs. Acceptance:
 - No regression beyond noise on any case of the `with_dispatch` (including
   `dispatch/span_scope_named`), `properties` and `with_no_dispatch` benches.
 - Measured, reported numbers for the two `_dyn` cases.
