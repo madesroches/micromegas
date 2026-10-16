@@ -1,11 +1,18 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicU32},
+};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use micromegas_tracing::{
+    dispatch::log_interop,
     error,
     event::NullEventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
-    imetric, span_scope, span_scope_named, span_scope_named_dyn,
+    imetric,
+    levels::Level,
+    logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
+    span_scope, span_scope_named, span_scope_named_dyn,
 };
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -27,6 +34,28 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("dispatch/metric", |b| {
         b.iter(|| {
             imetric!("name", "unit", 0);
+        });
+    });
+    let correlation_id = String::from("c0ffee");
+    c.bench_function("dispatch/metric_dyn_prop", |b| {
+        b.iter(|| {
+            imetric!("name", "unit", correlation_id = correlation_id, 0);
+        });
+    });
+    let target = String::from("bench::interop");
+    let interop_desc = LogMetadata {
+        level: Level::Info,
+        level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "",
+        target: &target,
+        module_path: "",
+        file: "",
+        line: 0,
+    };
+    let interop_msg = String::from("test");
+    c.bench_function("dispatch/log_interop", |b| {
+        b.iter(|| {
+            log_interop(&interop_desc, format_args!("{interop_msg}"));
         });
     });
     c.bench_function("dispatch/span_scope", |b| {
