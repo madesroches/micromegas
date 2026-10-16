@@ -31,8 +31,10 @@ internment.workspace = true
 memoffset.workspace = true
 micromegas-transit.workspace = true
 raw-cpuid.workspace = true
+rustc-hash.workspace = true
 thread-id.workspace = true
 whoami.workspace = true
+xxhash-rust = { workspace = true, features = ["xxh3"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

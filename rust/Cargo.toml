@@ -106,4 +106,5 @@ uuid = { version = "1.8", features = ["v4", "v5", "serde"] }
 whoami = "1.2"
 winapi = { version = "0.3", features = ["profileapi"] }
 wiremock = "0.6"
+rustc-hash = "2.1"
 xxhash-rust = { version = "0.8.10", features = ["xxh32", "xxh64"] }

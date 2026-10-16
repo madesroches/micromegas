@@ -247,3 +247,64 @@ behavior unchanged.
 
 The performance effect is measured by the before/after criterion runs in Phases 0 and 3, not by
 tests.
+
+## Results
+
+Median time per call (per round of threads for `contention`, per block for `extract`),
+`cargo bench -p micromegas-tracing --bench properties`, release profile, WSL machine, not
+otherwise idle. The bench-only commit (before) and this branch (after) were run alternately,
+twice each, with the same bench file. "Change" compares the mean of the two runs on each side.
+
+| Case | before (run 1 / 2) | after (run 1 / 2) | Change (mean) |
+|---|---|---|---|
+| contention/log/dyn_high_card/1 | 353.07 ns / 343.77 ns | 314.68 ns / 311.10 ns | -10.2% |
+| contention/log/dyn_high_card/4 | 3.9461 µs / 3.8872 µs | 3.4098 µs / 3.4929 µs | -11.9% |
+| contention/log/dyn_high_card/8 | 10.375 µs / 9.7565 µs | 8.8713 µs / 9.0169 µs | -11.1% |
+| contention/log/formatted/1 | 58.013 ns / 58.146 ns | 57.650 ns / 57.585 ns | -0.8% |
+| contention/log/formatted/4 | 507.06 ns / 514.14 ns | 516.51 ns / 511.06 ns | +0.6% |
+| contention/log/formatted/8 | 1.6774 µs / 1.6717 µs | 1.6892 µs / 1.6742 µs | +0.4% |
+| contention/log/static/1 | 15.785 ns / 15.794 ns | 15.816 ns / 15.736 ns | -0.1% |
+| contention/log/static/4 | 334.58 ns / 331.29 ns | 333.57 ns / 335.82 ns | +0.5% |
+| contention/log/static/8 | 841.47 ns / 894.24 ns | 868.31 ns / 876.47 ns | +0.5% |
+| contention/metric/dyn_high_card/1 | 337.48 ns / 328.84 ns | 260.50 ns / 303.34 ns | -15.4% |
+| contention/metric/dyn_high_card/4 | 3.3302 µs / 2.7141 µs | 2.5156 µs / 2.7980 µs | -12.1% |
+| contention/metric/dyn_high_card/8 | 7.8975 µs / 6.7901 µs | 5.9746 µs / 6.4341 µs | -15.5% |
+| contention/metric/plain/1 | 9.9409 ns / 9.8927 ns | 9.9301 ns / 9.8987 ns | -0.0% |
+| contention/metric/plain/4 | 203.31 ns / 202.96 ns | 191.90 ns / 192.32 ns | -5.4% |
+| contention/metric/plain/8 | 504.41 ns / 513.54 ns | 529.31 ns / 506.65 ns | +1.8% |
+| extract/log/dyn_high_card | 1.6331 ms / 1.2758 ms | 1.0223 ms / 1.0317 ms | -29.4% |
+| extract/log/dyn_low_card | 501.45 µs / 502.79 µs | 320.63 µs / 326.12 µs | -35.6% |
+| extract/log/dyn_mixed | 3.4422 ms / 2.8530 ms | 2.0275 ms / 2.0276 ms | -35.6% |
+| extract/log/set | 496.45 µs / 500.72 µs | 258.91 µs / 259.47 µs | -48.0% |
+| extract/log/static | 172.04 µs / 168.93 µs | 42.139 µs / 41.687 µs | -75.4% |
+| extract/metric/dyn_high_card | 551.42 µs / 550.41 µs | 221.09 µs / 221.98 µs | -59.8% |
+| extract/metric/dyn_low_card | 129.51 µs / 132.67 µs | 29.403 µs / 29.082 µs | -77.7% |
+| extract/metric/plain | 78.089 µs / 78.840 µs | 19.004 µs / 18.787 µs | -75.9% |
+| extract/metric/set | 135.85 µs / 131.87 µs | 19.025 µs / 18.925 µs | -85.8% |
+| log/dyn_high_card | 344.20 ns / 346.86 ns | 310.97 ns / 305.99 ns | -10.7% |
+| log/dyn_low_card | 86.535 ns / 92.484 ns | 69.129 ns / 68.870 ns | -22.9% |
+| log/dyn_mixed | 1.6569 µs / 1.6246 µs | 1.7010 µs / 1.6872 µs | +3.3% |
+| log/formatted | 57.526 ns / 58.042 ns | 57.733 ns / 58.003 ns | +0.1% |
+| log/literals | 44.097 ns / 44.278 ns | 44.815 ns / 44.520 ns | +1.1% |
+| log/set | 43.213 ns / 43.096 ns | 44.059 ns / 43.392 ns | +1.3% |
+| log/static | 15.959 ns / 15.986 ns | 15.989 ns / 15.822 ns | -0.4% |
+| metric/dyn_high_card | 594.24 ns / 541.39 ns | 594.01 ns / 546.94 ns | +0.5% |
+| metric/dyn_low_card | 66.865 ns / 68.659 ns | 55.643 ns / 55.344 ns | -18.1% |
+| metric/literals | 12.018 ns / 12.125 ns | 12.099 ns / 11.994 ns | -0.2% |
+| metric/literals_set | 163.95 ns / 152.42 ns | 117.42 ns / 138.52 ns | -19.1% |
+| metric/plain | 9.8559 ns / 10.031 ns | 10.090 ns / 9.9967 ns | +1.0% |
+| metric/set | 11.230 ns / 11.284 ns | 11.187 ns / 11.175 ns | -0.7% |
+
+Reading the numbers:
+
+- `extract` improves on every case: -75% to -86% where the desc and set fast path hits
+  (`log/static`, `metric/plain`, `metric/set`, `metric/dyn_low_card`), -48% on `log/set`, and
+  -30% to -36% on the cases that miss the fast path and only gain from FxHash
+  (`log/dyn_low_card`, `log/dyn_high_card`, `log/dyn_mixed`; `metric/dyn_high_card` -60%).
+- Content hash and index under the lock: single-thread `log/dyn_low_card` -23%,
+  `metric/dyn_low_card` -18%, `log/dyn_high_card` -11%, and the `contention/*/dyn_high_card`
+  rows -10% to -16% at 1, 4 and 8 threads.
+- `metric/dyn_high_card`, single thread, and `metric/literals_set` swing 10-20% between runs of
+  the same code, so their means are inside noise and are not claimed as wins.
+- `log/dyn_mixed` (+3%), `log/set`, `log/literals` and the static/plain/formatted cases are
+  unchanged within noise.

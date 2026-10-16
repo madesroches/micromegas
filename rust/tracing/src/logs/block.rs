@@ -7,7 +7,7 @@ use crate::{
     property_set::{PropertySetDependency, record_properties},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 declare_queue_struct!(
     struct LogMsgQueue<
@@ -31,7 +31,7 @@ declare_queue_struct!(
 
 fn record_log_event_dependencies(
     log_desc: &LogMetadata,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut LogDepsQueue,
 ) {
     let log_ptr = log_desc as *const _ as u64;
@@ -69,14 +69,24 @@ impl ExtractDeps for LogMsgQueue {
 
     fn extract(&self) -> Self::DepsQueue {
         let mut deps = LogDepsQueue::new(1024 * 1024);
-        let mut recorded_deps = HashSet::new();
+        let mut recorded_deps = FxHashSet::default();
+        let mut last_desc = 0u64;
+        let mut last_set = 0u64;
         for x in self.iter() {
             match x {
                 LogMsgQueueAny::LogStaticStrEvent(evt) => {
-                    record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
                 }
                 LogMsgQueueAny::LogStringEvent(evt) => {
-                    record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
                 }
                 LogMsgQueueAny::LogStaticStrInteropEvent(evt) => {
                     if recorded_deps.insert(evt.target.id()) {
@@ -95,28 +105,40 @@ impl ExtractDeps for LogMsgQueue {
                     if recorded_deps.insert(evt.target.id()) {
                         deps.push(evt.target.into_dependency());
                     }
-                    // SAFETY: the set is interned or owned by this block's arena.
-                    unsafe {
-                        record_properties(
-                            evt.properties,
-                            &mut recorded_deps,
-                            &mut deps,
-                            |q, d| q.push(d),
-                            |q, d| q.push(d),
-                        );
+                    let set = evt.properties as u64;
+                    if set != last_set {
+                        last_set = set;
+                        // SAFETY: the set is interned or owned by this block's arena.
+                        unsafe {
+                            record_properties(
+                                evt.properties,
+                                &mut recorded_deps,
+                                &mut deps,
+                                |q, d| q.push(d),
+                                |q, d| q.push(d),
+                            );
+                        }
                     }
                 }
                 LogMsgQueueAny::TaggedLogString(evt) => {
-                    record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    // SAFETY: the set is interned or owned by this block's arena.
-                    unsafe {
-                        record_properties(
-                            evt.properties,
-                            &mut recorded_deps,
-                            &mut deps,
-                            |q, d| q.push(d),
-                            |q, d| q.push(d),
-                        );
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
+                    let set = evt.properties as u64;
+                    if set != last_set {
+                        last_set = set;
+                        // SAFETY: the set is interned or owned by this block's arena.
+                        unsafe {
+                            record_properties(
+                                evt.properties,
+                                &mut recorded_deps,
+                                &mut deps,
+                                |q, d| q.push(d),
+                                |q, d| q.push(d),
+                            );
+                        }
                     }
                 }
             }

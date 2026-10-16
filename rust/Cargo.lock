@@ -4028,6 +4028,7 @@ dependencies = [
  "micromegas-transit",
  "pin-project",
  "raw-cpuid",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serial_test",
@@ -4037,6 +4038,7 @@ dependencies = [
  "uuid",
  "whoami",
  "winapi",
+ "xxhash-rust",
 ]
 
 [[package]]

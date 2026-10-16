@@ -4,6 +4,16 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** Use cheaper hashers for property sets (#1668). The arena content hash is now
+  xxh3 and the arena index and the log and metric dependency-extraction sets are keyed with
+  FxHash instead of SipHash; `extract` also skips the set lookups when an event repeats the
+  previous event's callsite or property set. On the `properties` benchmark, `extract` is 75-86%
+  faster on blocks from a repeated callsite or set (`log/static`, `metric/plain`,
+  `metric/set`), 30-36% faster on blocks that bring many sets (`log/dyn_high_card`,
+  `log/dyn_mixed`), and 48% faster for `log/set`. Dynamic-property calls under the stream lock
+  are 11-23% faster single-threaded (`log/dyn_low_card`, `log/dyn_high_card`,
+  `metric/dyn_low_card`), and the 1/4/8-thread `dyn_high_card` contention cases are 10-16%
+  faster. Static and untagged paths are unchanged within noise. No wire format or SQL change.
 * **Tracing:** Shorten the log and metric stream critical sections (#1669). A full block is now
   swapped in the same critical section that filled it, and the sink call, message formatting
   and target interning all run outside the stream lock; the flush paths no

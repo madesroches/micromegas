@@ -7,7 +7,7 @@ use crate::{
     property_set::{PropertySetDependency, record_properties},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 declare_queue_struct!(
     struct MetricsMsgQueue<
@@ -29,7 +29,7 @@ declare_queue_struct!(
 
 fn record_metric_event_dependencies(
     metric_desc: &StaticMetricMetadata,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut MetricsDepsQueue,
 ) {
     let metric_ptr = metric_desc as *const _ as u64;
@@ -67,39 +67,65 @@ impl ExtractDeps for MetricsMsgQueue {
 
     fn extract(&self) -> Self::DepsQueue {
         let mut deps = MetricsDepsQueue::new(1024 * 1024);
-        let mut recorded_deps = HashSet::new();
+        let mut recorded_deps = FxHashSet::default();
+        let mut last_desc = 0u64;
+        let mut last_set = 0u64;
         for x in self.iter() {
             match x {
                 MetricsMsgQueueAny::IntegerMetricEvent(evt) => {
-                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
                 }
                 MetricsMsgQueueAny::FloatMetricEvent(evt) => {
-                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
                 }
                 MetricsMsgQueueAny::TaggedFloatMetricEvent(evt) => {
-                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    // SAFETY: the set is interned or owned by this block's arena.
-                    unsafe {
-                        record_properties(
-                            evt.properties,
-                            &mut recorded_deps,
-                            &mut deps,
-                            |q, d| q.push(d),
-                            |q, d| q.push(d),
-                        );
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
+                    let set = evt.properties as u64;
+                    if set != last_set {
+                        last_set = set;
+                        // SAFETY: the set is interned or owned by this block's arena.
+                        unsafe {
+                            record_properties(
+                                evt.properties,
+                                &mut recorded_deps,
+                                &mut deps,
+                                |q, d| q.push(d),
+                                |q, d| q.push(d),
+                            );
+                        }
                     }
                 }
                 MetricsMsgQueueAny::TaggedIntegerMetricEvent(evt) => {
-                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
-                    // SAFETY: the set is interned or owned by this block's arena.
-                    unsafe {
-                        record_properties(
-                            evt.properties,
-                            &mut recorded_deps,
-                            &mut deps,
-                            |q, d| q.push(d),
-                            |q, d| q.push(d),
-                        );
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
+                    let set = evt.properties as u64;
+                    if set != last_set {
+                        last_set = set;
+                        // SAFETY: the set is interned or owned by this block's arena.
+                        unsafe {
+                            record_properties(
+                                evt.properties,
+                                &mut recorded_deps,
+                                &mut deps,
+                                |q, d| q.push(d),
+                                |q, d| q.push(d),
+                            );
+                        }
                     }
                 }
             }
