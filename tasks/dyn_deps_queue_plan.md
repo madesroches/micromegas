@@ -14,8 +14,7 @@ event is pushed. `extract` runs its usual walk for static dependencies, then app
 queue's bytes. Events that refer only to static data do no extra work on the calling thread.
 
 The queue deduplicates dynamic strings by content within a block, not only whole property
-sets. It is the shared mechanism for any future event type that carries runtime strings. This
-plan applies it to log and metric properties. That covers #1654 and folds in #1665, because
+sets. This plan applies it to log and metric properties. That covers #1654 and folds in #1665, because
 static values inside a dynamic set keep their pointer ids. The wire format and SQL surface
 don't change.
 
@@ -228,13 +227,16 @@ pub struct MergedProperties<'a> {
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PropertySetId(u64);
+pub struct PropertySetId(pub(crate) u64);
 impl PropertySetId {
     pub fn interned(set: &'static PropertySet) -> Self;
     pub fn as_interned(self) -> Option<&'static PropertySet>; // None for tagged ids
 }
 ```
 
+- The tuple field is `pub(crate)`: `dyn_deps.rs` (`intern_set`) and the log events' `read_value`
+  (`logs/log_events.rs`) construct ids from raw `u64`s directly. There is no public raw
+  constructor, which is what keeps the safe `as_interned` sound.
 - The four tagged events replace `properties: *const PropertySet` with
   `properties: PropertySetId`.
 - `as_interned` is safe, because an untagged id can only come from a `&'static PropertySet`.
@@ -344,27 +346,6 @@ impl PropertySetId {
   `rust/telemetry-sink/tests/tracing_interop_tests.rs`
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **Pre-build the whole dependency list at push time** (the comment on #1654): rejected. Every
-  static event would pay a dedup probe under the stream lock. The send-time walk with its
-  repeat shortcuts is cheaper and runs off the calling thread.
-- **Dynamic queue first, self-contained**, so that it also holds the static strings it
-  references: rejected. It needs a dedup set shared with the static walk, and it hashes static
-  ids at push time. Appending after the static records follows the direction references can go,
-  and leaves all static dedup to a single pass.
-- **Two-level set key `(name_ptr, value_id)`**, which makes hit comparisons integer-only:
-  rejected. It costs one string probe per dynamic value on every hit, and hits are the hot path.
-  Here, value strings are only probed on a miss.
-- **A dedicated `DynDepsQueue<StaticStringDependency, PropertySetDependency>`**: rejected. Its
-  type indices (0 and 1) differ from those of `LogDepsQueue` and `MetricsDepsQueue`, so
-  appending would mean decoding and pushing each record again instead of a `memcpy`.
-- **Pointer ids from a stable bump allocator**: rejected. It would need memory that stays
-  addressable for the whole block. Tagged offsets need no stable memory, and readers decode
-  them in O(1).
-- **A hand-written `Reflect` for the two metric events** instead of a derive attribute: works,
-  but duplicates layout code. The attribute is small and serves any future id-typed field.
-
 ## Decisions
 
 - The dynamic queue is appended after the static dependencies, never prepended. It holds only
@@ -378,6 +359,10 @@ impl PropertySetId {
   off.
 - #1665 is folded into this plan through `MergedProperties::static_values`.
 - The user requires no performance degradation on any tracing bench.
+- Declined: pre-building the whole dependency list at push time, since every static event would pay a dedup probe under the stream lock.
+- Declined: a two-level set key `(name_ptr, value_id)`, since it costs one string probe per dynamic value on every hit, and hits are the hot path.
+- Declined: pointer ids from a stable bump allocator, since it needs memory addressable for the whole block while tagged offsets need none.
+- Declined: a hand-written `Reflect` for the two metric events, since it duplicates layout code that the derive attribute covers.
 
 ## Documentation
 
@@ -426,19 +411,3 @@ assertions through `set_properties` and `PropertySetId` equality.
 main and on the finished branch, with no regression beyond noise on any case. The `properties`
 bench reports `extract` time and dependency bytes per event. The #1665 example (about 226 bytes
 per event against 73) should get close to the dynamic-value-only figure.
-
-## Follow-ups (not in this plan)
-
-`DynDeps::intern_str` is the general mechanism for runtime strings referenced by events. Two
-places could adopt it once this lands:
-
-- **Named spans with runtime names.** Today callers leak a process-wide `intern_string` per
-  name (`rust/tracing/examples/named_async_spans.rs`). A dynamic variant needs:
-  - a span name field type that holds a block-scoped id;
-  - the future or guard to own its name, because the end event may land in a different block,
-    or on a different thread's stream, than the begin event, and must intern the name again
-    there.
-- **Interop log targets.** `log_interop*` calls `intern_string(desc.target)` on every call.
-  A block-scoped string would avoid the process-wide lookup and the leak for dynamic targets,
-  but it would move a probe back under the log stream lock, which #1669 just shortened.
-  Measure before switching.
