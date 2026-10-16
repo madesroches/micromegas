@@ -202,8 +202,7 @@ depends on the fast path. It only removes lookups that would have returned "alre
 - Benchmarking before and after is a required step (user request). The baseline is taken on
   a bench-only commit before any tracing change, and before/after runs alternate.
 - xxhash is used for the content hash (user suggestion). xxh3 over `FxHasher` on `str`: xxh3 is
-  already a vetted workspace dependency and handles short strings better. Swap to `FxHasher` if
-  the bench favors it.
+  already a vetted workspace dependency and handles short strings better.
 - `extract` uses a single last-event check rather than a small LRU: the target is a hot callsite
   that repeats the same desc and set.
 - Spans extraction (`spans/block.rs`) and its `HashSet<u64>` are out of scope: the issue
