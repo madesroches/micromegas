@@ -93,10 +93,10 @@ const SHUTDOWN_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// last call.
 ///
 /// Must only be called from the worker thread's top-level loop, never from
-/// inside an `EventSink` callback: dispatch invokes `on_process_*_block` while
-/// holding the global log/metrics stream mutex, so emitting telemetry from
-/// the enqueue path (`try_push` runs on the caller's thread) would re-enter
-/// that same non-reentrant mutex and deadlock the process.
+/// inside an `EventSink` callback: the enqueue path (`try_push` runs on the
+/// caller's thread) is reached from `on_process_*_block`, so emitting telemetry
+/// there would recurse into the sink, and every dropped block could produce
+/// another one.
 fn report_dropped_items(queue: &SharedQueue) {
     for priority in [
         UploadPriority::Metadata,
@@ -199,7 +199,8 @@ impl SharedQueue {
 
     /// Records a dropped item for later reporting by the worker thread. Kept
     /// to a plain atomic increment on purpose: this runs on the enqueue path,
-    /// inside dispatch callbacks that hold the global stream mutexes.
+    /// inside dispatch callbacks, where emitting telemetry would recurse into
+    /// the sink.
     fn note_dropped(&self, priority: UploadPriority) {
         self.dropped[priority as usize].fetch_add(1, Ordering::Relaxed);
     }
@@ -231,8 +232,8 @@ impl SharedQueue {
             // drain and will never pop this item, so queuing it would leak
             // it forever. Reject and count the drop instead. No log/metric
             // is emitted here: this path can run inside a dispatch callback
-            // that holds the global stream mutex (see `report_dropped_items`),
-            // and post-shutdown the dispatch sink is gone anyway.
+            // (see `report_dropped_items`), and post-shutdown the dispatch
+            // sink is gone anyway.
             self.note_dropped(item.priority);
             return false;
         }

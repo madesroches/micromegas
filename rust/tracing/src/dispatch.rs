@@ -8,15 +8,13 @@ use crate::prelude::*;
 use crate::property_arena::merge_properties;
 use crate::property_set::{DynProperty, PropertySet};
 use crate::{
-    event::{EventSink, NullEventSink, TracingBlock},
+    event::{EventBlock, EventSink, EventStream, NullEventSink, TracingBlock},
     info,
     logs::{
-        LogBlock, LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream,
-        LogStringEvent, LogStringInteropEvent,
+        LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream, LogStringEvent,
+        LogStringInteropEvent,
     },
-    metrics::{
-        FloatMetricEvent, IntegerMetricEvent, MetricsBlock, MetricsStream, StaticMetricMetadata,
-    },
+    metrics::{FloatMetricEvent, IntegerMetricEvent, MetricsStream, StaticMetricMetadata},
     spans::{
         BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent,
         BeginThreadSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent,
@@ -35,7 +33,7 @@ use std::fmt;
 use std::sync::RwLock;
 use std::{
     cell::Cell,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 pub fn init_event_dispatch(
@@ -706,11 +704,7 @@ impl Dispatch {
         metrics_stream
             .get_events_mut()
             .push(IntegerMetricEvent { desc, value, time });
-        if metrics_stream.is_full() {
-            // Release the lock before calling flush_metrics_buffer
-            drop(metrics_stream);
-            self.flush_metrics_buffer();
-        }
+        self.on_metrics_pushed(metrics_stream);
     }
 
     #[inline]
@@ -720,11 +714,7 @@ impl Dispatch {
         metrics_stream
             .get_events_mut()
             .push(FloatMetricEvent { desc, value, time });
-        if metrics_stream.is_full() {
-            drop(metrics_stream);
-            // Release the lock before calling flush_metrics_buffer
-            self.flush_metrics_buffer();
-        }
+        self.on_metrics_pushed(metrics_stream);
     }
 
     #[inline]
@@ -744,11 +734,7 @@ impl Dispatch {
                 value,
                 time,
             });
-        if metrics_stream.is_full() {
-            drop(metrics_stream);
-            // Release the lock before calling flush_metrics_buffer
-            self.flush_metrics_buffer();
-        }
+        self.on_metrics_pushed(metrics_stream);
     }
 
     #[inline]
@@ -768,11 +754,7 @@ impl Dispatch {
                 value,
                 time,
             });
-        if metrics_stream.is_full() {
-            drop(metrics_stream);
-            // Release the lock before calling flush_metrics_buffer
-            self.flush_metrics_buffer();
-        }
+        self.on_metrics_pushed(metrics_stream);
     }
 
     #[inline]
@@ -797,10 +779,7 @@ impl Dispatch {
             value,
             time,
         });
-        if metrics_stream.is_full() {
-            drop(metrics_stream);
-            self.flush_metrics_buffer();
-        }
+        self.on_metrics_pushed(metrics_stream);
     }
 
     #[inline]
@@ -825,10 +804,23 @@ impl Dispatch {
             value,
             time,
         });
-        if metrics_stream.is_full() {
-            drop(metrics_stream);
-            self.flush_metrics_buffer();
+        self.on_metrics_pushed(metrics_stream);
+    }
+
+    #[inline]
+    fn on_metrics_pushed(&self, mut metrics_stream: MutexGuard<'_, MetricsStream>) {
+        if !metrics_stream.is_full() {
+            return;
         }
+        // Swapped in the critical section that filled the block, so no other thread can push
+        // into it past the size margin or flush it a second time.
+        let old_block = swap_block(
+            &mut metrics_stream,
+            self.metrics_buffer_size,
+            self.process_id,
+        );
+        drop(metrics_stream);
+        self.get_sink().on_process_metrics_block(old_block);
     }
 
     #[inline]
@@ -837,20 +829,13 @@ impl Dispatch {
         if metrics_stream.is_empty() {
             return;
         }
-        let stream_id = metrics_stream.stream_id();
-        let next_offset = metrics_stream.get_block_ref().object_offset()
-            + metrics_stream.get_block_ref().nb_objects();
-        let new_block = Arc::new(MetricsBlock::new(
+        let old_block = swap_block(
+            &mut metrics_stream,
             self.metrics_buffer_size,
             self.process_id,
-            stream_id,
-            next_offset,
-        ));
-        let begin = new_block.begin;
-        let mut old_event_block = metrics_stream.replace_block(new_block);
-        assert!(!metrics_stream.is_full());
-        Arc::get_mut(&mut old_event_block).unwrap().close_at(begin);
-        self.get_sink().on_process_metrics_block(old_event_block);
+        );
+        drop(metrics_stream);
+        self.get_sink().on_process_metrics_block(old_block);
     }
 
     fn log_enabled(&self, metadata: &LogMetadata) -> bool {
@@ -865,24 +850,23 @@ impl Dispatch {
         }
         let time = now();
         sink.on_log(metadata, &[], time, args);
+        let msg = match args.as_str() {
+            Some(_) => None,
+            None => Some(micromegas_transit::DynString(args.to_string())),
+        };
         let mut log_stream = self.log_stream.lock().unwrap();
-        if args.as_str().is_some() {
-            log_stream.get_events_mut().push(LogStaticStrEvent {
+        match msg {
+            None => log_stream.get_events_mut().push(LogStaticStrEvent {
                 desc: metadata,
                 time,
-            });
-        } else {
-            log_stream.get_events_mut().push(LogStringEvent {
+            }),
+            Some(msg) => log_stream.get_events_mut().push(LogStringEvent {
                 desc: metadata,
                 time,
-                msg: micromegas_transit::DynString(args.to_string()),
-            });
+                msg,
+            }),
         }
-        if log_stream.is_full() {
-            // Release the lock before calling flush_log_buffer
-            drop(log_stream);
-            self.flush_log_buffer();
-        }
+        self.on_log_pushed(log_stream);
     }
 
     #[inline]
@@ -910,45 +894,41 @@ impl Dispatch {
         let time = now();
         let sink_properties: Vec<DynProperty<'static>> = properties.dyn_properties().collect();
         sink.on_log(desc, &sink_properties, time, args);
+        let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
             properties,
             time,
-            msg: micromegas_transit::DynString(args.to_string()),
+            msg,
         });
-        if log_stream.is_full() {
-            // Release the lock before calling flush_log_buffer
-            drop(log_stream);
-            self.flush_log_buffer();
-        }
+        self.on_log_pushed(log_stream);
     }
 
     #[inline]
     fn log_interop(&self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
         let time = now();
         self.get_sink().on_log(desc, &[], time, args);
+        let target = intern_string(desc.target);
+        let msg = args
+            .as_str()
+            .ok_or_else(|| micromegas_transit::DynString(args.to_string()));
         let mut log_stream = self.log_stream.lock().unwrap();
-        if let Some(msg) = args.as_str() {
-            log_stream.get_events_mut().push(LogStaticStrInteropEvent {
+        match msg {
+            Ok(static_msg) => log_stream.get_events_mut().push(LogStaticStrInteropEvent {
                 time,
                 level: desc.level as u32,
-                target: intern_string(desc.target).into(),
-                msg: msg.into(),
-            });
-        } else {
-            log_stream.get_events_mut().push(LogStringInteropEvent {
+                target: target.into(),
+                msg: static_msg.into(),
+            }),
+            Err(msg) => log_stream.get_events_mut().push(LogStringInteropEvent {
                 time,
                 level: desc.level as u8,
-                target: intern_string(desc.target).into(),
-                msg: micromegas_transit::DynString(args.to_string()),
-            });
+                target: target.into(),
+                msg,
+            }),
         }
-        if log_stream.is_full() {
-            // Release the lock before calling flush_log_buffer
-            drop(log_stream);
-            self.flush_log_buffer();
-        }
+        self.on_log_pushed(log_stream);
     }
 
     #[inline]
@@ -992,10 +972,7 @@ impl Dispatch {
             time,
             msg,
         });
-        if log_stream.is_full() {
-            drop(log_stream);
-            self.flush_log_buffer();
-        }
+        self.on_log_pushed(log_stream);
     }
 
     #[inline]
@@ -1019,20 +996,28 @@ impl Dispatch {
             self.get_sink().on_log(desc, &merged, time, args);
         }
         let msg = micromegas_transit::DynString(args.to_string());
+        let target = intern_string(desc.target);
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, arena) = log_stream.get_block_mut_parts();
         let properties = arena.get_or_insert(&merged);
         events.push(TaggedLogInteropEvent {
             time,
             level: desc.level as u8,
-            target: intern_string(desc.target).into(),
+            target: target.into(),
             properties,
             msg,
         });
-        if log_stream.is_full() {
-            drop(log_stream);
-            self.flush_log_buffer();
+        self.on_log_pushed(log_stream);
+    }
+
+    #[inline]
+    fn on_log_pushed(&self, mut log_stream: MutexGuard<'_, LogStream>) {
+        if !log_stream.is_full() {
+            return;
         }
+        let old_block = swap_block(&mut log_stream, self.logs_buffer_size, self.process_id);
+        drop(log_stream);
+        self.get_sink().on_process_log_block(old_block);
     }
 
     #[inline]
@@ -1041,20 +1026,9 @@ impl Dispatch {
         if log_stream.is_empty() {
             return;
         }
-        let stream_id = log_stream.stream_id();
-        let next_offset =
-            log_stream.get_block_ref().object_offset() + log_stream.get_block_ref().nb_objects();
-        let new_block = Arc::new(LogBlock::new(
-            self.logs_buffer_size,
-            self.process_id,
-            stream_id,
-            next_offset,
-        ));
-        let begin = new_block.begin;
-        let mut old_event_block = log_stream.replace_block(new_block);
-        assert!(!log_stream.is_full());
-        Arc::get_mut(&mut old_event_block).unwrap().close_at(begin);
-        self.get_sink().on_process_log_block(old_event_block);
+        let old_block = swap_block(&mut log_stream, self.logs_buffer_size, self.process_id);
+        drop(log_stream);
+        self.get_sink().on_process_log_block(old_block);
     }
 
     #[inline]
@@ -1076,6 +1050,34 @@ impl Dispatch {
         Arc::get_mut(&mut old_block).unwrap().close_at(begin);
         self.get_sink().on_process_thread_block(old_block);
     }
+}
+
+/// Replaces the stream's current block with an empty one and returns the closed old block.
+///
+/// Must be called with the stream locked: `begin` is stamped here so that consecutive blocks
+/// stay contiguous.
+fn swap_block<Q>(
+    stream: &mut EventStream<EventBlock<Q>>,
+    buffer_size: usize,
+    process_id: uuid::Uuid,
+) -> Arc<EventBlock<Q>>
+where
+    Q: micromegas_transit::HeterogeneousQueue,
+    EventBlock<Q>: TracingBlock,
+{
+    let stream_id = stream.stream_id();
+    let next_offset = stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
+    let new_block = Arc::new(EventBlock::<Q>::new(
+        buffer_size,
+        process_id,
+        stream_id,
+        next_offset,
+    ));
+    let begin = new_block.begin;
+    let mut old_block = stream.replace_block(new_block);
+    assert!(!stream.is_full());
+    Arc::get_mut(&mut old_block).unwrap().close_at(begin);
+    old_block
 }
 
 fn get_cpu_brand() -> String {

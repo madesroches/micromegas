@@ -4,6 +4,7 @@ use std::{
     sync::{
         Arc, Barrier, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     time::Instant,
 };
@@ -36,11 +37,14 @@ fn shared_set() -> &'static PropertySet {
     })
 }
 
-/// Accepts every log and drops every block, unless `capture` is set.
+/// Accepts every log and discards every block, unless `capture` is set.
 struct BenchSink {
     capture: AtomicBool,
     log_blocks: Mutex<Vec<Arc<LogBlock>>>,
     metrics_blocks: Mutex<Vec<Arc<MetricsBlock>>>,
+    // Blocks are freed on another thread, like the HTTP sink does: freeing a full block on the
+    // recording thread charges the benchmark for work production never does there.
+    discard: mpsc::Sender<Box<dyn Send>>,
 }
 
 impl EventSink for BenchSink {
@@ -55,6 +59,8 @@ impl EventSink for BenchSink {
     fn on_process_log_block(&self, block: Arc<LogBlock>) {
         if self.capture.load(Ordering::Relaxed) {
             self.log_blocks.lock().unwrap().push(block);
+        } else {
+            let _ = self.discard.send(Box::new(block));
         }
     }
 
@@ -62,6 +68,8 @@ impl EventSink for BenchSink {
     fn on_process_metrics_block(&self, block: Arc<MetricsBlock>) {
         if self.capture.load(Ordering::Relaxed) {
             self.metrics_blocks.lock().unwrap().push(block);
+        } else {
+            let _ = self.discard.send(Box::new(block));
         }
     }
 
@@ -182,8 +190,9 @@ fn bench_extraction_group(c: &mut Criterion, sink: &BenchSink) {
 }
 
 fn bench_contention_group(c: &mut Criterion) {
-    let cases: [(&str, Case); 4] = [
+    let cases: [(&str, Case); 5] = [
         ("log/static", log_case("static")),
+        ("log/formatted", log_case("formatted")),
         ("log/dyn_high_card", log_case("dyn_high_card")),
         ("metric/plain", metric_case("plain")),
         ("metric/dyn_high_card", metric_case("dyn_high_card")),
@@ -222,10 +231,13 @@ fn bench_contention_group(c: &mut Criterion) {
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
+    let (discard, discarded) = mpsc::channel::<Box<dyn Send>>();
+    std::thread::spawn(move || for _block in discarded {});
     let sink = Arc::new(BenchSink {
         capture: AtomicBool::new(false),
         log_blocks: Mutex::new(vec![]),
         metrics_blocks: Mutex::new(vec![]),
+        discard,
     });
     let _tracing_guard = TracingSystemGuard::new(
         10 * 1024 * 1024,
