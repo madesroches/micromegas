@@ -415,6 +415,7 @@ impl PropertySetId {
 - Declined: pre-building the whole dependency list at push time, since every static event would pay a dedup probe under the stream lock.
 - Declined: a two-level set key `(name_ptr, value_id)`, since it costs one string probe per dynamic value on every hit, and hits are the hot path.
 - Declined: pointer ids from a stable bump allocator, since it needs memory addressable for the whole block while tagged offsets need none.
+- Declined for now: a chunked dynamic queue, since the `Vec` growth copy is bounded by the block budget; chunking stays internal to `DynDeps` if benches show tail latency.
 - Declined: a hand-written `Reflect` for the two metric events, since it duplicates layout code that the derive attribute covers.
 - Declined: recording the `'static` refs of dynamic sets in a list on each miss, since it adds
   work under the stream lock and memory outside the block budget; `extract` derives them from
