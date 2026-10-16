@@ -139,9 +139,7 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
    Use 10 000 log events and 5 000 metric events, like the existing cases, so each block still
    fits in one block. Commit this bench-only change on its own.
-2. From `rust/`, on that commit, save a baseline:
-   `cargo bench -p micromegas-tracing --bench properties -- --save-baseline hash-before`.
-   Use a quiet machine. #1669 found run-to-run swings of 10-20% on some cases, so also create a
+2. Use a quiet machine. #1669 found run-to-run swings of 10-20% on some cases, so create a
    worktree at this commit (`git worktree add ../../mm-hash-before HEAD`) to alternate runs in
    Phase 3.
 
@@ -162,7 +160,7 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
 ### Phase 3: Measure after
 
-8. Run the bench on the branch, then in the `hash-before` worktree, then on the branch again,
+8. Run the bench on the branch, then in the worktree (`mm-hash-before`), then on the branch again,
    then in the worktree again. Use the same bench file on both sides, and keep the machine
    otherwise idle.
 9. Add a Results section to this plan, with the same layout as
