@@ -6,9 +6,9 @@ emit logs and metrics into Micromegas without building a Rust project.
 
 The crate builds as a `cdylib`/`staticlib`/`rlib` exposing flat `extern "C"`
 functions (`mm_init`, `mm_log`, `mm_log_tagged`, `mm_metric_i`, `mm_metric_f`,
-`mm_metric_i_tagged`, `mm_metric_f_tagged`, `mm_flush`, `mm_shutdown`). The transport runs on its own OS thread inside the library, so the
-calling thread never blocks on the network, and all functions are safe to call from
-any thread.
+`mm_metric_i_tagged`, `mm_metric_f_tagged`, `mm_flush`, `mm_shutdown`). The transport
+runs on its own OS thread inside the library, so the calling thread never blocks on
+the network, and all functions are safe to call from any thread.
 
 ## Building
 
