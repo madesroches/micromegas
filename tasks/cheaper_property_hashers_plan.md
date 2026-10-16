@@ -222,16 +222,20 @@ to a few hundred so all events fit in one 64 KiB block. Rust doesn't guarantee t
 string literals share a pointer, so assertions are relative to a reference block rather than
 absolute totals:
 
+Each test needs an anchor independent of the fast path, since the fast path can only omit
+dependencies and a block and its reference lose the same ones.
+
+- **Tagged events emit dependencies.** For logs and metrics, a block with one tagged event has
+  more `nb_objects()` than one with one untagged event.
 - **Repeated events emit dependencies once.** Log N events from one callsite with the same
   dynamic value, flush, and compare `nb_objects()` with a block from a single such event: they
-  are equal. Then log N events with an `..set` static set, flush, and compare with a block from a
-  single such event. The dynamic half and the `..set` half carry different sets, so each goes in
-  its own block. Do the same for metrics.
+  are equal. Do the same with an `..set` static set (own block) and for metrics. This checks the
+  `FxHashSet` dedup, not the fast path.
 - **Interleaved sets still dedup.** Log values A, B, A, B, A from one callsite, which makes the
-  fast path miss every time. The block has the same `nb_objects()` as one with just A, B. This
-  catches a fast path that skips the set entirely, or one whose `last_*` is updated wrong.
-- **Interleaved callsites.** Alternate two log callsites that share one set. The block has the
-  same `nb_objects()` as one with a single event from each callsite.
+  fast path miss every time. Assert `nb(A,B,A,B,A) == nb(A) + 2` (set B costs its value and its
+  set).
+- **Interleaved callsites.** Alternate two log callsites that share one set. Assert
+  `nb(two callsites) > nb(one callsite)` and equal to a block with a single event from each.
 
 The existing arena tests (`same_content_same_pointer`, `different_values_different_sets`,
 `split_between_static_and_dynamic_does_not_change_identity`) cover the content hash and index
