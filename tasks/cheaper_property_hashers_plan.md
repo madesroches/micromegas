@@ -177,13 +177,18 @@ depends on the fast path. It only removes lookups that would have returned "alre
 ### Phase 4: Finish
 
 10. Add the CHANGELOG entry. Run `cargo fmt`, then `cargo clippy --workspace -- -D warnings`,
-    then `cargo test -p micromegas-tracing`, then `cargo deny check licenses` (new direct
-    dependency). Remove the worktree.
+    then `cargo test -p micromegas-tracing`, then `cargo deny check licenses bans sources` (from
+    `rust/`; new direct dependency). `rust/datafusion-wasm` has its own tracked `Cargo.lock`
+    that picks up the new dependencies, so run `python3 build/rust_ci.py wasm` (from the repo
+    root) and, from `rust/datafusion-wasm`,
+    `cargo deny --config ../deny.toml check licenses bans sources --allow unnecessary-skip`,
+    then commit the updated lockfile. Remove the worktree.
 
 ## Files to Modify
 
 - `rust/Cargo.toml`: `rustc-hash` workspace dependency
 - `rust/tracing/Cargo.toml`: `rustc-hash`, `xxhash-rust` with `xxh3`
+- `rust/datafusion-wasm/Cargo.lock`: new `xxhash-rust` entry
 - `rust/tracing/src/property_arena.rs`: content hash, index hasher
 - `rust/tracing/src/property_set.rs`: `record_properties` set type
 - `rust/tracing/src/logs/block.rs`: set type, fast path
@@ -192,31 +197,15 @@ depends on the fast path. It only removes lookups that would have returned "alre
 - `rust/tracing/tests/property_arena_tests.rs`: extraction dedup tests
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **xxh3 rather than FxHash or foldhash for the content hash.**
-  - xxh3 is already a vetted workspace dependency, and it handles short byte strings well with
-    one-shot calls.
-  - `FxHasher` on `str` would work too, with one less feature flag, but its string hashing is a
-    plain word-at-a-time multiply chain, weaker on similar short values like `"1"`, `"2"`.
-    Collisions cost only an extra compare, so the deciding factor is speed on short strings.
-  - If the after numbers show `FxHasher` would be faster, swapping is a one-line change. The
-    bench is the judge, not this table.
-- **FxHash rather than identity for the `u64` maps.** See Design 2: identity on addresses
-  defeats hashbrown's tag bits, and on the already-hashed index key it would save a single
-  multiply.
-- **FxHash (`rustc-hash`) rather than an xxh3 adapter for `u64` keys.** An adapter would avoid
-  one new dependency, but it would mean writing and owning a `Hasher` impl. xxh3 on 8 bytes
-  also does more work than one multiply. `rustc-hash` is tiny and purpose-built for this.
-- **A single last-event check rather than a small LRU.** The issue's target is a hot callsite,
-  which repeats the exact same desc and set. Rotating low-cardinality sets still hit the
-  (now cheap) hash set.
-
 ## Decisions
 
 - Benchmarking before and after is a required step (user request). The baseline is taken on
   a bench-only commit before any tracing change, and before/after runs alternate.
-- xxhash is used for the content hash (user suggestion, evaluated above).
+- xxhash is used for the content hash (user suggestion). xxh3 over `FxHasher` on `str`: xxh3 is
+  already a vetted workspace dependency and handles short strings better. Swap to `FxHasher` if
+  the bench favors it.
+- `extract` uses a single last-event check rather than a small LRU: the target is a hot callsite
+  that repeats the same desc and set.
 - Spans extraction (`spans/block.rs`) and its `HashSet<u64>` are out of scope: the issue
   targets the property paths, and the bench has no span extraction case. Revisit with a span
   `extract` bench if the log/metric numbers show a clear gain.
