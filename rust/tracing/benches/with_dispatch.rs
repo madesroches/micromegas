@@ -9,7 +9,7 @@ use micromegas_tracing::{
     error,
     event::NullEventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
-    imetric,
+    imetric, imetric_dyn,
     levels::Level,
     logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
     span_scope, span_scope_named, span_scope_named_dyn,
@@ -40,6 +40,20 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("dispatch/metric_dyn_prop", |b| {
         b.iter(|| {
             imetric!("name", "unit", correlation_id = correlation_id, 0);
+        });
+    });
+    let metric_name = String::from("name");
+    c.bench_function("dispatch/metric_dyn", |b| {
+        b.iter(|| {
+            imetric_dyn!(&metric_name, "unit", 0);
+        });
+    });
+    let metric_names: Vec<String> = (0..10_000).map(|i| format!("metric_name_{i}")).collect();
+    let mut next_metric = 0;
+    c.bench_function("dispatch/metric_dyn_high_card", |b| {
+        b.iter(|| {
+            next_metric = (next_metric + 1) % metric_names.len();
+            imetric_dyn!(&metric_names[next_metric], "unit", 0);
         });
     });
     let target = String::from("bench::interop");

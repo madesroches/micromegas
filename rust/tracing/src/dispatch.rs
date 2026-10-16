@@ -2,7 +2,6 @@
 use crate::dyn_deps::merge_properties;
 pub use crate::errors::{Error, Result};
 use crate::images::{ImageBlock, ImageEvent, ImageStream};
-use crate::intern_string::intern_string;
 use crate::logs::{TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
@@ -10,10 +9,7 @@ use crate::property_set::{DynProperty, PropertySet, PropertySetId};
 use crate::{
     event::{EventBlock, EventSink, EventStream, ExtractDeps, NullEventSink, TracingBlock},
     info,
-    logs::{
-        LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream, LogStringEvent,
-        LogStringInteropEvent,
-    },
+    logs::{LogMetadata, LogStaticStrEvent, LogStream, LogStringEvent, LogStringInteropEvent},
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricsStream, StaticMetricMetadata},
     spans::{
         BeginAsyncDynNamedSpanEvent, BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent,
@@ -1013,25 +1009,19 @@ impl Dispatch {
     fn log_interop(&self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
         let time = now();
         self.get_sink().on_log(desc, &[], time, args);
-        let target = intern_string(desc.target);
-        let msg = args
-            .as_str()
-            .ok_or_else(|| micromegas_transit::DynString(args.to_string()));
+        let msg = micromegas_transit::DynString(
+            args.as_str()
+                .map_or_else(|| args.to_string(), str::to_owned),
+        );
         let mut log_stream = self.log_stream.lock().unwrap();
-        match msg {
-            Ok(static_msg) => log_stream.get_events_mut().push(LogStaticStrInteropEvent {
-                time,
-                level: desc.level as u32,
-                target: target.into(),
-                msg: static_msg.into(),
-            }),
-            Err(msg) => log_stream.get_events_mut().push(LogStringInteropEvent {
-                time,
-                level: desc.level as u8,
-                target: target.into(),
-                msg,
-            }),
-        }
+        let (events, dyn_deps) = log_stream.get_block_mut_parts();
+        let target = dyn_deps.intern_str_ref(desc.target);
+        events.push(LogStringInteropEvent {
+            time,
+            level: desc.level as u8,
+            target,
+            msg,
+        });
         self.on_log_pushed(log_stream);
     }
 
@@ -1101,7 +1091,7 @@ impl Dispatch {
         let merged = merge_properties(PropertySet::empty(), dyn_properties);
         // Sinks treat `target`/`level` properties as overrides; interop logs must keep their own.
         let is_override = |p: &DynProperty<'_>| {
-            p.name.eq_ignore_ascii_case("target") || p.name.eq_ignore_ascii_case("level")
+            p.name().eq_ignore_ascii_case("target") || p.name().eq_ignore_ascii_case("level")
         };
         if merged.properties.iter().any(is_override) {
             let filtered: Vec<DynProperty<'_>> = merged
@@ -1115,14 +1105,14 @@ impl Dispatch {
             self.get_sink().on_log(desc, &merged.properties, time, args);
         }
         let msg = micromegas_transit::DynString(args.to_string());
-        let target = intern_string(desc.target);
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, dyn_deps) = log_stream.get_block_mut_parts();
+        let target = dyn_deps.intern_str_ref(desc.target);
         let properties = dyn_deps.intern_set(&merged);
         events.push(TaggedLogInteropEvent {
             time,
             level: desc.level as u8,
-            target: target.into(),
+            target,
             properties,
             msg,
         });

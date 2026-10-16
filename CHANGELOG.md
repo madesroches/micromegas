@@ -4,6 +4,28 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing, C API:** Metrics with names built at runtime, and a C API that keeps nothing for
+  the life of the process (#1676). `imetric_dyn!` and `fmetric_dyn!` take any `AsRef<str>` name
+  and unit, such as `format!(..)`, a `&String` or an `Arc<str>`, with the grammar of
+  `imetric!`/`fmetric!`. The name and unit travel as the `name` and `unit` property overrides
+  that analytics already applies to tagged metrics, so they are copied into the block's
+  dynamic dependency queue and freed with it; they also appear in the `properties` column. A
+  `DynProperty` name can now be block-scoped too (`DynProperty::with_dyn_name`), and the C API
+  uses that for property keys. The C API adds `mm_log_tagged`, `mm_metric_i_tagged` and
+  `mm_metric_f_tagged`, which take parallel key/value arrays like `mm_init`; `mm_log`,
+  `mm_metric_i` and `mm_metric_f` keep their signatures and no longer intern or leak anything.
+  Interop log targets (`mm_log`, the `tracing` and `log` bridges) are string records of the
+  block instead of process-lifetime interned strings, and a static interop message is written
+  as a `LogStringInteropEvent`; `LogStaticStrInteropEvent` stays readable for old data. The
+  Blender add-on exposes `log(.., properties=)`, `metric_i` and `metric_f` to other add-ons.
+  Medians on the `with_dispatch` benchmark: `dispatch/metric_dyn` 65.2 ns (same name every
+  call) and `dispatch/metric_dyn_high_card` 136.2 ns (10k rotating names), against 46.7 ns for
+  `dispatch/metric_dyn_prop` (one dynamic property); `dispatch/log_interop` 57.1 ns before and
+  55.8 ns after, and the existing cases are unchanged within noise. Distinct metric names are
+  still distinct series for queries. No SQL change. **Minor breaking change:** `DynProperty`'s
+  fields are private, built with `DynProperty::new` / `DynProperty::with_dyn_name` and read
+  with `name()` / `value()`, and `LogStringInteropEvent`'s and `TaggedLogInteropEvent`'s
+  `target` is a `BlockStringRef`.
 * **Tracing:** `key = static expr` properties on `log!`, `imetric!` and `fmetric!` (#1655). A
   `&'static str` chosen at runtime from a small closed set is interned once per distinct tuple
   of static values in a per-callsite `RwLock<FxHashMap>` cache, instead of taking the dynamic

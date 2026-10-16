@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import uuid
+from typing import Optional
 
 from .binding import (
     LEVEL_FATAL,
@@ -289,18 +290,59 @@ def _telemetry_excepthook(exc_type, exc_value, exc_tb):
             _prev_excepthook(exc_type, exc_value, exc_tb)
 
 
-def log(level: int, target: str, msg: object) -> None:
+def _str_properties(properties: Optional[dict]) -> Optional[dict]:
+    if not properties:
+        return None
+    return {str(k): str(v) for k, v in properties.items()}
+
+
+def log(
+    level: int, target: str, msg: object, properties: Optional[dict] = None
+) -> None:
     """Public API: log a message via the active telemetry session, if any.
 
     No-ops silently if the add-on isn't registered/initialized, so other
     add-ons can call this unconditionally without checking for our presence
     first. `level` uses the LEVEL_* constants re-exported from this module
     (mirrors the Rust log crate): LEVEL_FATAL=1, LEVEL_ERROR=2, LEVEL_WARN=3,
-    LEVEL_INFO=4, LEVEL_DEBUG=5, LEVEL_TRACE=6.
+    LEVEL_INFO=4, LEVEL_DEBUG=5, LEVEL_TRACE=6. `properties` is an optional
+    dict of string keys and values attached to the entry.
     """
     if _lib and _handle:
         try:
-            _lib.log(_handle, level, target, str(msg))
+            _lib.log(
+                _handle, level, target, str(msg), properties=_str_properties(properties)
+            )
+        except Exception:
+            pass
+
+
+def metric_i(
+    name: str, unit: str, value: int, properties: Optional[dict] = None
+) -> None:
+    """Public API: record an integer metric via the active session, if any.
+
+    Same contract as `log()`: a no-op without a session, and errors are
+    swallowed. Keep names and property values drawn from bounded sets.
+    """
+    if _lib and _handle:
+        try:
+            _lib.metric_i(
+                _handle, name, unit, value, properties=_str_properties(properties)
+            )
+        except Exception:
+            pass
+
+
+def metric_f(
+    name: str, unit: str, value: float, properties: Optional[dict] = None
+) -> None:
+    """Public API: record a floating-point metric. See `metric_i()`."""
+    if _lib and _handle:
+        try:
+            _lib.metric_f(
+                _handle, name, unit, value, properties=_str_properties(properties)
+            )
         except Exception:
             pass
 

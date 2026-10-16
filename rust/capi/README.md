@@ -5,8 +5,8 @@ lets any non-Rust process — a Python script, a C/C++ tool, a game-engine plugi
 emit logs and metrics into Micromegas without building a Rust project.
 
 The crate builds as a `cdylib`/`staticlib`/`rlib` exposing flat `extern "C"`
-functions (`mm_init`, `mm_log`, `mm_metric_i`, `mm_metric_f`, `mm_flush`,
-`mm_shutdown`). The transport runs on its own OS thread inside the library, so the
+functions (`mm_init`, `mm_log`, `mm_log_tagged`, `mm_metric_i`, `mm_metric_f`,
+`mm_metric_i_tagged`, `mm_metric_f_tagged`, `mm_flush`, `mm_shutdown`). The transport runs on its own OS thread inside the library, so the
 calling thread never blocks on the network, and all functions are safe to call from
 any thread.
 
@@ -48,10 +48,20 @@ mm_shutdown(h);                        /* flushes and frees */
 
 `sink_url` may be NULL to fall back to `MICROMEGAS_TELEMETRY_URL`. Authentication is
 always read from the environment (`MICROMEGAS_INGESTION_API_KEY` or the OIDC vars).
-Each unique metric `(name, unit)` pair is interned permanently, so keep metric names
-low-cardinality — never pass unbounded values (session IDs, asset names) as names.
+Metric names, units, log targets and property keys and values are copied into the block
+being filled and freed with it. Distinct metric names are still distinct series in queries,
+so keep them drawn from bounded sets — never pass unbounded values (session IDs, asset
+names) as names.
 
-The C header is generated with cbindgen (`cbindgen.toml`) and kept in sync with
+The `*_tagged` functions take parallel key/value arrays and a count, like `MmConfig`:
+
+```c
+const char *keys[] = { "queue" };
+const char *vals[] = { "render" };
+mm_metric_i_tagged(h, "queue.depth", "count", keys, vals, 1, 12);
+```
+
+The C header is maintained by hand (it is not generated) and kept in sync with
 `src/lib.rs`.
 
 ## Documentation

@@ -7,7 +7,7 @@ use micromegas_analytics::{
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
-    dyn_deps::merge_properties,
+    dyn_deps::{MergedProperties, merge_properties},
     event::TracingBlock,
     intern_string,
     metrics::{
@@ -237,10 +237,7 @@ fn test_dynamic_tagged_measures() {
     let correlation_id = String::from("abc");
     let merged = merge_properties(
         static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: &correlation_id,
-        }],
+        &[DynProperty::new("correlation_id", &correlation_id)],
     );
     let (events, dyn_deps) = stream.get_block_mut_parts();
     // An interned set that shares names and static values with the dynamic one goes first.
@@ -308,4 +305,181 @@ fn test_dynamic_tagged_measures() {
     assert_eq!(set_ptrs.len(), 3);
     assert_ne!(set_ptrs[0], set_ptrs[1]);
     assert_eq!(set_ptrs[1], set_ptrs[2]);
+}
+
+fn name_and_unit<'a>(
+    name: &'a str,
+    unit: &'a str,
+    extra: Option<DynProperty<'a>>,
+) -> MergedProperties<'a> {
+    let mut props: Vec<DynProperty<'a>> = extra.into_iter().collect();
+    props.push(DynProperty::new("name", name));
+    props.push(DynProperty::new("unit", unit));
+    merge_properties(PropertySet::empty(), &props)
+}
+
+#[test]
+#[serial]
+fn test_dynamic_name_measures() {
+    let process_id = uuid::Uuid::new_v4();
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
+    let mut stream = MetricsStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static STATIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
+        lod: Verbosity::Med,
+        name: "same_name",
+        unit: "count",
+        target: "static_target",
+        file: "file",
+        line: 123,
+    };
+    static DYN_DESC: StaticMetricMetadata = StaticMetricMetadata {
+        lod: Verbosity::Med,
+        name: "",
+        unit: "",
+        target: "dyn_target",
+        file: "file",
+        line: 456,
+    };
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    events.push(IntegerMetricEvent {
+        desc: &STATIC_DESC,
+        value: 1,
+        time: now(),
+    });
+    // a dynamic name equal to a static metric's name
+    let properties = dyn_deps.intern_set(&name_and_unit("same_name", "count", None));
+    events.push(TaggedIntegerMetricEvent {
+        desc: &DYN_DESC,
+        properties,
+        value: 2,
+        time: now(),
+    });
+    // two names sharing a unit
+    let properties = dyn_deps.intern_set(&name_and_unit("other_name", "count", None));
+    events.push(TaggedFloatMetricEvent {
+        desc: &DYN_DESC,
+        properties,
+        value: 3.0,
+        time: now(),
+    });
+    // a dynamic ticks unit
+    let properties = dyn_deps.intern_set(&name_and_unit("elapsed", "ticks", None));
+    events.push(TaggedIntegerMetricEvent {
+        desc: &DYN_DESC,
+        properties,
+        value: 5,
+        time: now(),
+    });
+    // a dynamic property name
+    let key = String::from("region_key");
+    let properties = dyn_deps.intern_set(&name_and_unit(
+        "with_key",
+        "count",
+        Some(DynProperty::with_dyn_name(&key, "eu")),
+    ));
+    events.push(TaggedFloatMetricEvent {
+        desc: &DYN_DESC,
+        properties,
+        value: 6.0,
+        time: now(),
+    });
+
+    let mut block =
+        stream.replace_block(Arc::new(MetricsBlock::new(8192, process_id, stream_id, 0)));
+    Arc::get_mut(&mut block).unwrap().close();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
+    let received_block: micromegas_telemetry::block_wire_format::Block =
+        ciborium::from_reader(&encoded[..]).unwrap();
+    let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
+    let mut seen = vec![];
+    parse_block(&stream_metadata, &received_block.payload, |val| {
+        let measure = measure_from_value(
+            process_info.clone(),
+            stream_metadata.stream_id.to_string().into(),
+            received_block.block_id.to_string().into(),
+            0,
+            &convert_ticks,
+            val,
+        )
+        .unwrap()
+        .unwrap();
+        let mut props = vec![];
+        measure
+            .properties
+            .for_each_property(|k, v| {
+                props.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            })
+            .unwrap();
+        props.sort();
+        seen.push((
+            measure.target.to_owned(),
+            measure.name.to_owned(),
+            measure.unit.to_owned(),
+            measure.value,
+            props,
+        ));
+        Ok(true)
+    })
+    .unwrap();
+
+    let named = |name: &str, unit: &str| {
+        vec![
+            ("name".to_owned(), name.to_owned()),
+            ("unit".to_owned(), unit.to_owned()),
+        ]
+    };
+    let mut with_key = named("with_key", "count");
+    with_key.push(("region_key".to_owned(), "eu".to_owned()));
+    with_key.sort();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "static_target".to_owned(),
+                "same_name".to_owned(),
+                "count".to_owned(),
+                1.0,
+                vec![]
+            ),
+            (
+                "dyn_target".to_owned(),
+                "same_name".to_owned(),
+                "count".to_owned(),
+                2.0,
+                named("same_name", "count")
+            ),
+            (
+                "dyn_target".to_owned(),
+                "other_name".to_owned(),
+                "count".to_owned(),
+                3.0,
+                named("other_name", "count")
+            ),
+            (
+                "dyn_target".to_owned(),
+                "elapsed".to_owned(),
+                "seconds".to_owned(),
+                5.0,
+                named("elapsed", "ticks")
+            ),
+            (
+                "dyn_target".to_owned(),
+                "with_key".to_owned(),
+                "count".to_owned(),
+                6.0,
+                with_key
+            ),
+        ]
+    );
 }

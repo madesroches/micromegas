@@ -48,10 +48,18 @@
 //! fmetric!("response_time", "ms", elapsed_ms);
 //! ```
 //!
+//! A name or unit built at run time goes through [`imetric_dyn!`] and [`fmetric_dyn!`], which
+//! copy it into the current block instead of requiring a `'static` string:
+//!
+//! ```rust,ignore
+//! imetric_dyn!(format!("queue.{queue}.depth"), "count", depth);
+//! ```
+//!
 //! # Dynamic properties
 //!
 //! Properties are `key = value` pairs, written before the format string in logs and before the
-//! value in metrics. Keys are identifiers or string literals and are always `'static`. A literal
+//! value in metrics. Keys written in the macros are identifiers or string literals and are always
+//! `'static`. A literal
 //! value is interned once per callsite and costs one atomic load afterwards (unless a `..set` is
 //! spread: then the literals before it are copied into the block like dynamic values, while the
 //! spread set's own values are not). Any other value (a correlation, request or session id) is
@@ -82,10 +90,11 @@
 //!
 //! In analytics some property names override the row's columns: `level` and `target` for logs,
 //! `target`, `name` and `unit` for metrics. The macros reject those names as keys (`target`
-//! belongs in `target: ..` before the other arguments); an override can only arrive through a
-//! `..set` spread or a runtime [`DynProperty`](property_set::DynProperty) slice. A dynamic
-//! `level` must be a valid level name or the block fails to parse. Interop logs (the `tracing`
-//! layer) keep their level and target unchanged.
+//! belongs in `target: ..` before the other arguments); an override arrives through a `..set`
+//! spread, a runtime [`DynProperty`](property_set::DynProperty) slice, or the
+//! [`imetric_dyn!`]/[`fmetric_dyn!`] macros, which set `name` and `unit`. A dynamic `level` must
+//! be a valid level name or the block fails to parse. Interop logs (the `tracing` layer) keep
+//! their level and target unchanged.
 //!
 //! # Manual Span Scopes
 //!
@@ -223,12 +232,30 @@ pub mod property_set {
         v
     }
 
-    /// A property whose value is not `'static`. Names stay `'static`: name cardinality must
-    /// remain bounded.
+    /// A property whose value is not `'static`. The name is `'static` (`new`) or block-scoped
+    /// (`with_dyn_name`).
     #[derive(Debug, Clone, Copy)]
     pub struct DynProperty<'a> {
-        pub name: &'static str,
-        pub value: &'a str,
+        name: &'a str,
+        value: &'a str,
+    }
+
+    impl<'a> DynProperty<'a> {
+        pub const fn new(name: &'static str, value: &'a str) -> Self {
+            Self { name, value }
+        }
+
+        pub const fn with_dyn_name(name: &'a str, value: &'a str) -> Self {
+            Self { name, value }
+        }
+
+        pub fn name(&self) -> &'a str {
+            self.name
+        }
+
+        pub fn value(&self) -> &'a str {
+            self.value
+        }
     }
 }
 
@@ -269,9 +296,10 @@ pub mod prelude {
     };
     pub use crate::time::*;
     pub use crate::{
-        debug, error, fatal, fmetric, imetric, info, instrument_named, instrument_named_dyn, log,
-        log_enabled, span_async_named, span_async_named_dyn, span_scope, span_scope_named,
-        span_scope_named_dyn, static_span_desc, static_span_location, trace, warn,
+        debug, error, fatal, fmetric, fmetric_dyn, imetric, imetric_dyn, info, instrument_named,
+        instrument_named_dyn, log, log_enabled, span_async_named, span_async_named_dyn, span_scope,
+        span_scope_named, span_scope_named_dyn, static_span_desc, static_span_location, trace,
+        warn,
     };
     pub use micromegas_tracing_proc_macros::*;
 }

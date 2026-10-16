@@ -87,3 +87,27 @@ impl std::convert::From<&'static str> for StaticStringRef {
         }
     }
 }
+
+/// Reference to a string record in the block's dynamic dependency queue. It has the layout and
+/// the reflection of `StaticStringRef`, so the wire format is the same, but it can't be
+/// dereferenced: `id` is only meaningful to the `DynDeps` of its block.
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+pub struct BlockStringRef {
+    pub id: u64,
+    pub len: u32,
+    pub codec: StringCodec,
+}
+
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<BlockStringRef>() == size_of::<StaticStringRef>());
+    assert!(offset_of!(BlockStringRef, id) == offset_of!(StaticStringRef, ptr));
+    assert!(offset_of!(BlockStringRef, len) == offset_of!(StaticStringRef, len));
+    assert!(offset_of!(BlockStringRef, codec) == offset_of!(StaticStringRef, codec));
+};
+
+impl Reflect for BlockStringRef {
+    fn reflect() -> UserDefinedType {
+        StaticStringRef::reflect()
+    }
+}

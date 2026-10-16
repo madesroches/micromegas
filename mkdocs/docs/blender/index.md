@@ -221,6 +221,29 @@ producer-side constraint unrelated to privacy:
 - Free-form, high-cardinality values (operator parameters, file paths,
   tracebacks, the add-on list) go only in the log **message body**, which is
   unbounded-safe.
+- Property keys and values, like metric names, should come from bounded sets.
+
+## Public API for other add-ons
+
+The add-on exposes three functions that other add-ons can call to send their own
+telemetry through the active session. They do nothing when the add-on isn't
+registered or has no session, and they swallow errors, so they can be called
+unconditionally.
+
+```python
+import micromegas_blender as mm
+
+mm.log(mm.LEVEL_INFO, "my_addon.export", "export finished",
+       properties={"format": "usd"})
+mm.metric_i("my_addon.exported_objects", "count", 42,
+            properties={"format": "usd"})
+mm.metric_f("my_addon.export_time", "s", 1.7)
+```
+
+`log(level, target, msg, properties=None)`, `metric_i(name, unit, value, properties=None)`
+and `metric_f(name, unit, value, properties=None)` take an optional dict of properties;
+values are converted with `str()`. Metric names and units are copied into the current
+block, but every distinct name is still a distinct series when querying.
 
 ## Querying the data
 

@@ -30,18 +30,52 @@ impl Property {
     }
 }
 
-/// A property whose value is not `'static`. Names stay `'static`: name cardinality must remain
-/// bounded.
+/// A property whose value is not `'static`. The name is either `'static` (`new`, referenced by
+/// address) or block-scoped (`with_dyn_name`, copied into the block like a dynamic value).
+/// Names from outside Rust, or otherwise unbounded, belong in `with_dyn_name`.
 ///
 /// For `log!` and metric macros, analytics treats some names as column overrides:
 /// `level`/`target` (logs) and `target`/`name`/`unit` (metrics). The macros reject those names
-/// as keys, so an override only arrives through a `..set` spread or a slice of `DynProperty`
-/// built at runtime. A dynamic `level` must be a valid level name or the block fails to parse.
-/// Interop logs (the `tracing` layer) keep their level and target unchanged.
+/// as keys, so an override arrives through a `..set` spread, a slice of `DynProperty` built at
+/// runtime, or the `imetric_dyn!`/`fmetric_dyn!` macros, which set `name` and `unit`. A dynamic
+/// `level` must be a valid level name or the block fails to parse. Interop logs (the `tracing`
+/// layer) keep their level and target unchanged.
 #[derive(Debug, Clone, Copy)]
 pub struct DynProperty<'a> {
-    pub name: &'static str,
-    pub value: &'a str,
+    name: &'a str,
+    value: &'a str,
+    // Private: a `true` flag on a non-`'static` name would make `static_ref_str` read freed memory.
+    static_name: bool,
+}
+
+impl<'a> DynProperty<'a> {
+    pub const fn new(name: &'static str, value: &'a str) -> Self {
+        Self {
+            name,
+            value,
+            static_name: true,
+        }
+    }
+
+    pub const fn with_dyn_name(name: &'a str, value: &'a str) -> Self {
+        Self {
+            name,
+            value,
+            static_name: false,
+        }
+    }
+
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub fn value(&self) -> &'a str {
+        self.value
+    }
+
+    pub(crate) fn is_static_name(&self) -> bool {
+        self.static_name
+    }
 }
 
 /// Interns the literal properties of one macro callsite on first use. `cell` is a `static`
@@ -134,12 +168,7 @@ impl PropertySet {
         // point into the set, so moving it into `Intern` keeps them valid.
         let dyn_view = properties
             .iter()
-            .map(|p| unsafe {
-                DynProperty {
-                    name: static_ref_str(&p.name),
-                    value: static_ref_str(&p.value),
-                }
-            })
+            .map(|p| unsafe { DynProperty::new(static_ref_str(&p.name), static_ref_str(&p.value)) })
             .collect();
         let set = PropertySet {
             properties,

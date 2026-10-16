@@ -1,5 +1,6 @@
 use micromegas_capi::{
-    MmConfig, MmHandle, mm_flush, mm_init, mm_log, mm_metric_f, mm_metric_i, mm_shutdown,
+    MmConfig, MmHandle, mm_flush, mm_init, mm_log, mm_log_tagged, mm_metric_f, mm_metric_f_tagged,
+    mm_metric_i, mm_metric_i_tagged, mm_shutdown,
 };
 use std::ffi::CString;
 use std::ptr;
@@ -43,7 +44,7 @@ fn null_handle_flush_is_safe() {
 
 /// Single test that owns the one allowed dispatch initialization and exercises
 /// the full handle-based API: init, null-safety on a valid handle, valid log and
-/// metric emission across all levels, interner deduplication, flush, and shutdown.
+/// metric emission across all levels, repeated and tagged emission, flush, and shutdown.
 #[test]
 fn init_and_exercise_api() {
     let handle = make_isolated_handle();
@@ -77,10 +78,70 @@ fn init_and_exercise_api() {
             mm_log(handle, level, levels_target.as_ptr(), lvl_msg.as_ptr());
         }
 
-        // Same (name, unit) emitted many times — the interner must not grow unboundedly.
+        // Same (name, unit) emitted many times.
         for i in 0..100_u64 {
             mm_metric_i(handle, name_dedup.as_ptr(), unit_bytes.as_ptr(), i);
         }
+
+        // Tagged variants, with and without properties.
+        let key_region = CString::new("region").expect("CString");
+        let val_region = CString::new("eu").expect("CString");
+        let keys = [key_region.as_ptr(), ptr::null()];
+        let values = [val_region.as_ptr(), val_region.as_ptr()];
+        mm_log_tagged(
+            handle,
+            4,
+            target.as_ptr(),
+            msg.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            0,
+        );
+        mm_log_tagged(
+            handle,
+            4,
+            target.as_ptr(),
+            msg.as_ptr(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            2,
+        );
+        mm_metric_i_tagged(
+            handle,
+            name_counter.as_ptr(),
+            unit_count.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            1,
+        );
+        mm_metric_i_tagged(
+            handle,
+            name_counter.as_ptr(),
+            unit_count.as_ptr(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            2,
+            2,
+        );
+        mm_metric_f_tagged(
+            handle,
+            name_latency.as_ptr(),
+            unit_ms.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            1.5,
+        );
+        mm_metric_f_tagged(
+            handle,
+            name_latency.as_ptr(),
+            unit_ms.as_ptr(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            2,
+            2.5,
+        );
 
         mm_flush(handle);
         mm_shutdown(handle);

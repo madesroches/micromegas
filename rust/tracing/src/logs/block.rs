@@ -100,15 +100,9 @@ impl ExtractDeps for LogMsgQueue {
                         deps.push(Utf8StaticStringDependency::from(&evt.msg));
                     }
                 }
-                LogMsgQueueAny::LogStringInteropEvent(evt) => {
-                    if recorded_deps.insert(evt.target.id()) {
-                        deps.push(evt.target.into_dependency());
-                    }
-                }
+                // The target of the interop events below is in the dynamic queue.
+                LogMsgQueueAny::LogStringInteropEvent(_) => {}
                 LogMsgQueueAny::TaggedLogInteropEvent(evt) => {
-                    if recorded_deps.insert(evt.target.id()) {
-                        deps.push(evt.target.into_dependency());
-                    }
                     if evt.properties != last_set {
                         last_set = evt.properties;
                         if let Some(set) = evt.properties.as_interned() {

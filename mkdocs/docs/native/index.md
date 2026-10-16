@@ -11,7 +11,6 @@ Your process
 └── libmicromegas_capi.{so,dll,dylib}   (loaded at runtime via dlopen/ctypes/LoadLibrary)
     ├── flat C ABI  (mm_init / mm_log / mm_metric_* / mm_flush / mm_shutdown)
     ├── holds TelemetryGuard (buffers + flush state)
-    ├── string interner  (runtime metric names → &'static metadata, bounded)
     └── HttpEventSink  ── own OS thread + tokio runtime ──► ingestion-srv
 ```
 
@@ -89,6 +88,26 @@ void mm_log(MmHandle *handle, int level, const char *target, const char *msg);
 Emits a log event.  `target` is a subsystem name (e.g. `"myapp.render"`).
 A `NULL` `target` is substituted with `"capi"`; a `NULL` `msg` is silently ignored (no event is emitted).
 
+### `mm_log_tagged`
+
+```c
+void mm_log_tagged(MmHandle *handle, int level, const char *target, const char *msg,
+                   const char *const *property_keys, const char *const *property_values,
+                   unsigned int property_count);
+```
+
+Same as `mm_log`, with properties read from parallel key/value arrays like `MmConfig`'s.
+A pair with a `NULL` key or value, or an empty or non-UTF-8 key, is skipped; a value that
+is not UTF-8 is kept as an empty string.  `NULL` arrays or a zero count mean no
+properties.  Logs filter `target` and `level` keys out of what the sink sees, and the
+entry keeps the `target` and `level` arguments.
+
+```c
+const char *keys[] = { "request_id", "region" };
+const char *vals[] = { "c0ffee",     "eu" };
+mm_log_tagged(h, MM_LEVEL_INFO, "myapp.net", "request done", keys, vals, 2);
+```
+
 ### `mm_metric_i` / `mm_metric_f`
 
 ```c
@@ -96,12 +115,37 @@ void mm_metric_i(MmHandle *handle, const char *name, const char *unit, uint64_t 
 void mm_metric_f(MmHandle *handle, const char *name, const char *unit, double  value);
 ```
 
-Emit an integer or floating-point metric.
+Emit an integer or floating-point metric.  A `NULL` or empty `name` is a no-op; a `NULL`
+`unit` is an empty string.
 
 !!! warning "Cardinality contract"
-    Each unique `(name, unit)` pair is permanently interned in memory
-    (`Box::leak`).  Keep metric names **low-cardinality and bounded** —
-    never pass session IDs, per-frame counters, or asset paths as metric names.
+    Names, units, targets, keys and values are copied into the current block and freed
+    with it; the library keeps none of them for the life of the process.  Distinct names
+    and values still cost series and dictionary entries in queries, so keep metric
+    names **low-cardinality and bounded** — never pass session IDs, per-frame counters,
+    or asset paths as metric names.
+
+### `mm_metric_i_tagged` / `mm_metric_f_tagged`
+
+```c
+void mm_metric_i_tagged(MmHandle *handle, const char *name, const char *unit,
+                        const char *const *property_keys, const char *const *property_values,
+                        unsigned int property_count, uint64_t value);
+void mm_metric_f_tagged(MmHandle *handle, const char *name, const char *unit,
+                        const char *const *property_keys, const char *const *property_values,
+                        unsigned int property_count, double value);
+```
+
+Same as `mm_metric_i` / `mm_metric_f`, with properties read as in `mm_log_tagged`.  Only
+the exact lowercase `target` key replaces a metric's default `"capi"` target (analytics
+matches it case-sensitively).  The `name` and `unit` arguments win over keys of the same
+name, and both appear in the `properties` column of the measure.
+
+```c
+const char *keys[] = { "queue", "target" };
+const char *vals[] = { "render", "myapp.queues" };
+mm_metric_i_tagged(h, "queue.depth", "count", keys, vals, 2, 12);
+```
 
 ### `mm_flush`
 
