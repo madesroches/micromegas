@@ -1,4 +1,4 @@
-use crate::string_id::StringId;
+use crate::string_id::{DynStringId, StringId};
 use micromegas_transit::prelude::*;
 
 use super::{SpanLocation, SpanMetadata};
@@ -113,3 +113,48 @@ pub struct EndAsyncNamedSpanEvent {
 }
 
 impl InProcSerialize for EndAsyncNamedSpanEvent {}
+
+//
+// events whose name is a block-scoped dynamic string record
+//
+#[derive(Debug, TransitReflect)]
+pub struct BeginThreadDynNamedSpanEvent {
+    pub thread_span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    pub time: i64,
+}
+
+impl InProcSerialize for BeginThreadDynNamedSpanEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct EndThreadDynNamedSpanEvent {
+    pub thread_span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    pub time: i64,
+}
+
+impl InProcSerialize for EndThreadDynNamedSpanEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct BeginAsyncDynNamedSpanEvent {
+    pub span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    pub span_id: u64,
+    pub parent_span_id: u64, // parent span at future creation time
+    pub depth: u32,          // nesting depth in async call hierarchy
+    pub time: i64,
+}
+
+impl InProcSerialize for BeginAsyncDynNamedSpanEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct EndAsyncDynNamedSpanEvent {
+    pub span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    pub span_id: u64,
+    pub parent_span_id: u64, // parent span at future creation time
+    pub depth: u32,          // nesting depth in async call hierarchy
+    pub time: i64,
+}
+
+impl InProcSerialize for EndAsyncDynNamedSpanEvent {}

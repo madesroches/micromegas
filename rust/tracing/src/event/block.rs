@@ -10,8 +10,8 @@ pub struct EventBlock<Q: ExtractDeps> {
     pub events: Q,
     pub end: Option<DualTime>,
     pub event_offset: usize,
-    /// Dependency records for the dynamic property sets that `events` refer to by id. Only log
-    /// and metrics dispatch insert into it.
+    /// Dependency records for the dynamic property sets and dynamic strings that `events` refer
+    /// to by id, inserted by log, metrics and thread dispatch.
     pub dyn_deps: DynDeps<Q::DepsQueue>,
 }
 

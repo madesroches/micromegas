@@ -17,6 +17,9 @@ mod span_events;
 #[cfg(not(target_arch = "wasm32"))]
 pub use span_events::*;
 
+mod span_name;
+pub use span_name::*;
+
 mod instrumented_future;
 pub use instrumented_future::*;
 

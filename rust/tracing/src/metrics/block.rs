@@ -5,7 +5,9 @@ use crate::{
     metrics::{
         FloatMetricEvent, IntegerMetricEvent, MetricMetadataDependency, StaticMetricMetadata,
     },
-    property_set::{PropertyDepsQueue, PropertySetDependency, PropertySetId, record_properties},
+    property_set::{
+        PropertyDepsQueue, PropertySetDependency, PropertySetId, StringDepsQueue, record_properties,
+    },
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use rustc_hash::FxHashSet;
@@ -121,11 +123,13 @@ impl ExtractDeps for MetricsMsgQueue {
     }
 }
 
-impl PropertyDepsQueue for MetricsDepsQueue {
+impl StringDepsQueue for MetricsDepsQueue {
     fn push_string(&mut self, dep: StaticStringDependency) {
         self.push(dep);
     }
+}
 
+impl PropertyDepsQueue for MetricsDepsQueue {
     fn push_set(&mut self, dep: PropertySetDependency) {
         self.push(dep);
     }

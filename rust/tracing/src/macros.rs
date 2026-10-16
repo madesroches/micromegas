@@ -39,7 +39,8 @@ macro_rules! span_scope {
 }
 
 /// Records a span with a name that is determined at runtime.
-/// The span name still needs to be statically allocated.
+/// The span name needs to be statically allocated; use `span_scope_named_dyn!` for a name built
+/// at runtime.
 ///
 /// # Examples
 ///
@@ -68,6 +69,41 @@ macro_rules! span_scope_named {
     };
     ($name:expr) => {
         $crate::span_scope_named!(_METADATA_NAMED, $name);
+    };
+}
+
+/// Records a span whose name is built at runtime, such as `format!(..)` or a `&String`.
+/// The name is copied into each block that records one of the span's events, so a high
+/// number of distinct names does not accumulate in memory.
+/// The guard owns the name, which is kept alive until the end of the scope.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::span_scope_named_dyn;
+///
+/// # fn main() {
+/// let asset = String::from("hero.png");
+/// span_scope_named_dyn!(format!("load {asset}"));
+/// # }
+/// ```
+#[macro_export]
+macro_rules! span_scope_named_dyn {
+    ($static_var_name:ident, $name:expr) => {
+        static $static_var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
+            lod: $crate::levels::Verbosity::Max,
+            target: module_path!(),
+            module_path: module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+        let guard_named = $crate::guards::ThreadNamedSpanGuard::with_name(
+            &$static_var_name,
+            $crate::spans::DynSpanName($name),
+        );
+    };
+    ($name:expr) => {
+        $crate::span_scope_named_dyn!(_METADATA_NAMED, $name);
     };
 }
 
@@ -144,6 +180,55 @@ macro_rules! instrument_named {
         use $crate::spans::InstrumentFuture as _;
         $crate::static_span_location!(_INSTRUMENT_LOCATION);
         $future.__instrument_named_internal(&_INSTRUMENT_LOCATION, $name)
+    }};
+}
+
+/// Instruments an async block with a named span whose name is built at runtime.
+/// The future owns the name: pass a `String` or `Arc<str>` to keep the future `'static`.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let id = 7;
+/// let result = span_async_named_dyn!(format!("query {id}"), async {
+///     42
+/// }).await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! span_async_named_dyn {
+    ($name:expr, $async_block:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_ASYNC_LOCATION);
+        $async_block.__instrument_named_dyn_internal(&_ASYNC_LOCATION, $name)
+    }};
+}
+
+/// Instruments a future with a named span whose name is built at runtime.
+/// The future owns the name: pass a `String` or `Arc<str>` to keep the future `'static`.
+/// Usage: `instrument_named_dyn!(future, format!("op {id}"))`
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let future = async { 42 };
+/// let result = instrument_named_dyn!(future, format!("operation {}", 1)).await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! instrument_named_dyn {
+    ($future:expr, $name:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_INSTRUMENT_LOCATION);
+        $future.__instrument_named_dyn_internal(&_INSTRUMENT_LOCATION, $name)
     }};
 }
 

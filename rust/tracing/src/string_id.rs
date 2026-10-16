@@ -60,3 +60,34 @@ impl StringId {
         self.ptr as u64
     }
 }
+
+/// Names a string record in the dynamic dependency queue of the block that holds the event.
+#[derive(Debug)]
+pub struct DynStringId {
+    pub id: u64,
+}
+
+// TransitReflect derive macro does not support reference udts, only reference members
+impl Reflect for DynStringId {
+    fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("DynStringId".into());
+            static ref ID: Arc<String> = Arc::new("id".into());
+        }
+        UserDefinedType {
+            name: TYPE_NAME.clone(),
+            size: std::mem::size_of::<Self>(),
+            members: vec![Member {
+                name: ID.clone(),
+                type_name: "u64".to_string(),
+                offset: memoffset::offset_of!(Self, id),
+                size: std::mem::size_of::<u64>(),
+                is_reference: true,
+            }],
+            is_reference: true,
+            secondary_udts: vec![],
+        }
+    }
+}
+
+impl InProcSerialize for DynStringId {}

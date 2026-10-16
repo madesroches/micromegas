@@ -1,14 +1,17 @@
 use super::{
-    BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
-    EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent,
-    SpanLocation, SpanLocationRecord, SpanMetadata, SpanRecord,
+    BeginAsyncDynNamedSpanEvent, BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent,
+    BeginThreadDynNamedSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
+    EndAsyncDynNamedSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent,
+    EndThreadDynNamedSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent, SpanLocation,
+    SpanLocationRecord, SpanMetadata, SpanRecord,
 };
 use crate::{
     dyn_deps::DynDeps,
     event::{EventBlock, EventStream, ExtractDeps},
-    string_id::StringId,
+    property_set::StringDepsQueue,
+    string_id::{DynStringId, StringId},
 };
-use micromegas_transit::{Utf8StaticStringDependency, prelude::*};
+use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use std::collections::HashSet;
 
 declare_queue_struct!(
@@ -21,12 +24,27 @@ declare_queue_struct!(
         EndAsyncSpanEvent,
         BeginAsyncNamedSpanEvent,
         EndAsyncNamedSpanEvent,
+        BeginThreadDynNamedSpanEvent,
+        EndThreadDynNamedSpanEvent,
+        BeginAsyncDynNamedSpanEvent,
+        EndAsyncDynNamedSpanEvent,
     > {}
 );
 
 declare_queue_struct!(
-    struct ThreadDepsQueue<SpanRecord, SpanLocationRecord, Utf8StaticStringDependency> {}
+    struct ThreadDepsQueue<
+        SpanRecord,
+        SpanLocationRecord,
+        Utf8StaticStringDependency,
+        StaticStringDependency,
+    > {}
 );
+
+impl StringDepsQueue for ThreadDepsQueue {
+    fn push_string(&mut self, dep: StaticStringDependency) {
+        self.push(dep);
+    }
+}
 
 fn record_scope_event_dependencies(
     thread_span_desc: &'static SpanMetadata,
@@ -63,9 +81,8 @@ fn record_scope_event_dependencies(
     }
 }
 
-fn record_named_scope_event_dependencies(
+fn record_span_location_dependencies(
     thread_span_location: &'static SpanLocation,
-    name: &StringId,
     recorded_deps: &mut HashSet<u64>,
     deps: &mut ThreadDepsQueue,
 ) {
@@ -92,7 +109,15 @@ fn record_named_scope_event_dependencies(
             lod: thread_span_location.lod as u32,
         });
     }
+}
 
+fn record_named_scope_event_dependencies(
+    thread_span_location: &'static SpanLocation,
+    name: &StringId,
+    recorded_deps: &mut HashSet<u64>,
+    deps: &mut ThreadDepsQueue,
+) {
+    record_span_location_dependencies(thread_span_location, recorded_deps, deps);
     if recorded_deps.insert(name.id()) {
         deps.push(Utf8StaticStringDependency::from(name));
     }
@@ -101,7 +126,7 @@ fn record_named_scope_event_dependencies(
 impl ExtractDeps for ThreadEventQueue {
     type DepsQueue = ThreadDepsQueue;
 
-    fn extract(&self, _dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
+    fn extract(&self, dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
         let mut deps = ThreadDepsQueue::new(1024 * 1024);
         let mut recorded_deps = HashSet::new();
         for x in self.iter() {
@@ -158,11 +183,52 @@ impl ExtractDeps for ThreadEventQueue {
                         &mut deps,
                     );
                 }
+                ThreadEventQueueAny::BeginThreadDynNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.thread_span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                }
+                ThreadEventQueueAny::EndThreadDynNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.thread_span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                }
+                ThreadEventQueueAny::BeginAsyncDynNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                }
+                ThreadEventQueueAny::EndAsyncDynNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                }
             }
         }
+        deps.extend_from(dyn_deps.queue());
         deps
     }
 }
 
 pub type ThreadBlock = EventBlock<ThreadEventQueue>;
 pub type ThreadStream = EventStream<ThreadBlock>;
+
+impl ThreadStream {
+    /// Writes `name` to the current block's dynamic queue, then pushes the event built from its id.
+    pub fn push_dyn_named<T>(&mut self, name: &str, make: impl FnOnce(DynStringId) -> T)
+    where
+        T: InProcSerialize + ThreadEventQueueTypeIndex,
+    {
+        let (events, dyn_deps) = self.get_block_mut_parts();
+        let id = dyn_deps.intern_str(name);
+        events.push(make(DynStringId { id }));
+    }
+}

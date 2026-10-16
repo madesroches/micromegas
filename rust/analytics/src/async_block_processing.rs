@@ -101,7 +101,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     })
                     .with_context(|| "reading EndAsyncSpanEvent")
                 }
-                "BeginAsyncNamedSpanEvent" => on_async_named_event(
+                "BeginAsyncNamedSpanEvent" | "BeginAsyncDynNamedSpanEvent" => on_async_named_event(
                     obj,
                     |span_location, name, span_id, parent_span_id, depth, ts| {
                         let filename = span_location.get::<&str>("file")?;
@@ -119,7 +119,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     },
                 )
                 .with_context(|| "reading BeginAsyncNamedSpanEvent"),
-                "EndAsyncNamedSpanEvent" => on_async_named_event(
+                "EndAsyncNamedSpanEvent" | "EndAsyncDynNamedSpanEvent" => on_async_named_event(
                     obj,
                     |span_location, name, span_id, parent_span_id, depth, ts| {
                         let filename = span_location.get::<&str>("file")?;

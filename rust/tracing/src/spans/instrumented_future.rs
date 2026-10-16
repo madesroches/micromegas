@@ -1,9 +1,7 @@
 //! Manual async span instrumentation using InstrumentedFuture wrapper
 
-use crate::dispatch::{
-    on_begin_async_named_scope, on_begin_async_scope, on_end_async_named_scope, on_end_async_scope,
-};
-use crate::spans::{SpanLocation, SpanMetadata};
+use crate::dispatch::{on_begin_async_scope, on_end_async_scope};
+use crate::spans::{DynSpanName, SpanLocation, SpanMetadata, SpanName, StaticSpanName};
 use pin_project::pin_project;
 use std::cell::UnsafeCell;
 use std::future::Future;
@@ -129,6 +127,17 @@ pub trait InstrumentFuture: Future + Sized {
     ) -> InstrumentedNamedFuture<Self> {
         InstrumentedNamedFuture::new(self, span_location, name)
     }
+
+    /// Internal method for runtime-named instrumentation - do not use directly.
+    /// Use the `instrument_named_dyn!` macro for method-like syntax instead.
+    #[doc(hidden)]
+    fn __instrument_named_dyn_internal<N: AsRef<str>>(
+        self,
+        span_location: &'static SpanLocation,
+        name: N,
+    ) -> InstrumentedNamedFuture<Self, DynSpanName<N>> {
+        InstrumentedNamedFuture::with_name(self, span_location, DynSpanName(name))
+    }
 }
 
 impl<F: Future> InstrumentFuture for F {}
@@ -209,11 +218,11 @@ where
 
 /// A wrapper that instruments a future with named async span tracing
 #[pin_project]
-pub struct InstrumentedNamedFuture<F> {
+pub struct InstrumentedNamedFuture<F, N = StaticSpanName> {
     #[pin]
     future: F,
     span_location: &'static SpanLocation,
-    name: &'static str,
+    name: N,
     span_id: Option<u64>,
     /// Parent span ID captured at future creation time
     parent: u64,
@@ -224,6 +233,13 @@ pub struct InstrumentedNamedFuture<F> {
 impl<F> InstrumentedNamedFuture<F> {
     /// Create a new instrumented named future
     pub fn new(future: F, span_location: &'static SpanLocation, name: &'static str) -> Self {
+        Self::with_name(future, span_location, StaticSpanName(name))
+    }
+}
+
+impl<F, N: SpanName> InstrumentedNamedFuture<F, N> {
+    /// Create a new instrumented named future
+    pub fn with_name(future: F, span_location: &'static SpanLocation, name: N) -> Self {
         let (parent, depth) = ASYNC_CALL_STACK.with(|stack_cell| {
             let stack = unsafe { &*stack_cell.get() };
             assert!(!stack.is_empty());
@@ -243,7 +259,7 @@ impl<F> InstrumentedNamedFuture<F> {
     }
 }
 
-impl<F> Future for InstrumentedNamedFuture<F>
+impl<F, N: SpanName> Future for InstrumentedNamedFuture<F, N>
 where
     F: Future,
 {
@@ -262,8 +278,7 @@ where
                 }
                 None => {
                     // Begin the async named span and store the span ID
-                    let span_id =
-                        on_begin_async_named_scope(this.span_location, this.name, parent, depth);
+                    let span_id = this.name.begin_async(this.span_location, parent, depth);
                     stack.push(span_id);
                     *this.span_id = Some(span_id);
                 }
@@ -272,13 +287,8 @@ where
                 Poll::Ready(output) => {
                     // End the async named span when the future completes
                     if let Some(span_id) = *this.span_id {
-                        on_end_async_named_scope(
-                            span_id,
-                            parent,
-                            this.span_location,
-                            this.name,
-                            depth,
-                        );
+                        this.name
+                            .end_async(span_id, parent, this.span_location, depth);
                     }
                     Poll::Ready(output)
                 }

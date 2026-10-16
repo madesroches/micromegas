@@ -4,13 +4,12 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use crate::{
     dispatch::{
         flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
-        init_thread_stream, on_begin_named_scope, on_begin_scope, on_end_named_scope, on_end_scope,
-        shutdown_dispatch,
+        init_thread_stream, on_begin_scope, on_end_scope, shutdown_dispatch,
     },
     errors::Result,
     event::EventSink,
     panic_hook::init_panic_hook,
-    spans::{SpanLocation, SpanMetadata},
+    spans::{SpanLocation, SpanMetadata, SpanName, StaticSpanName},
 };
 
 pub struct TracingSystemGuard {}
@@ -118,26 +117,32 @@ impl Drop for ThreadSpanGuard {
     }
 }
 
-pub struct ThreadNamedSpanGuard {
+pub struct ThreadNamedSpanGuard<N: SpanName = StaticSpanName> {
     thread_span_location: &'static SpanLocation,
-    name: &'static str,
+    name: N,
     _dummy_ptr: PhantomData<*mut u8>, // to mark the object as !Send
 }
 
 impl ThreadNamedSpanGuard {
     pub fn new(thread_span_location: &'static SpanLocation, name: &'static str) -> Self {
+        Self::with_name(thread_span_location, StaticSpanName(name))
+    }
+}
+
+impl<N: SpanName> ThreadNamedSpanGuard<N> {
+    pub fn with_name(thread_span_location: &'static SpanLocation, name: N) -> Self {
         let guard = Self {
             thread_span_location,
             name,
             _dummy_ptr: std::marker::PhantomData {},
         };
-        on_begin_named_scope(guard.thread_span_location, guard.name);
+        guard.name.begin_thread(guard.thread_span_location);
         guard
     }
 }
 
-impl Drop for ThreadNamedSpanGuard {
+impl<N: SpanName> Drop for ThreadNamedSpanGuard<N> {
     fn drop(&mut self) {
-        on_end_named_scope(self.thread_span_location, self.name);
+        self.name.end_thread(self.thread_span_location);
     }
 }
