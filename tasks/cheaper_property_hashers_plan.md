@@ -124,6 +124,7 @@ depends on the fast path. It only removes lookups that would have returned "alre
    - `log/dyn_low_card`: one desc and four arena sets in rotation. The set fast path misses
      every time, so this measures the hasher alone.
    - `metric/plain`
+   - `metric/set`: one desc and one interned set. Exercises both fast paths.
    - `metric/dyn_low_card`
 
    Use 10 000 log events and 5 000 metric events, like the existing cases, so each block still
