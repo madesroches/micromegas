@@ -1,6 +1,4 @@
-use micromegas_object_cache::metric_tags::{
-    CLASS_DEMAND, CLASS_PREFETCH, PREFIX_OTHER, PrefixTags, longest_prefix_match,
-};
+use micromegas_object_cache::metric_tags::{PREFIX_OTHER, longest_prefix_match};
 
 #[test]
 fn empty_labels_never_match() {
@@ -38,30 +36,4 @@ fn allow_all_style_empty_list_falls_back_to_other() {
     let labels: [&str; 0] = [];
     assert_eq!(longest_prefix_match(&labels, "anything"), None);
     assert_eq!(PREFIX_OTHER, "other");
-}
-
-#[test]
-fn prefix_tags_carry_expected_properties() {
-    let tags = PrefixTags::new("blobs");
-    assert_eq!(tags.label, "blobs");
-
-    let prefix_only = tags.prefix.get_properties();
-    assert_eq!(prefix_only.len(), 1);
-    assert_eq!(prefix_only[0].name.as_str(), "prefix");
-    assert_eq!(prefix_only[0].value.as_str(), "blobs");
-
-    let demand = tags.for_class(CLASS_DEMAND).get_properties();
-    assert!(
-        demand
-            .iter()
-            .any(|p| p.name.as_str() == "class" && p.value.as_str() == CLASS_DEMAND)
-    );
-    assert!(demand.iter().any(|p| p.value.as_str() == "blobs"));
-
-    let prefetch = tags.for_class(CLASS_PREFETCH).get_properties();
-    assert!(
-        prefetch
-            .iter()
-            .any(|p| p.name.as_str() == "class" && p.value.as_str() == CLASS_PREFETCH)
-    );
 }

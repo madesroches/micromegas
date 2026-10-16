@@ -8,12 +8,10 @@ use bytes::Bytes;
 use futures::future::join_all;
 use futures::stream::{self, FuturesUnordered, StreamExt};
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::property_set::PropertySet;
 use object_store::{ObjectStoreExt, path::Path};
 
 use crate::backend::FillHint;
 use crate::blocks::{block_byte_range, coalesce_runs};
-use crate::metric_tags;
 
 use super::RangeCache;
 use super::scheduler::{
@@ -79,15 +77,12 @@ impl RangeCache {
         }
 
         // Classify once per call (a longest-prefix string match), not once
-        // per block probe: `prefix_tags` is reused across every probe and
-        // every coalesced run below.
-        let prefix_tags = self.classify_tags(key);
-        let block_tag = prefix_tags.prefix;
-        let (run_demand_tag, run_prefetch_tag) =
-            (prefix_tags.prefix_demand, prefix_tags.prefix_prefetch);
+        // per block probe: `prefix` is reused across every probe and every
+        // coalesced run below.
+        let prefix = self.classify(key);
 
         let ProbeOutcome { hits, missing } = self
-            .probe_blocks(key, file_size, indices, prio, block_tag)
+            .probe_blocks(key, file_size, indices, prio, prefix)
             .await;
         if missing.is_empty() {
             return Ok(hits);
@@ -118,7 +113,7 @@ impl RangeCache {
                 entries: run_entries,
                 keys: run_keys,
             };
-            self.spawn_run_fetch(key, file_size, run, hint, run_demand_tag, run_prefetch_tag);
+            self.spawn_run_fetch(key, file_size, run, hint, prefix);
         }
 
         if prio == Priority::Prefetch {
@@ -141,7 +136,7 @@ impl RangeCache {
         file_size: u64,
         indices: &[u64],
         prio: Priority,
-        block_tag: &'static PropertySet,
+        prefix: &'static str,
     ) -> ProbeOutcome {
         let mut hits: HashMap<u64, Bytes> = HashMap::new();
         let mut missing: Vec<u64> = Vec::new();
@@ -161,7 +156,7 @@ impl RangeCache {
                     let expected_range = block_byte_range(idx, self.block_size, file_size);
                     let expected_len = expected_range.end - expected_range.start;
                     async move {
-                        imetric!("range_cache_block_request", "count", ..block_tag, 1_u64);
+                        imetric!("range_cache_block_request", "count", prefix = static prefix, 1_u64);
                         let probe = instrument_named!(
                             backend.get(&block_key, expected_len),
                             "range_cache_backend_read"
@@ -194,7 +189,7 @@ impl RangeCache {
                             missing.push(idx);
                             continue;
                         }
-                        imetric!("range_cache_block_backend_hit", "count", ..block_tag, 1_u64);
+                        imetric!("range_cache_block_backend_hit", "count", prefix = static prefix, 1_u64);
                         // A prefetch has nothing to do with an already-cached
                         // block, so drop the bytes immediately instead of
                         // accumulating every hit for the whole call.
@@ -264,8 +259,7 @@ impl RangeCache {
         file_size: u64,
         run: CoalescedRun,
         hint: FillHint,
-        run_demand_tag: &'static PropertySet,
-        run_prefetch_tag: &'static PropertySet,
+        prefix: &'static str,
     ) {
         // Capture a `RangeCache` clone (cheap: all fields are `Arc`s or `Copy`)
         // rather than cloning each field the task needs individually, mirroring
@@ -315,15 +309,10 @@ impl RangeCache {
             // acquired so a promotion racing the wait is reflected: used
             // to tag every latency/hit-rate signal this run emits.
             let class = effective_priority(&run.entries).class_label();
-            let run_class_tag = if class == metric_tags::CLASS_DEMAND {
-                run_demand_tag
-            } else {
-                run_prefetch_tag
-            };
             fmetric!(
                 "range_cache_fetch_permit_wait_ms",
                 "ms",
-                class = class,
+                class = static class,
                 permit_wait_start.elapsed().as_secs_f64() * 1000.0
             );
 
@@ -337,7 +326,7 @@ impl RangeCache {
             fmetric!(
                 "range_cache_origin_get_ms",
                 "ms",
-                class = class,
+                class = static class,
                 origin_get_start.elapsed().as_secs_f64() * 1000.0
             );
             drop(count_permit);
@@ -350,7 +339,7 @@ impl RangeCache {
                             data,
                             byte_start..byte_end,
                             &key_owned,
-                            run_class_tag,
+                            (prefix, class),
                             hint,
                         )
                         .await;
@@ -381,7 +370,7 @@ impl RangeCache {
         data: Bytes,
         byte_range: Range<u64>,
         key_owned: &str,
-        run_class_tag: &'static PropertySet,
+        (prefix, class): (&'static str, &'static str),
         hint: FillHint,
     ) {
         let block_size = self.block_size;
@@ -416,13 +405,15 @@ impl RangeCache {
             imetric!(
                 "range_cache_origin_block_fetch",
                 "count",
-                ..run_class_tag,
+                prefix = static prefix,
+                class = static class,
                 run_len as u64
             );
             imetric!(
                 "range_cache_origin_block_bytes",
                 "bytes",
-                ..run_class_tag,
+                prefix = static prefix,
+                class = static class,
                 data.len() as u64
             );
             debug!(

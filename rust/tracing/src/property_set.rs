@@ -1,5 +1,6 @@
 //! Interned collection of PropertySet instances. Each PropertySet contains properties where the names and the values are statically allocated.
-//! The user is expected to manage the cardinality.
+//! The user is expected to manage the cardinality: this holds for `key = static expr` values
+//! too, since every distinct combination is interned and never freed.
 use crate::{dyn_deps::static_ref_str, static_string_ref::StaticStringRef};
 use internment::Intern;
 use micromegas_transit::{HeterogeneousQueue, StaticStringDependency, UserDefinedType, prelude::*};
@@ -53,12 +54,28 @@ pub fn callsite_set(
 ) -> &'static PropertySet {
     cell.get_or_init(|| {
         let mut properties: Vec<Property> = Vec::with_capacity(pairs.len());
-        for (name, value) in pairs {
-            properties.retain(|p| !p.name.as_str().eq_ignore_ascii_case(name));
-            properties.push(Property::new(name, value));
-        }
+        apply_pairs(&mut properties, pairs.iter().copied());
         PropertySet::find_or_create(properties)
     })
+}
+
+/// Adds `pairs` in order, each one replacing an earlier property of the same name
+/// (case-insensitive), so the last one wins.
+pub(crate) fn apply_pairs(
+    properties: &mut Vec<Property>,
+    pairs: impl IntoIterator<Item = (&'static str, &'static str)>,
+) {
+    for (name, value) in pairs {
+        properties.retain(|p| !p.name.as_str().eq_ignore_ascii_case(name));
+        properties.push(Property::new(name, value));
+    }
+}
+
+/// Identity, but only accepts a `&'static str`: a borrowed value passed to a `key = static expr`
+/// property is a lifetime error at the call site.
+#[inline(always)]
+pub fn static_value(v: &'static str) -> &'static str {
+    v
 }
 
 pub fn dyn_property_get<'a>(properties: &[DynProperty<'a>], name: &str) -> Option<&'a str> {

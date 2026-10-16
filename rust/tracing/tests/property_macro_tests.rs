@@ -420,6 +420,28 @@ fn duplicate_keys() {
     info!(k = x, K = %"y", "last dynamic wins");
     info!(k = "a", k = "b", ..set, "spread keeps order");
     info!(k = x, k = "b", ..set, "spread keeps order, dynamic first");
+    let kset = PropertySet::find_or_create(vec![Property::new("k", "set")]);
+    let s = "s";
+    info!(k = static s, k = "b", "static then literal");
+    info!(k = "b", K = static s, "literal then static");
+    info!(k = static s, k = x, "static then dynamic");
+    info!(k = x, k = static s, "dynamic then static");
+    info!(k = static s, ..kset, "static over set");
+    info!(k = x, k = "b", ..kset, "spread without static");
+    info!(k = x, k = "b", p = static s, ..kset, "spread with static");
+    assert_eq!(guard.log_props("static then literal"), pairs(&[("k", "b")]));
+    assert_eq!(guard.log_props("literal then static"), pairs(&[("K", "s")]));
+    assert_eq!(guard.log_props("static then dynamic"), pairs(&[("k", "x")]));
+    assert_eq!(guard.log_props("dynamic then static"), pairs(&[("k", "x")]));
+    assert_eq!(guard.log_props("static over set"), pairs(&[("k", "s")]));
+    assert_eq!(
+        guard.log_props("spread without static"),
+        pairs(&[("k", "b")])
+    );
+    assert_eq!(
+        guard.log_props("spread with static"),
+        pairs(&[("k", "x"), ("p", "s")])
+    );
     assert_eq!(guard.log_props("last literal wins"), pairs(&[("k", "b")]));
     assert_eq!(
         guard.log_props("case insensitive literal"),
@@ -755,4 +777,121 @@ fn untagged_messages_are_stored_as_printed() {
     assert_eq!(logs[1].msg.as_deref(), Some("value 3"));
     assert_eq!(logs[2].kind, "LogStringEvent");
     assert_eq!(logs[2].msg.as_deref(), Some("a {b}"));
+}
+
+fn count_static(counter: &mut u32, s: &'static str) -> &'static str {
+    *counter += 1;
+    s
+}
+
+#[test]
+#[serial]
+fn static_values() {
+    let guard = DispatchGuard::new();
+    let label: &'static str = "alpha";
+    let id = String::from("req-1");
+    let set = PropertySet::find_or_create(vec![
+        Property::new("region", "eu"),
+        Property::new("prefix", "set"),
+    ]);
+    info!(prefix = static label, "log alone");
+    info!(prefix = static label, tier = "ram", "log with literal");
+    info!(prefix = static label, request = %id, "log with dynamic");
+    info!(prefix = static label, tier = "ram", ..set, "log with set");
+    info!(prefix = static label, request = %id, ..set, "log with set and dynamic");
+    imetric!("static_alone", "count", prefix = static label, 1_u64);
+    imetric!("static_literal", "count", prefix = static label, tier = "ram", 1_u64);
+    imetric!("static_dynamic", "count", prefix = static label, request = %id, 1_u64);
+    imetric!("static_set", "count", prefix = static label, ..set, 1_u64);
+    fmetric!("static_float", "ms", "p-key" = static label, 1.5);
+    assert_eq!(guard.log_props("log alone"), pairs(&[("prefix", "alpha")]));
+    assert_eq!(
+        guard.log_props("log with literal"),
+        pairs(&[("prefix", "alpha"), ("tier", "ram")])
+    );
+    assert_eq!(
+        guard.log_props("log with dynamic"),
+        pairs(&[("prefix", "alpha"), ("request", "req-1")])
+    );
+    assert_eq!(
+        guard.log_props("log with set"),
+        pairs(&[("prefix", "alpha"), ("tier", "ram"), ("region", "eu")])
+    );
+    assert_eq!(
+        guard.log_props("log with set and dynamic"),
+        pairs(&[("prefix", "alpha"), ("request", "req-1"), ("region", "eu")])
+    );
+    assert_eq!(
+        metric_props(&guard, "static_alone"),
+        pairs(&[("prefix", "alpha")])
+    );
+    assert_eq!(
+        metric_props(&guard, "static_literal"),
+        pairs(&[("prefix", "alpha"), ("tier", "ram")])
+    );
+    assert_eq!(
+        metric_props(&guard, "static_dynamic"),
+        pairs(&[("prefix", "alpha"), ("request", "req-1")])
+    );
+    assert_eq!(
+        metric_props(&guard, "static_set"),
+        pairs(&[("prefix", "alpha"), ("region", "eu")])
+    );
+    assert_eq!(
+        metric_props(&guard, "static_float"),
+        pairs(&[("p-key", "alpha")])
+    );
+}
+
+fn static_metric_once(label: &'static str) {
+    imetric!("static_once", "count", prefix = static label, 1_u64);
+}
+
+fn static_log_once(label: &'static str) {
+    info!(prefix = static label, "static callsite");
+}
+
+#[test]
+#[serial]
+fn static_only_calls_use_interned_sets() {
+    let guard = DispatchGuard::new();
+    for label in ["a", "b", "a"] {
+        static_metric_once(label);
+        static_log_once(label);
+    }
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 3);
+    assert!(metrics.iter().all(|m| m.dyn_deps_bytes == 0));
+    let ids: Vec<_> = metrics.iter().map(|m| m.set_id.unwrap()).collect();
+    assert_eq!(ids[0], ids[2]);
+    assert_ne!(ids[0], ids[1]);
+    assert!(ids.iter().all(|id| id.as_interned().is_some()));
+    let logs = guard.log_events();
+    assert_eq!(logs.len(), 3);
+    assert!(logs.iter().all(|l| l.tagged && l.dyn_deps_bytes == 0));
+    assert!(
+        logs.iter()
+            .all(|l| l.set_id.unwrap().as_interned().is_some())
+    );
+    assert_eq!(logs[0].set_id, logs[2].set_id);
+    assert_ne!(logs[0].set_id, logs[1].set_id);
+}
+
+#[test]
+#[serial]
+fn static_values_are_evaluated_lazily() {
+    let guard = DispatchGuard::new();
+    let mut count = 0;
+    info!(target: "lazy_static", a = static count_static(&mut count, "x"), "enabled");
+    assert_eq!(count, 1);
+    guard.disable_target("lazy_static");
+    info!(target: "lazy_static", a = static count_static(&mut count, "x"), "disabled");
+    info!(
+        target: "lazy_static",
+        a = static count_static(&mut count, "x"),
+        ..PropertySet::empty(),
+        "disabled with set"
+    );
+    assert_eq!(count, 1);
+    assert_eq!(guard.logs().len(), 1);
 }

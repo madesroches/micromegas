@@ -45,11 +45,8 @@ winapi.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
-dashmap = "6.2.1"
 futures = "0.3"
 log.workspace = true
-papaya = "0.2.5"
-scc = "3.8.8"
 serde_json.workspace = true
 serial_test = "3.2"
 tokio = { workspace = true, features = ["time"] }
@@ -68,8 +65,4 @@ harness = false
 
 [[bench]]
 name = "properties"
-harness = false
-
-[[bench]]
-name = "static_values"
 harness = false

@@ -11,7 +11,7 @@ use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 
 use super::backend::{BackendDiskStats, FillHint, RangeCacheBackend};
 use super::blocks::{assemble_range, block_byte_range, blocks_for_range, max_run_bytes};
-use super::metric_tags::{self, PrefixTags};
+use super::metric_tags;
 
 mod error;
 mod fetch;
@@ -90,16 +90,9 @@ pub struct RangeCache {
     scheduler: Arc<FetchScheduler>,
     max_coalesced_get_bytes: u64,
     /// Configured `prefix` labels (the server's `allowed_prefixes`, leaked to
-    /// `'static` once at startup), in the same order as `prefix_tags`. Empty
-    /// unless `with_prefix_labels` was used, in which case every key
-    /// classifies as `metric_tags::PREFIX_OTHER`.
+    /// `'static` once at startup). Empty unless `with_prefix_labels` was used, in
+    /// which case every key classifies as `metric_tags::PREFIX_OTHER`.
     prefix_labels: Arc<[&'static str]>,
-    /// Precomputed `PrefixTags` parallel to `prefix_labels` (`prefix_tags[i]`
-    /// corresponds to `prefix_labels[i]`), so `classify_tags` is an array
-    /// lookup rather than an allocation + intern-lock per call.
-    prefix_tags: Arc<[PrefixTags]>,
-    /// Precomputed tags for a key matching none of `prefix_labels`.
-    other_tags: PrefixTags,
 }
 
 impl RangeCache {
@@ -139,8 +132,6 @@ impl RangeCache {
             )),
             max_coalesced_get_bytes,
             prefix_labels: Arc::from(Vec::new()),
-            prefix_tags: Arc::from(Vec::new()),
-            other_tags: PrefixTags::new(metric_tags::PREFIX_OTHER),
         }
     }
 
@@ -155,29 +146,19 @@ impl RangeCache {
     /// `"other"`), so its existing callers/tests compile unmodified; only
     /// `object_cache_srv.rs` opts in.
     pub fn with_prefix_labels(mut self, labels: Arc<[&'static str]>) -> Self {
-        let tags: Vec<PrefixTags> = labels.iter().map(|&label| PrefixTags::new(label)).collect();
-        self.prefix_tags = Arc::from(tags);
         self.prefix_labels = labels;
         self
     }
 
-    /// The precomputed tags for the `prefix` `key` falls under, resolved by
-    /// longest-prefix match against `prefix_labels` (`other_tags` on no
-    /// match). Private: callers needing just the label use `classify`;
-    /// hot-path callers inside this module use the tags directly.
-    fn classify_tags(&self, key: &str) -> &PrefixTags {
-        match metric_tags::longest_prefix_match(&self.prefix_labels, key) {
-            Some(i) => &self.prefix_tags[i],
-            None => &self.other_tags,
-        }
-    }
-
     /// The `prefix` label `key` falls under (e.g. `"blobs"`, `"views"`, per
-    /// the server's configured `allowed_prefixes`), or
-    /// `metric_tags::PREFIX_OTHER` if it matches none. See
-    /// `with_prefix_labels`.
+    /// the server's configured `allowed_prefixes`), resolved by longest-prefix
+    /// match against `prefix_labels`, or `metric_tags::PREFIX_OTHER` if it
+    /// matches none. See `with_prefix_labels`.
     pub fn classify(&self, key: &str) -> &'static str {
-        self.classify_tags(key).label
+        match metric_tags::longest_prefix_match(&self.prefix_labels, key) {
+            Some(i) => self.prefix_labels[i],
+            None => metric_tags::PREFIX_OTHER,
+        }
     }
 
     /// Both fetch-permit budgets' (count and bytes) current occupancy, for
@@ -238,17 +219,17 @@ impl RangeCache {
         // are assumed write-once and content-addressed, so a cached size is
         // never invalidated.
         let meta_key = format!("meta:{}:{key}", self.ns);
-        let prefix_tag = self.classify_tags(key).prefix;
+        let prefix = self.classify(key);
 
         if let Some(data) = self.backend.get(&meta_key, 8).await
             && data.len() == 8
         {
             let size = decode_size(&data)?;
             if size <= MAX_PLAUSIBLE_OBJECT_SIZE {
-                imetric!("range_cache_size_backend_hit", "count", ..prefix_tag, 1_u64);
+                imetric!("range_cache_size_backend_hit", "count", prefix = static prefix, 1_u64);
                 return Ok(size);
             }
-            imetric!("range_cache_size_implausible", "count", ..prefix_tag, 1_u64);
+            imetric!("range_cache_size_implausible", "count", prefix = static prefix, 1_u64);
             warn!("range_cache implausible cached size {size} for key={key}; treating as miss");
             // fall through to origin HEAD, which repopulates meta:{ns}:{key}
         }
@@ -274,7 +255,7 @@ impl RangeCache {
                         scheduler.clone(),
                         vec![(meta_key_owned.clone(), task_entry.clone())],
                     );
-                    imetric!("range_cache_origin_head", "count", ..prefix_tag, 1_u64);
+                    imetric!("range_cache_origin_head", "count", prefix = static prefix, 1_u64);
                     let head_path = Path::from(key_owned.as_str());
                     let head_result = instrument_named!(
                         origin.head(&head_path),
@@ -295,7 +276,7 @@ impl RangeCache {
                                 imetric!(
                                     "range_cache_size_implausible",
                                     "count",
-                                    ..prefix_tag,
+                                    prefix = static prefix,
                                     1_u64
                                 );
                                 task_entry.fulfill(Err(Arc::new(anyhow::anyhow!(
