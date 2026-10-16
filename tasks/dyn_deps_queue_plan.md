@@ -107,38 +107,52 @@ block-scoped ids don't exist when static data is created. So the dependency stre
 deps = [ static walk over events + 'static refs of dynamic sets, deduplicated ] ++ [ dynamic queue bytes ]
 ```
 
-The dynamic queue contains only records with tagged ids, and the static walk never emits a
-tagged id. So nothing is emitted twice, and the two parts don't share a dedup set. Within the
+The dynamic queue contains only records with dynamic ids, and the static walk never emits a
+dynamic id. So nothing is emitted twice, and the two parts don't share a dedup set. Within the
 dynamic queue, a value string is always pushed before the set that references it.
 
 ### Block-scoped ids
 
 ```rust
 pub const DYN_ID_TAG: u64 = 1 << 63;
+fn dyn_string_id(offset: u32) -> u64 { DYN_ID_TAG | (u64::from(offset) << 1) }
+fn dyn_set_id(offset: u32) -> u64 { DYN_ID_TAG | (u64::from(offset) << 1) | 1 }
+fn dyn_offset(id: u64) -> u32 { ((id & !DYN_ID_TAG) >> 1) as u32 }
 ```
 
-A dynamic record's id is `DYN_ID_TAG | offset`, where `offset` is the byte offset of the record
-in the dynamic queue. User-space pointers on x86-64 and on aarch64 without pointer tagging never
-have bit 63 set, so a tagged id can't collide with the pointer ids of interned or `'static` data.
-The offset also gives in-process readers O(1) decoding. Ids stay `u64` on the wire, so neither
-the analytics parser nor the Unreal instrumentation changes.
+`offset` is the byte offset of the record in the dynamic queue, which gives in-process readers
+O(1) decoding. Ids stay `u64` on the wire, so neither the analytics parser nor the Unreal
+instrumentation changes.
 
-Heap pointer tagging breaks that assumption: Android arm64 (11+) puts `0xB4` in the top byte of
-heap pointers, and `PropertySet::find_or_create` allocates through `Intern`. `as_interned()`
-would then return `None` for a real interned set, `extract` would skip it, and the parser would
-fail with `dependency not found`. Android isn't a target today, so `find_or_create` (a cold
-path) gets an `assert!` that the interned pointer doesn't have `DYN_ID_TAG` set. String ids
-don't need the check: a collision would need a tagged pointer equal to `DYN_ID_TAG | offset`,
-and only the set discrimination relies on the bit alone.
+The design must hold on every platform, including arm64 with heap pointer tagging (Android 11+
+puts `0xB4` in the top byte of heap pointers; MTE and HWASan put a tag there too). So nothing
+in-process tells dynamic from static data by testing a pointer's high bits:
+
+- **Sets** are told apart by bit 0. An interned set id is a `&'static PropertySet` address,
+  which is at least 8-byte aligned on every platform (pointer tagging only touches the top
+  byte), so bit 0 is clear. A dynamic set id always has bit 0 set. `property_set.rs` gets a
+  `const` assert that `align_of::<PropertySet>() >= 2`.
+- **Values** inside a set record are told apart by the `static_values` mask that `DynDeps`
+  keeps next to each set offset (see below), never by inspecting the id. String pointers have
+  no alignment to rely on.
+
+`DYN_ID_TAG` only keeps dynamic ids out of the range of pointer ids on the wire, so the parser
+never sees a duplicate. A dynamic id is `0x80` in the top byte with an address below `2^33`,
+which no supported platform's allocator or loader produces.
 
 ### `DynDeps<D>` (new `rust/tracing/src/dyn_deps.rs`, replaces `property_arena.rs`)
 
 ```rust
 #[derive(Debug)]
 pub struct DynDeps<D> {
-    queue: D,                          // dynamic records only, tagged ids
+    queue: D,                          // dynamic records only
     strings: FxHashMap<u64, Vec<u32>>, // content hash -> string record offsets
-    sets: FxHashMap<u64, Vec<u32>>,    // content hash -> set record offsets
+    sets: FxHashMap<u64, Vec<DynSet>>, // content hash -> set records
+}
+
+struct DynSet {
+    offset: u32,
+    static_values: u64, // the MergedProperties mask the record was built with
 }
 ```
 
@@ -178,40 +192,41 @@ This trait also replaces the two `fn` pointer parameters of `record_properties`.
 `D: PropertyDepsQueue`):
 
 1. Hash the content the same way as today (chained xxh3 over names and values).
-2. **Hit check.** For each candidate offset in `sets[hash]`, decode the set record from the
-   queue bytes and compare it with `merged` by content:
+2. **Hit check.** For each candidate in `sets[hash]`, decode the set record at its offset from
+   the queue bytes and compare it with `merged` by content:
    - Names are `'static`, so they're compared through `as_str`.
-   - A value with a tagged id is resolved to its string record in the queue. An untagged value
-     is a `'static` pointer.
+   - A value whose bit is set in the candidate's `static_values` is a `'static` pointer. Any
+     other value is resolved to its string record in the queue through `dyn_offset`.
 
-   On a match, return `DYN_ID_TAG | offset`. A hit makes one probe and allocates nothing, the
+   On a match, return `dyn_set_id(offset)`. A hit makes one probe and allocates nothing, the
    same as today.
 3. **Miss.** Build one `Vec<Property>` for the set:
    - **Names** stay `StaticStringRef::from(&'static str)`.
    - **Static values** (marked in the `static_values` mask) keep their `'static` pointer. This
      is the #1665 fix.
-   - **Dynamic values** go through `intern_str`, and the property stores the returned tagged id
-     as its `StaticStringRef::ptr`, with the real `len` and `codec`. That ref is only serialized,
-     never dereferenced: it's written into the queue and dropped.
+   - **Dynamic values** go through `intern_str`, and the property stores the returned id as its
+     `StaticStringRef::ptr`, with the real `len` and `codec`. That ref is only serialized, never
+     dereferenced: it's written into the queue and dropped.
 
-   Then push the set record with id `DYN_ID_TAG | queue.len_bytes()` and record the offset in
-   `sets[hash]`.
+   Then push the set record with id `dyn_set_id(queue.len_bytes())` and record
+   `DynSet { offset, static_values: merged.static_values }` in `sets[hash]`.
 
 **`intern_str(&mut self, value: &str) -> u64`**:
 
 - Hash the value with xxh3 and probe `strings`. Candidates are compared against the bytes of
   the string record at their offset.
-- On a miss, push a `StaticStringDependency { id: DYN_ID_TAG | offset, codec: Utf8, len, ptr }`.
+- On a miss, push a `StaticStringDependency { id: dyn_string_id(offset), codec: Utf8, len, ptr }`.
   `push` copies the bytes into the queue right away, so the caller's `&str` only needs to live
   for the duration of the call.
 - Dynamic values are therefore deduplicated across sets. For example, a `correlation_id` used
   with two different property combinations is sent once.
 
 **`set_properties(&self, id: PropertySetId) -> Vec<(&str, &str)>`**: decodes an interned or
-tagged set for in-process readers (test helpers).
+dynamic set for in-process readers (test helpers).
 
-The hit check, `set_properties` and `extract` all rely on one invariant: an untagged ref in a
-set record was built from a `&'static str`, so `as_str` on it is sound.
+The hit check, `set_properties` and `extract` all rely on one invariant: every name ref in a
+set record, and every value ref whose `static_values` bit is set, was built from a
+`&'static str`, so `as_str` on it is sound.
 
 The hit check and `set_properties` decode by parsing `queue.as_bytes()` at the stored offset,
 never through `read_value_at_offset` or `iter`: `StaticStringDependency::read_value` and
@@ -254,7 +269,7 @@ pub struct MergedProperties<'a> {
 pub struct PropertySetId(pub(crate) u64);
 impl PropertySetId {
     pub fn interned(set: &'static PropertySet) -> Self;
-    pub fn as_interned(self) -> Option<&'static PropertySet>; // None for tagged ids
+    pub fn as_interned(self) -> Option<&'static PropertySet>; // None when bit 0 is set
 }
 ```
 
@@ -266,7 +281,8 @@ impl PropertySetId {
 - `#[repr(transparent)]` guarantees the same layout as a `u64`. The metric events are serialized
   by copying the raw struct (`impl InProcSerialize for TaggedFloatMetricEvent {}`), so their
   bytes depend on it.
-- `as_interned` is safe, because an untagged id can only come from a `&'static PropertySet`.
+- `as_interned` is safe, because an id with bit 0 clear can only come from a `&'static PropertySet`.
+  It tests bit 0 only, so it also holds for top-byte-tagged pointers.
   This removes the `unsafe` from `record_properties` and the arena clause of the validity
   contract on `PropertySetDependency`.
 - Log events already serialize the field by hand as a `u64`, so their wire layout is unchanged.
@@ -300,9 +316,10 @@ impl PropertySetId {
 - `ExtractDeps::extract(&self)` becomes `extract(&self, dyn_deps: &DynDeps<Self::DepsQueue>)`.
   For log and metric queues:
   1. Walk the events as today, including the `last_desc`/`last_set` shortcuts. For a tagged
-     event, call `record_properties` only when `as_interned()` is `Some`; skip tagged ids.
-  2. For each set offset in `dyn_deps.sets` (order doesn't matter: all of these go in the static
-     part), decode the set record and push each untagged name and value ref as a
+     event, call `record_properties` only when `as_interned()` is `Some`; skip dynamic set ids.
+  2. For each `DynSet` in `dyn_deps.sets` (order doesn't matter: all of these go in the static
+     part), decode the set record and push each name ref, and each value ref whose
+     `static_values` bit is set, as a
      `StaticStringDependency` if `recorded.insert(id)`. This runs on the sink thread, outside
      the stream lock, once per distinct dynamic set.
   3. Append the dynamic queue with `deps.extend_from(dyn_deps.queue())`. This is a new
@@ -327,12 +344,12 @@ impl PropertySetId {
      `#[transit(reference)]` fails to compile.
 2. **Property types** (`rust/tracing/src/property_set.rs`):
    - Add `PropertySetId` (`#[repr(transparent)]`).
-   - Add the `DYN_ID_TAG` `assert!` in `find_or_create`.
+   - Add the `const` assert that `align_of::<PropertySet>() >= 2`.
    - Reshape `PropertySetDependency` to `{ id, properties: Cow }`.
    - Add the `PropertyDepsQueue` trait (see Design).
    - Make `record_properties` safe: it takes `&'static PropertySet` and a
      `D: PropertyDepsQueue`.
-3. **`dyn_deps.rs`**: add `DYN_ID_TAG`, `DynDeps`, `MergedProperties` and
+3. **`dyn_deps.rs`**: add `DYN_ID_TAG`, the id helpers, `DynDeps`, `DynSet`, `MergedProperties` and
    `merge_properties`. Delete `property_arena.rs` and update `rust/tracing/src/lib.rs` (same
    native-only `cfg`).
 4. **Queues** (`logs/block.rs`, `metrics/block.rs`):
@@ -386,7 +403,7 @@ impl PropertySetId {
 ## Decisions
 
 - The dynamic queue is appended after the static dependencies, never prepended. It holds only
-  tagged records.
+  records with dynamic ids.
 - The dynamic queue is the same type as the stream's static deps queue, so the type-index
   bytes match and the append is a `memcpy`.
 - Events that carry only static data get no new work on the calling thread.
@@ -403,8 +420,8 @@ impl PropertySetId {
 - Declined: recording the `'static` refs of dynamic sets in a list on each miss, since it adds
   work under the stream lock and memory outside the block budget; `extract` derives them from
   the set records instead.
-- Pointer tagging (Android arm64) is out of scope; an `assert!` in `find_or_create` catches it
-  instead of a stricter tag scheme.
+- The design must work unchanged on every platform, including arm64 with heap pointer tagging
+  (Android); no in-process check relies on a pointer's high bits.
 
 ## Documentation
 
@@ -435,8 +452,9 @@ All of these are no-DB unit tests.
 - `extract` emits each name and static value referenced only by dynamic sets exactly once,
   before the appended queue bytes.
 - `len_bytes()` equals the queue's byte length.
-- Every id has `DYN_ID_TAG` set.
-- `set_properties` decodes both interned and tagged sets.
+- Every dynamic id has `DYN_ID_TAG` set; set ids have bit 0 set and string ids have it clear.
+- `as_interned` returns `Some` for `PropertySetId::interned` and `None` for every dynamic set id.
+- `set_properties` decodes both interned and dynamic sets.
 
 **Round trip through the real parser** (`rust/analytics/tests/log_tests.rs` and
 `metrics_test.rs`, which already encode blocks and parse them):
