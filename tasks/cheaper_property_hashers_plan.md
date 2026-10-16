@@ -10,8 +10,8 @@ property content that the process itself produced. This plan does three things:
 
 - computes the arena content hash with xxh3
 - keys the arena index and the extraction sets with FxHash (`rustc-hash`)
-- in `extract`, skips the set lookups when an event has the same `desc` and property set as the
-  previous one
+- in `extract`, skips the `desc` lookup when an event has the same `desc` as the previous event,
+  and the set lookups when it has the same property set
 
 The arena hash runs under the stream lock on every dynamic-property call, so it adds to
 contention. `extract` runs on the sink's encoding thread for every event of every block. A
@@ -24,13 +24,13 @@ criterion run before and after the change measures the effect. The wire format, 
 
 - `content_hash` (`:44`) feeds every name and value into `std`'s `DefaultHasher` (SipHash-1-3).
   `str::hash` writes the bytes, then a `0xff` terminator.
-- `get_or_insert` (`:66`) then looks the resulting `u64` up in `index: HashMap<u64, Vec<u32>>`
-  (`:24`), which SipHashes it a second time.
+- `get_or_insert` (`:67`) then looks the resulting `u64` up in `index: HashMap<u64, Vec<u32>>`
+  (`:23`), which SipHashes it a second time.
 - A hit compares content with `same_content`, so the hash only affects speed, never correctness.
 - Callers are the four dynamic paths in `rust/tracing/src/dispatch.rs`:
-  `tagged_float_metric_dyn` (`:775`), `tagged_integer_metric_dyn` (`:800`),
-  `log_dyn_tagged_to_sink` (`:968`) and `log_interop_dyn_tagged` (`:1002`). All of them call
-  `get_or_insert` while holding the stream lock.
+  `tagged_float_metric_dyn`, `tagged_integer_metric_dyn`, `log_dyn_tagged_to_sink` and
+  `log_interop_dyn_tagged`. Their `get_or_insert` calls are at `:775`, `:800`, `:968` and
+  `:1002`, all while holding the stream lock.
 
 **Extraction:**
 
@@ -56,8 +56,9 @@ share `record_properties`.
 - `rustc-hash` 2.1.2 is already in `Cargo.lock` through DataFusion, but isn't a workspace
   dependency yet. It is MIT/Apache-2.0 and has no dependencies.
 - `micromegas-tracing` lists its native-only dependencies under
-  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. `property_arena` and the block
-  modules are native-only (`rust/tracing/src/lib.rs:164`).
+  `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. `property_arena` is native-only
+  (`rust/tracing/src/lib.rs:164`), and so are the log and metric `block` modules
+  (`#[cfg(not(target_arch = "wasm32"))] mod block;` in `logs/mod.rs:2` and `metrics/mod.rs:2`).
 
 **Benchmark** (`rust/tracing/benches/properties.rs`, #1664):
 
@@ -123,9 +124,9 @@ depends on the fast path. It only removes lookups that would have returned "alre
    - `log/set`: one desc and one interned set. Exercises both fast paths.
    - `log/dyn_low_card`: one desc and four arena sets in rotation. The set fast path misses
      every time, so this measures the hasher alone.
-   - `metric/plain`
+   - `metric/plain`: one desc, no set. Exercises the desc fast path.
    - `metric/set`: one desc and one interned set. Exercises both fast paths.
-   - `metric/dyn_low_card`
+   - `metric/dyn_low_card`: same as `log/dyn_low_card`.
 
    Use 10 000 log events and 5 000 metric events, like the existing cases, so each block still
    fits in one block. Commit this bench-only change on its own.
@@ -177,7 +178,9 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
 - `rust/Cargo.toml`: `rustc-hash` workspace dependency
 - `rust/tracing/Cargo.toml`: `rustc-hash`, `xxhash-rust` with `xxh3`
-- `rust/datafusion-wasm/Cargo.lock`: new `xxhash-rust` entry
+- `rust/Cargo.lock`: `micromegas-tracing` dependency list
+- `rust/datafusion-wasm/Cargo.lock`: new `xxhash-rust` package; `micromegas-tracing` dependency
+  list gains `rustc-hash` and `xxhash-rust`
 - `rust/tracing/src/property_arena.rs`: content hash, index hasher
 - `rust/tracing/src/property_set.rs`: `record_properties` set type
 - `rust/tracing/src/logs/block.rs`: set type, fast path
@@ -231,7 +234,8 @@ dependencies and a block and its reference lose the same ones.
   dynamic value, flush, and compare `nb_objects()` with a block from a single such event: they
   are equal. Do the same with an `..set` static set (own block) and for metrics. This checks the
   `FxHashSet` dedup, not the fast path.
-- **Interleaved sets still dedup.** Log values A, B, A, B, A from one callsite, which makes the
+- **Interleaved sets still dedup.** Log values A, B, A, B, A from one callsite that uses `PropertySet::empty()` with exactly one
+  dynamic property and non-empty values A and B, which makes the
   fast path miss every time. Assert `nb(A,B,A,B,A) == nb(A) + 2` (set B costs its value and its
   set).
 - **Interleaved callsites.** Alternate two log callsites that share one set. Assert
