@@ -109,7 +109,7 @@ impl EventSink for PropertyCaptureSink {
         self.on_log_props.lock().unwrap().push(
             properties
                 .iter()
-                .map(|p| (p.name.to_owned(), p.value.to_owned()))
+                .map(|p| (p.name().to_owned(), p.value().to_owned()))
                 .collect(),
         );
     }

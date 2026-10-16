@@ -267,6 +267,7 @@ cardinality (a producer-side constraint):
   unbounded-safe.
 - The session UUID is a process property for fingerprinting, not a metric
   dimension.
+- Property keys and values, like metric names, should come from bounded sets.
 
 ---
 

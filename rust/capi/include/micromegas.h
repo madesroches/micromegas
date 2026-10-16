@@ -1,7 +1,6 @@
 /* Micromegas C ABI — telemetry producer for non-Rust processes.
  *
- * Auto-generated layout matches rust/capi/src/lib.rs.
- * Regenerate with cbindgen using rust/capi/cbindgen.toml.
+ * Maintained by hand, in sync with rust/capi/src/lib.rs (not generated).
  *
  * Threading: all functions are safe to call from any thread.
  * The transport runs on its own OS thread inside the library.
@@ -64,17 +63,46 @@ void mm_shutdown(MmHandle *handle);
 void mm_log(MmHandle *handle, int level, const char *target, const char *msg);
 
 /**
+ * Emit a log event with properties.
+ * Same as mm_log, plus property_count key/value pairs read from the parallel
+ * arrays.  A pair is skipped when its key or value is NULL, or its key is
+ * empty or not UTF-8.  "target" and "level" keys are not applied: the
+ * arguments decide those.  Keys and values are copied into the current block.
+ */
+void mm_log_tagged(MmHandle *handle, int level, const char *target, const char *msg,
+                   const char *const *property_keys, const char *const *property_values,
+                   unsigned int property_count);
+
+/**
  * Emit an integer metric.
- * Keep (name, unit) combinations low-cardinality — each unique pair is
- * permanently interned in memory.
+ * name must not be NULL or empty; a NULL unit is "".  Both are copied into the
+ * current block and freed with it.  Every distinct name is still a distinct
+ * series in queries, so keep names drawn from a bounded set.
  */
 void mm_metric_i(MmHandle *handle, const char *name, const char *unit, uint64_t value);
 
 /**
+ * Emit an integer metric with properties.
+ * Properties are read as in mm_log_tagged.  A "target" key replaces the
+ * default "capi" target; "name" and "unit" keys are overridden by the arguments.
+ */
+void mm_metric_i_tagged(MmHandle *handle, const char *name, const char *unit,
+                        const char *const *property_keys, const char *const *property_values,
+                        unsigned int property_count, uint64_t value);
+
+/**
  * Emit a floating-point metric.
- * Same cardinality contract as mm_metric_i.
+ * Same contract as mm_metric_i.
  */
 void mm_metric_f(MmHandle *handle, const char *name, const char *unit, double value);
+
+/**
+ * Emit a floating-point metric with properties.
+ * Same contract as mm_metric_i_tagged.
+ */
+void mm_metric_f_tagged(MmHandle *handle, const char *name, const char *unit,
+                        const char *const *property_keys, const char *const *property_values,
+                        unsigned int property_count, double value);
 
 /**
  * Flush in-memory log and metric buffers.

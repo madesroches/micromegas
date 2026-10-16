@@ -1,6 +1,7 @@
 use super::{
-    LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent, LogStringEvent,
-    LogStringInteropEvent, TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString,
+    LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent,
+    LogStaticStrInteropEventV2, LogStringEvent, LogStringInteropEvent, TaggedLogInteropEvent,
+    TaggedLogStaticStrEvent, TaggedLogString,
 };
 use crate::{
     dyn_deps::DynDeps,
@@ -17,6 +18,7 @@ declare_queue_struct!(
         LogStaticStrEvent,
         LogStringEvent,
         LogStaticStrInteropEvent,
+        LogStaticStrInteropEventV2,
         LogStringInteropEvent,
         TaggedLogString,
         TaggedLogStaticStrEvent,
@@ -100,15 +102,14 @@ impl ExtractDeps for LogMsgQueue {
                         deps.push(Utf8StaticStringDependency::from(&evt.msg));
                     }
                 }
-                LogMsgQueueAny::LogStringInteropEvent(evt) => {
-                    if recorded_deps.insert(evt.target.id()) {
-                        deps.push(evt.target.into_dependency());
+                // The target of the interop events below is in the dynamic queue.
+                LogMsgQueueAny::LogStaticStrInteropEventV2(evt) => {
+                    if recorded_deps.insert(evt.msg.id()) {
+                        deps.push(Utf8StaticStringDependency::from(&evt.msg));
                     }
                 }
+                LogMsgQueueAny::LogStringInteropEvent(_) => {}
                 LogMsgQueueAny::TaggedLogInteropEvent(evt) => {
-                    if recorded_deps.insert(evt.target.id()) {
-                        deps.push(evt.target.into_dependency());
-                    }
                     if evt.properties != last_set {
                         last_set = evt.properties;
                         if let Some(set) = evt.properties.as_interned() {

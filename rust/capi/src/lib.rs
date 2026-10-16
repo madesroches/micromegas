@@ -6,9 +6,10 @@
 //! Threading model: all functions are safe to call from any thread.  The transport
 //! runs on its own OS thread inside the library; callers need no async runtime.
 //!
-//! String cardinality contract: `mm_metric_i` / `mm_metric_f` intern each unique
-//! `(name, unit)` pair via `Box::leak`.  Keep metric names low-cardinality and
-//! bounded — do NOT pass unbounded values (session IDs, asset names) as metric names.
+//! Everything a caller passes (metric names, units, log targets, property keys and values) is
+//! copied into the block being filled and freed with it; nothing is retained for the life of the
+//! process.  Cardinality still matters for queries: every distinct metric name is a series and
+//! every distinct property set is a dictionary entry, so keep them drawn from bounded sets.
 
 #![allow(unsafe_code, clippy::missing_safety_doc)]
 
@@ -17,40 +18,93 @@ use micromegas_tracing::dispatch;
 use micromegas_tracing::levels::{Level, Verbosity};
 use micromegas_tracing::logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata};
 use micromegas_tracing::metrics::StaticMetricMetadata;
+use micromegas_tracing::property_set::{DynProperty, PropertySet};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::atomic::AtomicU32;
-use std::sync::{Mutex, OnceLock};
 
-// ---------------------------------------------------------------------------
-// Metric string interner — bounded by cardinality of (name, unit) pairs.
-// ---------------------------------------------------------------------------
+// Name and unit travel as `name` and `unit` property overrides, so one descriptor serves both paths.
+static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
+    lod: Verbosity::Min,
+    name: "",
+    unit: "",
+    target: "capi",
+    file: "micromegas-capi",
+    line: 0,
+};
 
-type MetricKey = (String, String); // (name, unit); target is always "capi"
-
-fn metric_interner() -> &'static Mutex<HashMap<MetricKey, &'static StaticMetricMetadata>> {
-    static INTERNER: OnceLock<Mutex<HashMap<MetricKey, &'static StaticMetricMetadata>>> =
-        OnceLock::new();
-    INTERNER.get_or_init(|| Mutex::new(HashMap::new()))
+/// Reads pair `i` of parallel key/value arrays.  A pair is skipped when its key or value is
+/// null, or when the key is empty or not UTF-8; a value that is not UTF-8 reads as "".
+unsafe fn read_pair<'a>(
+    keys: *const *const c_char,
+    values: *const *const c_char,
+    i: usize,
+) -> Option<(&'a str, &'a str)> {
+    let key_ptr = unsafe { *keys.add(i) };
+    let val_ptr = unsafe { *values.add(i) };
+    if key_ptr.is_null() || val_ptr.is_null() {
+        return None;
+    }
+    let key = match unsafe { CStr::from_ptr(key_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return None,
+    };
+    let val = unsafe { CStr::from_ptr(val_ptr) }.to_str().unwrap_or("");
+    Some((key, val))
 }
 
-fn intern_metric(name: &str, unit: &str) -> &'static StaticMetricMetadata {
-    let key = (name.to_owned(), unit.to_owned());
-    let mut map = metric_interner().lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(meta) = map.get(&key) {
-        return meta;
+/// Reads the property arrays of the `*_tagged` functions.  Keys are block-scoped names.
+#[doc(hidden)]
+pub unsafe fn read_properties<'a>(
+    keys: *const *const c_char,
+    values: *const *const c_char,
+    count: c_uint,
+) -> Vec<DynProperty<'a>> {
+    if keys.is_null() || values.is_null() {
+        return vec![];
     }
-    let meta: &'static StaticMetricMetadata = Box::leak(Box::new(StaticMetricMetadata {
-        lod: Verbosity::Min,
-        name: Box::leak(name.to_owned().into_boxed_str()),
-        unit: Box::leak(unit.to_owned().into_boxed_str()),
-        target: "capi",
-        file: "micromegas-capi",
-        line: 0,
-    }));
-    map.insert(key, meta);
-    meta
+    (0..count as usize)
+        .filter_map(|i| unsafe { read_pair(keys, values, i) })
+        .map(|(key, val)| DynProperty::with_dyn_name(key, val))
+        .collect()
+}
+
+/// The properties of a metric: the caller's pairs, then `name` and `unit`.  They come last
+/// because `merge_properties` keeps the last entry of a name, so the arguments win over keys of
+/// the same name.
+#[doc(hidden)]
+pub unsafe fn metric_properties<'a>(
+    keys: *const *const c_char,
+    values: *const *const c_char,
+    count: c_uint,
+    name: &'a str,
+    unit: &'a str,
+) -> Vec<DynProperty<'a>> {
+    let mut properties = unsafe { read_properties(keys, values, count) };
+    properties.push(DynProperty::new("name", name));
+    properties.push(DynProperty::new("unit", unit));
+    properties
+}
+
+unsafe fn metric_name_and_unit<'a>(
+    handle: *mut MmHandle,
+    name: *const c_char,
+    unit: *const c_char,
+) -> Option<(&'a str, &'a str)> {
+    if handle.is_null() || name.is_null() {
+        return None;
+    }
+    let name_str = match unsafe { CStr::from_ptr(name) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return None,
+    };
+    let unit_str = if unit.is_null() {
+        ""
+    } else {
+        unsafe { CStr::from_ptr(unit) }.to_str().unwrap_or("")
+    };
+    Some((name_str, unit_str))
 }
 
 // ---------------------------------------------------------------------------
@@ -114,20 +168,11 @@ pub unsafe extern "C" fn mm_init(cfg: *const MmConfig) -> *mut MmHandle {
     if cfg.property_count > 0 && !cfg.property_keys.is_null() && !cfg.property_values.is_null() {
         let mut props = HashMap::new();
         for i in 0..cfg.property_count as usize {
-            let key_ptr = unsafe { *cfg.property_keys.add(i) };
-            let val_ptr = unsafe { *cfg.property_values.add(i) };
-            if key_ptr.is_null() || val_ptr.is_null() {
-                continue;
+            if let Some((key, val)) =
+                unsafe { read_pair(cfg.property_keys, cfg.property_values, i) }
+            {
+                props.insert(key.to_owned(), val.to_owned());
             }
-            let key = match unsafe { CStr::from_ptr(key_ptr) }.to_str() {
-                Ok(s) if !s.is_empty() => s.to_owned(),
-                _ => continue,
-            };
-            let val = unsafe { CStr::from_ptr(val_ptr) }
-                .to_str()
-                .unwrap_or("")
-                .to_owned();
-            props.insert(key, val);
         }
         if !props.is_empty() {
             builder = builder.with_process_properties(props);
@@ -165,6 +210,35 @@ pub unsafe extern "C" fn mm_log(
     target: *const c_char,
     msg: *const c_char,
 ) {
+    unsafe {
+        mm_log_tagged(
+            handle,
+            level,
+            target,
+            msg,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+/// Emit a log event with properties.
+///
+/// Same as `mm_log`, plus `property_count` key/value pairs read from the parallel arrays, the
+/// way `mm_init` reads process properties: a pair with a null key or value, or an empty or
+/// non-UTF-8 key, is skipped.  Keys and values are copied into the current block.  `target` and
+/// `level` keys are not applied: the arguments decide those.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mm_log_tagged(
+    handle: *mut MmHandle,
+    level: c_int,
+    target: *const c_char,
+    msg: *const c_char,
+    property_keys: *const *const c_char,
+    property_values: *const *const c_char,
+    property_count: c_uint,
+) {
     if handle.is_null() {
         return;
     }
@@ -197,13 +271,18 @@ pub unsafe extern "C" fn mm_log(
         file: "",
         line: 0,
     };
-    dispatch::log_interop(&metadata, format_args!("{msg_str}"));
+    let properties = unsafe { read_properties(property_keys, property_values, property_count) };
+    if properties.is_empty() {
+        dispatch::log_interop(&metadata, format_args!("{msg_str}"));
+    } else {
+        dispatch::log_interop_dyn_tagged(&metadata, &properties, format_args!("{msg_str}"));
+    }
 }
 
 /// Emit an integer metric.
 ///
-/// `name` and `unit` must not be null.  Each unique `(name, unit)` pair is
-/// interned on first use — keep cardinality bounded.
+/// `name` must not be null or empty; a null `unit` is "".  The strings are copied into the
+/// current block.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mm_metric_i(
     handle: *mut MmHandle,
@@ -211,28 +290,52 @@ pub unsafe extern "C" fn mm_metric_i(
     unit: *const c_char,
     value: u64,
 ) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        mm_metric_i_tagged(
+            handle,
+            name,
+            unit,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            value,
+        )
     }
-    if name.is_null() {
+}
+
+/// Emit an integer metric with properties.
+///
+/// Same as `mm_metric_i`, plus `property_count` key/value pairs read as in `mm_log_tagged`.
+/// A `target` key replaces the default "capi" target; `name` and `unit` keys are overridden by
+/// the arguments.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mm_metric_i_tagged(
+    handle: *mut MmHandle,
+    name: *const c_char,
+    unit: *const c_char,
+    property_keys: *const *const c_char,
+    property_values: *const *const c_char,
+    property_count: c_uint,
+    value: u64,
+) {
+    let Some((name_str, unit_str)) = (unsafe { metric_name_and_unit(handle, name, unit) }) else {
         return;
-    }
-    let name_str = match unsafe { CStr::from_ptr(name) }.to_str() {
-        Ok(s) if !s.is_empty() => s,
-        _ => return,
     };
-    let unit_str = if unit.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(unit) }.to_str().unwrap_or("")
+    let properties = unsafe {
+        metric_properties(
+            property_keys,
+            property_values,
+            property_count,
+            name_str,
+            unit_str,
+        )
     };
-    let meta = intern_metric(name_str, unit_str);
-    dispatch::int_metric(meta, value);
+    dispatch::tagged_integer_metric_dyn(&METRIC_DESC, PropertySet::empty(), &properties, value);
 }
 
 /// Emit a floating-point metric.
 ///
-/// Same cardinality contract as `mm_metric_i`.
+/// Same contract as `mm_metric_i`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mm_metric_f(
     handle: *mut MmHandle,
@@ -240,23 +343,45 @@ pub unsafe extern "C" fn mm_metric_f(
     unit: *const c_char,
     value: f64,
 ) {
-    if handle.is_null() {
-        return;
+    unsafe {
+        mm_metric_f_tagged(
+            handle,
+            name,
+            unit,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            value,
+        )
     }
-    if name.is_null() {
+}
+
+/// Emit a floating-point metric with properties.
+///
+/// Same contract as `mm_metric_i_tagged`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mm_metric_f_tagged(
+    handle: *mut MmHandle,
+    name: *const c_char,
+    unit: *const c_char,
+    property_keys: *const *const c_char,
+    property_values: *const *const c_char,
+    property_count: c_uint,
+    value: f64,
+) {
+    let Some((name_str, unit_str)) = (unsafe { metric_name_and_unit(handle, name, unit) }) else {
         return;
-    }
-    let name_str = match unsafe { CStr::from_ptr(name) }.to_str() {
-        Ok(s) if !s.is_empty() => s,
-        _ => return,
     };
-    let unit_str = if unit.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(unit) }.to_str().unwrap_or("")
+    let properties = unsafe {
+        metric_properties(
+            property_keys,
+            property_values,
+            property_count,
+            name_str,
+            unit_str,
+        )
     };
-    let meta = intern_metric(name_str, unit_str);
-    dispatch::float_metric(meta, value);
+    dispatch::tagged_float_metric_dyn(&METRIC_DESC, PropertySet::empty(), &properties, value);
 }
 
 /// Flush all in-memory log and metric buffers to the transport.

@@ -14,6 +14,29 @@ def test_log_forwards_to_active_session(rec_lib):
         mm._handle = None
 
 
+def test_log_forwards_properties(rec_lib):
+    mm._lib = rec_lib
+    mm._handle = object()
+    try:
+        mm.log(4, "other_addon.target", "hello", properties={"scene": "main", "n": 3})
+        assert rec_lib.logs == [(4, "other_addon.target", "hello")]
+        assert rec_lib.log_props == [{"scene": "main", "n": "3"}]
+    finally:
+        mm._lib = None
+        mm._handle = None
+
+
+def test_log_without_properties_still_works(rec_lib):
+    mm._lib = rec_lib
+    mm._handle = object()
+    try:
+        mm.log(4, "other_addon.target", "hello")
+        assert rec_lib.log_props == [None]
+    finally:
+        mm._lib = None
+        mm._handle = None
+
+
 def test_log_stringifies_non_string_msg(rec_lib):
     mm._lib = rec_lib
     mm._handle = object()
@@ -34,7 +57,7 @@ def test_log_is_noop_without_active_session(rec_lib):
 
 def test_log_swallows_exceptions_from_lib():
     class RaisingLib:
-        def log(self, handle, level, target, msg):
+        def log(self, handle, level, target, msg, properties=None):
             raise RuntimeError("native call failed")
 
     mm._lib = RaisingLib()

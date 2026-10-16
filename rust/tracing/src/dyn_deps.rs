@@ -4,7 +4,7 @@ use crate::{
         DynProperty, Property, PropertyDepsQueue, PropertySet, PropertySetDependency,
         PropertySetId, StringDepsQueue, cmp_dyn_properties,
     },
-    static_string_ref::StaticStringRef,
+    static_string_ref::{BlockStringRef, StaticStringRef},
 };
 use micromegas_transit::{
     HeterogeneousQueue, StaticStringDependency, read_any, string_codec::StringCodec,
@@ -43,15 +43,21 @@ pub struct MergedProperties<'a> {
     pub properties: Vec<DynProperty<'a>>,
     // Bit i set: properties[i].value comes from the `&'static` set.
     static_values: u64,
+    // Bit i set: properties[i].name is `'static`.
+    static_names: u64,
 }
 
 impl MergedProperties<'_> {
     fn is_static_value(&self, index: usize) -> bool {
-        is_static_value(self.static_values, index)
+        is_static_bit(self.static_values, index)
+    }
+
+    fn is_static_name(&self, index: usize) -> bool {
+        is_static_bit(self.static_names, index)
     }
 }
 
-fn is_static_value(mask: u64, index: usize) -> bool {
+fn is_static_bit(mask: u64, index: usize) -> bool {
     index < 64 && (mask >> index) & 1 != 0
 }
 
@@ -66,27 +72,32 @@ pub fn merge_properties<'a>(
 ) -> MergedProperties<'a> {
     let mut merged: Vec<DynProperty<'a>> = static_set.dyn_properties().to_vec();
     for dyn_prop in dyn_properties {
-        merged.retain(|p| !p.name.eq_ignore_ascii_case(dyn_prop.name));
+        merged.retain(|p| !p.name().eq_ignore_ascii_case(dyn_prop.name()));
         merged.push(*dyn_prop);
     }
     merged.sort_by(cmp_dyn_properties);
     // A value that is the very memory of a static property's value is `'static` whoever
     // passed it. This avoids carrying a flag through the retain and the sort.
-    let static_values = merged
-        .iter()
-        .take(64)
-        .enumerate()
-        .fold(0u64, |mask, (i, p)| {
-            let is_static = static_set.get_properties().iter().any(|s| {
-                s.value.id() == p.value.as_ptr() as u64
-                    && s.value.len as usize == p.value.len()
-                    && s.name.as_str() == p.name
+    let (static_values, static_names) =
+        merged
+            .iter()
+            .take(64)
+            .enumerate()
+            .fold((0u64, 0u64), |(values, names), (i, p)| {
+                let is_static = static_set.get_properties().iter().any(|s| {
+                    s.value.id() == p.value().as_ptr() as u64
+                        && s.value.len as usize == p.value().len()
+                        && s.name.as_str() == p.name()
+                });
+                (
+                    values | (u64::from(is_static) << i),
+                    names | (u64::from(p.is_static_name()) << i),
+                )
             });
-            mask | (u64::from(is_static) << i)
-        });
     MergedProperties {
         properties: merged,
         static_values,
+        static_names,
     }
 }
 
@@ -184,8 +195,9 @@ impl<T> HashIndex<T> {
 #[derive(Debug)]
 struct DynSet {
     offset: u32,
-    // The mask of the `MergedProperties` the record was built with.
+    // The masks of the `MergedProperties` the record was built with.
     static_values: u64,
+    static_names: u64,
 }
 
 /// The dependency records of one block that only exist at run time.
@@ -248,25 +260,37 @@ impl<D: HeterogeneousQueue> DynDeps<D> {
         }
         let offset = dyn_offset(id.0);
         let bytes = self.queue.as_bytes();
-        let static_values = self
+        let set = self
             .sets
             .iter()
             .find(|s| s.offset == offset)
-            .expect("unknown dynamic set id")
-            .static_values;
+            .expect("unknown dynamic set id");
         (0..set_len(bytes, offset))
             .map(|i| {
                 let prop = set_property(bytes, offset, i);
-                // SAFETY: names and masked values were built from `&'static str`s.
-                let name = unsafe { static_ref_str(&prop.name) };
-                let value = if is_static_value(static_values, i) {
-                    unsafe { static_ref_str(&prop.value) }
-                } else {
-                    string_at(bytes, dyn_offset(prop.value.ptr))
-                };
-                (name, value)
+                (
+                    ref_str(bytes, &prop.name, set.static_names, i),
+                    ref_str(bytes, &prop.value, set.static_values, i),
+                )
             })
             .collect()
+    }
+
+    /// The text of a string record written by `intern_str`.
+    pub fn str(&self, id: u64) -> &str {
+        string_at(self.queue.as_bytes(), dyn_offset(id))
+    }
+}
+
+/// Resolves a name or value of a dynamic set: a `'static` string when its bit is set in
+/// `mask`, a string record of the block otherwise.
+#[inline]
+fn ref_str<'b>(bytes: &'b [u8], r: &StaticStringRef, mask: u64, index: usize) -> &'b str {
+    if is_static_bit(mask, index) {
+        // SAFETY: masked refs were built from `&'static str`s.
+        unsafe { static_ref_str(r) }
+    } else {
+        string_at(bytes, dyn_offset(r.ptr))
     }
 }
 
@@ -292,6 +316,15 @@ impl<D: StringDepsQueue> DynDeps<D> {
         self.strings.insert(hash, offset);
         id
     }
+
+    /// Like `intern_str`, as the reference an event stores.
+    pub fn intern_str_ref(&mut self, value: &str) -> BlockStringRef {
+        BlockStringRef {
+            id: self.intern_str(value),
+            len: value.len() as u32,
+            codec: StringCodec::Utf8,
+        }
+    }
 }
 
 impl<D: PropertyDepsQueue> DynDeps<D> {
@@ -300,7 +333,7 @@ impl<D: PropertyDepsQueue> DynDeps<D> {
     #[inline]
     pub fn intern_set(&mut self, merged: &MergedProperties<'_>) -> PropertySetId {
         self.reserve_on_first_insert();
-        let hash = content_hash(merged.properties.iter().map(|p| (p.name, p.value)));
+        let hash = content_hash(merged.properties.iter().map(|p| (p.name(), p.value())));
         let bytes = self.queue.as_bytes();
         for candidate in self.sets.candidates(hash) {
             if Self::same_content(bytes, candidate, merged) {
@@ -309,21 +342,28 @@ impl<D: PropertyDepsQueue> DynDeps<D> {
         }
         let mut properties = Vec::with_capacity(merged.properties.len());
         for (i, prop) in merged.properties.iter().enumerate() {
-            let value = if merged.is_static_value(i) {
-                // SAFETY: the mask marks values that came from a `&'static` set.
-                unsafe { StaticStringRef::from_str_unchecked(prop.value) }
+            // Only ever serialized: the ptr of a dynamic ref is the id of the string record.
+            let name = if merged.is_static_name(i) {
+                // SAFETY: the mask marks names that were built from a `&'static str`.
+                unsafe { StaticStringRef::from_str_unchecked(prop.name()) }
             } else {
-                // Only ever serialized: the ptr is the id of the string record.
                 StaticStringRef {
-                    ptr: self.intern_str(prop.value),
-                    len: prop.value.len() as u32,
+                    ptr: self.intern_str(prop.name()),
+                    len: prop.name().len() as u32,
                     codec: StringCodec::Utf8,
                 }
             };
-            properties.push(Property {
-                name: prop.name.into(),
-                value,
-            });
+            let value = if merged.is_static_value(i) {
+                // SAFETY: the mask marks values that came from a `&'static` set.
+                unsafe { StaticStringRef::from_str_unchecked(prop.value()) }
+            } else {
+                StaticStringRef {
+                    ptr: self.intern_str(prop.value()),
+                    len: prop.value().len() as u32,
+                    codec: StringCodec::Utf8,
+                }
+            };
+            properties.push(Property { name, value });
         }
         let offset = u32::try_from(self.queue.len_bytes()).expect("dynamic queue exceeds 4 GiB");
         let id = dyn_set_id(offset);
@@ -336,6 +376,7 @@ impl<D: PropertyDepsQueue> DynDeps<D> {
             DynSet {
                 offset,
                 static_values: merged.static_values,
+                static_names: merged.static_names,
             },
         );
         PropertySetId(id)
@@ -348,28 +389,22 @@ impl<D: PropertyDepsQueue> DynDeps<D> {
         }
         merged.properties.iter().enumerate().all(|(i, wanted)| {
             let prop = set_property(bytes, candidate.offset, i);
-            // SAFETY: names and masked values were built from `&'static str`s.
-            if unsafe { static_ref_str(&prop.name) } != wanted.name {
-                return false;
-            }
-            if is_static_value(candidate.static_values, i) {
-                unsafe { static_ref_str(&prop.value) == wanted.value }
-            } else {
-                string_at(bytes, dyn_offset(prop.value.ptr)) == wanted.value
-            }
+            ref_str(bytes, &prop.name, candidate.static_names, i) == wanted.name()
+                && ref_str(bytes, &prop.value, candidate.static_values, i) == wanted.value()
         })
     }
 
-    /// Emits the `'static` names and values that dynamic sets reference, once each.
+    /// Emits the `'static` names and values that dynamic sets reference, once each. Block-scoped
+    /// ones are already in the queue.
     pub(crate) fn record_static_refs(&self, recorded_deps: &mut FxHashSet<u64>, deps: &mut D) {
         let bytes = self.queue.as_bytes();
         for set in self.sets.iter() {
             for i in 0..set_len(bytes, set.offset) {
                 let prop = set_property(bytes, set.offset, i);
-                if recorded_deps.insert(prop.name.id()) {
+                if is_static_bit(set.static_names, i) && recorded_deps.insert(prop.name.id()) {
                     deps.push_string(prop.name.into_dependency());
                 }
-                if is_static_value(set.static_values, i) && recorded_deps.insert(prop.value.id()) {
+                if is_static_bit(set.static_values, i) && recorded_deps.insert(prop.value.id()) {
                     deps.push_string(prop.value.into_dependency());
                 }
             }

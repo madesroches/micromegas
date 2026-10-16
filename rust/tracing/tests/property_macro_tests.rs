@@ -70,7 +70,7 @@ impl EventSink for CapturingSink {
     ) {
         let mut sorted: Pairs = properties
             .iter()
-            .map(|p| (p.name.to_owned(), p.value.to_owned()))
+            .map(|p| (p.name().to_owned(), p.value().to_owned()))
             .collect();
         sorted.sort();
         self.state.lock().unwrap().logs.push(LogRecord {
@@ -784,6 +784,15 @@ fn count_static(counter: &mut u32, s: &'static str) -> &'static str {
     s
 }
 
+fn name_of(record: &MetricRecord) -> String {
+    record
+        .properties
+        .iter()
+        .find(|(k, _)| k == "name")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
 #[test]
 #[serial]
 fn static_values() {
@@ -879,6 +888,33 @@ fn static_only_calls_use_interned_sets() {
 
 #[test]
 #[serial]
+fn imetric_dyn_takes_runtime_name_and_unit() {
+    let guard = DispatchGuard::new();
+    let queue = "render";
+    let owned = String::from("owned.metric");
+    let shared: Arc<str> = Arc::from("shared.metric");
+    imetric_dyn!(format!("queue.{queue}.depth"), "count", 1);
+    imetric_dyn!(&owned, String::from("bytes"), 2);
+    imetric_dyn!(shared.clone(), Arc::<str>::from("ms"), 3);
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 3);
+    assert!(metrics.iter().all(|m| m.tagged));
+    assert_eq!(
+        metrics[0].properties,
+        pairs(&[("name", "queue.render.depth"), ("unit", "count")])
+    );
+    assert_eq!(
+        metrics[1].properties,
+        pairs(&[("name", "owned.metric"), ("unit", "bytes")])
+    );
+    assert_eq!(
+        metrics[2].properties,
+        pairs(&[("name", "shared.metric"), ("unit", "ms")])
+    );
+}
+
+#[test]
+#[serial]
 fn static_values_are_evaluated_lazily() {
     let guard = DispatchGuard::new();
     let mut count = 0;
@@ -894,4 +930,103 @@ fn static_values_are_evaluated_lazily() {
     );
     assert_eq!(count, 1);
     assert_eq!(guard.logs().len(), 1);
+}
+
+#[test]
+#[serial]
+fn dyn_metrics_with_the_same_name_share_one_set() {
+    let guard = DispatchGuard::new();
+    for i in 0..3 {
+        let name = String::from("same.name");
+        imetric_dyn!(&name, "count", i);
+    }
+    imetric_dyn!(String::from("other.name"), "count", 1);
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 4);
+    assert_eq!(metrics[0].set_id, metrics[1].set_id);
+    assert_eq!(metrics[1].set_id, metrics[2].set_id);
+    assert_ne!(metrics[2].set_id, metrics[3].set_id);
+}
+
+#[test]
+#[serial]
+fn fmetric_dyn_with_target_and_properties() {
+    let guard = DispatchGuard::new();
+    let name = String::from("http.latency");
+    let region = String::from("eu");
+    fmetric_dyn!(target: "my_crate::io", &name, "ms", "http.method" = "GET", region = region, 1.5);
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 1);
+    assert_eq!(metrics[0].target, "my_crate::io");
+    assert_eq!(
+        metrics[0].properties,
+        pairs(&[
+            ("http.method", "GET"),
+            ("region", "eu"),
+            ("name", "http.latency"),
+            ("unit", "ms")
+        ])
+    );
+}
+
+#[test]
+#[serial]
+fn dyn_metric_name_wins_over_a_spread_set() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![
+        Property::new("name", "from_set"),
+        Property::new("unit", "from_set"),
+        Property::new("region", "eu"),
+    ]);
+    imetric_dyn!("runtime.name", "count", ..set, 1);
+    let metrics = guard.metrics();
+    assert_eq!(
+        metrics[0].properties,
+        pairs(&[
+            ("name", "runtime.name"),
+            ("unit", "count"),
+            ("region", "eu")
+        ])
+    );
+    assert_eq!(name_of(&metrics[0]), "runtime.name");
+}
+
+#[test]
+#[serial]
+fn static_metrics_stay_untagged_next_to_dyn_ones() {
+    let guard = DispatchGuard::new();
+    imetric!("static_int", "count", 1);
+    fmetric!("static_float", "count", 1.0);
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 2);
+    assert!(metrics.iter().all(|m| !m.tagged && m.dyn_deps_bytes == 0));
+}
+
+#[test]
+#[serial]
+fn dyn_metric_with_a_static_value() {
+    let guard = DispatchGuard::new();
+    let label: &'static str = "alpha";
+    let name = String::from("dyn.static");
+    imetric_dyn!(&name, "count", prefix = static label, 1);
+    fmetric_dyn!(&name, "ms", prefix = static label, "p-key" = "lit", 1.5);
+    let metrics = guard.metrics();
+    assert_eq!(metrics.len(), 2);
+    assert_eq!(
+        metrics[0].properties,
+        pairs(&[
+            ("prefix", "alpha"),
+            ("name", "dyn.static"),
+            ("unit", "count")
+        ])
+    );
+    assert_eq!(
+        metrics[1].properties,
+        pairs(&[
+            ("prefix", "alpha"),
+            ("p-key", "lit"),
+            ("name", "dyn.static"),
+            ("unit", "ms")
+        ])
+    );
 }

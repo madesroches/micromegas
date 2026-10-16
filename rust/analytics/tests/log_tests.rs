@@ -7,11 +7,11 @@ use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::dyn_deps::merge_properties;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::levels::Level;
 use micromegas_tracing::logs;
 use micromegas_tracing::logs::LogBlock;
 use micromegas_tracing::logs::LogStaticStrInteropEvent;
+use micromegas_tracing::logs::LogStaticStrInteropEventV2;
 use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
@@ -22,6 +22,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
 use micromegas_tracing::property_set::PropertySetId;
+use micromegas_tracing::string_id::DynStringId;
 use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::DynString;
 use micromegas_transit::value::{Object, Value};
@@ -48,6 +49,14 @@ fn test_log_interop_metadata() {
     obj_meta
         .iter()
         .position(|udt| *udt.name == "StringId")
+        .unwrap();
+    obj_meta
+        .iter()
+        .position(|udt| *udt.name == "LogStaticStrInteropEventV2")
+        .unwrap();
+    obj_meta
+        .iter()
+        .position(|udt| *udt.name == "DynStringId")
         .unwrap();
 }
 
@@ -170,16 +179,18 @@ fn test_parse_log_interops() {
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
-    stream.get_events_mut().push(LogStaticStrInteropEvent {
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    events.push(LogStaticStrInteropEvent {
         time: 1,
         level: 2,
         target: "target_name".into(),
         msg: "my message".into(),
     });
-    stream.get_events_mut().push(LogStringInteropEvent {
+    let target = dyn_deps.intern_str_ref("target_name");
+    events.push(LogStringInteropEvent {
         time: 1,
         level: 2,
-        target: "target_name".into(),
+        target,
         msg: micromegas_transit::DynString(String::from("my message")),
     });
 
@@ -383,13 +394,8 @@ fn test_dynamic_tagged_log_entries() {
         let properties = match cid {
             Some(cid) => {
                 let cid = String::from(cid);
-                let merged = merge_properties(
-                    static_set,
-                    &[DynProperty {
-                        name: "correlation_id",
-                        value: &cid,
-                    }],
-                );
+                let merged =
+                    merge_properties(static_set, &[DynProperty::new("correlation_id", &cid)]);
                 dyn_deps.intern_set(&merged)
             }
             None => PropertySetId::interned(static_set),
@@ -435,17 +441,15 @@ fn test_tagged_log_interop_event() {
     let stream_id = stream.stream_id();
     let merged = merge_properties(
         PropertySet::empty(),
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
+        &[DynProperty::new("correlation_id", "abc")],
     );
     let (events, dyn_deps) = stream.get_block_mut_parts();
+    let target = dyn_deps.intern_str_ref("interop_target");
     let properties = dyn_deps.intern_set(&merged);
     events.push(TaggedLogInteropEvent {
         time: 1,
         level: Level::Warn as u8,
-        target: intern_string("interop_target").into(),
+        target,
         properties,
         msg: DynString("interop message".into()),
     });
@@ -482,13 +486,7 @@ fn test_tagged_log_static_str_entries() {
         Property::new("target", "overridden"),
     ]);
     let cid = String::from("abc");
-    let merged = merge_properties(
-        static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: &cid,
-        }],
-    );
+    let merged = merge_properties(static_set, &[DynProperty::new("correlation_id", &cid)]);
     let (events, dyn_deps) = stream.get_block_mut_parts();
     let dynamic_set = dyn_deps.intern_set(&merged);
     for properties in [
@@ -534,4 +532,107 @@ fn test_tagged_log_static_str_entries() {
     assert_eq!(entries[0].3, "target_name");
     assert_eq!(entries[2].2, Level::Error as i32);
     assert_eq!(entries[2].3, "overridden");
+}
+
+#[test]
+#[serial]
+fn test_block_scoped_interop_targets() {
+    let process_id = uuid::Uuid::new_v4();
+    let mut stream = LogStream::new(8192, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "static message",
+        target: "shared_target",
+        module_path: "module_path",
+        file: file!(),
+        line: line!(),
+    };
+    let (events, dyn_deps) = stream.get_block_mut_parts();
+    events.push(logs::LogStaticStrEvent {
+        desc: &LOG_DESC,
+        time: 1,
+    });
+    // a block-scoped target equal to a static log's target
+    let target = dyn_deps.intern_str_ref("shared_target");
+    events.push(LogStringInteropEvent {
+        time: 2,
+        level: Level::Warn as u8,
+        target,
+        msg: DynString("interop one".into()),
+    });
+    let target = dyn_deps.intern_str_ref("runtime_target");
+    events.push(LogStringInteropEvent {
+        time: 3,
+        level: Level::Error as u8,
+        target,
+        msg: DynString("interop two".into()),
+    });
+    let id = dyn_deps.intern_str("runtime_target");
+    events.push(LogStaticStrInteropEventV2 {
+        time: 4,
+        level: Level::Trace as u32,
+        target: DynStringId { id },
+        msg: "interop static".into(),
+    });
+    let key = String::from("region_key");
+    let merged = merge_properties(
+        PropertySet::empty(),
+        &[DynProperty::with_dyn_name(&key, "eu")],
+    );
+    let target = dyn_deps.intern_str_ref("tagged_target");
+    let properties = dyn_deps.intern_set(&merged);
+    events.push(TaggedLogInteropEvent {
+        time: 5,
+        level: Level::Debug as u8,
+        target,
+        properties,
+        msg: DynString("interop tagged".into()),
+    });
+
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(8192, process_id, stream_id, 0)));
+    let entries = parse_entries(&mut block, &stream, process_id, |entry| {
+        let mut props = vec![];
+        entry
+            .properties
+            .for_each_property(|k, v| {
+                props.push((k.to_owned(), v.to_owned()));
+                Ok(())
+            })
+            .unwrap();
+        (
+            entry.msg.to_owned(),
+            entry.target.to_owned(),
+            entry.level,
+            props,
+        )
+    });
+    let expected = |msg: &str, target: &str, level: Level, props: Vec<(&str, &str)>| {
+        (
+            msg.to_owned(),
+            target.to_owned(),
+            level as i32,
+            props
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        entries,
+        vec![
+            expected("static message", "shared_target", Level::Info, vec![]),
+            expected("interop one", "shared_target", Level::Warn, vec![]),
+            expected("interop two", "runtime_target", Level::Error, vec![]),
+            expected("interop static", "runtime_target", Level::Trace, vec![]),
+            expected(
+                "interop tagged",
+                "tagged_target",
+                Level::Debug,
+                vec![("region_key", "eu")]
+            ),
+        ]
+    );
 }

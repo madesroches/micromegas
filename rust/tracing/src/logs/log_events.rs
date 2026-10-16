@@ -1,4 +1,8 @@
-use crate::{property_set::PropertySetId, static_string_ref::StaticStringRef, string_id::StringId};
+use crate::{
+    property_set::PropertySetId,
+    static_string_ref::{BlockStringRef, StaticStringRef},
+    string_id::{DynStringId, StringId},
+};
 use micromegas_transit::{
     DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod,
 };
@@ -92,11 +96,23 @@ pub struct LogStaticStrInteropEvent {
 
 impl InProcSerialize for LogStaticStrInteropEvent {}
 
+#[derive(Debug, TransitReflect)]
+pub struct LogStaticStrInteropEventV2 {
+    pub time: i64,
+    pub level: u32,
+    pub target: DynStringId,
+    pub msg: StringId,
+}
+
+impl InProcSerialize for LogStaticStrInteropEventV2 {}
+
 #[derive(Debug)]
 pub struct LogStringInteropEvent {
     pub time: i64,
     pub level: u8,
-    pub target: StaticStringRef, //for unreal compatibility
+    // The id of a string record in the block's queue, laid out as a `StaticStringRef` for
+    // unreal compatibility.
+    pub target: BlockStringRef,
     pub msg: DynString,
 }
 
@@ -107,7 +123,7 @@ impl InProcSerialize for LogStringInteropEvent {
         Some(
             std::mem::size_of::<i64>() as u32 //time
                 + std::mem::size_of::<u8>() as u32 //level
-                + std::mem::size_of::<StringId>() as u32 //target
+                + std::mem::size_of::<BlockStringRef>() as u32 //target
                 + self.msg.get_value_size().unwrap(), //message
         )
     }
@@ -122,7 +138,7 @@ impl InProcSerialize for LogStringInteropEvent {
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let time: i64 = read_consume_pod(&mut window);
         let level: u8 = read_consume_pod(&mut window);
-        let target: StaticStringRef = read_consume_pod(&mut window);
+        let target: BlockStringRef = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
             time,
@@ -156,7 +172,7 @@ impl Reflect for LogStringInteropEvent {
 pub struct TaggedLogInteropEvent {
     pub time: i64,
     pub level: u8,
-    pub target: StaticStringRef,
+    pub target: BlockStringRef,
     pub properties: PropertySetId,
     pub msg: DynString,
 }
@@ -168,7 +184,7 @@ impl InProcSerialize for TaggedLogInteropEvent {
         Some(
             std::mem::size_of::<i64>() as u32 // time
                 + std::mem::size_of::<u8>() as u32 // level
-                + std::mem::size_of::<StaticStringRef>() as u32 // target
+                + std::mem::size_of::<BlockStringRef>() as u32 // target
                 + std::mem::size_of::<u64>() as u32 // properties ptr
                 + self.msg.get_value_size().unwrap(), // message
         )
@@ -185,7 +201,7 @@ impl InProcSerialize for TaggedLogInteropEvent {
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let time: i64 = read_consume_pod(&mut window);
         let level: u8 = read_consume_pod(&mut window);
-        let target: StaticStringRef = read_consume_pod(&mut window);
+        let target: BlockStringRef = read_consume_pod(&mut window);
         let properties_id: u64 = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {

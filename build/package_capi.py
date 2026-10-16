@@ -134,7 +134,7 @@ def main():
     os.makedirs(os.path.join(stage, "lib"), exist_ok=True)
     os.makedirs(os.path.join(stage, "include"), exist_ok=True)
 
-    # Header is checked in (cbindgen-generated); ship it as-is.
+    # Header is checked in (hand-maintained); ship it as-is.
     shutil.copy2(header, os.path.join(stage, "include", "micromegas.h"))
 
     copied = []

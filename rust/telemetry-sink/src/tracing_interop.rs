@@ -103,7 +103,7 @@ where
         } else {
             let dyn_properties: Vec<DynProperty<'_>> = properties
                 .iter()
-                .map(|(name, value)| DynProperty { name, value })
+                .map(|(name, value)| DynProperty::new(name, value))
                 .collect();
             log_interop_dyn_tagged(&log_desc, &dyn_properties, format_args!("{}", buffer));
         }

@@ -50,7 +50,7 @@ class CountingLib:
     def shutdown(self, handle) -> None:
         self.shutdown_calls += 1
 
-    def log(self, handle, level, target, msg) -> None:
+    def log(self, handle, level, target, msg, properties=None) -> None:
         self.logs.append((level, target, msg))
 
     def flush(self, handle) -> None:

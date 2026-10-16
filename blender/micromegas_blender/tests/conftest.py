@@ -123,15 +123,20 @@ class RecordingLib:
     def __init__(self) -> None:
         self.logs: list[tuple] = []
         self.metrics: list[tuple] = []
+        self.log_props: list = []
+        self.metric_props: list = []
 
-    def log(self, handle, level, target, msg) -> None:
+    def log(self, handle, level, target, msg, properties=None) -> None:
         self.logs.append((level, target, msg))
+        self.log_props.append(properties)
 
-    def metric_f(self, handle, name, unit, value) -> None:
+    def metric_f(self, handle, name, unit, value, properties=None) -> None:
         self.metrics.append((name, unit, float(value)))
+        self.metric_props.append(properties)
 
-    def metric_i(self, handle, name, unit, value) -> None:
+    def metric_i(self, handle, name, unit, value, properties=None) -> None:
         self.metrics.append((name, unit, int(value)))
+        self.metric_props.append(properties)
 
     def flush(self, handle) -> None:
         pass

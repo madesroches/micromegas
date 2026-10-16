@@ -232,7 +232,7 @@ macro_rules! instrument_named_dyn {
     }};
 }
 
-/// Records a integer metric.
+/// Records a integer metric. Use [`imetric_dyn!`] when the name or unit is built at run time.
 ///
 /// # Examples
 ///
@@ -421,6 +421,94 @@ macro_rules! fmetric {
     ($name:expr, $unit:expr, $($rest:tt)+) => {
         $crate::__props!(@m metric
             [$name, $unit, module_path!(), float_metric, tagged_float_metric_dyn]
+            [] [] [] [] [] $($rest)+)
+    };
+}
+
+/// Records an integer metric whose name or unit is only known at run time.
+///
+/// `name` and `unit` can be anything that implements `AsRef<str>`: a literal, a `&String`,
+/// `format!(..)` or an `Arc<str>`. They are copied into the current block once per distinct
+/// value, so nothing is retained for the life of the process. The rest of the grammar is the
+/// one of [`imetric!`].
+///
+/// Every distinct name is a distinct series for queries and materialized views, so the names
+/// should still come from a bounded set: deduplication within a block only bounds the cost on
+/// the wire. `name` and `unit` also appear in the `properties` column of the measure.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let queue = "render";
+/// let depth = 3;
+/// imetric_dyn!(format!("queue.{queue}.depth"), "count", depth);
+/// imetric_dyn!(target: "my_crate::io", String::from("bytes_read"), "bytes", "http.method" = "GET", 512);
+/// # }
+/// ```
+///
+/// `name` and `unit` are reserved keys, as with [`imetric!`]:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// imetric_dyn!("rows_fetched", "count", name = "other", 3);
+/// ```
+///
+/// `..set` must be the last property:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+/// use micromegas_tracing::property_set::PropertySet;
+///
+/// let set = PropertySet::empty();
+/// imetric_dyn!("rows_fetched", "count", ..set, kind = "a", 3);
+/// ```
+#[macro_export]
+macro_rules! imetric_dyn {
+    (target: $target:expr, $name:expr, $unit:expr, $($rest:tt)+) => {
+        $crate::__props!(@m metric
+            [$name, $unit, $target, int_metric, tagged_integer_metric_dyn, dynamic]
+            [] [] [] [] [] $($rest)+)
+    };
+    ($name:expr, $unit:expr, $($rest:tt)+) => {
+        $crate::__props!(@m metric
+            [$name, $unit, module_path!(), int_metric, tagged_integer_metric_dyn, dynamic]
+            [] [] [] [] [] $($rest)+)
+    };
+}
+
+/// Records a float metric whose name or unit is only known at run time.
+///
+/// Same as [`imetric_dyn!`], including the cardinality caveat, for a floating-point value.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let (name, unit) = (String::from("http.latency"), "ms");
+/// let elapsed = 12.5;
+/// fmetric_dyn!(target: "my_crate::io", &name, unit, "http.method" = "GET", elapsed);
+/// # }
+/// ```
+///
+/// `name` and `unit` are reserved keys, as with [`fmetric!`]:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// fmetric_dyn!("latency", "ms", unit = "s", 1.0);
+/// ```
+#[macro_export]
+macro_rules! fmetric_dyn {
+    (target: $target:expr, $name:expr, $unit:expr, $($rest:tt)+) => {
+        $crate::__props!(@m metric
+            [$name, $unit, $target, float_metric, tagged_float_metric_dyn, dynamic]
+            [] [] [] [] [] $($rest)+)
+    };
+    ($name:expr, $unit:expr, $($rest:tt)+) => {
+        $crate::__props!(@m metric
+            [$name, $unit, module_path!(), float_metric, tagged_float_metric_dyn, dynamic]
             [] [] [] [] [] $($rest)+)
     };
 }
@@ -667,13 +755,13 @@ macro_rules! __props {
         $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
             $crate::__static_set!(metric [] $($s)+),
-            $crate::__dyn_slice!(metric $($d)*), $value)
+            [$($d)*], $value)
     };
     (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static]
         $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
             $crate::__static_set!(metric [$set] $($s)+),
-            $crate::__dyn_slice!(metric $($d)*), $value)
+            [$($d)*], $value)
     };
 
     // The cheapest call that carries the properties: no properties at all, a spread set only,
@@ -704,16 +792,15 @@ macro_rules! __props {
         $crate::__metric_call!(plain $ctx $value)
     };
     (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] [] $value:expr $(,)?) => {
-        $crate::__metric_call!(tagged $ctx
-            $set, $crate::__dyn_slice!(metric $($a)*), $value)
+        $crate::__metric_call!(tagged $ctx $set, [$($a)*], $value)
     };
     (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [] $value:expr) => {
         $crate::__metric_call!(tagged $ctx
-            $crate::__callsite_set!(metric $($s)+), $crate::__dyn_slice!(metric $($d)*), $value)
+            $crate::__callsite_set!(metric $($s)+), [$($d)*], $value)
     };
     (@end metric $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] [] $value:expr) => {
         $crate::__metric_call!(tagged $ctx
-            $crate::property_set::PropertySet::empty(), $crate::__dyn_slice!(metric $($d)+), $value)
+            $crate::property_set::PropertySet::empty(), [$($d)+], $value)
     };
 }
 
@@ -789,7 +876,7 @@ macro_rules! __metric_call {
         $crate::dispatch::$plain(&METRIC_METADATA, $value);
     }};
     (tagged [$name:expr, $unit:expr, $target:expr, $plain:ident, $dynf:ident]
-        $set:expr, $slice:expr, $value:expr) => {{
+        $set:expr, [$($slice:tt)*], $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
             $crate::metrics::StaticMetricMetadata {
                 lod: $crate::levels::Verbosity::Max,
@@ -799,7 +886,45 @@ macro_rules! __metric_call {
                 file: file!(),
                 line: line!(),
             };
-        $crate::dispatch::$dynf(&METRIC_METADATA, $set, $slice, $value);
+        $crate::dispatch::$dynf(
+            &METRIC_METADATA,
+            $set,
+            $crate::__dyn_slice!(metric $($slice)*),
+            $value,
+        );
+    }};
+    // Runtime name and unit: they travel as the `name` and `unit` property overrides.
+    (plain [$name:expr, $unit:expr, $target:expr, $plain:ident, $dynf:ident, dynamic]
+        $value:expr) => {
+        $crate::__metric_call!(tagged [$name, $unit, $target, $plain, $dynf, dynamic]
+            $crate::property_set::PropertySet::empty(), [], $value)
+    };
+    (tagged [$name:expr, $unit:expr, $target:expr, $plain:ident, $dynf:ident, dynamic]
+        $set:expr, [$($slice:tt)*], $value:expr) => {{
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: "",
+                unit: "",
+                target: $target,
+                file: file!(),
+                line: line!(),
+            };
+        $crate::dispatch::$dynf(
+            &METRIC_METADATA,
+            $set,
+            $crate::__dyn_slice!(metric $($slice)* ;
+                $crate::property_set::DynProperty::new(
+                    "name",
+                    ::std::convert::AsRef::<str>::as_ref(&$name),
+                ),
+                $crate::property_set::DynProperty::new(
+                    "unit",
+                    ::std::convert::AsRef::<str>::as_ref(&$unit),
+                )
+            ),
+            $value,
+        );
     }};
 }
 
@@ -856,40 +981,41 @@ macro_rules! __dyn_slice {
     ($kind:ident $(($k:tt, $vk:ident, $v:tt))*) => {
         &[$($crate::__dyn_prop!($kind $k $vk $v)),*]
     };
+    // `extra` goes last, where `merge_properties` lets it win over a same-named entry.
+    ($kind:ident $(($k:tt, $vk:ident, $v:tt))* ; $($extra:expr),+) => {
+        &[$($crate::__dyn_prop!($kind $k $vk $v),)* $($extra),+]
+    };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __dyn_prop {
     ($kind:ident $k:tt lit $v:tt) => {
-        $crate::property_set::DynProperty {
-            name: $crate::__prop_key!($kind $k),
-            value: $v,
-        }
+        $crate::property_set::DynProperty::new($crate::__prop_key!($kind $k), $v)
     };
     ($kind:ident $k:tt bare $v:tt) => {
-        $crate::property_set::DynProperty {
-            name: $crate::__prop_key!($kind $k),
-            value: &*$crate::property_value::PropertyValue::property_value(&$v),
-        }
+        $crate::property_set::DynProperty::new(
+            $crate::__prop_key!($kind $k),
+            &*$crate::property_value::PropertyValue::property_value(&$v),
+        )
     };
     ($kind:ident $k:tt disp $v:tt) => {
-        $crate::property_set::DynProperty {
-            name: $crate::__prop_key!($kind $k),
-            value: &*::std::format!("{}", $v),
-        }
+        $crate::property_set::DynProperty::new(
+            $crate::__prop_key!($kind $k),
+            &*::std::format!("{}", $v),
+        )
     };
     ($kind:ident $k:tt dbg $v:tt) => {
-        $crate::property_set::DynProperty {
-            name: $crate::__prop_key!($kind $k),
-            value: &*::std::format!("{:?}", $v),
-        }
+        $crate::property_set::DynProperty::new(
+            $crate::__prop_key!($kind $k),
+            &*::std::format!("{:?}", $v),
+        )
     };
 }
 
 /// Turns a property key into a `&'static str`. Analytics treats some names as column
 /// overrides, so the macros reject them; a `..set` spread or a runtime `DynProperty` slice is
-/// the way to set them.
+/// the way to set them (the `_dyn` metric macros set `name` and `unit` themselves).
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __prop_key {

@@ -19,8 +19,9 @@ use micromegas_tracing::{
     process_info::ProcessInfo,
     property_set::{Property, PropertySet, PropertySetId, dyn_property_get},
     spans::{ThreadBlock, ThreadStream},
+    static_string_ref::BlockStringRef,
 };
-use micromegas_transit::{DynString, HeterogeneousQueue, Reflect};
+use micromegas_transit::{DynString, HeterogeneousQueue, Reflect, string_codec::StringCodec};
 use serial_test::serial;
 use std::{
     collections::HashMap,
@@ -62,7 +63,7 @@ type LogDeps = DynDeps<LogDepsQueue>;
 fn owned_props<'a>(props: &[(&'static str, &'a str)]) -> MergedProperties<'a> {
     let dyn_props: Vec<DynProperty<'_>> = props
         .iter()
-        .map(|(name, value)| DynProperty { name, value })
+        .map(|(name, value)| DynProperty::new(name, value))
         .collect();
     merge_properties(PropertySet::empty(), &dyn_props)
 }
@@ -88,13 +89,7 @@ fn same_content_same_id() {
 #[test]
 fn split_between_static_and_dynamic_does_not_change_identity() {
     let static_set = PropertySet::find_or_create(vec![Property::new("kind", "t")]);
-    let split = merge_properties(
-        static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
-    );
+    let split = merge_properties(static_set, &[DynProperty::new("correlation_id", "abc")]);
     let all_dynamic = owned_props(&[("kind", "t"), ("correlation_id", "abc")]);
     let mut deps = LogDeps::new();
     let first = deps.intern_set(&split);
@@ -144,10 +139,7 @@ fn static_values_get_no_string_record() {
     let mut deps = LogDeps::new();
     deps.intern_set(&merge_properties(
         static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
+        &[DynProperty::new("correlation_id", "abc")],
     ));
     // the dynamic value's string record and the set record
     assert_eq!(deps.queue().nb_objects(), 2);
@@ -194,10 +186,7 @@ fn set_properties_decodes_interned_and_dynamic_sets() {
     let mut deps = LogDeps::new();
     let dynamic = deps.intern_set(&merge_properties(
         static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
+        &[DynProperty::new("correlation_id", "abc")],
     ));
     assert_eq!(
         deps.set_properties(dynamic),
@@ -242,7 +231,12 @@ fn extract_interop(deps: &LogDeps, ids: &[PropertySetId]) -> Vec<Record> {
         events.push(TaggedLogInteropEvent {
             time: 0,
             level: 0,
-            target: "interop_target".into(),
+            // `extract` doesn't read the target: it is a record of the dynamic queue.
+            target: BlockStringRef {
+                id: 0,
+                len: 0,
+                codec: StringCodec::Utf8,
+            },
             properties: *id,
             msg: DynString(String::new()),
         });
@@ -257,17 +251,11 @@ fn extract_emits_static_refs_once_before_the_dynamic_queue() {
     let mut deps = LogDeps::new();
     let first = deps.intern_set(&merge_properties(
         static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abc",
-        }],
+        &[DynProperty::new("correlation_id", "abc")],
     ));
     let second = deps.intern_set(&merge_properties(
         static_set,
-        &[DynProperty {
-            name: "correlation_id",
-            value: "abd",
-        }],
+        &[DynProperty::new("correlation_id", "abd")],
     ));
     let records = extract_interop(&deps, &[first, second]);
     let count = |id: u64| {
@@ -332,14 +320,8 @@ fn merge_dynamic_overrides_static_case_insensitively() {
     let merged = merge_properties(
         static_set,
         &[
-            DynProperty {
-                name: "region",
-                value: "us",
-            },
-            DynProperty {
-                name: "correlation_id",
-                value: "abc",
-            },
+            DynProperty::new("region", "us"),
+            DynProperty::new("correlation_id", "abc"),
         ],
     );
     let merged = merged.properties;
@@ -422,7 +404,7 @@ impl EventSink for CapturingSink {
         self.state.lock().unwrap().on_log_properties.push(
             properties
                 .iter()
-                .map(|p| (p.name.to_owned(), p.value.to_owned()))
+                .map(|p| (p.name().to_owned(), p.value().to_owned()))
                 .collect(),
         );
     }
@@ -492,10 +474,7 @@ fn dispatch_delivers_merged_properties_and_isolates_blocks() {
     let guard = DispatchGuard::new();
     let static_set = PropertySet::find_or_create(vec![Property::new("kind", "test")]);
     let correlation_id = String::from("abc-123");
-    let dyn_props = [DynProperty {
-        name: "correlation_id",
-        value: &correlation_id,
-    }];
+    let dyn_props = [DynProperty::new("correlation_id", &correlation_id)];
 
     log_dyn_tagged(&LOG_DESC, static_set, &dyn_props, format_args!("first"));
     flush_log_buffer();
@@ -568,10 +547,7 @@ fn dynamic_metric_lands_in_dyn_deps() {
     tagged_float_metric_dyn(
         &METRIC_DESC,
         PropertySet::empty(),
-        &[DynProperty {
-            name: "request_id",
-            value: &value,
-        }],
+        &[DynProperty::new("request_id", &value)],
         2.0,
     );
     flush_metrics_buffer();
@@ -624,7 +600,7 @@ fn dyn_log(desc: &'static LogMetadata, set: &'static PropertySet, value: &str) {
     log_dyn_tagged(
         desc,
         set,
-        &[DynProperty { name: "k", value }],
+        &[DynProperty::new("k", value)],
         format_args!("m"),
     );
 }
@@ -676,10 +652,7 @@ fn repeated_events_emit_dependencies_once() {
         tagged_float_metric_dyn(
             &METRIC_DESC,
             PropertySet::empty(),
-            &[DynProperty {
-                name: "k",
-                value: "v",
-            }],
+            &[DynProperty::new("k", "v")],
             1.0,
         )
     };
@@ -736,9 +709,9 @@ fn dyn_properties_mirror_the_set() {
     let view = set.dyn_properties();
     assert_eq!(props.len(), view.len());
     for (p, d) in props.iter().zip(view) {
-        assert_eq!(p.name.as_str(), d.name);
-        assert_eq!(p.value.as_str(), d.value);
-        assert_eq!(p.value.id(), d.value.as_ptr() as u64);
+        assert_eq!(p.name.as_str(), d.name());
+        assert_eq!(p.value.as_str(), d.value());
+        assert_eq!(p.value.id(), d.value().as_ptr() as u64);
     }
     let again = PropertySet::find_or_create(vec![
         Property::new("zone", "z1"),
@@ -746,4 +719,87 @@ fn dyn_properties_mirror_the_set() {
         Property::new("kind", "x"),
     ]);
     assert!(std::ptr::eq(set, again));
+}
+
+fn dyn_named<'a>(props: &[(&'a str, &'a str)]) -> MergedProperties<'a> {
+    let dyn_props: Vec<DynProperty<'_>> = props
+        .iter()
+        .map(|(name, value)| DynProperty::with_dyn_name(name, value))
+        .collect();
+    merge_properties(PropertySet::empty(), &dyn_props)
+}
+
+#[test]
+fn dynamic_name_is_a_string_record_and_set_is_deduplicated() {
+    let mut deps = LogDeps::new();
+    let key = String::from("runtime_key");
+    let props = dyn_named(&[(key.as_str(), "v")]);
+    let first = deps.intern_set(&props);
+    // two string records and one set record
+    assert_eq!(deps.queue().nb_objects(), 3);
+    let len_after_first = deps.len_bytes();
+    let second = deps.intern_set(&props);
+    assert_eq!(first, second);
+    assert_eq!(deps.len_bytes(), len_after_first);
+}
+
+#[test]
+fn dynamic_names_share_string_records_with_values_and_other_names() {
+    let mut deps = LogDeps::new();
+    deps.intern_set(&dyn_named(&[("a", "shared")]));
+    // "a", "shared" and the set
+    assert_eq!(deps.queue().nb_objects(), 3);
+    // a name equal to an earlier value
+    deps.intern_set(&dyn_named(&[("shared", "x")]));
+    // "x" and the set
+    assert_eq!(deps.queue().nb_objects(), 5);
+    // a name equal to an earlier name
+    deps.intern_set(&dyn_named(&[("a", "y")]));
+    // "y" and the set
+    assert_eq!(deps.queue().nb_objects(), 7);
+}
+
+#[test]
+fn static_and_dynamic_names_of_equal_text_have_equal_content() {
+    let mut deps = LogDeps::new();
+    let key = String::from("correlation_id");
+    let dynamic = deps.intern_set(&dyn_named(&[(key.as_str(), "abc")]));
+    let statically = deps.intern_set(&owned_props(&[("correlation_id", "abc")]));
+    assert_eq!(dynamic, statically);
+    assert_eq!(pairs_of(&deps, dynamic), pairs_of(&deps, statically));
+    assert_eq!(
+        pairs_of(&deps, dynamic),
+        vec![("correlation_id".to_owned(), "abc".to_owned())]
+    );
+}
+
+#[test]
+fn set_properties_decodes_dynamic_names_and_extract_emits_only_static_ones() {
+    let static_set = PropertySet::find_or_create(vec![Property::new("kind", "t")]);
+    let kind = &static_set.get_properties()[0];
+    let key = String::from("runtime_key");
+    let mut deps = LogDeps::new();
+    let id = deps.intern_set(&merge_properties(
+        static_set,
+        &[DynProperty::with_dyn_name(&key, "abc")],
+    ));
+    let mut decoded = pairs_of(&deps, id);
+    decoded.sort();
+    assert_eq!(
+        decoded,
+        vec![
+            ("kind".to_owned(), "t".to_owned()),
+            ("runtime_key".to_owned(), "abc".to_owned())
+        ]
+    );
+    let records = extract_interop(&deps, &[id]);
+    let static_strings: Vec<u64> = records
+        .iter()
+        .filter(|r| r.type_index == STRING_RECORD && record_id(r) & DYN_ID_TAG == 0)
+        .map(record_id)
+        .collect();
+    // the static name and value of `kind`, and nothing for the runtime key
+    assert_eq!(static_strings.len(), 2);
+    assert!(static_strings.contains(&kind.name.id()));
+    assert!(static_strings.contains(&kind.value.id()));
 }
