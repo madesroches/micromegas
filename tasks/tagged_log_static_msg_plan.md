@@ -288,20 +288,26 @@ Command: `cargo bench -p micromegas-tracing --bench properties --bench with_disp
 
 | Case | Before | After |
 |---|---|---|
-| log/static | 16.53 ns | |
-| log/formatted | 61.42 ns | |
-| log/literals | 46.60 ns | |
-| log/set | 47.20 ns | |
-| log/dyn_low_card | 71.58 ns | |
-| log/dyn_high_card | 181.83 ns | |
-| log/dyn_mixed | 297.28 ns | |
-| extract/log/static | 44.20 µs (17 B/event) | |
-| extract/log/set | 271.40 µs (40 B/event) | |
-| extract/log/dyn_low_card | 266.26 µs (40 B/event) | |
-| extract/log/dyn_high_card | 355.06 µs (40 B/event) | |
-| extract/log/dyn_mixed | 602.34 µs (40 B/event) | |
-| contention/log/static 1/4/8 | 16.14 ns / 320.03 ns / 902.71 ns | |
-| dispatch/log | 446 ps | |
+| log/static | 16.53 ns | 16.86 ns |
+| log/formatted | 61.42 ns | 58.14 ns |
+| log/literals | 46.60 ns | 17.78 ns |
+| log/set | 47.20 ns | 17.38 ns |
+| log/dyn_low_card | 71.58 ns | 56.95 ns |
+| log/dyn_high_card | 181.83 ns | 166.19 ns |
+| log/dyn_mixed | 297.28 ns | 283.59 ns |
+| extract/log/static | 44.20 µs (17 B/event) | 40.06 µs (17 B/event) |
+| extract/log/set | 271.40 µs (40 B/event) | 44.77 µs (25 B/event) |
+| extract/log/dyn_low_card | 266.26 µs (40 B/event) | 47.21 µs (25 B/event) |
+| extract/log/dyn_high_card | 355.06 µs (40 B/event) | 149.19 µs (25 B/event) |
+| extract/log/dyn_mixed | 602.34 µs (40 B/event) | 389.52 µs (25 B/event) |
+| contention/log/static 1/4/8 | 16.14 ns / 320.03 ns / 902.71 ns | 16.81 ns / 352.10 ns / 970.57 ns |
+| dispatch/log | 446 ps | 221 ps |
+
+Controls moved by more than noise in a few places: `contention/log/static` is 4-9% slower and
+`extract/metric/plain` 6% slower (both reproduced on re-run; `metric/literals_set` did not),
+and `dispatch/log` halved. The `dispatch/log` and metric cases run code this change doesn't
+touch, so those are most likely code layout; the `log/static` cost is the `memcmp` plus the
+extra branch.
 
 Expected: `log/literals`, `log/set` and the `log/dyn_*` cases get faster, because they all use a
 static `"static"` message. Their object bytes/event drop from 40, and their `extract` times

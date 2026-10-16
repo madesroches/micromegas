@@ -1,6 +1,6 @@
 //! Interned collection of PropertySet instances. Each PropertySet contains properties where the names and the values are statically allocated.
 //! The user is expected to manage the cardinality.
-use crate::static_string_ref::StaticStringRef;
+use crate::{dyn_deps::static_ref_str, static_string_ref::StaticStringRef};
 use internment::Intern;
 use micromegas_transit::{HeterogeneousQueue, StaticStringDependency, UserDefinedType, prelude::*};
 use rustc_hash::FxHashSet;
@@ -78,9 +78,26 @@ pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a st
     })
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone)]
 pub struct PropertySet {
     pub(crate) properties: Vec<Property>,
+    // Same order as `properties`. Lets sinks get a slice without a per-call allocation.
+    dyn_view: Box<[DynProperty<'static>]>,
+}
+
+// Identity is the properties alone, so the cached view never affects interning.
+impl PartialEq for PropertySet {
+    fn eq(&self, other: &Self) -> bool {
+        self.properties == other.properties
+    }
+}
+
+impl Eq for PropertySet {}
+
+impl Hash for PropertySet {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.properties.hash(state);
+    }
 }
 
 /// Canonical property order, so that equal sets hash equally.
@@ -96,7 +113,21 @@ pub(crate) fn cmp_dyn_properties(a: &DynProperty<'_>, b: &DynProperty<'_>) -> st
 impl PropertySet {
     pub fn find_or_create(mut properties: Vec<Property>) -> &'static Self {
         sort_properties(&mut properties);
-        let set = PropertySet { properties };
+        // SAFETY: the refs were built from `&'static str` by `Property::new`, and they don't
+        // point into the set, so moving it into `Intern` keeps them valid.
+        let dyn_view = properties
+            .iter()
+            .map(|p| unsafe {
+                DynProperty {
+                    name: static_ref_str(&p.name),
+                    value: static_ref_str(&p.value),
+                }
+            })
+            .collect();
+        let set = PropertySet {
+            properties,
+            dyn_view,
+        };
         Intern::<PropertySet>::new(set).as_ref()
     }
 
@@ -112,11 +143,8 @@ impl PropertySet {
         &self.properties
     }
 
-    pub fn dyn_properties(&'static self) -> impl Iterator<Item = DynProperty<'static>> {
-        self.properties.iter().map(|p| DynProperty {
-            name: p.name.as_str(),
-            value: p.value.as_str(),
-        })
+    pub fn dyn_properties(&'static self) -> &'static [DynProperty<'static>] {
+        &self.dyn_view
     }
 }
 

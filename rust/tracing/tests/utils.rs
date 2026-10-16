@@ -73,6 +73,7 @@ impl EventSink for DebugEventSink {
                 LogMsgQueueAny::LogStaticStrInteropEvent(_evt) => {}
                 LogMsgQueueAny::LogStringInteropEvent(_evt) => {}
                 LogMsgQueueAny::TaggedLogString(_) => {}
+                LogMsgQueueAny::TaggedLogStaticStrEvent(_) => {}
                 LogMsgQueueAny::TaggedLogInteropEvent(_) => {}
             }
         }

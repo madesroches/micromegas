@@ -724,3 +724,26 @@ fn interleaved_callsites_still_dedup() {
     assert!(each > one);
     assert_eq!(alternating, each);
 }
+
+#[test]
+fn dyn_properties_mirror_the_set() {
+    let set = PropertySet::find_or_create(vec![
+        Property::new("region", "eu"),
+        Property::new("kind", "x"),
+        Property::new("zone", "z1"),
+    ]);
+    let props = set.get_properties();
+    let view = set.dyn_properties();
+    assert_eq!(props.len(), view.len());
+    for (p, d) in props.iter().zip(view) {
+        assert_eq!(p.name.as_str(), d.name);
+        assert_eq!(p.value.as_str(), d.value);
+        assert_eq!(p.value.id(), d.value.as_ptr() as u64);
+    }
+    let again = PropertySet::find_or_create(vec![
+        Property::new("zone", "z1"),
+        Property::new("region", "eu"),
+        Property::new("kind", "x"),
+    ]);
+    assert!(std::ptr::eq(set, again));
+}

@@ -107,8 +107,13 @@ fn concurrent_recording_loses_and_duplicates_nothing() {
     let mut ids = std::collections::HashSet::new();
     for block in &blocks {
         for evt in block.events.iter() {
-            if let LogMsgQueueAny::TaggedLogString(e) = evt {
-                for (name, value) in block.dyn_deps.set_properties(e.properties) {
+            let properties = match evt {
+                LogMsgQueueAny::TaggedLogString(e) => Some(e.properties),
+                LogMsgQueueAny::TaggedLogStaticStrEvent(e) => Some(e.properties),
+                _ => None,
+            };
+            if let Some(properties) = properties {
+                for (name, value) in block.dyn_deps.set_properties(properties) {
                     if name == "id" {
                         assert!(ids.insert(value.to_owned()), "duplicated event");
                     }
