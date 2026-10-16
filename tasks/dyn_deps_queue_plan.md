@@ -148,7 +148,9 @@ pub struct DynDeps<D> {
   That makes the append a plain `memcpy`, with no re-encoding.
   `DynDeps::new()` uses `D::new(0)` and doesn't allocate, so thread and image blocks, which
   never insert, pay nothing.
-- The first insert reserves 64 KB in the queue. Unlike the arena's `Vec<Box<_>>` of pointers,
+- On the first insert (`queue.capacity_bytes() == 0`), `intern_set`/`intern_str` replace the
+  empty queue with `D::new(64 * 1024)`, which uses only the existing `HeterogeneousQueue` API.
+  Unlike the arena's `Vec<Box<_>>` of pointers,
   this buffer holds the full dependency bytes, so growing it by doubling from zero would mean
   repeated multi-MB `realloc` + copies under the stream lock on a large block. The reservation
   removes the early small reallocations; the remaining doublings are amortized and accepted.
