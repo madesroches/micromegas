@@ -24,16 +24,16 @@ don't change.
 
 - `PropertyArena` (`:15`) holds `Vec<Box<PropertySet>>`, `Vec<Box<str>>`, an
   `FxHashMap<u64, Vec<u32>>` content index and an approximate `len_bytes`.
-- `get_or_insert` (`:63`) hashes the merged content with chained xxh3. A hit compares content
+- `get_or_insert` (`:62`) hashes the merged content with chained xxh3. A hit compares content
   and allocates nothing. A miss allocates a `Box<PropertySet>`, its `Vec<Property>` and one
   `Box<str>` per value, including values that came from the interned static set (#1665). Those
   copies get new addresses, so they're never deduplicated against the interned originals.
 - `merge_properties` (`:29`) combines the callsite's interned static set with the dynamic
   values into one sorted `Vec<DynProperty>`. Once merged, there's no record of which values
   were `'static`.
-- The arena lives in `EventBlock::properties` (`rust/tracing/src/event/block.rs:16`), and
-  `EventBlock::len_bytes` (`:93`) adds the arena's approximation to the events' bytes.
-  `EventStream::get_block_mut_parts` (`rust/tracing/src/event/stream.rs:128`) hands out the
+- The arena lives in `EventBlock::properties` (`rust/tracing/src/event/block.rs:18`), and
+  `EventBlock::len_bytes` (`:89`) adds the arena's approximation to the events' bytes.
+  `EventStream::get_block_mut_parts` (`rust/tracing/src/event/stream.rs:125`) hands out the
   queue and the arena together.
 
 **Dispatch** (`rust/tracing/src/dispatch.rs`): the four dynamic paths call `get_or_insert`
@@ -46,18 +46,18 @@ stores the returned `*const PropertySet` in the event.
 - `TaggedLogString` and `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`) have a
   manual `InProcSerialize` that writes `properties` as a `u64`.
 - `TaggedFloatMetricEvent` and `TaggedIntegerMetricEvent`
-  (`rust/tracing/src/metrics/metric_events.rs:43`, `:53`) derive `TransitReflect`. The derive
+  (`rust/tracing/src/metrics/metric_events.rs:43`, `:54`) derive `TransitReflect`. The derive
   marks `*const` members as references (`rust/transit/derive/src/derive_reflect.rs:17`), which
   makes the analytics parser resolve `properties` through the dependency map.
 
 **Extraction:**
 
-- `LogMsgQueue::extract` (`rust/tracing/src/logs/block.rs:66`) and `MetricsMsgQueue::extract`
-  (`rust/tracing/src/metrics/block.rs:64`) walk every event. For each tagged event they call
+- `LogMsgQueue::extract` (`rust/tracing/src/logs/block.rs:70`) and `MetricsMsgQueue::extract`
+  (`rust/tracing/src/metrics/block.rs:68`) walk every event. For each tagged event they call
   `unsafe record_properties` (`rust/tracing/src/property_set.rs:144`), which dereferences the
   set pointer (interned or arena-owned) and emits its name and value strings followed by a
   `PropertySetDependency`, deduplicated by address.
-- `PropertySetDependency` (`property_set.rs:122`) holds a raw `*const PropertySet`. Its
+- `PropertySetDependency` (`property_set.rs:123`) holds a raw `*const PropertySet`. Its
   validity contract covers arena sets.
 - `StaticStringDependency` (`rust/transit/src/static_string.rs`) derives its id from `ptr` in
   `write_value`, so the id is always an address.
@@ -70,15 +70,16 @@ stores the returned `*const PropertySet` in the event.
   duplicate id. Ids are opaque `u64` keys scoped to one block.
 - `parse_property_set` (`rust/tracing/src/parsing.rs:216`) resolves each property's name and
   value through `parse_pod_instance`. That function looks the reference up in the map built so
-  far and bails with `dependency not found` if it's missing (`parser.rs:182`). **So a record
+  far and bails with `dependency not found` if it's missing (`parser.rs:185`). **So a record
   must come after every record it references.**
 
 **In-process readers** that dereference `properties`:
 `rust/tracing/tests/stream_flush_tests.rs:112`,
 `rust/tracing/tests/property_arena_tests.rs:67` (`set_as_pairs`), and the pointer comparisons
-in `rust/tracing/tests/property_macro_tests.rs`. `rust/analytics/tests/log_tests.rs:363` and
-`rust/analytics/tests/metrics_test.rs:238` build blocks through `merge_properties` and the
-arena.
+in `rust/tracing/tests/property_macro_tests.rs`, which also reads `block.properties.len_bytes()`
+at `:184`, `:203` and `:208` (migrate to `dyn_deps.len_bytes()`). `rust/analytics/tests/log_tests.rs:363`,
+`:407-420` (`test_tagged_log_interop_event`) and `rust/analytics/tests/metrics_test.rs:238` build
+blocks through `merge_properties`, `get_block_mut_parts` and the arena's `get_or_insert`.
 
 More sites also stop compiling, each with its own migration:
 
@@ -117,7 +118,7 @@ pub const DYN_ID_TAG: u64 = 1 << 63;
 ```
 
 A dynamic record's id is `DYN_ID_TAG | offset`, where `offset` is the byte offset of the record
-in the dynamic queue. User-space addresses on supported 64-bit targets stay below 2⁴⁸, so a
+in the dynamic queue. User-space pointers on supported 64-bit targets never have bit 63 set, so a
 tagged id can't collide with the pointer ids of interned or `'static` data. The offset also gives
 in-process readers O(1) decoding. Ids stay `u64` on the wire, so neither the analytics parser
 nor the Unreal instrumentation changes.
@@ -125,6 +126,7 @@ nor the Unreal instrumentation changes.
 ### `DynDeps<D>` (new `rust/tracing/src/dyn_deps.rs`, replaces `property_arena.rs`)
 
 ```rust
+#[derive(Debug)]
 pub struct DynDeps<D> {
     queue: D,                          // dynamic records only, tagged ids
     static_refs: Vec<StaticStringRef>, // 'static strings that `queue` records reference
@@ -213,6 +215,9 @@ pub struct MergedProperties<'a> {
 }
 ```
 
+- `merge_properties` merges into `(DynProperty, bool)` pairs, sorts them with the same comparator
+  as today (`sort_dyn_properties`), and builds the mask from the sorted flags, so bit i refers to
+  the post-sort index.
 - Sinks still receive `&merged.properties`, so `EventSink` doesn't change.
 - Only the non-spread form folds callsite literal pairs into the interned static set (by
   `callsite_set`). With a `..set` spread, the macros pass every literal as a `DynProperty`
@@ -285,7 +290,9 @@ impl PropertySetId {
 ## Implementation Steps
 
 1. **Transit.**
-   - Add the `id` field to `StaticStringDependency` and update every constructor.
+   - Add the `id` field to `StaticStringDependency` and update every constructor. The
+     `StaticStringRef::into_dependency` update (`id: self.ptr`) lives in
+     `rust/tracing/src/static_string_ref.rs`, in the tracing crate.
    - Add `extend_from` to `HeterogeneousQueue` and generate it in
      `rust/transit/derive/src/declare_queue.rs`.
    - Add the `#[transit(reference)]` field attribute in
@@ -296,9 +303,10 @@ impl PropertySetId {
 2. **Property types** (`rust/tracing/src/property_set.rs`):
    - Add `PropertySetId`.
    - Reshape `PropertySetDependency` to `{ id, properties: Cow }`.
+   - Add the `PropertyDepsQueue` trait (see Design).
    - Make `record_properties` safe: it takes `&'static PropertySet` and a
      `D: PropertyDepsQueue`.
-3. **`dyn_deps.rs`**: add `DYN_ID_TAG`, `PropertyDepsQueue`, `DynDeps`, `MergedProperties` and
+3. **`dyn_deps.rs`**: add `DYN_ID_TAG`, `DynDeps`, `MergedProperties` and
    `merge_properties`. Delete `property_arena.rs` and update `rust/tracing/src/lib.rs` (same
    native-only `cfg`).
 4. **Queues** (`logs/block.rs`, `metrics/block.rs`):
@@ -308,8 +316,10 @@ impl PropertySetId {
 5. **Events**: switch the four tagged events to `PropertySetId` (`logs/log_events.rs`,
    `metrics/metric_events.rs`).
 6. **Block and stream**: change the `dyn_deps` field, its bounds and `len_bytes` in
-   `event/block.rs`, and `get_block_mut_parts` in `event/stream.rs`.
-7. **Dispatch**: switch the four dynamic paths in `dispatch.rs` to `merge_properties` →
+   `event/block.rs`, and `get_block_mut_parts` in `event/stream.rs`. Struct bounds don't
+   propagate, so add `Q: ExtractDeps` to `impl<Q> EventBlock<Q>` (`close`/`close_at`) and
+   `impl<Q> EventStream<EventBlock<Q>>`.
+7. **Dispatch**: add `Q: ExtractDeps` to `swap_block<Q>`, switch the four dynamic paths in `dispatch.rs` to `merge_properties` →
    `intern_set`, pass `&merged.properties` to sinks, and wrap the static paths' sets with
    `PropertySetId::interned`.
 8. **Sink**: update `encode_block` in `rust/telemetry-sink/src/stream_block.rs`.
@@ -334,7 +344,7 @@ impl PropertySetId {
 - `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/log_events.rs`
 - `rust/tracing/src/metrics/block.rs`, `rust/tracing/src/metrics/metric_events.rs`
 - `rust/tracing/src/spans/block.rs`, `rust/tracing/src/images/block.rs`
-- `rust/tracing/src/dispatch.rs`
+- `rust/tracing/src/dispatch.rs`, `rust/tracing/src/macros.rs` (two doc comments)
 - `rust/telemetry-sink/src/stream_block.rs`
 - `rust/tracing/benches/properties.rs`
 - `rust/tracing/tests/property_arena_tests.rs` → `dyn_deps_tests.rs`,
@@ -371,6 +381,8 @@ No mkdocs page describes the arena or the dependency stream. Documentation updat
 - The `CHANGELOG.md` entry.
 - The "Dynamic properties" section of the crate docs in `rust/tracing/src/lib.rs`, which says
   that with a spread every pair is copied. That no longer holds for the spread set's values.
+- The doc comments in `rust/tracing/src/macros.rs` (`:164-166` metric macros, `:325-327` log
+  macros) that say a spread copies all pairs into the block.
 - Arena wording in comments: `rust/tracing/src/property_set.rs` (`merge_properties` and "the
   arena set"), `event/stream.rs`, `event/block.rs`, and the SAFETY comments about "this block's
   arena" in `logs/block.rs` and `metrics/block.rs`.
@@ -395,7 +407,9 @@ All of these are no-DB unit tests.
 **Round trip through the real parser** (`rust/analytics/tests/log_tests.rs` and
 `metrics_test.rs`, which already encode blocks and parse them):
 
-- A block that mixes interned sets, dynamic sets sharing names with them, and static values
+- Extend the existing `test_dynamic_tagged_log_entries` (`log_tests.rs`) and
+  `test_dynamic_tagged_measures` (`metrics_test.rs`), which already encode and parse merged
+  sets, with interned-set events sharing names, rather than adding a separate test. A block that mixes interned sets, dynamic sets sharing names with them, and static values
   inside dynamic sets parses without `duplicate dependency id` or `dependency not found`, with
   the right properties on every event. This pins the ordering constraint that is the main
   correctness risk.
@@ -407,7 +421,6 @@ keep the `properties` member at the same offset and size with `is_reference: tru
 **Existing coverage:** `stream_flush_tests.rs` and `property_macro_tests.rs` keep their
 assertions through `set_properties` and `PropertySetId` equality.
 
-**Bench:** all three tracing benches (`properties`, `with_dispatch`, `with_no_dispatch`) run on
-main and on the finished branch, with no regression beyond noise on any case. The `properties`
+**Bench:** the `properties`
 bench reports `extract` time and dependency bytes per event. The #1665 example (about 226 bytes
 per event against 73) should get close to the dynamic-value-only figure.
