@@ -50,8 +50,8 @@ spread or a runtime-built `DynProperty` slice. There is no macro for it.
 and descriptor of every new pair. `mkdocs/docs/native/index.md:101` documents it as a
 cardinality contract. `mm_metric_i`/`mm_metric_f` (`:208-260`) take no properties, and every C
 metric gets `target: "capi"`. `mm_init` (`:115-136`) already reads process properties as
-parallel `property_keys`/`property_values` arrays with a `property_count`, skipping null and
-empty keys. The header `rust/capi/include/micromegas.h` is maintained by hand (it has
+parallel `property_keys`/`property_values` arrays with a `property_count`, skipping a pair whose
+key or value is null or whose key is empty or not UTF-8; a non-UTF-8 value is kept as `""`. The header `rust/capi/include/micromegas.h` is maintained by hand (it has
 `MM_LEVEL_*` defines and its own doc comments).
 **Interop logs** (`rust/tracing/src/dispatch.rs:1013-1130`): `log_interop` and
 `log_interop_dyn_tagged` take a `&LogMetadata<'_>` whose strings can be runtime (`mm_log` builds
@@ -60,8 +60,11 @@ passes `tracing` metadata). Both call `intern_string(desc.target)` and store the
 `target: StaticStringRef` in `LogStaticStrInteropEvent`, `LogStringInteropEvent` or
 `TaggedLogInteropEvent` (`rust/tracing/src/logs/log_events.rs`), so every distinct target is kept
 for the life of the process. `LogMsgQueue::extract` (`logs/block.rs:95-118`) emits each target
-by dereferencing that pointer. `log_interop_dyn_tagged` drops `target`/`level` properties, so an
-interop log keeps its own target and level. `mm_log` takes no properties. Tests in `analytics/`
+by dereferencing that pointer. `log_interop_dyn_tagged` filters `target`/`level` properties out
+of what the sink's `on_log` sees (`dispatch.rs:1103-1105`; `intern_set` stores the unfiltered set),
+so an interop log keeps its own target and level. The `log` crate bridge
+(`telemetry-sink/src/log_interop.rs:32-39`) also calls `log_interop` with a runtime target and
+benefits with no edit. `mm_log` takes no properties. Tests in `analytics/`
 push `LogStaticStrInteropEvent`s with `'static` targets directly (`parse_block_tests.rs`,
 `parse_alloc_test.rs`, `parse_corrupt_block_tests.rs`, `log_tests.rs`, several `*_db_test.rs`,
 `benches/parse_block.rs`).
@@ -206,10 +209,12 @@ void mm_metric_f_tagged(MmHandle *handle, const char *name, const char *unit,
 
 All three use one `#[doc(hidden)] pub` function, `read_properties(keys, values, count) ->
 Vec<DynProperty>`, which tests can reach. The metric functions build their list through a
-second `#[doc(hidden)] pub fn` (keys, values, count, name, unit -> `Vec<DynProperty>`) that
+second `#[doc(hidden)] pub fn metric_properties` (keys, values, count, name, unit ->
+`Vec<DynProperty>`) that
 calls `read_properties` and appends `name`/`unit`, since a test can't get a non-null `MmHandle`
-(only `mm_init` creates one). `read_properties` reads each pair as `mm_init` does, skipping it when
-the key or value is null, the key is empty, or either is not UTF-8. Null arrays or a zero count
+(only `mm_init` creates one). `read_properties` reads each pair exactly as `mm_init` does: it skips the pair
+when the key or value is null or the key is empty or not UTF-8, and a non-UTF-8 value becomes
+`""`. Null arrays or a zero count
 mean no properties. Keys use `DynProperty::with_dyn_name`.
 
 `mm_log_tagged` keeps `mm_log`'s argument handling (null handle or message is a no-op, null
@@ -224,8 +229,8 @@ The metric functions:
   `merge_properties` keeps the last entry of a name, so the arguments win over keys of the same
   name, and a `target` key overrides the default `"capi"` target;
 - call `tagged_integer_metric_dyn` / `tagged_float_metric_dyn` with one static descriptor per
-  type (`lod: Verbosity::Min`, `target: "capi"`, `file: "micromegas-capi"`, `line: 0`, the values
-  `intern_metric` uses today) and `PropertySet::empty()`.
+  type (`lod: Verbosity::Min`, `target: "capi"`, `file: "micromegas-capi"`, `line: 0`, `name: ""`, `unit: ""`; the other values
+  are what `intern_metric` uses today) and `PropertySet::empty()`.
 
 Names, units, targets, keys and values are all freed with their block; the C API keeps nothing for the
 life of the process. Cardinality still matters for queries: every distinct name is a series and
@@ -239,11 +244,14 @@ regenerate it with cbindgen, which would drop the hand-written content.
 - `binding.py`: declare `mm_log_tagged`, `mm_metric_i_tagged` and `mm_metric_f_tagged`.
   `log`, `metric_i` and `metric_f` gain `properties: Optional[dict] = None` and call the
   `_tagged` function when it's non-empty. They build the arrays with one helper shared with
-  `init`. Values go through `str()`, like `log()`'s message.
+  `init`. The public `__init__.py` functions apply `str()` to
+  values, like `log()`'s message; the shared helper doesn't, so `init`'s behaviour is unchanged.
 - `__init__.py`: the public `log()` gains `properties=None`, which keeps existing callers
   working. New public `metric_i(name, unit, value, properties=None)` and `metric_f(...)` sit next
   to it with the same contract: no-op without a session, exceptions swallowed, so other add-ons
   can call them unconditionally.
+- `tests/test_init.py`'s `CountingLib.log` and `tests/test_public_log_api.py`'s `RaisingLib.log`
+  gain `properties=None` too.
 - `tests/conftest.py`: `RecordingLib.log`/`metric_i`/`metric_f` accept `properties=None`. They
   keep recording the existing `(level, target, msg)` and `(name, unit, value)` 3-tuples and
   record properties in separate parallel `log_props`/`metric_props` lists.
@@ -262,16 +270,24 @@ regenerate it with cbindgen, which would drop the hand-written content.
    `static_names` mask to `MergedProperties`, `DynSet`, `intern_set`, `same_content`,
    `set_properties` and `record_static_refs`. Migrate the construction sites (`__dyn_prop!`,
    `dyn_properties()`, `tracing_interop.rs`, `analytics/tests/{log,metrics}_test.rs`,
-   `tracing/tests/dyn_deps_tests.rs`) to `DynProperty::new`. Give the wasm32 stub `DynProperty`
+   `tracing/tests/dyn_deps_tests.rs`) to `DynProperty::new`, and the direct field reads to the
+   accessors: `dispatch.rs:1104`, `dyn_deps.rs:69,81-83,303,314,318-319,324`,
+   `tracing/tests/property_macro_tests.rs:73`, `telemetry-sink/tests/tracing_interop_tests.rs:112`
+   and `tracing/tests/dyn_deps_tests.rs:425,739-741`. `merge_properties` computes `static_values`
+   by pointer comparison after its sort (`dyn_deps.rs:73-87`), so it sets the `static_names` bits
+   after the sort too; it needs a `pub(crate)` static-name accessor (`is_static_name`) unless the
+   API above already has one. Give the wasm32 stub `DynProperty`
    in `rust/tracing/src/lib.rs` the same constructors and accessors.
 3. **Interop targets** (`rust/tracing/src/static_string_ref.rs`, `dyn_deps.rs`,
    `logs/log_events.rs`, `logs/block.rs`, `dispatch.rs`): `BlockStringRef`, `intern_str_ref`,
    `str`, the interop events' `target` type, the two dispatch functions and the `extract` arms.
-   Migrate the `analytics/` tests and bench that build interop events.
+   Migrate the `analytics/` tests and bench that build interop events, and `extract_interop` in
+   `rust/tracing/tests/dyn_deps_tests.rs:242`, which builds a `TaggedLogInteropEvent` and asserts
+   `extract`'s records.
 4. **Macros** (`rust/tracing/src/macros.rs`): `imetric_dyn!`, `fmetric_dyn!`, the dynamic
-   context in `__metric_call!`, and the prefix form of `__dyn_slice!`. Add the prelude export in
+   context in `__metric_call!`, and the suffix form of `__dyn_slice!`. Add the prelude export in
    `rust/tracing/src/lib.rs`.
-5. **C API** (`rust/capi/src/lib.rs`): add `read_properties`, `mm_log_tagged`,
+5. **C API** (`rust/capi/src/lib.rs`): add `read_properties`, `metric_properties`, `mm_log_tagged`,
    `mm_metric_i_tagged` and `mm_metric_f_tagged`, route the existing functions through them, and
    remove the interner. Add the declarations to `rust/capi/include/micromegas.h` by hand.
 6. **Blender add-on** (`blender/micromegas_blender/binding.py`, `__init__.py`,
@@ -293,15 +309,19 @@ regenerate it with cbindgen, which would drop the hand-written content.
   `rust/tracing/src/logs/block.rs` (`lib.rs` includes the wasm32 `DynProperty` stub)
 - `rust/telemetry-sink/src/tracing_interop.rs`
 - `rust/tracing/benches/with_dispatch.rs`
-- `rust/tracing/tests/property_macro_tests.rs`, `rust/tracing/tests/dyn_deps_tests.rs`
+- `rust/tracing/tests/property_macro_tests.rs`, `rust/tracing/tests/dyn_deps_tests.rs`,
+  `rust/tracing/tests/interop_log_tests.rs` (new), `rust/telemetry-sink/tests/tracing_interop_tests.rs`
 - `rust/capi/src/lib.rs`, `rust/capi/include/micromegas.h`, `rust/capi/README.md`,
+  `rust/capi/cbindgen.toml`,
   `rust/capi/tests/smoke_test.rs`, `rust/capi/tests/properties_tests.rs` (new)
 - `rust/analytics/tests/metrics_test.rs`, `rust/analytics/tests/log_tests.rs`, and the
   `analytics/` tests and bench that push interop events (listed in Current State)
 - `blender/micromegas_blender/binding.py`, `blender/micromegas_blender/__init__.py`,
   `blender/micromegas_blender/tests/conftest.py`,
   `blender/micromegas_blender/tests/test_public_log_api.py`,
-  `blender/micromegas_blender/tests/test_public_metric_api.py` (new)
+  `blender/micromegas_blender/tests/test_init.py`,
+  `blender/micromegas_blender/tests/test_public_metric_api.py` (new),
+  `blender/micromegas_blender/tests/test_binding.py` (new)
 - `mkdocs/docs/blender/index.md`, `blender/README.md`
 - `mkdocs/docs/native/index.md`, `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
@@ -351,20 +371,29 @@ regenerate it with cbindgen, which would drop the hand-written content.
 - The `imetric!` doc (`macros.rs:235`): point at `imetric_dyn!` for runtime names.
 - The crate docs in `rust/tracing/src/lib.rs` (metrics section, around `:47`): mention the
   `_dyn` metric macros.
+- Stale doc comments: `rust/tracing/src/lib.rs:54` (keys "are always 'static"),
+  `rust/tracing/src/lib.rs:83-88` (override only through a `..set` spread or runtime `DynProperty`
+  slice), the `__prop_key!` doc at `rust/tracing/src/macros.rs:749-751`, and the wasm32 stub
+  `DynProperty` doc at `rust/tracing/src/lib.rs:191-192` ("Names stay 'static").
 - The `DynProperty` doc (`property_set.rs:35`): names can be `'static` (`new`) or
   block-scoped (`with_dyn_name`), and overrides also come from the `_dyn` metric macros.
+- `rust/capi/include/micromegas.h:3-4` and `rust/capi/README.md:54-55` say the header is
+  maintained by hand in sync with `src/lib.rs`, not generated; the stale "Auto-generated by
+  cbindgen" header string in `rust/capi/cbindgen.toml:2` is fixed to match.
 - `rust/capi/src/lib.rs` module doc, `rust/capi/README.md` (`:8`, `:51`) and
   `mkdocs/docs/native/index.md`. In the native page: the architecture list (`:14`) loses the
   string interner; the function sections document `mm_log_tagged`, `mm_metric_i_tagged` and
-  `mm_metric_f_tagged`, with examples that pass properties. They say that a `target` key
-  overrides a metric's target, that logs ignore `target`/`level` keys, and what happens to null
-  pairs. The "Cardinality contract" warning (`:101`) now says names, units, targets, keys and
+  `mm_metric_f_tagged`, with examples that pass properties. They say that only the exact lowercase `target` key
+  overrides a metric's target (analytics matches case-sensitively), that logs filter
+  `target`/`level` keys out of what the sink sees, and what happens to null pairs. The "Cardinality contract" warning (`:101`) now says names, units, targets, keys and
   values are freed with their block, and distinct names and values still cost series
   and dictionary entries in queries.
 - `rust/capi/include/micromegas.h:66-75` ("each unique pair is permanently interned"), the
   `mm_metric_i`/`mm_metric_f` doc comments (`rust/capi/src/lib.rs:203-206`, `:233-235`) and the
   comment at `:26-27`.
-- `blender/README.md:256-268` (Cardinality section): same update as the native page.
+- `blender/README.md:256-271` (Cardinality section, which has no interning text): add the same
+  line planned for `mkdocs/docs/blender/index.md`, that property keys and values should come from
+  bounded sets.
 - `mkdocs/docs/when-to-use/index.md:151`: reword the cardinality contract so only static callsite
   names, static targets and static property sets stay interned, and runtime names, targets and
   keys are block-scoped.
@@ -389,8 +418,7 @@ All of these are no-DB unit tests.
   to the same id and `set_properties` returns the same pairs.
 - `set_properties` decodes dynamic names; `extract` emits only static names before the queue.
 
-**Interop targets** (`rust/tracing/tests/log_events_tests.rs` or a new
-`rust/tracing/tests/interop_log_tests.rs`):
+**Interop targets** (`rust/tracing/tests/interop_log_tests.rs`, new):
 - `log_interop` with a target built at run time leaves a string record for it in the block, and
   two logs with the same target share it.
 - After `flush_log_buffer()`, the next block writes the target again.
@@ -409,7 +437,9 @@ All of these are no-DB unit tests.
   the target, and the set holds all four pairs.
 - A `..set` spread containing `name` is overridden by the macro's name.
 - `imetric!`/`fmetric!` still emit untagged events and leave `dyn_deps` empty.
-- `compile_fail` doc tests: `imetric_dyn!` with a `name =` key, and with a misplaced `..set`.
+- `compile_fail` doc tests, as ```` ```compile_fail ```` blocks in the `imetric_dyn!`/`fmetric_dyn!`
+  doc comments in `rust/tracing/src/macros.rs` (as existing there): `imetric_dyn!` with a `name =`
+  key, and with a misplaced `..set`.
 
 **Round trip through the real parser** (`rust/analytics/tests/metrics_test.rs`, extending
 `test_dynamic_tagged_measures`): a block with static metrics and dynamic-name metrics. It
@@ -423,12 +453,13 @@ equal to a static log's target) and a tagged interop log with a dynamic key. Aft
 entry has the right target, properties and level.
 
 **C API**:
-- `rust/capi/tests/properties_tests.rs` (new) tests `read_properties` and the metric
-  list-building function:
-  - null, empty and non-UTF-8 keys, and null values, are dropped;
+- `rust/capi/tests/properties_tests.rs` (new) tests `read_properties` and
+  `metric_properties`:
+  - null, empty and non-UTF-8 keys, and null values, are dropped, and a non-UTF-8 value is
+    kept as `""`;
   - null arrays with a nonzero count yield no pairs;
   - keys are dynamic names;
-  - in the metric list, `name`/`unit` come last, so `merge_properties` lets them win over keys
+  - in `metric_properties`, `name`/`unit` come last, so `merge_properties` lets them win over keys
     of the same name, and a `target` key is kept.
 - `rust/capi/tests/smoke_test.rs`: `init_and_exercise_api` (the one test allowed to call
   `mm_init`) also calls `mm_log_tagged`, `mm_metric_i_tagged` and `mm_metric_f_tagged` with and
@@ -442,9 +473,11 @@ entry has the right target, properties and level.
   exception from the lib.
 - `test_public_log_api.py`: `log()` forwards `properties`, and existing calls without them
   still work.
-- The binding's array building: a test with a fake ctypes lib checks that a non-empty
-  `properties` calls the `_tagged` symbol with matching keys, values and count, and that `None`
-  or `{}` calls the untagged symbol, for logs and metrics.
+- `test_binding.py` (new): the shared array helper is unit-tested directly (keys, values and
+  count). Symbol selection is checked by building `MicromegasLib` through `object.__new__` with a
+  stub `_lib` (its `__init__` calls `ctypes.CDLL` directly): a non-empty `properties` calls the
+  `_tagged` symbol with matching keys, values and count, and `None` or `{}` calls the untagged
+  symbol, for logs and metrics.
 
 **Bench**: the step 1 and step 8 runs. Acceptance:
 - No change beyond noise on any case of `with_dispatch`, `properties` and `with_no_dispatch`,
