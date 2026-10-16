@@ -30,9 +30,7 @@ criterion run before and after the change measures the effect. The wire format, 
 - Callers are the four dynamic paths in `rust/tracing/src/dispatch.rs`:
   `tagged_float_metric_dyn` (`:775`), `tagged_integer_metric_dyn` (`:800`),
   `log_dyn_tagged_to_sink` (`:968`) and `log_interop_dyn_tagged` (`:1002`). All of them call
-  `get_or_insert` while holding the stream lock. #1669 tried hashing before the lock
-  (`MergedProperties`) and reverted it: it made no measurable difference, so the hash stays
-  under the lock and it has to be cheap.
+  `get_or_insert` while holding the stream lock.
 
 **Extraction:**
 
@@ -86,8 +84,7 @@ fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64
   xxh3's one-shot paths for inputs of 16 bytes or less are a few multiplies. Nothing is buffered
   and there is no streaming state to set up.
 - xxh3 mixes the input length into the hash, so `("ab", "c")` and `("a", "bc")` still hash
-  differently without a terminator byte. A collision would only cost one extra `same_content`
-  compare anyway.
+  differently without a terminator byte.
 - Enable the `xxh3` feature only on tracing's own dependency line
   (`xxhash-rust = { workspace = true, features = ["xxh3"] }`).
 
@@ -97,14 +94,6 @@ fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64
 - The extraction sets for logs and metrics become `FxHashSet<u64>`. `record_properties` and
   `record_log_event_dependencies` / `record_metric_event_dependencies` take
   `&mut FxHashSet<u64>`. All of them are crate-private, so no public API changes.
-
-The issue suggests an identity hasher for these maps. That's a fine fit for the index, but a
-bad one for address keys: hashbrown picks the bucket from the low bits of the hash and the
-SIMD control tag from the top 7 bits. Aligned addresses have zero low bits, and user-space
-addresses share their top bits, so every key would get the same tag and lookups would fall
-back to full key compares. FxHash is one multiply and a rotate, which costs about the same as
-identity and spreads both ends. Using FxHash for the index too avoids writing a custom
-`Hasher`.
 
 ### 3. Repeated-event fast path in `extract`
 
@@ -140,8 +129,10 @@ depends on the fast path. It only removes lookups that would have returned "alre
    Use 10 000 log events and 5 000 metric events, like the existing cases, so each block still
    fits in one block. Commit this bench-only change on its own.
 2. Use a quiet machine. #1669 found run-to-run swings of 10-20% on some cases, so create a
-   worktree at this commit (`git worktree add ../../mm-hash-before HEAD`) to alternate runs in
-   Phase 3.
+   worktree at this commit to alternate runs in Phase 3. From the repo root:
+   `git worktree add ../mm-hash-before HEAD`. The bench runs from `rust/` in each tree
+   (`cargo bench -p micromegas-tracing --bench properties`), and the worktree's first run does a
+   full build.
 
 ### Phase 1: Hashers
 
@@ -160,9 +151,8 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
 ### Phase 3: Measure after
 
-8. Run the bench on the branch, then in the worktree (`mm-hash-before`), then on the branch again,
-   then in the worktree again. Use the same bench file on both sides, and keep the machine
-   otherwise idle.
+8. Run the bench on the branch, then in the worktree (`../mm-hash-before/rust`), then on the branch
+   again, then in the worktree again. Keep the machine otherwise idle.
 9. Add a Results section to this plan, with the same layout as
    `tasks/completed/stream_lock_critical_section_plan.md`:
    - the before and after medians for every case of both runs
@@ -176,13 +166,11 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
 ### Phase 4: Finish
 
-10. Add the CHANGELOG entry. Run `cargo fmt`, then `cargo clippy --workspace -- -D warnings`,
-    then `cargo test -p micromegas-tracing`, then `cargo deny check licenses bans sources` (from
-    `rust/`; new direct dependency). `rust/datafusion-wasm` has its own tracked `Cargo.lock`
-    that picks up the new dependencies, so run `python3 build/rust_ci.py wasm` (from the repo
-    root) and, from `rust/datafusion-wasm`,
-    `cargo deny --config ../deny.toml check licenses bans sources --allow unnecessary-skip`,
-    then commit the updated lockfile. Remove the worktree.
+10. Add the CHANGELOG entry. Run `cargo fmt`, then `python3 build/rust_ci.py` from the repo root.
+    It runs the same native and wasm steps as CI (clippy, nextest, doc tests, machete, audit and
+    deny for both lockfiles). `rust/datafusion-wasm` has its own tracked `Cargo.lock` that picks
+    up the new dependencies, so commit the updated lockfile. Remove the worktree
+    (`git worktree remove ../mm-hash-before`).
 
 ## Files to Modify
 
@@ -208,6 +196,11 @@ depends on the fast path. It only removes lookups that would have returned "alre
 - Spans extraction (`spans/block.rs`) and its `HashSet<u64>` are out of scope: the issue
   targets the property paths, and the bench has no span extraction case. Revisit with a span
   `extract` bench if the log/metric numbers show a clear gain.
+- FxHash rather than an identity hasher: identity on aligned addresses leaves the low bits zero
+  and gives every key the same top-7 hashbrown tag; FxHash costs about the same and also covers
+  the index without a custom `Hasher`.
+- The content hash stays under the stream lock: #1669 tried hashing before the lock
+  (`MergedProperties`) and reverted it with no measurable difference.
 - Moving the dedup to push time (#1654) is out of scope. This plan makes that move cheaper but
   doesn't depend on it.
 
@@ -221,27 +214,23 @@ depends on the fast path. It only removes lookups that would have returned "alre
 
 No-DB unit tests in `rust/tracing/tests/property_arena_tests.rs`. They reuse its existing
 capturing sink and `DispatchGuard`. Each test captures one block and asserts
-`block.events.extract().nb_objects()` (`HeterogeneousQueue`, with `ExtractDeps` imported) against
-an expected total. It does not count variants through `.iter()`: `read_value` is
-`unimplemented!()` for `StaticStringDependency` and `PropertySetDependency`, so iterating the
-deps queue panics. Keep N to a few hundred so all events fit in one 64 KiB block. Expected
-totals:
-
-- A log desc contributes one `Utf8StaticStringDependency` per distinct pointer among `fmt_str`,
-  `target`, `module_path` and `file` (at most 4), plus one `LogMetadataRecord`. A metric desc
-  does the same over `name`, `unit`, `target` and `file`, plus one `MetricMetadataDependency`.
-- Each distinct property set contributes one `StaticStringDependency` per distinct name or value
-  pointer not already recorded, plus one `PropertySetDependency`.
+`block.events.extract().nb_objects()` (`HeterogeneousQueue`, with `ExtractDeps` imported). It does
+not count variants through `.iter()`: `read_value` is `unimplemented!()` for
+`StaticStringDependency` and `PropertySetDependency`, so iterating the deps queue panics. Keep N
+to a few hundred so all events fit in one 64 KiB block. Rust doesn't guarantee that identical
+string literals share a pointer, so assertions are relative to a reference block rather than
+absolute totals:
 
 - **Repeated events emit dependencies once.** Log N events from one callsite with the same
-  dynamic value, then N with an `..set` static set. The total equals one desc plus one set.
-  Do the same for metrics.
+  dynamic value, flush, and compare `nb_objects()` with a block from a single such event: they
+  are equal. Then log N events with an `..set` static set, flush, and compare with a block from a
+  single such event. The dynamic half and the `..set` half carry different sets, so each goes in
+  its own block. Do the same for metrics.
 - **Interleaved sets still dedup.** Log values A, B, A, B, A from one callsite, which makes the
-  fast path miss every time. The total equals one desc plus two sets, with each value string
-  counted once. This catches a fast path that skips the set entirely, or one whose `last_*` is
-  updated wrong.
-- **Interleaved callsites.** Alternate two log callsites that share one set. The total equals
-  two descs plus one set.
+  fast path miss every time. The block has the same `nb_objects()` as one with just A, B. This
+  catches a fast path that skips the set entirely, or one whose `last_*` is updated wrong.
+- **Interleaved callsites.** Alternate two log callsites that share one set. The block has the
+  same `nb_objects()` as one with a single event from each callsite.
 
 The existing arena tests (`same_content_same_pointer`, `different_values_different_sets`,
 `split_between_static_and_dynamic_does_not_change_identity`) cover the content hash and index
