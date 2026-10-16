@@ -41,8 +41,9 @@ and probes it under the stream lock. Static values from the base set are referen
 (#1679).
 
 **Duplicate-key rules** (pinned by `duplicate_keys`, `rust/tracing/tests/property_macro_tests.rs:412`):
-among literals, last wins case-insensitively; a dynamic value beats a literal of the same name
-regardless of order; pairs override `..set` entries.
+without `..set`, among literals last wins case-insensitively and a dynamic value beats a literal
+of the same name regardless of order; with `..set`, all pairs resolve in source order (a later
+literal beats an earlier dynamic value of the same name); pairs override `..set` entries.
 
 **wasm32** (`rust/tracing/src/lib.rs:170`): `property_set` is a stub where only the empty set
 exists; `callsite_set` returns it. `internment`, `rustc-hash` and the other property deps are
@@ -53,9 +54,13 @@ native-only (`rust/tracing/Cargo.toml`).
 - `PrefixTags { label, prefix, prefix_demand, prefix_prefetch }` and
   `EvictionTags { prefix, count_evict, count_replace, count_remove, count_clear }` hold one set per
   combination, built at construction.
-- Spread sites: `foyer_backend.rs:230,240,416,422,426,439,541` and
-  `range_cache/fetch.rs:164,197,323,337,416,422`; `fetch.rs:85-87,318,384` pick and thread the
-  class set through a helper; `range_cache/mod.rs:95-177` owns the `PrefixTags` table.
+- Spread sites: `foyer_backend.rs:230,240,416,422,426,439,541`,
+  `range_cache/fetch.rs:164,197,419,425` and `range_cache/mod.rs:248,251,277,298` (the last four
+  spread `prefix_tag = self.classify_tags(key).prefix`, `:241`); `fetch.rs:85-87,318,384` pick
+  and thread the class set through a helper, and `probe_blocks` (`fetch.rs:144`) and the
+  function at `fetch.rs:267-268` carry sets as `&'static PropertySet` parameters;
+  `range_cache/mod.rs:95-177` owns the `PrefixTags` table.
+  `rust/object-cache/tests/metric_tags_tests.rs` imports `PrefixTags` and calls `for_class`.
 
 ## Design
 
@@ -98,20 +103,21 @@ The resulting `@end` matrix (static present):
 
 | `..set` | dynamic values | base set | slice | log form |
 |---|---|---|---|---|
-| no | no | `__static_set!(s)` | empty | `nogate` |
+| no | no | `__static_set!(s)` | empty | `gate` |
 | no | yes | `__static_set!(s)` | `$d` | `gate` |
-| yes | no | `__static_set!(set, s)` | empty | `nogate` |
+| yes | no | `__static_set!(set, s)` | empty | `gate` |
 | yes | yes | `__static_set!(set, s)` | `$d` | `gate` |
 
 With an empty slice, dispatch already takes the interned path, so no dispatch change is needed.
-Static expressions live inside the set expression, so like the set they are evaluated only after
-the level check.
+Every static row uses the `gate` log form: `nogate` evaluates the set expression before the
+target-enabled check, so only `gate` guarantees a static expression is evaluated for an enabled
+entry alone.
 
 ### `__static_set!` expansion
 
 ```rust
 {
-    static CACHE: $crate::static_set_cache::StaticSetCache<M> =
+    static CACHE: $crate::static_set_cache::StaticSetCache<{ [$(stringify!($k)),+].len() }> =
         $crate::static_set_cache::StaticSetCache::new();
     CACHE.get(
         base,  // `$set` or `PropertySet::empty()`
@@ -120,7 +126,8 @@ the level check.
 }
 ```
 
-`M` is the number of `$s` entries; the array literal fixes it, so the macro doesn't count.
+`M` is the number of `$s` entries, counted by the const block in the `static CACHE` type (a
+static's type is never inferred).
 
 ### `StaticSetCache` (`rust/tracing/src/static_set_cache.rs`, new, native only)
 
@@ -162,7 +169,10 @@ sites compile unchanged and type-check the same.
 ### Precedence
 
 Unchanged rules, extended: among literals and static values, last in source order wins
-(case-insensitively); dynamic values beat both; any pair overrides a `..set` entry.
+(case-insensitively); dynamic values beat both; any pair overrides a `..set` entry. A call with
+both `static` and `..set` differs from one without `static`: literals and static values are
+interned into the base set and dynamic values are merged over it, so dynamic values beat
+literals and static values regardless of order.
 
 ### Dependencies
 
@@ -204,10 +214,12 @@ target-specific code; `scc` runs loom model tests.
    Keep the label constants, `longest_prefix_match`, and a label table: `EvictionTagTable`
    becomes a `classify(key) -> &'static str` over the configured labels.
 9. `rust/object-cache/src/range_cache/mod.rs`: replace `prefix_tags` / `other_tags` with the
-   labels; `classify_tags` returns the label.
+   labels; delete `classify_tags` in favor of the existing `classify` (`:179`).
 10. `rust/object-cache/src/range_cache/fetch.rs` and `foyer_backend.rs`: write
     `prefix = static label` (plus `class = static class` / `reason = static reason_str(reason)`)
-    at each spread site; the helper at `fetch.rs:384` takes the two labels instead of a set.
+    at each spread site, including `range_cache/mod.rs:241-298` (`prefix_tag` becomes the label
+    from `classify`); `probe_blocks`, the function at `fetch.rs:267` and the helper at
+    `fetch.rs:384` take labels instead of sets.
 11. `CHANGELOG.md`: Unreleased entry with before/after numbers from step 6, plus a
     **Minor breaking change** clause for the removed `PrefixTags` / `EvictionTags`.
 
@@ -227,6 +239,7 @@ target-specific code; `scc` runs loom model tests.
 - `rust/object-cache/src/range_cache/mod.rs`
 - `rust/object-cache/src/range_cache/fetch.rs`
 - `rust/object-cache/src/foyer_backend.rs`
+- `rust/object-cache/tests/metric_tags_tests.rs` (delete `prefix_tags_carry_expected_properties`)
 - `CHANGELOG.md`
 
 ## Benchmarks
@@ -299,11 +312,12 @@ All no-DB unit tests and doctests.
   - `static` on `imetric!`, `fmetric!` and `info!`, alone and mixed with literals, dynamic
     values and `..set`, checking recorded properties;
   - extend `duplicate_keys` with static/literal in both orders, static/dynamic, and static over
-    `..set`;
+    `..set`, plus `info!(k = x, k = "b", ..set, …)` with and without a `p = static s` pair
+    (`k = "b"` without, `k = x` with);
   - a static-only call produces an interned set id and no dynamic dependency records (it takes the
     `..set` path, not the dynamic one);
   - a disabled log doesn't evaluate its `static` expression (side-effect counter), like the
-    existing gating test for dynamic values.
+    existing gating test for dynamic values (`guard.disable_target`).
 - `compile_fail` doctests: a borrowed `&str` (`k = static s.as_str()` with `s: String`), a
   reserved key (`unit = static x`), and `static` with `%` / `?`.
 - `cargo bench -p micromegas-tracing --bench properties` before (save baseline) and after;
