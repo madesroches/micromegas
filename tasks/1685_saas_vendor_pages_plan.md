@@ -21,7 +21,7 @@ on 2026-10-18; see **Billing-size measurement**. The script is at
 
 **Left to do**: Implementation Steps 8–11, the rest of the **Fairness Corrections**, plus the
 **Reference deployment refresh**.
-- Get the current S3 size (Open Question), then refresh the Micromegas cost and volumes.
+- Put the refreshed Micromegas cost (~$2,400/month at list price) and the volumes into the docs.
 - Price traces where a linear rate is published.
 - Show Elastic's log tier as a range.
 - Recompute every figure and rewrite the hub, vendor pages, `llms.txt`, README and the
@@ -282,22 +282,25 @@ actually pays less, but the docs don't describe why. The July 2026 list cost by 
 
 | Component | List/month |
 | :--- | :--- |
-| S3 (~17 TB + requests) | ~$670 → **re-price at current size** |
+| S3 (~27.5 TB + requests, mid-October 2026) | ~$1,090 (July's ~$670 for ~16.9 TB, scaled by size) |
 | Aurora Serverless v2 | ~$624 |
 | Fargate (4 services) | ~$485 |
 | EC2 (object cache) | ~$146 |
 | ALB (attributed share) | ~$50 |
-| **Total** | **~$1,975 + S3 growth** |
+| **Total** | **~$2,400** |
 
-The user confirmed (2026-10-18) that compute hasn't changed since July and only S3 has grown.
-Re-price the S3 line at its current stored size: S3 Standard list, $0.023/GB-month for the first
-50 TB, plus requests in the same proportion as July. Every other line stays. Volumes and cost
-should cover the same period. If the S3 size is current (October), refresh the volume table too,
-with the same `blocks` aggregate.
+- The user confirmed (2026-10-18) that compute hasn't changed since July and only S3 has grown.
+- Bucket size from the bucket-size metric: ~29 TB peak in September, ~27.5 TB mid-October.
+- Aurora storage grew ~57 → ~70 GB, which is negligible at list price. ACU use is flat.
+- The S3 line scales July's whole line (storage + requests) by size. Scaling storage alone would
+  give ~$910.
+- The volume table is from 2026-08-23, when the bucket held ~25 TB, so the volumes run ~10%
+  behind this cost. That understates Micromegas's efficiency, so it is accepted rather than
+  refreshed.
 
 With the measured sizes, monthly billing volume on per-GB vendors is ~5.3 TB of logs, ~124 TB of
 metrics and ~288 TB of spans. That is about 13× the old ~10.7 TB, before traces. Expect every
-per-GB vendor's estimate to rise sharply. The Micromegas side rises only from ~$1,100 to ~$2,000+.
+per-GB vendor's estimate to rise sharply. The Micromegas side rises only from ~$1,100 to ~$2,400.
 
 ### Traces priced where a linear rate is published
 
@@ -491,8 +494,7 @@ Steps 1–6: **done**.
    real page with a stub). Also confirm each has a `<title>` starting with "<Vendor> Pricing and
    Cost Breakdown vs. Micromegas" and a `<meta name="description">` tag.
 
-Step 7: **done**. Steps 8–11: **to do**. Step 9's Micromegas cost is blocked on the Open
-Question.
+Step 7: **done**. Steps 8–11: **to do**; nothing blocks them.
 
 7. ~~Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` on the production
    deployment, and record the bytes per log entry, metric point and span.~~ Done. Results are in
@@ -567,7 +569,6 @@ These checks are rendering output that a person has to look at.
 
 ## Open Questions
 
-- **needs user decision:** the S3 bucket's current stored size (GB-month, latest full
-  month), so the S3 line can be re-priced. Optionally also provide
-  current per-tag volumes. Prod access was granted once, for Step 7, so refreshing volumes needs
-  either a new go-ahead for one `blocks` aggregate query or numbers supplied by the user.
+None. The current S3 size came from the user on 2026-10-18. Refreshing the August volumes would
+need a new go-ahead for one prod `blocks` query, and is optional (see **Reference deployment
+refresh**).
