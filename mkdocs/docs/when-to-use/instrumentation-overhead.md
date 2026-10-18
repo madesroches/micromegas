@@ -12,11 +12,11 @@ This is the time the application thread spends recording one item, which is the 
 
 | case | `micromegas` | `micromegas_interop` | `otel` |
 |---|---|---|---|
-| `static` | 44.8 | 102.0 | 341.5 |
-| `formatted` | 80.6 | 143.8 | 323.7 |
-| `static_attrs` | 42.9 | — | 672.6 |
-| `dyn_low_card` | 71.4 | — | 400.5 |
-| `dyn_high_card` | 144.1 | 297.0 | 424.1 |
+| `static` | 44.6 | 104.0 | 293.2 |
+| `formatted` | 77.3 | 156.1 | 297.5 |
+| `static_attrs` | 45.0 | — | 638.0 |
+| `dyn_low_card` | 67.6 | — | 470.4 |
+| `dyn_high_card` | 150.9 | 314.4 | 418.3 |
 
 Micromegas is faster in every case; a `tracing` event routed into Micromegas costs more than the native macro but still less than OpenTelemetry.
 
@@ -24,9 +24,9 @@ Micromegas is faster in every case; a `tracing` event routed into Micromegas cos
 
 | case | `micromegas` | `otel` | `otel_tracing` |
 |---|---|---|---|
-| `static` | 27.9 | 151.7 | 795.6 |
-| `attrs` | — | 227.3 | 911.7 |
-| `dyn_name` | 96.1 | 196.6 | 919.4 |
+| `static` | 27.7 | 146.3 | 776.5 |
+| `attrs` | — | 218.8 | 902.8 |
+| `dyn_name` | 87.1 | 193.7 | 876.2 |
 
 `otel_tracing` is OpenTelemetry through the `tracing-opentelemetry` bridge, which costs several times more than the direct tracer.
 
@@ -34,10 +34,10 @@ Micromegas is faster in every case; a `tracing` event routed into Micromegas cos
 
 | case | `micromegas` | `otel` |
 |---|---|---|
-| 10 series | 24.6 | 67.4 |
-| 100 series | 25.2 | 68.2 |
+| 10 series | 24.2 | 68.5 |
+| 100 series | 24.1 | 67.9 |
 
-A sample costs the calling thread about 2.7 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
+A sample costs the calling thread about 2.8 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
 
 ## Overall cost (off the calling thread)
 
@@ -47,10 +47,10 @@ This work runs on a background thread and does not affect the instrumented threa
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| `log_static_attrs` | 774.3 | 514.5 | 918.6 |
-| `log_dyn_high_card` | 3904.8 | 329.7 | 805.5 |
-| `span_static` | 1229.4 | 256.5 | 2132.4 |
-| `span_dyn_name` | 3104.1 | 273.9 | 2839.2 |
+| `log_static_attrs` | 754.4 | 535.8 | 927.7 |
+| `log_dyn_high_card` | 3776.7 | 319.4 | 814.3 |
+| `span_static` | 1205.9 | 257.3 | 2130.4 |
+| `span_dyn_name` | 2997.7 | 274.2 | 3027.9 |
 
 OpenTelemetry encodes faster per event, most clearly for `log_dyn_high_card`. With gzip it is costlier than Micromegas for the static cases and about equal for `span_dyn_name`.
 
@@ -69,8 +69,8 @@ The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is sm
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| 10 series | 1401.8 | 626.9 | 1867.9 |
-| 100 series | 1199.9 | 684.6 | 965.2 |
+| 10 series | 1309.7 | 641.7 | 1921.1 |
+| 100 series | 1221.6 | 692.5 | 983.5 |
 
 OpenTelemetry wins metric export cost: its collect, conversion and encode is cheaper per sample than Micromegas's share of `encode_bin`, and gzip erases that lead only at 10 series.
 
@@ -78,7 +78,7 @@ OpenTelemetry wins metric export cost: its collect, conversion and encode is che
 
 | case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| 10 series | 33.2 | 8.3 | 90.4 | 25.1 |
+| 10 series | 33.2 | 8.3 | 90.4 | 25.5 |
 | 100 series | 34.7 | 8.1 | 76.5 | 5.8 |
 
 Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 series and smaller at 100, where OpenTelemetry wins on size.
@@ -86,7 +86,7 @@ Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 serie
 ## Reading the numbers
 
 - **Logs and spans.** On the calling thread Micromegas is faster in every log and span case. The gap is a design difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record, attributes included, and hands it to a bounded queue.
-- **Metrics.** A metric sample costs the calling thread about 2.7 times less with Micromegas. Every sample counted here is kept by both libraries (see [Metric samples](#metric-samples)). In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
+- **Metrics.** A metric sample costs the calling thread about 2.8 times less with Micromegas. Every sample counted here is kept by both libraries (see [Metric samples](#metric-samples)). In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
 - **Off the calling thread.** OpenTelemetry encodes faster per event; Micromegas trades that worker time for smaller wire sizes against uncompressed OTLP.
 - **Drops.** Pacing keeps both libraries from dropping data, so no number includes drop behavior or says what happens when a producer outruns its exporter for long.
 - **Bytes.** The benchmark's records are repetitive and repeated attribute values compress well in both formats, so wire sizes for real data are likely larger.
@@ -95,7 +95,7 @@ Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 serie
 
 ### What is measured
 
-Calling-thread time for one operation, with criterion (`iter_custom`, only the emit calls are timed, see Pacing): `log` and `span` cases are one macro or API call, `metric_batch` cases are one batch of N calls. Both libraries record string attribute values (`%i` or `i.to_string()`), since Micromegas property values are strings, so the comparison is about the same information, not the cheapest encoding each library offers. Both filter at INFO. Every cell is a median from one full run (not `--quick`) of [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), except the `metric_batch` tables, which come from a later full run of the `metric_batch` group alone on the same machine. All cases are single-threaded: heavy contention on telemetry is not a realistic workload.
+Calling-thread time for one operation, with criterion (`iter_custom`, only the emit calls are timed, see Pacing): `log` and `span` cases are one macro or API call, `metric_batch` cases are one batch of N calls. Both libraries record string attribute values (`%i` or `i.to_string()`), since Micromegas property values are strings, so the comparison is about the same information, not the cheapest encoding each library offers. Both filter at INFO. Every cell is a median from a single full run (not `--quick`) of [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), the metric tables included. All cases are single-threaded: heavy contention on telemetry is not a realistic workload.
 
 ### Library configurations
 
@@ -128,7 +128,7 @@ Neither library ever drops a record, and the bench fails if either does: after e
 
 ### Noise
 
-One full run on one machine. Two cases were repeated five more times: `log/static/micromegas` gave criterion estimates between 43.1 and 44.3 ns (44.8 ns in the table) and `span/static/micromegas` between 28.1 and 28.7 ns (27.9 ns in the table). The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes. Bench threads are not pinned, so samples can land on performance or efficiency cores, a likely source of run-to-run spread, and the multi-thread cases are the most exposed to it. Treat differences of 10% as noise.
+Every number on this page comes from one full run on one machine, so no run-to-run spread is reported. The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes. Bench threads are not pinned, so samples can land on performance or efficiency cores, a likely source of run-to-run spread, and the multi-thread cases are the most exposed to it. Treat differences of 10% as noise.
 
 ### Hardware and software
 
