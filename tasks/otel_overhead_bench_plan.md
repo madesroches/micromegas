@@ -37,7 +37,7 @@ behind it.
   `tracing-opentelemetry` 0.33.x (both require `opentelemetry ^0.32`).
 - OTel SDK 0.32 behavior that shapes the design (verified in the registry sources):
   - `BatchLogProcessor` / `BatchSpanProcessor` push each record into a bounded `sync_channel`
-    (default queue 2048, batch 512, 1 s delay) drained by a dedicated thread; a full queue
+    (default queue 2048, batch 512; schedule delay 1 s for `BatchLogProcessor`, 5 s for `BatchSpanProcessor`) drained by a dedicated thread; a full queue
     **drops** the record and only counts it internally (`dropped_logs_count` is private).
   - Metrics aggregate in-process per attribute set; the default cardinality limit is 2000 per
     instrument, past which values go to an overflow series.
@@ -55,9 +55,7 @@ behind it.
 
 ### Crate
 New workspace member `rust/otel-comparison-bench/` (picked up by the `members = ["*"]` glob),
-package `micromegas-otel-comparison-bench`, `publish = false`. Two bench targets, one per library,
-so each process has exactly one global `tracing` subscriber, one micromegas dispatch (or none), and
-no background threads from the other library competing for cores:
+package `micromegas-otel-comparison-bench`, `publish = false`. Two bench targets, one per library:
 
 ```
 rust/otel-comparison-bench/
@@ -99,8 +97,7 @@ Both libraries record string attribute values (`%i` / `i.to_string()`), since mi
 values are strings; the comparison is about the same information, not the cheapest encoding each
 library offers.
 
-`log` group — micromegas native macros vs. `tracing` macros through `OpenTelemetryTracingBridge`
-(the OTel Logs API is an appender API; Rust applications log through `tracing` or `log`):
+`log` group — micromegas native macros vs. `tracing` macros through `OpenTelemetryTracingBridge`:
 
 | case | `micromegas` | `micromegas_tracing` (via interop) | `otel` |
 |---|---|---|---|
@@ -162,8 +159,9 @@ per kind; OTel's batch channel and metric aggregation map are its shared points.
 - `BenchSink` like `properties.rs`, except non-captured blocks go to a worker thread that calls
   `encode_bin` and drops the bytes — the HTTP sink minus the network — and `on_startup` stores
   the `Arc<ProcessInfo>` for that worker and the `encode` group. The worker queue has the same
-  default byte caps as `HttpSinkConfig` (`DEFAULT_MAX_QUEUE_BYTES` 128 MiB for Traces blocks,
-  256 MiB for logs/metrics) and a drop counter, as in `HttpEventSink`'s `SharedQueue::try_push`.
+  default byte caps as `HttpSinkConfig` (`DEFAULT_MAX_QUEUE_BYTES`, the 128 MiB soft cap for thread (Traces) blocks, and
+  `DEFAULT_HARD_QUEUE_BYTES`, the 256 MiB hard cap for log/metric blocks, both checked against the
+  queue's total bytes) and a drop counter, as in `HttpEventSink`'s `SharedQueue::try_push`.
 - `TracingSystemGuard::new(10 MiB, 1 MiB, 10 MiB, sink, HashMap::new(), true)` (CPU tracing on,
   the `telemetry-sink` buffer defaults), `set_max_level(LevelFilter::Info)`,
   `init_thread_stream()` on the main thread, `install_tracing_interop(None)` (it copies the
@@ -179,8 +177,7 @@ per kind; OTel's batch channel and metric aggregation map are its shared points.
   sampler, random ids).
 - `SdkMeterProvider::builder().with_reader(PeriodicReader::builder(NoopMetricExporter).build())`
   (default 60 s interval, cumulative temporality, default cardinality limit).
-- All processor/reader settings are SDK defaults: that is OTel's recommended production
-  configuration, and changing them would be tuning one side only.
+- All processor/reader settings are SDK defaults.
 - `NoopLogExporter` / `NoopSpanExporter` convert each batch to OTLP protobuf (the same code as
   the `encode` group) so the background thread does the work a real exporter does, add the record
   count to an `AtomicU64`, and, when a capture flag is set, clone the records into a `Mutex<Vec>`.
@@ -188,13 +185,13 @@ per kind; OTel's batch channel and metric aggregation map are its shared points.
 
 ### Drop accounting
 A tight bench loop can outrun OTel's background thread; a full queue makes `emit` / `end`
-return early, which would flatter the OTel hot path. After each OTel log and span case the bench
+return early. Dropped records are data the exporter never sees, so the drop rate is reported next to each number. After each OTel log and span case the bench
 calls `force_flush()` from the `after_case` callback, compares the exporter's count with the
 case's emitted count, and prints `<id>: dropped N of M (P%)` for `report.py`. The exporter's
 `AtomicU64` is cumulative, so it is snapshotted before each case and the per-case delta is used.
 This covers the `contention` log and span cases at each thread count too, which share the same
-2048 queue. The micromegas binary prints the same line format for blocks its capped worker queue
-drops. The results page shows the drop rate next to each log and span number.
+2048 queue. The micromegas binary prints the same line format for its capped worker queue, counting the
+events (`nb_objects()`) in each dropped block so N and M are event counts. The results page shows the drop rate next to each log and span number.
 
 ### Report script (`report.py`)
 Stdlib-only Python. Reads `target/criterion/{log,metric,span,contention,encode}/**/new/estimates.json`
