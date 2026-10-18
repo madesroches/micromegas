@@ -19,18 +19,18 @@
 on 2026-10-18; see **Billing-size measurement**. The script is at
 `tasks/1685_billing_sizes/measure_billing_sizes.py`.
 
-**Left to do**: Implementation Steps 8–11, the rest of the **Fairness Corrections**, plus the
-**Reference deployment refresh**.
-- Put the refreshed Micromegas cost (~$2,400/month at list price) and the volumes into the docs.
-- Price traces where a linear rate is published.
-- Show Elastic's log tier as a range.
-- Recompute every figure and rewrite the hub, vendor pages, `llms.txt`, README and the
-  changelog to match.
-- Then push and open the PR.
+**Done (fairness corrections, continued)**: Steps 8–11, in commit `d619c5c78`.
+- Workload refreshed from the last 30 days.
+- Measured billing sizes applied; traces priced where a rate is published; Elastic shown as a
+  range.
+- Micromegas costed at ~$1,100/month on a single provider's public list prices.
+- Hub, vendor pages, `llms.txt`, README and changelog rewritten.
+- `mkdocs build --strict` and the docs-site tests pass.
 
-The pricing figures in **Pricing Re-verification** are the rates as verified. The per-vendor
-totals and ratios there (and in the shipped pages) are the *pre-correction* numbers. Steps 7–10
-replace them.
+**Left to do**: push and open the PR.
+
+The pricing figures in **Pricing Re-verification** are the rates as verified. Its per-vendor
+totals and ratios are *pre-correction* numbers, superseded by **Decisions**.
 
 ## Overview
 
@@ -262,45 +262,48 @@ deployment"). Don't publish:
 - instance types;
 - anything else beyond aggregate volumes, sizes and list-price infrastructure cost.
 
-**Volumes** (cumulative over retention, from `blocks.nb_objects` by stream tag, queried
-2026-08-23):
+**Volumes, last 30 days** (2026-09-18 → 2026-10-18; `SUM(blocks.nb_objects)` by stream tag,
+second and last prod query, approved by the user):
 
-| Signal | Events retained | Window | Per 30 days |
-| :--- | :--- | :--- | :--- |
-| CPU trace events | ~1.51T | 93 days | ~487B (~274B spans at 1.8 events/span) |
-| Metric points | ~400B | 91 days | ~132B |
-| Log entries | ~20.2B | 98 days | ~6.2B |
+| Signal | Per 30 days | Retained (90 days) |
+| :--- | :--- | :--- |
+| Log entries | ~9.6B | ~29B |
+| Metric points | ~138B | ~415B |
+| CPU trace events | ~535B (~300B spans at 1.8 events/span) | ~1.6T |
+| Network-trace events | ~10.8B (left out of vendor estimates) | — |
 
-- Retention is 90 days.
-- Peaks: ~518 GB/day ingested; ~240M CPU trace events/min (a burst; sustained busy load is
-  ~100–150M/min); ~12.8M metric points/min.
+- Object storage is ~27.5 TB (bucket-size metric, mid-October).
+- A whole-retention query was discarded: blocks date back to 2026-04-10, past the 90-day
+  retention, so cumulative totals were ambiguous.
 - The trace row counts stream events, not spans. Label it "trace events", and use the span
   conversion only for vendor pricing.
 
-**Cost basis: AWS on-demand list price**, so it matches the vendors' list prices. The deployment
-actually pays less, but the docs don't describe why. The July 2026 list cost by component:
+**Cost basis: a single cloud provider's public monthly list prices** (DigitalOcean) for resources
+equivalent to the deployment. That means no commitment and no negotiated discounts: the same
+footing as the vendors' list prices. The user chose this basis on 2026-10-18.
 
-| Component | List/month |
-| :--- | :--- |
-| S3 (~27.5 TB + requests, mid-October 2026) | ~$1,090 (July's ~$670 for ~16.9 TB, scaled by size) |
-| Aurora Serverless v2 | ~$624 |
-| Fargate (4 services) | ~$485 |
-| EC2 (object cache) | ~$146 |
-| ALB (attributed share) | ~$50 |
-| **Total** | **~$2,400** |
+| Component | Equivalent resource | $/month |
+| :--- | :--- | :--- |
+| Object storage | ~27.5 TB S3-compatible | ~$512 |
+| Services | 16 vCPU / 32 GiB | $336 |
+| PostgreSQL | managed, 4 vCPU / 8 GiB, single node | $122 |
+| Object cache | 2 vCPU / 16 GiB, local NVMe | $131 |
+| Load balancer | | ~$12 |
+| **Total** | | **~$1,100** |
 
-- The user confirmed (2026-10-18) that compute hasn't changed since July and only S3 has grown.
-- Bucket size from the bucket-size metric: ~29 TB peak in September, ~27.5 TB mid-October.
-- Aurora storage grew ~57 → ~70 GB, which is negligible at list price. ACU use is flat.
-- The S3 line scales July's whole line (storage + requests) by size. Scaling storage alone would
-  give ~$910.
-- The volume table is from 2026-08-23, when the bucket held ~25 TB, so the volumes run ~10%
-  behind this cost. That understates Micromegas's efficiency, so it is accepted rather than
-  refreshed.
+- The provider is named only in the hub's bottom "Pricing References" section, not as an
+  endorsement.
+- **AWS, where the deployment runs:** ~$2,200/month at on-demand list prices. The docs always state
+  it as "no discounts, rebates or Savings Plans".
+- **Caveats** published on the hub:
+  - a single PostgreSQL node;
+  - writes to object storage count against the compute transfer allowance (same-region reads are
+    free);
+  - the sizing was translated from the deployment, not measured on that provider.
 
-With the measured sizes, monthly billing volume on per-GB vendors is ~5.3 TB of logs, ~124 TB of
-metrics and ~288 TB of spans. That is about 13× the old ~10.7 TB, before traces. Expect every
-per-GB vendor's estimate to rise sharply. The Micromegas side rises only from ~$1,100 to ~$2,400.
+With the measured sizes, monthly billable volume on per-GB vendors is ~8.3 TB of logs, ~130 TB of
+metrics and ~316 TB of spans. Full figures and arithmetic are in the scratch spec the
+implementation followed. Its totals are recorded in **Decisions**.
 
 ### Traces priced where a linear rate is published
 
@@ -494,7 +497,7 @@ Steps 1–6: **done**.
    real page with a stub). Also confirm each has a `<title>` starting with "<Vendor> Pricing and
    Cost Breakdown vs. Micromegas" and a `<meta name="description">` tag.
 
-Step 7: **done**. Steps 8–11: **to do**; nothing blocks them.
+Steps 7–11: **done**.
 
 7. ~~Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` on the production
    deployment, and record the bytes per log entry, metric point and span.~~ Done. Results are in
@@ -562,7 +565,22 @@ These checks are rendering output that a person has to look at.
   linear rate is published, and the Elastic log tier shown as a range.
 - Measured billing sizes apply to every vendor, not just Elastic, even where that raises other
   vendors' estimates.
-- Micromegas is costed at AWS on-demand list price, to match the vendors' list prices.
+- Micromegas is costed at ~$1,100/month on a single cloud provider's public monthly list prices
+  for equivalent resources (user decision, 2026-10-18). AWS is quoted only as ~$2,200 on-demand
+  with no discounts.
+- Recomputed vendor estimates, per month, logs + metrics / with traces:
+  - Datadog ~$25,100 / ~$568,000
+  - Dynatrace ~$3,200 / ~$78,200
+  - Elastic ~$6,200–$10,400 / ~$52,600–$56,800
+  - Grafana Cloud ~$25,400 / ~$183,000
+  - New Relic ~$90,200 / ~$216,500
+  - Splunk ~$16,400–$18,700 / n/a
+- Grafana metrics are billed on the DPM rule (~3.16M billable series), not the 1M series assumed
+  earlier.
+- Splunk metrics are priced in Observability Cloud per host, with custom metrics excluded, rather
+  than indexed in Splunk Cloud.
+- Elastic traces are priced at the $0.09/GB floor, the rate most favourable to Elastic.
+- Network-trace events are left out of every vendor estimate.
 - The reference deployment stays anonymous. Only aggregate volumes, sizes and list-price cost
   are published.
 - Vendor trace pricing uses spans: stream events converted at the measured ~1.8 events/span.
