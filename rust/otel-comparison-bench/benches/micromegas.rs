@@ -382,7 +382,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_cases(
         c,
         "log",
-        "micromegas_tracing",
+        "micromegas_interop",
         &TRACING_LOG_CASES,
         drain,
         Some(after_case),

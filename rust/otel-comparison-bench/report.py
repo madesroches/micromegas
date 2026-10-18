@@ -19,7 +19,7 @@ from pathlib import Path
 
 LIBS = {
     "micromegas",
-    "micromegas_tracing",
+    "micromegas_interop",
     "otel",
     "otel_counter",
     "otel_gauge",
@@ -27,7 +27,7 @@ LIBS = {
     "otel_gzip",
 }
 HOT_PATH_GROUPS = {
-    "log": ["micromegas", "micromegas_tracing", "otel"],
+    "log": ["micromegas", "micromegas_interop", "otel"],
     "metric": ["micromegas", "otel_counter", "otel_gauge"],
     "span": ["micromegas", "otel", "otel_tracing"],
 }

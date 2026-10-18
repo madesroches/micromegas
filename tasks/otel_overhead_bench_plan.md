@@ -108,7 +108,7 @@ library offers.
 
 `log` group — micromegas native macros vs. `tracing` macros through `OpenTelemetryTracingBridge`:
 
-| case | `micromegas` | `micromegas_tracing` (via interop) | `otel` |
+| case | `micromegas` | `micromegas_interop` | `otel` |
 |---|---|---|---|
 | `static` | `info!("static")` | `tracing::info!("static")` | `tracing::info!("static")` |
 | `formatted` | `info!("value {}", i)` | `tracing::info!("value {}", i)` | same |
@@ -116,7 +116,7 @@ library offers.
 | `dyn_low_card` | `info!(l = LABELS[i % 4], "static")` | — | `tracing::info!(l = LABELS[i % 4], "static")` |
 | `dyn_high_card` | `info!(id = %i, "static")` | `tracing::info!(id = %i, "static")` | same |
 
-`micromegas_tracing` shows the cost for an application already instrumented with `tracing`; it
+`micromegas_interop` shows the cost for an application already instrumented with `tracing`; it
 runs in the micromegas binary, whose global `tracing` subscriber is the interop layer.
 
 `metric` group — micromegas samples (`imetric!`) vs. OTel instruments created once
@@ -215,7 +215,7 @@ Stdlib-only Python. Reads `target/criterion/{log,metric,span,contention,encode}/
 `function_id` and `value_str` fields of the sibling `new/benchmark.json` rather than from the
 directory path (criterion replaces `/` with `_`, and case and lib names contain `_`, so paths
 cannot be split). Only ids whose lib is one of this crate's libs (`micromegas`,
-`micromegas_tracing`, `otel`, `otel_counter`, `otel_gauge`, `otel_tracing`, `otel_gzip`) are
+`micromegas_interop`, `otel`, `otel_counter`, `otel_gauge`, `otel_tracing`, `otel_gzip`) are
 kept, since `rust/tracing/benches/properties.rs` writes the same group names into the same
 `rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` lines) and
 prints the markdown tables for the docs page: hot path (ns/op per case × library), contention
@@ -270,7 +270,7 @@ Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
   that production keeps busy (LZ4 + CBOR for micromegas, protobuf for OTel); encoding keeps the
   hot-path numbers representative of a real deployment's CPU contention without network noise.
 - **`tracing` front end for OTel logs vs. the Logs API.** `Logger::emit` is meant for appenders;
-  measuring it would describe no real application. The `micromegas_tracing` column gives the
+  measuring it would describe no real application. The `micromegas_interop` column gives the
   like-for-like `tracing` comparison.
 - **Calling `LogBatch::new` despite its "may be made private" note.** It is the only way to
   re-run the OTLP conversion on captured records; versions are pinned, and a future removal shows

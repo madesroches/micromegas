@@ -11,13 +11,13 @@ This page compares what it costs a Rust application to record the same logs, met
 
 ## Results
 
-Every cell is a median from one full run. A dash marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_tracing` (the `tracing` crate's macros routed into Micromegas through its interop layer) only has the cases that `tracing` can express.
+Every cell is a median from one full run. A dash marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
 ### Hot path
 
 **`log`: median ns per operation**
 
-| case | `micromegas` | `micromegas_tracing` | `otel` |
+| case | `micromegas` | `micromegas_interop` | `otel` |
 |---|---|---|---|
 | `static` | 44.8 | 102.0 | 341.5 |
 | `formatted` | 80.6 | 143.8 | 323.7 |
@@ -102,7 +102,7 @@ Metrics are not in the encoding comparison: OpenTelemetry exports one aggregated
 
 **What is measured.** Calling-thread time for one operation, with criterion (`iter_custom`, only the emit calls are timed, see Pacing below): `log` and `span` cases are one macro or API call, `metric` cases are one sample. Both libraries record string attribute values (`%i` or `i.to_string()`), since Micromegas property values are strings; the comparison is about the same information, not the cheapest encoding each library offers. Both filter at INFO.
 
-**Micromegas.** `micromegas-tracing` with the `telemetry-sink` buffer defaults (10 MiB for logs and thread spans, 1 MiB for metrics) and CPU tracing enabled. The sink accepts every log, hands each full block to a worker thread that runs `StreamBlock::encode_bin` and drops the bytes (the HTTP sink without the network), and applies the HTTP sink's byte caps to that queue: 128 MiB for thread blocks and 256 MiB for log and metric blocks. `micromegas_tracing` events go through `install_tracing_interop`.
+**Micromegas.** `micromegas-tracing` with the `telemetry-sink` buffer defaults (10 MiB for logs and thread spans, 1 MiB for metrics) and CPU tracing enabled. The sink accepts every log, hands each full block to a worker thread that runs `StreamBlock::encode_bin` and drops the bytes (the HTTP sink without the network), and applies the HTTP sink's byte caps to that queue: 128 MiB for thread blocks and 256 MiB for log and metric blocks. `micromegas_interop` uses the `tracing` crate's macros, captured by the interop layer installed with `install_tracing_interop`.
 
 **OpenTelemetry.** `opentelemetry` 0.32.0 and `opentelemetry_sdk` 0.32.1 with the SDK defaults and no tuning of queue sizes: `BatchLogProcessor` and `BatchSpanProcessor` (2048-record queue, 512-record batches, drop on full), `ParentBased(AlwaysOn)` sampling with random ids, and a `PeriodicReader` with its default 60 s interval, cumulative temporality and the default cardinality limit. Logs enter through `opentelemetry-appender-tracing` 0.32.0 and `tracing` events; spans through the tracer directly (`otel`) or through `tracing-opentelemetry` 0.33.0 (`otel_tracing`); metrics through a `Counter<u64>` (`otel_counter`) and a `Gauge<u64>` (`otel_gauge`) created once. The log and span exporters convert each batch to OTLP protobuf with `opentelemetry-proto` 0.32.0, as a network exporter would, and discard it; the metric exporter does nothing, because the first export is a minute away.
 
