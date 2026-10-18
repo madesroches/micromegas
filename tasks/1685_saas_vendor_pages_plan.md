@@ -15,8 +15,13 @@
 - `mkdocs build --strict` and `pytest build/test_check_docs_site.py` pass.
 - Commits: `d6252153a`, `c1f2374f0`, `36bb6a084`, `676dafde4`, `35913d9ff`.
 
-**Left to do**: Implementation Steps 7–11, the **Fairness Corrections**.
-- Measure billing sizes (blocked on the Open Question).
+**Done (fairness corrections)**: Step 7. Billing sizes were measured on the production deployment
+on 2026-10-18; see **Billing-size measurement**. The script is at
+`tasks/1685_billing_sizes/measure_billing_sizes.py`.
+
+**Left to do**: Implementation Steps 8–11, the rest of the **Fairness Corrections**, plus the
+**Reference deployment refresh**.
+- Get the current S3 size (Open Question), then refresh the Micromegas cost and volumes.
 - Price traces where a linear rate is published.
 - Show Elastic's log tier as a range.
 - Recompute every figure and rewrite the hub, vendor pages, `llms.txt`, README and the
@@ -224,11 +229,75 @@ enriched document size; it is not a vendor's exact number. Write the script to
 `tasks/1685_billing_sizes/measure_billing_sizes.py`, run it with the poetry venv in
 `python/micromegas`, and record its output. It is a task artifact and is not shipped.
 
+**Measured 2026-10-18** (Step 7, done). Twelve one-hour windows over the previous 6 days were
+sampled: 30,000 log entries, 30,000 metric points, and 50,000 thread spans from the busiest CPU
+streams.
+
+| Signal | Old assumption | Measured mean | p50 | p95 |
+| :--- | :--- | :--- | :--- | :--- |
+| Log entry | 500 B | **~860 B** | 775 B | 1,184 B |
+| Metric point | 100 B | **~940 B** | 904 B | 1,299 B |
+| Span | 1 KB | **~1,050 B** | 916 B | 2,120 B |
+
+The same run measured **~1.8 CPU stream events per thread span** (19.7M spans against 35.1M
+events). Edge effects make this approximate. Vendors bill spans, not Micromegas stream events,
+so convert trace event counts to spans with this ratio.
+
 On the hub:
 - The Reference Workload's "Data size assumptions" become **measured billing sizes**, each with
   a one-line method note.
 - The Methodology states the rule: per-GB charges use the measured billing size. Micromegas's
   own cost is its actual bill and does not change.
+
+### Reference deployment refresh
+
+The hub's "Example Deployment Cost" and "Reference Workload" describe the production deployment
+as it was in early 2026 (8.5 TB, 9B logs, 275B metric events, 165B trace events, ~$1,100/month).
+Replace them with the current deployment's figures.
+
+**Confidentiality.** Everything about this deployment stays anonymous ("a production
+deployment"). Don't publish:
+- the organization, the project, or what is instrumented;
+- hostnames, account IDs or discount programmes;
+- instance types;
+- anything else beyond aggregate volumes, sizes and list-price infrastructure cost.
+
+**Volumes** (cumulative over retention, from `blocks.nb_objects` by stream tag, queried
+2026-08-23):
+
+| Signal | Events retained | Window | Per 30 days |
+| :--- | :--- | :--- | :--- |
+| CPU trace events | ~1.51T | 93 days | ~487B (~274B spans at 1.8 events/span) |
+| Metric points | ~400B | 91 days | ~132B |
+| Log entries | ~20.2B | 98 days | ~6.2B |
+
+- Retention is 90 days.
+- Peaks: ~518 GB/day ingested; ~240M CPU trace events/min (a burst; sustained busy load is
+  ~100–150M/min); ~12.8M metric points/min.
+- The trace row counts stream events, not spans. Label it "trace events", and use the span
+  conversion only for vendor pricing.
+
+**Cost basis: AWS on-demand list price**, so it matches the vendors' list prices. The deployment
+actually pays less, but the docs don't describe why. The July 2026 list cost by component:
+
+| Component | List/month |
+| :--- | :--- |
+| S3 (~17 TB + requests) | ~$670 → **re-price at current size** |
+| Aurora Serverless v2 | ~$624 |
+| Fargate (4 services) | ~$485 |
+| EC2 (object cache) | ~$146 |
+| ALB (attributed share) | ~$50 |
+| **Total** | **~$1,975 + S3 growth** |
+
+The user confirmed (2026-10-18) that compute hasn't changed since July and only S3 has grown.
+Re-price the S3 line at its current stored size: S3 Standard list, $0.023/GB-month for the first
+50 TB, plus requests in the same proportion as July. Every other line stays. Volumes and cost
+should cover the same period. If the S3 size is current (October), refresh the volume table too,
+with the same `blocks` aggregate.
+
+With the measured sizes, monthly billing volume on per-GB vendors is ~5.3 TB of logs, ~124 TB of
+metrics and ~288 TB of spans. That is about 13× the old ~10.7 TB, before traces. Expect every
+per-GB vendor's estimate to rise sharply. The Micromegas side rises only from ~$1,100 to ~$2,000+.
 
 ### Traces priced where a linear rate is published
 
@@ -422,16 +491,21 @@ Steps 1–6: **done**.
    real page with a stub). Also confirm each has a `<title>` starting with "<Vendor> Pricing and
    Cost Breakdown vs. Micromegas" and a `<meta name="description">` tag.
 
-Steps 7–11 (fairness corrections): **to do**. Step 7 is blocked on the Open Question.
+Step 7: **done**. Steps 8–11: **to do**. Step 9's Micromegas cost is blocked on the Open
+Question.
 
-7. Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` against the deployment
-   chosen in Open Questions, and record the measured bytes per log entry, metric point and span.
+7. ~~Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` on the production
+   deployment, and record the bytes per log entry, metric point and span.~~ Done. Results are in
+   **Billing-size measurement**.
 8. Look up Datadog's span rates, and check Dynatrace's included trace volume (see **Traces priced
    where a linear rate is published**).
-9. Recompute every vendor's per-GB charges with the measured sizes, add the with-traces figure
-   where a rate is published, and switch Elastic logs to the range. Update the six vendor pages
-   accordingly.
-10. Update the hub: the Reference Workload sizes, the Methodology rule, "The Challenge of Traces",
+9. Refresh the Micromegas side per **Reference deployment refresh**: list-price cost with S3 at
+   its current size, and the new volumes. Recompute every vendor's per-GB charges with the new
+   volumes and measured sizes, recompute per-event charges (e.g. Datadog log indexing, Dynatrace
+   metric data points) with the new event counts, add the with-traces figure where a rate is
+   published, and switch Elastic logs to the range. Update the six vendor pages accordingly.
+10. Update the hub: Example Deployment Cost, Scale Perspective, the Reference Workload volumes and
+    sizes, the Methodology rule, "The Challenge of Traces",
     At a glance (new column), the TL;DR and `description:`. Then update the `llms.txt` glosses,
     the README paragraph and the #1685 `CHANGELOG.md` entry.
 11. Re-run step 6's checks.
@@ -486,11 +560,14 @@ These checks are rendering output that a person has to look at.
   linear rate is published, and the Elastic log tier shown as a range.
 - Measured billing sizes apply to every vendor, not just Elastic, even where that raises other
   vendors' estimates.
+- Micromegas is costed at AWS on-demand list price, to match the vendors' list prices.
+- The reference deployment stays anonymous. Only aggregate volumes, sizes and list-price cost
+  are published.
+- Vendor trace pricing uses spans: stream events converted at the measured ~1.8 events/span.
 
 ## Open Questions
 
-- **needs user decision:** which deployment the step-7 billing-size sample comes from. The
-  production deployment behind the reference workload is the only representative source. The
-  local test environment's data shape doesn't match it. This needs `micromegas-query` access to
-  production (a profile in `~/.micromegas/config.json`), or a JSON sample you export and hand
-  over.
+- **needs user decision:** the S3 bucket's current stored size (GB-month, latest full
+  month), so the S3 line can be re-priced. Optionally also provide
+  current per-tag volumes. Prod access was granted once, for Step 7, so refreshing volumes needs
+  either a new go-ahead for one `blocks` aggregate query or numbers supplied by the user.
