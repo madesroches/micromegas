@@ -32,6 +32,7 @@ Throughput claim of 100k events/sec elsewhere:
 - `welcome/public/llms.txt:9` — `sustains roughly 100k events/second per process`
 - `mkdocs/docs/index.md:32` — `Supports up to 100k events/second per process`
 - `README.md:35` — `up to **100,000 events per second** from a single instrumented process`
+- `mkdocs/docs/architecture/index.md:257` — `Support for 100k+ events/second per process`
 
 (`welcome/dist/` is gitignored build output — not edited.)
 
@@ -56,12 +57,13 @@ Text-only edits; no structural slide changes.
 3. **Line 239** → `Up to 300k events/second per process` (keep "without breaking the host app").
 4. **Line 225** → keep `~20 ns per event` and add a fragment bullet right after:
    `~5–6× less calling-thread cost than the OpenTelemetry Rust SDK for logs and spans`
-   (static cases; the ratio is the portable claim, the absolute ns are laptop numbers).
+   Only the quoted string goes on the slide.
 5. **Throughput alignment** (100k → up to 300k):
    - `HowItWorks.tsx`: `"20ns per event, up to 300k events/sec"`
    - `llms.txt`: `sustains up to 300k events/second per process`
    - `mkdocs/docs/index.md`: `Supports up to 300k events/second per process`
    - `README.md`: `up to **300,000 events per second**`
+   - `mkdocs/docs/architecture/index.md`: `Support for up to 300k events/second per process`
 
 6. **Speaker guide** `doc/intro-micromegas/presentation-plan.md` lines 14, 32, 80: replace
    `900 billion events` / `900B events` with `~2 trillion events` and `$1,750` with `~$1,100`,
@@ -71,15 +73,12 @@ Text-only edits; no structural slide changes.
    `about $1,100/month for ~2 trillion events over 90 days`; drop `on AWS` from line 198 to
    match the list-price footing.
 
-The $1,100 public-list-price figure is used deliberately; the ~$2,200 AWS on-demand figure is
-not quoted anywhere.
-
 ## Implementation Steps
 
 1. Edit the four lines in `doc/intro-micromegas/src/slides/presentation.md` per Design 1–4.
-2. Edit the throughput claim in the four files listed in Design 5.
+2. Edit the throughput claim in the five files listed in Design 5.
    Apply Design 6 and 7 to the speaker guide and `when-to-use/index.md`.
-3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100,000 events\|60k\|266M" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
+3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100k+\|100,000 events\|60k\|266M" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
    — expect no hits.
 4. Add a `**Docs:**` bullet under `## Unreleased` in `CHANGELOG.md` (same `* **Docs:** ... (#1688).`
    format as the existing entries) summarizing the refreshed deck cost/scale figures and the
@@ -94,6 +93,7 @@ not quoted anywhere.
 - `welcome/public/llms.txt`
 - `mkdocs/docs/index.md`
 - `README.md`
+- `mkdocs/docs/architecture/index.md`
 - `doc/intro-micromegas/presentation-plan.md`
 - `mkdocs/docs/when-to-use/index.md`
 - `CHANGELOG.md`
@@ -106,9 +106,11 @@ not quoted anywhere.
   these carry the same claim and leaving them at 100k would recreate the inconsistency the issue
   is fixing.
 - **Quote "~5–6×" for static logs/spans** rather than a single blended ratio: matches the issue
-  and the static medians; dynamic cases are smaller and stay on the overhead page.
+  and the static medians (rounds conservatively from 5.3× span and 6.6× log); dynamic cases are smaller and stay on the overhead page.
 
 ## Decisions
+
+- The $1,100 public-list-price figure is used; the ~$2,200 AWS on-demand figure is not quoted anywhere.
 
 ## Documentation
 
@@ -117,7 +119,7 @@ The edited files are themselves the docs; no new pages. CHANGELOG entry under Un
 ## Testing Strategy
 
 Content-only change with no logic; no automated tests apply. The grep in step 3 and the two
-builds in step 4 are the checks.
+builds in step 5 are the checks.
 
 ## Manual Verification
 
