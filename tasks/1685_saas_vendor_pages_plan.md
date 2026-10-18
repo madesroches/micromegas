@@ -71,6 +71,13 @@ part of making all six pages share one structure.
 - Included: unlimited users, host metrics, and 100 custom metrics per host on Pro (overage $5
   per 100). Billed separately: log ingest and indexing (priced per retention period), Flex
   storage/compute, and APM at $31/host annual with Infra.
+- Custom metrics caveat: the headline excludes the workload's ~998k custom-metric series
+  (~1M minus the 2,000 included for 20 hosts), ~$49,900/month at the $5 per 100 overage. Say
+  so on the page, with the usual note that fine-grained metrics like these wouldn't typically be
+  sent to Datadog at this granularity.
+- The old "effective cost of logs ~$1.80–$2.94/GB" figure is wrong. Replace it with ~$5.10/GB:
+  3,000M events / 1,500 GB = 2M events/GB, so indexing is $5.00/GB plus $0.10 ingest
+  (`$7,650 / 1,500`).
 - Sources: datadoghq.com/pricing/list/,
   datadoghq.com/pricing/?product=log-management,
   docs.datadoghq.com/account_management/billing/custom_metrics/.
@@ -240,12 +247,18 @@ site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-
 - `*Last reviewed: June 2026*` → `*Last reviewed: October 2026*`.
 - Methodology intro (line 120): "every vendor comparison below… Each vendor section" →
   "every vendor page… Each vendor page".
-- Update the front matter `description:` if it states a range; the current one doesn't.
+- Reword the front matter `description:` to match the new figures. Drop "at a fraction of
+  commercial SaaS cost" and use a factual framing, e.g. "Micromegas's self-hosted cost model
+  compared with Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk on one
+  reference workload, with per-vendor pricing pages."
+- The note at line 26 ("the Dynatrace figure excludes custom metrics") names Datadog alongside
+  Dynatrace as excluding custom metrics.
 
 ### `mkdocs.yml`
 
 - Remove the six vendor lines from `redirect_maps`. Keep `cost-effectiveness.md` and
   `cost-comparisons/index.md`.
+- Add `validation:` / `  anchors: warn` so `--strict` fails on broken hub-anchor links.
 - Nav: turn `vs. SaaS Vendors` into a section.
 
 ```yaml
@@ -276,11 +289,14 @@ gloss if it still says "each vendor".
    `saas-vendors.md` sections.
 2. Edit `mkdocs/docs/when-to-use/saas-vendors.md`: delete the vendor sections and update At a
    glance, the TL;DR, Last reviewed, and the Methodology intro.
-3. Edit `mkdocs/mkdocs.yml`: change the redirects and nav.
+3. Edit `mkdocs/mkdocs.yml`: change the redirects and nav, and add `validation:` / `  anchors: warn`.
 4. Edit `welcome/public/llms.txt`, lines 71–77.
 5. Run `mkdocs build --strict` from `mkdocs/` and `python3 -m pytest build/test_check_docs_site.py`.
    The PR's "Build Docs" CI job (`publish-docs.yml`) is the authoritative full-stage
    `check_docs_site.py` run; a partial local stage would fail for unrelated reasons.
+   After the build, grep the six built `site/cost-comparisons/<vendor>/index.html` files and
+   confirm none contains `http-equiv="refresh"` (a leftover vendor redirect would overwrite the
+   real page with a stub).
 
 ## Files to Modify
 
@@ -317,28 +333,27 @@ pages come back via this change's own entry.
 ## Testing Strategy
 
 There is no new code, so no unit tests. Existing automated checks cover the change:
-- `mkdocs build --strict` catches broken relative links, nav entries pointing at missing files, and a redirect source that collides with a real page.
+- `mkdocs build --strict` catches broken relative links and nav entries pointing at missing files. With `validation: anchors: warn` it also fails on broken anchors, including the hub-anchor links.
+- After the build, grep the six built `site/cost-comparisons/<vendor>/index.html` files and
+  confirm none contains `http-equiv="refresh"`; neither mkdocs-redirects nor Check 4 detects a
+  leftover vendor redirect overwriting a real page.
 - `python3 -m pytest build/test_check_docs_site.py` should still pass; it doesn't change.
 - The PR's "Build Docs" CI job (`publish-docs.yml`) runs the full stage plus
   `python3 build/check_docs_site.py public_docs` on PRs touching `mkdocs/**` or `welcome/**`.
-  It is the authoritative run: Check 6 confirms the six new `llms.txt` URLs resolve, and Check 4
-  confirms the new pages carry their own canonical tags instead of being refresh stubs.
+  It is the authoritative run: Check 6 confirms the six new `llms.txt` URLs resolve.
 
 ## Manual Verification
 
 These checks are rendering output that a person has to look at.
 1. Run `cd mkdocs && mkdocs serve` and open `/docs/cost-comparisons/dynatrace/`. Expected: the
    browser tab reads "Dynatrace Pricing and Cost Breakdown vs. Micromegas - Micromegas
-   Documentation", the page source has `<meta name="description">` with the front matter text,
-   and it has no `http-equiv="refresh"`.
+   Documentation", the page source has `<meta name="description">` with the front matter text.
 2. Expected: the nav shows `When to Use › vs. SaaS Vendors` expanded, with Overview plus six
    vendors.
 3. Open `/docs/when-to-use/saas-vendors/`. Expected: the At a glance links open the vendor
    pages, and no `## vs.` sections are left.
 4. Open `/docs/cost-comparisons/` and `/docs/cost-effectiveness/`. Expected: both still redirect
    to the hub.
-5. On one vendor page, click the four hub-anchor links (`#reference-workload`, `#methodology`,
-   `#the-challenge-of-traces`, `#at-a-glance`). Expected: each lands on its section in the hub.
 
 ## Decisions
 
