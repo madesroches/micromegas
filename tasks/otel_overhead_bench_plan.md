@@ -318,7 +318,7 @@ clippy run, since CI does not build benches.
 ## Manual Verification
 Bench output is read by a human, so these are not automated.
 1. `cd rust && cargo bench -p micromegas-otel-comparison-bench | tee /tmp/bench.log` —
-   every group runs in both binaries; `log/static/micromegas` reports tens of ns (logs enabled);
+   every group except `contention` runs in both binaries (`contention` runs in the micromegas binary only); `log/static/micromegas` reports tens of ns (logs enabled);
    `span/static/micromegas` is non-zero and its `encode` sample reports a non-empty block (thread
    streams enabled); the bench panics with the id and counts if either library drops anything;
    the OTel `metric_batch` export asserts that a collect holds exactly N points.

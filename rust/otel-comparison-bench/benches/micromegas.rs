@@ -293,7 +293,6 @@ fn bench_encode<Q>(
     name: &str,
     block: &EventBlock<Q>,
     nb_events: usize,
-    bench: bool,
 ) where
     Q: HeterogeneousQueue + ExtractDeps,
     Q::DepsQueue: HeterogeneousQueue,
@@ -307,12 +306,10 @@ fn bench_encode<Q>(
         raw_bytes(block),
         wire,
     );
-    if bench {
-        group.throughput(Throughput::Elements(nb_events as u64));
-        group.bench_function(BenchmarkId::new(name, "micromegas"), |b| {
-            b.iter(|| block.encode_bin(process_info).unwrap())
-        });
-    }
+    group.throughput(Throughput::Elements(nb_events as u64));
+    group.bench_function(BenchmarkId::new(name, "micromegas"), |b| {
+        b.iter(|| block.encode_bin(process_info).unwrap())
+    });
 }
 
 fn bench_encode_group(c: &mut Criterion) {
@@ -325,18 +322,11 @@ fn bench_encode_group(c: &mut Criterion) {
             &format!("log_{name}"),
             &block,
             ENCODE_LOG_EVENTS,
-            true,
         );
     }
     for (name, case) in SPAN_CASES {
         let block = capture_block(&sink.thread_blocks, flush_thread_buffer, case, ENCODE_SPANS);
-        bench_encode(
-            &mut group,
-            &format!("span_{name}"),
-            &block,
-            ENCODE_SPANS,
-            true,
-        );
+        bench_encode(&mut group, &format!("span_{name}"), &block, ENCODE_SPANS);
     }
     group.finish();
 }

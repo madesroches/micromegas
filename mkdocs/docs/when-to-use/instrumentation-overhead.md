@@ -128,7 +128,7 @@ Neither library ever drops a record, and the bench fails if either does: after e
 
 ### Noise
 
-Every number on this page comes from one full run on one machine, so no run-to-run spread is reported. The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes. Bench threads are not pinned, so samples can land on performance or efficiency cores, a likely source of run-to-run spread, and the multi-thread cases are the most exposed to it. Treat differences of 10% as noise.
+Every number on this page comes from one full run on one machine, so no run-to-run spread is reported. The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes. Bench threads are not pinned, so samples can land on performance or efficiency cores, a likely source of run-to-run spread. Treat differences of 10% as noise.
 
 ### Hardware and software
 
