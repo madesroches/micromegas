@@ -93,14 +93,21 @@ part of making all six pages share one structure.
 - Logs, Observability Complete:
   - Ingest is volume-tiered, "as low as $0.09/GB", and the tier breakpoints are not published.
     Keep the prior blended assumption of ~$0.15/GB, stated as an assumption:
-    `1,500 × ~$0.15 = ~$225` (range `$135`–`$900` across $0.09–$0.60/GB).
+    `1,500 × ~$0.15 = ~$225` (range `$135`–`$900` across $0.09–$0.60/GB). The ~$0.15/GB figure
+    assumes the volume tiers count combined ingest (~10.7 TB/month); that is an assumption, not
+    a verified fact. If the tiers count only the 1.5 TB of logs, the rate is higher, toward the
+    range's upper end. The page must say the same.
   - Retention $0.019/GB-month → `1,500 × 3 × $0.019 = ~$86`.
 - Metrics. New pricing effective July 1, 2026: time-series metrics cost 25% of the standard rate.
   - Ingest $0.023/GB → `9,200 × $0.023 = ~$212`.
   - Retention $0.005/GB-month → `9,200 × 3 × $0.005 = ~$138`.
-- Total ~$660/month, which is **below** the Micromegas ~$1,100. The page must say so plainly,
-  and also say that the Micromegas figure includes 165B trace events while this one excludes
-  traces. The pricing section opens with the range, because the log-ingest tiers are unpublished.
+- Total ~$660/month, which is **below** the Micromegas ~$1,100. The total range is
+  ~$570–$1,340/month (~0.5×–1.2×): log ingest $135–$900 plus fixed $86 + $212 + $138. "Below
+  Micromegas" holds under the blended-rate assumption (headline ~$660, ~0.6×); the upper bound
+  assumes the $0.60 first-tier rate on all logs. The page states the headline together with that
+  caveat, and also says that the Micromegas figure includes 165B trace events while this one
+  excludes traces. The pricing section opens with the range, because the log-ingest tiers are
+  unpublished.
 - Also mention Logs Essentials (ingest as low as $0.07/GB, retention as low as $0.017/GB-month)
   as the cheaper, reduced-feature tier. No per-user fees. Egress: first 50 GB free, then $0.05/GB.
 - Sources: elastic.co/pricing/serverless-observability,
@@ -138,10 +145,8 @@ part of making all six pages share one structure.
   newer activity-based option) but no rates.
 - Keep the ~$22,000/month estimate, built from the last publicly listed Marketplace tiers
   (50 GB/day $50k/yr, 100 GB/day $80k/yr; extrapolated at ~$700–$800 per GB/day-year to
-  ~357 GB/day). Label it explicitly as based on the last published list prices and say that
-  current prices are private-offer only. Cite the 2025-07-19 blog post
-  (`blog/posts/...how-costly-really-is-splunk`) as the dated record of those tiers, and do not
-  edit that post.
+  ~357 GB/day). The Splunk page carries the tier table itself, labelled as the last published
+  AWS Marketplace list prices (early 2026), and says that current prices are private-offer only.
 - Mention Splunk Observability Cloud per-host pricing (Infrastructure $15, App & Infra $60,
   End-to-End $75 per host-month, "starts at") as the metrics-side product. Unlimited users on
   Cloud Platform. Keep the Cisco acquisition note short.
@@ -273,9 +278,9 @@ gloss if it still says "each vendor".
    glance, the TL;DR, Last reviewed, and the Methodology intro.
 3. Edit `mkdocs/mkdocs.yml`: change the redirects and nav.
 4. Edit `welcome/public/llms.txt`, lines 71–77.
-5. Run `mkdocs build --strict` from `mkdocs/`. Then stage the site the way
-   `publish-docs.yml` does, as far as practical (a docs-only `public_docs/docs` + the welcome
-   build), and run `python3 build/check_docs_site.py public_docs`.
+5. Run `mkdocs build --strict` from `mkdocs/` and `python3 -m pytest build/test_check_docs_site.py`.
+   The PR's "Build Docs" CI job (`publish-docs.yml`) is the authoritative full-stage
+   `check_docs_site.py` run; a partial local stage would fail for unrelated reasons.
 
 ## Files to Modify
 
@@ -283,6 +288,7 @@ gloss if it still says "each vendor".
 - `mkdocs/docs/when-to-use/saas-vendors.md`
 - `mkdocs/mkdocs.yml`
 - `welcome/public/llms.txt`
+- `CHANGELOG.md` (amend the Unreleased #1637 entry)
 
 ## Trade-offs
 
@@ -294,7 +300,7 @@ gloss if it still says "each vendor".
   ~1,500 words of copied boilerplate, which is what #1641 removed.
 - **Splunk: keep the dollar estimate, or say "unpriced".** Keep it, labelled as based on the last
   published list rates. "Contact sales" would make the comparison table useless, and the
-  published tiers are recorded in the dated blog post.
+  published tiers are on the Splunk page itself.
 - **Elastic coming out cheaper.** Publish the honest figure. The page's credibility, and the
   whole comparison's, depends on applying the same arithmetic to every vendor. The
   traces exclusion explains why that figure isn't a like-for-like loss.
@@ -304,17 +310,19 @@ gloss if it still says "each vendor".
 ## Documentation
 
 This change is documentation. `CHANGELOG.md` gets an entry from the `pr` stage. Nothing else
-links to the vendor anchors.
+links to the vendor anchors. Also amend the Unreleased #1637 `CHANGELOG.md` entry so it says
+only `/cost-effectiveness/` and `/cost-comparisons/` redirect to the merged page; the vendor
+pages come back via this change's own entry.
 
 ## Testing Strategy
 
 There is no new code, so no unit tests. Existing automated checks cover the change:
-- `mkdocs build --strict` catches broken relative links (including the hub ↔ vendor anchors),
-  nav entries pointing at missing files, and a redirect source that collides with a real page.
+- `mkdocs build --strict` catches broken relative links, nav entries pointing at missing files, and a redirect source that collides with a real page.
 - `python3 -m pytest build/test_check_docs_site.py` should still pass; it doesn't change.
-- `python3 build/check_docs_site.py public_docs` runs on a staged tree. Check 6 confirms the
-  six new `llms.txt` URLs resolve. Check 4 confirms the new pages carry their own canonical tags
-  instead of being refresh stubs.
+- The PR's "Build Docs" CI job (`publish-docs.yml`) runs the full stage plus
+  `python3 build/check_docs_site.py public_docs` on PRs touching `mkdocs/**` or `welcome/**`.
+  It is the authoritative run: Check 6 confirms the six new `llms.txt` URLs resolve, and Check 4
+  confirms the new pages carry their own canonical tags instead of being refresh stubs.
 
 ## Manual Verification
 
@@ -329,6 +337,8 @@ These checks are rendering output that a person has to look at.
    pages, and no `## vs.` sections are left.
 4. Open `/docs/cost-comparisons/` and `/docs/cost-effectiveness/`. Expected: both still redirect
    to the hub.
+5. On one vendor page, click the four hub-anchor links (`#reference-workload`, `#methodology`,
+   `#the-challenge-of-traces`, `#at-a-glance`). Expected: each lands on its section in the hub.
 
 ## Decisions
 
