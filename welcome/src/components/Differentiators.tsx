@@ -31,7 +31,7 @@ export default function Differentiators() {
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <Card
             icon={<Zap size={24} className="text-brand-gold" />}
-            title="20ns Overhead"
+            title="49ns Overhead"
             description="Instrumentation so fast you never turn it off. Capture every event in production without impacting performance."
           />
           <Card

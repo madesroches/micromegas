@@ -19,7 +19,7 @@ description: Micromegas is an open-source observability platform unifying teleme
 
 Micromegas is a comprehensive observability solution that provides:
 
-- **High-performance instrumentation** with 20ns overhead per event
+- **High-performance instrumentation** with about 49ns overhead per log event ([measured against OpenTelemetry](when-to-use/instrumentation-overhead.md))
 - **Unified data collection** for logs, metrics, spans, and traces
 - **Cost-efficient storage** using object storage for raw data
 - **Powerful SQL analytics** built on Apache DataFusion
@@ -28,7 +28,7 @@ Micromegas is a comprehensive observability solution that provides:
 ## Key Features
 
 ### 🚀 High Performance
-- Ultra-low overhead telemetry collection (20ns per event)
+- Ultra-low overhead telemetry collection (about 49ns per log event; [how it was measured](when-to-use/instrumentation-overhead.md))
 - Supports up to 100k events/second per process
 - Thread-local storage for minimal performance impact
 

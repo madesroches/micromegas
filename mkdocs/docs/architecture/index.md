@@ -104,7 +104,7 @@ graph TD
 ### Component Responsibilities
 
 #### Data Collection
-- **Tracing Library**: Ultra-low overhead (20ns per event) instrumentation embedded in applications
+- **Tracing Library**: Ultra-low overhead (about 49ns per log event, [measured](../when-to-use/instrumentation-overhead.md)) instrumentation embedded in applications
 - **Telemetry Sink**: Batches events and handles transmission to ingestion service
 - **Ingestion Service**: HTTP endpoint accepting two wire formats — the native transit/CBOR protocol from `micromegas-tracing`, and OTLP/HTTP from any OpenTelemetry-instrumented producer (see [OTLP Ingestion](../otlp/index.md))
 

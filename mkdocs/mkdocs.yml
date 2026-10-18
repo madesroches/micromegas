@@ -109,6 +109,7 @@ nav:
     - When to Use Micromegas: when-to-use/index.md
     - vs. LLM Agent Tools: when-to-use/agent-observability.md
     - vs. SaaS Vendors: when-to-use/saas-vendors.md
+    - Instrumentation Overhead: when-to-use/instrumentation-overhead.md
   - Query Guide:
     - Overview: query-guide/index.md
     - Quick Start: query-guide/quick-start.md
