@@ -288,10 +288,13 @@ gloss if it still says "each vendor".
    pricing from **Pricing Re-verification** and the qualitative bullets from the current
    `saas-vendors.md` sections.
 2. Edit `mkdocs/docs/when-to-use/saas-vendors.md`: delete the vendor sections and update At a
-   glance, the TL;DR, Last reviewed, and the Methodology intro.
+   glance, the TL;DR, Last reviewed, the Methodology intro, the front matter `description:`, and
+   the line-26 custom-metrics note (name Datadog alongside Dynatrace).
 3. Edit `mkdocs/mkdocs.yml`: change the redirects and nav, and add `validation:` / `  anchors: warn`.
 4. Edit `welcome/public/llms.txt`, lines 71–77.
-5. Run `mkdocs build --strict` from `mkdocs/` and `python3 -m pytest build/test_check_docs_site.py`.
+5. Amend the Unreleased #1637 `CHANGELOG.md` entry so it says only `/cost-effectiveness/` and
+   `/cost-comparisons/` redirect to the merged page.
+6. Run `mkdocs build --strict` from `mkdocs/` and `python3 -m pytest build/test_check_docs_site.py`.
    The PR's "Build Docs" CI job (`publish-docs.yml`) is the authoritative full-stage
    `check_docs_site.py` run; a partial local stage would fail for unrelated reasons.
    After the build, grep the six built `site/cost-comparisons/<vendor>/index.html` files and
