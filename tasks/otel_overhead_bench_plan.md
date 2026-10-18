@@ -76,19 +76,28 @@ records the versions so a later bump is a re-run.
 
 ### Shared harness (`src/lib.rs`)
 - `pub type Case = fn(usize);`
-- `pub fn bench_cases(c, group, lib, cases: &[(&str, Case)], after_case: Option<fn(id: &str, emitted: u64)>)`
-  — one criterion group per category, `BenchmarkId::new(case, lib)`, persistent counter across
-  warm-up and samples (as in `properties.rs`). Same ids in both binaries, so `report.py` pairs the
-  libraries by `group_id`/`function_id`/`value_str`, never by directory name. `after_case` runs once per case after
-  its last sample and receives the counter's final value (the case's emitted count).
-- `pub fn bench_contention(c, lib, cases, per_thread_init: fn(), per_thread_exit: fn(),
-  after_case: Option<fn(id: &str, emitted: u64)>)` — the `properties.rs`
-  `iter_custom` + `Barrier` + disjoint-range harness, ids `BenchmarkId::new(format!("{case}/{lib}"),
-  threads)` for 1, 4, 8 threads with `Throughput::Elements(threads)`. `per_thread_init` runs in
-  each spawned thread before the barrier (micromegas needs `init_thread_stream()` for spans);
-  `per_thread_exit` runs in each spawned thread before it exits (micromegas calls
-  `unregister_thread_stream()` so no dangling `*mut ThreadStream` stays in the dispatch). `after_case`
-  runs once per case and thread count with the total emitted across threads.
+- `pub const BATCH: usize = 2048;` — operations per chunk, across all threads; the OTel default
+  batch queue size, so a chunk can never overflow it.
+- `pub type Drain = fn();` — returns once the library's background queue is empty.
+- `pub fn bench_cases(c, group, lib, cases: &[(&str, Case)], drain: Drain, after_case:
+  Option<fn(id: &str, emitted: u64)>)` — one criterion group per category,
+  `BenchmarkId::new(case, lib)`, persistent counter across warm-up and samples (as in
+  `properties.rs`). Uses `iter_custom`: each sample's `iters` are split into chunks of at most
+  `BATCH`; only the emits of a chunk are timed, and `drain` runs between chunks outside the timed
+  region. Same ids in both binaries, so `report.py` pairs the libraries by
+  `group_id`/`function_id`/`value_str`, never by directory name. `after_case` runs once per case
+  after its last sample and receives the counter's final value (the case's emitted count).
+- `pub fn bench_contention(c, lib, cases, per_thread_init: fn(), per_thread_exit: fn(), drain:
+  Drain, after_case: Option<fn(id: &str, emitted: u64)>)` — `iter_custom` with disjoint id
+  ranges, ids `BenchmarkId::new(format!("{case}/{lib}"), threads)` for 1, 4, 8 threads with
+  `Throughput::Elements(threads)`. Each thread emits `BATCH / threads` operations per chunk; all
+  threads and the main thread meet at barriers around each chunk, and the main thread drains
+  between chunks. A chunk's time is the slowest thread's emit time, measured inside the thread so
+  barrier latency is excluded. `per_thread_init` runs in each spawned thread before the first
+  barrier (micromegas needs `init_thread_stream()` for spans); `per_thread_exit` runs in each
+  spawned thread after its last chunk (micromegas calls `unregister_thread_stream()` so no
+  dangling `*mut ThreadStream` stays in the dispatch). `after_case` runs once per case and thread
+  count with the total emitted across threads.
 - `pub fn print_bytes(id, nb_events, raw_bytes, wire_bytes)` — one `println!` line per encoded
   sample (criterion has no custom-metric output), parsed by `report.py`.
 
@@ -183,15 +192,22 @@ per kind; OTel's batch channel and metric aggregation map are its shared points.
   count to an `AtomicU64`, and, when a capture flag is set, clone the records into a `Mutex<Vec>`.
   `NoopMetricExporter` returns `Ok` and does nothing.
 
-### Drop accounting
-A tight bench loop can outrun OTel's background thread; a full queue makes `emit` / `end`
-return early. Dropped records are data the exporter never sees, so the drop rate is reported next to each number. After each OTel log and span case the bench
-calls `force_flush()` from the `after_case` callback, compares the exporter's count with the
-case's emitted count, and prints `<id>: dropped N of M (P%)` for `report.py`. The exporter's
-`AtomicU64` is cumulative, so it is snapshotted before each case and the per-case delta is used.
-This covers the `contention` log and span cases at each thread count too, which share the same
-2048 queue. The micromegas binary prints the same line format for its capped worker queue, counting the
-events (`nb_objects()`) in each dropped block so N and M are event counts. The results page shows the drop rate next to each log and span number.
+### Pacing and drop guard
+A tight bench loop outruns the background threads of both libraries: OTel's 2048-slot batch queue
+and Micromegas's byte-capped worker queue both drop under it, and the results would describe
+dropped data rather than normal operation. Instead of tuning queues, the producer is paced: chunks
+of at most `BATCH` (2048) operations are timed, and an untimed `drain` between chunks waits for the
+background side to empty.
+- OTel `drain`: `force_flush()` on the logger and tracer providers.
+- Micromegas `drain`: waits until the bench sink's worker queue is empty and the worker is idle
+  (a pending-block counter and a condvar). It does not flush the calling thread's partially
+  filled block; blocks reaching the worker as they fill is the normal hot-path behavior.
+
+Drops stay accounted as a guard. After each case, `after_case` panics with the id and the counts
+if anything was dropped: for OTel, the exporter's cumulative `AtomicU64` is snapshotted per case
+and compared with the emitted count (the SDK's own dropped counter is private); for Micromegas,
+the events in each dropped block (`nb_objects()`) are counted. This covers the `contention` cases
+at each thread count too. The `encode` capture asserts the exact captured count.
 
 ### Report script (`report.py`)
 Stdlib-only Python. Reads `target/criterion/{log,metric,span,contention,encode}/**/new/estimates.json`
@@ -201,10 +217,10 @@ directory path (criterion replaces `/` with `_`, and case and lib names contain 
 cannot be split). Only ids whose lib is one of this crate's libs (`micromegas`,
 `micromegas_tracing`, `otel`, `otel_counter`, `otel_gauge`, `otel_tracing`, `otel_gzip`) are
 kept, since `rust/tracing/benches/properties.rs` writes the same group names into the same
-`rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` and drop lines) and
+`rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` lines) and
 prints the markdown tables for the docs page: hot path (ns/op per case × library), contention
-(aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event),
-drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
+(aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event).
+Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
 `python3 otel-comparison-bench/report.py bench.log`.
 
 ## Implementation Steps
@@ -214,7 +230,7 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
 3. Write `benches/micromegas.rs`: sink, setup, `log` / `metric` / `span` / `contention` /
    `encode` groups.
 4. Write `benches/opentelemetry.rs`: exporters, providers, global subscriber, the same groups,
-   drop accounting.
+   pacing, drain and drop guard.
 5. Write `report.py`.
 6. From `rust/`: `cargo clippy -p micromegas-otel-comparison-bench --all-targets -- -D warnings`,
    `cargo fmt`, `cargo machete`, `cargo deny check bans` (add `skip` entries in `deny.toml` only
@@ -244,9 +260,12 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
 - **Two bench binaries vs. one.** Both stacks want a process-global `tracing` subscriber, and
   OTel's batch and reader threads would run during micromegas cases. Separate processes give each
   library the machine to itself; shared ids keep the results side by side.
-- **SDK defaults vs. tuned OTel queues.** Raising the queue size only delays the point where a
-  producer faster than the exporter drops records; reporting the drop rate at defaults is more
-  informative than picking a size that hides it on one machine.
+- **Pacing vs. tuned queues.** Both libraries keep their defaults. Raising a queue size only
+  delays the point where a producer faster than the exporter drops records, and a benchmark that
+  reports dropped data says little about normal operation, where drops are rare. Pacing the
+  producer in chunks no larger than the smallest queue, with an untimed drain between chunks,
+  measures the steady state where the exporter keeps up. The cost is that sustained overload is
+  not measured.
 - **Encoding in the no-op sinks vs. pure discard.** Discarding would leave a background core idle
   that production keeps busy (LZ4 + CBOR for micromegas, protobuf for OTel); encoding keeps the
   hot-path numbers representative of a real deployment's CPU contention without network noise.
@@ -263,24 +282,25 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
   contention, encode and bytes tables, then methodology — versions, configuration of each
   library, hardware/OS/`rustc`, the semantic differences (per-sample metrics vs. in-process
   aggregation and its cardinality limit, no micromegas span attributes, OTel drops at full
-  queues, string attribute values), and the exact commands to reproduce.
+  queues (not exercised by the paced bench), string attribute values), and the exact commands to reproduce.
 - `mkdocs/docs/when-to-use/index.md`: link the page from the "Micromegas in brief"
   instrumentation bullet.
 
 ## Testing Strategy
 The deliverable is a benchmark and a report generator; the bench code has no product logic to
 unit-test, and its guards are inline: the single-block assertion before each `encode` sample, and
-the drop accounting that makes a starved OTel exporter visible instead of silently fast.
+the drop guard that fails the bench if either library loses a record instead of silently measuring a partly discarding producer.
 `report.py`'s parsing is exercised by generating the docs tables from a real run (Implementation
 Step 7); a malformed table is obvious on the page. Bench compilation is checked by Step 6's
 clippy run, since CI does not build benches.
 
 ## Manual Verification
 Bench output is read by a human, so these are not automated.
-1. `cd rust && cargo bench -p micromegas-otel-comparison-bench -- --quick | tee /tmp/bench.log` —
+1. `cd rust && cargo bench -p micromegas-otel-comparison-bench | tee /tmp/bench.log` —
    every group runs in both binaries; `log/static/micromegas` reports tens of ns (logs enabled);
    `span/static/micromegas` is non-zero and its `encode` sample reports a non-empty block (thread
-   streams enabled); each OTel log/span case prints a drop line.
+   streams enabled); no case prints a drop line, and the bench panics with the id and counts if
+   either library drops anything.
 2. `python3 otel-comparison-bench/report.py /tmp/bench.log` — prints every table with no empty
    cells except the `—` combinations listed in the case tables.
 3. `cd mkdocs && mkdocs serve` — the new page renders and is reachable from `When to Use`.
@@ -288,5 +308,5 @@ Bench output is read by a human, so these are not automated.
 ## Decisions
 - `mkdocs/docs/unreal/index.md:14` is Unreal-specific and is left as is.
 - Blog posts and `doc/` presentations are historical records and are left unchanged.
-- OTel runs on SDK defaults only, with no tuned-OTel row; its drop rate is reported instead.
+- Both libraries run on defaults, paced in chunks of at most 2048 operations with an untimed drain between chunks, so no record is dropped; a drop fails the bench.
 - The project-wide "20 ns per event" figure (CPU tracing, one span begin or end event) stays as a simple headline; only the new page carries precise, per-operation numbers.

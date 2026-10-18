@@ -8,13 +8,10 @@ use std::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use micromegas_otel_comparison_bench::{
-    Case, bench_cases, bench_contention, print_bytes, print_drops,
-};
+use micromegas_otel_comparison_bench::{Case, bench_cases, bench_contention, print_bytes};
 use micromegas_telemetry_sink::{
     stream_block::StreamBlock, tracing_interop::install_tracing_interop,
 };
@@ -70,6 +67,8 @@ struct WorkerQueue {
     queued_bytes: AtomicUsize,
     // Queued plus being encoded.
     pending: AtomicUsize,
+    idle: Condvar,
+    idle_lock: Mutex<()>,
     dropped_events: AtomicU64,
 }
 
@@ -110,13 +109,18 @@ impl WorkerQueue {
             self.queued_bytes.fetch_sub(item.bytes, Ordering::Relaxed);
             let process_info = process_info.get().expect("blocks arrive after startup");
             let _ = std::hint::black_box(item.block.encode_bin(process_info));
-            self.pending.fetch_sub(1, Ordering::Relaxed);
+            if self.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                // Taking the lock orders this notification after a waiter's check of `pending`.
+                drop(self.idle_lock.lock().unwrap());
+                self.idle.notify_all();
+            }
         }
     }
 
     fn wait_idle(&self) {
-        while self.pending.load(Ordering::Relaxed) > 0 {
-            std::thread::sleep(Duration::from_millis(1));
+        let mut guard = self.idle_lock.lock().unwrap();
+        while self.pending.load(Ordering::Acquire) > 0 {
+            guard = self.idle.wait(guard).unwrap();
         }
     }
 }
@@ -185,15 +189,17 @@ fn sink() -> &'static BenchSink {
         .expect("sink is initialized before any case runs")
 }
 
-/// Waits for the worker so a case's drops are counted against that case and the next one starts
-/// from an idle queue.
+/// Blocks that already reached the worker queue are encoded; the calling thread's partially
+/// filled block stays where it is, as it would in normal operation.
+fn drain() {
+    sink().queue.wait_idle();
+}
+
 fn after_case(id: &str, emitted: u64) {
-    flush_log_buffer();
-    flush_metrics_buffer();
-    flush_thread_buffer();
     let queue = &sink().queue;
     queue.wait_idle();
-    print_drops(id, queue.dropped_events.swap(0, Ordering::Relaxed), emitted);
+    let dropped = queue.dropped_events.swap(0, Ordering::Relaxed);
+    assert_eq!(dropped, 0, "{id}: dropped {dropped} of {emitted} events");
 }
 
 const LOG_CASES: [(&str, Case); 5] = [
@@ -342,6 +348,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         wake: Condvar::new(),
         queued_bytes: AtomicUsize::new(0),
         pending: AtomicUsize::new(0),
+        idle: Condvar::new(),
+        idle_lock: Mutex::new(()),
         dropped_events: AtomicU64::new(0),
     });
     {
@@ -370,22 +378,38 @@ fn criterion_benchmark(c: &mut Criterion) {
     init_thread_stream();
     install_tracing_interop(None);
 
-    bench_cases(c, "log", "micromegas", &LOG_CASES, Some(after_case));
+    bench_cases(c, "log", "micromegas", &LOG_CASES, drain, Some(after_case));
     bench_cases(
         c,
         "log",
         "micromegas_tracing",
         &TRACING_LOG_CASES,
+        drain,
         Some(after_case),
     );
-    bench_cases(c, "metric", "micromegas", &METRIC_CASES, Some(after_case));
-    bench_cases(c, "span", "micromegas", &SPAN_CASES, Some(after_case));
+    bench_cases(
+        c,
+        "metric",
+        "micromegas",
+        &METRIC_CASES,
+        drain,
+        Some(after_case),
+    );
+    bench_cases(
+        c,
+        "span",
+        "micromegas",
+        &SPAN_CASES,
+        drain,
+        Some(after_case),
+    );
     bench_contention(
         c,
         "micromegas",
         &CONTENTION_CASES,
         init_thread_stream,
         unregister_thread_stream,
+        drain,
         Some(after_case),
     );
     bench_encode_group(c);

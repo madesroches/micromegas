@@ -47,7 +47,6 @@ ENCODE_ORDER = [
 ]
 THREADS = [1, 4, 8]
 
-DROP_RE = re.compile(r"^(\S+): dropped (\d+) of (\d+) \(([\d.]+)%\)\s*$")
 BYTES_RE = re.compile(r"^bytes: (\S+) events=(\d+) raw=(\d+) wire=(\d+)\s*$")
 MISSING = "—"
 
@@ -79,17 +78,13 @@ def load_estimates(criterion_dir):
     return results
 
 
-def load_stdout(path):
-    drops, sizes = {}, {}
+def load_sizes(path):
+    sizes = {}
     for line in Path(path).read_text().splitlines():
-        m = DROP_RE.match(line)
-        if m:
-            drops[m.group(1)] = (int(m.group(2)), int(m.group(3)), float(m.group(4)))
-            continue
         m = BYTES_RE.match(line)
         if m:
             sizes[m.group(1)] = tuple(int(g) for g in m.groups()[1:])
-    return drops, sizes
+    return sizes
 
 
 def table(header, rows):
@@ -98,13 +93,7 @@ def table(header, rows):
     return "\n".join(lines)
 
 
-def fmt_drop(drops, ident):
-    if ident not in drops:
-        return ""
-    return f" ({drops[ident][2]:.1f}%)"
-
-
-def hot_path(results, drops):
+def hot_path(results):
     out = []
     for group, libs in HOT_PATH_GROUPS.items():
         rows = []
@@ -115,15 +104,15 @@ def hot_path(results, drops):
                 if est is None:
                     row.append(MISSING)
                 else:
-                    row.append(f"{est[0]:.1f}{fmt_drop(drops, f'{group}/{case}/{lib}')}")
+                    row.append(f"{est[0]:.1f}")
             rows.append(row)
-        out.append(f"### `{group}`: median ns per operation (dropped %)\n")
+        out.append(f"### `{group}`: median ns per operation\n")
         out.append(table(["case"] + [f"`{lib}`" for lib in libs], rows))
         out.append("")
     return "\n".join(out)
 
 
-def contention(results, drops):
+def contention(results):
     rows = []
     for case in CONTENTION_ORDER:
         for lib in CONTENTION_LIB_ORDER:
@@ -136,10 +125,10 @@ def contention(results, drops):
                     row.append(MISSING)
                     continue
                 mops = threads / est[0] * 1000.0
-                row.append(f"{mops:.1f}{fmt_drop(drops, f'contention/{case}/{lib}/{threads}')}")
+                row.append(f"{mops:.1f}")
             rows.append(row)
     header = ["case", "lib"] + [f"{t} thread{'s' if t > 1 else ''}" for t in THREADS]
-    return "### `contention`: aggregate Mops/s (dropped %)\n\n" + table(header, rows) + "\n"
+    return "### `contention`: aggregate Mops/s\n\n" + table(header, rows) + "\n"
 
 
 def encode(results, sizes):
@@ -183,13 +172,6 @@ def encode(results, sizes):
     return "\n".join(out) + "\n"
 
 
-def drop_table(drops):
-    rows = [
-        [f"`{ident}`", str(d), str(m), f"{p:.2f}%"] for ident, (d, m, p) in sorted(drops.items())
-    ]
-    return "### Dropped events\n\n" + table(["id", "dropped", "emitted", "rate"], rows) + "\n"
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bench_log", help="saved stdout of the bench run")
@@ -200,11 +182,10 @@ def main():
     results = load_estimates(args.criterion_dir)
     if not results:
         sys.exit(f"no criterion results under {args.criterion_dir}")
-    drops, sizes = load_stdout(args.bench_log)
-    print(hot_path(results, drops))
-    print(contention(results, drops))
+    sizes = load_sizes(args.bench_log)
+    print(hot_path(results))
+    print(contention(results))
     print(encode(results, sizes))
-    print(drop_table(drops))
 
 
 if __name__ == "__main__":

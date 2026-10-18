@@ -12,9 +12,7 @@ use std::{
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use flate2::{Compression, write::GzEncoder};
-use micromegas_otel_comparison_bench::{
-    Case, bench_cases, bench_contention, print_bytes, print_drops,
-};
+use micromegas_otel_comparison_bench::{BATCH, Case, bench_cases, bench_contention, print_bytes};
 use opentelemetry::{
     InstrumentationScope, KeyValue,
     metrics::{Counter, Gauge, MeterProvider},
@@ -43,8 +41,6 @@ use tracing_subscriber::{filter::LevelFilter, layer::SubscriberExt, util::Subscr
 
 const ENCODE_LOG_EVENTS: usize = 10_000;
 const ENCODE_SPANS: usize = 10_000;
-// The default batch queue holds 2048 records and drops on full.
-const FLUSH_EVERY: usize = 2000;
 
 static LABELS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
 
@@ -257,8 +253,12 @@ const COUNTER_CONTENTION_CASES: [(&str, Case); 1] = [("metric/static_attrs", COU
 static LAST_LOG_EXPORTED: AtomicU64 = AtomicU64::new(0);
 static LAST_SPAN_EXPORTED: AtomicU64 = AtomicU64::new(0);
 
-/// Flushes the batch processors so the exporter has seen everything the case emitted, then
-/// reports how much of it never got there.
+fn drain() {
+    providers().logger.force_flush().unwrap();
+    providers().tracer_provider.force_flush().unwrap();
+}
+
+/// Fails the bench if the exporter saw fewer records than the case emitted.
 fn after_case(id: &str, emitted: u64) {
     let mut parts = id.split('/');
     let mut kind = parts.next().unwrap();
@@ -266,19 +266,19 @@ fn after_case(id: &str, emitted: u64) {
         kind = parts.next().unwrap();
     }
     let (exported, last) = match kind {
-        "log" => {
-            providers().logger.force_flush().unwrap();
-            (&LOG_EXPORTED, &LAST_LOG_EXPORTED)
-        }
-        "span" => {
-            providers().tracer_provider.force_flush().unwrap();
-            (&SPAN_EXPORTED, &LAST_SPAN_EXPORTED)
-        }
+        "log" => (&LOG_EXPORTED, &LAST_LOG_EXPORTED),
+        "span" => (&SPAN_EXPORTED, &LAST_SPAN_EXPORTED),
         _ => return,
     };
+    drain();
     let total = exported.load(Ordering::Relaxed);
     let delivered = total - last.swap(total, Ordering::Relaxed);
-    print_drops(id, emitted.saturating_sub(delivered), emitted);
+    assert_eq!(
+        delivered,
+        emitted,
+        "{id}: dropped {} of {emitted} records",
+        emitted.saturating_sub(delivered)
+    );
 }
 
 fn capture_logs(case: Case, nb_events: usize) -> Vec<(SdkLogRecord, InstrumentationScope)> {
@@ -287,7 +287,7 @@ fn capture_logs(case: Case, nb_events: usize) -> Vec<(SdkLogRecord, Instrumentat
     CAPTURE_LOGS.store(true, Ordering::Relaxed);
     for i in 0..nb_events {
         case(i);
-        if (i + 1) % FLUSH_EVERY == 0 {
+        if (i + 1) % BATCH == 0 {
             providers().logger.force_flush().unwrap();
         }
     }
@@ -308,7 +308,7 @@ fn capture_spans(case: Case, nb_spans: usize) -> Vec<SpanData> {
     CAPTURE_SPANS.store(true, Ordering::Relaxed);
     for i in 0..nb_spans {
         case(i);
-        if (i + 1) % FLUSH_EVERY == 0 {
+        if (i + 1) % BATCH == 0 {
             providers().tracer_provider.force_flush().unwrap();
         }
     }
@@ -411,24 +411,34 @@ fn criterion_benchmark(c: &mut Criterion) {
             .is_ok()
     );
 
-    bench_cases(c, "log", "otel", &LOG_CASES, Some(after_case));
-    bench_cases(c, "metric", "otel_counter", &COUNTER_CASES, None);
-    bench_cases(c, "metric", "otel_gauge", &GAUGE_CASES, None);
-    bench_cases(c, "span", "otel", &SPAN_CASES, Some(after_case));
+    bench_cases(c, "log", "otel", &LOG_CASES, drain, Some(after_case));
+    bench_cases(c, "metric", "otel_counter", &COUNTER_CASES, drain, None);
+    bench_cases(c, "metric", "otel_gauge", &GAUGE_CASES, drain, None);
+    bench_cases(c, "span", "otel", &SPAN_CASES, drain, Some(after_case));
     bench_cases(
         c,
         "span",
         "otel_tracing",
         &TRACING_SPAN_CASES,
+        drain,
         Some(after_case),
     );
-    bench_contention(c, "otel", &CONTENTION_CASES, || {}, || {}, Some(after_case));
+    bench_contention(
+        c,
+        "otel",
+        &CONTENTION_CASES,
+        || {},
+        || {},
+        drain,
+        Some(after_case),
+    );
     bench_contention(
         c,
         "otel_counter",
         &COUNTER_CONTENTION_CASES,
         || {},
         || {},
+        drain,
         Some(after_case),
     );
     bench_encode_group(c);
