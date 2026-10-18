@@ -305,7 +305,4 @@ Bench output is read by a human, so these are not automated.
 ## Decisions
 - `mkdocs/docs/unreal/index.md:14` is Unreal-specific and is left as is.
 - Blog posts and `doc/` presentations are historical records and are left unchanged.
-
-## Open Questions
-- Should the page include a "tuned OTel" row (e.g. a larger batch queue) next to the defaults,
-  or stay with defaults only as planned?
+- OTel runs on SDK defaults only, with no tuned-OTel row; its drop rate is reported instead.
