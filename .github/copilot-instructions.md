@@ -5,7 +5,7 @@ Micromegas is a unified observability platform for logs, metrics, and traces bui
 ## Architecture Overview
 
 ### Core Components
-- **`rust/tracing/`**: High-performance instrumentation library (~49ns overhead per log event)
+- **`rust/tracing/`**: High-performance instrumentation library (20ns overhead per event)
 - **`rust/analytics/`**: DataFusion-powered analytics engine with lakehouse storage
 - **`rust/telemetry-ingestion-srv/`**: HTTP service for telemetry ingestion (port 9000)
 - **`rust/flight-sql-srv/`**: Apache Arrow FlightSQL service for queries (port 50051)

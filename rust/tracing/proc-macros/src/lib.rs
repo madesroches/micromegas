@@ -181,8 +181,8 @@ fn is_future_type(ty: &Type) -> bool {
 ///
 /// # Performance
 ///
-/// The overhead is approximately 30ns per span (a span
-/// records both a begin and an end event). This makes it suitable for high-frequency
+/// The overhead is approximately 40ns per span (20ns per event, with a span
+/// recording both begin and end). This makes it suitable for high-frequency
 /// instrumentation. Spans are collected in thread-local storage and batched
 /// for efficient transmission.
 ///

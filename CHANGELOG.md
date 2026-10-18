@@ -11,11 +11,8 @@ This file documents the historical progress of the Micromegas project. For curre
   (`encode_bin` for Micromegas, OTLP protobuf with optional gzip for OpenTelemetry). It reports
   calling-thread cost, 1/4/8-thread contention, encoding cost off the calling thread, bytes per
   event, and the share of records each library dropped, and `report.py` turns a run into the
-  tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". Measured on
-  one machine, a static `info!` costs about 49 ns and a span about 30 ns in the calling thread, so
-  the "20ns per event" claim in the README, the docs, the crate descriptions and the welcome page
-  becomes "about 49ns per log event" with a link to the method; the Unreal page's figure is
-  unchanged. No SQL change.
+  tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". No SQL
+  change.
 * **Tracing, C API:** Metrics with names built at runtime, and a C API that keeps nothing for
   the life of the process (#1676). `imetric_dyn!` and `fmetric_dyn!` take any `AsRef<str>` name
   and unit, such as `format!(..)`, a `&String` or an `Arc<str>`, with the grammar of

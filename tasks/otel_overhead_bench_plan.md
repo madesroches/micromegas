@@ -221,11 +221,7 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
    for duplicates the new bridges bring in, with a comment naming the crate).
 7. Run the benches on a quiet machine (performance governor, nothing else running), generate the
    tables, and write the docs page (below) with hardware, OS, `rustc` version and crate versions.
-8. Reconcile the "20ns per event" claim in `mkdocs/docs/index.md`, `README.md`,
-   `mkdocs/docs/architecture/index.md` and `rust/tracing/src/lib.rs`, `rust/public/Cargo.toml`,
-   `rust/tracing/proc-macros/src/lib.rs`, `welcome/src/components/Differentiators.tsx` and
-   `.github/copilot-instructions.md` with the measured `log/static/micromegas` number, and link it to the new page from the docs.
-9. Add a `CHANGELOG.md` entry under Unreleased.
+8. Add a `CHANGELOG.md` entry under Unreleased.
 
 ## Files to Modify
 - `rust/Cargo.toml`
@@ -239,14 +235,6 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
 - `mkdocs/docs/when-to-use/instrumentation-overhead.md` (new)
 - `mkdocs/mkdocs.yml`
 - `mkdocs/docs/when-to-use/index.md`
-- `mkdocs/docs/index.md`
-- `README.md`
-- `mkdocs/docs/architecture/index.md`
-- `rust/tracing/src/lib.rs`
-- `rust/public/Cargo.toml`
-- `rust/tracing/proc-macros/src/lib.rs`
-- `welcome/src/components/Differentiators.tsx`
-- `.github/copilot-instructions.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -278,11 +266,6 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
   queues, string attribute values), and the exact commands to reproduce.
 - `mkdocs/docs/when-to-use/index.md`: link the page from the "Micromegas in brief"
   instrumentation bullet.
-- `mkdocs/docs/index.md`, `README.md`, `mkdocs/docs/architecture/index.md`,
-  `rust/tracing/src/lib.rs`: link the per-event overhead claim to the page (docs) and correct the
-  number if the measurement disagrees. `rust/public/Cargo.toml`,
-  `rust/tracing/proc-macros/src/lib.rs`, `welcome/src/components/Differentiators.tsx` and
-  `.github/copilot-instructions.md`: correct the number only.
 
 ## Testing Strategy
 The deliverable is a benchmark and a report generator; the bench code has no product logic to
@@ -306,3 +289,4 @@ Bench output is read by a human, so these are not automated.
 - `mkdocs/docs/unreal/index.md:14` is Unreal-specific and is left as is.
 - Blog posts and `doc/` presentations are historical records and are left unchanged.
 - OTel runs on SDK defaults only, with no tuned-OTel row; its drop rate is reported instead.
+- The project-wide "20 ns per event" figure (CPU tracing, one span begin or end event) stays as a simple headline; only the new page carries precise, per-operation numbers.

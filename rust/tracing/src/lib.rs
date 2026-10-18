@@ -1,9 +1,8 @@
 //! High-performance tracing for logs, metrics, and spans.
 //!
-//! This crate provides low-overhead instrumentation (~49ns per log event, measured against
-//! OpenTelemetry in <https://micromegas.info/docs/when-to-use/instrumentation-overhead/>) for
-//! high-performance applications. Originally designed for video game engines, it focuses on
-//! predictable performance while providing comprehensive observability.
+//! This crate provides low-overhead instrumentation (~20ns per event) for high-performance
+//! applications. Originally designed for video game engines, it focuses on predictable
+//! performance while providing comprehensive observability.
 //!
 //! # Quick Start - Instrumenting Functions
 //!
