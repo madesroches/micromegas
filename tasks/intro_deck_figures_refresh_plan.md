@@ -38,7 +38,7 @@ Throughput claim of 100k events/sec elsewhere:
 `doc/intro-micromegas/presentation-plan.md` (speaker guide):
 - Line 14: `"900 billion events for $1,750 a month"`
 - Line 32: `"$1,750 a month for 900 billion events"`
-- Line 80: `900B events / 90 days / ~$1,750/month`
+- Line 80: `900B events / 90 days / ~$1,750/month, spikes of 266M events/min`
 
 `mkdocs/docs/when-to-use/index.md`:
 - Line 198: `one production deployment on AWS runs at about $1,100/month for 449 billion events over 90 days`
@@ -65,7 +65,8 @@ Text-only edits; no structural slide changes.
 
 6. **Speaker guide** `doc/intro-micromegas/presentation-plan.md` lines 14, 32, 80: replace
    `900 billion events` / `900B events` with `~2 trillion events` and `$1,750` with `~$1,100`,
-   keeping each line's phrasing.
+   keeping each line's phrasing. On line 80 also replace `spikes of 266M events/min` with
+   `bursts of ~240M trace events/min`.
 7. **`mkdocs/docs/when-to-use/index.md`** lines 198 and 216: rewrite to
    `about $1,100/month for ~2 trillion events over 90 days`; drop `on AWS` from line 198 to
    match the list-price footing.
@@ -78,7 +79,7 @@ not quoted anywhere.
 1. Edit the four lines in `doc/intro-micromegas/src/slides/presentation.md` per Design 1–4.
 2. Edit the throughput claim in the four files listed in Design 5.
    Apply Design 6 and 7 to the speaker guide and `when-to-use/index.md`.
-3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100,000 events\|60k" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
+3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100,000 events\|60k\|266M" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
    — expect no hits.
 4. Add a `**Docs:**` bullet under `## Unreleased` in `CHANGELOG.md` (same `* **Docs:** ... (#1688).`
    format as the existing entries) summarizing the refreshed deck cost/scale figures and the
