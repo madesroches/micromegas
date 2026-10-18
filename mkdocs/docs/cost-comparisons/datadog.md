@@ -1,11 +1,11 @@
 ---
 title: Datadog Pricing and Cost Breakdown vs. Micromegas
-description: Datadog pricing explained ($15/host Infra Pro, $2.50 per million log events indexed) and applied to a 90-day, ~100-user logs-and-metrics workload, ~$7,950/month vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
+description: Datadog pricing explained ($15/host Infra Pro, $2.50 per million log events indexed) and applied to a ~100-user logs-and-metrics workload, ~$7,950/month at 30-day log retention vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
 ---
 
 # Datadog Pricing vs. Micromegas
 
-Datadog bills per host for infrastructure monitoring, per GB for log ingestion and per million events for log indexing. On the reference workload the estimate is ~$7,950/month, about 7.2× the Micromegas figure. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); like every comparison on this site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-traces)).
+Datadog bills per host for infrastructure monitoring, per GB for log ingestion and per million events for log indexing. On the reference workload the estimate is ~$7,950/month with 30-day log retention, about 7.2× the Micromegas figure. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); like every comparison on this site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-traces)).
 
 *Rates verified October 2026. Estimates, not quotes — confirm current rates at [datadoghq.com/pricing](https://www.datadoghq.com/pricing/list/).*
 
@@ -38,7 +38,7 @@ Indexing is priced per retention period: $1.06 per million events for 3 days, $1
 
 | Category | Micromegas | Datadog |
 | :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$7,950/month (custom metrics excluded) |
+| **Platform/Infrastructure Cost** | ~$1,100/month | ~$7,950+/month (30-day log retention, custom metrics excluded) |
 | **Ratio** | **1×** | **~7.2× more** |
 
 ## Qualitative differences

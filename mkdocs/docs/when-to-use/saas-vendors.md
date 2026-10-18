@@ -16,7 +16,7 @@ Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Us
 
 | Vendor | Priced on | Est. monthly (logs + metrics), rates verified October 2026 | vs. Micromegas ~$1,100 |
 | :--- | :--- | :--- | :--- |
-| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$7,950 (custom metrics excluded) | ~7.2× |
+| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$7,950+ (30-day log retention, custom metrics excluded) | ~7.2× |
 | [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
 | [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$660 | ~0.6× |
 | [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs, per user | ~$8,000+ (30-day retention only) | ~7.2× |
