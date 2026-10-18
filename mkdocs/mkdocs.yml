@@ -8,6 +8,9 @@ repo_name: madesroches/micromegas
 docs_dir: docs
 strict: true
 
+validation:
+  anchors: warn
+
 theme:
   name: material
   custom_dir: overrides
@@ -57,12 +60,6 @@ plugins:
       redirect_maps:
         cost-effectiveness.md: when-to-use/saas-vendors.md
         cost-comparisons/index.md: when-to-use/saas-vendors.md#methodology
-        cost-comparisons/datadog.md: when-to-use/saas-vendors.md#vs-datadog
-        cost-comparisons/dynatrace.md: when-to-use/saas-vendors.md#vs-dynatrace
-        cost-comparisons/elastic.md: when-to-use/saas-vendors.md#vs-elastic
-        cost-comparisons/grafana.md: when-to-use/saas-vendors.md#vs-grafana-cloud
-        cost-comparisons/newrelic.md: when-to-use/saas-vendors.md#vs-new-relic
-        cost-comparisons/splunk.md: when-to-use/saas-vendors.md#vs-splunk
   - rss:
       match_path: blog/posts/.*
       use_git: false
@@ -108,7 +105,14 @@ nav:
   - When to Use:
     - When to Use Micromegas: when-to-use/index.md
     - vs. LLM Agent Tools: when-to-use/agent-observability.md
-    - vs. SaaS Vendors: when-to-use/saas-vendors.md
+    - vs. SaaS Vendors:
+      - Overview: when-to-use/saas-vendors.md
+      - Datadog: cost-comparisons/datadog.md
+      - Dynatrace: cost-comparisons/dynatrace.md
+      - Elastic: cost-comparisons/elastic.md
+      - Grafana Cloud: cost-comparisons/grafana.md
+      - New Relic: cost-comparisons/newrelic.md
+      - Splunk: cost-comparisons/splunk.md
     - Instrumentation Overhead: when-to-use/instrumentation-overhead.md
   - Query Guide:
     - Overview: query-guide/index.md

@@ -18,7 +18,7 @@ def main():
     # Check if venv mkdocs exists
     if not VENV_MKDOCS.exists():
         print(f"Error: MkDocs not found at {VENV_MKDOCS}", file=sys.stderr)
-        print("Please run: python3 -m venv docs-venv && docs-venv/bin/pip install mkdocs mkdocs-material mkdocstrings", file=sys.stderr)
+        print(f"Please run from {REPO_ROOT}: python3 -m venv docs-venv && docs-venv/bin/pip install -r mkdocs/docs-requirements.txt", file=sys.stderr)
         sys.exit(1)
 
     # Check if config file exists

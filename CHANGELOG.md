@@ -17,6 +17,24 @@ This file documents the historical progress of the Micromegas project. For curre
   between them, so neither library drops a record (a drop fails the bench), and `report.py` turns a run into the
   tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". No SQL
   change.
+* **Docs:** Split the SaaS vendor comparison back into six per-vendor pricing pages (#1685) at
+  their original `/docs/cost-comparisons/<vendor>/` URLs (Datadog, Dynatrace, Elastic, Grafana
+  Cloud, New Relic, Splunk), each with its own title and description and the same structure:
+  the vendor's pricing applied to the reference workload, what is included and billed
+  separately, the comparison table, qualitative differences and sources. `vs. SaaS Vendors`
+  stays the hub for the methodology and the at-a-glance table. All rates were re-verified in
+  October 2026, and the estimates are refreshed on a workload measured on a production
+  deployment (~9.6B logs, ~138B metric points and ~535B trace events a month), with host-priced
+  products using ~400 concurrently active machines measured on the deployment instead of an
+  assumed 20, and with per-GB
+  charges computed from measured billing sizes (log ~860 B, metric point ~940 B, span
+  ~1,050 B). Each vendor page now also gives a with-traces figure wherever the vendor publishes
+  a linear trace rate (Splunk excluded), and Micromegas is costed at a single cloud provider's
+  public list prices (~$1,100/month). Splunk's Marketplace list prices are gone so its
+  estimate is labelled as based on the last published rates, and the Datadog, Grafana and
+  New Relic estimates are labelled as 30-day log retention. `llms.txt` links the new pages, the
+  README cost claim is reworded to match, and the docs build now fails on broken anchors
+  (`validation: anchors: warn`, MkDocs ≥ 1.6).
 * **Tracing, C API:** Metrics with names built at runtime, and a C API that keeps nothing for
   the life of the process (#1676). `imetric_dyn!` and `fmetric_dyn!` take any `AsRef<str>` name
   and unit, such as `format!(..)`, a `&String` or an `Arc<str>`, with the grammar of
@@ -235,7 +253,7 @@ This file documents the historical progress of the Micromegas project. For curre
   new `vs. LLM Agent Tools` page comparing Micromegas with Langfuse, Arize Phoenix, Opik and
   Laminar for LLM agent observability, and a single `vs. SaaS Vendors` page that merges the cost
   overview, methodology and six vendor pages (Datadog, Dynatrace, Elastic, Grafana Cloud, New
-  Relic, Splunk). The old `/cost-effectiveness/` and `/cost-comparisons/*` URLs redirect to the
+  Relic, Splunk). The old `/cost-effectiveness/` and `/cost-comparisons/` URLs redirect to the
   merged page through `mkdocs-redirects`; the site check accepts redirect stubs, and the docs
   build now runs with `--strict`.
 * **Docs:** Add a "When to Use Micromegas" page (#1636) comparing Micromegas with open-source
