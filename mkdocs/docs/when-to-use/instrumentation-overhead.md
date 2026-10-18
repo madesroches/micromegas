@@ -1,6 +1,8 @@
 # Instrumentation Overhead vs. OpenTelemetry
 
-This page compares `micromegas-tracing` with the OpenTelemetry Rust SDK recording the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one laptop, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
+Instrumentation must not change the shape of the thread it instruments. This page measures what `micromegas-tracing` and the OpenTelemetry Rust SDK add to the calling thread per log event, span and metric sample, and how that holds up when several threads instrument at once, so that recording telemetry does not change the timing profile of the code it observes.
+
+Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one laptop, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
 ## Calling-thread cost
 
@@ -37,9 +39,26 @@ Micromegas is faster in every case; a `tracing` event routed into Micromegas cos
 
 A sample costs the calling thread about 2.7 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
 
-## Off-thread cost and size
+## Contention
 
-Both libraries do work on another thread before data leaves the process. Micromegas runs `StreamBlock::encode_bin` (dependency extraction, LZ4, CBOR); OpenTelemetry converts to OTLP protobuf, and `otel_gzip` adds the gzip an OTLP/HTTP exporter can apply.
+The same operation on 1, 4 and 8 threads, started together.
+
+**`contention`: aggregate Mops/s**
+
+| case | lib | 1 thread | 4 threads | 8 threads |
+|---|---|---|---|---|
+| `log/static` | `micromegas` | 22.9 | 8.8 | 10.2 |
+| `log/static` | `otel` | 2.8 | 10.0 | 14.6 |
+| `log/dyn_high_card` | `micromegas` | 6.4 | 1.7 | 1.6 |
+| `log/dyn_high_card` | `otel` | 1.9 | 9.5 | 13.8 |
+| `span/static` | `micromegas` | 33.7 | 119.9 | 217.4 |
+| `span/static` | `otel` | 7.0 | 9.2 | 14.0 |
+
+Micromegas logs share one process-wide stream, so throughput falls with threads and OpenTelemetry overtakes it at 4 and 8 threads. Micromegas spans scale because each thread has its own stream.
+
+## Overall cost (off the calling thread)
+
+This work runs on a background thread and does not affect the instrumented thread. Both libraries do it before data leaves the process: Micromegas runs `StreamBlock::encode_bin` (dependency extraction, LZ4, CBOR); OpenTelemetry converts to OTLP protobuf, and `otel_gzip` adds the gzip an OTLP/HTTP exporter can apply. The production Micromegas encoder compresses with LZ4 at level 10 (LZ4 HC, see `rust/telemetry/src/compression.rs`), trading worker CPU for wire size, which dominates its encode cost.
 
 **`encode`: median ns per event, off the calling thread**
 
@@ -81,37 +100,12 @@ OpenTelemetry wins metric export cost: its collect, conversion and encode is che
 
 Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 series and smaller at 100, where OpenTelemetry wins on size.
 
-**`metric_batch`: median ns per metric sample, calling thread plus export** (the two parts run on different threads)
-
-| series per batch | `micromegas` | `otel` | `otel_gzip` |
-|---|---|---|---|
-| 10 | 1426.4 | 694.4 | 1935.3 |
-| 100 | 1225.1 | 752.7 | 1033.4 |
-
-Micromegas's calling-thread advantage is small next to its export cost, so the total favors OpenTelemetry for metrics, except against gzip at 10 series.
-
-## Contention
-
-The same operation on 1, 4 and 8 threads, started together.
-
-**`contention`: aggregate Mops/s**
-
-| case | lib | 1 thread | 4 threads | 8 threads |
-|---|---|---|---|---|
-| `log/static` | `micromegas` | 22.9 | 8.8 | 10.2 |
-| `log/static` | `otel` | 2.8 | 10.0 | 14.6 |
-| `log/dyn_high_card` | `micromegas` | 6.4 | 1.7 | 1.6 |
-| `log/dyn_high_card` | `otel` | 1.9 | 9.5 | 13.8 |
-| `span/static` | `micromegas` | 33.7 | 119.9 | 217.4 |
-| `span/static` | `otel` | 7.0 | 9.2 | 14.0 |
-
-Micromegas logs share one process-wide stream, so throughput falls with threads and OpenTelemetry overtakes it at 4 and 8 threads. Micromegas spans scale because each thread has its own stream.
-
 ## Reading the numbers
 
-- **Logs and spans.** The calling-thread gap is a design difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record, attributes included, and hands it to a bounded queue. Micromegas pays for that off the calling thread, in the encode tables, where whether it matters depends on a core being free.
-- **Metrics.** Micromegas is cheaper on the calling thread and OpenTelemetry is cheaper to export and, at 100 series, smaller when gzipped. The per-sample figure divides a batch by N so that every recorded value is a kept sample in both libraries. In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval rather than once per batch. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
-- **Contention.** The producer emits only 2048 operations in total between drains, so the contention figures describe bursts the background threads can absorb, not sustained overload.
+- **Logs and spans.** On the calling thread Micromegas is faster in every log and span case. The gap is a design difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record, attributes included, and hands it to a bounded queue.
+- **Metrics.** A metric sample costs the calling thread about 2.7 times less with Micromegas. The per-sample figure divides a batch by N so that every recorded value is a kept sample in both libraries. In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval rather than once per batch. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
+- **Contention.** Micromegas log throughput falls with threads because logs share one process-wide stream, and OpenTelemetry overtakes it at 4 and 8 threads; Micromegas spans scale because each thread has its own stream. The producer emits only 2048 operations in total between drains, so these figures describe bursts the background threads can absorb, not sustained overload.
+- **Off the calling thread.** OpenTelemetry encodes faster per event; Micromegas trades that worker time for smaller wire sizes against uncompressed OTLP.
 - **Drops.** Pacing keeps both libraries from dropping data, so no number includes drop behavior or says what happens when a producer outruns its exporter for long.
 - **Bytes.** The benchmark's records are repetitive and repeated attribute values compress well in both formats, so wire sizes for real data are likely larger.
 
