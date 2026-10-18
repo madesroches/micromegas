@@ -42,7 +42,7 @@ export default function HowItWorks() {
             number={1}
             title="Instrument"
             description="Drop-in tracing for Rust and Unreal Engine."
-            detail="20ns per event, 100k events/sec"
+            detail="~49ns per log event, 100k events/sec"
           />
           <Step
             icon={<Database size={24} className="text-brand-blue" />}
