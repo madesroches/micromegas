@@ -4,7 +4,7 @@ This page compares what it costs a Rust application to record the same logs, met
 
 **Summary.**
 
-- **Calling-thread cost.** For logs and spans, the calling thread pays a median of 49 ns per static log call and 30 ns per span (one `span/static` operation, which records a begin and an end event) with Micromegas, against 297 ns and 156 ns with the OpenTelemetry SDK, in a single-threaded `--quick` run. Micromegas copies the event into a thread-local buffer; the SDK builds a record and pushes it into a bounded queue. With the bridges for the `tracing` crate the same operations cost more: 942 ns per span through `tracing-opentelemetry`, and 114 ns against 49 ns per static log for a `tracing` event routed into Micromegas. The OpenTelemetry figures come from runs that drop a large share of records, which the [Results](#results) tables show.
+- **Calling-thread cost.** For logs and spans, the calling thread pays a median of 49 ns per static log call and 30 ns per span (one `span/static` operation, which records a begin and an end event) with Micromegas, against 297 ns and 156 ns with the OpenTelemetry SDK, in a single-threaded `--quick` run. Micromegas copies a fixed-size event into a thread-local buffer for spans and into a shared process-wide buffer for logs; the SDK builds a record and pushes it into a bounded queue. With the bridges for the `tracing` crate the same operations cost more: 942 ns per span through `tracing-opentelemetry`, and 114 ns against 49 ns per static log for a `tracing` event routed into Micromegas. The OpenTelemetry figures come from runs that drop a large share of records, which the [Results](#results) tables show.
 - **Metrics are a different trade.** OpenTelemetry aggregates in the process, so a plain counter increment costs 7 ns, less than Micromegas's 27 ns, which records every sample. With attributes the two are within about a factor of two in either direction (the `set` case is 2.2 times), and the difference between them is that Micromegas keeps every sample while OpenTelemetry keeps one aggregated point per series per export interval.
 - **Drops.** At the SDK's default queue sizes, a producer faster than the exporter thread makes OpenTelemetry drop records. In this benchmark's tight loops that is 21% to 65% of log records and 33% to 60% of spans, and the drop rate is printed next to each number. Micromegas also drops when its encoding worker falls behind its 128 MiB (thread blocks) or 256 MiB (log and metric blocks) queue caps. It dropped nothing in the single-threaded cases of the run below, but most spans in the 4- and 8-thread contention cases; an earlier run of the same code also dropped in two single-threaded cases, because the number of iterations criterion picks changes how long the loop outruns the worker.
 - **Encoding and bytes.** Off the calling thread, the OpenTelemetry protobuf conversion is cheaper per event than Micromegas's dependency extraction, LZ4 and CBOR encoding in this run; adding gzip to it makes it costlier than Micromegas for the static cases (`log_static_attrs`, `span_static`), about equal for `span_dyn_name` (3067 against 3296 ns), and still far cheaper for `log_dyn_high_card` (888 against 4227 ns). On the wire, Micromegas is smaller than uncompressed OTLP protobuf, and gzipped OTLP is smaller than Micromegas for log records and larger for spans.
@@ -110,14 +110,17 @@ Metrics are not in the encoding comparison: OpenTelemetry exports one aggregated
 
 **Drop accounting.** After each log and span case, the bench flushes the library's queue, compares the number of records the exporter or worker saw with the number emitted (including criterion's warm-up iterations), and prints the difference. OpenTelemetry does not expose its dropped-record counter, so the exporter's own count is the reference.
 
-**Noise.** One run on one machine, `--quick`. Two cases were repeated. `log/static/micromegas`: six runs gave medians between 46.4 and 51.3 ns. `span/static/micromegas`: six later runs gave medians of 37.0, 37.2, 37.1, 35.8, 35.9 and 35.3 ns, higher than the 30.0 ns in the table, so the per-span cost in this run is 30 to 37 ns. The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes, so treat differences of 10% as noise.
+**Noise.** One run on one machine, `--quick`. Two cases were repeated. `log/static/micromegas`: six runs gave medians between 46.4 and 51.3 ns. `span/static/micromegas`: six later runs gave medians of 37.0, 37.2, 37.1, 35.8, 35.9 and 35.3 ns, higher than the 30.0 ns in the table, so the per-span cost in this run is 30 to 37 ns. The machine was a laptop under WSL2 with no control of the CPU governor and ordinary background processes. Bench threads are not pinned, so samples can land on performance or efficiency cores, a likely source of run-to-run spread (for example the `span/static` 30 against 35 to 37 ns). Treat differences of 10% as noise.
 
 **Hardware and software.**
 
 | | |
 |---|---|
-| CPU | Intel Core i9-13900H, 20 logical CPUs |
+| Laptop | ASUS ROG Flow X16 (GV601VU) |
+| CPU | Intel Core i9-13900H, 20 logical CPUs (hybrid: 6 performance cores with 12 threads, 8 efficiency cores) |
 | Memory | 31 GiB |
+| Host OS | Windows 11 (build 10.0.26300), WSL 3.0.3.0 |
+| Power | Windows "Balanced" power plan, on AC power |
 | OS | Linux 6.18.54.1-microsoft-standard-WSL2 x86_64, under a Microsoft hypervisor |
 | `rustc` | 1.99.0 (b940084d7 2026-09-28), `bench` profile (optimized) |
 | `micromegas-tracing` | 0.32.0 |
