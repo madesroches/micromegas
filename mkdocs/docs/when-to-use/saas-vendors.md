@@ -1,29 +1,29 @@
 ---
-description: How Micromegas delivers enterprise-grade observability at a fraction of commercial SaaS cost, with dollar-for-dollar estimates against Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk.
+description: Micromegas's self-hosted cost model compared with Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk on one reference workload, with per-vendor pricing pages.
 ---
 
 # Micromegas vs. SaaS Observability Vendors
 
 Micromegas runs on your own infrastructure, so its cost is the direct cost of the cloud services it uses rather than a per-GB, per-host or per-user price. This page explains that cost model, states the methodology shared by every estimate, and compares it with six commercial vendors on one reference workload.
 
-**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month. The six vendors below come out between roughly 1.5× (Dynatrace, with custom metrics excluded) and roughly 36× (New Relic, driven by per-seat fees) that figure. The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
+**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month. The six vendors range from below that figure (Elastic Serverless at ~0.6×, on logs and metrics alone), through Dynatrace at ~1.5× (with custom metrics excluded), up to roughly 36× (New Relic, driven by per-seat fees). The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
 
-*Last reviewed: June 2026*
+*Last reviewed: October 2026*
 
 Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Use Micromegas](index.md).
 
 ## At a glance
 
-| Vendor | Priced on | Est. monthly (logs + metrics) | vs. Micromegas ~$1,100 |
+| Vendor | Priced on | Est. monthly (logs + metrics), rates verified October 2026 | vs. Micromegas ~$1,100 |
 | :--- | :--- | :--- | :--- |
-| [Datadog](#vs-datadog) | Per host, per GB ingested, per million events indexed | ~$7,950 | ~7× |
-| [Dynatrace](#vs-dynatrace) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
-| [Elastic](#vs-elastic) | Per GB ingested (volume-tiered), per GB-month retained | ~$2,200 | ~2× |
-| [Grafana Cloud](#vs-grafana-cloud) | Per 1,000 active series, per GB of logs, per user | ~$8,100+ (30-day retention only) | ~7.3× |
-| [New Relic](#vs-new-relic) | Per GB ingested, per user seat | ~$39,200 | ~36× |
-| [Splunk](#vs-splunk) | Daily index volume, billed annually | ~$22,000 | ~20× |
+| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$7,950 (custom metrics excluded) | ~7.2× |
+| [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
+| [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$660 | ~0.6× |
+| [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs, per user | ~$8,000+ (30-day retention only) | ~7.2× |
+| [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$39,100 | ~36× |
+| [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$22,000 | ~20× |
 
-Every estimate excludes traces, and the Dynatrace figure excludes custom metrics at the reference volume; see [Methodology](#methodology).
+Every estimate excludes traces, and the Datadog and Dynatrace figures exclude custom metrics at the reference volume; see [Methodology](#methodology).
 
 ## Cost Philosophy
 
@@ -117,7 +117,7 @@ Configure retention periods independently for:
 
 ## Methodology
 
-This section describes the methodology shared by every vendor comparison below. Each vendor section focuses only on that vendor's pricing.
+This section describes the methodology shared by every vendor page. Each vendor page focuses only on that vendor's pricing.
 
 ### Pricing Models
 
@@ -207,281 +207,3 @@ The Micromegas model is particularly advantageous when:
 - **Data governance** requirements favor keeping data in your environment
 - **Operational maturity** exists to manage distributed systems
 - **Long-term retention** is needed (cheap object storage vs. expensive SaaS retention)
-
-## vs. Datadog
-
-**Disclaimer:** These are estimates, not quotes. Datadog's pricing is complex and modular. Actual costs vary based on specific product usage, negotiated enterprise agreements, and region. **Pricing figures were verified in early 2026 — confirm current rates at [datadoghq.com/pricing](https://www.datadoghq.com/pricing/) before use.**
-
-Datadog's pricing combines per-host infrastructure monitoring with per-GB log ingestion and per-million-event log indexing.
-
-*   **Infrastructure Monitoring (Pro Plan):**
-    *   `20 hosts × $15/host/month (annual commitment)`
-    *   **Subtotal:** **~$300/month**
-
-*   **Log Management:**
-    *   Ingestion: `1,500 GB/month × $0.10/GB = ~$150/month`
-    *   Indexing (30-day retention): `3,000 million events/month × $2.50/million = ~$7,500/month`
-    *   **Subtotal:** **~$7,650/month**
-
-*   **Total Estimated Monthly Cost (Logs & Infrastructure):** **~$7,950/month**
-
-Note: Log indexing dominates the cost. The effective cost of logs is ~$1.80–$2.94/GB when combining ingestion and indexing. The $2.50/million events indexing rate is approximate — Datadog does not transparently publish per-retention-tier indexing prices.
-
-**Cost comparison.**
-
-| Category | Micromegas | Datadog |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$7,950/month |
-| **Ratio** | **1×** | **~7× more** |
-
-**Qualitative differences.**
-
-*   **Cost Driver:** Datadog's cost is dominated by log indexing fees. For organizations that generate large volumes of structured logs, these costs can escalate quickly.
-
-*   **Platform Philosophy:**
-    *   **Datadog** offers distinct, tightly integrated products for logs, metrics, and traces. The underlying data is stored in specialized systems, leading to separate billing for each.
-    *   **Micromegas** uses a single, unified storage and query layer for all telemetry types, enabling cross-signal correlation and significantly better storage efficiency.
-
-*   **Cost Complexity:** Datadog's pricing is famously complex and modular. While this offers flexibility, it can lead to unpredictable costs as you enable more features or as usage patterns change. Micromegas's cost maps directly to your cloud bill.
-
-*   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud environment — a critical requirement for many organizations.
-
-Sources: [Datadog Pricing List](https://www.datadoghq.com/pricing/list/), [SigNoz: Datadog Pricing Analysis](https://signoz.io/blog/datadog-pricing/), [Last9: Datadog Pricing Breakdown](https://last9.io/blog/datadog-pricing-all-your-questions-answered/).
-
-## vs. Dynatrace
-
-**Disclaimer:** These are estimates, not quotes. Dynatrace pricing varies based on negotiated enterprise agreements, region, and specific product usage. **Pricing figures were verified in early 2026 — confirm current rates at [dynatrace.com/pricing](https://www.dynatrace.com/pricing/) before use.**
-
-Dynatrace has transitioned from the legacy DDU (Davis Data Unit) model to DPS (Dynatrace Platform Subscription) with a rate card pricing structure. Costs are based on capabilities consumed rather than host units.
-
-*   **Full-Stack Monitoring (memory-based):**
-    *   `20 hosts × 8 GB memory × 730 hours/month × $0.01/GiB-hour`
-    *   **Subtotal:** **~$1,168/month**
-
-*   **Log Ingest & Process:**
-    *   `1,500 GB/month × $0.20/GiB`
-    *   **Subtotal:** **~$300/month**
-
-*   **Log Retention (90 days):**
-    *   `1,500 GB × 90 days × $0.0007/GiB-day`
-    *   **Subtotal:** **~$95/month**
-
-*   **Total Estimated Monthly Cost (Logs + Monitoring):** **~$1,563/month**
-
-**Metric ingestion at extreme volume:** The reference workload includes ~92 billion metric data points per month. At the DPS list rate of $0.15/100k data points, this would cost ~$138,000/month. In practice, standard host metrics are included with Full-Stack monitoring — only custom metrics are billed separately. The 275 billion metric data points in the Micromegas workload include fine-grained instrumentation metrics that would not typically be sent to Dynatrace at this granularity.
-
-**No per-user fees:** Dynatrace includes unlimited users in its DPS model, unlike most competitors.
-
-**Log retention options:** Dynatrace also offers a "Retain with Included Queries" log option at $0.02/GiB-day (up to 35 days), which is significantly more expensive than the usage-based $0.0007/GiB-day option used in this estimate.
-
-**Cost comparison.**
-
-| Category | Micromegas | Dynatrace |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$1,600/month (logs + monitoring only) |
-| **Ratio** | **1×** | **~1.5× more** |
-
-Note: The Dynatrace estimate excludes custom metrics at scale. Including them at the reference workload's volume would dramatically increase the cost.
-
-**Qualitative differences.**
-
-*   **Closest Competitor:** Of all platforms compared, Dynatrace is the closest to Micromegas in cost at this reference workload — but only when custom metrics at extreme volume are excluded from the comparison.
-
-*   **Platform Philosophy:**
-    *   **Dynatrace** is known for its highly automated, AI-driven approach to observability, offering deep insights into application performance with minimal manual configuration.
-    *   **Micromegas** provides a unified data model for all telemetry types within your own cloud environment, offering greater control and cost efficiency for high-volume data.
-
-*   **Pricing Model:** The DPS rate card offers granular, capability-based pricing. This can be predictable for standard monitoring but diverges dramatically at extreme metric or trace volumes.
-
-*   **Cost at Scale:** The gap between Dynatrace and Micromegas widens as data volume increases. At the reference workload, it's 1.5×. For organizations with high-cardinality custom metrics, the difference can be orders of magnitude.
-
-*   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account — a critical requirement for many organizations.
-
-Sources: [Dynatrace Rate Card](https://www.dynatrace.com/pricing/rate-card/), [Dynatrace DPS Overview](https://www.dynatrace.com/pricing/dynatrace-platform-subscription/).
-
-## vs. Elastic
-
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, cloud provider, region, and volume tiers. **Pricing figures reflect the November 2025 Elastic pricing update — confirm current rates at [elastic.co/pricing](https://www.elastic.co/pricing) before use.**
-
-Elastic Cloud Serverless reached GA in December 2024, and pricing was updated in November 2025. The serverless model replaces the older resource-based pricing (RAM + storage) and is now Elastic's primary offering for new customers.
-
-*   **Observability Complete Ingest:**
-    *   Volume-tiered pricing ranging from ~$0.60/GB (first 50 GB) down to ~$0.09/GB at high volume
-    *   At 10+ TB/month, the blended rate is approximately ~$0.15/GB
-    *   `10,700 GB/month × ~$0.15/GB`
-    *   **Subtotal:** **~$1,605/month**
-
-*   **Retention (90 days):**
-    *   `10,700 GB × 3 months × $0.019/GB-month`
-    *   **Subtotal:** **~$610/month**
-
-*   **Total Estimated Monthly Cost:** **~$2,215/month**
-
-Note: The exact volume tiers for Observability ingest are not fully published — Elastic's pricing calculator provides the full breakdown. The ~$0.15/GB blended rate is approximate for this workload.
-
-**Cost comparison.**
-
-| Category | Micromegas | Elastic Cloud (Serverless) |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$2,200/month |
-| **Ratio** | **1×** | **~2× more** |
-
-**Qualitative differences.**
-
-*   **Architectural Philosophy:**
-    *   **Elastic** was built around the Lucene search index — exceptionally powerful for log search and text analysis. Metrics and traces support has been built on top of this foundation.
-    *   **Micromegas** was designed from the ground up with a unified data model for logs, metrics, and traces. It uses columnar storage (Parquet) and a SQL query engine (DataFusion), which is inherently more efficient for analytical queries and data compression.
-
-*   **Query Language:**
-    *   **Elastic** uses KQL (Kibana Query Language) and Lucene query syntax, powerful for text search but requiring domain-specific knowledge.
-    *   **Micromegas** uses **SQL**, making it immediately accessible to a broader range of engineers, analysts, and data scientists.
-
-*   **Serverless vs. Self-Hosted:** Elastic Cloud Serverless removes the need to manage cluster sizing and scaling. Micromegas requires managing your own infrastructure but provides full cost transparency and control.
-
-*   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account, simplifying data governance.
-
-Sources: [Elastic Serverless Observability Pricing](https://www.elastic.co/pricing/serverless-observability), [Elastic Cloud Serverless GA Announcement](https://www.elastic.co/blog/elastic-cloud-serverless-ga), [Elastic Cloud Serverless Pricing Update (Nov 2025)](https://www.elastic.co/blog/elastic-cloud-serverless-pricing-packaging).
-
-## vs. Grafana Cloud
-
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on usage patterns, active series count, scrape frequency, and negotiated agreements. **Pricing figures were verified in early 2026 — confirm current rates at [grafana.com/pricing](https://grafana.com/pricing/) before use.**
-
-Grafana Cloud Pro pricing is component-based, with separate charges for logs (Loki), metrics (Mimir), and users.
-
-*   **Platform Fee:**
-    *   **Subtotal:** **$19/month**
-
-*   **Logs (Loki):**
-    *   Pricing includes process ($0.05/GB) + write ($0.40/GB) + retain ($0.10/GB) = $0.50/GB total
-    *   This rate includes **30-day retention only**
-    *   `1,500 GB/month × $0.50/GB`
-    *   **Subtotal:** **~$750/month**
-
-*   **Extended Log Retention (beyond 30 days):**
-    *   Grafana Cloud does not publicly list pricing for log retention beyond 30 days — it requires contacting sales
-    *   The reference workload requires 90-day retention, so the actual cost would be **higher than shown**
-    *   **Subtotal:** **Unknown (contact sales)**
-
-*   **Metrics (Mimir):**
-    *   Priced at $6.50 per 1,000 active series (at 1 data point per minute scrape frequency)
-    *   Higher scrape frequencies multiply cost proportionally
-    *   `1,000,000 active series × $6.50/1k`
-    *   **Subtotal:** **~$6,500/month**
-
-*   **Users:**
-    *   `100 active users × $8/user`
-    *   **Subtotal:** **$800/month**
-
-*   **Total Estimated Monthly Cost (30-day retention only):** **~$8,069/month**
-
-Note: This estimate uses only 30-day log retention. The reference workload requires 90 days — the actual cost with extended retention would be higher. Metric costs dominate at this scale; 1 million active series at $6.50/1k series = $6,500/month.
-
-**Cost comparison.**
-
-| Category | Micromegas | Grafana Cloud Pro |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$8,100+/month (30-day retention only) |
-| **Ratio** | **1×** | **~7.3× more** |
-
-Note: With 90-day log retention (not publicly priced), the actual ratio would be higher.
-
-**Qualitative differences.**
-
-*   **Cost Driver:** Metrics dominate the Grafana Cloud cost at this scale. At $6.50 per 1,000 active series, 1 million active series alone costs $6,500/month — nearly 6× the entire Micromegas deployment.
-
-*   **Open Source Foundation:**
-    *   **Grafana Cloud** is built on open-source components (Grafana, Loki, Mimir, Tempo), which means organizations can self-host these components to reduce costs — but at the expense of operational complexity.
-    *   **Micromegas** is also open source and self-hosted, but its unified architecture means fewer components to manage.
-
-*   **Retention Transparency:** Grafana Cloud's lack of publicly listed extended retention pricing makes it difficult to accurately estimate costs for workloads requiring 90+ day retention. Micromegas's retention cost is simply the cost of S3 storage.
-
-*   **Ecosystem:** Grafana Cloud benefits from the rich Grafana visualization ecosystem. Micromegas provides SQL-based querying and integrates with standard analytics tools.
-
-*   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account — a critical requirement for many organizations.
-
-Sources: [Grafana Cloud Pricing](https://grafana.com/pricing/), [Grafana Cloud Logs](https://grafana.com/products/cloud/logs/).
-
-## vs. New Relic
-
-**Disclaimer:** These are estimates, not quotes. Actual costs vary based on data volume, user count, plan type, and negotiated enterprise agreements. **Pricing figures were verified in early 2026 — confirm current rates at [newrelic.com/pricing](https://newrelic.com/pricing) before use.**
-
-New Relic's pricing combines per-GB data ingestion with per-user seat fees. They also offer a newer CCU (Compute Capacity Unit) model, but per-GB + per-seat pricing is still available and widely used.
-
-*   **Data Ingest (Original Data option):**
-    *   Logs: `1,500 GB/month`
-    *   Metrics: `~9,200 GB/month`
-    *   Total: `10,700 GB/month × $0.40/GB`
-    *   **Subtotal:** **~$4,280/month**
-
-*   **User Seats (Pro, Full Platform Users, annual):**
-    *   `100 users × $349/user/month`
-    *   **Subtotal:** **~$34,900/month**
-
-*   **Total Estimated Monthly Cost:** **~$39,180/month**
-
-Note: New Relic also offers a Data Plus option at $0.60/GB with additional features (extended retention, HIPAA eligibility, etc.). The CCU model provides compute-based pricing as an alternative, but its pricing is not transparently published.
-
-**Cost comparison.**
-
-| Category | Micromegas | New Relic |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$39,200/month |
-| **Ratio** | **1×** | **~36× more** |
-
-**Qualitative differences.**
-
-*   **Cost Drivers:** User seats dominate. At $349/user/month for Pro Full Platform Users, 100 users cost $34,900/month — over 30× the entire Micromegas infrastructure. Giving some users cheaper Core or free Basic seats lowers this, but those seats restrict access to parts of the platform.
-
-*   **Platform Philosophy:**
-    *   **New Relic** offers a broad, integrated SaaS platform covering APM, infrastructure, logs, and more, with a focus on providing a single pane of glass for observability.
-    *   **Micromegas** provides a unified data model within your own cloud environment, offering greater control and cost efficiency for high-volume data.
-
-*   **Pricing Model:** New Relic's combination of data volume and user seats means costs scale on two dimensions. For large teams with high data volumes, both dimensions compound. Micromegas's cost scales only with infrastructure usage.
-
-*   **User Access:** New Relic's per-user pricing can discourage giving broad access to observability data. Micromegas has no per-user fees — anyone in your organization can query the data.
-
-*   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account — a critical requirement for many organizations.
-
-Sources: [New Relic Pricing](https://newrelic.com/pricing), [SigNoz: New Relic CCU Pricing Analysis](https://signoz.io/blog/new-relic-ccu-pricing-unpredictable-costs/).
-
-## vs. Splunk
-
-**Disclaimer:** These are estimates, not quotes. Splunk Cloud pricing is highly negotiable and not transparently published. Actual costs vary based on daily index volume, negotiated enterprise rates, and region. **Pricing figures are based on AWS Marketplace rates from early 2026 — verify current rates before use.**
-
-Splunk charges based on daily index volume, billed annually. Representative pricing from AWS Marketplace:
-
-| Daily Volume | Annual Cost | Effective $/GB/day/year |
-|---|---|---|
-| 50 GB/day | $50,000/yr | $1,000 |
-| 100 GB/day | $80,000/yr | $800 |
-
-The reference workload generates ~10,700 GB/month ÷ 30 = **~357 GB/day**.
-
-*   **Ingest (~357 GB/day):**
-    *   At scale pricing (~$700–$800/GB/day/year): ~$250k–$285k/year
-    *   **Estimated Monthly Cost:** **~$22,000/month**
-
-Note: Splunk Cloud pricing is heavily volume-discounted at scale. The AWS Marketplace figures ($50k/yr for 50 GB/day, $80k/yr for 100 GB/day) are representative but actual pricing may vary significantly through direct enterprise negotiations.
-
-**Cisco acquisition context.** Cisco completed its acquisition of Splunk in March 2024 for ~$28 billion. Cisco is working on a "Data Fabric" approach that could affect future pricing. Verify current pricing directly with Splunk before making budget decisions.
-
-**Cost comparison.**
-
-| Category | Micromegas | Splunk Cloud |
-| :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$22,000/month |
-| **Ratio** | **1×** | **~20× more** |
-
-**Qualitative differences.**
-
-*   **Cost at Scale:** On data volume alone, Splunk is the most expensive option by a wide margin. At ~20× the cost of Micromegas, the difference is driven by Splunk's ingest-based pricing applied to high data volumes.
-
-*   **Platform Maturity:** Splunk has decades of investment in log analysis, security (SIEM), and IT operations. Its SPL (Search Processing Language) is powerful but requires specialized knowledge.
-
-*   **Operational Burden:** Splunk Cloud is a managed SaaS — the vendor handles uptime, scaling, and patching. Micromegas requires managing your own infrastructure but provides full cost transparency.
-
-*   **Control & Transparency:** With Micromegas, you see every dollar on your cloud bill. With Splunk, pricing is opaque and requires annual contract negotiations.
-
-*   **Data Ownership:** Micromegas keeps all telemetry data within your own cloud account, which is a critical advantage for security and data governance.
-
-Sources: [AWS Marketplace: Splunk Cloud](https://aws.amazon.com/marketplace/pp/prodview-jlaunompo5wbw), [Cisco Newsroom: Splunk Acquisition Complete](https://newsroom.cisco.com/c/r/newsroom/en/us/a/y2024/m03/cisco-completes-acquisition-of-splunk.html).
