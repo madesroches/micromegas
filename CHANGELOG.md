@@ -4,6 +4,19 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Benchmarks, Docs:** Instrumentation overhead against the OpenTelemetry Rust SDK (#1678). A new
+  unpublished crate, `rust/otel-comparison-bench` (`micromegas-otel-comparison-bench`), measures
+  the same logs, metrics and spans in `micromegas-tracing` and in `opentelemetry_sdk` 0.32 on its
+  defaults, with the network export replaced by an in-process sink that still encodes the payload
+  (`encode_bin` for Micromegas, OTLP protobuf with optional gzip for OpenTelemetry). The page
+  leads with what each library adds to the instrumented thread: calling-thread cost per log, span
+  and metric sample (for metrics, a batch of one value for each of 10 or 100 static series, reported
+  per sample), single-threaded. A secondary section reports the work off the calling
+  thread (encoding, one OpenTelemetry collect, OTLP conversion and protobuf encode, or `encode_bin`
+  per batch) and the bytes per event; it is never added to the calling-thread cost. The producer is paced in chunks of at most 2048 operations with an untimed drain
+  between them, so neither library drops a record (a drop fails the bench), and `report.py` turns a run into the
+  tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". No SQL
+  change.
 * **Tracing, C API:** Metrics with names built at runtime, and a C API that keeps nothing for
   the life of the process (#1676). `imetric_dyn!` and `fmetric_dyn!` take any `AsRef<str>` name
   and unit, such as `format!(..)`, a `&String` or an `Arc<str>`, with the grammar of

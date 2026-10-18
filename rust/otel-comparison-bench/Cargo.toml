@@ -1,0 +1,37 @@
+[package]
+name = "micromegas-otel-comparison-bench"
+description = "Instrumentation overhead benchmarks: micromegas-tracing vs. the OpenTelemetry Rust SDK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+bench = false
+
+[dependencies]
+criterion.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing.workspace = true
+micromegas-transit.workspace = true
+opentelemetry.workspace = true
+opentelemetry-appender-tracing.workspace = true
+opentelemetry-proto.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["experimental_metrics_custom_reader"] }
+prost.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+
+[[bench]]
+name = "micromegas"
+harness = false
+
+[[bench]]
+name = "opentelemetry"
+harness = false
