@@ -24,7 +24,9 @@ This file documents the historical progress of the Micromegas project. For curre
   separately, the comparison table, qualitative differences and sources. `vs. SaaS Vendors`
   stays the hub for the methodology and the at-a-glance table. All rates were re-verified in
   October 2026, and the estimates are refreshed on a workload measured on a production
-  deployment (~9.6B logs, ~138B metric points and ~535B trace events a month), with per-GB
+  deployment (~9.6B logs, ~138B metric points and ~535B trace events a month), with host-priced
+  products using ~400 concurrently active machines measured on the deployment instead of an
+  assumed 20, and with per-GB
   charges computed from measured billing sizes (log ~860 B, metric point ~940 B, span
   ~1,050 B). Each vendor page now also gives a with-traces figure wherever the vendor publishes
   a linear trace rate (Splunk excluded), and Micromegas is costed at a single cloud provider's

@@ -568,13 +568,19 @@ These checks are rendering output that a person has to look at.
 - Micromegas is costed at ~$1,100/month on a single cloud provider's public monthly list prices
   for equivalent resources (user decision, 2026-10-18). AWS is quoted only as ~$2,200 on-demand
   with no discounts.
+- The inherited "20 hosts" assumption (in the docs since 2025, never measured) is replaced by
+  **400 hosts** for every host-priced product (user decision, 2026-10-18), with 8 GiB per host
+  still assumed.
+  - Measured per minute over 2026-09-18 → 2026-10-18: ~393 average, ~435 p99, 499 max concurrent
+    machines.
+  - Hourly distinct counts (p99 ~856) were rejected. Short-lived machines inflate them.
 - Recomputed vendor estimates, per month, logs + metrics / with traces:
-  - Datadog ~$25,100 / ~$568,000
-  - Dynatrace ~$3,200 / ~$78,200
+  - Datadog ~$30,800 / ~$586,000
+  - Dynatrace ~$25,400 / ~$95,300
   - Elastic ~$6,200–$10,400 / ~$52,600–$56,800
   - Grafana Cloud ~$25,400 / ~$183,000
   - New Relic ~$90,200 / ~$216,500
-  - Splunk ~$16,400–$18,700 / n/a
+  - Splunk ~$22,100–$24,400 / n/a
 - Grafana metrics are billed on the DPM rule (~3.16M billable series), not the 1M series assumed
   earlier.
 - Splunk metrics are priced in Observability Cloud per host, with custom metrics excluded, rather

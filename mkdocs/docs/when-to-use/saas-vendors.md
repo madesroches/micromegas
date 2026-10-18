@@ -6,7 +6,7 @@ description: Micromegas's self-hosted cost model compared with Datadog, Dynatrac
 
 Micromegas runs on your own infrastructure, so its cost is the direct cost of the cloud services it uses rather than a per-GB, per-host or per-user price. This page explains that cost model, states the methodology shared by every estimate, and compares it with six commercial vendors on one reference workload.
 
-**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month at a single cloud provider's public list prices, with all traces included. On logs and metrics alone, the six vendors range from ~2.9× (Dynatrace, custom metrics excluded) to ~82× (New Relic). With traces priced wherever a vendor publishes a rate, the range is ~48× (Elastic) to ~517× (Datadog). All vendor numbers are estimates, not quotes.
+**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month at a single cloud provider's public list prices, with all traces included. On logs and metrics alone, the six vendors range from ~5.6× (Elastic) to ~82× (New Relic). With traces priced wherever a vendor publishes a rate, the range is ~48× (Elastic) to ~532× (Datadog). All vendor numbers are estimates, not quotes.
 
 *Last reviewed: October 2026*
 
@@ -16,12 +16,12 @@ Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Us
 
 | Vendor | Priced on | Logs + metrics | With traces | vs. Micromegas ~$1,100 |
 | :--- | :--- | :--- | :--- | :--- |
-| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$25,100 (30-day logs, custom metrics excl.) | ~$568,000 (15-day span index) | ~23× / ~517× |
-| [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs and spans (DPS rate card) | ~$3,200 (logs + monitoring, custom metrics excl.) | ~$78,200 | ~2.9× / ~71× |
+| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$30,800 (30-day logs, custom metrics excl.) | ~$586,000 (15-day span index) | ~28× / ~532× |
+| [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs and spans (DPS rate card) | ~$25,400 (logs + monitoring, custom metrics excl.) | ~$95,300 | ~23× / ~87× |
 | [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$6,200–$10,400 | ~$52,600–$56,800 | ~5.6–9.4× / ~48–52× |
 | [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs and traces, per user | ~$25,400 (30-day logs) | ~$183,000 (30-day) | ~23× / ~167× |
 | [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$90,200 (30-day logs) | ~$216,500 | ~82× / ~197× |
-| [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$16,400–$18,700 (custom metrics excl.) | n/a (no published rate) | ~15–17× / — |
+| [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$22,100–$24,400 (custom metrics excl.) | n/a (no published rate) | ~20–22× / — |
 
 Rates verified October 2026. The ratio column is logs + metrics / with traces. The Micromegas figure includes all traces. Datadog, Dynatrace and Splunk exclude custom metrics at the reference volume, and Splunk's trace cost is not estimated because no per-volume rate is published; see [Methodology](#methodology).
 
@@ -160,7 +160,7 @@ Micromegas takes a fundamentally different approach: instead of abstracting away
 
 All comparisons use the same reference workload, measured on a production Micromegas deployment (costed in [Example Deployment Cost](#example-deployment-cost)):
 
-*   **Infrastructure:** 20 hosts/nodes to monitor, 8 GiB of memory each (for host-priced products)
+*   **Infrastructure:** about 400 machines send data concurrently, measured per minute from 2026-09-18 to 2026-10-18 (average ~393, 99th percentile ~435, never above 499). Counting distinct machines per hour gives higher numbers because short-lived machines come and go; the estimates use ~400, which favors host-priced vendors. Memory per host is not recorded, so 8 GiB per host is an assumption (for host-priced products).
 *   **Retention:** 90 days (3 months)
 *   **Monthly volume:**
     *   **Logs:** ~9.6 billion log entries (~29 billion over 90 days)

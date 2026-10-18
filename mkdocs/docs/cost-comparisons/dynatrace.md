@@ -1,19 +1,19 @@
 ---
 title: Dynatrace Pricing and Cost Breakdown vs. Micromegas
-description: Dynatrace pricing explained ($0.01 per memory-GiB-hour Full-Stack, $0.20/GiB log and span ingest) and applied to a measured 90-day production workload, ~$3,200/month for logs and monitoring and ~$78,200/month with traces, vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
+description: Dynatrace pricing explained ($0.01 per memory-GiB-hour Full-Stack, $0.20/GiB log and span ingest) and applied to a measured 90-day production workload, ~$25,400/month for logs and monitoring and ~$95,300/month with traces, vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
 ---
 
 # Dynatrace Pricing vs. Micromegas
 
-Dynatrace bills on its Dynatrace Platform Subscription (DPS) rate card: memory-hours of monitored hosts, per GiB of logs, and per data point of custom metrics. On the reference workload the estimate is ~$3,200/month for logs and monitoring, about 2.9× the Micromegas figure, with custom metrics excluded. The with-traces figure adds the reference span volume at $0.20/GiB ingested plus $0.0007/GiB-day retained and comes to ~$78,200/month, about 71×. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); see [The Challenge of Traces](../when-to-use/saas-vendors.md#the-challenge-of-traces) for how traces are priced.
+Dynatrace bills on its Dynatrace Platform Subscription (DPS) rate card: memory-hours of monitored hosts, per GiB of logs, and per data point of custom metrics. On the reference workload the estimate is ~$25,400/month for logs and monitoring, about 23× the Micromegas figure, with custom metrics excluded. The with-traces figure adds the reference span volume at $0.20/GiB ingested plus $0.0007/GiB-day retained and comes to ~$95,300/month, about 87×. Full-Stack is billed on memory-hours, so it is priced on 400 hosts × 8 GiB, the approximate number of machines sending data concurrently. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); see [The Challenge of Traces](../when-to-use/saas-vendors.md#the-challenge-of-traces) for how traces are priced.
 
 *Rates verified October 2026. Estimates, not quotes — confirm current rates at [dynatrace.com/pricing](https://www.dynatrace.com/pricing/rate-card/).*
 
 ## Dynatrace pricing on the reference workload
 
 *   **Full-Stack Monitoring (memory-based):**
-    *   `20 hosts × 8 GiB × 730 hours/month × $0.01/GiB-hour`
-    *   **Subtotal:** **~$1,168/month**
+    *   `400 hosts × 8 GiB × 730 hours/month × $0.01/GiB-hour`
+    *   **Subtotal:** **~$23,360/month**
 
 *   **Log Ingest & Process:**
     *   `7,694 GiB/month × $0.20/GiB`
@@ -23,15 +23,15 @@ Dynatrace bills on its Dynatrace Platform Subscription (DPS) rate card: memory-h
     *   `7,694 GiB × 90 days × $0.0007/GiB-day`
     *   **Subtotal:** **~$485/month**
 
-*   **Total Estimated Monthly Cost (Logs + Monitoring):** **~$3,191/month**, or ~$3,200
+*   **Total Estimated Monthly Cost (Logs + Monitoring):** **~$25,383/month**, or ~$25,400
 
-**Custom metrics are excluded from the headline.** Metric data points are billed at $0.15 per 100k. Full-Stack includes 900 custom-metric data points per GiB of memory per 15-minute interval, which for 160 GiB over a month is about 420 million data points (`160 × 900 × 2,920 intervals`). That covers about 0.3% of the workload's ~138.3 billion points per month. The remainder would cost about **$206,800/month** (`(138.3B − ~420M) / 100k × $0.15`). The fine-grained instrumentation metrics in the Micromegas workload would not typically be sent to Dynatrace at this granularity.
+**Custom metrics are excluded from the headline.** Metric data points are billed at $0.15 per 100k. Full-Stack includes 900 custom-metric data points per GiB of memory per 15-minute interval, which for 400 hosts × 8 GiB over a month is about 8.4 billion data points (`400 × 8 × 900 × 2,920 intervals`). That covers about 6.1% of the workload's ~138 billion points per month. The remainder would cost about **$194,800/month**. The fine-grained instrumentation metrics in the Micromegas workload would not typically be sent to Dynatrace at this granularity.
 
-**With traces: ~$78,200/month.** The span volume is ~294,148 GiB per month. Full-Stack includes 200 KiB per minute per GiB of memory, about 1,337 GiB/month for the 20 hosts.
+**With traces: ~$95,300/month.** The span volume is ~294,146 GiB per month. Full-Stack includes 200 KiB per minute per GiB of memory, about 26,700 GiB/month (26,733) for the 400 hosts.
 
-*   **Span ingest:** `(294,148 − 1,337) GiB × $0.20/GiB` = **~$58,562/month**
-*   **Span retention:** the first 10 days are free, so days 11–90 are billed: `294,148 GiB × 80 days × $0.0007/GiB-day` = **~$16,472/month**
-*   **Traces subtotal:** **~$75,034/month**, for a total of **~$78,226/month**
+*   **Span ingest:** `(294,146 − 26,733) GiB × $0.20/GiB` = **~$53,483/month**
+*   **Span retention:** the first 10 days are free, so days 11–90 are billed: `294,146 GiB × 80 days × $0.0007/GiB-day` = **~$16,472/month**
+*   **Traces subtotal:** **~$69,955/month**, for a total of **~$95,338/month**
 
 ## What's included and what's billed separately
 
@@ -44,15 +44,13 @@ Dynatrace bills on its Dynatrace Platform Subscription (DPS) rate card: memory-h
 
 | Category | Micromegas | Dynatrace |
 | :--- | :--- | :--- |
-| **Logs + monitoring** | ~$1,100/month (includes all traces) | ~$3,200/month (custom metrics excluded) |
-| **With traces** | ~$1,100/month | ~$78,200/month |
-| **Ratio** | **1×** | **~2.9× / ~71×** |
+| **Logs + monitoring** | ~$1,100/month (includes all traces) | ~$25,400/month (custom metrics excluded) |
+| **With traces** | ~$1,100/month | ~$95,300/month |
+| **Ratio** | **1×** | **~23× / ~87×** |
 
 The Dynatrace estimates exclude custom metrics at scale. Including them at the reference workload's volume would dramatically increase the cost.
 
 ## Qualitative differences
-
-*   **Closest on Logs + Monitoring:** Dynatrace is the closest to Micromegas in cost on logs and monitoring at this reference workload, and only when custom metrics at extreme volume are excluded from the comparison.
 
 *   **Platform Philosophy:**
     *   **Dynatrace** is known for its highly automated, AI-driven approach to observability, offering deep insights into application performance with minimal manual configuration.
@@ -60,7 +58,7 @@ The Dynatrace estimates exclude custom metrics at scale. Including them at the r
 
 *   **Pricing Model:** The DPS rate card offers granular, capability-based pricing. This can be predictable for standard monitoring but diverges dramatically at extreme metric or trace volumes.
 
-*   **Cost at Scale:** The gap between Dynatrace and Micromegas widens as data volume increases. At the reference workload, it's ~2.9× on logs and monitoring and ~71× with traces. For organizations with high-cardinality custom metrics, the difference can be orders of magnitude.
+*   **Cost at Scale:** The gap between Dynatrace and Micromegas widens as data volume increases. At the reference workload, it's ~23× on logs and monitoring and ~87× with traces. For organizations with high-cardinality custom metrics, the difference can be orders of magnitude.
 
 *   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account — a critical requirement for many organizations.
 
