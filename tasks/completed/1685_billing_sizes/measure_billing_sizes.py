@@ -7,7 +7,7 @@ context (exe, username, computer, process properties), and reports aggregate
 byte sizes only. Rows are never printed or written anywhere.
 
 Usage (from python/micromegas):
-    poetry run python ../../tasks/1685_billing_sizes/measure_billing_sizes.py --profile <name>
+    poetry run python ../../tasks/completed/1685_billing_sizes/measure_billing_sizes.py --profile <name>
 """
 
 import argparse

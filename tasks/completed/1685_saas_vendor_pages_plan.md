@@ -17,7 +17,7 @@
 
 **Done (fairness corrections)**: Step 7. Billing sizes were measured on the production deployment
 on 2026-10-18; see **Billing-size measurement**. The script is at
-`tasks/1685_billing_sizes/measure_billing_sizes.py`.
+`tasks/completed/1685_billing_sizes/measure_billing_sizes.py`.
 
 **Done (fairness corrections, continued)**: Steps 8–11, in commit `d619c5c78`.
 - Workload refreshed from the last 30 days.
@@ -226,7 +226,7 @@ reference workload with `micromegas-query --format json`. Include the process co
 OTLP resource attributes ride along on every document. Measure the mean serialized bytes per
 row. Serialized JSON with the resource context is a stand-in for a vendor's pre-compression,
 enriched document size; it is not a vendor's exact number. Write the script to
-`tasks/1685_billing_sizes/measure_billing_sizes.py`, run it with the poetry venv in
+`tasks/completed/1685_billing_sizes/measure_billing_sizes.py`, run it with the poetry venv in
 `python/micromegas`, and record its output. It is a task artifact and is not shipped.
 
 **Measured 2026-10-18** (Step 7, done). Twelve one-hour windows over the previous 6 days were
@@ -499,7 +499,7 @@ Steps 1–6: **done**.
 
 Steps 7–11: **done**.
 
-7. ~~Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` on the production
+7. ~~Write and run `tasks/completed/1685_billing_sizes/measure_billing_sizes.py` on the production
    deployment, and record the bytes per log entry, metric point and span.~~ Done. Results are in
    **Billing-size measurement**.
 8. Look up Datadog's span rates, and check Dynatrace's included trace volume (see **Traces priced
@@ -524,7 +524,7 @@ Steps 7–11: **done**.
 - `welcome/public/llms.txt`
 - `CHANGELOG.md` (amend the Unreleased #1637 entry; update the #1685 entry)
 - `README.md` (cost paragraph, after recomputing)
-- `tasks/1685_billing_sizes/measure_billing_sizes.py` (new task artifact, not shipped)
+- `tasks/completed/1685_billing_sizes/measure_billing_sizes.py` (new task artifact, not shipped)
 
 ## Documentation
 
