@@ -198,7 +198,13 @@ drops. The results page shows the drop rate next to each log and span number.
 
 ### Report script (`report.py`)
 Stdlib-only Python. Reads `target/criterion/{log,metric,span,contention,encode}/**/new/estimates.json`
-(median point estimate) and the bench stdout saved to a file (`print_bytes` and drop lines), and
+(median point estimate), taking group, case, lib and thread count from the `group_id`,
+`function_id` and `value_str` fields of the sibling `new/benchmark.json` rather than from the
+directory path (criterion replaces `/` with `_`, and case and lib names contain `_`, so paths
+cannot be split). Only ids whose lib is one of this crate's libs (`micromegas`,
+`micromegas_tracing`, `otel`, `otel_counter`, `otel_gauge`, `otel_tracing`, `otel_gzip`) are
+kept, since `rust/tracing/benches/properties.rs` writes the same group names into the same
+`rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` and drop lines) and
 prints the markdown tables for the docs page: hot path (ns/op per case × library), contention
 (aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event),
 drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
@@ -219,8 +225,9 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
 7. Run the benches on a quiet machine (performance governor, nothing else running), generate the
    tables, and write the docs page (below) with hardware, OS, `rustc` version and crate versions.
 8. Reconcile the "20ns per event" claim in `mkdocs/docs/index.md`, `README.md`,
-   `mkdocs/docs/architecture/index.md` and `rust/tracing/src/lib.rs` with the measured
-   `log/static/micromegas` number, and link it to the new page from the docs.
+   `mkdocs/docs/architecture/index.md` and `rust/tracing/src/lib.rs`, `rust/public/Cargo.toml`,
+   `rust/tracing/proc-macros/src/lib.rs`, `welcome/src/components/Differentiators.tsx` and
+   `.github/copilot-instructions.md` with the measured `log/static/micromegas` number, and link it to the new page from the docs.
 9. Add a `CHANGELOG.md` entry under Unreleased.
 
 ## Files to Modify
@@ -239,6 +246,10 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
 - `README.md`
 - `mkdocs/docs/architecture/index.md`
 - `rust/tracing/src/lib.rs`
+- `rust/public/Cargo.toml`
+- `rust/tracing/proc-macros/src/lib.rs`
+- `welcome/src/components/Differentiators.tsx`
+- `.github/copilot-instructions.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -272,7 +283,9 @@ drop rates. Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.
   instrumentation bullet.
 - `mkdocs/docs/index.md`, `README.md`, `mkdocs/docs/architecture/index.md`,
   `rust/tracing/src/lib.rs`: link the per-event overhead claim to the page (docs) and correct the
-  number if the measurement disagrees.
+  number if the measurement disagrees. `rust/public/Cargo.toml`,
+  `rust/tracing/proc-macros/src/lib.rs`, `welcome/src/components/Differentiators.tsx` and
+  `.github/copilot-instructions.md`: correct the number only.
 
 ## Testing Strategy
 The deliverable is a benchmark and a report generator; the bench code has no product logic to
@@ -294,6 +307,7 @@ Bench output is read by a human, so these are not automated.
 
 ## Decisions
 - `mkdocs/docs/unreal/index.md:14` is Unreal-specific and is left as is.
+- Blog posts and `doc/` presentations are historical records and are left unchanged.
 
 ## Open Questions
 - Should the page include a "tuned OTel" row (e.g. a larger batch queue) next to the defaults,
