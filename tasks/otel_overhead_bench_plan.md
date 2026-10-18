@@ -78,8 +78,8 @@ records the versions so a later bump is a re-run.
 - `pub type Case = fn(usize);`
 - `pub fn bench_cases(c, group, lib, cases: &[(&str, Case)], after_case: Option<fn(id: &str, emitted: u64)>)`
   — one criterion group per category, `BenchmarkId::new(case, lib)`, persistent counter across
-  warm-up and samples (as in `properties.rs`). Same ids in both binaries, so results land under
-  `target/criterion/<group>/<case>/<lib>/` side by side. `after_case` runs once per case after
+  warm-up and samples (as in `properties.rs`). Same ids in both binaries, so `report.py` pairs the
+  libraries by `group_id`/`function_id`/`value_str`, never by directory name. `after_case` runs once per case after
   its last sample and receives the counter's final value (the case's emitted count).
 - `pub fn bench_contention(c, lib, cases, per_thread_init: fn(), per_thread_exit: fn(),
   after_case: Option<fn(id: &str, emitted: u64)>)` — the `properties.rs`
