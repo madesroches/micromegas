@@ -49,16 +49,13 @@ verification month (October 2026).
 ## Pricing Re-verification (October 2026)
 
 All rates below were checked against official pricing pages on 2026-10-18. Unless marked
-otherwise, they are unchanged from "early 2026". The implementer uses these figures as given and
-does not re-research them. Reference workload: 20 hosts × 8 GiB, 90-day retention, ~1,500 GB/month
+otherwise, they are unchanged from "early 2026". Reference workload: 20 hosts × 8 GiB, 90-day retention, ~1,500 GB/month
 of logs (3B entries), ~9,200 GB/month of metrics (~92B points, ~1M active series), ~100 users,
 ~10,700 GB/month in total, ~357 GB/day.
 
-Where a vendor publishes a free or included allotment, the estimate now subtracts it. The
-previous estimates ignored allotments; applying them the same way for every vendor is
-part of making all six pages share one structure.
+Where a vendor publishes a free or included allotment, the estimate now subtracts it.
 
-### Datadog — ~$7,950/month, ~7× (unchanged)
+### Datadog — ~$7,950/month, ~7.2× (unchanged)
 - Infra Pro $15/host-month annual ($18 month-to-month) → `20 × $15 = $300`.
 - Log ingest $0.10/GB → `1,500 × $0.10 = $150`.
 - Log indexing, 30-day retention: $2.50 per 1M events annual → `3,000 × $2.50 = $7,500`.
@@ -176,9 +173,7 @@ mkdocs/docs/cost-comparisons/newrelic.md    → /docs/cost-comparisons/newrelic/
 mkdocs/docs/cost-comparisons/splunk.md      → /docs/cost-comparisons/splunk/
 ```
 
-`cost-comparisons/index.md` and `cost-effectiveness.md` keep their redirects to the hub. The
-vendor pages live in a different folder from the hub (`when-to-use/`) because preserving
-URLs matters more than having them in the same folder.
+`cost-comparisons/index.md` and `cost-effectiveness.md` keep their redirects to the hub.
 
 ### Shared page template
 
@@ -239,7 +234,7 @@ site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-
 - Delete the six `## vs. <Vendor>` sections (lines 211–487).
 - **At a glance.**
   - Link each vendor to `../cost-comparisons/<vendor>.md`.
-  - Update the figures: Elastic ~$660 / ~0.6×, Grafana ~$8,000+ / ~7.2×, New Relic ~$39,100 / ~36×.
+  - Update the figures: Datadog ~$7,950 / ~7.2×, Elastic ~$660 / ~0.6×, Grafana ~$8,000+ / ~7.2×, New Relic ~$39,100 / ~36×.
   - Add a column header or a note saying "Rates verified October 2026".
 - **TL;DR** (line 9). The range now starts *below* Micromegas: Elastic Serverless at ~0.6× on
   logs and metrics alone, then Dynatrace at ~1.5×, up to New Relic at ~36×. Keep the
@@ -258,7 +253,8 @@ site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-
 
 - Remove the six vendor lines from `redirect_maps`. Keep `cost-effectiveness.md` and
   `cost-comparisons/index.md`.
-- Add `validation:` / `  anchors: warn` so `--strict` fails on broken hub-anchor links.
+- Add `validation:` / `  anchors: warn` so `--strict` fails on broken hub-anchor links. This
+  needs MkDocs 1.6, so raise the floor in `mkdocs/docs-requirements.txt` to `mkdocs>=1.6.0`.
 - Nav: turn `vs. SaaS Vendors` into a section.
 
 ```yaml
@@ -279,8 +275,9 @@ site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-
 
 Point lines 72–77 at `https://micromegas.info/docs/cost-comparisons/<vendor>/`. Append a short
 gloss to each line with the headline figure, e.g. `: ~$7,950/month on the reference workload,
-~7× Micromegas`, matching the gloss style of the neighbouring entries. Update the line-71 hub
-gloss if it still says "each vendor".
+~7.2× Micromegas`, matching the gloss style of the neighbouring entries. Replace the line-71 hub
+gloss, which says "each vendor", with "where the money goes, the comparison methodology and an
+at-a-glance cost table, with a pricing page per vendor below."
 
 ## Implementation Steps
 
@@ -291,6 +288,7 @@ gloss if it still says "each vendor".
    glance, the TL;DR, Last reviewed, the Methodology intro, the front matter `description:`, and
    the line-26 custom-metrics note (name Datadog alongside Dynatrace).
 3. Edit `mkdocs/mkdocs.yml`: change the redirects and nav, and add `validation:` / `  anchors: warn`.
+   Raise `mkdocs/docs-requirements.txt` to `mkdocs>=1.6.0`.
 4. Edit `welcome/public/llms.txt`, lines 71–77.
 5. Amend the Unreleased #1637 `CHANGELOG.md` entry so it says only `/cost-effectiveness/` and
    `/cost-comparisons/` redirect to the merged page.
@@ -299,72 +297,51 @@ gloss if it still says "each vendor".
    `check_docs_site.py` run; a partial local stage would fail for unrelated reasons.
    After the build, grep the six built `site/cost-comparisons/<vendor>/index.html` files and
    confirm none contains `http-equiv="refresh"` (a leftover vendor redirect would overwrite the
-   real page with a stub).
+   real page with a stub). Also confirm each has a `<title>` starting with "<Vendor> Pricing and
+   Cost Breakdown vs. Micromegas" and a `<meta name="description">` tag.
 
 ## Files to Modify
 
 - `mkdocs/docs/cost-comparisons/{datadog,dynatrace,elastic,grafana,newrelic,splunk}.md` (new)
 - `mkdocs/docs/when-to-use/saas-vendors.md`
 - `mkdocs/mkdocs.yml`
+- `mkdocs/docs-requirements.txt` (`mkdocs>=1.6.0`)
 - `welcome/public/llms.txt`
 - `CHANGELOG.md` (amend the Unreleased #1637 entry)
-
-## Trade-offs
-
-- **Original URLs vs. `when-to-use/saas-vendors/<vendor>/`.** Put the pages back at the original
-  URLs. Search Console's 122 impressions and the AI citations already point there. New URLs
-  would need a second round of redirects and would let that accumulated signal fade.
-- **Hub keeps the methodology vs. repeating it on each page.** The issue asks for the hub. Each
-  vendor page links three anchors (reference workload, methodology, traces) instead of carrying
-  ~1,500 words of copied boilerplate, which is what #1641 removed.
-- **Splunk: keep the dollar estimate, or say "unpriced".** Keep it, labelled as based on the last
-  published list rates. "Contact sales" would make the comparison table useless, and the
-  published tiers are on the Splunk page itself.
-- **Elastic coming out cheaper.** Publish the honest figure. The page's credibility, and the
-  whole comparison's, depends on applying the same arithmetic to every vendor. The
-  traces exclusion explains why that figure isn't a like-for-like loss.
-- **Subtracting free allotments.** This moves Grafana from ~$8,069 to ~$7,955 and New Relic from
-  ~$39,180 to ~$39,140. The changes are small, but the same rule now applies to every vendor.
 
 ## Documentation
 
 This change is documentation. `CHANGELOG.md` gets an entry from the `pr` stage. Nothing else
-links to the vendor anchors. Also amend the Unreleased #1637 `CHANGELOG.md` entry so it says
-only `/cost-effectiveness/` and `/cost-comparisons/` redirect to the merged page; the vendor
-pages come back via this change's own entry.
+links to the vendor anchors.
 
 ## Testing Strategy
 
-There is no new code, so no unit tests. Existing automated checks cover the change:
-- `mkdocs build --strict` catches broken relative links and nav entries pointing at missing files. With `validation: anchors: warn` it also fails on broken anchors, including the hub-anchor links.
-- After the build, grep the six built `site/cost-comparisons/<vendor>/index.html` files and
-  confirm none contains `http-equiv="refresh"`; neither mkdocs-redirects nor Check 4 detects a
-  leftover vendor redirect overwriting a real page.
-- `python3 -m pytest build/test_check_docs_site.py` should still pass; it doesn't change.
-- The PR's "Build Docs" CI job (`publish-docs.yml`) runs the full stage plus
-  `python3 build/check_docs_site.py public_docs` on PRs touching `mkdocs/**` or `welcome/**`.
-  It is the authoritative run: Check 6 confirms the six new `llms.txt` URLs resolve.
+There is no new code, so no unit tests. Implementation Step 6 runs the automated checks. Beyond
+those, `--strict` with `validation: anchors: warn` fails on broken anchors, including the
+hub-anchor links, and the "Build Docs" CI job's Check 6 confirms the six new `llms.txt` URLs
+resolve.
 
 ## Manual Verification
 
 These checks are rendering output that a person has to look at.
-1. Run `cd mkdocs && mkdocs serve` and open `/docs/cost-comparisons/dynatrace/`. Expected: the
-   browser tab reads "Dynatrace Pricing and Cost Breakdown vs. Micromegas - Micromegas
-   Documentation", the page source has `<meta name="description">` with the front matter text.
-2. Expected: the nav shows `When to Use › vs. SaaS Vendors` expanded, with Overview plus six
+1. Run `cd mkdocs && mkdocs serve`. Expected: the nav shows `When to Use › vs. SaaS Vendors` expanded, with Overview plus six
    vendors.
-3. Open `/docs/when-to-use/saas-vendors/`. Expected: the At a glance links open the vendor
+2. Open `/docs/when-to-use/saas-vendors/`. Expected: the At a glance links open the vendor
    pages, and no `## vs.` sections are left.
-4. Open `/docs/cost-comparisons/` and `/docs/cost-effectiveness/`. Expected: both still redirect
+3. Open `/docs/cost-comparisons/` and `/docs/cost-effectiveness/`. Expected: both still redirect
    to the hub.
 
 ## Decisions
 
 - Pricing figures were re-verified on 2026-10-18 during design (see **Pricing
   Re-verification**). The implementation uses them as given and does not re-research.
+- Pages return to the original URLs rather than new ones.
+- The methodology stays on the hub; vendor pages link to it.
+- Splunk keeps a labelled estimate based on the last published list prices.
+- Elastic's below-Micromegas figure is published as computed.
+- Free allotments are subtracted for every vendor (Grafana ~$8,069 to ~$7,955, New Relic
+  ~$39,180 to ~$39,140).
 
 ## Open Questions
 
-- None blocking. Elastic now comes out at ~0.6× Micromegas on logs and metrics. This
-  reverses part of the hub's message, so the maintainer may want to review the reworded TL;DR
-  in the PR.
+None.
