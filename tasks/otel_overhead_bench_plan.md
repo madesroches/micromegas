@@ -7,7 +7,7 @@ Add a criterion bench crate that measures the same logging, metric and span oper
 `micromegas-tracing` and in the OpenTelemetry Rust SDK, each in its recommended production
 configuration with network export replaced by an in-process sink that still encodes the payload.
 The point is that instrumentation must not change the shape of the instrumented thread, so it
-leads with calling-thread cost and scaling under 1/4/8 threads (contention), then reports encoding
+leads with single-thread calling-thread cost, then reports encoding
 cost and bytes per event off the calling thread as a secondary section, and publishes the results
 with their methodology in the docs.
 Today the only numbers (`rust/tracing/benches/properties.rs`) compare micromegas to itself, and
@@ -99,7 +99,8 @@ records the versions so a later bump is a re-run.
   barrier (micromegas needs `init_thread_stream()` for spans); `per_thread_exit` runs in each
   spawned thread after its last chunk (micromegas calls `unregister_thread_stream()` so no
   dangling `*mut ThreadStream` stays in the dispatch). `after_case` runs once per case and thread
-  count with the total emitted across threads.
+  count with the total emitted across threads. Only the micromegas binary calls it (see the
+  `contention` group).
 - `pub fn print_bytes(id, nb_events, raw_bytes, wire_bytes)` — one `println!` line per encoded
   sample (criterion has no custom-metric output), parsed by `report.py`.
 
@@ -153,8 +154,9 @@ through `tracing-opentelemetry` (`otel_tracing`). Each span is a root span (no a
 | `attrs` | — (no span attributes) | `tracer.span_builder("static").with_attributes([KeyValue::new("id", i.to_string())]).start(&tracer)` | `info_span!("static", id = %i)` |
 | `dyn_name` | `span_scope_named_dyn!(format!("span {i}"))` | `tracer.start(format!("span {i}"))` | `info_span!("static", otel.name = %format_args!("span {i}"))` |
 
-`contention` group — `log/static`, `log/dyn_high_card`, `span/static` for each library at 1, 4, 8
-threads. Micromegas logs share one process-wide stream; OTel's batch channel is its shared point.
+`contention` group (micromegas binary only, not on the page) — `log/static`, `log/dyn_high_card`,
+`span/static` at 1, 4, 8 threads, kept to track Micromegas scaling over time. Micromegas logs
+share one process-wide stream. `report.py` skips it.
 
 `encode` group — off-thread cost per block, on captured data, with
 `Throughput::Elements(nb_events)`:
@@ -224,7 +226,7 @@ micromegas side. OTel metrics have no queue: recording aggregates in place and t
 part of the measured export, so nothing is dropped and nothing is counted.
 
 ### Report script (`report.py`)
-Stdlib-only Python. Reads `target/criterion/{log,span,contention,encode,metric_batch}/**/new/estimates.json`
+Stdlib-only Python. Reads `target/criterion/{log,span,encode,metric_batch}/**/new/estimates.json`
 (median point estimate), taking group, case, lib and thread count from the `group_id`,
 `function_id` and `value_str` fields of the sibling `new/benchmark.json` rather than from the
 directory path (criterion replaces `/` with `_`, and case and lib names contain `_`, so paths
@@ -232,11 +234,10 @@ cannot be split). Only ids whose lib is one of this crate's libs (`micromegas`,
 `micromegas_interop`, `otel`, `otel_tracing`, `otel_gzip`) are
 kept, since `rust/tracing/benches/properties.rs` writes the same group names into the same
 `rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` lines) and
-prints the markdown tables for the docs page: hot path (ns/op per case × library for `log` and `span`), contention
-(aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event) and
+prints the markdown tables for the docs page: hot path (ns/op per case × library for `log` and `span`), encode (ns/event, raw and wire bytes/event) and
 `metric_batch` (per sample, derived as per batch / N: ns on the calling thread with per-batch
 columns, ns off the calling thread, and bytes; the Micromegas export and bytes are divided by B
-first). Output follows the page: calling-thread tables (log, span, metric), contention, then the
+first). Output follows the page: calling-thread tables (log, span, metric), then the
 off-thread tables (encode, bytes, metric export and bytes). No table sums calling-thread and
 off-thread cost.
 Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
@@ -247,7 +248,7 @@ Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
 2. Create `rust/otel-comparison-bench/Cargo.toml` (`publish = false`, two `[[bench]]` targets with
    `harness = false`) and `src/lib.rs` with the shared harness.
 3. Write `benches/micromegas.rs`: sink, setup, `log` / `metric_batch` / `span` / `contention` /
-   `encode` groups.
+   `encode` groups (`contention` in this binary only).
 4. Write `benches/opentelemetry.rs`: exporters, providers, global subscriber, the same groups,
    pacing, drain and drop guard.
 5. Write `report.py`.
@@ -298,7 +299,7 @@ Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
 ## Documentation
 - New `mkdocs/docs/when-to-use/instrumentation-overhead.md` ("Instrumentation Overhead vs.
   OpenTelemetry"), added to the `When to Use` nav in `mkdocs/mkdocs.yml`: summary, the
-  calling-thread tables (log, span, metric per sample), contention, a secondary "Overall cost (off
+  calling-thread tables (log, span, metric per sample), a secondary "Overall cost (off
   the calling thread)" section with the encode and bytes tables, then methodology — versions, configuration of each
   library, hardware/OS/`rustc`, the semantic differences (per-sample metrics vs. in-process
   aggregation and its cardinality limit, measured per batch, reported per sample, no micromegas span attributes, OTel drops at full
@@ -330,5 +331,6 @@ Bench output is read by a human, so these are not automated.
 - Blog posts and `doc/` presentations are historical records and are left unchanged.
 - Both libraries run on defaults, paced in chunks of at most 2048 operations with an untimed drain between chunks, so no record is dropped; a drop fails the bench.
 - The project-wide "20 ns per event" figure (CPU tracing, one span begin or end event) stays as a simple headline; only the new page carries precise, per-operation numbers.
-- The page is about the instrumented thread: calling-thread cost and contention lead, off-thread encoding is a secondary section, and the two are never summed.
+- The page is about the instrumented thread: calling-thread cost leads, off-thread encoding is a secondary section, and the two are never summed.
+- The comparison is single-threaded: heavy contention on telemetry is not a realistic workload. The `contention` group stays in the micromegas binary only, to track Micromegas scaling, and is not on the page.
 - Metrics are measured per batch (one value for each of N static series, N = 10 and 100, OTel collecting once per batch) and reported per sample (per batch / N), so every recorded value is a kept value in both libraries.

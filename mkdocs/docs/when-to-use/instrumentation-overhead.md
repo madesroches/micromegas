@@ -1,6 +1,6 @@
 # Instrumentation Overhead vs. OpenTelemetry
 
-Instrumentation must not change the shape of the thread it instruments. This page measures what `micromegas-tracing` and the OpenTelemetry Rust SDK add to the calling thread per log event, span and metric sample, and how that holds up when several threads instrument at once, so that recording telemetry does not change the timing profile of the code it observes.
+Instrumentation must not change the shape of the thread it instruments. This page measures what `micromegas-tracing` and the OpenTelemetry Rust SDK add to the calling thread per log event, span and metric sample, so that recording telemetry does not change the timing profile of the code it observes.
 
 Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one laptop, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
@@ -38,23 +38,6 @@ Micromegas is faster in every case; a `tracing` event routed into Micromegas cos
 | 100 series | 25.2 | 68.2 |
 
 A sample costs the calling thread about 2.7 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
-
-## Contention
-
-The same operation on 1, 4 and 8 threads, started together.
-
-**`contention`: aggregate Mops/s**
-
-| case | lib | 1 thread | 4 threads | 8 threads |
-|---|---|---|---|---|
-| `log/static` | `micromegas` | 22.9 | 8.8 | 10.2 |
-| `log/static` | `otel` | 2.8 | 10.0 | 14.6 |
-| `log/dyn_high_card` | `micromegas` | 6.4 | 1.7 | 1.6 |
-| `log/dyn_high_card` | `otel` | 1.9 | 9.5 | 13.8 |
-| `span/static` | `micromegas` | 33.7 | 119.9 | 217.4 |
-| `span/static` | `otel` | 7.0 | 9.2 | 14.0 |
-
-Micromegas logs share one process-wide stream, so throughput falls with threads and OpenTelemetry overtakes it at 4 and 8 threads. Micromegas spans scale because each thread has its own stream.
 
 ## Overall cost (off the calling thread)
 
@@ -104,7 +87,6 @@ Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 serie
 
 - **Logs and spans.** On the calling thread Micromegas is faster in every log and span case. The gap is a design difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record, attributes included, and hands it to a bounded queue.
 - **Metrics.** A metric sample costs the calling thread about 2.7 times less with Micromegas. Every sample counted here is kept by both libraries (see [Metric samples](#metric-samples)). In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
-- **Contention.** Micromegas log throughput falls with threads because logs share one process-wide stream, and OpenTelemetry overtakes it at 4 and 8 threads; Micromegas spans scale because each thread has its own stream. The producer emits only 2048 operations in total between drains, so these figures describe bursts the background threads can absorb, not sustained overload.
 - **Off the calling thread.** OpenTelemetry encodes faster per event; Micromegas trades that worker time for smaller wire sizes against uncompressed OTLP.
 - **Drops.** Pacing keeps both libraries from dropping data, so no number includes drop behavior or says what happens when a producer outruns its exporter for long.
 - **Bytes.** The benchmark's records are repetitive and repeated attribute values compress well in both formats, so wire sizes for real data are likely larger.
@@ -113,7 +95,7 @@ Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 serie
 
 ### What is measured
 
-Calling-thread time for one operation, with criterion (`iter_custom`, only the emit calls are timed, see Pacing): `log` and `span` cases are one macro or API call, `metric_batch` cases are one batch of N calls. Both libraries record string attribute values (`%i` or `i.to_string()`), since Micromegas property values are strings, so the comparison is about the same information, not the cheapest encoding each library offers. Both filter at INFO. Every cell is a median from one full run (not `--quick`) of [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), except the `metric_batch` tables, which come from a later full run of the `metric_batch` group alone on the same machine.
+Calling-thread time for one operation, with criterion (`iter_custom`, only the emit calls are timed, see Pacing): `log` and `span` cases are one macro or API call, `metric_batch` cases are one batch of N calls. Both libraries record string attribute values (`%i` or `i.to_string()`), since Micromegas property values are strings, so the comparison is about the same information, not the cheapest encoding each library offers. Both filter at INFO. Every cell is a median from one full run (not `--quick`) of [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), except the `metric_batch` tables, which come from a later full run of the `metric_batch` group alone on the same machine. All cases are single-threaded: heavy contention on telemetry is not a realistic workload.
 
 ### Library configurations
 
@@ -141,8 +123,6 @@ The two libraries run in separate bench binaries because both want a process-glo
 ### Pacing and the drop guard
 
 Both libraries run on their defaults, and the producer is paced instead of the queues being tuned. Each criterion sample is split into chunks of at most 2048 operations (the OpenTelemetry default queue size); only the emit calls of a chunk are timed. For `metric_batch` the unit of a chunk is one batch. Between chunks, outside the timed region, the bench waits until the library's background queue is empty: `force_flush` on the OpenTelemetry providers, and for Micromegas until its worker has encoded every block that reached it (the calling thread's partially filled block stays where it is).
-
-In the contention cases the threads start together and use disjoint ranges of ids, each thread emits `2048 / threads` operations per chunk, and a chunk costs its slowest thread.
 
 Neither library ever drops a record, and the bench fails if either does: after each case it compares the number of records the exporter or worker saw with the number emitted (OpenTelemetry does not expose its dropped-record counter, so the exporter's own count is the reference) and panics on any difference. The numbers are therefore the steady state where the exporter keeps up, which is normal operation.
 

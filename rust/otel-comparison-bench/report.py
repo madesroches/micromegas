@@ -6,7 +6,7 @@ Usage (from rust/):
     cargo bench -p micromegas-otel-comparison-bench | tee bench.log
     python3 otel-comparison-bench/report.py bench.log [--criterion-dir target/criterion]
 
-Stdlib only. Group, case, library and thread count come from the ids criterion records in
+Stdlib only. Group, case and library come from the ids criterion records in
 `benchmark.json`, never from directory names: criterion replaces `/` with `_` there, and case
 and library names contain `_`.
 """
@@ -32,8 +32,6 @@ CASE_ORDER = {
     "log": ["static", "formatted", "static_attrs", "dyn_low_card", "dyn_high_card"],
     "span": ["static", "attrs", "dyn_name"],
 }
-CONTENTION_ORDER = ["log/static", "log/dyn_high_card", "span/static"]
-CONTENTION_LIB_ORDER = ["micromegas", "otel"]
 ENCODE_ORDER = [
     "log_static_attrs",
     "log_dyn_high_card",
@@ -41,7 +39,6 @@ ENCODE_ORDER = [
     "span_dyn_name",
 ]
 SERIES_COUNTS = [10, 100]
-THREADS = [1, 4, 8]
 
 BYTES_RE = re.compile(r"^bytes: (\S+) events=(\d+) raw=(\d+) wire=(\d+)\s*$")
 MISSING = "—"
@@ -62,10 +59,9 @@ def load_estimates(criterion_dir):
         if function_id is None or value is None:
             continue
         if group == "contention":
-            case, _, lib = function_id.rpartition("/")
-            threads = int(value)
-        else:
-            case, lib, threads = function_id, value, None
+            # Micromegas-only scaling cases, tracked locally but not on the page.
+            continue
+        case, lib, threads = function_id, value, None
         if lib not in LIBS:
             # rust/tracing/benches/properties.rs writes the same group names.
             continue
@@ -107,25 +103,6 @@ def hot_path(results):
         out.append(table(header, rows))
         out.append("")
     return "\n".join(out)
-
-
-def contention(results):
-    rows = []
-    for case in CONTENTION_ORDER:
-        for lib in CONTENTION_LIB_ORDER:
-            if not any((("contention", case, lib, t) in results) for t in THREADS):
-                continue
-            row = [f"`{case}`", f"`{lib}`"]
-            for threads in THREADS:
-                est = results.get(("contention", case, lib, threads))
-                if est is None:
-                    row.append(MISSING)
-                    continue
-                mops = threads / est[0] * 1000.0
-                row.append(f"{mops:.1f}")
-            rows.append(row)
-    header = ["case", "lib"] + [f"{t} thread{'s' if t > 1 else ''}" for t in THREADS]
-    return "### `contention`: aggregate Mops/s\n\n" + table(header, rows) + "\n"
 
 
 def encode(results, sizes):
@@ -226,7 +203,6 @@ def main():
     metric_calling, metric_offthread = metric_batch(results, sizes)
     print(hot_path(results))
     print(metric_calling)
-    print(contention(results))
     print(encode(results, sizes))
     print(metric_offthread)
 

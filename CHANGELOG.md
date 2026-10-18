@@ -11,7 +11,7 @@ This file documents the historical progress of the Micromegas project. For curre
   (`encode_bin` for Micromegas, OTLP protobuf with optional gzip for OpenTelemetry). The page
   leads with what each library adds to the instrumented thread: calling-thread cost per log, span
   and metric sample (for metrics, a batch of one value for each of 10 or 100 static series, reported
-  per sample) and 1/4/8-thread contention. A secondary section reports the work off the calling
+  per sample), single-threaded. A secondary section reports the work off the calling
   thread (encoding, one OpenTelemetry collect, OTLP conversion and protobuf encode, or `encode_bin`
   per batch) and the bytes per event; it is never added to the calling-thread cost. The producer is paced in chunks of at most 2048 operations with an untimed drain
   between them, so neither library drops a record (a drop fails the bench), and `report.py` turns a run into the

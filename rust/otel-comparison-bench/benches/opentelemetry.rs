@@ -12,9 +12,7 @@ use std::{
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use flate2::{Compression, write::GzEncoder};
-use micromegas_otel_comparison_bench::{
-    BATCH, Case, SERIES_COUNTS, bench_cases, bench_contention, print_bytes,
-};
+use micromegas_otel_comparison_bench::{BATCH, Case, SERIES_COUNTS, bench_cases, print_bytes};
 use opentelemetry::{
     InstrumentationScope, KeyValue,
     metrics::{Gauge, MeterProvider},
@@ -249,12 +247,6 @@ const TRACING_SPAN_CASES: [(&str, Case); 3] = [
     }),
 ];
 
-const CONTENTION_CASES: [(&str, Case); 3] = [
-    ("log/static", LOG_CASES[0].1),
-    ("log/dyn_high_card", LOG_CASES[4].1),
-    ("span/static", SPAN_CASES[0].1),
-];
-
 static LAST_LOG_EXPORTED: AtomicU64 = AtomicU64::new(0);
 static LAST_SPAN_EXPORTED: AtomicU64 = AtomicU64::new(0);
 
@@ -265,11 +257,7 @@ fn drain() {
 
 /// Fails the bench if the exporter saw fewer records than the case emitted.
 fn after_case(id: &str, emitted: u64) {
-    let mut parts = id.split('/');
-    let mut kind = parts.next().unwrap();
-    if kind == "contention" {
-        kind = parts.next().unwrap();
-    }
+    let kind = id.split('/').next().unwrap();
     let (exported, last) = match kind {
         "log" => (&LOG_EXPORTED, &LAST_LOG_EXPORTED),
         "span" => (&SPAN_EXPORTED, &LAST_SPAN_EXPORTED),
@@ -508,15 +496,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         "span",
         "otel_tracing",
         &TRACING_SPAN_CASES,
-        drain,
-        Some(after_case),
-    );
-    bench_contention(
-        c,
-        "otel",
-        &CONTENTION_CASES,
-        || {},
-        || {},
         drain,
         Some(after_case),
     );
