@@ -164,46 +164,55 @@ def encode(results, sizes):
 
 
 def metric_batch(results, sizes):
-    """One batch is one value for each of N series. Micromegas sizes are per batch of a block
-    holding `events` batches; OpenTelemetry sizes are for one collected batch."""
+    """One batch is one value for each of N series, and one sample is one series' value in one
+    batch. Per-sample figures are the per-batch ones divided by N. Micromegas sizes are per batch
+    of a block holding `events` batches; OpenTelemetry sizes are for one collected batch."""
 
     def median(case, lib):
         est = results.get(("metric_batch", case, lib, None))
         return None if est is None else est[0] / (est[1] or 1)
 
-    def cell(value):
-        return MISSING if value is None else f"{value:.1f}"
+    def cell(value, n=1):
+        return MISSING if value is None else f"{value / n:.1f}"
 
-    record_rows, export_rows, size_rows = [], [], []
+    def total(call, export):
+        return None if call is None or export is None else call + export
+
+    record_rows, export_rows, size_rows, total_rows = [], [], [], []
     for n in SERIES_COUNTS:
-        mm = median(f"record/{n}", "micromegas")
-        otel = median(f"record/{n}", "otel")
+        call = {lib: median(f"record/{n}", lib) for lib in ("micromegas", "otel")}
+        export = {lib: median(f"export/{n}", lib) for lib in ("micromegas", "otel", "otel_gzip")}
         record_rows.append(
-            [str(n)] + [cell(v) for v in (mm, otel)]
-            + [cell(v / n if v is not None else None) for v in (mm, otel)]
+            [str(n)] + [cell(call[lib], n) for lib in ("micromegas", "otel")]
+            + [cell(call[lib]) for lib in ("micromegas", "otel")]
         )
-        export_rows.append(
-            [str(n)] + [cell(median(f"export/{n}", lib)) for lib in ("micromegas", "otel", "otel_gzip")]
+        export_rows.append([str(n)] + [cell(export[lib], n) for lib in ("micromegas", "otel", "otel_gzip")])
+        total_rows.append(
+            [str(n), cell(total(call["micromegas"], export["micromegas"]), n)]
+            + [
+                cell(total(call["otel"], export[lib]), n)
+                for lib in ("otel", "otel_gzip")
+            ]
         )
         s_mm = sizes.get(f"metric_batch/{n}/micromegas")
         s_otel = sizes.get(f"metric_batch/{n}/otel")
         size_rows.append(
             [str(n)]
             + [
-                f"{v[i] / v[0]:.1f}" if v else MISSING
+                f"{v[i] / v[0] / n:.1f}" if v else MISSING
                 for v, i in [(s_mm, 1), (s_mm, 2), (s_otel, 1), (s_otel, 2)]
             ]
         )
-    out = ["### `metric_batch`: median ns per batch on the calling thread\n"]
+    out = ["### `metric_batch`: median ns per sample on the calling thread\n"]
     out.append(
         table(
-            ["series per batch", "`micromegas`", "`otel`", "`micromegas` per series", "`otel` per series"],
+            ["series per batch", "`micromegas`", "`otel`", "`micromegas` per batch", "`otel` per batch"],
             record_rows,
         )
     )
-    out.append("\n### `metric_batch`: median ns per batch, off the calling thread\n")
+    out.append("\n### `metric_batch`: median ns per sample, off the calling thread\n")
     out.append(table(["series per batch", "`micromegas`", "`otel`", "`otel_gzip`"], export_rows))
-    out.append("\n### Bytes per batch\n")
+    out.append("\n### Bytes per sample\n")
     out.append(
         table(
             [
@@ -216,6 +225,8 @@ def metric_batch(results, sizes):
             size_rows,
         )
     )
+    out.append("\n### `metric_batch`: median ns per sample, calling thread plus export (run on different threads)\n")
+    out.append(table(["series per batch", "`micromegas`", "`otel`", "`otel_gzip`"], total_rows))
     return "\n".join(out) + "\n"
 
 

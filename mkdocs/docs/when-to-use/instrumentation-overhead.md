@@ -5,7 +5,7 @@ This page compares what it costs a Rust application to record the same logs, met
 **Summary.**
 
 - **Calling-thread cost.** For logs and spans, the calling thread pays a median of 45 ns per static log call and 28 ns per span (one `span/static` operation, which records a begin and an end event) with Micromegas, against 342 ns and 152 ns with the OpenTelemetry SDK, single-threaded. Micromegas copies a fixed-size event into a thread-local buffer for spans and into a shared process-wide buffer for logs; the SDK builds a record and pushes it into a bounded queue. With the bridges for the `tracing` crate the same operations cost more: 796 ns per span through `tracing-opentelemetry`, and 102 ns against 45 ns per static log for a `tracing` event routed into Micromegas.
-- **Metrics are compared per batch, not per sample.** A batch is one value for each of N series (a game recording its frame metrics once per frame), N = 10 and 100. On the calling thread, a batch of 10 series costs a median of 246 ns with Micromegas (10 `imetric!` calls) against 674 ns with OpenTelemetry (10 `Gauge::record` calls); at 100 series, 2520 against 6816 ns. Exporting one batch off the calling thread costs 14.0 and 120.0 µs with Micromegas (`encode_bin`, per batch, from a block of many batches) against 6.3 and 68.5 µs with OpenTelemetry (one collect, OTLP conversion and protobuf encode; 18.7 and 96.5 µs with gzip). One batch is 82.8 and 811.7 bytes on the Micromegas wire against 904 and 7654 bytes of OTLP protobuf (251 and 575 gzipped).
+- **Metrics, per sample.** A sample is one series' value in one batch; a batch is one value for each of N series (a game recording its frame metrics once per frame), N = 10 and 100, and every per-sample figure is the per-batch figure divided by N. On the calling thread a sample costs a median of 24.6 ns with Micromegas (an `imetric!` call) against 67.4 ns with OpenTelemetry (a `Gauge::record` call) at 10 series, and 25.2 against 68.2 ns at 100. Exporting a sample off the calling thread costs 1402 and 1200 ns with Micromegas (`encode_bin`, per batch from a block of many batches, divided by N) against 627 and 685 ns with OpenTelemetry (one collect, OTLP conversion and protobuf encode; 1868 and 965 ns with gzip). Calling thread plus export is 1426 and 1225 ns per sample with Micromegas against 694 and 753 ns with OpenTelemetry (1935 and 1033 ns with gzip), on different threads. A sample is 8.3 and 8.1 bytes on the Micromegas wire against 90.4 and 76.5 bytes of OTLP protobuf (25.1 and 5.8 gzipped).
 - **Pacing.** The producer is paced so that neither library drops a record: only the emit calls are timed, in chunks of at most 2048 operations, with an untimed wait for the library's background queue to empty between chunks. The numbers are the steady state where the exporter keeps up.
 - **Encoding and bytes.** Off the calling thread, the OpenTelemetry protobuf conversion is cheaper per event than Micromegas's dependency extraction, LZ4 and CBOR encoding in this run; adding gzip to it makes it costlier than Micromegas for the static cases (`log_static_attrs`, `span_static`), about equal for `span_dyn_name` (2839 against 3104 ns), and still far cheaper for `log_dyn_high_card` (806 against 3905 ns). On the wire, Micromegas is smaller than uncompressed OTLP protobuf, and gzipped OTLP is smaller than Micromegas for log records and larger for spans.
 
@@ -74,40 +74,47 @@ Both libraries do work on another thread before data leaves the process. Microme
 
 A metric batch is one snapshot: one value for each of N series at the same moment, like a game recording its frame metrics once per frame. N is 10 or 100. Each series is a static set of attributes, prebuilt once: three fixed pairs (`x`, `y`, `z`) and a series identifier, all under one metric name. The value changes from batch to batch (a persistent counter).
 
-Per-sample cost is not what is compared here, because the two libraries do not keep the same thing per sample: an OpenTelemetry counter or gauge aggregates in the process and keeps one point per series per export interval, so tens of millions of recorded samples become one point. A batch is the unit both libraries keep in full: one value per series.
+An OpenTelemetry counter or gauge reduces repeated records of the same series to one point per collect, so a raw `record` call is not a kept sample. Measuring in batches, with one collect per batch, makes every recorded value a kept sample in both libraries: Micromegas stores it and OpenTelemetry exports it as one point. A sample here is one series' value in one batch, so the per-sample cost below (the per-batch cost divided by N) compares like with like.
 
 - **Micromegas.** A batch is N `imetric!` calls, one per series, each with its prebuilt `PropertySet` (`..set`). Many batches fill one `MetricsBlock`, which the worker thread encodes with `encode_bin`.
 - **OpenTelemetry.** A batch is N `Gauge<u64>::record` calls, each with the series' prebuilt `&'static [KeyValue]`, followed by one collect through a `ManualReader` (cumulative temporality, the SDK default). The collected `ResourceMetrics` is converted to an `ExportMetricsServiceRequest` with `opentelemetry-proto` and encoded with `prost`. A real exporter does this once per interval; here the interval is one batch. Each batch size has its own meter provider, so a collect holds exactly N series.
 
-**`metric_batch`: median ns per batch on the calling thread** (the N record calls, timed alone)
+**`metric_batch`: median ns per sample on the calling thread** (the N record calls, timed alone, divided by N; the per-batch columns are the undivided medians)
 
-| series per batch | `micromegas` | `otel` | `micromegas` per series | `otel` per series |
+| series per batch | `micromegas` | `otel` | `micromegas` per batch | `otel` per batch |
 |---|---|---|---|---|
-| 10 | 246.0 | 674.2 | 24.6 | 67.4 |
-| 100 | 2520.3 | 6816.4 | 25.2 | 68.2 |
+| 10 | 24.6 | 67.4 | 246.0 | 674.2 |
+| 100 | 25.2 | 68.2 | 2520.3 | 6816.4 |
 
-**`metric_batch`: median ns per batch, off the calling thread**
+**`metric_batch`: median ns per sample, off the calling thread**
 
 | series per batch | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| 10 | 14018.0 | 6269.4 | 18678.6 |
-| 100 | 119991.2 | 68457.5 | 96518.7 |
+| 10 | 1401.8 | 626.9 | 1867.9 |
+| 100 | 1199.9 | 684.6 | 965.2 |
 
-For `micromegas`, one sample is `encode_bin` on one `MetricsBlock` holding 10 000 metric events, that is B = 1000 batches at 10 series and B = 100 batches at 100 series (the bench asserts the events fit one block), divided by B. For `otel` it is one collect, the OTLP conversion and the protobuf encode of one batch, with the batch's records made before the timer starts; `otel_gzip` adds gzip.
+For `micromegas`, one batch is `encode_bin` on one `MetricsBlock` holding 10 000 metric events, that is B = 1000 batches at 10 series and B = 100 batches at 100 series (the bench asserts the events fit one block), divided by B, then by N. For `otel` it is one collect, the OTLP conversion and the protobuf encode of one batch, with the batch's records made before the timer starts, divided by N; `otel_gzip` adds gzip.
 
-**Bytes per batch**
+**Bytes per sample**
 
 | series per batch | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| 10 | 331.9 | 82.8 | 904.0 | 251.0 |
-| 100 | 3467.9 | 811.7 | 7654.0 | 575.0 |
+| 10 | 33.2 | 8.3 | 90.4 | 25.1 |
+| 100 | 34.7 | 8.1 | 76.5 | 5.8 |
 
-Micromegas figures are the block's size divided by B; raw is the in-memory size of the events and their dependencies, wire is the `encode_bin` output. OpenTelemetry figures are one collected batch.
+**`metric_batch`: median ns per sample, calling thread plus export** (the two parts run on different threads)
+
+| series per batch | `micromegas` | `otel` | `otel_gzip` |
+|---|---|---|---|
+| 10 | 1426.4 | 694.4 | 1935.3 |
+| 100 | 1225.1 | 752.7 | 1033.4 |
+
+Micromegas figures are the block's size divided by B and by N; raw is the in-memory size of the events and their dependencies, wire is the `encode_bin` output. OpenTelemetry figures are one collected batch divided by N.
 
 ## What the numbers do and do not say
 
 - **Logs and spans.** The gap in calling-thread cost is the design difference, not a tuning difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record (attributes included) and hands it to a bounded queue.
-- **Metrics.** In this run a batch costs the calling thread about 2.7 times less with Micromegas than with OpenTelemetry (246 against 674 ns at 10 series, 2520 against 6816 ns at 100), at roughly 25 against 68 ns per series. Off the calling thread the order reverses: OpenTelemetry's collect, conversion and protobuf encode takes 6.3 µs per 10-series batch against 14.0 µs for Micromegas's share of `encode_bin` (68.5 against 120.0 µs at 100 series), and adding gzip brings OpenTelemetry to 18.7 and 96.5 µs. On the wire a Micromegas batch is smaller than OTLP protobuf (82.8 against 904 bytes at 10 series), while gzipped OTLP is larger than Micromegas at 10 series (251 against 82.8 bytes) and smaller at 100 (575 against 811.7). The OpenTelemetry batch here is collected once per batch; a real exporter collects once per interval, so with a 60 s interval its collect, conversion and encode cost is paid once per interval instead of once per batch, and one point per series per interval is all it keeps, which is the right choice when you want rates and distributions. Micromegas keeps every batch, with its time, so each snapshot stays queryable.
+- **Metrics.** In this run a sample costs the calling thread about 2.7 times less with Micromegas than with OpenTelemetry (24.6 against 67.4 ns at 10 series, 25.2 against 68.2 ns at 100). Off the calling thread the order reverses: OpenTelemetry's collect, conversion and protobuf encode takes 627 ns per sample at 10 series against 1402 ns for Micromegas's share of `encode_bin` (685 against 1200 ns at 100 series), and adding gzip brings OpenTelemetry to 1868 and 965 ns. Calling thread plus export, on different threads, is 1426 and 1225 ns per sample with Micromegas against 694 and 753 ns with OpenTelemetry (1935 and 1033 ns with gzip). On the wire a Micromegas sample is smaller than OTLP protobuf (8.3 against 90.4 bytes at 10 series), while gzipped OTLP is larger than Micromegas at 10 series (25.1 against 8.3 bytes) and smaller at 100 (5.8 against 8.1). The OpenTelemetry batch here is collected once per batch; a real exporter collects once per interval, so with a 60 s interval its collect, conversion and encode cost is paid once per interval instead of once per batch, and one point per series per interval is all it keeps, which is the right choice when you want rates and distributions. Micromegas keeps every sample, with its time, so each snapshot stays queryable.
 - **Contention.** Micromegas log throughput falls as threads are added in this run (`log/static` from 22.9 Mops/s on 1 thread to 8.8 on 4 and 10.2 on 8; `log/dyn_high_card` from 6.4 to 1.6), because the shared stream is a shared point. OpenTelemetry's aggregate log throughput rises with threads (`log/static` from 2.8 to 14.6 Mops/s), so it overtakes Micromegas for logs at 4 and 8 threads in this run, while Micromegas stays ahead on a single thread. Micromegas span throughput rises with threads (33.7 to 217.4 Mops/s) because each thread writes its own stream, and OpenTelemetry's span throughput rises more slowly (7.0 to 14.0). The paced producer emits only 2048 operations in total between drains, so these figures describe bursts the background threads can absorb, not sustained overload.
 - **Encoding.** The encoding comparison runs on captured data of identical content. Micromegas spends more time per event in this run, most of it for the cases with dynamic content (`log_dyn_high_card`, `span_dyn_name`), where it first extracts the dependency records that the objects refer to by id. Whether that off-thread cost matters depends on whether a core is free for it.
 - **Bytes.** The raw column is the in-memory size of the events and, for Micromegas, the extracted dependencies; the wire column is what is sent. Repeated attribute values compress well in both formats, and the benchmark's records are repetitive, so wire sizes for real data are likely larger.
@@ -155,7 +162,7 @@ python3 otel-comparison-bench/report.py bench.log
 
 ## Semantic differences
 
-- Micromegas metrics are samples, one per call. OpenTelemetry instruments aggregate in the process and export one point per series per interval, with a cardinality limit per instrument (2000 attribute sets by default). That is why metrics are compared per batch, one value for each of N series, rather than per sample.
+- Micromegas metrics are samples, one per call. OpenTelemetry instruments aggregate in the process and export one point per series per interval, with a cardinality limit per instrument (2000 attribute sets by default). That is why metrics are measured per batch, one value for each of N series with one collect per batch, and reported per sample (per batch divided by N), so every recorded value is a kept value in both libraries.
 - Micromegas spans have no attributes. A name built at run time (`span_scope_named_dyn!`) is the closest equivalent, and the `span/dyn_name` case compares it with an OpenTelemetry span of the same name.
 - OpenTelemetry drops records when its queue is full and Micromegas drops blocks when its queue passes its byte caps. Neither reports the drop on the calling thread. The benchmark's pacing keeps both from dropping, so no number here includes that behavior.
 - Attribute values are strings in both libraries in these cases. OpenTelemetry supports typed values, which would change its encoded size.

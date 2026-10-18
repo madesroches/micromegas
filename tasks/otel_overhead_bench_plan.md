@@ -122,8 +122,9 @@ runs in the micromegas binary, whose global `tracing` subscriber is the interop 
 `metric_batch` group — a batch is one snapshot: one value for each of N static series on one
 metric name (like a game recording its frame metrics once per frame), N = 10 and 100. Each series
 is a prebuilt static set: three fixed pairs plus a series identifier. The value is the persistent
-counter. Both libraries keep one value per series per batch; per-sample cost is not compared,
-because OTel aggregates in-process and keeps one point per series per interval.
+counter. Both libraries keep one value per series per batch, so a sample (one series' value in one
+batch) is kept by both; per-sample is derived as per batch / N. A raw `record` is not a kept
+sample in OTel, which aggregates in-process, hence the per-batch measurement with one collect per batch.
 - Calling thread (`record/10`, `record/100`, via `bench_cases`, so paced and drop-guarded):
   micromegas does N `imetric!("name", "unit", ..set_k, value)` with prebuilt `PropertySet`s; OTel
   does N `Gauge<u64>::record(value, attrs_k)` with prebuilt `&'static [KeyValue]`.
@@ -169,7 +170,7 @@ threads. Micromegas logs share one process-wide stream; OTel's batch channel is 
   compression option) as `otel_gzip`. Span conversion takes `Vec<SpanData>` by value, so it uses
   `iter_batched` with the clone in setup. `print_bytes` reports the protobuf length (raw) and the
   gzip length (wire).
-- Metrics are not in this group; they are compared per batch in the `metric_batch` group.
+- Metrics are not in this group; they are measured per batch and reported per sample in the `metric_batch` group.
 
 ### micromegas binary setup
 - `BenchSink` like `properties.rs`, except non-captured blocks go to a worker thread that calls
@@ -231,8 +232,9 @@ kept, since `rust/tracing/benches/properties.rs` writes the same group names int
 `rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` lines) and
 prints the markdown tables for the docs page: hot path (ns/op per case × library for `log` and `span`), contention
 (aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event) and
-`metric_batch` (ns per batch on the calling thread with a per-series column, ns per batch off the
-calling thread, bytes per batch; the Micromegas export and bytes are divided by B).
+`metric_batch` (per sample, derived as per batch / N: ns on the calling thread with per-batch
+columns, ns off the calling thread, bytes, and calling thread plus export; the Micromegas export and
+bytes are divided by B first).
 Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
 `python3 otel-comparison-bench/report.py bench.log`.
 
@@ -294,7 +296,7 @@ Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
   OpenTelemetry"), added to the `When to Use` nav in `mkdocs/mkdocs.yml`: summary, hot-path,
   contention, encode and bytes tables, then methodology — versions, configuration of each
   library, hardware/OS/`rustc`, the semantic differences (per-sample metrics vs. in-process
-  aggregation and its cardinality limit, compared per batch, no micromegas span attributes, OTel drops at full
+  aggregation and its cardinality limit, measured per batch, reported per sample, no micromegas span attributes, OTel drops at full
   queues (not exercised by the paced bench), string attribute values), and the exact commands to reproduce.
 - `mkdocs/docs/when-to-use/index.md`: link the page from the "Micromegas in brief"
   instrumentation bullet.
@@ -323,4 +325,4 @@ Bench output is read by a human, so these are not automated.
 - Blog posts and `doc/` presentations are historical records and are left unchanged.
 - Both libraries run on defaults, paced in chunks of at most 2048 operations with an untimed drain between chunks, so no record is dropped; a drop fails the bench.
 - The project-wide "20 ns per event" figure (CPU tracing, one span begin or end event) stays as a simple headline; only the new page carries precise, per-operation numbers.
-- Metrics are compared per batch (one value for each of N static series, N = 10 and 100, OTel collecting once per batch), since per-sample cost is not comparable with in-process aggregation.
+- Metrics are measured per batch (one value for each of N static series, N = 10 and 100, OTel collecting once per batch) and reported per sample (per batch / N), so every recorded value is a kept value in both libraries.
