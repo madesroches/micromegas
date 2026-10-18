@@ -21,36 +21,30 @@ LIBS = {
     "micromegas",
     "micromegas_interop",
     "otel",
-    "otel_counter",
-    "otel_gauge",
     "otel_tracing",
     "otel_gzip",
 }
 HOT_PATH_GROUPS = {
     "log": ["micromegas", "micromegas_interop", "otel"],
-    "metric": ["micromegas", "otel_counter", "otel_gauge"],
     "span": ["micromegas", "otel", "otel_tracing"],
 }
 CASE_ORDER = {
     "log": ["static", "formatted", "static_attrs", "dyn_low_card", "dyn_high_card"],
-    "metric": ["plain", "static_attrs", "set", "dyn_low_card", "dyn_high_card"],
     "span": ["static", "attrs", "dyn_name"],
 }
-CONTENTION_ORDER = ["log/static", "log/dyn_high_card", "metric/static_attrs", "span/static"]
-CONTENTION_LIB_ORDER = ["micromegas", "otel", "otel_counter"]
+CONTENTION_ORDER = ["log/static", "log/dyn_high_card", "span/static"]
+CONTENTION_LIB_ORDER = ["micromegas", "otel"]
 ENCODE_ORDER = [
     "log_static_attrs",
     "log_dyn_high_card",
     "span_static",
     "span_dyn_name",
-    "metric_static_attrs",
 ]
+SERIES_COUNTS = [10, 100]
 THREADS = [1, 4, 8]
 
 BYTES_RE = re.compile(r"^bytes: (\S+) events=(\d+) raw=(\d+) wire=(\d+)\s*$")
-DROPS_RE = re.compile(r"^metric-drops: (\S+) kept=(\d+) samples=(\d+)\s*$")
 MISSING = "—"
-OTEL_METRIC_LIBS = ["otel_counter", "otel_gauge"]
 
 
 def load_estimates(criterion_dir):
@@ -89,29 +83,15 @@ def load_sizes(path):
     return sizes
 
 
-def load_drops(path):
-    """Returns {(case, lib): dropped fraction} from the `metric-drops:` lines."""
-    drops = {}
-    for line in Path(path).read_text().splitlines():
-        m = DROPS_RE.match(line)
-        if m:
-            _, case, lib = m.group(1).split("/")
-            kept, samples = int(m.group(2)), int(m.group(3))
-            drops[(case, lib)] = (samples - kept) / samples if samples else 0.0
-    return drops
-
-
 def table(header, rows):
     lines = ["| " + " | ".join(header) + " |", "|" + "|".join(["---"] * len(header)) + "|"]
     lines += ["| " + " | ".join(row) + " |" for row in rows]
     return "\n".join(lines)
 
 
-def hot_path(results, drops):
+def hot_path(results):
     out = []
     for group, libs in HOT_PATH_GROUPS.items():
-        # Only the OpenTelemetry metric libraries get a dropped-samples column.
-        drop_libs = OTEL_METRIC_LIBS if group == "metric" else []
         rows = []
         for case in CASE_ORDER[group]:
             row = [f"`{case}`"]
@@ -121,13 +101,9 @@ def hot_path(results, drops):
                     row.append(MISSING)
                 else:
                     row.append(f"{est[0]:.1f}")
-            for lib in drop_libs:
-                drop = drops.get((case, lib))
-                row.append(MISSING if drop is None else f"{drop * 100:.3f}%")
             rows.append(row)
         out.append(f"### `{group}`: median ns per operation\n")
         header = ["case"] + [f"`{lib}`" for lib in libs]
-        header += [f"`{lib}` dropped samples %" for lib in drop_libs]
         out.append(table(header, rows))
         out.append("")
     return "\n".join(out)
@@ -153,14 +129,10 @@ def contention(results):
 
 
 def encode(results, sizes):
-    time_rows, size_rows, metric_rows = [], [], []
+    time_rows, size_rows = [], []
     for case in ENCODE_ORDER:
         mm = sizes.get(f"encode/{case}/micromegas")
         otel = sizes.get(f"encode/{case}/otel")
-        if case == "metric_static_attrs":
-            if mm:
-                metric_rows.append([f"`{case}`", f"{mm[1] / mm[0]:.1f}", f"{mm[2] / mm[0]:.1f}"])
-            continue
         row = [f"`{case}`"]
         for lib in ["micromegas", "otel", "otel_gzip"]:
             est = results.get(("encode", case, lib, None))
@@ -188,8 +160,62 @@ def encode(results, sizes):
             size_rows,
         )
     )
-    out.append("\n### Micromegas metric bytes per event\n")
-    out.append(table(["case", "raw", "wire (LZ4 + CBOR)"], metric_rows))
+    return "\n".join(out) + "\n"
+
+
+def metric_batch(results, sizes):
+    """One batch is one value for each of N series. Micromegas sizes are per batch of a block
+    holding `events` batches; OpenTelemetry sizes are for one collected batch."""
+
+    def median(case, lib):
+        est = results.get(("metric_batch", case, lib, None))
+        return None if est is None else est[0] / (est[1] or 1)
+
+    def cell(value):
+        return MISSING if value is None else f"{value:.1f}"
+
+    record_rows, export_rows, size_rows = [], [], []
+    for n in SERIES_COUNTS:
+        mm = median(f"record/{n}", "micromegas")
+        otel = median(f"record/{n}", "otel")
+        record_rows.append(
+            [str(n)] + [cell(v) for v in (mm, otel)]
+            + [cell(v / n if v is not None else None) for v in (mm, otel)]
+        )
+        export_rows.append(
+            [str(n)] + [cell(median(f"export/{n}", lib)) for lib in ("micromegas", "otel", "otel_gzip")]
+        )
+        s_mm = sizes.get(f"metric_batch/{n}/micromegas")
+        s_otel = sizes.get(f"metric_batch/{n}/otel")
+        size_rows.append(
+            [str(n)]
+            + [
+                f"{v[i] / v[0]:.1f}" if v else MISSING
+                for v, i in [(s_mm, 1), (s_mm, 2), (s_otel, 1), (s_otel, 2)]
+            ]
+        )
+    out = ["### `metric_batch`: median ns per batch on the calling thread\n"]
+    out.append(
+        table(
+            ["series per batch", "`micromegas`", "`otel`", "`micromegas` per series", "`otel` per series"],
+            record_rows,
+        )
+    )
+    out.append("\n### `metric_batch`: median ns per batch, off the calling thread\n")
+    out.append(table(["series per batch", "`micromegas`", "`otel`", "`otel_gzip`"], export_rows))
+    out.append("\n### Bytes per batch\n")
+    out.append(
+        table(
+            [
+                "series per batch",
+                "`micromegas` raw",
+                "`micromegas` wire (LZ4 + CBOR)",
+                "`otel` protobuf",
+                "`otel_gzip`",
+            ],
+            size_rows,
+        )
+    )
     return "\n".join(out) + "\n"
 
 
@@ -204,10 +230,10 @@ def main():
     if not results:
         sys.exit(f"no criterion results under {args.criterion_dir}")
     sizes = load_sizes(args.bench_log)
-    drops = load_drops(args.bench_log)
-    print(hot_path(results, drops))
+    print(hot_path(results))
     print(contention(results))
     print(encode(results, sizes))
+    print(metric_batch(results, sizes))
 
 
 if __name__ == "__main__":

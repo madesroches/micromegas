@@ -3,10 +3,9 @@
 //! `benches/micromegas.rs`; both use the same group and case ids.
 
 use std::{
-    collections::HashMap,
     io::Write,
     sync::{
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -14,16 +13,19 @@ use std::{
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use flate2::{Compression, write::GzEncoder};
 use micromegas_otel_comparison_bench::{
-    BATCH, Case, bench_cases, bench_contention, print_bytes, print_metric_drops,
+    BATCH, Case, SERIES_COUNTS, bench_cases, bench_contention, print_bytes,
 };
 use opentelemetry::{
     InstrumentationScope, KeyValue,
-    metrics::{Counter, Gauge, MeterProvider},
+    metrics::{Gauge, MeterProvider},
     trace::{Tracer, TracerProvider},
 };
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_proto::{
-    tonic::collector::{logs::v1::ExportLogsServiceRequest, trace::v1::ExportTraceServiceRequest},
+    tonic::collector::{
+        logs::v1::ExportLogsServiceRequest, metrics::v1::ExportMetricsServiceRequest,
+        trace::v1::ExportTraceServiceRequest,
+    },
     transform::{
         common::tonic::ResourceAttributesWithSchema, logs::tonic::group_logs_by_resource_and_scope,
         trace::tonic::group_spans_by_resource_and_scope,
@@ -34,9 +36,9 @@ use opentelemetry_sdk::{
     error::OTelSdkResult,
     logs::{LogBatch, LogExporter, SdkLogRecord, SdkLoggerProvider},
     metrics::{
-        PeriodicReader, SdkMeterProvider, Temporality,
+        InstrumentKind, ManualReader, Pipeline, SdkMeterProvider, Temporality,
         data::{AggregatedMetrics, MetricData, ResourceMetrics},
-        exporter::PushMetricExporter,
+        reader::MetricReader,
     },
     trace::{SdkTracer, SdkTracerProvider, SpanData, SpanExporter},
 };
@@ -121,63 +123,50 @@ impl SpanExporter for EncodingSpanExporter {
     }
 }
 
-/// Data points received per instrument name, across every export.
-static EXPORTED_POINTS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+/// The provider owns its reader, so the bench keeps a second handle to collect on demand.
+#[derive(Debug, Clone)]
+struct SharedReader(Arc<ManualReader>);
 
-fn count_points<T>(data: &MetricData<T>) -> u64 {
-    match data {
-        MetricData::Gauge(g) => g.data_points().count() as u64,
-        MetricData::Sum(s) => s.data_points().count() as u64,
-        MetricData::Histogram(h) => h.data_points().count() as u64,
-        MetricData::ExponentialHistogram(h) => h.data_points().count() as u64,
+impl MetricReader for SharedReader {
+    fn register_pipeline(&self, pipeline: std::sync::Weak<Pipeline>) {
+        self.0.register_pipeline(pipeline)
+    }
+    fn collect(&self, rm: &mut ResourceMetrics) -> OTelSdkResult {
+        self.0.collect(rm)
+    }
+    fn force_flush(&self) -> OTelSdkResult {
+        self.0.force_flush()
+    }
+    fn shutdown_with_timeout(&self, timeout: std::time::Duration) -> OTelSdkResult {
+        self.0.shutdown_with_timeout(timeout)
+    }
+    fn temporality(&self, kind: InstrumentKind) -> Temporality {
+        self.0.temporality(kind)
     }
 }
 
-/// Metrics are aggregated in-process; the export interval is long enough that the exporter is
-/// never on the measured path, so it only counts the data points it receives.
-#[derive(Debug)]
-struct CountingMetricExporter;
+/// One meter provider per batch size, so a cumulative collect holds exactly that many series.
+struct BatchMeter {
+    n: usize,
+    _provider: SdkMeterProvider,
+    reader: SharedReader,
+    gauge: Gauge<u64>,
+}
 
-impl PushMetricExporter for CountingMetricExporter {
-    async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
-        let mut exported = EXPORTED_POINTS.lock().unwrap();
-        let exported = exported.get_or_insert_with(HashMap::new);
-        for metric in metrics.scope_metrics().flat_map(|s| s.metrics()) {
-            let points = match metric.data() {
-                AggregatedMetrics::F64(d) => count_points(d),
-                AggregatedMetrics::U64(d) => count_points(d),
-                AggregatedMetrics::I64(d) => count_points(d),
-            };
-            *exported.entry(metric.name().to_owned()).or_default() += points;
-        }
-        Ok(())
-    }
-    fn force_flush(&self) -> OTelSdkResult {
-        Ok(())
-    }
-    fn shutdown_with_timeout(&self, _timeout: std::time::Duration) -> OTelSdkResult {
-        Ok(())
-    }
-    fn temporality(&self) -> Temporality {
-        Temporality::Cumulative
-    }
+fn batch_meter(n: usize) -> &'static BatchMeter {
+    providers().batch_meters.iter().find(|m| m.n == n).unwrap()
 }
 
 struct Providers {
     logger: SdkLoggerProvider,
     tracer_provider: SdkTracerProvider,
     tracer: SdkTracer,
-    meter_provider: SdkMeterProvider,
+    batch_meters: Vec<BatchMeter>,
     resource: ResourceAttributesWithSchema,
 }
 
 static PROVIDERS: OnceLock<Providers> = OnceLock::new();
-static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
-// One instrument per metric case, so the points the exporter sees under an instrument's name
-// belong to that case alone.
-static CASE_COUNTERS: [OnceLock<Counter<u64>>; 5] = [const { OnceLock::new() }; 5];
-static CASE_GAUGES: [OnceLock<Gauge<u64>>; 5] = [const { OnceLock::new() }; 5];
-static SET: OnceLock<[KeyValue; 3]> = OnceLock::new();
+static SERIES: OnceLock<Vec<&'static [KeyValue]>> = OnceLock::new();
 
 fn providers() -> &'static Providers {
     PROVIDERS
@@ -189,17 +178,19 @@ fn tracer() -> &'static SdkTracer {
     &providers().tracer
 }
 
-fn counter() -> &'static Counter<u64> {
-    COUNTER.get().unwrap()
-}
-
-fn shared_set() -> &'static [KeyValue] {
-    SET.get_or_init(|| {
-        [
-            KeyValue::new("x", "1"),
-            KeyValue::new("y", "2"),
-            KeyValue::new("z", "3"),
-        ]
+/// One static attribute slice per series: three fixed pairs and the series identifier.
+fn series_attrs() -> &'static [&'static [KeyValue]] {
+    SERIES.get_or_init(|| {
+        (0..*SERIES_COUNTS.iter().max().unwrap())
+            .map(|k| {
+                Box::leak(Box::new([
+                    KeyValue::new("x", "1"),
+                    KeyValue::new("y", "2"),
+                    KeyValue::new("z", "3"),
+                    KeyValue::new("series", k.to_string()),
+                ])) as &'static [KeyValue]
+            })
+            .collect()
     })
 }
 
@@ -215,39 +206,20 @@ const LOG_CASES: [(&str, Case); 5] = [
     ("dyn_high_card", |i| tracing::info!(id = %i, "static")),
 ];
 
-macro_rules! metric_cases {
-    ($instruments:ident, $record:ident) => {
-        [
-            ("plain", |_| $instruments[0].get().unwrap().$record(1, &[])),
-            ("static_attrs", |_| {
-                $instruments[1]
-                    .get()
-                    .unwrap()
-                    .$record(1, &[KeyValue::new("tier", "ram")])
-            }),
-            ("set", |_| {
-                $instruments[2].get().unwrap().$record(1, shared_set())
-            }),
-            ("dyn_low_card", |i| {
-                $instruments[3]
-                    .get()
-                    .unwrap()
-                    .$record(1, &[KeyValue::new("l", LABELS[i % 4])])
-            }),
-            // Exceeds the default 2000-series cardinality limit, so most samples land in the
-            // overflow series.
-            ("dyn_high_card", |i| {
-                $instruments[4]
-                    .get()
-                    .unwrap()
-                    .$record(1, &[KeyValue::new("id", i.to_string())])
-            }),
-        ]
-    };
+/// One batch: a value for each of `N` series, from the persistent counter.
+fn record_batch<const N: usize>(i: usize) {
+    let gauge = &batch_meter(N).gauge;
+    for attrs in &series_attrs()[..N] {
+        gauge.record(i as u64, attrs);
+    }
 }
 
-const COUNTER_CASES: [(&str, Case); 5] = metric_cases!(CASE_COUNTERS, add);
-const GAUGE_CASES: [(&str, Case); 5] = metric_cases!(CASE_GAUGES, record);
+fn metric_batch_cases() -> [(&'static str, Case); 2] {
+    [
+        ("record/10", record_batch::<10>),
+        ("record/100", record_batch::<100>),
+    ]
+}
 
 const SPAN_CASES: [(&str, Case); 3] = [
     ("static", |_| {
@@ -283,10 +255,6 @@ const CONTENTION_CASES: [(&str, Case); 3] = [
     ("span/static", SPAN_CASES[0].1),
 ];
 
-const COUNTER_CONTENTION_CASES: [(&str, Case); 1] = [("metric/static_attrs", |_| {
-    counter().add(1, &[KeyValue::new("tier", "ram")])
-})];
-
 static LAST_LOG_EXPORTED: AtomicU64 = AtomicU64::new(0);
 static LAST_SPAN_EXPORTED: AtomicU64 = AtomicU64::new(0);
 
@@ -299,10 +267,6 @@ fn drain() {
 fn after_case(id: &str, emitted: u64) {
     let mut parts = id.split('/');
     let mut kind = parts.next().unwrap();
-    if kind == "metric" {
-        report_metric_drops(id, emitted);
-        return;
-    }
     if kind == "contention" {
         kind = parts.next().unwrap();
     }
@@ -320,23 +284,6 @@ fn after_case(id: &str, emitted: u64) {
         "{id}: dropped {} of {emitted} records",
         emitted.saturating_sub(delivered)
     );
-}
-
-/// Prints how many of the case's samples reached the exporter as individual points; `report.py`
-/// parses the line. Unlike logs and spans, metric samples are aggregated away by design, so this
-/// reports instead of asserting.
-fn report_metric_drops(id: &str, emitted: u64) {
-    providers().meter_provider.force_flush().unwrap();
-    let mut parts = id.split('/').skip(1);
-    let case = parts.next().unwrap();
-    let kind = parts.next().unwrap().strip_prefix("otel_").unwrap();
-    let kept = EXPORTED_POINTS
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&format!("{kind}_{case}")).copied())
-        .unwrap_or(0);
-    print_metric_drops(id, kept, emitted);
 }
 
 fn capture_logs(case: Case, nb_events: usize) -> Vec<(SdkLogRecord, InstrumentationScope)> {
@@ -433,6 +380,72 @@ fn bench_encode_group(c: &mut Criterion) {
     group.finish();
 }
 
+fn encode_metrics(rm: &ResourceMetrics) -> Vec<u8> {
+    ExportMetricsServiceRequest::from(rm).encode_to_vec()
+}
+
+/// One batch is `n` gauge records followed by one collect, converted to OTLP and encoded: what a
+/// periodic exporter does once per interval, with the interval being one batch. The records are
+/// untimed setup; the collect reuses one `ResourceMetrics`, as the periodic reader does.
+fn bench_metric_batch_export(c: &mut Criterion) {
+    let mut group = c.benchmark_group("metric_batch");
+    let mut rm = ResourceMetrics::default();
+    for n in SERIES_COUNTS {
+        let meter = batch_meter(n);
+        let record = |i: usize| {
+            for attrs in &series_attrs()[..n] {
+                meter.gauge.record(i as u64, attrs);
+            }
+        };
+        record(0);
+        meter.reader.collect(&mut rm).unwrap();
+        let proto = encode_metrics(&rm);
+        let points: usize = rm
+            .scope_metrics()
+            .flat_map(|s| s.metrics())
+            .map(|m| match m.data() {
+                AggregatedMetrics::U64(MetricData::Gauge(g)) => g.data_points().count(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(points, n, "a batch must export one point per series");
+        print_bytes(
+            &format!("metric_batch/{n}/otel"),
+            1,
+            proto.len(),
+            gzip(&proto).len(),
+        );
+        let mut i = 1usize;
+        group.bench_function(BenchmarkId::new(format!("export/{n}"), "otel"), |b| {
+            b.iter_batched(
+                || {
+                    i += 1;
+                    record(i)
+                },
+                |()| {
+                    meter.reader.collect(&mut rm).unwrap();
+                    encode_metrics(&rm)
+                },
+                BatchSize::SmallInput,
+            )
+        });
+        group.bench_function(BenchmarkId::new(format!("export/{n}"), "otel_gzip"), |b| {
+            b.iter_batched(
+                || {
+                    i += 1;
+                    record(i)
+                },
+                |()| {
+                    meter.reader.collect(&mut rm).unwrap();
+                    gzip(&encode_metrics(&rm))
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     let resource = Resource::builder().with_service_name("bench").build();
     let logger = SdkLoggerProvider::builder()
@@ -443,22 +456,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         .with_resource(resource.clone())
         .with_batch_exporter(EncodingSpanExporter::default())
         .build();
-    let meter_provider = SdkMeterProvider::builder()
-        .with_resource(resource.clone())
-        .with_reader(PeriodicReader::builder(CountingMetricExporter).build())
-        .build();
     let tracer = tracer_provider.tracer("bench");
-    let meter = meter_provider.meter("bench");
-    COUNTER.set(meter.u64_counter("counter").build()).unwrap();
-    // Created up front so instrument creation is never inside a timed region.
-    for (i, (name, _)) in COUNTER_CASES.iter().enumerate() {
-        CASE_COUNTERS[i]
-            .set(meter.u64_counter(format!("counter_{name}")).build())
-            .unwrap();
-        CASE_GAUGES[i]
-            .set(meter.u64_gauge(format!("gauge_{name}")).build())
-            .unwrap();
-    }
+    let batch_meters = SERIES_COUNTS
+        .iter()
+        .map(|&n| {
+            let reader = SharedReader(Arc::new(ManualReader::builder().build()));
+            let provider = SdkMeterProvider::builder()
+                .with_resource(resource.clone())
+                .with_reader(reader.clone())
+                .build();
+            let gauge = provider.meter("bench").u64_gauge("gauge").build();
+            BatchMeter {
+                n,
+                _provider: provider,
+                reader,
+                gauge,
+            }
+        })
+        .collect();
+    series_attrs();
 
     tracing_subscriber::registry()
         .with(LevelFilter::INFO)
@@ -471,7 +487,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 logger,
                 tracer_provider,
                 tracer,
-                meter_provider,
+                batch_meters,
                 resource: (&resource).into(),
             })
             .is_ok()
@@ -480,17 +496,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_cases(c, "log", "otel", &LOG_CASES, drain, Some(after_case));
     bench_cases(
         c,
-        "metric",
-        "otel_counter",
-        &COUNTER_CASES,
-        drain,
-        Some(after_case),
-    );
-    bench_cases(
-        c,
-        "metric",
-        "otel_gauge",
-        &GAUGE_CASES,
+        "metric_batch",
+        "otel",
+        &metric_batch_cases(),
         drain,
         Some(after_case),
     );
@@ -512,16 +520,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         drain,
         Some(after_case),
     );
-    bench_contention(
-        c,
-        "otel_counter",
-        &COUNTER_CONTENTION_CASES,
-        || {},
-        || {},
-        drain,
-        Some(after_case),
-    );
     bench_encode_group(c);
+    bench_metric_batch_export(c);
 }
 
 criterion_group!(benches, criterion_benchmark);

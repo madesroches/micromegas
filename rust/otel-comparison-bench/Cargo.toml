@@ -22,7 +22,7 @@ micromegas-transit.workspace = true
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
 opentelemetry-proto.workspace = true
-opentelemetry_sdk.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["experimental_metrics_custom_reader"] }
 prost.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true

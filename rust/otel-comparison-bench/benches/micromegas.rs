@@ -11,7 +11,9 @@ use std::{
 };
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use micromegas_otel_comparison_bench::{Case, bench_cases, bench_contention, print_bytes};
+use micromegas_otel_comparison_bench::{
+    Case, SERIES_COUNTS, bench_cases, bench_contention, print_bytes,
+};
 use micromegas_telemetry_sink::{
     stream_block::StreamBlock, tracing_interop::install_tracing_interop,
 };
@@ -39,18 +41,26 @@ const HARD_QUEUE_BYTES: usize = 256 * 1024 * 1024;
 
 const ENCODE_LOG_EVENTS: usize = 10_000;
 const ENCODE_SPANS: usize = 10_000;
-const ENCODE_METRIC_EVENTS: usize = 5_000;
+// Metric events in the block whose encoding is timed, so every batch size fills a block with the
+// same number of events.
+const ENCODE_METRIC_EVENTS: usize = 10_000;
 
 static LABELS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
-static SET: OnceLock<&'static PropertySet> = OnceLock::new();
+static SERIES: OnceLock<Vec<&'static PropertySet>> = OnceLock::new();
 
-fn shared_set() -> &'static PropertySet {
-    SET.get_or_init(|| {
-        PropertySet::find_or_create(vec![
-            Property::new("x", "1"),
-            Property::new("y", "2"),
-            Property::new("z", "3"),
-        ])
+/// One static set per series: three fixed pairs and the series identifier.
+fn series_sets() -> &'static [&'static PropertySet] {
+    SERIES.get_or_init(|| {
+        (0..*SERIES_COUNTS.iter().max().unwrap())
+            .map(|k| {
+                PropertySet::find_or_create(vec![
+                    Property::new("x", "1"),
+                    Property::new("y", "2"),
+                    Property::new("z", "3"),
+                    Property::new("series", Box::leak(k.to_string().into_boxed_str())),
+                ])
+            })
+            .collect()
     })
 }
 
@@ -218,17 +228,23 @@ const TRACING_LOG_CASES: [(&str, Case); 3] = [
     ("dyn_high_card", |i| tracing::info!(id = %i, "static")),
 ];
 
-const METRIC_CASES: [(&str, Case); 5] = [
-    ("plain", |_| imetric!("name", "unit", 1)),
-    ("static_attrs", |_| {
-        imetric!("name", "unit", tier = "ram", 1)
-    }),
-    ("set", |_| imetric!("name", "unit", ..shared_set(), 1)),
-    ("dyn_low_card", |i| {
-        imetric!("name", "unit", l = LABELS[i % 4], 1)
-    }),
-    ("dyn_high_card", |i| imetric!("name", "unit", id = %i, 1)),
-];
+/// One batch: a value for each of `N` series, from the persistent counter.
+fn record_batch<const N: usize>(i: usize) {
+    for set in &series_sets()[..N] {
+        imetric!("name", "unit", ..*set, i as u64);
+    }
+}
+
+fn metric_batch_cases() -> [(&'static str, Case); 2] {
+    [
+        ("record/10", record_batch::<10>),
+        ("record/100", record_batch::<100>),
+    ]
+}
+
+fn metric_batch_export_cases() -> [(usize, Case); 2] {
+    [(10, record_batch::<10>), (100, record_batch::<100>)]
+}
 
 const SPAN_CASES: [(&str, Case); 2] = [
     ("static", |_| {
@@ -239,10 +255,9 @@ const SPAN_CASES: [(&str, Case); 2] = [
     }),
 ];
 
-const CONTENTION_CASES: [(&str, Case); 4] = [
+const CONTENTION_CASES: [(&str, Case); 3] = [
     ("log/static", LOG_CASES[0].1),
     ("log/dyn_high_card", LOG_CASES[4].1),
-    ("metric/static_attrs", METRIC_CASES[1].1),
     ("span/static", SPAN_CASES[0].1),
 ];
 
@@ -323,21 +338,29 @@ fn bench_encode_group(c: &mut Criterion) {
             true,
         );
     }
-    // Only the size is reported: OpenTelemetry exports aggregated series, not one point per
-    // sample, so there is nothing to compare the encoding cost with.
-    let block = capture_block(
-        &sink.metrics_blocks,
-        flush_metrics_buffer,
-        METRIC_CASES[1].1,
-        ENCODE_METRIC_EVENTS,
-    );
-    bench_encode(
-        &mut group,
-        "metric_static_attrs",
-        &block,
-        ENCODE_METRIC_EVENTS,
-        false,
-    );
+    group.finish();
+}
+
+/// Encoding of one block holding `ENCODE_METRIC_EVENTS / n` batches, reported per batch.
+fn bench_metric_batch_export(c: &mut Criterion) {
+    let sink = sink();
+    let process_info = sink.process_info.get().unwrap();
+    let mut group = c.benchmark_group("metric_batch");
+    for (n, case) in metric_batch_export_cases() {
+        let nb_batches = ENCODE_METRIC_EVENTS / n;
+        let block = capture_block(&sink.metrics_blocks, flush_metrics_buffer, case, nb_batches);
+        let wire = block.encode_bin(process_info).unwrap().len();
+        print_bytes(
+            &format!("metric_batch/{n}/micromegas"),
+            nb_batches,
+            raw_bytes(&block),
+            wire,
+        );
+        group.throughput(Throughput::Elements(nb_batches as u64));
+        group.bench_function(BenchmarkId::new(format!("export/{n}"), "micromegas"), |b| {
+            b.iter(|| block.encode_bin(process_info).unwrap())
+        });
+    }
     group.finish();
 }
 
@@ -377,6 +400,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     set_max_level(LevelFilter::Info);
     init_thread_stream();
     install_tracing_interop(None);
+    series_sets();
 
     bench_cases(c, "log", "micromegas", &LOG_CASES, drain, Some(after_case));
     bench_cases(
@@ -389,9 +413,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
     bench_cases(
         c,
-        "metric",
+        "metric_batch",
         "micromegas",
-        &METRIC_CASES,
+        &metric_batch_cases(),
         drain,
         Some(after_case),
     );
@@ -413,6 +437,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         Some(after_case),
     );
     bench_encode_group(c);
+    bench_metric_batch_export(c);
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -17,7 +17,7 @@ pub type Case = fn(usize);
 
 /// Called once per case after its last sample with the case id (`group/case/lib`, or
 /// `contention/case/lib/threads`) and the number of operations it emitted. Panics if the library
-/// dropped any of them, except for OpenTelemetry metrics, which report instead.
+/// dropped any of them.
 pub type AfterCase = fn(id: &str, emitted: u64);
 
 pub const THREAD_COUNTS: [u64; 3] = [1, 4, 8];
@@ -146,13 +146,10 @@ pub fn bench_contention(
     group.finish();
 }
 
+/// Series per metric batch: each batch is one value for each of this many series.
+pub const SERIES_COUNTS: [usize; 2] = [10, 100];
+
 /// One line per encoded sample, parsed by `report.py` (criterion has no custom-metric output).
 pub fn print_bytes(id: &str, nb_events: usize, raw_bytes: usize, wire_bytes: usize) {
     println!("bytes: {id} events={nb_events} raw={raw_bytes} wire={wire_bytes}");
-}
-
-/// One line per OpenTelemetry metric case, parsed by `report.py`: samples recorded and the
-/// individual data points that reached the exporter.
-pub fn print_metric_drops(id: &str, kept: u64, emitted: u64) {
-    println!("metric-drops: {id} kept={kept} samples={emitted}");
 }
