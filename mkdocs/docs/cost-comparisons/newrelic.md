@@ -1,17 +1,17 @@
 ---
 title: New Relic Pricing and Cost Breakdown vs. Micromegas
-description: New Relic pricing explained ($0.40/GB ingest, $349/month per Full Platform user) and applied to a 90-day, ~100-user logs-and-metrics workload, ~$39,100/month vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
+description: New Relic pricing explained ($0.40/GB ingest, $349/month per Full Platform user) and applied to a ~100-user logs-and-metrics workload, ~$39,100/month at 30-day log retention vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
 ---
 
 # New Relic Pricing vs. Micromegas
 
-New Relic bills per GB of data ingested and per user seat. On the reference workload the estimate is ~$39,100/month, about 36× the Micromegas figure, driven by per-seat fees. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); like every comparison on this site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-traces)).
+New Relic bills per GB of data ingested and per user seat. On the reference workload the estimate is ~$39,100/month with 30-day log retention, about 36× the Micromegas figure, driven by per-seat fees. This page uses the shared [reference workload](../when-to-use/saas-vendors.md#reference-workload) and [methodology](../when-to-use/saas-vendors.md#methodology); like every comparison on this site, it excludes traces ([why](../when-to-use/saas-vendors.md#the-challenge-of-traces)).
 
 *Rates verified October 2026. Estimates, not quotes — confirm current rates at [newrelic.com/pricing](https://newrelic.com/pricing).*
 
 ## New Relic pricing on the reference workload
 
-*   **Data Ingest (Original Data option, 100 GB/month free):**
+*   **Data Ingest (Original Data option, 100 GB/month free, 30-day retention):**
     *   Logs: `1,500 GB/month`; metrics: `~9,200 GB/month`; total ~10,700 GB/month
     *   `(10,700 − 100) GB × $0.40/GB`
     *   **Subtotal:** **~$4,240/month**
@@ -26,7 +26,7 @@ New Relic bills per GB of data ingested and per user seat. On the reference work
 
 *   **Included:** 100 GB/month of free ingest, and free Basic users.
 *   **Billed separately:** Full Platform users at $349/month (Pro, annual); Core users at $49/month; data beyond the free 100 GB.
-*   **Data Plus:** $0.60/GB, with additional features such as extended retention and HIPAA eligibility.
+*   **Data Plus:** $0.60/GB, with additional features such as extended retention (up to 120 days) and HIPAA eligibility. Original Data keeps logs only 30 days, so the 90-day reference retention needs Data Plus: `~10,600 GB × $0.60 = ~$6,360/month` for data, ~$41,260/month in total (~37.5× Micromegas).
 *   **Logs, metrics and traces** are all billed per GB at the same rate, with no host or custom-metric charges. Traces are not in this estimate.
 *   **CCU pricing:** New Relic also offers a Compute Capacity Unit (CCU) model, but no rates are published.
 
@@ -34,7 +34,7 @@ New Relic bills per GB of data ingested and per user seat. On the reference work
 
 | Category | Micromegas | New Relic |
 | :--- | :--- | :--- |
-| **Platform/Infrastructure Cost** | ~$1,100/month | ~$39,100/month |
+| **Platform/Infrastructure Cost** | ~$1,100/month | ~$39,100/month (30-day log retention) |
 | **Ratio** | **1×** | **~36× more** |
 
 ## Qualitative differences
@@ -53,4 +53,4 @@ New Relic bills per GB of data ingested and per user seat. On the reference work
 
 ## Sources
 
-[New Relic Pricing](https://newrelic.com/pricing). Back to [all SaaS vendor comparisons](../when-to-use/saas-vendors.md#at-a-glance).
+[New Relic Pricing](https://newrelic.com/pricing); [New Relic data retention](https://docs.newrelic.com/docs/data-apis/manage-data/manage-data-retention/). Back to [all SaaS vendor comparisons](../when-to-use/saas-vendors.md#at-a-glance).

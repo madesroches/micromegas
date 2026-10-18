@@ -20,7 +20,7 @@ Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Us
 | [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
 | [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$660 | ~0.6× |
 | [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs, per user | ~$8,000+ (30-day retention only) | ~7.2× |
-| [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$39,100 | ~36× |
+| [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$39,100 (30-day log retention) | ~36× |
 | [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$22,000 | ~20× |
 
 Every estimate excludes traces, and the Datadog and Dynatrace figures exclude custom metrics at the reference volume; see [Methodology](#methodology).
