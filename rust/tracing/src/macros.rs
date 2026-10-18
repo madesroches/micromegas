@@ -232,7 +232,7 @@ macro_rules! instrument_named_dyn {
     }};
 }
 
-/// Records a integer metric. Use [`imetric_dyn!`] when the name or unit is built at run time.
+/// Records a integer metric. Use [`imetric_dyn!`](crate::imetric_dyn!) when the name or unit is built at run time.
 ///
 /// # Examples
 ///
@@ -480,7 +480,7 @@ macro_rules! imetric_dyn {
 
 /// Records a float metric whose name or unit is only known at run time.
 ///
-/// Same as [`imetric_dyn!`], including the cardinality caveat, for a floating-point value.
+/// Same as [`imetric_dyn!`](crate::imetric_dyn!), including the cardinality caveat, for a floating-point value.
 ///
 /// ```
 /// use micromegas_tracing::prelude::*;
