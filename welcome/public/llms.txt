@@ -73,8 +73,8 @@ Site layout: `/` is the overview, `/docs/` the documentation, `/docs/blog/` the 
   - [vs. Splunk](https://micromegas.info/docs/cost-comparisons/splunk/): ~$22,000/month on the reference workload, ~20× Micromegas
   - [vs. Elastic](https://micromegas.info/docs/cost-comparisons/elastic/): ~$660/month on the reference workload, ~0.6× Micromegas
   - [vs. New Relic](https://micromegas.info/docs/cost-comparisons/newrelic/): ~$39,100/month on the reference workload (30-day log retention), ~36× Micromegas
-  - [vs. Dynatrace](https://micromegas.info/docs/cost-comparisons/dynatrace/): ~$1,600/month on the reference workload, ~1.5× Micromegas
-  - [vs. Grafana Cloud](https://micromegas.info/docs/cost-comparisons/grafana/): ~$8,000+/month on the reference workload, ~7.2× Micromegas
+  - [vs. Dynatrace](https://micromegas.info/docs/cost-comparisons/dynatrace/): ~$1,600/month on the reference workload (custom metrics excluded), ~1.5× Micromegas
+  - [vs. Grafana Cloud](https://micromegas.info/docs/cost-comparisons/grafana/): ~$8,000+/month on the reference workload (30-day log retention only), ~7.2× Micromegas
 
 ## Engineering blog
 

@@ -56,9 +56,7 @@ These roles can run as independent, horizontally-scalable services or bundled in
 
 ## Cost-Effectiveness
 
-Unlike traditional observability platforms with opaque and often escalating costs, Micromegas offers a transparent and **orders of magnitude more efficient** solution. With Micromegas, you can afford to record billions of events without relying heavily on sampling, gaining a complete and accurate picture of your systems. By leveraging your own cloud infrastructure, Micromegas drastically reduces your observability spend, especially at scale.
-
-Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://micromegas.info/docs/when-to-use/saas-vendors/) document.
+Micromegas cost is the direct cloud bill: about $1,100/month for the reference deployment, including 165B trace events kept without sampling. It is compared with six SaaS vendors on one reference workload in the [vendor comparison](https://micromegas.info/docs/when-to-use/saas-vendors/), which covers the methodology and per-vendor pricing.
 
 ## Presentations
 

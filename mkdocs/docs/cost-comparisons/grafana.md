@@ -1,6 +1,6 @@
 ---
 title: Grafana Cloud Pricing and Cost Breakdown vs. Micromegas
-description: Grafana Cloud Pro pricing explained ($6.50 per 1,000 active series, $0.50/GB logs, $8/user) and applied to a ~100-user logs-and-metrics workload, ~$8,000+/month vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
+description: Grafana Cloud Pro pricing explained ($6.50 per 1,000 active series, $0.50/GB logs, $8/user) and applied to a ~100-user logs-and-metrics workload, ~$8,000+/month (30-day log retention only) vs. ~$1,100 for self-hosted Micromegas. Rates verified October 2026.
 ---
 
 # Grafana Cloud Pricing vs. Micromegas
