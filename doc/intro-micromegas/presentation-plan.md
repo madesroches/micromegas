@@ -11,7 +11,7 @@ Weave these in naturally — these are the lines the audience should be able to 
 - **"One query, complete context"** — the unified payoff in five words
 - **"Events should be cheap enough to never sample by default"** — the cost-model inversion
 - **"Same goals, very different cost model"** — the biggest-difference framing
-- **"900 billion events for $1,750 a month"** — the proof. Say the number, then pause.
+- **"~2 trillion events for ~$1,100 a month"** — the proof. Say the number, then pause.
 - **"Memcpy into a thread-local buffer"** — the mechanism behind the 20 ns claim
 - **"We didn't reinvent the analytics stack — we assembled it"** — the standards pitch
 - **"Same engine, end to end"** — DataFusion server + DataFusion in browser
@@ -29,7 +29,7 @@ Weave these in naturally — these are the lines the audience should be able to 
 
 - Use the audience's vocabulary (services, requests, spans) and bridge to Micromegas's (events, streams, blocks).
 - **Pause on the 20 ns number** — let it land.
-- **Pause on the cost number** — "$1,750 a month for 900 billion events" is the line the audience will quote to their boss. Don't bury it in a list.
+- **Pause on the cost number** — "~$1,100 a month for ~2 trillion events" is the line the audience will quote to their boss. Don't bury it in a list.
 - **Pause on "one query, complete context"** — let the audience think of their last cross-tool investigation.
 - When asked "how does this compare to <X>?" in Q&A, answer it then. On stage, stay focused on what Micromegas does.
 
@@ -77,4 +77,4 @@ If running long, cut: §9's second screenshot, the closer fragment of §4, the i
 | "Can I join with my warehouse data?" | Yes via Databricks Lakehouse Federation through the gateway — predicates push down, only results transfer. Caveat: schema isn't auto-discovered today, you declare the tables you want to expose. |
 | "What's the migration cost?" | Frame as complement-then-replace, not rip-and-replace. Run alongside existing stack; move signals over as the team gets comfortable. |
 | "Do I have to self-host?" | Today, yes — that's also why the cost is what it is. You own the data and the bill. |
-| "Can it handle <my workload>?" | Production reference: 900B events / 90 days / ~$1,750/month, spikes of 266M events/min. If your workload is in that ballpark, yes. |
+| "Can it handle <my workload>?" | Production reference: ~2 trillion events / 90 days / ~$1,100/month, bursts of ~240M trace events/min. If your workload is in that ballpark, yes. |

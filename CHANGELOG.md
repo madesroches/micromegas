@@ -4,6 +4,10 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Docs:** Refresh the intro deck's cost and scale figures to the vendor comparison's reference
+  workload (~2 trillion events over 90 days, ~27.5 TB, ~$1,100/month) and align the per-process
+  throughput claim to up to 300k events/second across the deck, landing page, `llms.txt`, README,
+  and docs (#1688). No SQL change.
 * **Benchmarks, Docs:** Instrumentation overhead against the OpenTelemetry Rust SDK (#1678). A new
   unpublished crate, `rust/otel-comparison-bench` (`micromegas-otel-comparison-bench`), measures
   the same logs, metrics and spans in `micromegas-tracing` and in `opentelemetry_sdk` 0.32 on its

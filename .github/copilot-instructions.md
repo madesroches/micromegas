@@ -1,6 +1,6 @@
 # Copilot Instructions for Micromegas
 
-Micromegas is a unified observability platform for logs, metrics, and traces built for high-volume environments (100k+ events/second).
+Micromegas is a unified observability platform for logs, metrics, and traces built for high-volume environments (up to 300k events/second per process).
 
 ## Architecture Overview
 
@@ -68,7 +68,7 @@ some_future.instrument(&static_span_desc!("operation_name")).await
 
 ### Performance Considerations
 - Thread-local storage minimizes instrumentation overhead
-- High-frequency telemetry designed for 100k+ events/second
+- High-frequency telemetry designed for up to 300k events/second per process
 - Async span tracking uses `InstrumentedFuture` wrapper for zero-cost abstractions
 - Cost-efficient storage: metadata in PostgreSQL, bulk data in object storage
 

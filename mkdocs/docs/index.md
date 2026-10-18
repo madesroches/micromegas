@@ -29,7 +29,7 @@ Micromegas is a comprehensive observability solution that provides:
 
 ### 🚀 High Performance
 - Ultra-low overhead telemetry collection (20ns per event)
-- Supports up to 100k events/second per process
+- Supports up to 300k events/second per process
 - Thread-local storage for minimal performance impact
 
 ### 💰 Cost Effective
