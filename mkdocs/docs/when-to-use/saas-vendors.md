@@ -86,7 +86,7 @@ The table prices resources equivalent to the production deployment using a singl
 | **Load balancer** | | ~$12 |
 | **Total** | | **~$1,100/month** |
 
-The production deployment itself runs on AWS. There it costs about $2,200/month at AWS on-demand list prices, with no discounts, rebates or Savings Plans applied.
+The production deployment itself runs on AWS. There it would cost about $2,200/month at AWS on-demand list prices if no rebates of any kind applied (no discounts or Savings Plans).
 
 Caveats:
 
