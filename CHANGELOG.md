@@ -17,6 +17,18 @@ This file documents the historical progress of the Micromegas project. For curre
   between them, so neither library drops a record (a drop fails the bench), and `report.py` turns a run into the
   tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". No SQL
   change.
+* **Docs:** Split the SaaS vendor comparison back into six per-vendor pricing pages (#1685) at
+  their original `/docs/cost-comparisons/<vendor>/` URLs (Datadog, Dynatrace, Elastic, Grafana
+  Cloud, New Relic, Splunk), each with its own title and description and the same structure:
+  the vendor's pricing applied to the reference workload, what is included and billed
+  separately, the comparison table, qualitative differences and sources. `vs. SaaS Vendors`
+  stays the hub for the methodology and the at-a-glance table. All rates were re-verified in
+  October 2026: Elastic's July 2026 metrics repricing puts it at ~0.6× Micromegas on logs and
+  metrics, Splunk's Marketplace list prices are gone so its estimate is labelled as based on
+  the last published rates, and the Datadog, Grafana and New Relic estimates are labelled as
+  30-day log retention. `llms.txt` links the new pages, the README cost claim is reworded to
+  match, and the docs build now fails on broken anchors (`validation: anchors: warn`, MkDocs
+  ≥ 1.6).
 * **Tracing, C API:** Metrics with names built at runtime, and a C API that keeps nothing for
   the life of the process (#1676). `imetric_dyn!` and `fmetric_dyn!` take any `AsRef<str>` name
   and unit, such as `format!(..)`, a `&String` or an `Arc<str>`, with the grammar of
