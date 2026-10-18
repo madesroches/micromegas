@@ -1,12 +1,12 @@
 ---
-description: Micromegas's self-hosted cost model compared with Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk on one reference workload, with per-vendor pricing pages.
+description: Micromegas's self-hosted cost model compared with Datadog, Dynatrace, Elastic, Grafana Cloud, New Relic and Splunk on one workload measured on a production deployment, with a pricing page per vendor.
 ---
 
 # Micromegas vs. SaaS Observability Vendors
 
 Micromegas runs on your own infrastructure, so its cost is the direct cost of the cloud services it uses rather than a per-GB, per-host or per-user price. This page explains that cost model, states the methodology shared by every estimate, and compares it with six commercial vendors on one reference workload.
 
-**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month. The six vendors range from below that figure (Elastic Serverless at ~0.6×, on logs and metrics alone), through Dynatrace at ~1.5× (with custom metrics excluded), up to roughly 36× (New Relic, driven by per-seat fees). The comparison is heavily skewed in the vendors' favor: the Micromegas figure includes 165 billion trace events, while the vendor estimates cover only logs and metrics, because pricing that trace volume in a SaaS product would not be a realistic comparison (see [The Challenge of Traces](#the-challenge-of-traces)). All vendor numbers are estimates, not quotes.
+**TL;DR:** on the reference workload (90-day retention, ~100 users) Micromegas costs about $1,100/month at a single cloud provider's public list prices, with all traces included. On logs and metrics alone, the six vendors range from ~2.9× (Dynatrace, custom metrics excluded) to ~82× (New Relic). With traces priced wherever a vendor publishes a rate, the range is ~48× (Elastic) to ~517× (Datadog). All vendor numbers are estimates, not quotes.
 
 *Last reviewed: October 2026*
 
@@ -14,16 +14,16 @@ Weighing self-hosted open-source tools rather than SaaS vendors? See [When to Us
 
 ## At a glance
 
-| Vendor | Priced on | Est. monthly (logs + metrics), rates verified October 2026 | vs. Micromegas ~$1,100 |
-| :--- | :--- | :--- | :--- |
-| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$7,950+ (30-day log retention, custom metrics excluded) | ~7.2× |
-| [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs (DPS rate card) | ~$1,600 (logs + monitoring only) | ~1.5× |
-| [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$660 | ~0.6× |
-| [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs, per user | ~$8,000+ (30-day retention only) | ~7.2× |
-| [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$39,100 (30-day log retention) | ~36× |
-| [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$22,000 | ~20× |
+| Vendor | Priced on | Logs + metrics | With traces | vs. Micromegas ~$1,100 |
+| :--- | :--- | :--- | :--- | :--- |
+| [Datadog](../cost-comparisons/datadog.md) | Per host, per GB ingested, per million events indexed | ~$25,100 (30-day logs, custom metrics excl.) | ~$568,000 (15-day span index) | ~23× / ~517× |
+| [Dynatrace](../cost-comparisons/dynatrace.md) | Memory-hours of monitored hosts, per GiB of logs and spans (DPS rate card) | ~$3,200 (logs + monitoring, custom metrics excl.) | ~$78,200 | ~2.9× / ~71× |
+| [Elastic](../cost-comparisons/elastic.md) | Per GB ingested (volume-tiered), per GB-month retained | ~$6,200–$10,400 | ~$52,600–$56,800 | ~5.6–9.4× / ~48–52× |
+| [Grafana Cloud](../cost-comparisons/grafana.md) | Per 1,000 active series, per GB of logs and traces, per user | ~$25,400 (30-day logs) | ~$183,000 (30-day) | ~23× / ~167× |
+| [New Relic](../cost-comparisons/newrelic.md) | Per GB ingested, per user seat | ~$90,200 (30-day logs) | ~$216,500 | ~82× / ~197× |
+| [Splunk](../cost-comparisons/splunk.md) | Daily index volume, billed annually | ~$16,400–$18,700 (custom metrics excl.) | n/a (no published rate) | ~15–17× / — |
 
-Every estimate excludes traces, and the Datadog and Dynatrace figures exclude custom metrics at the reference volume; see [Methodology](#methodology).
+Rates verified October 2026. The ratio column is logs + metrics / with traces. The Micromegas figure includes all traces. Datadog, Dynatrace and Splunk exclude custom metrics at the reference volume, and Splunk's trace cost is not estimated because no per-volume rate is published; see [Methodology](#methodology).
 
 ## Cost Philosophy
 
@@ -63,39 +63,43 @@ Micromegas also supports **native OTLP/HTTP ingestion** (logs, metrics, and trac
 
 ## Example Deployment Cost
 
-Here's a real-world cost breakdown for a production Micromegas deployment on AWS Fargate:
+Here's the cost of running the reference workload, measured on a production Micromegas deployment between 2026-09-18 and 2026-10-18.
 
 ### Data Scale
 
 - **Retention Period:** 90 days
-- **Total Storage:** 8.5 TB in 118 million objects
-- **Log Entries:** 9 billion
-- **Metric Events:** 275 billion
-- **Trace Events:** 165 billion
+- **Total Storage:** ~27.5 TB in object storage
+- **Log Entries:** ~9.6 billion per month (~29 billion retained)
+- **Metric Points:** ~138 billion per month (~415 billion retained)
+- **CPU Trace Events:** ~535 billion per month (~1.6 trillion retained)
 
 ### Monthly Infrastructure Costs
 
-| Component | Specification | Monthly Cost |
-|-----------|---------------|-------------|
-| **Ingestion Services** | 2 × (1 vCPU, 2 GB) on Fargate | ~$66 |
-| **Analytics Service** | 2 × (4 vCPU, 8 GB) on Fargate | ~$288 |
-| **Maintenance Daemon** | 1 × (4 vCPU, 8 GB) on Fargate | ~$144 |
-| **Analytics Web** | 1 × (0.5 vCPU, 1 GB) on Fargate | ~$18 |
-| **Aurora Serverless v2** | 44 GB storage, 0.5–20 ACU (avg 18.7% ≈ 3.74 ACU) | ~$330 |
-| **S3 Storage** | 8.5 TB @ $0.023/GB | ~$200 |
-| **Application Load Balancer** | Fixed + LCU charges (shared) | ~$25 |
-| **Data Transfer** | Minimal (internal) | ~$10 |
+The table prices resources equivalent to the production deployment using a single cloud provider's public monthly list prices, with no commitment and no negotiated discounts. This is the same footing as the vendors' list prices.
+
+| Component | Equivalent resource | Monthly Cost |
+|-----------|---------------------|-------------|
+| **Object storage** | ~27.5 TB S3-compatible object storage | ~$512 |
+| **Services** (ingestion, analytics, maintenance, web) | 16 vCPU / 32 GiB compute | $336 |
+| **PostgreSQL** (metadata) | Managed PostgreSQL, 4 vCPU / 8 GiB, single node | $122 |
+| **Object cache** | 2 vCPU / 16 GiB with local NVMe | $131 |
+| **Load balancer** | | ~$12 |
 | **Total** | | **~$1,100/month** |
 
-Resources are sized for redundancy, not peak utilization — a tighter deployment without redundancy would be cheaper. Conversely, autoscaling can add tasks under sustained load.
+The production deployment itself runs on AWS. There it costs about $2,200/month at AWS on-demand list prices, with no discounts, rebates or Savings Plans applied.
+
+Caveats:
+
+- PostgreSQL is a single node with no standby.
+- Writes to object storage count against the compute transfer allowance; reads within the region are free.
+- The sizing is translated from the measured deployment, not separately measured.
 
 ### Scale Perspective
 
 This deployment handles:
 
-- **449 billion total events** over 90 days
-- **Spikes of ~266 million events per minute**
-- **~58,000 events per second** average throughput
+- **~263,000 events per second** on average
+- **Bursts of up to ~240 million trace events per minute** and ~13 million metric points per minute
 
 ## Cost Management Features
 
@@ -139,6 +143,8 @@ Most commercial observability solutions use one or a combination of the followin
     *   **Pros:** Pay for only the features you need.
     *   **Cons:** You may be forced into a much more expensive tier for a single critical feature. Cost jumps between tiers can be substantial.
 
+Every estimate follows one rule: per-GB charges use the measured billing sizes from the [reference workload](#reference-workload), while per-event, per-data-point, per-series and per-host charges use counts.
+
 Micromegas takes a fundamentally different approach: instead of abstracting away the infrastructure, it runs on your own cloud account (AWS, GCP, Azure), and **your cost is the direct cost of the underlying cloud services you consume.**
 
 | Aspect | Commercial SaaS Platforms | Micromegas |
@@ -152,23 +158,22 @@ Micromegas takes a fundamentally different approach: instead of abstracting away
 
 ### Reference Workload
 
-All comparisons use the same reference workload, based on a real Micromegas production deployment (costed in [Example Deployment Cost](#example-deployment-cost)):
+All comparisons use the same reference workload, measured on a production Micromegas deployment (costed in [Example Deployment Cost](#example-deployment-cost)):
 
-*   **Infrastructure:** 20 hosts/nodes to monitor
+*   **Infrastructure:** 20 hosts/nodes to monitor, 8 GiB of memory each (for host-priced products)
 *   **Retention:** 90 days (3 months)
-*   **Total events over 90-day retention:**
-    *   **Logs:** 9 billion log entries
-    *   **Metrics:** 275 billion metric data points
-    *   **Traces:** 165 billion trace events
-*   **Monthly ingestion rate:**
-    *   **Logs:** 3 billion log entries/month
-    *   **Metrics:** ~92 billion metric data points/month
-    *   **Traces:** ~55 billion trace events/month
+*   **Monthly volume:**
+    *   **Logs:** ~9.6 billion log entries (~29 billion over 90 days)
+    *   **Metrics:** ~138 billion metric data points (~415 billion over 90 days)
+    *   **Traces:** ~535 billion CPU trace events (~1.6 trillion over 90 days). Vendors bill spans, not stream events. At a measured ~1.8 events per span, that is ~300 billion spans per month.
 *   **Users:** ~100 active users
-*   **Data size assumptions for billing estimates:**
-    *   Average log entry size: 500 bytes
-    *   Average metric data point size: 100 bytes
-    *   Average trace event size: 1 KB
+*   **Custom metrics:** ~1 million series, where a vendor bills per series or custom metric
+*   **Left out:** network-trace events (~10.8 billion per month) are not included in any vendor estimate, which favors the vendors.
+*   **Measured billing sizes:** the mean serialized JSON document size, including resource attributes (executable, user, host, process properties), sampled on 2026-10-18:
+    *   Log entry: ~860 bytes
+    *   Metric point: ~940 bytes
+    *   Span: ~1,050 bytes
+*   **Monthly billable volume:** logs ~8.3 TB (~275 GB/day), metrics ~130 TB, spans ~316 TB.
 
 ### Why Personnel Costs Are Excluded
 
@@ -187,16 +192,16 @@ An organization using a fragmented set of off-the-shelf solutions does not spend
 
 ### The Challenge of Traces
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our reference workload) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps infrastructure costs manageable.
+Micromegas is designed to ingest and store a very high volume of raw trace events (~535 billion per month, ~1.6 trillion over 90 days in the reference workload) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps infrastructure costs manageable.
 
-Commercial SaaS tracing solutions are typically priced based on ingested GB or spans, and their architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this comes at a significantly higher cost per unit, especially for long retention periods.
+Commercial SaaS tracing solutions are priced per ingested GB or per span, and their architectures are optimized for real-time analysis and high-cardinality indexing. This comes at a significantly higher cost per unit.
 
-For 165 billion trace events (equivalent to ~165 TB of raw data at 1 KB/event) with 90-day retention, the estimated cost in a typical SaaS tracing solution would be **prohibitively expensive** — hundreds of thousands of dollars per month. This is why high-volume tracing in SaaS solutions relies heavily on **aggressive sampling**.
+Each vendor page therefore gives a second figure that adds traces to the logs-and-metrics estimate wherever the vendor publishes a linear (per-GB or per-span) rate. The reference span volume is ~300 billion spans per month, or ~316 TB at the measured span size. Traces are excluded only where no such rate is published, which is the case for Splunk.
+
+These figures price the full volume. Real deployments of these vendors would not ingest it:
 
 *   **SaaS Tracing Reality:** To manage costs, users implement head-based or tail-based sampling, meaning only a small fraction (1–10%) of traces are actually ingested and retained. This sacrifices data completeness for cost control.
-*   **Micromegas Tracing Philosophy:** Micromegas retains a significantly larger volume of raw trace data, allowing comprehensive on-demand processing and analysis. This fundamental difference makes a direct dollar-for-dollar comparison for traces misleading — the two approaches optimize for different cost/completeness trade-offs.
-
-For this reason, **all cost comparisons exclude traces** and focus on logs and metrics, where pricing is more directly comparable.
+*   **Micromegas Tracing Philosophy:** Micromegas retains the full volume of raw trace data, allowing comprehensive on-demand processing and analysis. The two approaches optimize for different cost/completeness trade-offs, so the with-traces figures show what full-volume tracing would cost at each vendor, not what a sampled deployment would pay.
 
 ### When Micromegas is Cost Effective
 
@@ -207,3 +212,13 @@ The Micromegas model is particularly advantageous when:
 - **Data governance** requirements favor keeping data in your environment
 - **Operational maturity** exists to manage distributed systems
 - **Long-term retention** is needed (cheap object storage vs. expensive SaaS retention)
+
+## Pricing References
+
+The Micromegas figure in [Example Deployment Cost](#example-deployment-cost) uses these public list prices from DigitalOcean:
+
+- [Spaces object storage](https://www.digitalocean.com/pricing/spaces-object-storage): $5/month including 250 GiB, then $0.02/GiB
+- [Droplets](https://www.digitalocean.com/pricing/droplets): CPU-Optimized 16 vCPU / 32 GiB at $336; Storage-Optimized 2 vCPU / 16 GiB at $131
+- [Managed Databases](https://www.digitalocean.com/pricing/managed-databases): PostgreSQL 4 vCPU / 8 GiB at $122.10
+- [Load Balancers](https://www.digitalocean.com/pricing/load-balancers): from $12/month
+- [Spaces pricing details](https://docs.digitalocean.com/products/spaces/details/pricing/): same-region reads are free

@@ -56,7 +56,7 @@ These roles can run as independent, horizontally-scalable services or bundled in
 
 ## Cost-Effectiveness
 
-Micromegas cost is the direct cloud bill: about $1,100/month for the reference deployment, including 165B trace events kept without sampling. It is compared with six SaaS vendors on one reference workload in the [vendor comparison](https://micromegas.info/docs/when-to-use/saas-vendors/), which covers the methodology and per-vendor pricing.
+Micromegas cost is the direct cloud bill: about $1,100/month at public list prices for equivalent resources, including ~535 billion trace events a month kept without sampling. It is compared with six SaaS vendors on one reference workload in the [vendor comparison](https://micromegas.info/docs/when-to-use/saas-vendors/), which covers the methodology and per-vendor pricing.
 
 ## Presentations
 
