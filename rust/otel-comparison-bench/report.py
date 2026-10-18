@@ -180,34 +180,27 @@ def metric_batch(results, sizes):
     for n in SERIES_COUNTS:
         call = {lib: median(f"record/{n}", lib) for lib in ("micromegas", "otel")}
         export = {lib: median(f"export/{n}", lib) for lib in ("micromegas", "otel", "otel_gzip")}
-        record_rows.append(
-            [str(n)] + [cell(call[lib], n) for lib in ("micromegas", "otel")]
-            + [cell(call[lib]) for lib in ("micromegas", "otel")]
-        )
-        export_rows.append([str(n)] + [cell(export[lib], n) for lib in ("micromegas", "otel", "otel_gzip")])
+        label = f"{n} series"
+        record_rows.append([label] + [cell(call[lib], n) for lib in ("micromegas", "otel")])
+        export_rows.append([label] + [cell(export[lib], n) for lib in ("micromegas", "otel", "otel_gzip")])
         s_mm = sizes.get(f"metric_batch/{n}/micromegas")
         s_otel = sizes.get(f"metric_batch/{n}/otel")
         size_rows.append(
-            [str(n)]
+            [label]
             + [
                 f"{v[i] / v[0] / n:.1f}" if v else MISSING
                 for v, i in [(s_mm, 1), (s_mm, 2), (s_otel, 1), (s_otel, 2)]
             ]
         )
-    calling = ["### `metric_batch`: median ns per sample on the calling thread\n"]
-    calling.append(
-        table(
-            ["series per batch", "`micromegas`", "`otel`", "`micromegas` per batch", "`otel` per batch"],
-            record_rows,
-        )
-    )
-    out = ["### `metric_batch`: median ns per sample, off the calling thread\n"]
-    out.append(table(["series per batch", "`micromegas`", "`otel`", "`otel_gzip`"], export_rows))
-    out.append("\n### Bytes per sample\n")
+    calling = ["### `metric`: median ns per metric sample on the calling thread\n"]
+    calling.append(table(["case", "`micromegas`", "`otel`"], record_rows))
+    out = ["### `metric`: median ns per metric sample, off the calling thread\n"]
+    out.append(table(["case", "`micromegas`", "`otel`", "`otel_gzip`"], export_rows))
+    out.append("\n### `metric`: bytes per metric sample\n")
     out.append(
         table(
             [
-                "series per batch",
+                "case",
                 "`micromegas` raw",
                 "`micromegas` wire (LZ4 + CBOR)",
                 "`otel` protobuf",

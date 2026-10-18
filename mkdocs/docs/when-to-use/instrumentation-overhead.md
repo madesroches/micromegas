@@ -30,12 +30,12 @@ Micromegas is faster in every case; a `tracing` event routed into Micromegas cos
 
 `otel_tracing` is OpenTelemetry through the `tracing-opentelemetry` bridge, which costs several times more than the direct tracer.
 
-**`metric_batch`: median ns per metric sample on the calling thread** (the N record calls of a batch, timed alone, divided by N; the per-batch columns are the undivided medians)
+**`metric`: median ns per metric sample on the calling thread** (one value of one series; the series setup is in [Metric samples](#metric-samples))
 
-| series per batch | `micromegas` | `otel` | `micromegas` per batch | `otel` per batch |
-|---|---|---|---|---|
-| 10 | 24.6 | 67.4 | 246.0 | 674.2 |
-| 100 | 25.2 | 68.2 | 2520.3 | 6816.4 |
+| case | `micromegas` | `otel` |
+|---|---|---|
+| 10 series | 24.6 | 67.4 |
+| 100 series | 25.2 | 68.2 |
 
 A sample costs the calling thread about 2.7 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
 
@@ -82,28 +82,28 @@ OpenTelemetry encodes faster per event, most clearly for `log_dyn_high_card`. Wi
 
 The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is smaller than Micromegas for logs and larger for spans.
 
-**`metric_batch`: median ns per metric sample, off the calling thread**
+**`metric`: median ns per metric sample, off the calling thread**
 
-| series per batch | `micromegas` | `otel` | `otel_gzip` |
+| case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| 10 | 1401.8 | 626.9 | 1867.9 |
-| 100 | 1199.9 | 684.6 | 965.2 |
+| 10 series | 1401.8 | 626.9 | 1867.9 |
+| 100 series | 1199.9 | 684.6 | 965.2 |
 
 OpenTelemetry wins metric export cost: its collect, conversion and encode is cheaper per sample than Micromegas's share of `encode_bin`, and gzip erases that lead only at 10 series.
 
-**`metric_batch`: bytes per metric sample**
+**`metric`: bytes per metric sample**
 
-| series per batch | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
+| case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| 10 | 33.2 | 8.3 | 90.4 | 25.1 |
-| 100 | 34.7 | 8.1 | 76.5 | 5.8 |
+| 10 series | 33.2 | 8.3 | 90.4 | 25.1 |
+| 100 series | 34.7 | 8.1 | 76.5 | 5.8 |
 
 Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 series and smaller at 100, where OpenTelemetry wins on size.
 
 ## Reading the numbers
 
 - **Logs and spans.** On the calling thread Micromegas is faster in every log and span case. The gap is a design difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record, attributes included, and hands it to a bounded queue.
-- **Metrics.** A metric sample costs the calling thread about 2.7 times less with Micromegas. The per-sample figure divides a batch by N so that every recorded value is a kept sample in both libraries. In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval rather than once per batch. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
+- **Metrics.** A metric sample costs the calling thread about 2.7 times less with Micromegas. Every sample counted here is kept by both libraries (see [Metric samples](#metric-samples)). In real use an OpenTelemetry exporter collects once per interval and keeps one point per series per interval, so its collect, conversion and encode cost is paid once per interval. That suits rates and distributions. Micromegas keeps every sample with its time, so each snapshot stays queryable.
 - **Contention.** Micromegas log throughput falls with threads because logs share one process-wide stream, and OpenTelemetry overtakes it at 4 and 8 threads; Micromegas spans scale because each thread has its own stream. The producer emits only 2048 operations in total between drains, so these figures describe bursts the background threads can absorb, not sustained overload.
 - **Off the calling thread.** OpenTelemetry encodes faster per event; Micromegas trades that worker time for smaller wire sizes against uncompressed OTLP.
 - **Drops.** Pacing keeps both libraries from dropping data, so no number includes drop behavior or says what happens when a producer outruns its exporter for long.
@@ -121,7 +121,7 @@ Calling-thread time for one operation, with criterion (`iter_custom`, only the e
 
 **OpenTelemetry.** `opentelemetry` 0.32.0 and `opentelemetry_sdk` 0.32.1 with the SDK defaults and no tuning of queue sizes: `BatchLogProcessor` and `BatchSpanProcessor` (2048-record queue, 512-record batches, drop on full), `ParentBased(AlwaysOn)` sampling with random ids, and, for the metric batches, a `ManualReader` with cumulative temporality (the SDK default). Logs enter through `opentelemetry-appender-tracing` 0.32.0 and `tracing` events; spans through the tracer directly (`otel`) or through `tracing-opentelemetry` 0.33.0 (`otel_tracing`); metrics through a `Gauge<u64>` created once per batch size. The log and span exporters convert each batch to OTLP protobuf with `opentelemetry-proto` 0.32.0, as a network exporter would, and discard it.
 
-### Metric batches and samples
+### Metric samples
 
 A metric batch is one snapshot: one value for each of N series at the same moment, like a game recording its frame metrics once per frame. N is 10 or 100. Each series is a static set of attributes, prebuilt once: three fixed pairs (`x`, `y`, `z`) and a series identifier, all under one metric name. The value changes from batch to batch (a persistent counter). A sample is one series' value in one batch, and every per-sample figure is the per-batch figure divided by N.
 
