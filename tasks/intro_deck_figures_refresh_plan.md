@@ -78,7 +78,7 @@ Text-only edits; no structural slide changes.
 1. Edit the four lines in `doc/intro-micromegas/src/slides/presentation.md` per Design 1–4.
 2. Edit the throughput claim in the five files listed in Design 5.
    Apply Design 6 and 7 to the speaker guide and `when-to-use/index.md`.
-3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100k+\|100,000 events\|60k\|266M" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
+3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100k+\|100,000 events\|60k\|266M" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs rust .github`
    — expect no hits.
 4. Add a `**Docs:**` bullet under `## Unreleased` in `CHANGELOG.md` (same `* **Docs:** ... (#1688).`
    format as the existing entries) summarizing the refreshed deck cost/scale figures and the

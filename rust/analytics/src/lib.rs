@@ -28,7 +28,7 @@ pub mod images_table;
 /// the lakehouse partitions are costly to write but allow for cheap & fast queries using datafusion.
 ///
 /// Views based on a low frequency of events (< 1k events per second per process) are kept updated regularly.
-/// Views based on a high frequency of events (up to 100k events per second per process) are metrialized on demand.
+/// Views based on a high frequency of events (up to 300k events per second per process) are metrialized on demand.
 pub mod lakehouse;
 /// In-memory log entries in arrow format
 pub mod log_entries_table;
