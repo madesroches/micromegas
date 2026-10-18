@@ -254,7 +254,7 @@ The analytics web app provides a modern web interface for exploring telemetry da
 
 ## Design Principles
 
-- **High-frequency collection**: Support for 100k+ events/second per process
+- **High-frequency collection**: Support for up to 300k events/second per process
 - **Cost-efficient storage**: Cheap object storage for raw data with on-demand processing
 - **Dual ETL strategy**: Live processing for recent data, JIT for historical analysis
 - **Unified observability**: Logs, metrics, and traces in single queryable format

@@ -191,9 +191,9 @@ graph LR
 <li class="fragment">Self-hosted on your cloud — no per-event vendor pricing</li>
 </ul>
 
-<p class="fragment" style="margin-top: 0.7em; font-size: 1.1em;"><strong>900 billion events / 90 days / ~$1,750 a month</strong></p>
+<p class="fragment" style="margin-top: 0.7em; font-size: 1.1em;"><strong>~2 trillion events / 90 days / ~27.5 TB / ~$1,100 a month</strong></p>
 
-<p class="fragment" style="margin-top: 0.4em; font-size: 0.55em; color: var(--color-text-secondary);">At this volume, traditional vendor SaaS pricing is orders of magnitude higher.</p>
+<p class="fragment" style="margin-top: 0.4em; font-size: 0.55em; color: var(--color-text-secondary);">At this volume, Datadog costs ~28× more on logs and metrics alone — before counting traces.</p>
 
 ---
 
@@ -223,6 +223,7 @@ Modern observability stacks share an unstated assumption — events are <strong>
 
 <ul>
 <li class="fragment"><strong>~20 ns per event</strong> in the calling thread</li>
+<li class="fragment">~5–6× less calling-thread cost than the OpenTelemetry Rust SDK for logs and spans</li>
 <li class="fragment">Events are <strong>tiny</strong> (a few bytes) and use <strong>native memory layout</strong></li>
 <li class="fragment">The hot path is a <strong>memcpy into a thread-local buffer</strong> — no allocation, no formatting, no serialization</li>
 <li class="fragment">Background thread drains buffers, compresses with <strong>LZ4</strong>, ships to ingestion</li>
@@ -236,7 +237,7 @@ Modern observability stacks share an unstated assumption — events are <strong>
 ## What This Unlocks
 
 <ul>
-<li class="fragment"><strong>60k–200k events/second per process</strong> without breaking the host app</li>
+<li class="fragment"><strong>Up to 300k events/second per process</strong> without breaking the host app</li>
 <li class="fragment"><strong>Always-on tracing</strong> in production — not just in dev or under flag</li>
 <li class="fragment">Sub-microsecond spans are visible — you can see what your inner loop is doing</li>
 </ul>
@@ -374,7 +375,7 @@ Notebooks are for the <strong>iterative investigation</strong> that monitoring d
 <li class="fragment"><strong>Unified storage</strong> — one schema model, automatic correlation</li>
 <li class="fragment"><strong>Standard query interface</strong> — SQL on Arrow, no lock-in</li>
 <li class="fragment"><strong>Open integration</strong> — Python API, HTTP gateway, Databricks federation</li>
-<li class="fragment"><strong>Affordable at scale</strong> — 900B events for $1,750/month, on your own cloud</li>
+<li class="fragment"><strong>Affordable at scale</strong> — ~2 trillion events for ~$1,100/month, on your own cloud</li>
 </ul>
 
 ---

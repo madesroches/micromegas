@@ -195,7 +195,7 @@ These projects overlap more than they compete, and many teams run two of them.
 - you want very high-frequency, high-resolution telemetry, or full-resolution traces without sampling: Rust CPU traces record every span unsampled in production, enabled with `MICROMEGAS_ENABLE_CPU_TRACING=true` ([`lib.rs`](https://github.com/madesroches/micromegas/blob/main/rust/telemetry-sink/src/lib.rs)), and `telemetry.spans.all` does the same in Unreal, whose default keeps blocks around frame spikes ([console variables][unreal-cvars], [`SamplingController.h`](https://github.com/madesroches/micromegas/blob/main/unreal/MicromegasTelemetrySink/Private/SamplingController.h));
 - your cost depends on the data more than the code (assets, URLs, scripts, queries going through an interpreter or resolver) and you need to know which input was slow, not just which function;
 - your telemetry comes from many processes that aren't classic services: desktop or mobile clients, edge devices, batch jobs, CI runners, game clients and servers;
-- you need high event volume and long retention at a predictable cost, stored as Parquet on your own object storage, with spans processed only when queried ([on-demand processing][cost-ondemand]); one production deployment on AWS runs at about $1,100/month for 449 billion events over 90 days ([cost breakdown][cost]);
+- you need high event volume and long retention at a predictable cost, stored as Parquet on your own object storage, with spans processed only when queried ([on-demand processing][cost-ondemand]); one production deployment runs at about $1,100/month for ~2 trillion events over 90 days ([cost breakdown][cost]);
 - you want one SQL surface across logs, metrics and traces, including in notebooks, instead of one query language per signal;
 - you need [per-row access control][authz] so each team sees the telemetry meant for it, with privacy guarantees.
 
@@ -213,7 +213,7 @@ It depends on the workload. For OTel-instrumented services with a ready-made APM
 
 ### How do I reduce observability costs at high event volume?
 
-Micromegas stores raw data in your own object storage and processes spans only when they are queried; one production deployment runs at about $1,100/month for 449 billion events over 90 days ([cost breakdown][cost]). VictoriaMetrics is a strong choice for metrics, with low resource use and no external dependencies ([VictoriaMetrics](https://github.com/VictoriaMetrics)).
+Micromegas stores raw data in your own object storage and processes spans only when they are queried; one production deployment runs at about $1,100/month for ~2 trillion events over 90 days ([cost breakdown][cost]). VictoriaMetrics is a strong choice for metrics, with low resource use and no external dependencies ([VictoriaMetrics](https://github.com/VictoriaMetrics)).
 
 ### How do I record full-resolution traces in production without sampling?
 
