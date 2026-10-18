@@ -35,6 +35,15 @@ Throughput claim of 100k events/sec elsewhere:
 
 (`welcome/dist/` is gitignored build output — not edited.)
 
+`doc/intro-micromegas/presentation-plan.md` (speaker guide):
+- Line 14: `"900 billion events for $1,750 a month"`
+- Line 32: `"$1,750 a month for 900 billion events"`
+- Line 80: `900B events / 90 days / ~$1,750/month`
+
+`mkdocs/docs/when-to-use/index.md`:
+- Line 198: `one production deployment on AWS runs at about $1,100/month for 449 billion events over 90 days`
+- Line 216: `one production deployment runs at about $1,100/month for 449 billion events over 90 days`
+
 ## Design
 
 Text-only edits; no structural slide changes.
@@ -54,6 +63,13 @@ Text-only edits; no structural slide changes.
    - `mkdocs/docs/index.md`: `Supports up to 300k events/second per process`
    - `README.md`: `up to **300,000 events per second**`
 
+6. **Speaker guide** `doc/intro-micromegas/presentation-plan.md` lines 14, 32, 80: replace
+   `900 billion events` / `900B events` with `~2 trillion events` and `$1,750` with `~$1,100`,
+   keeping each line's phrasing.
+7. **`mkdocs/docs/when-to-use/index.md`** lines 198 and 216: rewrite to
+   `about $1,100/month for ~2 trillion events over 90 days`; drop `on AWS` from line 198 to
+   match the list-price footing.
+
 The $1,100 public-list-price figure is used deliberately; the ~$2,200 AWS on-demand figure is
 not quoted anywhere.
 
@@ -61,9 +77,13 @@ not quoted anywhere.
 
 1. Edit the four lines in `doc/intro-micromegas/src/slides/presentation.md` per Design 1–4.
 2. Edit the throughput claim in the four files listed in Design 5.
-3. `grep -rn "900 billion\|900B\|1,750\|100k events\|100,000 events\|60k" doc/intro-micromegas/src welcome/src welcome/public README.md mkdocs/docs`
+   Apply Design 6 and 7 to the speaker guide and `when-to-use/index.md`.
+3. `grep -rn --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=blog "900 billion\|900B\|1,750\|449 billion\|100k events\|100,000 events\|60k" doc/intro-micromegas welcome/src welcome/public README.md mkdocs/docs`
    — expect no hits.
-4. Build the deck (`cd doc/intro-micromegas && yarn build`) and the landing page
+4. Add a `**Docs:**` bullet under `## Unreleased` in `CHANGELOG.md` (same `* **Docs:** ... (#1688).`
+   format as the existing entries) summarizing the refreshed deck cost/scale figures and the
+   aligned 300k events/second throughput claim. No SQL change.
+5. Build the deck (`cd doc/intro-micromegas && yarn build`) and the landing page
    (`cd welcome && yarn build`) to confirm nothing broke.
 
 ## Files to Modify
@@ -73,6 +93,9 @@ not quoted anywhere.
 - `welcome/public/llms.txt`
 - `mkdocs/docs/index.md`
 - `README.md`
+- `doc/intro-micromegas/presentation-plan.md`
+- `mkdocs/docs/when-to-use/index.md`
+- `CHANGELOG.md`
 
 ## Trade-offs
 
