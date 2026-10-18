@@ -2,6 +2,31 @@
 
 **GitHub Issue**: https://github.com/madesroches/micromegas/issues/1685
 
+## Status
+
+**Done**: Implementation Steps 1–6, on branch `comparisons`, not pushed.
+- Six vendor pages restored at `/docs/cost-comparisons/<vendor>/`; the hub is reworked; redirects,
+  nav, anchor validation and the `mkdocs>=1.6.0` floor are in place; `llms.txt` links the new
+  pages; the #1637 changelog entry is amended.
+- Review-loop fixes are in: 30-day log-retention labels on Datadog, New Relic and Grafana; a
+  Datadog custom-metrics caveat; consistent caveats in `llms.txt`; factual README wording.
+- A #1685 `CHANGELOG.md` entry is written. It still says Elastic is ~0.6× and gets updated in
+  Step 10.
+- `mkdocs build --strict` and `pytest build/test_check_docs_site.py` pass.
+- Commits: `d6252153a`, `c1f2374f0`, `36bb6a084`, `676dafde4`, `35913d9ff`.
+
+**Left to do**: Implementation Steps 7–11, the **Fairness Corrections**.
+- Measure billing sizes (blocked on the Open Question).
+- Price traces where a linear rate is published.
+- Show Elastic's log tier as a range.
+- Recompute every figure and rewrite the hub, vendor pages, `llms.txt`, README and the
+  changelog to match.
+- Then push and open the PR.
+
+The pricing figures in **Pricing Re-verification** are the rates as verified. The per-vendor
+totals and ratios there (and in the shipped pages) are the *pre-correction* numbers. Steps 7–10
+replace them.
+
 ## Overview
 
 #1641 folded the six SaaS cost comparisons into one ~4,300-word page,
@@ -157,6 +182,101 @@ Where a vendor publishes a free or included allotment, the estimate now subtract
 - Sources: AWS Marketplace listing, splunk.com/en_us/products/pricing.html,
   splunk.com/en_us/products/pricing/observability.html.
 
+## Fairness Corrections (follow-up, to do)
+
+The first implementation (commits `d6252153a`–`676dafde4`) puts Elastic at ~0.6× Micromegas.
+That result comes from three assumptions that favour Elastic. This phase removes them.
+
+1. **Byte-billed vendors are priced on Micromegas's compact event sizes.** The reference
+   workload assumes 500 B per log entry, 100 B per metric point and 1 KB per trace event, which
+   is close to how Micromegas stores data. Elastic bills ingest *and* retention on "the fully
+   enriched normalized data size at the end of the ingest pipeline, before Elasticsearch
+   compression", and notes that this is "higher than the volumes traditionally reported by
+   Elasticsearch index size" (elastic-observability-billing-dimensions, fetched 2026-10-18).
+   Every billed document carries its own timestamp, field names and resource attributes. Metrics
+   are ~9,200 of the ~10,700 GB/month, so the 100 B figure alone sets most of Elastic's total.
+2. **Traces are excluded even where a vendor publishes a linear per-GB trace rate.** The
+   Micromegas ~$1,100 includes 165B trace events. The "Challenge of Traces" rationale ("hundreds
+   of thousands of dollars per month") was never computed. For Elastic it would be roughly
+   $8–11k/month, not prohibitive, so leaving traces out is what makes Elastic look cheaper.
+3. **The Elastic log rate assumes a combined-volume discount.** The ~$0.15/GB headline assumes
+   the unpublished ingest tiers count logs and metrics together.
+
+### Billing-size measurement
+
+Replace the assumed event sizes with measured ones and apply them to every charge billed per GB.
+Charges billed per event, data point, series or host are unaffected.
+
+| Vendor | Charges billed per GB (re-priced) | Charges billed some other way (unchanged) |
+| :--- | :--- | :--- |
+| Elastic | logs, metrics, traces: ingest and retention | — |
+| New Relic | all data ingest | user seats |
+| Splunk | daily index volume | — |
+| Dynatrace | log ingest/retain, trace ingest/retain | host memory-hours, metric data points |
+| Grafana Cloud | logs, traces | metric series, users |
+| Datadog | log ingest ($0.10/GB) | log indexing per event, hosts, custom metrics |
+
+Method: take samples of `log_entries`, `measures` and thread spans from a deployment running the
+reference workload with `micromegas-query --format json`. Include the process columns, because
+OTLP resource attributes ride along on every document. Measure the mean serialized bytes per
+row. Serialized JSON with the resource context is a stand-in for a vendor's pre-compression,
+enriched document size; it is not a vendor's exact number. Write the script to
+`tasks/1685_billing_sizes/measure_billing_sizes.py`, run it with the poetry venv in
+`python/micromegas`, and record its output. It is a task artifact and is not shipped.
+
+On the hub:
+- The Reference Workload's "Data size assumptions" become **measured billing sizes**, each with
+  a one-line method note.
+- The Methodology states the rule: per-GB charges use the measured billing size. Micromegas's
+  own cost is its actual bill and does not change.
+
+### Traces priced where a linear rate is published
+
+Each vendor page gets a second, like-for-like figure: logs + metrics + the reference trace volume
+(~55B spans/month, 90-day retention, measured span size). Price it only where the vendor
+publishes a per-GB or per-span rate:
+
+- **Elastic:** standard per-GB ingest rate plus $0.019/GB-month retention. Traces are not
+  metrics, so they don't get the 25% time-series rate.
+- **Dynatrace:** $0.20/GiB ingest plus $0.0007/GiB-day retain. Subtract the Full-Stack included
+  trace volume only if the docs confirm it; the design research did not fetch that page.
+- **Grafana Cloud:** $0.50/GB with 50 GB included and 30-day retention. Label it 30-day like its
+  logs.
+- **New Relic:** $0.40/GB, Original Data, 30-day retention; Data Plus for 90 days, as its logs
+  already do.
+- **Datadog:** look up the ingested-span and indexed-span list rates and the per-host allotments
+  on datadoghq.com/pricing/list/. If they are not published, keep traces excluded and say so.
+- **Splunk:** no published rates, so traces stay excluded, stated on the page.
+
+Rewrite "The Challenge of Traces" around this rule:
+- Traces are priced wherever a vendor publishes a linear rate, and excluded only where it
+  doesn't.
+- The sampling argument stays, as the reason real deployments of those vendors would not ingest
+  this volume.
+- Drop the uncomputed "hundreds of thousands" claim.
+
+### Elastic log tier
+
+Drop the single ~$0.15/GB headline for Elastic logs. The tier breakpoints are unpublished, so the
+Elastic page and its At a glance cell show a range: the $0.09/GB floor up to the $0.60/GB
+first-tier rate, applied to the actual per-signal volumes. The Elastic page does not pick a point
+inside the range.
+
+### Presentation
+
+- **At a glance:** keep the "logs + metrics" column and add a "with traces" column. Use "n/a
+  (no published rate)" where traces stay excluded. The ratio column compares the with-traces
+  figure to Micromegas where one exists, because that is the like-for-like number.
+- **Rewrite after recomputing:** the TL;DR, the hub `description:`, each vendor page's lead,
+  description, cost table and qualitative bullets, the `llms.txt` glosses, and the README
+  paragraph. These follow the recomputed figures; do not carry forward "Elastic is cheaper" or
+  "second-closest" wording that no longer holds.
+- **Template:** the lead sentence "like every comparison on this site, it excludes traces" becomes
+  vendor-specific: either "includes the reference trace volume at <rate>" or "excludes traces:
+  <vendor> publishes no trace rate".
+- **CHANGELOG:** update the #1685 entry, which currently says Elastic is ~0.6×, to the
+  recomputed figures.
+
 ## Design
 
 ### URLs and files
@@ -281,6 +401,8 @@ at-a-glance cost table, with a pricing page per vendor below."
 
 ## Implementation Steps
 
+Steps 1–6: **done**.
+
 1. Create the six `mkdocs/docs/cost-comparisons/<vendor>.md` pages from the template. Take the
    pricing from **Pricing Re-verification** and the qualitative bullets from the current
    `saas-vendors.md` sections.
@@ -300,6 +422,20 @@ at-a-glance cost table, with a pricing page per vendor below."
    real page with a stub). Also confirm each has a `<title>` starting with "<Vendor> Pricing and
    Cost Breakdown vs. Micromegas" and a `<meta name="description">` tag.
 
+Steps 7–11 (fairness corrections): **to do**. Step 7 is blocked on the Open Question.
+
+7. Write and run `tasks/1685_billing_sizes/measure_billing_sizes.py` against the deployment
+   chosen in Open Questions, and record the measured bytes per log entry, metric point and span.
+8. Look up Datadog's span rates, and check Dynatrace's included trace volume (see **Traces priced
+   where a linear rate is published**).
+9. Recompute every vendor's per-GB charges with the measured sizes, add the with-traces figure
+   where a rate is published, and switch Elastic logs to the range. Update the six vendor pages
+   accordingly.
+10. Update the hub: the Reference Workload sizes, the Methodology rule, "The Challenge of Traces",
+    At a glance (new column), the TL;DR and `description:`. Then update the `llms.txt` glosses,
+    the README paragraph and the #1685 `CHANGELOG.md` entry.
+11. Re-run step 6's checks.
+
 ## Files to Modify
 
 - `mkdocs/docs/cost-comparisons/{datadog,dynatrace,elastic,grafana,newrelic,splunk}.md` (new)
@@ -307,7 +443,9 @@ at-a-glance cost table, with a pricing page per vendor below."
 - `mkdocs/mkdocs.yml`
 - `mkdocs/docs-requirements.txt` (`mkdocs>=1.6.0`)
 - `welcome/public/llms.txt`
-- `CHANGELOG.md` (amend the Unreleased #1637 entry)
+- `CHANGELOG.md` (amend the Unreleased #1637 entry; update the #1685 entry)
+- `README.md` (cost paragraph, after recomputing)
+- `tasks/1685_billing_sizes/measure_billing_sizes.py` (new task artifact, not shipped)
 
 ## Documentation
 
@@ -316,7 +454,9 @@ links to the vendor anchors.
 
 ## Testing Strategy
 
-There is no new code, so no unit tests. Implementation Step 6 runs the automated checks. Beyond
+The shipped change has no new code, so no unit tests. The step-7 measurement script is a one-off
+task artifact whose output is recorded in the docs, not maintained code. Implementation Step 6
+runs the automated checks. Beyond
 those, `--strict` with `validation: anchors: warn` fails on broken anchors, including the
 hub-anchor links, and the "Build Docs" CI job's Check 6 confirms the six new `llms.txt` URLs
 resolve.
@@ -334,14 +474,23 @@ These checks are rendering output that a person has to look at.
 ## Decisions
 
 - Pricing figures were re-verified on 2026-10-18 during design (see **Pricing
-  Re-verification**). The implementation uses them as given and does not re-research.
+  Re-verification**). The implementation uses them as given and does not re-research them. The
+  exceptions are the step-8 lookups (Datadog span rates, Dynatrace included trace volume).
 - Pages return to the original URLs rather than new ones.
 - The methodology stays on the hub; vendor pages link to it.
 - Splunk keeps a labelled estimate based on the last published list prices.
-- Elastic's below-Micromegas figure is published as computed.
 - Free allotments are subtracted for every vendor (Grafana ~$8,069 to ~$7,955, New Relic
   ~$39,180 to ~$39,140).
+- The user judged the ~0.6× Elastic result unfair to Micromegas. It is replaced by **Fairness
+  Corrections**: measured billing sizes for every per-GB charge, traces priced wherever a
+  linear rate is published, and the Elastic log tier shown as a range.
+- Measured billing sizes apply to every vendor, not just Elastic, even where that raises other
+  vendors' estimates.
 
 ## Open Questions
 
-None.
+- **needs user decision:** which deployment the step-7 billing-size sample comes from. The
+  production deployment behind the reference workload is the only representative source. The
+  local test environment's data shape doesn't match it. This needs `micromegas-query` access to
+  production (a profile in `~/.micromegas/config.json`), or a JSON sample you export and hand
+  over.
