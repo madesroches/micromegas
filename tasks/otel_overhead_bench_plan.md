@@ -119,9 +119,11 @@ library offers.
 `micromegas_interop` shows the cost for an application already instrumented with `tracing`; it
 runs in the micromegas binary, whose global `tracing` subscriber is the interop layer.
 
-`metric` group — micromegas samples (`imetric!`) vs. OTel instruments created once
-(`OnceLock<Counter<u64>>`, `OnceLock<Gauge<u64>>`), each case run against both `otel_counter`
-(`add`) and `otel_gauge` (`record`):
+`metric` group — micromegas samples (`imetric!`) vs. OTel instruments, each case run against both
+`otel_counter` (`add`) and `otel_gauge` (`record`). Every case has its own instrument
+(`counter_<case>`, `gauge_<case>`, held in `OnceLock` arrays) created before any case runs, so the
+data points the exporter sees under an instrument's name are exactly that case's, and instrument
+creation is never timed:
 
 | case | `micromegas` | `otel_counter` / `otel_gauge` attributes |
 |---|---|---|
@@ -184,13 +186,14 @@ per kind; OTel's batch channel and metric aggregation map are its shared points.
   global default, with an `INFO` level filter on both layers matching micromegas' level check.
 - `SdkTracerProvider::builder().with_batch_exporter(NoopSpanExporter)` (default `ParentBased(AlwaysOn)`
   sampler, random ids).
-- `SdkMeterProvider::builder().with_reader(PeriodicReader::builder(NoopMetricExporter).build())`
+- `SdkMeterProvider::builder().with_reader(PeriodicReader::builder(CountingMetricExporter).build())`
   (default 60 s interval, cumulative temporality, default cardinality limit).
 - All processor/reader settings are SDK defaults.
 - `NoopLogExporter` / `NoopSpanExporter` convert each batch to OTLP protobuf (the same code as
   the `encode` group) so the background thread does the work a real exporter does, add the record
   count to an `AtomicU64`, and, when a capture flag is set, clone the records into a `Mutex<Vec>`.
-  `NoopMetricExporter` returns `Ok` and does nothing.
+  `CountingMetricExporter` returns `Ok` and adds the data points of each export to a per-instrument-name
+  map (periodic and forced exports alike).
 
 ### Pacing and drop guard
 A tight bench loop outruns the background threads of both libraries: OTel's 2048-slot batch queue
@@ -209,6 +212,13 @@ and compared with the emitted count (the SDK's own dropped counter is private); 
 the events in each dropped block (`nb_objects()`) are counted. This covers the `contention` cases
 at each thread count too. The `encode` capture asserts the exact captured count.
 
+OTel metrics are different: aggregation drops samples by design, so `after_case` reports instead of
+asserting. For `otel_counter` and `otel_gauge` it calls `force_flush()` on the meter provider, reads
+the case instrument's exported data-point total (the `dyn_high_card` overflow series counts as one
+point per export) and prints `metric-drops: metric/<case>/<lib> kept=<points> samples=<emitted>`.
+dropped samples % = (samples - kept) / samples. Micromegas keeps every sample, so it prints nothing
+and has no column. The `contention` counter keeps its own single shared instrument.
+
 ### Report script (`report.py`)
 Stdlib-only Python. Reads `target/criterion/{log,metric,span,contention,encode}/**/new/estimates.json`
 (median point estimate), taking group, case, lib and thread count from the `group_id`,
@@ -218,7 +228,9 @@ cannot be split). Only ids whose lib is one of this crate's libs (`micromegas`,
 `micromegas_interop`, `otel`, `otel_counter`, `otel_gauge`, `otel_tracing`, `otel_gzip`) are
 kept, since `rust/tracing/benches/properties.rs` writes the same group names into the same
 `rust/target/criterion`. It also reads the bench stdout saved to a file (`print_bytes` lines) and
-prints the markdown tables for the docs page: hot path (ns/op per case × library), contention
+prints the markdown tables for the docs page: hot path (ns/op per case × library; the `metric`
+table adds an `otel_counter` / `otel_gauge` "dropped samples %" column each, from the
+`metric-drops:` lines), contention
 (aggregate Mops/s per case × library × threads), encode (ns/event, raw and wire bytes/event).
 Usage: `cargo bench -p micromegas-otel-comparison-bench | tee bench.log` then
 `python3 otel-comparison-bench/report.py bench.log`.
@@ -300,9 +312,10 @@ Bench output is read by a human, so these are not automated.
    every group runs in both binaries; `log/static/micromegas` reports tens of ns (logs enabled);
    `span/static/micromegas` is non-zero and its `encode` sample reports a non-empty block (thread
    streams enabled); no case prints a drop line, and the bench panics with the id and counts if
-   either library drops anything.
-2. `python3 otel-comparison-bench/report.py /tmp/bench.log` — prints every table with no empty
-   cells except the `—` combinations listed in the case tables.
+   either library drops anything (OTel metric cases print a `metric-drops:` line instead; kept is
+   1 to 4 points for the low-cardinality cases and 2001 for `dyn_high_card`).
+2. `python3 otel-comparison-bench/report.py /tmp/bench.log` — prints every table (the `metric`
+   table with its two dropped-samples columns) with no empty cells except the `—` combinations listed in the case tables.
 3. `cd mkdocs && mkdocs serve` — the new page renders and is reachable from `When to Use`.
 
 ## Decisions

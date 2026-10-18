@@ -48,7 +48,9 @@ ENCODE_ORDER = [
 THREADS = [1, 4, 8]
 
 BYTES_RE = re.compile(r"^bytes: (\S+) events=(\d+) raw=(\d+) wire=(\d+)\s*$")
+DROPS_RE = re.compile(r"^metric-drops: (\S+) kept=(\d+) samples=(\d+)\s*$")
 MISSING = "—"
+OTEL_METRIC_LIBS = ["otel_counter", "otel_gauge"]
 
 
 def load_estimates(criterion_dir):
@@ -87,15 +89,29 @@ def load_sizes(path):
     return sizes
 
 
+def load_drops(path):
+    """Returns {(case, lib): dropped fraction} from the `metric-drops:` lines."""
+    drops = {}
+    for line in Path(path).read_text().splitlines():
+        m = DROPS_RE.match(line)
+        if m:
+            _, case, lib = m.group(1).split("/")
+            kept, samples = int(m.group(2)), int(m.group(3))
+            drops[(case, lib)] = (samples - kept) / samples if samples else 0.0
+    return drops
+
+
 def table(header, rows):
     lines = ["| " + " | ".join(header) + " |", "|" + "|".join(["---"] * len(header)) + "|"]
     lines += ["| " + " | ".join(row) + " |" for row in rows]
     return "\n".join(lines)
 
 
-def hot_path(results):
+def hot_path(results, drops):
     out = []
     for group, libs in HOT_PATH_GROUPS.items():
+        # Only the OpenTelemetry metric libraries get a dropped-samples column.
+        drop_libs = OTEL_METRIC_LIBS if group == "metric" else []
         rows = []
         for case in CASE_ORDER[group]:
             row = [f"`{case}`"]
@@ -105,9 +121,14 @@ def hot_path(results):
                     row.append(MISSING)
                 else:
                     row.append(f"{est[0]:.1f}")
+            for lib in drop_libs:
+                drop = drops.get((case, lib))
+                row.append(MISSING if drop is None else f"{drop * 100:.3f}%")
             rows.append(row)
         out.append(f"### `{group}`: median ns per operation\n")
-        out.append(table(["case"] + [f"`{lib}`" for lib in libs], rows))
+        header = ["case"] + [f"`{lib}`" for lib in libs]
+        header += [f"`{lib}` dropped samples %" for lib in drop_libs]
+        out.append(table(header, rows))
         out.append("")
     return "\n".join(out)
 
@@ -183,7 +204,8 @@ def main():
     if not results:
         sys.exit(f"no criterion results under {args.criterion_dir}")
     sizes = load_sizes(args.bench_log)
-    print(hot_path(results))
+    drops = load_drops(args.bench_log)
+    print(hot_path(results, drops))
     print(contention(results))
     print(encode(results, sizes))
 

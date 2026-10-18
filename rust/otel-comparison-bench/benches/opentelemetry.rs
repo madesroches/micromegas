@@ -3,6 +3,7 @@
 //! `benches/micromegas.rs`; both use the same group and case ids.
 
 use std::{
+    collections::HashMap,
     io::Write,
     sync::{
         Mutex, OnceLock,
@@ -12,7 +13,9 @@ use std::{
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use flate2::{Compression, write::GzEncoder};
-use micromegas_otel_comparison_bench::{BATCH, Case, bench_cases, bench_contention, print_bytes};
+use micromegas_otel_comparison_bench::{
+    BATCH, Case, bench_cases, bench_contention, print_bytes, print_metric_drops,
+};
 use opentelemetry::{
     InstrumentationScope, KeyValue,
     metrics::{Counter, Gauge, MeterProvider},
@@ -31,7 +34,8 @@ use opentelemetry_sdk::{
     error::OTelSdkResult,
     logs::{LogBatch, LogExporter, SdkLogRecord, SdkLoggerProvider},
     metrics::{
-        PeriodicReader, SdkMeterProvider, Temporality, data::ResourceMetrics,
+        PeriodicReader, SdkMeterProvider, Temporality,
+        data::{AggregatedMetrics, MetricData, ResourceMetrics},
         exporter::PushMetricExporter,
     },
     trace::{SdkTracer, SdkTracerProvider, SpanData, SpanExporter},
@@ -117,13 +121,35 @@ impl SpanExporter for EncodingSpanExporter {
     }
 }
 
-/// Metrics are aggregated in-process; the export interval is long enough that the exporter is
-/// never on the measured path, so it does nothing.
-#[derive(Debug)]
-struct NoopMetricExporter;
+/// Data points received per instrument name, across every export.
+static EXPORTED_POINTS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 
-impl PushMetricExporter for NoopMetricExporter {
-    async fn export(&self, _metrics: &ResourceMetrics) -> OTelSdkResult {
+fn count_points<T>(data: &MetricData<T>) -> u64 {
+    match data {
+        MetricData::Gauge(g) => g.data_points().count() as u64,
+        MetricData::Sum(s) => s.data_points().count() as u64,
+        MetricData::Histogram(h) => h.data_points().count() as u64,
+        MetricData::ExponentialHistogram(h) => h.data_points().count() as u64,
+    }
+}
+
+/// Metrics are aggregated in-process; the export interval is long enough that the exporter is
+/// never on the measured path, so it only counts the data points it receives.
+#[derive(Debug)]
+struct CountingMetricExporter;
+
+impl PushMetricExporter for CountingMetricExporter {
+    async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
+        let mut exported = EXPORTED_POINTS.lock().unwrap();
+        let exported = exported.get_or_insert_with(HashMap::new);
+        for metric in metrics.scope_metrics().flat_map(|s| s.metrics()) {
+            let points = match metric.data() {
+                AggregatedMetrics::F64(d) => count_points(d),
+                AggregatedMetrics::U64(d) => count_points(d),
+                AggregatedMetrics::I64(d) => count_points(d),
+            };
+            *exported.entry(metric.name().to_owned()).or_default() += points;
+        }
         Ok(())
     }
     fn force_flush(&self) -> OTelSdkResult {
@@ -141,14 +167,16 @@ struct Providers {
     logger: SdkLoggerProvider,
     tracer_provider: SdkTracerProvider,
     tracer: SdkTracer,
-    // Kept alive for the reader thread.
-    _meter_provider: SdkMeterProvider,
+    meter_provider: SdkMeterProvider,
     resource: ResourceAttributesWithSchema,
 }
 
 static PROVIDERS: OnceLock<Providers> = OnceLock::new();
 static COUNTER: OnceLock<Counter<u64>> = OnceLock::new();
-static GAUGE: OnceLock<Gauge<u64>> = OnceLock::new();
+// One instrument per metric case, so the points the exporter sees under an instrument's name
+// belong to that case alone.
+static CASE_COUNTERS: [OnceLock<Counter<u64>>; 5] = [const { OnceLock::new() }; 5];
+static CASE_GAUGES: [OnceLock<Gauge<u64>>; 5] = [const { OnceLock::new() }; 5];
 static SET: OnceLock<[KeyValue; 3]> = OnceLock::new();
 
 fn providers() -> &'static Providers {
@@ -163,10 +191,6 @@ fn tracer() -> &'static SdkTracer {
 
 fn counter() -> &'static Counter<u64> {
     COUNTER.get().unwrap()
-}
-
-fn gauge() -> &'static Gauge<u64> {
-    GAUGE.get().unwrap()
 }
 
 fn shared_set() -> &'static [KeyValue] {
@@ -192,27 +216,38 @@ const LOG_CASES: [(&str, Case); 5] = [
 ];
 
 macro_rules! metric_cases {
-    ($instrument:ident, $record:ident) => {
+    ($instruments:ident, $record:ident) => {
         [
-            ("plain", |_| $instrument().$record(1, &[])),
+            ("plain", |_| $instruments[0].get().unwrap().$record(1, &[])),
             ("static_attrs", |_| {
-                $instrument().$record(1, &[KeyValue::new("tier", "ram")])
+                $instruments[1]
+                    .get()
+                    .unwrap()
+                    .$record(1, &[KeyValue::new("tier", "ram")])
             }),
-            ("set", |_| $instrument().$record(1, shared_set())),
+            ("set", |_| {
+                $instruments[2].get().unwrap().$record(1, shared_set())
+            }),
             ("dyn_low_card", |i| {
-                $instrument().$record(1, &[KeyValue::new("l", LABELS[i % 4])])
+                $instruments[3]
+                    .get()
+                    .unwrap()
+                    .$record(1, &[KeyValue::new("l", LABELS[i % 4])])
             }),
             // Exceeds the default 2000-series cardinality limit, so most samples land in the
             // overflow series.
             ("dyn_high_card", |i| {
-                $instrument().$record(1, &[KeyValue::new("id", i.to_string())])
+                $instruments[4]
+                    .get()
+                    .unwrap()
+                    .$record(1, &[KeyValue::new("id", i.to_string())])
             }),
         ]
     };
 }
 
-const COUNTER_CASES: [(&str, Case); 5] = metric_cases!(counter, add);
-const GAUGE_CASES: [(&str, Case); 5] = metric_cases!(gauge, record);
+const COUNTER_CASES: [(&str, Case); 5] = metric_cases!(CASE_COUNTERS, add);
+const GAUGE_CASES: [(&str, Case); 5] = metric_cases!(CASE_GAUGES, record);
 
 const SPAN_CASES: [(&str, Case); 3] = [
     ("static", |_| {
@@ -248,7 +283,9 @@ const CONTENTION_CASES: [(&str, Case); 3] = [
     ("span/static", SPAN_CASES[0].1),
 ];
 
-const COUNTER_CONTENTION_CASES: [(&str, Case); 1] = [("metric/static_attrs", COUNTER_CASES[1].1)];
+const COUNTER_CONTENTION_CASES: [(&str, Case); 1] = [("metric/static_attrs", |_| {
+    counter().add(1, &[KeyValue::new("tier", "ram")])
+})];
 
 static LAST_LOG_EXPORTED: AtomicU64 = AtomicU64::new(0);
 static LAST_SPAN_EXPORTED: AtomicU64 = AtomicU64::new(0);
@@ -262,6 +299,10 @@ fn drain() {
 fn after_case(id: &str, emitted: u64) {
     let mut parts = id.split('/');
     let mut kind = parts.next().unwrap();
+    if kind == "metric" {
+        report_metric_drops(id, emitted);
+        return;
+    }
     if kind == "contention" {
         kind = parts.next().unwrap();
     }
@@ -279,6 +320,23 @@ fn after_case(id: &str, emitted: u64) {
         "{id}: dropped {} of {emitted} records",
         emitted.saturating_sub(delivered)
     );
+}
+
+/// Prints how many of the case's samples reached the exporter as individual points; `report.py`
+/// parses the line. Unlike logs and spans, metric samples are aggregated away by design, so this
+/// reports instead of asserting.
+fn report_metric_drops(id: &str, emitted: u64) {
+    providers().meter_provider.force_flush().unwrap();
+    let mut parts = id.split('/').skip(1);
+    let case = parts.next().unwrap();
+    let kind = parts.next().unwrap().strip_prefix("otel_").unwrap();
+    let kept = EXPORTED_POINTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&format!("{kind}_{case}")).copied())
+        .unwrap_or(0);
+    print_metric_drops(id, kept, emitted);
 }
 
 fn capture_logs(case: Case, nb_events: usize) -> Vec<(SdkLogRecord, InstrumentationScope)> {
@@ -387,12 +445,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         .build();
     let meter_provider = SdkMeterProvider::builder()
         .with_resource(resource.clone())
-        .with_reader(PeriodicReader::builder(NoopMetricExporter).build())
+        .with_reader(PeriodicReader::builder(CountingMetricExporter).build())
         .build();
     let tracer = tracer_provider.tracer("bench");
     let meter = meter_provider.meter("bench");
     COUNTER.set(meter.u64_counter("counter").build()).unwrap();
-    GAUGE.set(meter.u64_gauge("gauge").build()).unwrap();
+    // Created up front so instrument creation is never inside a timed region.
+    for (i, (name, _)) in COUNTER_CASES.iter().enumerate() {
+        CASE_COUNTERS[i]
+            .set(meter.u64_counter(format!("counter_{name}")).build())
+            .unwrap();
+        CASE_GAUGES[i]
+            .set(meter.u64_gauge(format!("gauge_{name}")).build())
+            .unwrap();
+    }
 
     tracing_subscriber::registry()
         .with(LevelFilter::INFO)
@@ -405,15 +471,29 @@ fn criterion_benchmark(c: &mut Criterion) {
                 logger,
                 tracer_provider,
                 tracer,
-                _meter_provider: meter_provider,
+                meter_provider,
                 resource: (&resource).into(),
             })
             .is_ok()
     );
 
     bench_cases(c, "log", "otel", &LOG_CASES, drain, Some(after_case));
-    bench_cases(c, "metric", "otel_counter", &COUNTER_CASES, drain, None);
-    bench_cases(c, "metric", "otel_gauge", &GAUGE_CASES, drain, None);
+    bench_cases(
+        c,
+        "metric",
+        "otel_counter",
+        &COUNTER_CASES,
+        drain,
+        Some(after_case),
+    );
+    bench_cases(
+        c,
+        "metric",
+        "otel_gauge",
+        &GAUGE_CASES,
+        drain,
+        Some(after_case),
+    );
     bench_cases(c, "span", "otel", &SPAN_CASES, drain, Some(after_case));
     bench_cases(
         c,

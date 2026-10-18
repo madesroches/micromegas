@@ -1,17 +1,17 @@
 # Instrumentation Overhead vs. OpenTelemetry
 
-This page compares what it costs a Rust application to record the same logs, metrics and spans with `micromegas-tracing` and with the OpenTelemetry Rust SDK, each in its recommended production configuration with the network export replaced by an in-process sink that still encodes the payload. All numbers come from one full criterion run (not `--quick`) of the benchmark crate, [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), on the hardware listed in [Methodology](#methodology). They are not a promise for your hardware.
+This page compares what it costs a Rust application to record the same logs, metrics and spans with `micromegas-tracing` and with the OpenTelemetry Rust SDK, each in its recommended production configuration with the network export replaced by an in-process sink that still encodes the payload. All numbers come from one full criterion run (not `--quick`) of the benchmark crate, except the `metric` table, which comes from a later full run of the `metric` group alone on the same machine, [`rust/otel-comparison-bench`](https://github.com/madesroches/micromegas/tree/main/rust/otel-comparison-bench), on the hardware listed in [Methodology](#methodology). They are not a promise for your hardware.
 
 **Summary.**
 
 - **Calling-thread cost.** For logs and spans, the calling thread pays a median of 45 ns per static log call and 28 ns per span (one `span/static` operation, which records a begin and an end event) with Micromegas, against 342 ns and 152 ns with the OpenTelemetry SDK, single-threaded. Micromegas copies a fixed-size event into a thread-local buffer for spans and into a shared process-wide buffer for logs; the SDK builds a record and pushes it into a bounded queue. With the bridges for the `tracing` crate the same operations cost more: 796 ns per span through `tracing-opentelemetry`, and 102 ns against 45 ns per static log for a `tracing` event routed into Micromegas.
-- **Metrics are a different trade.** OpenTelemetry aggregates in the process, so a plain counter increment costs 8 ns, less than Micromegas's 24 ns, which records every sample. With attributes the two are within about a factor of two in either direction (the `set` case is 2.2 times in Micromegas's favor), and the difference between them is that Micromegas keeps every sample while OpenTelemetry keeps one aggregated point per series per export interval.
+- **Metrics are a different trade.** OpenTelemetry aggregates in the process, so a plain counter increment costs 7 ns, less than Micromegas's 24 ns, which records every sample. With attributes the two are within about a factor of two in either direction (the `set` case is 2.2 times in Micromegas's favor), and the difference between them is that Micromegas keeps every sample while OpenTelemetry keeps one aggregated point per series per export interval: at its defaults, 99.997% to 100% of the samples recorded in the metric cases never reach the exporter as an individual point.
 - **Pacing.** The producer is paced so that neither library drops a record: only the emit calls are timed, in chunks of at most 2048 operations, with an untimed wait for the library's background queue to empty between chunks. The numbers are the steady state where the exporter keeps up.
 - **Encoding and bytes.** Off the calling thread, the OpenTelemetry protobuf conversion is cheaper per event than Micromegas's dependency extraction, LZ4 and CBOR encoding in this run; adding gzip to it makes it costlier than Micromegas for the static cases (`log_static_attrs`, `span_static`), about equal for `span_dyn_name` (2839 against 3104 ns), and still far cheaper for `log_dyn_high_card` (806 against 3905 ns). On the wire, Micromegas is smaller than uncompressed OTLP protobuf, and gzipped OTLP is smaller than Micromegas for log records and larger for spans.
 
 ## Results
 
-Every cell is a median from one full run. A dash marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
+Every cell is a median from one full run, except the `metric` table (see the introduction). A dash marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
 ### Hot path
 
@@ -27,13 +27,15 @@ Every cell is a median from one full run. A dash marks a combination that does n
 
 **`metric`: median ns per operation**
 
-| case | `micromegas` | `otel_counter` | `otel_gauge` |
-|---|---|---|---|
-| `plain` | 24.4 | 8.3 | 3.9 |
-| `static_attrs` | 25.3 | 37.1 | 34.2 |
-| `set` | 25.2 | 55.0 | 52.1 |
-| `dyn_low_card` | 53.3 | 36.9 | 33.0 |
-| `dyn_high_card` | 124.8 | 141.9 | 135.5 |
+| case | `micromegas` | `otel_counter` | `otel_gauge` | `otel_counter` dropped samples % | `otel_gauge` dropped samples % |
+|---|---|---|---|---|---|
+| `plain` | 24.4 | 7.0 | 3.9 | 100.000% | 100.000% |
+| `static_attrs` | 25.0 | 38.8 | 32.9 | 100.000% | 100.000% |
+| `set` | 25.4 | 56.3 | 54.7 | 100.000% | 100.000% |
+| `dyn_low_card` | 53.0 | 35.0 | 31.2 | 100.000% | 100.000% |
+| `dyn_high_card` | 120.9 | 142.5 | 136.3 | 99.997% | 99.997% |
+
+Dropped samples % is the share of recorded samples that never reach the exporter as an individual point, because a counter sums them and a gauge keeps only the last value per series per export. It is measured, not computed: each case has its own instrument, and the bench counts the data points the exporter receives under that instrument's name across every export, including a forced flush after the case. Micromegas has no such column; it keeps every sample. The low-cardinality cases export 1 to 4 points for 128 to 156 million samples; `dyn_high_card` exports 2001 points (2000 series plus the overflow series) for about 62 million.
 
 **`span`: median ns per operation**
 
@@ -93,7 +95,7 @@ Metrics are not in the encoding comparison: OpenTelemetry exports one aggregated
 ## What the numbers do and do not say
 
 - **Logs and spans.** The gap in calling-thread cost is the design difference, not a tuning difference: Micromegas writes a fixed-size event into a thread-local or process-wide buffer and does the rest elsewhere, while the OpenTelemetry SDK builds an owned record (attributes included) and hands it to a bounded queue.
-- **Metrics.** OpenTelemetry's aggregation makes the hot path cheap and makes the output small, and it is the right choice when you want rates and distributions per series. It limits each instrument to 2000 attribute sets by default, after which values go to an overflow series; the `dyn_high_card` metric cases exceed it. Micromegas records each sample with its time and properties, so high-cardinality ids remain queryable, at a calling-thread cost that does not depend on cardinality.
+- **Metrics.** OpenTelemetry's aggregation makes the hot path cheap and makes the output small, and it is the right choice when you want rates and distributions per series. The cost is that individual samples are gone: in the metric cases here, 99.997% to 100% of the recorded samples never reach the exporter as an individual point. It limits each instrument to 2000 attribute sets by default, after which values go to an overflow series; the `dyn_high_card` metric cases exceed it. Micromegas records each sample with its time and properties, so high-cardinality ids remain queryable, at a calling-thread cost that does not depend on cardinality.
 - **Contention.** Micromegas log and metric throughput falls as threads are added in this run (`log/static` from 22.9 Mops/s on 1 thread to 8.8 on 4 and 10.2 on 8; `log/dyn_high_card` from 6.4 to 1.6), because the shared stream is a shared point. OpenTelemetry's aggregate log throughput rises with threads (`log/static` from 2.8 to 14.6 Mops/s), so it overtakes Micromegas for logs at 4 and 8 threads in this run, while Micromegas stays ahead on a single thread; the counter is about even with Micromegas at 4 and 8 threads (18.6 against 18.1, 29.5 against 25.0 Mops/s). Micromegas span throughput rises with threads (33.7 to 217.4 Mops/s) because each thread writes its own stream, and OpenTelemetry's span throughput rises more slowly (7.0 to 14.0). The paced producer emits only 2048 operations in total between drains, so these figures describe bursts the background threads can absorb, not sustained overload.
 - **Encoding.** The encoding comparison runs on captured data of identical content. Micromegas spends more time per event in this run, most of it for the cases with dynamic content (`log_dyn_high_card`, `span_dyn_name`), where it first extracts the dependency records that the objects refer to by id. Whether that off-thread cost matters depends on whether a core is free for it.
 - **Bytes.** The raw column is the in-memory size of the events and, for Micromegas, the extracted dependencies; the wire column is what is sent. Repeated attribute values compress well in both formats, and the benchmark's records are repetitive, so wire sizes for real data are likely larger.
@@ -104,7 +106,7 @@ Metrics are not in the encoding comparison: OpenTelemetry exports one aggregated
 
 **Micromegas.** `micromegas-tracing` with the `telemetry-sink` buffer defaults (10 MiB for logs and thread spans, 1 MiB for metrics) and CPU tracing enabled. The sink accepts every log, hands each full block to a worker thread that runs `StreamBlock::encode_bin` and drops the bytes (the HTTP sink without the network), and applies the HTTP sink's byte caps to that queue: 128 MiB for thread blocks and 256 MiB for log and metric blocks. `micromegas_interop` uses the `tracing` crate's macros, captured by the interop layer installed with `install_tracing_interop`.
 
-**OpenTelemetry.** `opentelemetry` 0.32.0 and `opentelemetry_sdk` 0.32.1 with the SDK defaults and no tuning of queue sizes: `BatchLogProcessor` and `BatchSpanProcessor` (2048-record queue, 512-record batches, drop on full), `ParentBased(AlwaysOn)` sampling with random ids, and a `PeriodicReader` with its default 60 s interval, cumulative temporality and the default cardinality limit. Logs enter through `opentelemetry-appender-tracing` 0.32.0 and `tracing` events; spans through the tracer directly (`otel`) or through `tracing-opentelemetry` 0.33.0 (`otel_tracing`); metrics through a `Counter<u64>` (`otel_counter`) and a `Gauge<u64>` (`otel_gauge`) created once. The log and span exporters convert each batch to OTLP protobuf with `opentelemetry-proto` 0.32.0, as a network exporter would, and discard it; the metric exporter does nothing, because the first export is a minute away.
+**OpenTelemetry.** `opentelemetry` 0.32.0 and `opentelemetry_sdk` 0.32.1 with the SDK defaults and no tuning of queue sizes: `BatchLogProcessor` and `BatchSpanProcessor` (2048-record queue, 512-record batches, drop on full), `ParentBased(AlwaysOn)` sampling with random ids, and a `PeriodicReader` with its default 60 s interval, cumulative temporality and the default cardinality limit. Logs enter through `opentelemetry-appender-tracing` 0.32.0 and `tracing` events; spans through the tracer directly (`otel`) or through `tracing-opentelemetry` 0.33.0 (`otel_tracing`); metrics through a `Counter<u64>` (`otel_counter`) and a `Gauge<u64>` (`otel_gauge`) created once per case. The log and span exporters convert each batch to OTLP protobuf with `opentelemetry-proto` 0.32.0, as a network exporter would, and discard it; the metric exporter only counts the data points it receives per instrument name, because the first periodic export is a minute away and the bench forces one after each case.
 
 **Two processes.** The two libraries run in separate bench binaries because both want a process-global `tracing` subscriber and because OpenTelemetry's batch and reader threads would otherwise run during the Micromegas cases. The group and case ids are the same in both, so the results pair up.
 

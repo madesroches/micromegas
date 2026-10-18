@@ -10,7 +10,7 @@ This file documents the historical progress of the Micromegas project. For curre
   defaults, with the network export replaced by an in-process sink that still encodes the payload
   (`encode_bin` for Micromegas, OTLP protobuf with optional gzip for OpenTelemetry). It reports
   calling-thread cost, 1/4/8-thread contention, encoding cost off the calling thread, bytes per
-  event. The producer is paced in chunks of at most 2048 operations with an untimed drain
+  event, and, for the OpenTelemetry metric cases, the share of recorded samples that never reach the exporter as an individual point. The producer is paced in chunks of at most 2048 operations with an untimed drain
   between them, so neither library drops a record (a drop fails the bench), and `report.py` turns a run into the
   tables of the new `When to Use` page, "Instrumentation Overhead vs. OpenTelemetry". No SQL
   change.
