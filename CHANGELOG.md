@@ -27,7 +27,7 @@ This file documents the historical progress of the Micromegas project. For curre
   other cases are within noise (`log/static` 16.8 -> 15.9 ns, `log/formatted` 58.9 -> 57.9 ns,
   `dispatch/log` 225 -> 221 ps; `log/dyn_high_card` measured 179 -> 188-209 ns across runs, where
   interning dominates and the run-to-run spread is wide). No SQL change. **Minor breaking
-  change:** `LogEntry::msg` is `Cow<'a, str>`, the `dispatch::log*` functions take a
+  change:** `PropertyValue` is sealed, `LogEntry::msg` is `Cow<'a, str>`, the `dispatch::log*` functions take a
   `LogMsgForm`, `LogMsgQueue` gains a variant (exhaustive matches on `LogMsgQueueAny` must add
   `TaggedLogTemplateEvent`), and a placeholder that matches two property keys, or a format spec
   or `{key:?}` on a literal or `static` property, is a compile error.
