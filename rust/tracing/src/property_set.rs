@@ -73,7 +73,8 @@ impl<'a> DynProperty<'a> {
         self.value
     }
 
-    pub(crate) fn is_static_name(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_static_name(&self) -> bool {
         self.static_name
     }
 }
@@ -157,7 +158,8 @@ pub(crate) fn sort_properties(properties: &mut [Property]) {
 }
 
 /// Same order as `sort_properties`, so a merged list matches the dynamic set built from it.
-pub(crate) fn cmp_dyn_properties(a: &DynProperty<'_>, b: &DynProperty<'_>) -> std::cmp::Ordering {
+#[doc(hidden)]
+pub fn cmp_dyn_properties(a: &DynProperty<'_>, b: &DynProperty<'_>) -> std::cmp::Ordering {
     b.name.cmp(a.name)
 }
 

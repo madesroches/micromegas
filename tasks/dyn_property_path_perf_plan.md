@@ -203,6 +203,24 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
 - Hashing static strings by pointer is rejected: it breaks content identity for split sets
   (`split_between_static_and_dynamic_does_not_change_identity`).
 
+- **Step 5 (hash outside the lock): not adopted.** `perf` is not installed on this machine, so
+  there is no profile; the gate was decided from criterion. I implemented it, and
+  `contention/log/dyn_high_card/8` stayed at 6.4 us before, 6.4 us after the merge rewrite alone
+  and 6.8 us with the hash moved out (4 threads: 3.13, 3.31 and 2.96 us), and
+  `contention/metric/dyn_high_card/8` went 4.1, 4.2 and 4.6 us. No difference beyond noise, so the
+  change was reverted. This repeats the earlier result.
+- **Step 7 (precomputed static entry hashes): not adopted.** To bound the share of hashing, I
+  temporarily replaced `content_hash` with a constant-cost function (the property count):
+  `metric/dyn_low_card` measured 53.2 ns against 50.1 ns with the real hash, and `log/dyn_low_card`
+  60.5 ns against 55.1 ns. Removing the hash entirely does not make the path faster, so
+  precomputing part of it cannot pay off. The remaining ~30 ns over `static_low_card` is the lock,
+  the probe and `same_content`.
+- **Merge fast path for an empty static set.** The `_dyn` metric macros and interop logs merge
+  into an empty static set. With the plain merge-walk, `dispatch/metric_dyn` regressed from 68.9
+  to 74.1 ns, because two copies of the 320-byte inline buffer cost more than the `Vec` they
+  replaced. Deduping in the output buffer and returning it as-is when the static set is empty
+  brought it to 65 ns.
+
 ## Testing Strategy
 
 Unit tests in `rust/tracing/tests/dyn_deps_tests.rs` (no DB):
@@ -236,3 +254,52 @@ matches the precedent plans.
 
 No `mkdocs/` page describes these internals, but `instrumentation-overhead.md` publishes
 per-call medians, which are regenerated in step 8 along with the rest of the page. Add the CHANGELOG entry.
+
+## Results
+
+`perf` is not available on this machine (`perf: command not found`), so the profile split of
+step 1 could not be taken; the gates for steps 5 and 7 were decided from criterion (see
+Decisions). Medians are criterion's central estimate on the machine described in
+`instrumentation-overhead.md`, single-threaded unless noted. `before` is the `main` merge, `after`
+is this change.
+
+`properties` bench:
+
+| case | before (ns) | after (ns) |
+|---|---|---|
+| `log/dyn_low_card` | 56.5 | 50.0 |
+| `log/dyn_high_card` | 202.7 | 198.5 |
+| `log/dyn_mixed` | 266.4 | 224.2 (212 in repeat runs) |
+| `metric/literals_set` | 124.5 | 98.6 |
+| `metric/dyn_low_card` | 51.1 | 46.9 |
+| `metric/dyn_high_card` | 156.6 | 145.2 |
+| `contention/log/dyn_high_card/4` | 3131 | 3020 |
+| `contention/log/dyn_high_card/8` | 6539 | 7090 (noise: 6.4 to 6.8 us in other runs) |
+
+`with_dispatch` bench:
+
+| case | before (ns) | after (ns) |
+|---|---|---|
+| `dispatch/metric_dyn_prop` | 45.7 | 43.8 |
+| `dispatch/metric_dyn` | 68.9 | 66.0 |
+| `dispatch/metric_dyn_high_card` | 133.4 | 144.1 (140 to 147 in repeat runs) |
+| `dispatch/log_interop` | 55.2 | 58.9 (56 to 58 in repeat runs) |
+
+Two cases are slightly slower and I could not make them match the old code: the high-cardinality
+metric and the interop log, both by a few percent. They are dominated by interning new strings and
+by the `tracing` layer, which this change does not touch.
+
+otel-comparison bench (criterion `time:` estimates, `bench-before.log` against `bench.log`, full
+runs; the standalone re-runs of the two high-cardinality micromegas cases are in brackets):
+
+| case | before (ns) | after (ns) |
+|---|---|---|
+| `log/dyn_low_card/micromegas` | 52.6 | 49.7 |
+| `log/dyn_high_card/micromegas` | 192.1 | 240.8 (standalone 176 to 183, old code standalone 188) |
+| `log/dyn_high_card/micromegas_interop` | 400.5 | 496.1 (standalone 436 to 453, old code standalone 409) |
+| `span/dyn_name/micromegas` | 112.5 | 115.4 |
+| `contention/log/dyn_high_card/micromegas/8` | 7446 | 7612 |
+
+The full-run `dyn_high_card` figures vary more between runs than the change does (the same code
+gave 192 and 282 ns in two full runs), so the standalone re-runs are the better comparison.
+`instrumentation-overhead.md` is regenerated from the final full run.

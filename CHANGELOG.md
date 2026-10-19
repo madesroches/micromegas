@@ -4,6 +4,20 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Performance:** Cheaper dynamic property path for log and metric calls (#1682).
+  `merge_properties` now builds the merged list in a stack buffer and merges the static set's
+  canonical-order view with the sorted dynamic list, instead of allocating a `Vec`, running a
+  `retain` per dynamic property, sorting everything and scanning for static values. The sets a
+  block holds, the wire format and the SQL surface are unchanged. Single-threaded medians from
+  `rust/tracing/benches/properties.rs`: `log/dyn_mixed` 266 -> 224 ns, `metric/literals_set`
+  125 -> 99 ns, `metric/dyn_low_card` 51 -> 47 ns, `log/dyn_low_card` 57 -> 50 ns,
+  `dispatch/metric_dyn` 69 -> 66 ns; the high-cardinality cases are within a few percent, where
+  the cost is interning new strings. Moving the content hash out of the stream lock and
+  precomputing static entry hashes were evaluated and not adopted: neither showed a measurable
+  difference. A dynamic value that happens to share the memory of a static value is no longer
+  recognized as static, which costs one extra string record. The instrumentation overhead page
+  is re-measured. **Minor breaking change:** `MergedProperties::properties` is now a method
+  returning a slice instead of a public `Vec` field. No SQL change.
 * **Docs:** Refresh the intro deck's cost and scale figures to the vendor comparison's reference
   workload (~2 trillion events over 90 days, ~27.5 TB, ~$1,100/month) and align the per-process
   throughput claim to up to 300k events/second across the deck, landing page, `llms.txt`, README,

@@ -80,7 +80,7 @@ fn metric_arguments_win_over_keys_of_the_same_name_and_target_is_kept() {
     let properties =
         unsafe { metric_properties(keys.as_ptr(), values.as_ptr(), 3, "queue.depth", "count") };
     let merged = merge_properties(PropertySet::empty(), &properties);
-    let mut merged_pairs = pairs(&merged.properties);
+    let mut merged_pairs = pairs(merged.properties());
     merged_pairs.sort();
     assert_eq!(
         merged_pairs,
