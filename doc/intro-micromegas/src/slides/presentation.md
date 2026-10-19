@@ -223,7 +223,7 @@ Modern observability stacks share an unstated assumption — events are <strong>
 
 <ul>
 <li class="fragment"><strong>~20 ns per event</strong> in the calling thread</li>
-<li class="fragment">~5–6× less calling-thread cost than the OpenTelemetry Rust SDK for logs and spans</li>
+<li class="fragment">~10–14× less calling-thread cost than the OpenTelemetry Rust SDK for logs and spans</li>
 <li class="fragment">Events are <strong>tiny</strong> (a few bytes) and use <strong>native memory layout</strong></li>
 <li class="fragment">The hot path is a <strong>memcpy into a thread-local buffer</strong> — no allocation, no formatting, no serialization</li>
 <li class="fragment">Background thread drains buffers, compresses with <strong>LZ4</strong>, ships to ingestion</li>

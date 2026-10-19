@@ -9,7 +9,8 @@ This file documents the historical progress of the Micromegas project. For curre
   canonical-order view with the sorted dynamic list, instead of allocating a `Vec`, running a
   `retain` per dynamic property, sorting everything and scanning for static values. The sets a
   block holds, the wire format and the SQL surface are unchanged. Single-threaded medians from
-  `rust/tracing/benches/properties.rs`: `log/dyn_mixed` 266 -> 224 ns, `metric/literals_set`
+  `rust/tracing/benches/properties.rs` (`dispatch/metric_dyn` from
+  `rust/tracing/benches/with_dispatch.rs`): `log/dyn_mixed` 266 -> 224 ns, `metric/literals_set`
   125 -> 99 ns, `metric/dyn_low_card` 51 -> 47 ns, `log/dyn_low_card` 57 -> 50 ns,
   `dispatch/metric_dyn` 69 -> 66 ns; the high-cardinality cases are within a few percent, where
   the cost is interning new strings. Moving the content hash out of the stream lock and
@@ -17,7 +18,8 @@ This file documents the historical progress of the Micromegas project. For curre
   difference. A dynamic value that happens to share the memory of a static value is no longer
   recognized as static, which costs one extra string record. The instrumentation overhead page
   is re-measured. The `tracing` interop layer now formats each field once and reuses per-thread
-  scratch buffers instead of allocating a `String` per field and two `Vec`s per event:
+  scratch buffers instead of allocating a `String` per field and two `Vec`s per event (medians from
+  `rust/otel-comparison-bench/benches/micromegas.rs`):
   `log/dyn_high_card/micromegas_interop` 444 -> 277 ns, `log/formatted/micromegas_interop`
   195 -> 105 ns, `log/static/micromegas_interop` 140 -> 90 ns. **Minor breaking change:**
   `MergedProperties::properties` is now a method returning a slice instead of a public `Vec`

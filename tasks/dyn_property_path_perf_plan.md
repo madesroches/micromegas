@@ -310,7 +310,7 @@ is this change.
 
 Two cases are slightly slower and I could not make them match the old code: the high-cardinality
 metric and the interop log, both by a few percent. They are dominated by interning new strings and
-by the `tracing` layer, which this change does not touch.
+by the sink call, lock and `args.to_string()` inside `Dispatch::log_interop`.
 
 otel-comparison bench (criterion `time:` estimates, `bench-before.log` against `bench.log`, full
 runs; the standalone re-runs of the two high-cardinality micromegas cases are in brackets):

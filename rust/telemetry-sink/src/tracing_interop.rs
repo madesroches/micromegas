@@ -118,7 +118,7 @@ where
         let reused = SCRATCH
             .try_with(|cell| match cell.try_borrow_mut() {
                 Ok(mut scratch) => {
-                    // A panic in a previous capture skips the post-capture cleanup.
+                    // The buffers keep the previous event's contents, which also covers a capture that panicked.
                     scratch.buffer.clear();
                     scratch.values.clear();
                     capture(&mut scratch);
