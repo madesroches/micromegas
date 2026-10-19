@@ -138,7 +138,7 @@ set_hash = fold(0, |h, e| (h.rotate_left(5) ^ e).wrapping_mul(K))
 `find_or_create` and excluded from `Eq`/`Hash` like `dyn_view`. The merge walk then takes a
 static entry's hash from the slice, so the only xxh3 work is for dynamic entries. A static entry
 and a dynamic entry with the same content still hash the same, so content identity holds.
-Hashing static strings by pointer, the issue's other idea, is rejected (see Trade-offs).
+Hashing static strings by pointer, the issue's other idea, is rejected (see Decisions).
 
 ## Implementation Steps
 
@@ -152,7 +152,10 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Trad
    (it is already in `Cargo.lock` transitively, MIT/Apache-2.0). Add `smallvec.workspace = true`
    to the native-only section of `rust/tracing/Cargo.toml`, since `dyn_deps` is native-only.
 3. **`merge_properties`.** Rewrite it in `rust/tracing/src/dyn_deps.rs` as in Design §2. Make
-   `properties` private and add `MergedProperties::properties()`.
+   `properties` private and add `MergedProperties::properties()`. Add `#[doc(hidden)] pub`
+   getters `is_static_value(i)`, `is_static_name(i)` and `hash()` on `MergedProperties`, and make
+   `content_hash`, `DynProperty::is_static_name` and `cmp_dyn_properties` `#[doc(hidden)] pub`
+   for the reference test.
 4. **Callers.** Update `rust/tracing/src/dispatch.rs` (`:1073` `sink.on_log`, `:1111`/`:1112`
    interop filter) and the tests that read `merged.properties`:
    `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
@@ -172,33 +175,20 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Trad
 
 - `rust/Cargo.toml`: workspace `smallvec`
 - `rust/tracing/Cargo.toml`: `smallvec` (native-only)
-- `rust/tracing/src/dyn_deps.rs`: `MergedProperties`, `merge_properties`, `intern_set`,
-  maybe `content_hash`
+- `rust/tracing/src/dyn_deps.rs`: `MergedProperties` (plus `#[doc(hidden)] pub` getters),
+  `merge_properties`, `intern_set`, `content_hash` (`#[doc(hidden)] pub`)
 - `rust/tracing/src/dispatch.rs`: accessor use
-- `rust/tracing/src/property_set.rs`: only for step 7
+- `rust/tracing/src/property_set.rs`: `DynProperty::is_static_name` and `cmp_dyn_properties`
+  become `#[doc(hidden)] pub`; `entry_hashes` only for step 7
 - `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
   `rust/analytics/tests/metrics_test.rs`, `rust/capi/tests/properties_tests.rs`: accessor and
   new tests
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **Merge walk vs. "insert dynamic entries into the copied static list".** Inserting into a
-  copy of the static list means shifting the static-value mask on every removal and insertion.
-  A walk over two sorted inputs knows each entry's origin when it emits it, so the masks are set
-  as it pushes and nothing needs shifting.
-- **`SmallVec` vs. a fixed array with a fallback, or a thread-local scratch `Vec`.** `SmallVec`
-  gives the stack common case and the uncapped heap fallback the issue asks for, in a crate
-  already in the lock file. A thread-local scratch buffer cannot be returned in
-  `MergedProperties` without borrowing problems, and it costs a TLS access on every call.
-- **Hashing static strings by pointer: rejected.** A split set and the same set given all
-  dynamic would hash differently. That breaks content identity
-  (`split_between_static_and_dynamic_does_not_change_identity`) and would write duplicate set
-  records. Precomputed content hashes (§4) save the same work and keep identity.
-- **Hash stored in `MergedProperties` vs. passed as an `intern_set` argument.** Storing it
-  means a caller cannot pair a hash with the wrong list, and every caller gets it for free.
-
 ## Decisions
+
+- Hashing static strings by pointer is rejected: it breaks content identity for split sets
+  (`split_between_static_and_dynamic_does_not_change_identity`).
 
 ## Testing Strategy
 
@@ -218,8 +208,10 @@ Unit tests in `rust/tracing/tests/dyn_deps_tests.rs` (no DB):
   - `with_dyn_name` entries
   - more than 8 entries (heap spill)
   - more than 64 entries (mask bits beyond 63 stay clear)
-  The masks need `pub(crate)` test access or a `#[doc(hidden)] pub` getter, following the
-  existing test seams in the crate.
+  The test crate reaches the internals through `#[doc(hidden)] pub` getters on
+  `MergedProperties` (`is_static_value(i)`, `is_static_name(i)`, `hash()`). It builds the
+  reference copy using `DynProperty::is_static_name`, `cmp_dyn_properties` and `content_hash`,
+  which also become `#[doc(hidden)] pub`.
 - If step 7 lands, the hash of a set built split and all-dynamic is equal, and different
   content gives different hashes on the existing cases.
 
