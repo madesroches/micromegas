@@ -208,9 +208,13 @@ arm, placed before the existing arms. The arm is an expression that returns the 
   `span_scope_named!`, and an owned or borrowed runtime string for `span_scope_named_dyn!`.
 - The property list is the one `log!` takes: literals, `static` values, `%`/`?`/bare dynamic
   values and a trailing `..set`. It is parsed by a new `span` kind in `__props!`, with an end arm
-  that accepts an empty rest.
-  - Literals, `static` values and `..set` become the guard's `static_set`, through the same
-    callsite set, static set cache and spread paths that `log!` uses.
+  that accepts an empty rest and a `span` arm for a trailing `.. $set:expr $(,)?` with nothing
+  after it (the existing `..set` arms need a comma and more tokens).
+  - Literals and `static` values become the guard's `static_set` through the callsite set and
+    static set cache. A `..set` combined with literals goes through `__static_set!` with the
+    spread set as the base, producing one `&'static` `static_set`; `log!`'s non-`static` spread
+    path, which sends the literals as dynamic entries, does not apply because the guard holds a
+    single `static_set`. A `..set` alone is used as the `static_set` directly.
   - Each dynamic entry becomes a `set_property` call on the new guard. `%v` goes in as
     `Display` with no `format!`. `?v` goes in through a small `Debug`-as-`Display` adapter. A
     bare value goes through `PropertyValue`.
@@ -335,7 +339,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms, `AsyncEventRecord` /
     `AsyncEventRecordBuilder` / `async_events_table_schema`, and the `SCHEMA_VERSION` bump in
     `async_events_view.rs`. Update the test impls (`tests/span_tests.rs`,
-    `tests/async_events_tests.rs`, `tests/dictionary_key_overflow_tests.rs`).
+    `tests/async_events_tests.rs`, `tests/dictionary_key_overflow_tests.rs`). Bump the
+    `num_columns() == 12` asserts in `tests/async_events_tests.rs` to 13.
 
 **Phase 3: docs and changelog** (see Documentation)
 
