@@ -112,8 +112,8 @@ with this end.
   `ThreadDepsQueue` with a `PropertyDepsQueue` impl, as `LogDepsQueue` does.
 - `extract` handles the new arms like their plain counterparts. It also calls
   `record_properties` for interned sets, caching the last set as the log extractor does
-  (`logs/block.rs:80`). Before `extend_from`, it calls `dyn_deps.record_static_refs(...)`. Today
-  this does nothing, because thread blocks have no dynamic sets.
+  (`logs/block.rs:80`). Before `extend_from`, it calls `dyn_deps.record_static_refs(...)`. It emits
+  the `'static` names and values that the dynamic sets from `push_tagged` reference.
 - Add `ThreadStream::push_tagged<T>(set, dyn_properties, make: impl FnOnce(PropertySetId) -> T)`
   and `push_tagged_named<T>(name, set, dyn_properties, make: impl FnOnce(DynStringId,
   PropertySetId) -> T)`. With no dynamic properties, the set goes in as
@@ -480,7 +480,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `doc/how_to_query/README.md` (`:323+`, `:339+`): add `properties` to the `async_events` and
   `thread_spans` tables of this legacy schema copy. `:428` repeats the `properties` description
   sentence; it also covers spans.
-- `mkdocs/docs/query-guide/functions-reference.md`: `process_spans` returns `properties`.
+- `mkdocs/docs/query-guide/functions-reference.md`: add a `properties` row (`Dictionary(Int32, Binary)`, JSONB) as the
+  last row of the `process_spans` Returns table (`:185-199`).
 - `mkdocs/docs/when-to-use/index.md` (`:151`, `:169`, `:232`): the producer-side cardinality
   contract, "Code vs. data" and the FAQ say per-call context goes in span properties rather than
   in a `_dyn` name.
@@ -489,7 +490,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace the two "no
   attributes" statements ("Micromegas spans carry no attributes" at `:5`, "Micromegas spans have no
   attributes" at `:165`) with a note that spans can carry end-time properties, which this
-  comparison doesn't measure.
+  comparison doesn't measure. The `:5` edit must also re-explain the dashes: a dash marks a
+  combination this comparison doesn't measure, not one that doesn't exist.
 
 ## Testing Strategy
 
