@@ -77,7 +77,14 @@ meaning.
 - `info!(n = %n, "{n:.2}")` formats the original `n`, not its `Display` string. Specs keep
   working, so the output doesn't change.
 - A placeholder bound to a literal key binds the original literal token, taken back out of the
-  muncher's `concat!` wrapper, so `info!(n = 1.5, "{n:.2}")` prints `1.50`.
+  muncher's `concat!` wrapper, so `info!(n = 1.5, "{n:.2}")` prints `1.50`. A literal whose token
+  isn't a valid standalone expression (a negated non-numeric such as `-"abc"`, `-true` or `-'a'`,
+  or an integer out of range for `i32`) isn't bound.
+- A placeholder binds only a key with exactly the same spelling: an identifier key, or a
+  string-literal key with identical text (`"user" = ..` binds `{user}`). `{User}` doesn't bind a
+  key `user`, so the stored name always matches the placeholder and the analytics renderer stays
+  exact-case. Raw-identifier keys (`r#type`) never bind, since `{r#type}` is invalid in a format
+  string.
 - A key that exists only in a `..set` spread is unknown at compile time and isn't bound.
 
 A scan of `rust/` found no non-test call site that uses properties together with a named
@@ -93,13 +100,17 @@ sink gating, property merging and interning, and analytics rendering remain.
 | Format string is not a literal (`concat!(..)`) | No binding; `Formatted` |
 | Literal with no `{` or `}` and no extra arguments | `Static` |
 | Placeholder name matches two keys case-insensitively | `compile_error!`, since the binding would be ambiguous |
+| Placeholder name matches a lone key only case-insensitively (`{user}` with key `User`) | Not bound; the placeholder keeps its local-capture meaning; `Formatted` |
+| Literal key whose token isn't a valid standalone expression (`-"abc"`, `-true`, `-'a'`, out-of-range int) | Not bound; `Formatted` |
 | Placeholder name is also passed explicitly (`"{user}", user = x`) | Not bound (the explicit argument wins); `Formatted` |
-| Every placeholder is `{k}` with a `%`/bare/literal/static key, or `{k:?}` with a `?` key, and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
+| Every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key, and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
 | Anything else (specs, positional, unbound names, extra arguments) | Bind what matches a key; `Formatted` |
 
 The pairing rule exists because a deferred placeholder renders as the stored property string.
 `{k}` renders `Display`, which equals the stored string for `%`, bare (string `PropertyValue`),
-literal and static values. `{k:?}` renders `Debug`, which equals it for `?` values. A `{k}` over a
+string/char/bool/non-negated integer literal, and static values. Float and negated literals stay
+`Formatted`: the muncher stores them via `concat!`, which can differ from `Display` (`1.0` vs `1`,
+`0.50` vs `0.5`, `1e3` vs `1000`, `-0` vs `0`). `{k:?}` renders `Debug`, which equals it for `?` values. A `{k}` over a
 `?` key is still bound, but formatted.
 
 The previous plan fixed a bug where `is_static_msg` stored `{}` for `info!("{}", "{}")`. The
@@ -112,8 +123,10 @@ which is rare and still correct.
 It lives in `rust/tracing/proc-macros/src/lib.rs` (format scanning in a new
 `src/log_impl.rs`), is `#[doc(hidden)]`, and is re-exported at the `micromegas_tracing` root so
 that the `#[macro_export]` macros can reach it. It replaces `__log_call!` and the body of
-`__props!`' `@end log` arms. `__props!` keeps parsing the property syntax, so the reserved-key
-errors and the existing `compile_fail` doctests stay. The metric arms don't change.
+`__props!`' `@end log` arms. `__props!` keeps parsing the property syntax, but the reserved-key
+(`level`/`target`) errors live in `__prop_key!`, which generated code would bypass. So
+`__log_impl!` emits every key through `$crate::__prop_key!(log $k)` (or builds dyn entries via
+`__dyn_prop!` over the hoisted locals), and the errors and existing `compile_fail` doctests stay. The metric arms don't change.
 
 Input, from the `@end log` arms: `$crate` (proc macros can't name it themselves), the
 `[target, lvl]` context, the muncher's accumulators (literal/static pairs, dynamic entries,
@@ -128,7 +141,8 @@ if <level gate> {
         let __mm_v_user = &(account.name);                   // each dyn/static value, once
         let __mm_p_user = format!("{}", __mm_v_user);        // disp; dbg uses {:?}, bare PropertyValue
         dispatch::log_dyn_tagged_enabled(
-            sink, &LOG_DESC, <set>, &[DynProperty::new("user", &*__mm_p_user)],
+            sink, &LOG_DESC, <set>,
+            &[DynProperty::new($crate::__prop_key!(log user), &*__mm_p_user)],
             LogMsgForm::Template,
             format_args!("login for {user}", user = __mm_v_user),
         );
@@ -137,7 +151,8 @@ if <level gate> {
 ```
 
 - A literal key's value is bound as the original literal token, not the muncher's
-  `concat!(..)` (or `concat!("-", ..)` for negatives) string.
+  `concat!(..)` (or `concat!("-", ..)` for negatives) string, and only for the Template-eligible
+  literal kinds (string, char, bool, non-negated integer) with a valid standalone token.
 - Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers. Static
   values are hoisted the same way and passed to the static-set cache, so they're evaluated once.
 - Only names found in argument position are passed as named arguments. The scanner reads the
@@ -245,7 +260,10 @@ doesn't expose the message template, so the interop path can't benefit.
 8. `rust/tracing/src/macros.rs`: route the `@end log` arms of `__props!` to `__log_impl!`, and
    delete `__log_call!`.
 9. Update the in-process readers of `LogMsgQueueAny`: `rust/tracing/tests/utils.rs` (exhaustive
-   match), `property_macro_tests.rs` (record the new kind), and `stream_flush_tests.rs` (read
+   match), `property_macro_tests.rs` (record the new kind;
+   `tagged_messages_that_differ_from_the_format_string_are_formatted` loses its
+   `info!(a = "1", "a {{b}}")` case, which becomes a `TaggedLogTemplateEvent` and moves to that
+   group, so the test keeps only cases that stay `TaggedLogString`), and `stream_flush_tests.rs` (read
    `properties` from the new event too). `dyn_deps_tests.rs` calls `log`, `log_tagged` and
    `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` (`Static` for `"static"`) so each
    call keeps its current event kind.
@@ -257,7 +275,7 @@ doesn't expose the message template, so the interop path can't benefit.
     `rust/analytics/src/log_entries_table.rs`: append `&*row.msg`.
     `rust/analytics/tests/dictionary_key_overflow_tests.rs`: `msg: Cow::Borrowed(&msg)`.
     `rust/analytics/tests/log_tests.rs`: the `entry.msg.to_owned()` readers switch to
-    `.into_owned()`.
+    `entry.msg.to_string()` (the readers hold `&LogEntry`, and `into_owned` takes `self`).
 
 ### Phase 4: Tests
 
@@ -288,12 +306,6 @@ doesn't expose the message template, so the interop path can't benefit.
 
 ## Trade-offs
 
-- **Proc macro vs. a runtime check per callsite in `macro_rules`.** `macro_rules` can't look
-  inside the format string, so the alternative was a cached runtime check that compared
-  `stringify!(value)` with the key, and covered only `key = %key`. That left a placeholder
-  meaning a same-named local, and excluded literal and static values and every
-  `key = %expr` form. The proc macro binds the placeholder to the property, so the stored and
-  printed messages can't diverge, and it costs nothing at runtime.
 - **Proc macro for the log tail only, not the whole `log!`.** `__props!` already parses the
   property syntax and owns the reserved-key and `..set` errors and their `compile_fail` tests.
   Moving only the code generation keeps that tested surface intact.
@@ -357,6 +369,10 @@ sink). Each call also checks that the sink's `on_log` arguments format to the ex
     `account.name`, and pushes the template event;
   - `info!(id = %next(), "{id}")` evaluates `next()` once.
 - `TaggedLogString` with the printed message:
+  - `info!(x = 1.0, "{x}")` and `info!(x = -1, "{x}")` (float and negated literals);
+  - `info!(User = %u, "{user}")` with a local `user` (case-mismatched lone key, not bound);
+  - `info!(x = -"abc", "{x}")` and `info!(x = 99999999999999999999, "{x}")` (literal not bound,
+    expansion unchanged from today);
   - `info!(n = %n, "{n:>8}")`, which formats the original `n`;
   - `info!(v = ?v, "{v}")`;
   - `info!(user = %user, "{user} {}", 3)`;
@@ -379,8 +395,9 @@ unsupported placeholder (kept verbatim).
 
 - A round trip through the real macros: `init_in_memory_tracing`, then the template-event calls
   above, then `parse_entries`. The test takes the owned `Arc<LogBlock>` out of the in-memory sink and
-  builds the stream metadata from the sink's `StreamDesc` (a small `parse_entries` variant taking
-  that, since the existing one needs a `&LogStream`). Mark it `#[serial]`. Assert that each `msg` equals the `format!` of the same template
+  builds a throwaway `LogStream` from the sink's `StreamDesc`
+  (`LogStream::new(.., desc.process_id, &desc.tags, desc.properties.clone())`) and calls the
+  existing `parse_entries`. Mark it `#[serial]`. Assert that each `msg` equals the `format!` of the same template
   and values. This pins agreement between the proc macro's grammar and the analytics renderer.
 - A `level`/`target` override property on a template event still applies through
   `tagged_log_entry`.
