@@ -69,9 +69,10 @@ literal set, `static` values and dynamic values, with `log` and `metric` kinds. 
   `AsyncEventCollector` (`lakehouse/async_events_block_processor.rs:34`). A new collector is
   built for every block, so `PropertySetJsonbDictionaryBuilder`'s one-arena invariant holds
   there. `async_events_table_schema` is in `rust/analytics/src/async_events_table.rs`.
-- `SCHEMA_VERSION` is 3 in both `thread_spans_view.rs:39` and `async_events_view.rs:36`.
+- `SCHEMA_VERSION` is 3 in both `thread_spans_view.rs:38` and `async_events_view.rs:36`.
 - `log_entry.rs:261` shows how to read a `properties` reference member:
-  `obj.get::<&Object>("properties")` returns an analytics `PropertySet`.
+  `obj.get::<&Object>("properties")` returns an `&Object`, which `.into()` converts to an
+  analytics `PropertySet` (`From<&Object>`, `properties/property_set.rs:50`).
 
 ## Design
 
@@ -104,8 +105,7 @@ pub struct TaggedEndThreadNamedSpanEvent {
 The named variants always carry the name as a block-scoped string record (`DynStringId`), whether
 it was `'static` or built at runtime. Analytics matches begin and end by the content hash of the
 scope description, not by the event type or string id, so a static-named begin closes correctly
-with this end. A tagged end already pays for a property merge and a set lookup, so hashing the
-name once more costs little. This avoids two extra event types.
+with this end.
 
 ### Block (`spans/block.rs`)
 
@@ -140,8 +140,7 @@ pub fn on_end_async_named_scope_tagged(span_id: u64, parent_span_id: u64, loc: &
   `on_end_scope` / `on_end_async_scope`, and the two named ones fall back to
   `on_end_named_scope_dyn` / `on_end_async_named_scope_dyn`, because they take a runtime
   `&str`. Guards and futures check for emptiness first and end through `SpanName::end_*`, so
-  static-named spans keep their exact bytes. The dispatch fallback is only reached by direct
-  callers.
+  static-named spans keep their exact bytes.
 - Otherwise the function reads `now()` first, as the existing `_dyn` end paths do. It then goes
   through a new `on_thread_tagged_event` helper, which has the same shape as
   `on_thread_dyn_named_event`. No lock is taken, because the thread stream is thread-local.
@@ -156,10 +155,6 @@ span.set_property("rows", rows.len());
 span.set_property("cache", if hit { "hit" } else { "miss" });
 // the end event at drop carries region, request, rows and cache
 ```
-
-The guard collects properties for the whole lifetime of the span and writes all of them on the
-end event when it drops. Nothing is recorded at begin. The wire still has one set per span, on
-its end event, so analytics never merges anything.
 
 **`SpanProperties`** (new, `rust/tracing/src/spans/span_properties.rs`):
 
@@ -183,11 +178,16 @@ impl SpanProperties {
 - Setting a name that is already present (case-insensitive, as in `merge_properties`) replaces
   the value. The old bytes are compacted out, so a property set inside a loop doesn't grow the
   buffer.
-- At drop, the guard builds a `DynProperty` view of the entries, then calls `merge_properties`
-  with `static_set` and the matching `on_end_*_tagged`. A value set at run time beats a literal
-  of the same name, the rule `log!` already uses. With no properties at all, the guard emits the
+- At drop, the guard builds a `DynProperty` slice of the entries and passes it, with
+  `static_set`, to the matching `on_end_*_tagged`. The merge happens only in `push_tagged`. A
+  value set at run time beats a literal of the same name, the rule `log!` already uses. With no properties at all, the guard emits the
   plain end.
 - Names are `&'static str`, because name cardinality must stay bounded.
+- `smallvec` and `rustc-hash` are native-only dependencies, and `merge_properties` lives in the
+  native-only `dyn_deps`, while `guards` and `instrumented_future` compile on wasm32. Following
+  the stub convention in `lib.rs`, wasm32 gets a cfg'd `SpanProperties` stub holding only the
+  `static_set`, with a no-op `set_property`. The guard's tagged drop path is cfg'd to the plain
+  end there, so the wasm clippy build (`-D warnings`) stays clean.
 
 **Guards.** `SpanName` gains `fn as_str(&self) -> &str`, so that both name kinds reach the single
 `_named_scope_tagged` dispatch.
@@ -221,7 +221,9 @@ arm, placed before the existing arms. The arm is an expression that returns the 
 - `__prop_key!(span name)` / `(span "name")` is a compile error, because `name` is the span's
   name. `span_scope!(name = "x", name = "y")` therefore fails to compile.
 - Writing `span_scope!(name = "x", ...);` as a bare statement drops the guard at once. That
-  triggers the `#[must_use]` warning, which CI treats as an error.
+  triggers the `#[must_use]` warning. CI clippy runs without `--all-targets`, so the warning is
+  denied in library code only; the compile-fail doctest's `#![deny(unused_must_use)]` covers the
+  rest.
 - The existing arms don't change. They stay statements with a hidden guard and no properties.
 - Dynamic values are evaluated without a check. Spans have no level gate, and span names built at
   runtime are evaluated the same way.
@@ -304,7 +306,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 
 **Phase 1: thread spans**
 
-1. `span_events.rs`: add `TaggedEndThreadSpanEvent` and `TaggedEndThreadNamedSpanEvent`.
+1. `span_events.rs`: add `TaggedEndThreadSpanEvent` and `TaggedEndThreadNamedSpanEvent`, each with
+   `impl InProcSerialize`.
 2. `spans/block.rs`: add the queue entries, `PropertySetDependency` in `ThreadDepsQueue` with
    its `PropertyDepsQueue` impl, the new `extract` arms with `record_properties` and
    `record_static_refs`, and `push_tagged` / `push_tagged_named`. Switch `recorded_deps` and the
@@ -313,7 +316,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 3. `dispatch.rs`: add `on_thread_tagged_event`, `on_end_scope_tagged` and
    `on_end_named_scope_tagged`. `dispatch_wasm.rs`: add stubs.
 4. `spans/span_properties.rs` (new, plus its `mod` / `pub use` in `spans/mod.rs`):
-   `SpanProperties`. `span_name.rs`: add `SpanName::as_str`. `guards.rs`: add the properties type
+   `SpanProperties`, with the wasm32 stub (checked by the wasm clippy build). `span_name.rs`: add `SpanName::as_str`. `guards.rs`: add the properties type
    parameter with its sealed trait, `set_property`, the tagged drop path and `#[must_use]`.
 5. `macros.rs`: add the `name =` arms on the three scope macros, the `span` kind in `__props!`
    and `__prop_key!` (with `name` reserved), and a `__span_guard_call!` that builds the guard.
@@ -322,23 +325,29 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
    declaration), the trait parameter on `ThreadBlockProcessor`, the parser arms, `CallTreeNode`
    / `CallTree` / `CallTreeBuilder`, `SpanRow` / `SpanRecordBuilder` / `get_spans_schema`, and
    the `SCHEMA_VERSION` bump in `thread_spans_view.rs`. Update the test impls of
-   `ThreadBlockProcessor` (`tests/span_tests.rs`) and the `SpanRow` users
+   `ThreadBlockProcessor` (`tests/span_tests.rs`), the direct `on_end_thread_scope` calls in
+   `tests/call_tree_tests.rs`, and the `SpanRow` users
    (`tests/dictionary_key_overflow_tests.rs`).
-8. `process_spans_table_function.rs`: append `e.properties` to the async join's select list. The
-   thread half passes the view's batches through unchanged.
+8. `process_spans_table_function.rs`: append `arrow_cast(jsonb_parse('{}'), 'Dictionary(Int32, Binary)')
+   as properties` (the empty set) to the async join's select list, because `async_events` has no
+   `properties` column until Phase 2 and the batch is built strictly against `get_spans_schema`.
+   The thread half passes the view's batches through unchanged.
 9. Bench: add `dispatch/span_props_literal` and `dispatch/span_props_dyn` cases to
    `rust/tracing/benches/with_dispatch.rs`, next to `dispatch/span_scope`.
 
 **Phase 2: async spans** (can ship as its own PR)
 
-10. Add `TaggedEndAsyncSpanEvent` and `TaggedEndAsyncNamedSpanEvent` to the events, the queue
+10. Add `TaggedEndAsyncSpanEvent` and `TaggedEndAsyncNamedSpanEvent` (each with
+    `impl InProcSerialize`) to the events, the queue
     and `extract`; add the two new `ThreadEventQueueAny` arms in `rust/tracing/tests/utils.rs`. Add `on_end_async_scope_tagged` and `on_end_async_named_scope_tagged`, with
     wasm stubs.
 11. `instrumented_future.rs`: add the end-hook type parameter,
     `InstrumentFuture::instrument_with`, and the closure arms on the four async macros.
-12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms, `AsyncEventRecord` /
+12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms (and add the two tagged
+    async types to `parse_thread_block_payload`'s ignore list), `AsyncEventRecord` /
     `AsyncEventRecordBuilder` / `async_events_table_schema`, and the `SCHEMA_VERSION` bump in
-    `async_events_view.rs`. Update the test impls (`tests/span_tests.rs`,
+    `async_events_view.rs`. In `process_spans_table_function.rs`, replace the empty-set literal with
+    `e.properties`. Update the test impls (`tests/span_tests.rs`,
     `tests/async_events_tests.rs`, `tests/dictionary_key_overflow_tests.rs`). Bump the
     `num_columns() == 12` asserts in `tests/async_events_tests.rs` to 13.
 
@@ -437,13 +446,13 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `mkdocs/docs/query-guide/schema-reference.md`: add a `properties` row to the `thread_spans` and
   `async_events` tables, plus an example
   (`SELECT name, property_get(properties, 'rows') ... FROM view_instance('thread_spans', ..)`).
-- `mkdocs/docs/query-guide/schema-reference.md` (`:659`): the `properties` description ("log
+- `mkdocs/docs/query-guide/schema-reference.md` (`:662`): the `properties` description ("log
   properties, metric properties") also covers spans.
 - `claude-plugin/skills/micromegas-query/SKILL.md` (`:329-364`): add a `properties` row to the
   `thread_spans` and `async_events` column tables.
 - `rust/tracing/README.md` (`:25`): properties attach to logs, metrics and spans.
-- `doc/how_to_query/README.md` (`:339+`): add `properties` to the `thread_spans` section of this
-  legacy schema copy.
+- `doc/how_to_query/README.md` (`:323+`, `:339+`): add `properties` to the `async_events` and
+  `thread_spans` tables of this legacy schema copy.
 - `mkdocs/docs/query-guide/functions-reference.md`: `process_spans` returns `properties`.
 - `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace "Micromegas
   spans carry no attributes" with a note that spans can carry end-time properties, which this
