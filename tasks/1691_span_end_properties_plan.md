@@ -199,6 +199,12 @@ impl SpanProperties {
   - `()`, the default, which ends the span plainly. Every existing guard keeps its size and its
     drop path.
   - `SpanProperties`, which ends the span through the tagged path.
+- `ThreadSpanGuard::with_properties(desc, props)` and
+  `ThreadNamedSpanGuard::with_properties(loc, name, props)` live in impls fixed to
+  `P = SpanProperties`; `__span_guard_call!` calls them. `new` and `with_name` stay in impls
+  fixed to `P = ()`: making them generic over `P` would break inference at existing call sites
+  such as the `span_scope_named_dyn!` expansion, since default type parameters don't drive
+  inference in expressions.
 - `set_property` exists only when `P = SpanProperties`, takes `&mut self`, and forwards to the storage.
 - Both guard types become `#[must_use]`.
 
@@ -332,7 +338,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
    `on_end_named_scope_tagged`. `dispatch_wasm.rs`: add stubs.
 4. `spans/span_properties.rs` (new, plus its `mod` / `pub use` in `spans/mod.rs`):
    `SpanProperties`, with the wasm32 stub (checked by the wasm clippy build). `span_name.rs`: add `SpanName::as_str`. `guards.rs`: add the properties type
-   parameter with its sealed trait, `set_property`, the tagged drop path and `#[must_use]`.
+   parameter with its sealed trait, the `with_properties` constructors, `set_property`, the
+   tagged drop path and `#[must_use]`.
 5. `macros.rs`: add the `name =` arms on the three scope macros, the `span` kind in `__props!`
    and `__prop_key!` (with `name` reserved), and a `__span_guard_call!` that builds the guard.
 6. `rust/tracing/tests/utils.rs`: add the new `ThreadEventQueueAny` match arms.
@@ -422,6 +429,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - The property syntax is the codebase's `key = value` (`log!`, `imetric!`), not the issue's
   `"rows" => n` sketch, so that every property-taking macro parses the same way.
 - Async end hook: `SpanEndHook` trait with `NoHook` default; `instrument_with` stays for unnamed futures, macros use hidden `__instrument_named[_dyn]_with_internal` (user call).
+- Property-carrying guards are built with `with_properties` on `ThreadSpanGuard` and
+  `ThreadNamedSpanGuard`; `new` / `with_name` stay fixed to `P = ()` (user call).
 - C API, Unreal bindings, properties on begin events, and `#[span_fn]` integration are out of
   scope for v1, following the issue.
 - Perfetto `args` mapping is not part of this plan. `perfetto_trace_execution_plan.rs` selects
