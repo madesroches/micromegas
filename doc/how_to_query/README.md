@@ -335,6 +335,7 @@ Asynchronous span events for tracking async operations.
 | `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `line` | `UInt32` | Line number |
+| `properties` | `Dictionary(Int32, Binary)` | Properties recorded on the span's end event (JSONB); empty on begin rows |
 
 #### `thread_spans` 
 Derived view for analyzing span durations and hierarchies (accessed via `view_instance('thread_spans', stream_id)`).
@@ -354,6 +355,7 @@ extra sort).
 | `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `line` | `UInt32` | Line number |
+| `properties` | `Dictionary(Int32, Binary)` | Properties recorded on the span's end event (JSONB) |
 
 #### `measures` (metrics)
 Numerical measurements and counters.
@@ -425,7 +427,7 @@ List<Struct<
 ```
 
 **Common properties fields:**
-- `properties` - Event-specific metadata (log properties, metric properties)
+- `properties` - Event-specific metadata (log properties, metric properties, span end properties)
 - `process_properties` - Process-wide metadata shared across all events from a process
 
 **Querying properties:**

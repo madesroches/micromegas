@@ -1,4 +1,7 @@
+use crate::arrow_properties::serialize_property_set_to_jsonb;
 use crate::metadata::{StreamMetadata, get_thread_name_from_stream_metadata};
+use crate::properties::jsonb_dictionary::JsonbDictionary;
+use crate::properties::property_set::PropertySet;
 use crate::scope::BorrowedScopeDesc;
 use crate::scope::ScopeDesc;
 use crate::scope::ScopeHashMap;
@@ -24,6 +27,9 @@ pub struct CallTreeNode {
     pub end: i64,
     /// The children of this node in the call tree.
     pub children: Vec<CallTreeNode>,
+    /// Index into `CallTree::property_sets` of the properties on the span's end event; 0 is the
+    /// empty set.
+    pub properties: i32,
 }
 
 /// A call tree, representing the execution of a single thread.
@@ -34,6 +40,8 @@ pub struct CallTree {
     /// The root node of the call tree.
     // the root node corresponds to the thread and has a span equal to the query range
     pub call_tree_root: Option<CallTreeNode>,
+    /// The JSONB property sets that the nodes refer to.
+    pub property_sets: JsonbDictionary,
 }
 
 /// A builder for creating a `CallTree` from a stream of thread events.
@@ -44,6 +52,7 @@ pub struct CallTreeBuilder {
     nb_spans: i64,
     stack: Vec<CallTreeNode>,
     scopes: ScopeHashMap,
+    property_sets: JsonbDictionary,
     convert_ticks: ConvertTicks,
     root_hash: u32,
 }
@@ -72,6 +81,7 @@ impl CallTreeBuilder {
             nb_spans: 0,
             stack: Vec::new(),
             scopes,
+            property_sets: JsonbDictionary::new(),
             convert_ticks,
             root_hash,
         }
@@ -83,6 +93,7 @@ impl CallTreeBuilder {
             return CallTree {
                 scopes: self.scopes,
                 call_tree_root: None,
+                property_sets: self.property_sets,
             };
         }
         while self.stack.len() > 1 {
@@ -95,6 +106,7 @@ impl CallTreeBuilder {
         CallTree {
             scopes: self.scopes,
             call_tree_root: self.stack.pop(),
+            property_sets: self.property_sets,
         }
     }
 
@@ -109,10 +121,24 @@ impl CallTreeBuilder {
                 begin: self.begin_range_ns,
                 end: self.end_range_ns,
                 children: vec![node],
+                properties: 0,
             };
             self.stack.push(new_root);
             self.nb_spans += 1;
         }
+    }
+
+    fn intern_properties(&mut self, properties: &PropertySet<'_>) -> Result<i32> {
+        let mut is_empty = true;
+        properties.for_each_property(|_, _| {
+            is_empty = false;
+            Ok(())
+        })?;
+        if is_empty {
+            return Ok(0);
+        }
+        let jsonb = serialize_property_set_to_jsonb(properties)?;
+        Ok(self.property_sets.intern(&jsonb))
     }
 
     fn record_scope_desc(&mut self, scope_desc: BorrowedScopeDesc<'_>) {
@@ -150,6 +176,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             begin: time,
             end: self.end_range_ns,
             children: Vec::new(),
+            properties: 0,
         };
         self.stack.push(node);
         self.nb_spans += 1;
@@ -162,6 +189,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         event_id: i64,
         scope: BorrowedScopeDesc<'_>,
         ts: i64,
+        properties: PropertySet<'_>,
     ) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
         if time < self.begin_range_ns {
@@ -172,14 +200,17 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         }
         let hash = scope.hash;
         self.record_scope_desc(scope);
+        let properties = self.intern_properties(&properties)?;
         if let Some(mut old_top) = self.stack.pop() {
             if old_top.hash == hash {
                 old_top.end = time;
+                old_top.properties = properties;
                 self.add_child_to_top(old_top);
             } else if old_top.hash == self.root_hash {
                 old_top.id = Some(event_id);
                 old_top.hash = hash;
                 old_top.end = time;
+                old_top.properties = properties;
                 self.add_child_to_top(old_top);
             } else {
                 let ending_name = self.scopes.get(&hash).map_or("?", |s| s.name.as_str());
@@ -201,6 +232,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 begin: self.begin_range_ns,
                 end: time,
                 children: Vec::new(),
+                properties,
             };
             self.add_child_to_top(node);
         }

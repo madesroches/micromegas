@@ -394,7 +394,8 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                         b.name, \
                         b.target, \
                         b.filename, \
-                        b.line \
+                        b.line, \
+                        e.properties \
                     FROM (SELECT * FROM view_instance('async_events', '{process_id}') \
                           WHERE event_type = 'begin') b \
                     INNER JOIN (SELECT * FROM view_instance('async_events', '{process_id}') \

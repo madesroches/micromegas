@@ -201,6 +201,7 @@ ORDER BY lane, begin
 | target | Dictionary(Int32, Utf8) | Module/target |
 | filename | Dictionary(Int32, Utf8) | Source file |
 | line | UInt32 | Line number |
+| properties | Dictionary(Int32, Binary) | Properties recorded on the span's end event (JSONB) |
 
 **Examples:**
 ```sql

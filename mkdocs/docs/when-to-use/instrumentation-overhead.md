@@ -2,7 +2,7 @@
 
 Instrumentation must not change the shape of the thread it instruments. This page measures what `micromegas-tracing` and the OpenTelemetry Rust SDK add to the calling thread per log event, span and metric sample, so that recording telemetry does not change the timing profile of the code it observes.
 
-Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one workstation, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
+Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one workstation, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that this comparison does not measure, not one that does not exist: Micromegas spans can carry end-time properties, which are not measured here, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
 ## Calling-thread cost
 
@@ -162,7 +162,7 @@ python3 otel-comparison-bench/report.py bench.log
 ### Semantic differences
 
 - Micromegas metrics are samples, one per call. OpenTelemetry instruments aggregate in the process and export one point per series per interval, with a cardinality limit per instrument (2000 attribute sets by default). That is why metrics are measured per batch and reported per sample.
-- Micromegas spans have no attributes. A name built at run time (`span_scope_named_dyn!`) is the closest equivalent, and the `span/dyn_name` case compares it with an OpenTelemetry span of the same name.
+- Micromegas spans can carry properties recorded at span end, which this comparison does not measure. The cases use a name built at run time (`span_scope_named_dyn!`) as the closest equivalent of an attribute, and the `span/dyn_name` case compares it with an OpenTelemetry span of the same name.
 - OpenTelemetry drops records when its queue is full and Micromegas drops blocks when its queue passes its byte caps. Neither reports the drop on the calling thread.
 - Attribute values are strings in both libraries in these cases. OpenTelemetry supports typed values, which would change its encoded size.
 - The cases record to an in-process sink. The network, the ingestion service and storage are not part of any number on this page; see [Cost Effectiveness](saas-vendors.md) for the storage side.

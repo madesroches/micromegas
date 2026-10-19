@@ -282,6 +282,46 @@ pub fn on_end_async_named_scope_dyn(
 ) {
 }
 
+#[inline(always)]
+pub fn on_end_scope_tagged(
+    _scope: &'static SpanMetadata,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+) {
+}
+
+#[inline(always)]
+pub fn on_end_named_scope_tagged(
+    _thread_span_location: &'static SpanLocation,
+    _name: &str,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+) {
+}
+
+#[inline(always)]
+pub fn on_end_async_scope_tagged(
+    _span_id: u64,
+    _parent_span_id: u64,
+    _scope: &'static SpanMetadata,
+    _depth: u32,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+) {
+}
+
+#[inline(always)]
+pub fn on_end_async_named_scope_tagged(
+    _span_id: u64,
+    _parent_span_id: u64,
+    _span_location: &'static SpanLocation,
+    _name: &str,
+    _depth: u32,
+    _properties: &'static PropertySet,
+    _dyn_properties: &[DynProperty<'_>],
+) {
+}
+
 /// # Safety
 /// No-op on wasm32
 pub unsafe fn force_uninit() {}

@@ -1,5 +1,6 @@
 use crate::metadata::StreamMetadata;
 use crate::payload::{fetch_block_payload, parse_block};
+use crate::properties::property_set::PropertySet;
 use crate::scope::BorrowedScopeDesc;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -17,12 +18,14 @@ pub trait ThreadBlockProcessor {
         scope: BorrowedScopeDesc<'_>,
         ts: i64,
     ) -> Result<bool>;
+    /// `properties` is the empty set for a span that ended without any.
     fn on_end_thread_scope(
         &mut self,
         block_id: &str,
         event_id: i64,
         scope: BorrowedScopeDesc<'_>,
         ts: i64,
+        properties: PropertySet<'_>,
     ) -> Result<bool>;
 }
 
@@ -73,9 +76,31 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     let target = scope.get::<&str>("target")?;
                     let line = scope.get::<u32>("line")?;
                     let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
-                    processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
+                    processor.on_end_thread_scope(
+                        block_id,
+                        event_id,
+                        scope_desc,
+                        ts,
+                        PropertySet::empty(),
+                    )
                 })
                 .with_context(|| "reading EndThreadSpanEvent"),
+                "TaggedEndThreadSpanEvent" => on_thread_event(obj, |scope, ts| {
+                    let name = scope.get::<&str>("name")?;
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
+                    let line = scope.get::<u32>("line")?;
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
+                    let properties = obj.get::<&Object>("properties")?;
+                    processor.on_end_thread_scope(
+                        block_id,
+                        event_id,
+                        scope_desc,
+                        ts,
+                        properties.into(),
+                    )
+                })
+                .with_context(|| "reading TaggedEndThreadSpanEvent"),
                 "BeginThreadNamedSpanEvent" | "BeginThreadDynNamedSpanEvent" => {
                     on_thread_named_event(obj, |scope, name, ts| {
                         let filename = scope.get::<&str>("file")?;
@@ -92,16 +117,39 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                         let target = scope.get::<&str>("target")?;
                         let line = scope.get::<u32>("line")?;
                         let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
-                        processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
+                        processor.on_end_thread_scope(
+                            block_id,
+                            event_id,
+                            scope_desc,
+                            ts,
+                            PropertySet::empty(),
+                        )
                     })
                     .with_context(|| "reading EndThreadNamedSpanEvent")
                 }
+                "TaggedEndThreadNamedSpanEvent" => on_thread_named_event(obj, |scope, name, ts| {
+                    let filename = scope.get::<&str>("file")?;
+                    let target = scope.get::<&str>("target")?;
+                    let line = scope.get::<u32>("line")?;
+                    let scope_desc = BorrowedScopeDesc::new(name, filename, target, line);
+                    let properties = obj.get::<&Object>("properties")?;
+                    processor.on_end_thread_scope(
+                        block_id,
+                        event_id,
+                        scope_desc,
+                        ts,
+                        properties.into(),
+                    )
+                })
+                .with_context(|| "reading TaggedEndThreadNamedSpanEvent"),
                 "BeginAsyncSpanEvent"
                 | "EndAsyncSpanEvent"
                 | "BeginAsyncNamedSpanEvent"
                 | "EndAsyncNamedSpanEvent"
                 | "BeginAsyncDynNamedSpanEvent"
-                | "EndAsyncDynNamedSpanEvent" => {
+                | "EndAsyncDynNamedSpanEvent"
+                | "TaggedEndAsyncSpanEvent"
+                | "TaggedEndAsyncNamedSpanEvent" => {
                     // Ignore async span events as they are not relevant for thread spans view
                     Ok(true)
                 }

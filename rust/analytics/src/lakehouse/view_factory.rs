@@ -82,6 +82,7 @@
 //! |target        |Utf8                         | category or module name                                    |
 //! |filename      |Utf8                         | name or path of the source file where the span is coded    |
 //! |line          |UInt32                       | line number in the file where the span can be found        |
+//! |properties    |Dictionary(Int32, Binary)    | properties recorded on the span's end event (JSONB), empty when none |
 //!
 //! ### thread_spans view instances
 //!
@@ -102,6 +103,7 @@
 //! |filename      |Dictionary(Int32, Utf8)      | name or path of the source file where the span is coded  |
 //! |target        |Dictionary(Int32, Utf8)      | category or module name                                   |
 //! |line          |UInt32                       | line number in the file where the span can be found      |
+//! |properties    |Dictionary(Int32, Binary)    | properties recorded on the span's end event (JSONB), empty on begin rows and when none |
 //!
 //! ### async_events view instances
 //!

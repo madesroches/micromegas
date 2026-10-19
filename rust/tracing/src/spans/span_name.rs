@@ -13,6 +13,7 @@ mod sealed {
 }
 
 pub trait SpanName: sealed::Sealed {
+    fn as_str(&self) -> &str;
     fn begin_thread(&self, loc: &'static SpanLocation);
     fn end_thread(&self, loc: &'static SpanLocation);
     fn begin_async(&self, loc: &'static SpanLocation, parent: u64, depth: u32) -> u64;
@@ -26,6 +27,11 @@ pub trait SpanName: sealed::Sealed {
 pub struct StaticSpanName(pub &'static str);
 
 impl SpanName for StaticSpanName {
+    #[inline(always)]
+    fn as_str(&self) -> &str {
+        self.0
+    }
+
     #[inline(always)]
     fn begin_thread(&self, loc: &'static SpanLocation) {
         on_begin_named_scope(loc, self.0);
@@ -51,6 +57,11 @@ impl SpanName for StaticSpanName {
 pub struct DynSpanName<N>(pub N);
 
 impl<N: AsRef<str>> SpanName for DynSpanName<N> {
+    #[inline(always)]
+    fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+
     #[inline(always)]
     fn begin_thread(&self, loc: &'static SpanLocation) {
         on_begin_named_scope_dyn(loc, self.0.as_ref());

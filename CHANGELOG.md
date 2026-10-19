@@ -4,6 +4,30 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing, Analytics:** Properties on thread and async spans, recorded at span end (#1691).
+  `span_scope!(name = "x", k = v, ..)`, `span_scope_named!(name = ..)` and
+  `span_scope_named_dyn!(name = ..)` return a guard whose end event carries the properties, taking
+  the same `key = value` list as `log!` (literals, `static` values, `%`, `?`, bare values and a
+  trailing `..set`); `guard.set_property(name, value)` adds results later, and a later value beats
+  a same-named one from creation. Async spans take an optional trailing closure on
+  `instrument_named!`, `instrument_named_dyn!`, `span_async_named!` and `span_async_named_dyn!`,
+  or `InstrumentFuture::instrument_with`, that receives the output and a `&mut SpanProperties`.
+  Four new tagged end events (`TaggedEndThreadSpanEvent`, `TaggedEndThreadNamedSpanEvent`,
+  `TaggedEndAsyncSpanEvent`, `TaggedEndAsyncNamedSpanEvent`) reuse the per-block dynamic dependency
+  queue; a span that sets nothing emits exactly the bytes it emitted before. `thread_spans`,
+  `async_events` and `process_spans` each gain a last column, `properties`
+  (`Dictionary(Int32, Binary)`, JSONB, the empty set when there are none), and `SCHEMA_VERSION` of
+  `thread_spans` and `async_events` is now 4, so their partitions rebuild. **Deploy analytics
+  before instrumented code that records span properties:** an older analytics server skips a
+  tagged thread end as an unknown type, so the next end pops the wrong span and the call tree
+  fails with `top scope mismatch`, and it shows a tagged async span as never ended. **Minor
+  breaking change:** `ThreadBlockProcessor::on_end_thread_scope` and
+  `AsyncBlockProcessor::on_end_async_scope` take a `properties` parameter; `CallTreeNode`,
+  `CallTree` and `AsyncEventRecord` gain fields; `SpanRecordBuilder::append` gains a `properties`
+  parameter; `ThreadEventQueueAny` and `ThreadDepsQueueAny` gain variants; the sealed `SpanName`
+  gains `as_str`; `ThreadSpanGuard` and `ThreadNamedSpanGuard` gain a defaulted type parameter and
+  become `#[must_use]`; `InstrumentedFuture` and `InstrumentedNamedFuture` gain a defaulted
+  end-hook type parameter. The SQL change is additive.
 * **Tracing:** A log message that only repeats its properties is no longer formatted in the
   process (#1653). `info!(user = %user, "login for {user}")` now stores the format string and
   the property set in a new `TaggedLogTemplateEvent`, and analytics renders `msg` when it parses

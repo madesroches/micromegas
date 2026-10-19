@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::call_tree::CallTree;
 use crate::call_tree::CallTreeNode;
+use crate::properties::jsonb_dictionary::JsonbDictionary;
 use anyhow::{Context, Result};
 use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
@@ -44,6 +45,8 @@ pub struct SpanRecordBuilder {
     pub targets: StringDictionaryBuilder<Int32Type>,
     pub filenames: StringDictionaryBuilder<Int32Type>,
     pub lines: PrimitiveBuilder<UInt32Type>,
+    property_sets: JsonbDictionary,
+    property_keys: Vec<i32>,
 }
 
 /// Returns the schema for the spans table.
@@ -80,6 +83,11 @@ pub fn get_spans_schema() -> Schema {
             false,
         ),
         Field::new("line", DataType::UInt32, false),
+        Field::new(
+            "properties",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            false,
+        ),
     ])
 }
 
@@ -97,6 +105,8 @@ impl SpanRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             filenames: StringDictionaryBuilder::new(),
             lines: PrimitiveBuilder::with_capacity(capacity),
+            property_sets: JsonbDictionary::new(),
+            property_keys: Vec::with_capacity(capacity),
         }
     }
 
@@ -108,7 +118,16 @@ impl SpanRecordBuilder {
         self.ids.len() == 0
     }
 
-    pub fn append(&mut self, row: SpanRow) -> Result<()> {
+    /// Appends a row whose end event carried `properties`, as JSONB (the bytes of the empty set
+    /// for none).
+    pub fn append(&mut self, row: SpanRow, properties: &[u8]) -> Result<()> {
+        self.append_columns(row)?;
+        let key = self.property_sets.intern(properties);
+        self.property_keys.push(key);
+        Ok(())
+    }
+
+    fn append_columns(&mut self, row: SpanRow) -> Result<()> {
         self.ids.append_value(row.id);
         self.parents.append_value(row.parent);
         self.depths.append_value(row.depth);
@@ -125,12 +144,19 @@ impl SpanRecordBuilder {
 
     pub fn append_call_tree(&mut self, tree: &CallTree) -> Result<()> {
         if let Some(root) = &tree.call_tree_root {
+            // Interned once per distinct set of the tree, not once per node.
+            let remap: Vec<i32> = tree
+                .property_sets
+                .values()
+                .iter()
+                .map(|jsonb| self.property_sets.intern(jsonb))
+                .collect();
             for_each_node_in_tree(root, 0, 0, &mut |node, parent, depth| {
                 let scope_desc = tree
                     .scopes
                     .get(&node.hash)
                     .with_context(|| "fetching scope_desc from hash")?;
-                self.append(SpanRow {
+                self.append_columns(SpanRow {
                     id: node.id.unwrap_or(-1),
                     parent,
                     depth,
@@ -141,7 +167,12 @@ impl SpanRecordBuilder {
                     target: scope_desc.target.clone(),
                     filename: scope_desc.filename.clone(),
                     line: scope_desc.line,
-                })
+                })?;
+                let key = *remap
+                    .get(node.properties as usize)
+                    .with_context(|| "fetching property set from index")?;
+                self.property_keys.push(key);
+                Ok(())
             })?;
         }
         Ok(())
@@ -163,6 +194,7 @@ impl SpanRecordBuilder {
                 Arc::new(self.targets.finish()),
                 Arc::new(self.filenames.finish()),
                 Arc::new(self.lines.finish()),
+                Arc::new(self.property_sets.finish(self.property_keys)?),
             ],
         )
         .with_context(|| "building record batch")

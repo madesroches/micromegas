@@ -7,6 +7,7 @@
 //! - `PropertiesLength`: Get the length of properties (supports both formats)
 //! - `PropertiesToJsonb`: Convert properties to JSONB binary format
 
+pub mod jsonb_dictionary;
 pub mod properties_column_accessor;
 pub mod properties_to_dict_udf;
 pub mod properties_to_jsonb_udf;
