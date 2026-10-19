@@ -331,6 +331,9 @@ doesn't expose the message template, so the interop path can't benefit.
 - Case-insensitive property names are inherited behavior, not a hard requirement. If supporting
   them adds real complexity, switch the tracing crate to case-sensitive names instead, even
   though that changes current behavior (user call, 2026-10-19).
+- Static and literal properties must not add per-call cost on the instrumented process: binding
+  one into the message must not format, allocate or evaluate anything beyond what the existing
+  static-set path already does (user call, 2026-10-19).
 
 ## Documentation
 
