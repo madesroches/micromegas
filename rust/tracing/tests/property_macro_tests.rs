@@ -322,6 +322,20 @@ fn log_key_value_forms() {
 
 #[test]
 #[serial]
+fn values_borrowing_from_temporaries() {
+    fn s() -> String {
+        String::from("temp")
+    }
+    let guard = DispatchGuard::new();
+    info!(u = s().as_str(), n = %s().as_str(), "{u} {n}");
+    assert_eq!(
+        guard.log_props("temp temp"),
+        pairs(&[("u", "temp"), ("n", "temp")])
+    );
+}
+
+#[test]
+#[serial]
 fn bare_values_of_string_types() {
     let guard = DispatchGuard::new();
     let s = String::from("string");

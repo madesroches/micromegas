@@ -564,8 +564,12 @@ fn try_expand(input: TokenStream) -> syn::Result<TokenStream> {
     }
 
     // The hoisted locals are evaluated once, for an enabled entry only, and feed both the
-    // stored property and the message.
+    // stored property and the message. Dynamic values are matched on as one scrutinee so
+    // temporaries they borrow from (`s().as_str()`) live until the dispatch call finishes.
     let mut hoists = TokenStream::new();
+    let mut scrutinee: Vec<TokenStream> = vec![];
+    let mut patterns: Vec<Ident> = vec![];
+    let mut renders = TokenStream::new();
     let mut dyn_props: Vec<TokenStream> = vec![];
     for (i, e) in dyns.iter().enumerate() {
         let v = &keyed[statics.len() + i].1;
@@ -573,19 +577,18 @@ fn try_expand(input: TokenStream) -> syn::Result<TokenStream> {
         let value = &e.value;
         let key = &e.key;
         match e.kind {
-            Kind::Disp => hoists.extend(quote! {
-                let #v = &(#value);
+            Kind::Disp => renders.extend(quote! {
                 let #p = ::std::format!("{}", #v);
             }),
-            Kind::Dbg => hoists.extend(quote! {
-                let #v = &(#value);
+            Kind::Dbg => renders.extend(quote! {
                 let #p = ::std::format!("{:?}", #v);
             }),
-            _ => hoists.extend(quote! {
-                let #v = &(#value);
+            _ => renders.extend(quote! {
                 let #p = #krate::property_value::PropertyValue::property_value(&#v);
             }),
         }
+        scrutinee.push(quote!(&(#value)));
+        patterns.push(v.clone());
         dyn_props.push(quote! {
             #krate::property_set::DynProperty::new(#krate::__prop_key!(log #key), &*#p)
         });
@@ -664,14 +667,19 @@ fn try_expand(input: TokenStream) -> syn::Result<TokenStream> {
         quote! {
             if let Some(#sink) = #krate::dispatch::enabled_log_sink(&LOG_DESC) {
                 #hoists
-                #krate::dispatch::log_dyn_tagged_enabled(
-                    #sink,
-                    &LOG_DESC,
-                    #set_expr,
-                    &[#(#slice),*],
-                    #msg_form,
-                    #format_args,
-                );
+                match (#(#scrutinee,)*) {
+                    (#(#patterns,)*) => {
+                        #renders
+                        #krate::dispatch::log_dyn_tagged_enabled(
+                            #sink,
+                            &LOG_DESC,
+                            #set_expr,
+                            &[#(#slice),*],
+                            #msg_form,
+                            #format_args,
+                        );
+                    }
+                }
             }
         }
     } else {
