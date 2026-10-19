@@ -149,7 +149,9 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
    `cargo bench -p micromegas-tracing --bench with_dispatch -- --save-baseline before`.
    Profile with `perf record -g` on the `properties` bench binary filtered to
    `metric/dyn_low_card` and `log/dyn_mixed`. Write the split (allocation, sort, mask scan,
-   hash, probe) into the PR description.
+   hash, probe) into the PR description. Also run the otel-comparison bench on the same
+   machine (`cargo bench -p micromegas-otel-comparison-bench | tee bench-before.log`) so step 8
+   has a like-for-like before.
 2. **Dependency.** Add `smallvec = "1.15"` to `[workspace.dependencies]` in `rust/Cargo.toml`
    (MIT/Apache-2.0). It is already in the workspace `Cargo.lock` transitively, but becomes a new direct dependency of the published `micromegas-tracing` crate. Add `smallvec.workspace = true`
    to the native-only section of `rust/tracing/Cargo.toml`, since `dyn_deps` is native-only.
@@ -175,7 +177,8 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
    `mkdocs/docs/when-to-use/instrumentation-overhead.md`
    (`cargo bench -p micromegas-otel-comparison-bench | tee bench.log`, then
    `python3 otel-comparison-bench/report.py bench.log`). Regenerate every table in that page and
-   update its hardware/software/date table.
+   update its hardware/software/date table. Put the `dyn_*` before/after medians from
+   `bench-before.log` and `bench.log` in the PR description.
 9. **CHANGELOG.** Add an Unreleased entry with before/after medians and a **Minor breaking
    change** clause: `MergedProperties::properties` is now a method returning a slice.
 
