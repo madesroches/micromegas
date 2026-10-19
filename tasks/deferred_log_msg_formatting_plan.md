@@ -81,7 +81,9 @@ meaning.
   the value to a differently named local and format that (`let label = ..; "{label:?}"`), since a
   local named after the key would hit the same error.
 - A placeholder bound to a literal key binds the original literal token, taken back out of the
-  muncher's `concat!` wrapper. A literal whose token
+  muncher's `concat!` wrapper. The literal is read through `syn`, because `$v:literal` fragments
+  arrive wrapped in an invisible `Delimiter::None` group that a hand-written `TokenTree::Literal`
+  match would never see. A literal whose token
   isn't a valid standalone expression (a negated non-numeric such as `-"abc"`, `-true` or `-'a'`,
   or an integer out of range for its type (`i32` when unsuffixed)) isn't bound.
 - A placeholder binds only a key with exactly the same spelling: an identifier key, or a
@@ -108,7 +110,7 @@ sink gating, property merging and interning, and analytics rendering remain.
 | Literal key whose token isn't a valid standalone expression (`-"abc"`, `-true`, `-'a'`, int out of range for its type, `i32` when unsuffixed) | Not bound; `Formatted` |
 | Placeholder with a spec or `:?` names a static or literal key | `compile_error!` |
 | Placeholder name is also passed explicitly (`"{user}", user = x`) | Not bound (the explicit argument wins); `Formatted` |
-| Every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key (a spec or `:?` on a static or literal key is the error above), and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
+| The call has properties, every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key (a spec or `:?` on a static or literal key is the error above), and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
 | Anything else (specs, positional, unbound names, extra arguments) | Bind what matches a key; `Formatted` |
 
 The pairing rule exists because a deferred placeholder renders as the stored property string.
@@ -152,8 +154,6 @@ if <level gate> {
 }
 ```
 
-- A literal key's value is bound as the literal token taken out of the muncher's `concat!(..)`
-  wrapper (see Placeholder semantics).
 - Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers, and are
   named by position (`__mm_v_0`, `__mm_p_0`, ...) because keys can be string literals
   (`"http.method"`) or duplicated. Static
@@ -247,7 +247,7 @@ doesn't expose the message template, so the interop path can't benefit.
 ### Phase 1: Event and dispatch
 
 3. `rust/tracing/src/logs/log_events.rs`: add `TaggedLogTemplateEvent`, and add `LogMsgForm` in
-   `rust/tracing/src/logs/events.rs`. Export both from `logs`.
+   `rust/tracing/src/logs/events.rs`.
 4. `rust/tracing/src/logs/block.rs`: add the event to `LogMsgQueue` and `extract`.
 5. `rust/tracing/src/dispatch.rs`: add the `form` parameter to `log`, `log_tagged`,
    `log_dyn_tagged`, `log_dyn_tagged_enabled` and the `Dispatch` methods, and remove
@@ -265,7 +265,7 @@ doesn't expose the message template, so the interop path can't benefit.
    match), `property_macro_tests.rs` (record the new kind;
    `tagged_messages_that_differ_from_the_format_string_are_formatted` loses its
    `info!(a = "1", "a {{b}}")` case, which becomes a `TaggedLogTemplateEvent` and moves to that
-   group, so the test keeps only cases that stay `TaggedLogString`),. `dyn_deps_tests.rs` calls `log`, `log_tagged` and
+   group, so the test keeps only cases that stay `TaggedLogString`). `dyn_deps_tests.rs` calls `log`, `log_tagged` and
    `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` so each
    call keeps its current event kind.
 
@@ -298,7 +298,7 @@ doesn't expose the message template, so the interop path can't benefit.
 - `rust/tracing/proc-macros/src/lib.rs`, `rust/tracing/proc-macros/src/log_impl.rs` (new)
 - `rust/tracing/src/macros.rs`, `rust/tracing/src/lib.rs`
 - `rust/tracing/src/logs/log_events.rs`, `rust/tracing/src/logs/events.rs`,
-  `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/mod.rs`
+  `rust/tracing/src/logs/block.rs`
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`
 - `rust/tracing/benches/properties.rs`, `rust/tracing/README.md`
 - `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`,
