@@ -83,7 +83,7 @@ meaning.
 - A placeholder bound to a literal key binds the original literal token, taken back out of the
   muncher's `concat!` wrapper. A literal whose token
   isn't a valid standalone expression (a negated non-numeric such as `-"abc"`, `-true` or `-'a'`,
-  or an integer out of range for `i32`) isn't bound.
+  or an integer out of range for its type (`i32` when unsuffixed)) isn't bound.
 - A placeholder binds only a key with exactly the same spelling: an identifier key, or a
   string-literal key with identical text (`"user" = ..` binds `{user}`). `{User}` doesn't bind a
   key `user`, so the stored name always matches the placeholder and the analytics renderer stays
@@ -105,7 +105,7 @@ sink gating, property merging and interning, and analytics rendering remain.
 | Literal with no `{` or `}` and no extra arguments | `Static` |
 | Placeholder name matches two keys case-insensitively | `compile_error!`, since the binding would be ambiguous |
 | Placeholder name matches a lone key only case-insensitively (`{user}` with key `User`) | Not bound; the placeholder keeps its local-capture meaning; `Formatted` |
-| Literal key whose token isn't a valid standalone expression (`-"abc"`, `-true`, `-'a'`, out-of-range int) | Not bound; `Formatted` |
+| Literal key whose token isn't a valid standalone expression (`-"abc"`, `-true`, `-'a'`, int out of range for its type, `i32` when unsuffixed) | Not bound; `Formatted` |
 | Placeholder with a spec or `:?` names a static or literal key | `compile_error!` |
 | Placeholder name is also passed explicitly (`"{user}", user = x`) | Not bound (the explicit argument wins); `Formatted` |
 | Every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key (a spec or `:?` on a static or literal key is the error above), and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
@@ -118,10 +118,7 @@ string/char/bool/non-negated integer literal, and static values. Float and negat
 `0.50` vs `0.5`, `1e3` vs `1000`, `-0` vs `0`). `{k:?}` renders `Debug`, which equals it for `?` values. A `{k}` over a
 `?` key is still bound, but formatted.
 
-The previous plan fixed a bug where `is_static_msg` stored `{}` for `info!("{}", "{}")`. The
-compile-time `Static` rule keeps that fix: any brace or extra argument rules a call out of
-`Static`. `is_static_msg` goes away. Non-literal format strings lose the runtime static check,
-which is rare and still correct.
+Non-literal format strings lose the runtime static check, which is rare and still correct.
 
 ### Proc macro `__log_impl!`
 
@@ -143,23 +140,23 @@ Output, for an enabled entry:
 static LOG_DESC: LogMetadata = { .. fmt_str: <first fmt token> .. };
 if <level gate> {
     if let Some(sink) = enabled_log_sink(&LOG_DESC) {        // only when values are evaluated
-        let __mm_v_user = &(account.name);                   // each dyn/static value, once
-        let __mm_p_user = format!("{}", __mm_v_user);        // disp; dbg uses {:?}, bare PropertyValue
+        let __mm_v_0 = &(account.name);                      // each dyn/static value, once
+        let __mm_p_0 = format!("{}", __mm_v_0);              // disp; dbg uses {:?}, bare PropertyValue
         dispatch::log_dyn_tagged_enabled(
             sink, &LOG_DESC, <set>,
-            &[DynProperty::new($crate::__prop_key!(log user), &*__mm_p_user)],
+            &[DynProperty::new($crate::__prop_key!(log user), &*__mm_p_0)],
             LogMsgForm::Template,
-            format_args!("login for {user}", user = __mm_v_user),
+            format_args!("login for {user}", user = __mm_v_0),
         );
     }
 }
 ```
 
-- A literal key's value is bound as the original literal token, not the muncher's
-  `concat!(..)` (or `concat!("-", ..)` for negatives) string, and only for the Template-eligible
-  literal kinds (string, char, bool, non-negated integer) with a valid standalone token, and only
-  for plain `{k}`: a spec or `{k:?}` on a static or literal key emits `compile_error!`.
-- Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers. Static
+- A literal key's value is bound as the literal token taken out of the muncher's `concat!(..)`
+  wrapper (see Placeholder semantics).
+- Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers, and are
+  named by position (`__mm_v_0`, `__mm_p_0`, ...) because keys can be string literals
+  (`"http.method"`) or duplicated. Static
   values are hoisted the same way and passed to the static-set cache, so they're evaluated once.
 - Only names found in argument position are passed as named arguments. The scanner reads the
   text before the first `:` of each `{..}`, and leaves `name$` width and precision references to
@@ -237,13 +234,12 @@ doesn't expose the message template, so the interop path can't benefit.
 
 1. `rust/tracing/benches/properties.rs`: add log cases that put a property in the message:
    - `dyn_low_card_msg`: `let l = LABELS[i % 4]; info!(l = l, "label {l}")`;
-   - `dyn_high_card_msg`: `info!(id = %i, "request {id}")`;
+   - `dyn_high_card_msg`: `let id = i; info!(id = %id, "request {id}")`;
    - `static_low_card_msg`: `let l = LABELS[i % 4]; info!(l = static l, "label {l}")`.
 
-   Add all three to the `extract` group. Before the change, these calls format in the process.
-   (`dyn_high_card_msg` compiles today only if a local `id` exists, so bind `let id = i;`.
-   Likewise `static_low_card_msg` needs the local `l`, since bench cases are non-capturing
-   `fn(usize)` closures.)
+   Add all three to the `extract` group, together with `static_low_card` (its bytes per event are
+   the reference for `static_low_card_msg`), and grow `LOG_CASES` from 8 entries to 11. Before the change,
+   these calls format in the process.
 2. Commit, then from `rust/`:
    `cargo bench -p micromegas-tracing --bench properties --bench with_dispatch -- --save-baseline before`.
    Record the "Before" column. Don't re-save the baseline after making changes.
@@ -275,10 +271,14 @@ doesn't expose the message template, so the interop path can't benefit.
 
 ### Phase 3: Analytics
 
-10. `rust/analytics/src/log_msg_template.rs` (new): `render_msg_template`.
+10. `rust/analytics/src/log_msg_template.rs` (new): `render_msg_template`. Declare
+    `pub mod log_msg_template;` with a `///` doc line in `rust/analytics/src/lib.rs` (pub so the
+    integration test reaches `render_msg_template`).
 11. `rust/analytics/src/log_entry.rs`: make `msg` a `Cow` and add the new arm.
+    Update the `LogEntry` doc comment (`:15`) that says the string fields borrow the parse arena:
+    `msg` may be owned when rendered from a template.
     `rust/analytics/src/log_entries_table.rs`: append `&*row.msg`.
-    `rust/analytics/tests/dictionary_key_overflow_tests.rs`: `msg: Cow::Borrowed(&msg)`.
+    `rust/analytics/tests/dictionary_key_overflow_tests.rs`: `msg: Cow::Borrowed(&msg)` (import `std::borrow::Cow`).
     `rust/analytics/tests/log_tests.rs`: the `entry.msg.to_owned()` readers switch to
     `entry.msg.to_string()` (the readers hold `&LogEntry`, and `into_owned` takes `self`).
 
@@ -300,7 +300,7 @@ doesn't expose the message template, so the interop path can't benefit.
 - `rust/tracing/src/logs/log_events.rs`, `rust/tracing/src/logs/events.rs`,
   `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/mod.rs`
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`
-- `rust/tracing/benches/properties.rs`
+- `rust/tracing/benches/properties.rs`, `rust/tracing/README.md`
 - `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`,
   `dyn_deps_tests.rs`
 - `rust/analytics/src/log_msg_template.rs` (new), `rust/analytics/src/lib.rs`,
@@ -311,15 +311,10 @@ doesn't expose the message template, so the interop path can't benefit.
 
 ## Trade-offs
 
-- **Proc macro for the log tail only, not the whole `log!`.** `__props!` already parses the
-  property syntax and owns the reserved-key and `..set` errors and their `compile_fail` tests.
-  Moving only the code generation keeps that tested surface intact.
 - **Separate format grammars in the proc macro and analytics.** A proc-macro crate can only
   export macros, so the two can't share a parser without a new crate. The analytics grammar is
   small (text, escapes, `{name}`, `{name:?}`), and the round-trip test (macro, then analytics
   render, compared with `format!`) catches any disagreement.
-- **Reusing `TaggedLogStaticStrEvent`.** Rejected because stored static events would be
-  re-rendered.
 - **No `template` column.** Nothing asks for it. Appending it last later is an additive SQL
   change.
 - **`Cow` in `LogEntry` vs. exposing the parse arena to the callback.** `Cow` keeps
@@ -351,9 +346,13 @@ doesn't expose the message template, so the interop path can't benefit.
   literal key.
 - Crate docs (`rust/tracing/src/lib.rs:72`): the example
   `rows = %n, "fetched {n} rows"` becomes `"fetched {rows} rows"`, the form that defers.
+- `rust/tracing/README.md:25`: `info!(correlation_id = cid, "fetched {n} rows")` becomes
+  `info!(correlation_id = cid, rows = %n, "fetched {rows} rows")`.
 - No `mkdocs/` page documents log macro properties or event types.
 - `CHANGELOG.md`, in the style of the recent tracing performance entries:
-  - the new event, and that analytics must be upgraded before instrumented processes;
+  - the new event, with the precedent `TaggedLogStaticStrEvent` entry's bold **Not forward
+    compatible** wording: upgrade the analytics services (`flight-sql-srv`,
+    `telemetry-maintenance-srv`, or the monolith) before deploying instrumented applications;
   - the placeholder semantics change;
   - the before/after medians;
   - **Minor breaking change:** `LogEntry::msg` is `Cow<'a, str>`, the `dispatch::log*`
@@ -383,7 +382,8 @@ sink). Each call also checks that the sink's `on_log` arguments format to the ex
 - `TaggedLogString` with the printed message:
   - `info!(x = 1.0, "{x}")` and `info!(x = -1, "{x}")` (float and negated literals);
   - `info!(User = %u, "{user}")` with a local `user` (case-mismatched lone key, not bound);
-  - `info!(x = -"abc", "{x}")` and `info!(x = 99999999999999999999, "{x}")` (literal not bound,
+  - `info!(x = -"abc", "{x}")`, `info!(x = 99999999999999999999, "{x}")` and
+    `info!(x = 300u8, "{x}")` (literal not bound,
     expansion unchanged from today);
   - `info!(n = %n, "{n:>8}")`, which formats the original `n` (dynamic key);
   - `info!(v = ?v, "{v}")`;
@@ -422,7 +422,8 @@ the extract and parse plumbing once they're updated.
 ## Benchmarks
 
 Command: `cargo bench -p micromegas-tracing --bench properties --bench with_dispatch`, from
-`rust/`. Medians. "Before" is the Phase 0 baseline.
+`rust/`. Medians. "Before" is the Phase 0 baseline. Bytes per event are printed only for the
+`extract/` cases, so record them there (before and after) alongside the times.
 
 | Case | Before | After |
 |---|---|---|
@@ -433,13 +434,14 @@ Command: `cargo bench -p micromegas-tracing --bench properties --bench with_disp
 | log/dyn_low_card, log/dyn_high_card | | |
 | extract/log/dyn_low_card_msg | | |
 | extract/log/dyn_high_card_msg | | |
+| extract/log/static_low_card_msg | | |
 | dispatch/log | | |
 
 Expected:
 
 - `dyn_low_card_msg` and `static_low_card_msg` drop by about a third (the issue measured +28 ns
-  of formatting on an ~81 ns call), and their bytes per event fall to those of the
-  corresponding `*_low_card` cases.
+  of formatting on an ~81 ns call), and their bytes per event (read from the
+  `extract/` cases) fall to those of the corresponding `*_low_card` cases.
 - `dyn_high_card_msg` should be at or slightly below its baseline, because interning dominates.
 - `log/static` and `log/formatted` may improve slightly, since the runtime `is_static_msg`
   comparison is gone.
