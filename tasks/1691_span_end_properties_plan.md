@@ -173,6 +173,8 @@ impl SpanProperties {
 }
 ```
 
+- Dynamic set ids are block-scoped and a block can flush mid-span, so the values can't be written
+  to the block as they are set. They have to wait in the guard.
 - `set_property` formats the value straight into `values` with `fmt::Write`, so short values
   (`&str`, numbers, anything `Display`) cost no heap allocation. Longer ones spill once.
 - Setting a name that is already present (case-insensitive, as in `merge_properties`) replaces
@@ -229,7 +231,8 @@ arm, placed before the existing arms. The arm is an expression that returns the 
   runtime are evaluated the same way.
 
 **Async spans.** `InstrumentFuture` gains
-`instrument_with(self, desc, on_end: impl FnOnce(&Self::Output, &mut SpanProperties))`. The four
+`instrument_with(self, desc, on_end: impl SpanEndHook<Self::Output>)`, the public entry point for
+the unnamed `InstrumentedFuture`. The four
 async macros (`instrument_named!`, `instrument_named_dyn!`, `span_async_named!`,
 `span_async_named_dyn!`) each gain an optional trailing closure argument:
 
@@ -242,9 +245,14 @@ let rows = instrument_named!(fetch(id), "fetch", |out, span| {
 .await;
 ```
 
-- `InstrumentedFuture` and `InstrumentedNamedFuture` gain an end-hook type parameter. Its default
-  ends the span plainly, so `instrument` and the existing macro arms keep their types and their
-  cost.
+- `SpanEndHook<O>` is a trait with a blanket impl for `FnOnce(&O, &mut SpanProperties)`.
+  `InstrumentedFuture` and `InstrumentedNamedFuture` gain an end-hook type parameter bounded by
+  it, defaulting to the unit type `NoHook`, which ends the span plainly, so `instrument` and the
+  existing macro arms keep their types and their cost.
+- The macros expand to `__instrument_named_internal` / `__instrument_named_dyn_internal`, which
+  build `InstrumentedNamedFuture`. The closure arms instead call new hidden
+  `__instrument_named_with_internal` and `__instrument_named_dyn_with_internal` methods on
+  `InstrumentFuture`, which use a hook-taking `InstrumentedNamedFuture` constructor.
 - On `Ready`, the future builds an empty `SpanProperties` on the stack and passes it to the hook
   with the output. It then emits the tagged end, or the plain end when the hook set nothing.
 - The hook is a separate type parameter, so a non-capturing closure keeps the future `Send`.
@@ -344,8 +352,11 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
     `impl InProcSerialize`) to the events, the queue
     and `extract`; add the two new `ThreadEventQueueAny` arms in `rust/tracing/tests/utils.rs`. Add `on_end_async_scope_tagged` and `on_end_async_named_scope_tagged`, with
     wasm stubs.
-11. `instrumented_future.rs`: add the end-hook type parameter,
-    `InstrumentFuture::instrument_with`, and the closure arms on the four async macros.
+11. `instrumented_future.rs`: add the `SpanEndHook` trait, `NoHook`, the end-hook type parameter
+    on both futures, `InstrumentFuture::instrument_with`, the hidden
+    `__instrument_named_with_internal` / `__instrument_named_dyn_with_internal` methods with the
+    hook-taking `InstrumentedNamedFuture` constructor, and the closure arms on the four async
+    macros.
 12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms (and add the two tagged
     async types to `parse_thread_block_payload`'s ignore list), `AsyncEventRecord` /
     `AsyncEventRecordBuilder` / `async_events_table_schema`, and the `SCHEMA_VERSION` bump in
@@ -371,7 +382,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   `dictionary_key_overflow_tests.rs`
 - `CHANGELOG.md`, `mkdocs/docs/query-guide/schema-reference.md`,
   `mkdocs/docs/query-guide/functions-reference.md`,
-  `mkdocs/docs/when-to-use/instrumentation-overhead.md`
+  `mkdocs/docs/when-to-use/instrumentation-overhead.md`, `mkdocs/docs/when-to-use/index.md`
+- `rust/analytics/src/lakehouse/view_factory.rs` (rustdoc only)
 - `claude-plugin/skills/micromegas-query/SKILL.md`, `rust/tracing/README.md`,
   `doc/how_to_query/README.md`
 
@@ -389,12 +401,6 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   expressions.** If `span_scope!("x")` returned the guard, every existing `span_scope!("x");`
   statement would drop it at once and silently record a zero-length span. A new arm keeps
   existing call sites correct, and `#[must_use]` catches the same mistake in the new form.
-- **A setter on a live guard vs. a consuming `span_end!(guard, ..)`.** The setter needs storage
-  on the guard until drop. The inline buffer keeps that free of heap allocation for short values,
-  and the default `P = ()` keeps it off plain guards. In return, every exit path records what
-  was set so far, including `?` and early returns. With a consuming end, those paths lose every
-  property. Dynamic set ids are block-scoped and a block can flush mid-span, so the values can't
-  be written to the block as they are set. They have to wait in the guard.
 - **A content-keyed dictionary for `thread_spans` vs. Arrow's `BinaryDictionaryBuilder`.**
   Arrow's builder would hash the JSONB bytes of every row, including the empty set on every plain
   span in the largest table. The index scheme hashes once per distinct set per tree.
@@ -411,6 +417,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   merge" goal holds on the wire and in analytics.
 - The property syntax is the codebase's `key = value` (`log!`, `imetric!`), not the issue's
   `"rows" => n` sketch, so that every property-taking macro parses the same way.
+- Async end hook: `SpanEndHook` trait with `NoHook` default; `instrument_with` stays for unnamed futures, macros use hidden `__instrument_named[_dyn]_with_internal` (user call).
 - C API, Unreal bindings, properties on begin events, and `#[span_fn]` integration are out of
   scope for v1, following the issue.
 - Perfetto `args` mapping is not part of this plan. `perfetto_trace_execution_plan.rs` selects
@@ -432,7 +439,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   - `SpanName` gains `as_str`. It is sealed, so only in-crate impls are affected.
   - `ThreadSpanGuard` and `ThreadNamedSpanGuard` gain a defaulted type parameter and become
     `#[must_use]`.
-  - `InstrumentedFuture` and `InstrumentedNamedFuture` gain a defaulted type parameter.
+  - `InstrumentedFuture` and `InstrumentedNamedFuture` gain a defaulted type parameter
+    (`NoHook`).
 
 ## Documentation
 
@@ -458,6 +466,11 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `doc/how_to_query/README.md` (`:323+`, `:339+`): add `properties` to the `async_events` and
   `thread_spans` tables of this legacy schema copy.
 - `mkdocs/docs/query-guide/functions-reference.md`: `process_spans` returns `properties`.
+- `mkdocs/docs/when-to-use/index.md` (`:151`, `:169`, `:232`): the producer-side cardinality
+  contract, "Code vs. data" and the FAQ say per-call context goes in span properties rather than
+  in a `_dyn` name.
+- `rust/analytics/src/lakehouse/view_factory.rs` module rustdoc (`:70-100`): add a `properties`
+  row to the `thread_spans` and `async_events` column tables.
 - `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace "Micromegas
   spans carry no attributes" with a note that spans can carry end-time properties, which this
   comparison doesn't measure.
@@ -498,7 +511,7 @@ All of these are no-DB unit tests.
 - **Call tree / `thread_spans` rows** (`rust/analytics/tests/call_tree_tests.rs`):
   - Feed `CallTreeBuilder` directly. A span ended with properties gets the right JSONB in the
     `SpanRecordBuilder` column, and plain spans get the empty set.
-  - A span that begins in one block and ends with properties in the next keeps them.
+  - Fold a properties assertion into the existing `test_span_crossing_a_block_boundary_is_one_node`.
   - A span whose begin is before the range (the root-adoption path) keeps its end properties.
   - A span left open at the end of the range gets the empty set.
   - Two trees appended to one builder that share a set produce one dictionary value.
