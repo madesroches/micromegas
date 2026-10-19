@@ -187,9 +187,10 @@ impl SpanProperties {
 - `smallvec` and `rustc-hash` are native-only dependencies, and `merge_properties` lives in the
   native-only `dyn_deps`, while `guards` and `instrumented_future` compile on wasm32. Following
   the stub convention in `lib.rs`, wasm32 gets a cfg'd `SpanProperties` stub holding only the
-  `static_set`, with a no-op `set_property`. The guard's tagged drop path and the async futures'
-  tagged end are cfg'd to the plain end there (the futures still call the hook, so user closures
-  keep type-checking, then end through `SpanName::end_async` / `on_end_async_scope`), so tracing
+  `static_set`, with a no-op `set_property`. The stub's `is_empty()` always returns true, so
+  guards take the plain end there. The async futures still call the hook, so user closures keep
+  type-checking, and a hook that sets a property can still reach the tagged branch, where the
+  `dispatch_wasm.rs` tagged-end functions are no-op stubs. Tracing
   still compiles for wasm32 (checked by the wasm clippy build).
 
 **Guards.** `SpanName` gains `fn as_str(&self) -> &str`, so that both name kinds reach the single
@@ -372,7 +373,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
     `__instrument_named_with_internal` / `__instrument_named_dyn_with_internal` methods, the
     hook-taking `InstrumentedFuture` and `InstrumentedNamedFuture` constructors (in `impl<F, H>`
     blocks; `new` / `with_name` stay in the `NoHook` impls), and the closure arms on the four async
-    macros. On wasm32 the futures' tagged end is cfg'd to the plain end.
+    macros. On wasm32 the stub `is_empty()` keeps guards on the plain end, and the futures' tagged end reaches
+    no-op `dispatch_wasm.rs` stubs.
 12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms (and add the two tagged
     async types to `parse_thread_block_payload`'s ignore list), `AsyncEventRecord` /
     `AsyncEventRecordBuilder` / `async_events_table_schema`, and the `SCHEMA_VERSION` bump in
@@ -432,6 +434,10 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - Async end hook: `SpanEndHook` trait with `NoHook` default; `instrument_with` stays for unnamed futures, macros use hidden `__instrument_named[_dyn]_with_internal` (user call).
 - Property-carrying guards are built with `with_properties` on `ThreadSpanGuard` and
   `ThreadNamedSpanGuard`; `new` / `with_name` stay fixed to `P = ()` (user call).
+- Async named spans keep the name on the begin event rather than moving it into end properties:
+  futures dropped before `Ready` (select losers, timeouts, aborted tasks) never emit an end event
+  and would lose their name, and `async_events` carries `name` on begin rows that a processor
+  can't backfill. Saving one event type isn't worth that.
 - C API, Unreal bindings, properties on begin events, and `#[span_fn]` integration are out of
   scope for v1, following the issue.
 - Perfetto `args` mapping is not part of this plan. `perfetto_trace_execution_plan.rs` selects
@@ -560,16 +566,6 @@ Both need running services.
    `micromegas-query "SELECT thread_name, name, property_get(properties, 'rows') FROM process_spans('<process_id>', 'both') WHERE properties_length(properties) > 0"`.
    Expected: thread rows, and at least one async row (`thread_name = 'async'`) with non-empty
    properties, both show their end properties.
-
-## Future Work
-
-Out of scope for this change; do not implement here.
-
-- **Async named spans as a name property.** Consider replacing the named async span events
-  (`BeginAsyncNamedSpanEvent` / `EndAsyncNamedSpanEvent` and their dyn variants) with a plain
-  async span whose name is carried as a property. Async begin and end rows are joined on span
-  id, so the name does not have to be on the begin event — it could ride on the end event's
-  properties like any other value.
 
 ## Open Questions
 

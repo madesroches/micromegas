@@ -104,7 +104,6 @@ impl SpanProperties {
 /// Properties are not recorded on wasm32.
 #[cfg(target_arch = "wasm32")]
 pub struct SpanProperties {
-    #[allow(dead_code)]
     static_set: &'static PropertySet,
 }
 
