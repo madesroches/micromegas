@@ -42,8 +42,10 @@ doesn't change: `msg` still holds the rendered text.
 `TaggedLogStaticStrEvent`) if it holds, and otherwise the formatted one (`LogStringEvent`,
 `TaggedLogString`, with `args.to_string()`). Sinks receive `fmt::Arguments`. Only the console
 and local sinks format it. With the HTTP sink, `args.to_string()` in dispatch is the only
-formatting on the calling thread. The `dispatch::log*` entry points are only called by the
-macros.
+formatting on the calling thread. The `dispatch::log*` entry points are called by the macros
+and directly by `rust/tracing/tests/dyn_deps_tests.rs`. On wasm32, `rust/tracing/src/lib.rs`
+loads `dispatch_wasm.rs` as `dispatch`; it has its own `log`, `log_tagged`, `log_dyn_tagged` and
+`log_dyn_tagged_enabled`.
 
 **Proc macros** (`rust/tracing/proc-macros`): `span_fn` and `log_fn` attributes, built on
 `syn` (`full`), `quote` and `proc-macro2`. They are re-exported through
@@ -74,6 +76,8 @@ meaning.
 - `info!(user = %account.name, "login for {user}")` prints and stores `account.name`.
 - `info!(n = %n, "{n:.2}")` formats the original `n`, not its `Display` string. Specs keep
   working, so the output doesn't change.
+- A placeholder bound to a literal key binds the original literal token, taken back out of the
+  muncher's `concat!` wrapper, so `info!(n = 1.5, "{n:.2}")` prints `1.50`.
 - A key that exists only in a `..set` spread is unknown at compile time and isn't bound.
 
 A scan of `rust/` found no non-test call site that uses properties together with a named
@@ -132,6 +136,8 @@ if <level gate> {
 }
 ```
 
+- A literal key's value is bound as the original literal token, not the muncher's
+  `concat!(..)` (or `concat!("-", ..)` for negatives) string.
 - Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers. Static
   values are hoisted the same way and passed to the static-set cache, so they're evaluated once.
 - Only names found in argument position are passed as named arguments. The scanner reads the
@@ -211,10 +217,12 @@ doesn't expose the message template, so the interop path can't benefit.
 1. `rust/tracing/benches/properties.rs`: add log cases that put a property in the message:
    - `dyn_low_card_msg`: `let l = LABELS[i % 4]; info!(l = l, "label {l}")`;
    - `dyn_high_card_msg`: `info!(id = %i, "request {id}")`;
-   - `static_low_card_msg`: `info!(l = static LABELS[i % 4], "label {l}")`.
+   - `static_low_card_msg`: `let l = LABELS[i % 4]; info!(l = static l, "label {l}")`.
 
    Add all three to the `extract` group. Before the change, these calls format in the process.
-   (`dyn_high_card_msg` compiles today only if a local `id` exists, so bind `let id = i;`.)
+   (`dyn_high_card_msg` compiles today only if a local `id` exists, so bind `let id = i;`.
+   Likewise `static_low_card_msg` needs the local `l`, since bench cases are non-capturing
+   `fn(usize)` closures.)
 2. Commit, then from `rust/`:
    `cargo bench -p micromegas-tracing --bench properties --bench with_dispatch -- --save-baseline before`.
    Record the "Before" column. Don't re-save the baseline after making changes.
@@ -226,7 +234,8 @@ doesn't expose the message template, so the interop path can't benefit.
 4. `rust/tracing/src/logs/block.rs`: add the event to `LogMsgQueue` and `extract`.
 5. `rust/tracing/src/dispatch.rs`: add the `form` parameter to `log`, `log_tagged`,
    `log_dyn_tagged`, `log_dyn_tagged_enabled` and the `Dispatch` methods, and remove
-   `is_static_msg`.
+   `is_static_msg`. `rust/tracing/src/dispatch_wasm.rs`: add `form` to its `log`, `log_tagged`,
+   `log_dyn_tagged` and `log_dyn_tagged_enabled` (ignored there).
 
 ### Phase 2: Proc macro
 
@@ -237,13 +246,18 @@ doesn't expose the message template, so the interop path can't benefit.
    delete `__log_call!`.
 9. Update the in-process readers of `LogMsgQueueAny`: `rust/tracing/tests/utils.rs` (exhaustive
    match), `property_macro_tests.rs` (record the new kind), and `stream_flush_tests.rs` (read
-   `properties` from the new event too).
+   `properties` from the new event too). `dyn_deps_tests.rs` calls `log`, `log_tagged` and
+   `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` (`Static` for `"static"`) so each
+   call keeps its current event kind.
 
 ### Phase 3: Analytics
 
 10. `rust/analytics/src/log_msg_template.rs` (new): `render_msg_template`.
 11. `rust/analytics/src/log_entry.rs`: make `msg` a `Cow` and add the new arm.
     `rust/analytics/src/log_entries_table.rs`: append `&*row.msg`.
+    `rust/analytics/tests/dictionary_key_overflow_tests.rs`: `msg: Cow::Borrowed(&msg)`.
+    `rust/analytics/tests/log_tests.rs`: the `entry.msg.to_owned()` readers switch to
+    `.into_owned()`.
 
 ### Phase 4: Tests
 
@@ -262,12 +276,14 @@ doesn't expose the message template, so the interop path can't benefit.
 - `rust/tracing/src/macros.rs`, `rust/tracing/src/lib.rs`
 - `rust/tracing/src/logs/log_events.rs`, `rust/tracing/src/logs/events.rs`,
   `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/mod.rs`
-- `rust/tracing/src/dispatch.rs`
+- `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`
 - `rust/tracing/benches/properties.rs`
-- `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`, `stream_flush_tests.rs`
+- `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`, `stream_flush_tests.rs`,
+  `dyn_deps_tests.rs`
 - `rust/analytics/src/log_msg_template.rs` (new), `rust/analytics/src/lib.rs`,
   `rust/analytics/src/log_entry.rs`, `rust/analytics/src/log_entries_table.rs`
-- `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/log_msg_template_tests.rs` (new)
+- `rust/analytics/tests/log_tests.rs`, `rust/analytics/tests/dictionary_key_overflow_tests.rs`,
+  `rust/analytics/tests/log_msg_template_tests.rs` (new)
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -362,7 +378,9 @@ unsupported placeholder (kept verbatim).
 **`rust/analytics/tests/log_tests.rs`**:
 
 - A round trip through the real macros: `init_in_memory_tracing`, then the template-event calls
-  above, then `parse_entries`. Assert that each `msg` equals the `format!` of the same template
+  above, then `parse_entries`. The test takes the owned `Arc<LogBlock>` out of the in-memory sink and
+  builds the stream metadata from the sink's `StreamDesc` (a small `parse_entries` variant taking
+  that, since the existing one needs a `&LogStream`). Mark it `#[serial]`. Assert that each `msg` equals the `format!` of the same template
   and values. This pins agreement between the proc macro's grammar and the analytics renderer.
 - A `level`/`target` override property on a template event still applies through
   `tagged_log_entry`.
