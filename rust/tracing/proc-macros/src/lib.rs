@@ -42,6 +42,8 @@
 // crate-specific lint exceptions:
 //#![allow()]
 
+mod log_impl;
+
 use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
@@ -310,4 +312,12 @@ pub fn log_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     TokenStream::from(quote! {
         #function
     })
+}
+
+/// Expansion of the log macros. Not for direct use: `macros.rs` feeds it the property
+/// accumulators of its muncher and the format tokens.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __log_impl(input: TokenStream) -> TokenStream {
+    log_impl::expand(input.into()).into()
 }

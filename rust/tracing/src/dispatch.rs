@@ -2,7 +2,10 @@
 use crate::dyn_deps::merge_properties;
 pub use crate::errors::{Error, Result};
 use crate::images::{ImageBlock, ImageEvent, ImageStream};
-use crate::logs::{TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString};
+use crate::logs::{
+    LogMsgForm, TaggedLogInteropEvent, TaggedLogStaticStrEvent, TaggedLogString,
+    TaggedLogTemplateEvent,
+};
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
 use crate::property_set::{DynProperty, PropertySet, PropertySetId};
@@ -153,10 +156,11 @@ pub fn log_dyn_tagged(
     desc: &'static LogMetadata,
     properties: &'static PropertySet,
     dyn_properties: &[DynProperty<'_>],
+    form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
     if let Some(d) = G_DISPATCH.get() {
-        d.log_dyn_tagged(desc, properties, dyn_properties, args);
+        d.log_dyn_tagged(desc, properties, dyn_properties, form, args);
     }
 }
 
@@ -188,10 +192,11 @@ pub fn log_dyn_tagged_enabled(
     desc: &'static LogMetadata,
     properties: &'static PropertySet,
     dyn_properties: &[DynProperty<'_>],
+    form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
     sink.dispatch
-        .log_dyn_tagged_to_sink(&*sink.sink, desc, properties, dyn_properties, args);
+        .log_dyn_tagged_to_sink(&*sink.sink, desc, properties, dyn_properties, form, args);
 }
 
 #[inline(always)]
@@ -206,9 +211,9 @@ pub fn log_interop_dyn_tagged(
 }
 
 #[inline(always)]
-pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
+pub fn log(desc: &'static LogMetadata, form: LogMsgForm, args: fmt::Arguments<'_>) {
     if let Some(d) = G_DISPATCH.get() {
-        d.log(desc, args);
+        d.log(desc, form, args);
     }
 }
 
@@ -217,10 +222,11 @@ pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
 pub fn log_tagged(
     desc: &'static LogMetadata,
     properties: &'static PropertySet,
+    form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
     if let Some(d) = G_DISPATCH.get() {
-        d.log_tagged(desc, properties, args);
+        d.log_tagged(desc, properties, form, args);
     }
 }
 
@@ -590,12 +596,6 @@ struct Dispatch {
     sink: RwLock<Arc<dyn EventSink>>,
 }
 
-/// The message is `fmt_str` verbatim, so analytics can read it from the metadata.
-#[inline(always)]
-fn is_static_msg(desc: &LogMetadata, args: &fmt::Arguments<'_>) -> bool {
-    args.as_str() == Some(desc.fmt_str)
-}
-
 impl Dispatch {
     pub fn new(
         logs_buffer_size: usize,
@@ -934,17 +934,19 @@ impl Dispatch {
     }
 
     #[inline]
-    fn log(&self, metadata: &'static LogMetadata, args: fmt::Arguments<'_>) {
+    fn log(&self, metadata: &'static LogMetadata, form: LogMsgForm, args: fmt::Arguments<'_>) {
         let sink = self.get_sink();
         if !sink.on_log_enabled(metadata) {
             return;
         }
         let time = now();
         sink.on_log(metadata, &[], time, args);
-        let msg = if is_static_msg(metadata, &args) {
-            None
-        } else {
-            Some(micromegas_transit::DynString(args.to_string()))
+        let msg = match form {
+            LogMsgForm::Static => None,
+            // Untagged calls have no properties to render from.
+            LogMsgForm::Template | LogMsgForm::Formatted => {
+                Some(micromegas_transit::DynString(args.to_string()))
+            }
         };
         let mut log_stream = self.log_stream.lock().unwrap();
         match msg {
@@ -966,13 +968,14 @@ impl Dispatch {
         &self,
         desc: &'static LogMetadata,
         properties: &'static PropertySet,
+        form: LogMsgForm,
         args: fmt::Arguments<'_>,
     ) {
         let sink = self.get_sink();
         if !sink.on_log_enabled(desc) {
             return;
         }
-        self.log_tagged_to_sink(&*sink, desc, properties, args);
+        self.log_tagged_to_sink(&*sink, desc, properties, form, args);
     }
 
     #[inline]
@@ -981,28 +984,30 @@ impl Dispatch {
         sink: &dyn EventSink,
         desc: &'static LogMetadata,
         properties: &'static PropertySet,
+        form: LogMsgForm,
         args: fmt::Arguments<'_>,
     ) {
         let time = now();
         sink.on_log(desc, properties.dyn_properties(), time, args);
         let properties = PropertySetId::interned(properties);
-        let msg = if is_static_msg(desc, &args) {
-            None
-        } else {
-            Some(micromegas_transit::DynString(args.to_string()))
-        };
         let mut log_stream = self.log_stream.lock().unwrap();
-        match msg {
-            None => log_stream.get_events_mut().push(TaggedLogStaticStrEvent {
+        let events = log_stream.get_events_mut();
+        match form {
+            LogMsgForm::Static => events.push(TaggedLogStaticStrEvent {
                 desc,
                 properties,
                 time,
             }),
-            Some(msg) => log_stream.get_events_mut().push(TaggedLogString {
+            LogMsgForm::Template => events.push(TaggedLogTemplateEvent {
                 desc,
                 properties,
                 time,
-                msg,
+            }),
+            LogMsgForm::Formatted => events.push(TaggedLogString {
+                desc,
+                properties,
+                time,
+                msg: micromegas_transit::DynString(args.to_string()),
             }),
         }
         self.on_log_pushed(log_stream);
@@ -1046,13 +1051,14 @@ impl Dispatch {
         desc: &'static LogMetadata,
         properties: &'static PropertySet,
         dyn_properties: &[DynProperty<'_>],
+        form: LogMsgForm,
         args: fmt::Arguments<'_>,
     ) {
         let sink = self.get_sink();
         if !sink.on_log_enabled(desc) {
             return;
         }
-        self.log_dyn_tagged_to_sink(&*sink, desc, properties, dyn_properties, args);
+        self.log_dyn_tagged_to_sink(&*sink, desc, properties, dyn_properties, form, args);
     }
 
     #[inline]
@@ -1062,34 +1068,35 @@ impl Dispatch {
         desc: &'static LogMetadata,
         properties: &'static PropertySet,
         dyn_properties: &[DynProperty<'_>],
+        form: LogMsgForm,
         args: fmt::Arguments<'_>,
     ) {
         if dyn_properties.is_empty() {
-            return self.log_tagged_to_sink(sink, desc, properties, args);
+            return self.log_tagged_to_sink(sink, desc, properties, form, args);
         }
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
         sink.on_log(desc, merged.properties(), time, args);
-        let msg = if is_static_msg(desc, &args) {
-            None
-        } else {
-            Some(micromegas_transit::DynString(args.to_string()))
-        };
         let mut log_stream = self.log_stream.lock().unwrap();
         let (events, dyn_deps) = log_stream.get_block_mut_parts();
         let properties = dyn_deps.intern_set(&merged);
-        match msg {
-            None => events.push(TaggedLogStaticStrEvent {
+        match form {
+            LogMsgForm::Static => events.push(TaggedLogStaticStrEvent {
                 desc,
                 properties,
                 time,
             }),
-            Some(msg) => events.push(TaggedLogString {
+            LogMsgForm::Template => events.push(TaggedLogTemplateEvent {
                 desc,
                 properties,
                 time,
-                msg,
+            }),
+            LogMsgForm::Formatted => events.push(TaggedLogString {
+                desc,
+                properties,
+                time,
+                msg: micromegas_transit::DynString(args.to_string()),
             }),
         }
         self.on_log_pushed(log_stream);

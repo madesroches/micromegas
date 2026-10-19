@@ -1,7 +1,7 @@
 use super::{
     LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent,
     LogStaticStrInteropEventV2, LogStringEvent, LogStringInteropEvent, TaggedLogInteropEvent,
-    TaggedLogStaticStrEvent, TaggedLogString,
+    TaggedLogStaticStrEvent, TaggedLogString, TaggedLogTemplateEvent,
 };
 use crate::{
     dyn_deps::DynDeps,
@@ -23,6 +23,7 @@ declare_queue_struct!(
         TaggedLogString,
         TaggedLogStaticStrEvent,
         TaggedLogInteropEvent,
+        TaggedLogTemplateEvent,
     > {}
 );
 
@@ -131,6 +132,19 @@ impl ExtractDeps for LogMsgQueue {
                     }
                 }
                 LogMsgQueueAny::TaggedLogStaticStrEvent(evt) => {
+                    let desc = evt.desc as *const _ as u64;
+                    if desc != last_desc {
+                        last_desc = desc;
+                        record_log_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                    }
+                    if evt.properties != last_set {
+                        last_set = evt.properties;
+                        if let Some(set) = evt.properties.as_interned() {
+                            record_properties(set, &mut recorded_deps, &mut deps);
+                        }
+                    }
+                }
+                LogMsgQueueAny::TaggedLogTemplateEvent(evt) => {
                     let desc = evt.desc as *const _ as u64;
                     if desc != last_desc {
                         last_desc = desc;

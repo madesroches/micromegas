@@ -69,7 +69,7 @@
 //! use micromegas_tracing::prelude::*;
 //!
 //! let cid = request.correlation_id(); // String
-//! info!(correlation_id = cid, region = "eu", rows = %n, "fetched {n} rows");
+//! info!(correlation_id = cid, region = "eu", rows = %n, "fetched {rows} rows");
 //! imetric!("rows_fetched", "count", correlation_id = cid, region = "eu", n);
 //! fmetric!("fetch_ms", "ms", "http.method" = "GET", elapsed_ms);
 //! ```
@@ -279,6 +279,9 @@ pub mod runtime;
 
 #[macro_use]
 mod macros;
+
+#[doc(hidden)]
+pub use micromegas_tracing_proc_macros::__log_impl;
 
 /// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {

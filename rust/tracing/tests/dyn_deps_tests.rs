@@ -8,8 +8,8 @@ use micromegas_tracing::{
     event::{EventSink, ExtractDeps, TracingBlock},
     levels::Level,
     logs::{
-        FILTER_LEVEL_UNSET_VALUE, LogBlock, LogDepsQueue, LogMetadata, LogMsgQueue, LogMsgQueueAny,
-        LogStream, TaggedLogInteropEvent, TaggedLogString,
+        FILTER_LEVEL_UNSET_VALUE, LogBlock, LogDepsQueue, LogMetadata, LogMsgForm, LogMsgQueue,
+        LogMsgQueueAny, LogStream, TaggedLogInteropEvent, TaggedLogString,
     },
     metrics::{
         MetricsBlock, MetricsMsgQueueAny, MetricsStream, StaticMetricMetadata,
@@ -478,9 +478,21 @@ fn dispatch_delivers_merged_properties_and_isolates_blocks() {
     let correlation_id = String::from("abc-123");
     let dyn_props = [DynProperty::new("correlation_id", &correlation_id)];
 
-    log_dyn_tagged(&LOG_DESC, static_set, &dyn_props, format_args!("first"));
+    log_dyn_tagged(
+        &LOG_DESC,
+        static_set,
+        &dyn_props,
+        LogMsgForm::Formatted,
+        format_args!("first"),
+    );
     flush_log_buffer();
-    log_dyn_tagged(&LOG_DESC, static_set, &dyn_props, format_args!("second"));
+    log_dyn_tagged(
+        &LOG_DESC,
+        static_set,
+        &dyn_props,
+        LogMsgForm::Formatted,
+        format_args!("second"),
+    );
     flush_log_buffer();
 
     let state = guard.sink.state.lock().unwrap();
@@ -511,7 +523,12 @@ fn dispatch_delivers_merged_properties_and_isolates_blocks() {
 fn static_path_does_not_touch_dyn_deps() {
     let guard = DispatchGuard::new();
     let static_set = PropertySet::find_or_create(vec![Property::new("kind", "static")]);
-    log_tagged(&LOG_DESC, static_set, format_args!("static"));
+    log_tagged(
+        &LOG_DESC,
+        static_set,
+        LogMsgForm::Formatted,
+        format_args!("static"),
+    );
     tagged_float_metric(&METRIC_DESC, static_set, 1.0);
     flush_log_buffer();
     flush_metrics_buffer();
@@ -603,6 +620,7 @@ fn dyn_log(desc: &'static LogMetadata, set: &'static PropertySet, value: &str) {
         desc,
         set,
         &[DynProperty::new("k", value)],
+        LogMsgForm::Formatted,
         format_args!("m"),
     );
 }
@@ -612,8 +630,12 @@ fn dyn_log(desc: &'static LogMetadata, set: &'static PropertySet, value: &str) {
 fn tagged_events_emit_dependencies() {
     let guard = DispatchGuard::new();
     let set = PropertySet::find_or_create(vec![Property::new("x", "1")]);
-    let untagged = log_deps(&guard, || log(&LOG_DESC, format_args!("m")));
-    let tagged = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    let untagged = log_deps(&guard, || {
+        log(&LOG_DESC, LogMsgForm::Formatted, format_args!("m"))
+    });
+    let tagged = log_deps(&guard, || {
+        log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"))
+    });
     assert!(tagged > untagged);
 
     let untagged = metric_deps(&guard, || float_metric(&METRIC_DESC, 1.0));
@@ -634,10 +656,12 @@ fn repeated_events_emit_dependencies_once() {
     });
     assert_eq!(one, many);
 
-    let one = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    let one = log_deps(&guard, || {
+        log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"))
+    });
     let many = log_deps(&guard, || {
         for _ in 0..200 {
-            log_tagged(&LOG_DESC, set, format_args!("m"));
+            log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"));
         }
     });
     assert_eq!(one, many);
@@ -685,15 +709,17 @@ fn interleaved_sets_still_dedup() {
 fn interleaved_callsites_still_dedup() {
     let guard = DispatchGuard::new();
     let set = PropertySet::find_or_create(vec![Property::new("x", "1")]);
-    let one = log_deps(&guard, || log_tagged(&LOG_DESC, set, format_args!("m")));
+    let one = log_deps(&guard, || {
+        log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"))
+    });
     let each = log_deps(&guard, || {
-        log_tagged(&LOG_DESC, set, format_args!("m"));
-        log_tagged(&LOG_DESC_2, set, format_args!("m"));
+        log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"));
+        log_tagged(&LOG_DESC_2, set, LogMsgForm::Formatted, format_args!("m"));
     });
     let alternating = log_deps(&guard, || {
         for _ in 0..50 {
-            log_tagged(&LOG_DESC, set, format_args!("m"));
-            log_tagged(&LOG_DESC_2, set, format_args!("m"));
+            log_tagged(&LOG_DESC, set, LogMsgForm::Formatted, format_args!("m"));
+            log_tagged(&LOG_DESC_2, set, LogMsgForm::Formatted, format_args!("m"));
         }
     });
     assert!(each > one);

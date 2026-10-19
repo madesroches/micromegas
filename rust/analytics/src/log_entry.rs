@@ -1,4 +1,5 @@
 use crate::{
+    log_msg_template::render_msg_template,
     metadata::{ProcessMetadata, StreamMetadata},
     payload::{fetch_block_payload, parse_block},
     properties::property_set::PropertySet,
@@ -8,13 +9,14 @@ use anyhow::{Context, Result};
 use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 /// A single log entry.
 ///
-/// String fields borrow the per-block parse arena, so a `LogEntry` is valid only
-/// within the `parse_block` callback that produced it; it must be appended to
-/// Arrow (which copies the bytes) before the arena is dropped.
+/// String fields borrow the per-block parse arena, except `msg`, which is owned when it was
+/// rendered from a template. A `LogEntry` is valid only within the `parse_block` callback that
+/// produced it; it must be appended to Arrow (which copies the bytes) before the arena is
+/// dropped.
 #[derive(Debug)]
 pub struct LogEntry<'a> {
     pub process: Arc<ProcessMetadata>,
@@ -24,7 +26,7 @@ pub struct LogEntry<'a> {
     pub time: i64,
     pub level: i32,
     pub target: &'a str,
-    pub msg: &'a str,
+    pub msg: Cow<'a, str>,
     pub properties: PropertySet<'a>,
 }
 
@@ -64,7 +66,7 @@ pub fn log_entry_from_value<'a>(
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    msg,
+                    msg: Cow::Borrowed(msg),
                     properties: PropertySet::empty(),
                 }))
             }
@@ -92,7 +94,7 @@ pub fn log_entry_from_value<'a>(
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    msg,
+                    msg: Cow::Borrowed(msg),
                     properties: PropertySet::empty(),
                 }))
             }
@@ -120,7 +122,7 @@ pub fn log_entry_from_value<'a>(
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    msg,
+                    msg: Cow::Borrowed(msg),
                     properties: PropertySet::empty(),
                 }))
             }
@@ -149,7 +151,7 @@ pub fn log_entry_from_value<'a>(
                     time,
                     level: level as i32,
                     target,
-                    msg,
+                    msg: Cow::Borrowed(msg),
                     properties: properties.into(),
                 }))
             }
@@ -164,7 +166,7 @@ pub fn log_entry_from_value<'a>(
                     block_id,
                     block_insert_time_ns,
                     obj,
-                    msg,
+                    Cow::Borrowed(msg),
                 )
             }
             "TaggedLogStaticStrEvent" => {
@@ -180,7 +182,26 @@ pub fn log_entry_from_value<'a>(
                     block_id,
                     block_insert_time_ns,
                     obj,
-                    msg,
+                    Cow::Borrowed(msg),
+                )
+            }
+            "TaggedLogTemplateEvent" => {
+                let fmt_str = obj
+                    .get::<&Object>("desc")
+                    .with_context(|| format!("reading desc from {}", obj.type_name))?
+                    .get::<&str>("fmt_str")
+                    .with_context(|| format!("reading fmt_str from {}", obj.type_name))?;
+                let properties = obj
+                    .get::<&Object>("properties")
+                    .with_context(|| format!("reading properties from {}", obj.type_name))?;
+                tagged_log_entry(
+                    convert_ticks,
+                    process,
+                    stream_id,
+                    block_id,
+                    block_insert_time_ns,
+                    obj,
+                    Cow::Owned(render_msg_template(fmt_str, properties)),
                 )
             }
 
@@ -244,7 +265,7 @@ fn tagged_log_entry<'a>(
     block_id: Arc<String>,
     block_insert_time_ns: i64,
     obj: &Object<'a>,
-    msg: &'a str,
+    msg: Cow<'a, str>,
 ) -> Result<Option<LogEntry<'a>>> {
     let ticks = obj
         .get::<i64>("time")
