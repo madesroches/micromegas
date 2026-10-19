@@ -488,6 +488,16 @@ fn duplicate_keys() {
 
 #[test]
 #[serial]
+fn empty_format_spec_is_plain() {
+    let guard = DispatchGuard::new();
+    info!(n = 1, "empty spec {n:}");
+    info!(s = "x", "empty spec {s:}");
+    assert_eq!(guard.log_props("empty spec 1"), pairs(&[("n", "1")]));
+    assert_eq!(guard.log_props("empty spec x"), pairs(&[("s", "x")]));
+}
+
+#[test]
+#[serial]
 fn trailing_commas_and_named_format_args() {
     let guard = DispatchGuard::new();
     let cid = String::from("c");

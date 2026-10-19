@@ -21,7 +21,11 @@ pub fn render_msg_template(fmt_str: &str, properties: &Object) -> String {
         {
             let placeholder = &tail[..=end];
             let inner = &tail[1..end];
-            let name = inner.strip_suffix(":?").unwrap_or(inner);
+            // `{n:}` is `{n}` in Rust's format grammar and reaches here verbatim.
+            let name = inner
+                .strip_suffix(":?")
+                .or_else(|| inner.strip_suffix(':'))
+                .unwrap_or(inner);
             match properties.members.iter().find(|(k, _)| *k == name) {
                 Some((_, Value::String(value))) => out.push_str(value),
                 _ => out.push_str(placeholder),

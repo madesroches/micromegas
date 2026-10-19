@@ -56,6 +56,7 @@ fn scan_placeholders(fmt: &str) -> Option<Vec<Placeholder>> {
                 }
                 let (arg, spec) = match inner.split_once(':') {
                     None => (inner.as_str(), Spec::Plain),
+                    Some((arg, "")) => (arg, Spec::Plain),
                     Some((arg, "?")) => (arg, Spec::Debug),
                     Some((arg, _)) => (arg, Spec::Other),
                 };
@@ -326,8 +327,7 @@ fn entry_binding(entry: &Entry, hoisted: &Ident) -> Option<(TokenStream, bool)> 
                 LitClass::Deferrable => Some((info.expr, true)),
             }
         }
-        Kind::Stat | Kind::Disp | Kind::Bare => Some((quote!(#hoisted), true)),
-        Kind::Dbg => Some((quote!(#hoisted), true)),
+        Kind::Stat | Kind::Disp | Kind::Bare | Kind::Dbg => Some((quote!(#hoisted), true)),
     }
 }
 
