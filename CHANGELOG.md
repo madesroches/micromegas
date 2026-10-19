@@ -29,6 +29,9 @@ This file documents the historical progress of the Micromegas project. For curre
   become `#[must_use]`; `InstrumentedFuture` and `InstrumentedNamedFuture` gain a defaulted
   end-hook type parameter. The SQL change is additive, except that `process_spans`'
   `stream_id` and `thread_name` now use `Int32` dictionary keys, like every other view.
+  The OpenTelemetry comparison (`rust/otel-comparison-bench`, Instrumentation Overhead page) now
+  measures a span with a per-call property (`span/attrs`, `encode/span_attrs`), with all tables
+  re-run.
 * **Tracing:** A log message that only repeats its properties is no longer formatted in the
   process (#1653). `info!(user = %user, "login for {user}")` now stores the format string and
   the property set in a new `TaggedLogTemplateEvent`, and analytics renders `msg` when it parses
