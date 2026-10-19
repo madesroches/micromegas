@@ -118,9 +118,10 @@ where
         let reused = SCRATCH
             .try_with(|cell| match cell.try_borrow_mut() {
                 Ok(mut scratch) => {
-                    capture(&mut scratch);
+                    // A panic in a previous capture skips the post-capture cleanup.
                     scratch.buffer.clear();
                     scratch.values.clear();
+                    capture(&mut scratch);
                     if scratch.buffer.capacity() > MAX_RETAINED_SCRATCH
                         || scratch.values.capacity() > MAX_RETAINED_SCRATCH
                     {
