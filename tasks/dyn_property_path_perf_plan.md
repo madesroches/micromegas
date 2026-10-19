@@ -71,7 +71,7 @@ Benchmarks: `rust/tracing/benches/properties.rs` has `log/dyn_low_card`, `log/dy
 
 Save criterion baselines and take a `perf` profile of `metric/dyn_low_card` and
 `log/dyn_mixed`, so we know whether allocation, sort or hashing dominates (see Implementation
-Steps). Step 2 is worth doing whatever the profile shows. Steps 3 and 4 are gated on it.
+Steps). §2 is worth doing whatever the profile shows. §3 and §4 are gated on it.
 
 ### 2. `merge_properties`: stack buffer and a merge of two sorted lists
 
@@ -82,7 +82,7 @@ pub struct MergedProperties<'a> {
     properties: SmallVec<[DynProperty<'a>; INLINE_PROPERTIES]>,
     static_values: u64,
     static_names: u64,
-    hash: u64, // step 3
+    hash: u64, // only with §3
 }
 
 impl<'a> MergedProperties<'a> {
@@ -113,16 +113,13 @@ The algorithm uses the fact that the static set's `dyn_view` is already in canon
    nested pointer scan goes away.
 
 Behaviour change: before, a dynamic property whose value pointed at the exact memory of a
-static set's value was marked static. Now only entries that come from the static set are. That
-case only arises if a caller builds a `DynProperty` from `set.dyn_properties()` by hand. The
-result is still correct, since the string gets a record, so the change is safe.
+static set's value was marked static. Now only entries that come from the static set are. The
+same case can arise through the `..set` spread macro path, where the compiler may pool a
+callsite literal with an identical value in the spread set (e.g. `log!(region = "eu", ..set)`
+where the set has `("region", "eu")`), or when a caller builds a `DynProperty` from
+`set.dyn_properties()` by hand. The only cost is one extra string record.
 
-### 3. Hash outside the lock (only if the profile shows lock-held hashing)
-
-A previous attempt to hash before the lock was reverted with no measurable difference. Do this
-only if the baseline profile shows hash time under the lock as a visible share, notably in the
-`contention` group.
-
+### 3. Hash outside the lock (only if the profile shows lock-held hashing, notably in the `contention` group)
 
 `merge_properties` computes `hash` as the last step, folding over `properties` in output order
 with the current `content_hash` function. `intern_set` uses `merged.hash` instead of computing
@@ -149,34 +146,36 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
 
 1. **Baseline.** From `rust/`:
    `cargo bench -p micromegas-tracing --bench properties -- --save-baseline before` and
-   `cargo bench -p micromegas-tracing --bench with_dispatch -- --save-baseline before` and
-   `cargo bench -p micromegas-tracing --bench with_no_dispatch -- --save-baseline before`.
+   `cargo bench -p micromegas-tracing --bench with_dispatch -- --save-baseline before`.
    Profile with `perf record -g` on the `properties` bench binary filtered to
    `metric/dyn_low_card` and `log/dyn_mixed`. Write the split (allocation, sort, mask scan,
    hash, probe) into the PR description.
 2. **Dependency.** Add `smallvec = "1.15"` to `[workspace.dependencies]` in `rust/Cargo.toml`
-   (it is already in `Cargo.lock` transitively, MIT/Apache-2.0). Add `smallvec.workspace = true`
+   (MIT/Apache-2.0). It is already in the workspace `Cargo.lock` transitively, but becomes a new direct dependency of the published `micromegas-tracing` crate. Add `smallvec.workspace = true`
    to the native-only section of `rust/tracing/Cargo.toml`, since `dyn_deps` is native-only.
 3. **`merge_properties`.** Rewrite it in `rust/tracing/src/dyn_deps.rs` as in Design §2. Make
    `properties` private and add `MergedProperties::properties()`. Add `#[doc(hidden)] pub`
-   getters `is_static_value(i)`, `is_static_name(i)` and `hash()` on `MergedProperties`, and make
+   getters `is_static_value(i)` and `is_static_name(i)` on `MergedProperties`, and make
    `content_hash`, `DynProperty::is_static_name` and `cmp_dyn_properties` `#[doc(hidden)] pub`
    for the reference test.
 4. **Callers.** Update `rust/tracing/src/dispatch.rs` (`:1073` `sink.on_log`, `:1111`/`:1112`
    interop filter) and the tests that read `merged.properties`:
-   `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
-   `rust/analytics/tests/metrics_test.rs` and `rust/capi/tests/properties_tests.rs`.
-5. **(Gated) Hash outside the lock.** Only if the step 1 profile justifies Design §3. Add `hash` to `MergedProperties`, compute it in
-   `merge_properties`, and use it in `intern_set`.
-6. **Measure.** Rerun all three benches (`properties`, `with_dispatch`, `with_no_dispatch`) with
+   `rust/tracing/tests/dyn_deps_tests.rs` and `rust/capi/tests/properties_tests.rs`.
+5. **(Gated) Hash outside the lock.** Only if the step 1 profile justifies Design §3. Add `hash` to `MergedProperties` with a
+   `#[doc(hidden)] pub` `hash()` getter, compute it in `merge_properties`, use it in
+   `intern_set`, and add the hash comparison to the reference-equivalence test.
+6. **Measure.** Rerun both benches (`properties`, `with_dispatch`) with
    `--baseline before`. If the hash is still a visible share of `metric/dyn_low_card` or
    `log/dyn_mixed` in a fresh profile, do step 7. Otherwise skip it and record that under
    Decisions.
 7. **(Gated) Static entry hashes.** Implement Design §4 in `rust/tracing/src/property_set.rs`
    (`PropertySet::entry_hashes`, filled in `find_or_create`) and `dyn_deps.rs` (`entry_hash`,
    new fold, merge walk reads precomputed hashes).
-8. **Published figures.** Rerun `rust/otel-comparison-bench` and update the `dyn_low_card` and
-   `dyn_high_card` rows in `mkdocs/docs/when-to-use/instrumentation-overhead.md`.
+8. **Published figures.** Rerun the full otel-comparison bench, following the Reproduce section of
+   `mkdocs/docs/when-to-use/instrumentation-overhead.md`
+   (`cargo bench -p micromegas-otel-comparison-bench | tee bench.log`, then
+   `python3 otel-comparison-bench/report.py bench.log`). Regenerate every table in that page and
+   update its hardware/software/date table.
 9. **CHANGELOG.** Add an Unreleased entry with before/after medians and a **Minor breaking
    change** clause: `MergedProperties::properties` is now a method returning a slice.
 
@@ -189,10 +188,9 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
 - `rust/tracing/src/dispatch.rs`: accessor use
 - `rust/tracing/src/property_set.rs`: `DynProperty::is_static_name` and `cmp_dyn_properties`
   become `#[doc(hidden)] pub`; `entry_hashes` only for step 7
-- `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
-  `rust/analytics/tests/metrics_test.rs`, `rust/capi/tests/properties_tests.rs`: accessor and
+- `rust/tracing/tests/dyn_deps_tests.rs`, `rust/capi/tests/properties_tests.rs`: accessor and
   new tests
-- `mkdocs/docs/when-to-use/instrumentation-overhead.md`: refreshed `dyn_*` medians
+- `mkdocs/docs/when-to-use/instrumentation-overhead.md`: all tables regenerated, hardware/software/date table updated
 - `CHANGELOG.md`
 
 ## Decisions
@@ -211,7 +209,7 @@ Unit tests in `rust/tracing/tests/dyn_deps_tests.rs` (no DB):
   `merge_dynamic_overrides_static_case_insensitively` and `static_values_get_no_string_record`.
 - **Reference equivalence:** keep a copy of today's `Vec`/`retain`/`sort` algorithm in the test
   file as a reference. Over a table of cases, assert that the new `merge_properties` gives the
-  same `(name, value)` sequence, `is_static_value`/`is_static_name` per index, and hash. Cases:
+  same `(name, value)` sequence and `is_static_value`/`is_static_name` per index (and the hash, if step 5 lands). Override values in the table must differ from the static values they replace, so the reference's pointer-based mask agrees with the new code. Cases:
   - empty static set or empty dynamic list
   - a dynamic name that sorts before, between and after the static names
   - a case-insensitive override of a static entry
@@ -221,17 +219,17 @@ Unit tests in `rust/tracing/tests/dyn_deps_tests.rs` (no DB):
   - more than 8 entries (heap spill)
   - more than 64 entries (mask bits beyond 63 stay clear)
   The test crate reaches the internals through `#[doc(hidden)] pub` getters on
-  `MergedProperties` (`is_static_value(i)`, `is_static_name(i)`, `hash()`). It builds the
+  `MergedProperties` (`is_static_value(i)`, `is_static_name(i)`, plus `hash()` with step 5). It builds the
   reference copy using `DynProperty::is_static_name`, `cmp_dyn_properties` and `content_hash`,
   which also become `#[doc(hidden)] pub`.
 - If step 7 lands, the hash of a set built split and all-dynamic is equal, and different
   content gives different hashes on the existing cases.
 
 Performance is checked by the criterion runs in Implementation Steps 1 and 6. Acceptance: no
-regression beyond noise on any tracing bench case. There is no automated performance gate, which
+regression beyond noise on any tracing bench case that is run. There is no automated performance gate, which
 matches the precedent plans.
 
 ## Documentation
 
 No `mkdocs/` page describes these internals, but `instrumentation-overhead.md` publishes
-`dyn_*` per-call medians, which are updated in step 8. Add the CHANGELOG entry.
+per-call medians, which are regenerated in step 8 along with the rest of the page. Add the CHANGELOG entry.
