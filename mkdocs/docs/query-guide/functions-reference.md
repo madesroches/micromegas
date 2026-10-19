@@ -188,8 +188,8 @@ ORDER BY lane, begin
 
 | Column | Type | Description |
 |--------|------|-------------|
-| stream_id | Dictionary(Int16, Utf8) | Stream identifier (empty for async) |
-| thread_name | Dictionary(Int16, Utf8) | Thread display name (`'async'` for async spans) |
+| stream_id | Dictionary(Int32, Utf8) | Stream identifier (empty for async) |
+| thread_name | Dictionary(Int32, Utf8) | Thread display name (`'async'` for async spans) |
 | id | Int64 | Span identifier |
 | parent | Int64 | Parent span identifier |
 | depth | UInt32 | Nesting depth |
