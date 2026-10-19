@@ -285,7 +285,10 @@ impl JsonbDictionary {
 - `SpanRecordBuilder` owns a `JsonbDictionary` and a `Vec<i32>` of keys.
   - `append_call_tree` remaps the tree's dictionary into the builder's once per tree (one
     `intern` for each distinct set), then pushes one remapped key per node.
-  - `append(SpanRow)` gains `properties: &[u8]` and calls `intern`. Tests use it.
+  - `append(SpanRow, properties: &[u8])` takes the properties as a parameter; `SpanRow` stays
+    owned and gains no field. Both `append` and `append_call_tree` go through a private helper
+    that appends the 11 existing columns. `append` then interns the bytes and pushes the key;
+    `append_call_tree` pushes its remapped key directly. Tests use `append`.
   - `finish` builds the column.
 - `async_events` keeps `PropertySetJsonbDictionaryBuilder`, since its collector handles one block
   at a time. `AsyncEventRecord` gains `properties: PropertySet<'a>`, and begin rows get the
@@ -423,7 +426,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - **Minor breaking change (Rust API only):**
   - `ThreadBlockProcessor::on_end_thread_scope` and `AsyncBlockProcessor::on_end_async_scope`
     take `properties`.
-  - `CallTreeNode`, `CallTree`, `SpanRow` and `AsyncEventRecord` gain fields.
+  - `CallTreeNode`, `CallTree` and `AsyncEventRecord` gain fields; `SpanRecordBuilder::append`
+    gains a `properties` parameter.
   - `ThreadEventQueueAny` and `ThreadDepsQueueAny` gain variants.
   - `SpanName` gains `as_str`. It is sealed, so only in-crate impls are affected.
   - `ThreadSpanGuard` and `ThreadNamedSpanGuard` gain a defaulted type parameter and become
