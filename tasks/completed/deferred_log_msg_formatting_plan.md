@@ -427,15 +427,19 @@ Command: `cargo bench -p micromegas-tracing --bench properties --bench with_disp
 
 | Case | Before | After |
 |---|---|---|
-| log/dyn_low_card_msg | | |
-| log/dyn_high_card_msg | | |
-| log/static_low_card_msg | | |
-| log/static, log/formatted | | |
-| log/dyn_low_card, log/dyn_high_card | | |
-| extract/log/dyn_low_card_msg | | |
-| extract/log/dyn_high_card_msg | | |
-| extract/log/static_low_card_msg | | |
-| dispatch/log | | |
+| log/dyn_low_card_msg | 82.8 ns | 51.2 ns (−38%) |
+| log/dyn_high_card_msg | 214.2 ns | 169–174 ns (−20%) |
+| log/static_low_card_msg | 57.3 ns | 24.8 ns (−57%) |
+| log/static, log/formatted | 16.7 ns, 58.5 ns | 16.0 ns, 57.5 ns |
+| log/dyn_low_card, log/dyn_high_card | 52.2 ns, 178.0 ns | 51.2 ns, 183–188 ns |
+| extract/log/dyn_low_card_msg | 325.9 µs, 44 B/event | 57.5 µs, 25 B/event |
+| extract/log/dyn_high_card_msg | 414.1 µs, 45 B/event | 161.2 µs, 25 B/event |
+| extract/log/static_low_card_msg | 352.4 µs, 44 B/event | 91.1 µs, 25 B/event |
+| dispatch/log | 0.2 ns | 0.2 ns |
+
+Bytes are object bytes per event; the `*_low_card` and `dyn_high_card` references are 25 B/event
+before and after. The `dyn_high_card` pair is noisy in the full suite (~200 ns for both in one
+run); its "After" ranges come from three isolated reruns of those two cases.
 
 Expected:
 
