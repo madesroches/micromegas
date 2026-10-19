@@ -338,13 +338,13 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 6. `rust/tracing/tests/utils.rs`: add the new `ThreadEventQueueAny` match arms.
 7. Analytics: add `JsonbDictionary` (`properties/jsonb_dictionary.rs`, plus its `mod`
    declaration), the trait parameter on `ThreadBlockProcessor`, the parser arms, `CallTreeNode`
-   / `CallTree` / `CallTreeBuilder`, `SpanRow` / `SpanRecordBuilder` / `get_spans_schema`, and
+   / `CallTree` / `CallTreeBuilder`, `SpanRecordBuilder` (and its `append` callers) / `get_spans_schema`, and
    the `SCHEMA_VERSION` bump in `thread_spans_view.rs`. Update the test impls of
    `ThreadBlockProcessor` (`tests/span_tests.rs`), the direct `on_end_thread_scope` calls in
-   `tests/call_tree_tests.rs`, and the `SpanRow` users
+   `tests/call_tree_tests.rs`, and the `SpanRecordBuilder::append` callers
    (`tests/dictionary_key_overflow_tests.rs`).
-8. `process_spans_table_function.rs`: append `arrow_cast(jsonb_parse('{}'), 'Dictionary(Int32, Binary)')
-   as properties` (the empty set) to the async join's select list, because `async_events` has no
+8. `process_spans_table_function.rs`: append `jsonb_parse('{{}}') as properties`
+   (the empty set; braces escaped because the SQL is built with `format!`) to the async join's select list, because `async_events` has no
    `properties` column until Phase 2 and the batch is built strictly against `get_spans_schema`.
    The thread half passes the view's batches through unchanged.
 9. Bench: add `dispatch/span_props_literal` and `dispatch/span_props_dyn` cases to
