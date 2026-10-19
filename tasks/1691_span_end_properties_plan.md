@@ -258,6 +258,9 @@ let rows = instrument_named!(fetch(id), "fetch", |out, span| {
   build `InstrumentedNamedFuture`. The closure arms instead call new hidden
   `__instrument_named_with_internal` and `__instrument_named_dyn_with_internal` methods on
   `InstrumentFuture`, which use a hook-taking `InstrumentedNamedFuture` constructor.
+- `instrument_with` uses a hook-taking `InstrumentedFuture` constructor. Both hook-taking
+  constructors live in `impl<F, H>` blocks; `new` / `with_name` stay in the `NoHook` impls because
+  `#[span_fn]` calls `InstrumentedFuture::new` where the hook type can't be inferred.
 - `instrument_with` and the two hidden `_with_internal` methods are bounded directly by
   `H: FnOnce(&Self::Output, &mut SpanProperties)`, not by `SpanEndHook`: closures infer their
   parameter types only from a direct `FnOnce` bound, so `|out, span|` fails to compile through the
@@ -364,8 +367,9 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
     wasm stubs.
 11. `instrumented_future.rs`: add the `SpanEndHook` trait, `NoHook`, the end-hook type parameter
     on both futures, `InstrumentFuture::instrument_with`, the hidden
-    `__instrument_named_with_internal` / `__instrument_named_dyn_with_internal` methods with the
-    hook-taking `InstrumentedNamedFuture` constructor, and the closure arms on the four async
+    `__instrument_named_with_internal` / `__instrument_named_dyn_with_internal` methods, the
+    hook-taking `InstrumentedFuture` and `InstrumentedNamedFuture` constructors (in `impl<F, H>`
+    blocks; `new` / `with_name` stay in the `NoHook` impls), and the closure arms on the four async
     macros.
 12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms (and add the two tagged
     async types to `parse_thread_block_payload`'s ignore list), `AsyncEventRecord` /
