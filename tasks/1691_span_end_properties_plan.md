@@ -561,6 +561,16 @@ Both need running services.
    Expected: thread rows, and at least one async row (`thread_name = 'async'`) with non-empty
    properties, both show their end properties.
 
+## Future Work
+
+Out of scope for this change; do not implement here.
+
+- **Async named spans as a name property.** Consider replacing the named async span events
+  (`BeginAsyncNamedSpanEvent` / `EndAsyncNamedSpanEvent` and their dyn variants) with a plain
+  async span whose name is carried as a property. Async begin and end rows are joined on span
+  id, so the name does not have to be on the begin event — it could ride on the end event's
+  properties like any other value.
+
 ## Open Questions
 
 None.
