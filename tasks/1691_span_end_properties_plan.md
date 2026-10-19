@@ -187,8 +187,10 @@ impl SpanProperties {
 - `smallvec` and `rustc-hash` are native-only dependencies, and `merge_properties` lives in the
   native-only `dyn_deps`, while `guards` and `instrumented_future` compile on wasm32. Following
   the stub convention in `lib.rs`, wasm32 gets a cfg'd `SpanProperties` stub holding only the
-  `static_set`, with a no-op `set_property`. The guard's tagged drop path is cfg'd to the plain
-  end there, so tracing still compiles for wasm32 (checked by the wasm clippy build).
+  `static_set`, with a no-op `set_property`. The guard's tagged drop path and the async futures'
+  tagged end are cfg'd to the plain end there (the futures still call the hook, so user closures
+  keep type-checking, then end through `SpanName::end_async` / `on_end_async_scope`), so tracing
+  still compiles for wasm32 (checked by the wasm clippy build).
 
 **Guards.** `SpanName` gains `fn as_str(&self) -> &str`, so that both name kinds reach the single
 `_named_scope_tagged` dispatch.
@@ -370,7 +372,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
     `__instrument_named_with_internal` / `__instrument_named_dyn_with_internal` methods, the
     hook-taking `InstrumentedFuture` and `InstrumentedNamedFuture` constructors (in `impl<F, H>`
     blocks; `new` / `with_name` stay in the `NoHook` impls), and the closure arms on the four async
-    macros.
+    macros. On wasm32 the futures' tagged end is cfg'd to the plain end.
 12. Analytics: add the `AsyncBlockProcessor` parameter, the parser arms (and add the two tagged
     async types to `parse_thread_block_payload`'s ignore list), `AsyncEventRecord` /
     `AsyncEventRecordBuilder` / `async_events_table_schema`, and the `SCHEMA_VERSION` bump in
