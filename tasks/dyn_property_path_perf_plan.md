@@ -8,9 +8,9 @@ A log or metric call that has a runtime property value costs about 4× a call wi
 set (≈95–118 ns against 25 ns single-threaded), even when the value has low cardinality and the
 block already holds the resulting set. Every `imetric_dyn!`/`fmetric_dyn!` call, the C API
 `*_tagged` calls and the interop log bridges take this path too. This plan removes the per-call
-heap allocation, sort and nested scan from `merge_properties`, and moves the content hash out of
-the stream lock. If the profile shows hashing still matters after that, it also precomputes the
-hashes of static entries. Nothing changes in the wire format, the SQL surface or the sets a block
+heap allocation, sort and nested scan from `merge_properties`. If the profile shows the content
+hash under the stream lock matters, it also moves that hash out of the lock, and if hashing still
+matters after that, it precomputes the hashes of static entries. Nothing changes in the wire format, the SQL surface or the sets a block
 ends up holding.
 
 ## Current State
@@ -71,7 +71,7 @@ Benchmarks: `rust/tracing/benches/properties.rs` has `log/dyn_low_card`, `log/dy
 
 Save criterion baselines and take a `perf` profile of `metric/dyn_low_card` and
 `log/dyn_mixed`, so we know whether allocation, sort or hashing dominates (see Implementation
-Steps). Steps 2 and 3 are worth doing whatever the profile shows. Step 4 is gated on it.
+Steps). Step 2 is worth doing whatever the profile shows. Steps 3 and 4 are gated on it.
 
 ### 2. `merge_properties`: stack buffer and a merge of two sorted lists
 
@@ -117,7 +117,12 @@ static set's value was marked static. Now only entries that come from the static
 case only arises if a caller builds a `DynProperty` from `set.dyn_properties()` by hand. The
 result is still correct, since the string gets a record, so the change is safe.
 
-### 3. Hash outside the lock
+### 3. Hash outside the lock (only if the profile shows lock-held hashing)
+
+A previous attempt to hash before the lock was reverted with no measurable difference. Do this
+only if the baseline profile shows hash time under the lock as a visible share, notably in the
+`contention` group.
+
 
 `merge_properties` computes `hash` as the last step, folding over `properties` in output order
 with the current `content_hash` function. `intern_set` uses `merged.hash` instead of computing
@@ -144,7 +149,8 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
 
 1. **Baseline.** From `rust/`:
    `cargo bench -p micromegas-tracing --bench properties -- --save-baseline before` and
-   `cargo bench -p micromegas-tracing --bench with_dispatch -- --save-baseline before`.
+   `cargo bench -p micromegas-tracing --bench with_dispatch -- --save-baseline before` and
+   `cargo bench -p micromegas-tracing --bench with_no_dispatch -- --save-baseline before`.
    Profile with `perf record -g` on the `properties` bench binary filtered to
    `metric/dyn_low_card` and `log/dyn_mixed`. Write the split (allocation, sort, mask scan,
    hash, probe) into the PR description.
@@ -160,15 +166,18 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
    interop filter) and the tests that read `merged.properties`:
    `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
    `rust/analytics/tests/metrics_test.rs` and `rust/capi/tests/properties_tests.rs`.
-5. **Hash outside the lock.** Add `hash` to `MergedProperties`, compute it in
+5. **(Gated) Hash outside the lock.** Only if the step 1 profile justifies Design §3. Add `hash` to `MergedProperties`, compute it in
    `merge_properties`, and use it in `intern_set`.
-6. **Measure.** Rerun both benches with `--baseline before`. If the hash is still a visible
-   share of `metric/dyn_low_card` or `log/dyn_mixed` in a fresh profile, do step 7. Otherwise
-   skip it and record that under Decisions.
+6. **Measure.** Rerun all three benches (`properties`, `with_dispatch`, `with_no_dispatch`) with
+   `--baseline before`. If the hash is still a visible share of `metric/dyn_low_card` or
+   `log/dyn_mixed` in a fresh profile, do step 7. Otherwise skip it and record that under
+   Decisions.
 7. **(Gated) Static entry hashes.** Implement Design §4 in `rust/tracing/src/property_set.rs`
    (`PropertySet::entry_hashes`, filled in `find_or_create`) and `dyn_deps.rs` (`entry_hash`,
    new fold, merge walk reads precomputed hashes).
-8. **CHANGELOG.** Add an Unreleased entry with before/after medians and a **Minor breaking
+8. **Published figures.** Rerun `rust/otel-comparison-bench` and update the `dyn_low_card` and
+   `dyn_high_card` rows in `mkdocs/docs/when-to-use/instrumentation-overhead.md`.
+9. **CHANGELOG.** Add an Unreleased entry with before/after medians and a **Minor breaking
    change** clause: `MergedProperties::properties` is now a method returning a slice.
 
 ## Files to Modify
@@ -183,10 +192,13 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
 - `rust/tracing/tests/dyn_deps_tests.rs`, `rust/analytics/tests/log_tests.rs`,
   `rust/analytics/tests/metrics_test.rs`, `rust/capi/tests/properties_tests.rs`: accessor and
   new tests
+- `mkdocs/docs/when-to-use/instrumentation-overhead.md`: refreshed `dyn_*` medians
 - `CHANGELOG.md`
 
 ## Decisions
 
+- Hashing before the lock was tried and reverted earlier with no measurable difference, so
+  Design §3 is gated on the profile.
 - Hashing static strings by pointer is rejected: it breaks content identity for split sets
   (`split_between_static_and_dynamic_does_not_change_identity`).
 
@@ -215,9 +227,11 @@ Unit tests in `rust/tracing/tests/dyn_deps_tests.rs` (no DB):
 - If step 7 lands, the hash of a set built split and all-dynamic is equal, and different
   content gives different hashes on the existing cases.
 
-Performance is checked by the criterion runs in Implementation Steps 1 and 6. There is no
-automated performance gate, which matches the precedent plans.
+Performance is checked by the criterion runs in Implementation Steps 1 and 6. Acceptance: no
+regression beyond noise on any tracing bench case. There is no automated performance gate, which
+matches the precedent plans.
 
 ## Documentation
 
-No `mkdocs/` page describes these internals. The CHANGELOG entry is enough.
+No `mkdocs/` page describes these internals, but `instrumentation-overhead.md` publishes
+`dyn_*` per-call medians, which are updated in step 8. Add the CHANGELOG entry.
