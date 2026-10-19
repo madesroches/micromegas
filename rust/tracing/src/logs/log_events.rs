@@ -33,6 +33,20 @@ pub struct TaggedLogStaticStrEvent {
 
 impl InProcSerialize for TaggedLogStaticStrEvent {}
 
+/// A log whose message is `desc.fmt_str` rendered with `properties`.
+///
+/// It has the layout of `TaggedLogStaticStrEvent` but a distinct type name: a stored static
+/// event means "verbatim" and must never be rendered again.
+#[derive(Debug, TransitReflect)]
+pub struct TaggedLogTemplateEvent {
+    pub desc: &'static LogMetadata<'static>,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedLogTemplateEvent {}
+
 #[derive(Debug)]
 pub struct LogStringEvent {
     pub desc: &'static LogMetadata<'static>,

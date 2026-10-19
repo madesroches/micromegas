@@ -12,6 +12,17 @@ pub struct LogMetadata<'a> {
     pub line: u32,
 }
 
+/// How a log call's message is stored. The macros pick it at compile time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogMsgForm {
+    /// The message is `desc.fmt_str` verbatim.
+    Static,
+    /// The message is `desc.fmt_str` with its placeholders replaced by the stored properties.
+    Template,
+    /// The message is formatted in the process and stored.
+    Formatted,
+}
+
 pub const FILTER_LEVEL_UNSET_VALUE: u32 = 0xF;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

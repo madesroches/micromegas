@@ -93,7 +93,7 @@ impl EventSink for BenchSink {
 
 type Case = fn(usize);
 
-const LOG_CASES: [(&str, Case); 8] = [
+const LOG_CASES: [(&str, Case); 11] = [
     ("static", |_| info!("static")),
     ("formatted", |i| info!("value {}", i)),
     ("literals", |_| info!(a = "1", b = "2", c = "3", "static")),
@@ -104,6 +104,18 @@ const LOG_CASES: [(&str, Case); 8] = [
         |i| info!(l = static LABELS[i % 4], "static"),
     ),
     ("dyn_high_card", |i| info!(id = %i, "static")),
+    ("dyn_low_card_msg", |i| {
+        let l = LABELS[i % 4];
+        info!(l = l, "label {l}")
+    }),
+    ("dyn_high_card_msg", |i| {
+        let id = i;
+        info!(id = %id, "request {id}")
+    }),
+    ("static_low_card_msg", |i| {
+        let l = LABELS[i % 4];
+        info!(l = static l, "label {l}")
+    }),
     (
         "dyn_mixed",
         |i| info!(a = "1", b = "2", c = "3", id = %i, "static"),
@@ -207,6 +219,10 @@ fn bench_extraction_group(c: &mut Criterion, sink: &BenchSink) {
         "dyn_low_card",
         "dyn_high_card",
         "dyn_mixed",
+        "static_low_card",
+        "dyn_low_card_msg",
+        "dyn_high_card_msg",
+        "static_low_card_msg",
     ] {
         let block = capture_log_block(sink, log_case(name), 10_000);
         bench_extract(

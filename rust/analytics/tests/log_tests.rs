@@ -7,7 +7,7 @@ use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::dyn_deps::merge_properties;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::levels::Level;
+use micromegas_tracing::levels::{Level, LevelFilter, set_max_level};
 use micromegas_tracing::logs;
 use micromegas_tracing::logs::LogBlock;
 use micromegas_tracing::logs::LogStaticStrInteropEvent;
@@ -358,7 +358,7 @@ fn parse_tagged_entries(
             })
             .unwrap();
         (
-            entry.msg.to_owned(),
+            entry.msg.to_string(),
             props,
             entry.properties.object_ptr() as usize,
         )
@@ -512,7 +512,7 @@ fn test_tagged_log_static_str_entries() {
             })
             .unwrap();
         (
-            entry.msg.to_owned(),
+            entry.msg.to_string(),
             props,
             entry.level,
             entry.target.to_owned(),
@@ -603,7 +603,7 @@ fn test_block_scoped_interop_targets() {
             })
             .unwrap();
         (
-            entry.msg.to_owned(),
+            entry.msg.to_string(),
             entry.target.to_owned(),
             entry.level,
             props,
@@ -635,4 +635,62 @@ fn test_block_scoped_interop_targets() {
             ),
         ]
     );
+}
+
+/// Runs the real macros, then renders the stored blocks, so that the proc macro's placeholder
+/// grammar and the analytics renderer are checked against `format!`.
+#[test]
+#[serial]
+fn test_deferred_templates_round_trip() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
+    let user = String::from("alice");
+    let zone = "eu";
+    let label: &'static str = "alpha";
+    let v = vec![1, 2];
+    let tricky = "a \"b\" {c}";
+    let set = PropertySet::find_or_create(vec![Property::new("region", "us")]);
+
+    info!(user = %user, "login for {user}");
+    info!(user = %user, zone = zone, "{user} in {zone}");
+    info!(zone = "eu", "in {zone}");
+    info!(l = static label, "label {l}");
+    info!(v = ?v, "{v:?}");
+    info!(a = "1", "a {{b}}");
+    info!(n = 7, c = 'x', ok = true, "{n} {c} {ok}");
+    info!(user = %user, "{{{user}}}");
+    info!(t = tricky, "{t}");
+    info!(t = ?tricky, "{t:?}");
+    info!(id = %user, ..set, "{id}!");
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let (desc, mut blocks) = {
+        let mut state = guard.sink.state.lock().unwrap();
+        (
+            state.log_stream_desc.clone().expect("log stream"),
+            std::mem::take(&mut state.log_blocks),
+        )
+    };
+    let stream = LogStream::new(1024, desc.process_id, &desc.tags, desc.properties.clone());
+    let mut msgs = vec![];
+    for block in &mut blocks {
+        msgs.extend(parse_entries(block, &stream, desc.process_id, |entry| {
+            entry.msg.to_string()
+        }));
+    }
+    let expected = vec![
+        format!("login for {user}"),
+        format!("{user} in {zone}"),
+        format!("in {}", "eu"),
+        format!("label {label}"),
+        format!("{v:?}"),
+        String::from("a {b}"),
+        format!("{} {} {}", 7, 'x', true),
+        format!("{{{user}}}"),
+        tricky.to_string(),
+        format!("{tricky:?}"),
+        format!("{user}!"),
+    ];
+    assert!(msgs.len() >= expected.len());
+    assert_eq!(msgs[msgs.len() - expected.len()..], expected[..]);
 }

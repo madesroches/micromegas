@@ -1,7 +1,7 @@
 //! Minimal wasm32 dispatch — forwards logs to EventSink, no-ops everything else
 pub use crate::errors::{Error, Result};
 use crate::event::EventSink;
-use crate::logs::LogMetadata;
+use crate::logs::{LogMetadata, LogMsgForm};
 use crate::metrics::StaticMetricMetadata;
 use crate::process_info::ProcessInfo;
 use crate::property_set::{DynProperty, PropertySet};
@@ -106,9 +106,10 @@ pub fn log_dyn_tagged(
     desc: &'static LogMetadata,
     _properties: &'static PropertySet,
     _dyn_properties: &[DynProperty<'_>],
+    form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
-    log(desc, args);
+    log(desc, form, args);
 }
 
 #[doc(hidden)]
@@ -134,6 +135,7 @@ pub fn log_dyn_tagged_enabled(
     desc: &'static LogMetadata,
     _properties: &'static PropertySet,
     _dyn_properties: &[DynProperty<'_>],
+    _form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
     sink.dispatch.sink.on_log(desc, &[], now(), args);
@@ -149,7 +151,7 @@ pub fn log_interop_dyn_tagged(
 }
 
 #[inline(always)]
-pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
+pub fn log(desc: &'static LogMetadata, _form: LogMsgForm, args: fmt::Arguments<'_>) {
     if let Some(d) = G_DISPATCH.get() {
         if d.sink.on_log_enabled(desc) {
             d.sink.on_log(desc, &[], now(), args);
@@ -161,6 +163,7 @@ pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
 pub fn log_tagged(
     desc: &'static LogMetadata,
     _properties: &'static PropertySet,
+    _form: LogMsgForm,
     args: fmt::Arguments<'_>,
 ) {
     if let Some(d) = G_DISPATCH.get() {

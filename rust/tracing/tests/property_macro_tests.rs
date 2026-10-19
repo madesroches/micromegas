@@ -222,6 +222,13 @@ impl DispatchGuard {
                         msg: Some(e.msg.0.clone()),
                         dyn_deps_bytes: block.dyn_deps.len_bytes(),
                     }),
+                    LogMsgQueueAny::TaggedLogTemplateEvent(e) => out.push(LogEventRecord {
+                        kind: "TaggedLogTemplateEvent",
+                        tagged: true,
+                        set_id: Some(e.properties),
+                        msg: None,
+                        dyn_deps_bytes: block.dyn_deps.len_bytes(),
+                    }),
                     _ => {}
                 }
             }
@@ -311,6 +318,20 @@ fn log_key_value_forms() {
         pairs(&[("neg", "-1"), ("signed", "-2.5")])
     );
     assert_eq!(guard.log_props("display int 7"), pairs(&[("shown", "7")]));
+}
+
+#[test]
+#[serial]
+fn values_borrowing_from_temporaries() {
+    fn s() -> String {
+        String::from("temp")
+    }
+    let guard = DispatchGuard::new();
+    info!(u = s().as_str(), n = %s().as_str(), "{u} {n}");
+    assert_eq!(
+        guard.log_props("temp temp"),
+        pairs(&[("u", "temp"), ("n", "temp")])
+    );
 }
 
 #[test]
@@ -463,6 +484,16 @@ fn duplicate_keys() {
     );
     imetric!("dups", "count", k = "a", K = "b", 1);
     assert_eq!(metric_props(&guard, "dups"), pairs(&[("K", "b")]));
+}
+
+#[test]
+#[serial]
+fn empty_format_spec_is_plain() {
+    let guard = DispatchGuard::new();
+    info!(n = 1, "empty spec {n:}");
+    info!(s = "x", "empty spec {s:}");
+    assert_eq!(guard.log_props("empty spec 1"), pairs(&[("n", "1")]));
+    assert_eq!(guard.log_props("empty spec x"), pairs(&[("s", "x")]));
 }
 
 #[test]
@@ -748,19 +779,176 @@ fn tagged_messages_that_differ_from_the_format_string_are_formatted() {
     let guard = DispatchGuard::new();
     let n = 12;
     info!(a = "1", "value {}", 3);
-    info!(a = "1", "a {{b}}");
     info!(a = "1", "v {}", n);
     let logs = guard.log_events();
     let msgs: Vec<_> = logs.iter().map(|l| l.msg.clone()).collect();
     assert!(logs.iter().all(|l| l.kind == "TaggedLogString"));
     assert_eq!(
         msgs,
-        vec![
-            Some("value 3".to_owned()),
-            Some("a {b}".to_owned()),
-            Some("v 12".to_owned())
-        ]
+        vec![Some("value 3".to_owned()), Some("v 12".to_owned())]
     );
+}
+
+/// Checks the event kind of the last call, the message the sink was handed, and that the
+/// message is stored only when the event carries it.
+#[track_caller]
+fn assert_last(guard: &DispatchGuard, kind: &str, printed: &str) {
+    let events = guard.log_events();
+    let last = events.last().expect("no log event");
+    assert_eq!(last.kind, kind);
+    if matches!(kind, "TaggedLogString" | "LogStringEvent") {
+        assert_eq!(last.msg.as_deref(), Some(printed));
+    } else {
+        assert_eq!(last.msg, None);
+    }
+    assert_eq!(guard.logs().last().expect("no sink log").0, printed);
+}
+
+fn next_id(counter: &mut u32) -> u32 {
+    *counter += 1;
+    *counter
+}
+
+#[test]
+#[serial]
+fn placeholders_bound_to_properties_are_deferred() {
+    let guard = DispatchGuard::new();
+    let user = String::from("alice");
+    let zone = String::from("eu");
+    let label: &'static str = "alpha";
+    let v = vec![1, 2];
+
+    info!(user = %user, "login for {user}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "login for alice");
+    let name: &str = &user;
+    info!(user = name, "login for {user}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "login for alice");
+    info!(user = %user, zone = %zone, "{user} in {zone}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "alice in eu");
+    info!(zone = "eu", "in {zone}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "in eu");
+    info!(l = static label, "label {l}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "label alpha");
+    info!(v = ?v, "{v:?}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "[1, 2]");
+    info!(a = "1", "a {{b}}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "a {b}");
+    info!(n = 7, "{n} {n}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "7 7");
+    info!(c = 'x', ok = true, "{c} {ok}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "x true");
+}
+
+#[test]
+#[serial]
+fn placeholders_bind_the_property_value() {
+    struct Account {
+        name: String,
+    }
+    let guard = DispatchGuard::new();
+    let account = Account {
+        name: String::from("alice"),
+    };
+    let user = "someone else";
+    info!(user = %account.name, "{user}");
+    assert_last(&guard, "TaggedLogTemplateEvent", "alice");
+    assert_eq!(guard.log_props("alice"), pairs(&[("user", "alice")]));
+    assert_eq!(user, "someone else");
+
+    let mut counter = 0;
+    info!(id = %next_id(&mut counter), "{id}");
+    assert_eq!(counter, 1);
+    assert_last(&guard, "TaggedLogTemplateEvent", "1");
+}
+
+#[test]
+#[serial]
+fn placeholders_that_cannot_be_deferred_are_formatted() {
+    let guard = DispatchGuard::new();
+    let u = "bob";
+    let other = "carol";
+    let n = 1.23456_f64;
+    let v = vec![1];
+    let region = "eu";
+    let set = PropertySet::find_or_create(vec![Property::new("region", "us")]);
+
+    // The muncher spells a float or negated literal through `concat!`, which can differ from
+    // `Display`.
+    info!(x = 1.0, "{x}");
+    assert_last(&guard, "TaggedLogString", "1");
+    info!(x = -1, "{x}");
+    assert_last(&guard, "TaggedLogString", "-1");
+
+    // Not bound: the placeholder keeps its local-capture meaning.
+    let user = "local";
+    info!(User = %u, "{user}");
+    assert_last(&guard, "TaggedLogString", "local");
+    let x = "local x";
+    info!(x = -"abc", "{x}");
+    assert_last(&guard, "TaggedLogString", "local x");
+    info!(x = 99999999999999999999, "{x}");
+    assert_last(&guard, "TaggedLogString", "local x");
+    info!(x = 300u8, "{x}");
+    assert_last(&guard, "TaggedLogString", "local x");
+
+    info!(n = %n, "{n:.2}");
+    assert_last(&guard, "TaggedLogString", "1.23");
+    assert_eq!(guard.log_props("1.23"), pairs(&[("n", "1.23456")]));
+    info!(v = ?v, "{v:?} {v}", v = "x");
+    assert_last(&guard, "TaggedLogString", "\"x\" x");
+    let text = String::from("t");
+    info!(t = %text, "{t:>3}");
+    assert_last(&guard, "TaggedLogString", "  t");
+    info!(v = ?text, "{v}");
+    assert_last(&guard, "TaggedLogString", "t");
+    info!(user = %user, "{user} {}", 3);
+    assert_last(&guard, "TaggedLogString", "local 3");
+    info!(a = "1", "{}", "{}");
+    assert_last(&guard, "TaggedLogString", "{}");
+    info!(..set, "{region}");
+    assert_last(&guard, "TaggedLogString", "eu");
+    info!(user = %u, "{user}", user = other);
+    assert_last(&guard, "TaggedLogString", "carol");
+}
+
+#[test]
+#[serial]
+fn deferred_messages_keep_the_set_of_a_spread() {
+    let guard = DispatchGuard::new();
+    let set = PropertySet::find_or_create(vec![Property::new("region", "us")]);
+    let id = 7;
+    info!(id = %id, ..set, "{id} in the set");
+    assert_last(&guard, "TaggedLogTemplateEvent", "7 in the set");
+    assert_eq!(
+        guard.log_props("7 in the set"),
+        pairs(&[("id", "7"), ("region", "us")])
+    );
+}
+
+#[test]
+#[serial]
+fn deferred_messages_are_not_evaluated_for_disabled_entries() {
+    let guard = DispatchGuard::new();
+    let mut dynamic = 0;
+    let mut stat = 0;
+    guard.disable_target("lazy_template");
+    info!(target: "lazy_template", id = %next_id(&mut dynamic), "{id}");
+    info!(
+        target: "lazy_template",
+        l = static count_static(&mut stat, "x"),
+        id = %next_id(&mut dynamic),
+        "{l} {id}"
+    );
+    assert_eq!((dynamic, stat), (0, 0));
+}
+
+#[test]
+#[serial]
+fn static_messages_with_properties_use_the_static_event() {
+    let guard = DispatchGuard::new();
+    let user = String::from("alice");
+    info!(user = %user, "static");
+    assert_last(&guard, "TaggedLogStaticStrEvent", "static");
 }
 
 #[test]

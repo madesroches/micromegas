@@ -265,6 +265,53 @@ macro_rules! instrument_named_dyn {
 /// # }
 /// ```
 ///
+/// In a call with properties, a `{key}` placeholder whose name is a property key refers to that
+/// property's value (evaluated once), not to a local of the same name; every other placeholder
+/// keeps its usual meaning. When every placeholder is a plain `{key}` over a `%`, bare, `static`,
+/// or string, char, bool or integer literal property, or a `{key:?}` over a `?` property, and
+/// the call has no other format arguments, the process doesn't format the message at all: it
+/// stores the format string with the properties, and analytics renders it. That is the cheapest
+/// way to put a property in the message, and it is smaller in the block. A placeholder with a
+/// spec (`{key:>8}`), a `{key}` over a `?` property, a float or negated literal, a positional
+/// argument, or a name that isn't a property is formatted in the process as before.
+/// Property names are case-insensitive, so a placeholder matching two keys is a compile error,
+/// and a placeholder only binds a key spelled exactly like it.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let (user, rows) = ("alice", 3);
+/// info!(user = user, rows = %rows, "{user} fetched {rows} rows");
+/// # }
+/// ```
+///
+/// A placeholder that matches two keys is ambiguous, so it doesn't compile:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// let (a, b) = ("1", "2");
+/// info!(user = %a, User = %b, "{user}");
+/// ```
+///
+/// A literal or `static` property is recorded once per callsite and never formatted per call, so
+/// it can't take a format spec or `{key:?}`; bind the value to a differently named local and
+/// format that instead:
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// let x: &'static str = "x";
+/// info!(l = static x, "{l:?}");
+/// ```
+///
+/// ```compile_fail
+/// use micromegas_tracing::prelude::*;
+///
+/// info!(n = 1, "{n:>8}");
+/// ```
+///
 /// A precomputed `&'static PropertySet` is spread with `..set`. It must come last in the
 /// property list, and `key = value` pairs override its entries:
 ///
@@ -548,7 +595,7 @@ macro_rules! fmetric_dyn {
 /// # fn main() {
 /// let correlation_id = String::from("c0ffee");
 /// let rows = 3;
-/// info!(correlation_id = correlation_id, region = "eu", rows = %rows, "fetched {} rows", rows);
+/// info!(correlation_id = correlation_id, region = "eu", rows = %rows, "fetched {rows} rows");
 /// info!(target: "app_events", "http.method" = "GET", "request done");
 /// # }
 /// ```
@@ -740,17 +787,11 @@ macro_rules! __props {
         $crate::__props!(@end metric $ctx $s $d $a $set $t $value)
     };
 
-    // A static value: literals and static values are interned together (over the spread set,
-    // if any) by a per-callsite cache, and only dynamic values go to the slice. Always `gate`:
-    // it is the only log form that evaluates the set expression for an enabled entry alone.
-    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static] $($fmt:tt)+) => {
-        $crate::__log_call!(gate $ctx [$($fmt)+]
-            $crate::__static_set!(log [] $($s)+), $crate::__dyn_slice!(log $($d)*))
+    // `__log_impl!` picks the call shape and how the message is stored.
+    (@end log $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt $($fmt:tt)+) => {
+        $crate::__log_impl!($crate $ctx $s $d $a $set $t $($fmt)+)
     };
-    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static] $($fmt:tt)+) => {
-        $crate::__log_call!(gate $ctx [$($fmt)+]
-            $crate::__static_set!(log [$set] $($s)+), $crate::__dyn_slice!(log $($d)*))
-    };
+
     (@end metric $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static]
         $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx
@@ -762,30 +803,6 @@ macro_rules! __props {
         $crate::__metric_call!(tagged $ctx
             $crate::__static_set!(metric [$set] $($s)+),
             [$($d)*], $value)
-    };
-
-    // The cheapest call that carries the properties: no properties at all, a spread set only,
-    // the per-callsite literal set only, or any of those plus dynamic values.
-    (@end log $ctx:tt [] [] [] [] [] $($fmt:tt)+) => {
-        $crate::__log_call!(plain $ctx [$($fmt)+])
-    };
-    (@end log $ctx:tt [$($s:tt)*] [] [$($a:tt)*] [$set:tt] [] $($fmt:tt)+) => {
-        $crate::__log_call!(nogate $ctx [$($fmt)+] $set, $crate::__dyn_slice!(log $($a)*))
-    };
-    (@end log $ctx:tt [$($s:tt)*] [$($d:tt)+] [$($a:tt)*] [$set:tt] [] $($fmt:tt)+) => {
-        $crate::__log_call!(gate $ctx [$($fmt)+] $set, $crate::__dyn_slice!(log $($a)*))
-    };
-    (@end log $ctx:tt [$($s:tt)+] [] [$($a:tt)*] [] [] $($fmt:tt)+) => {
-        $crate::__log_call!(nogate $ctx [$($fmt)+]
-            $crate::__callsite_set!(log $($s)+), $crate::__dyn_slice!(log))
-    };
-    (@end log $ctx:tt [$($s:tt)+] [$($d:tt)+] [$($a:tt)*] [] [] $($fmt:tt)+) => {
-        $crate::__log_call!(gate $ctx [$($fmt)+]
-            $crate::__callsite_set!(log $($s)+), $crate::__dyn_slice!(log $($d)+))
-    };
-    (@end log $ctx:tt [] [$($d:tt)+] [$($a:tt)*] [] [] $($fmt:tt)+) => {
-        $crate::__log_call!(gate $ctx [$($fmt)+]
-            $crate::property_set::PropertySet::empty(), $crate::__dyn_slice!(log $($d)+))
     };
 
     (@end metric $ctx:tt [] [] [] [] [] $value:expr) => {
@@ -802,62 +819,6 @@ macro_rules! __props {
         $crate::__metric_call!(tagged $ctx
             $crate::property_set::PropertySet::empty(), [$($d)+], $value)
     };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __log_call {
-    (plain [$target:expr, $lvl:expr] [$($fmt:tt)+]) => ({
-        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
-            level: $lvl,
-            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
-            fmt_str: $crate::__first_arg!($($fmt)+),
-            target: $target,
-            module_path: $crate::__log_module_path!(),
-            file: file!(),
-            line: line!(),
-        };
-        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
-            $crate::dispatch::log(&LOG_DESC, format_args!($($fmt)+));
-        }
-    });
-    (nogate [$target:expr, $lvl:expr] [$($fmt:tt)+] $set:expr, $slice:expr) => ({
-        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
-            level: $lvl,
-            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
-            fmt_str: $crate::__first_arg!($($fmt)+),
-            target: $target,
-            module_path: $crate::__log_module_path!(),
-            file: file!(),
-            line: line!(),
-        };
-        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
-            $crate::dispatch::log_dyn_tagged(&LOG_DESC, $set, $slice, format_args!($($fmt)+));
-        }
-    });
-    // Evaluating a dynamic value can allocate, so only do it for an enabled entry.
-    (gate [$target:expr, $lvl:expr] [$($fmt:tt)+] $set:expr, $slice:expr) => ({
-        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
-            level: $lvl,
-            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
-            fmt_str: $crate::__first_arg!($($fmt)+),
-            target: $target,
-            module_path: $crate::__log_module_path!(),
-            file: file!(),
-            line: line!(),
-        };
-        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
-            if let Some(sink) = $crate::dispatch::enabled_log_sink(&LOG_DESC) {
-                $crate::dispatch::log_dyn_tagged_enabled(
-                    sink,
-                    &LOG_DESC,
-                    $set,
-                    $slice,
-                    format_args!($($fmt)+),
-                );
-            }
-        }
-    });
 }
 
 #[doc(hidden)]

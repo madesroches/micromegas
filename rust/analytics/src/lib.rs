@@ -34,6 +34,8 @@ pub mod lakehouse;
 pub mod log_entries_table;
 /// Parsing of log entries from telemetry payload
 pub mod log_entry;
+/// Rendering of deferred log message templates
+pub mod log_msg_template;
 /// Parsing of metrics from telemetry payload
 pub mod measure;
 /// Access to the metadata stored in the relational database

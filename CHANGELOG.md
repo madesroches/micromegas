@@ -4,6 +4,33 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Tracing:** A log message that only repeats its properties is no longer formatted in the
+  process (#1653). `info!(user = %user, "login for {user}")` now stores the format string and
+  the property set in a new `TaggedLogTemplateEvent`, and analytics renders `msg` when it parses
+  the block; the SQL surface is unchanged. **Not forward compatible — upgrade the analytics
+  services (`flight-sql-srv`, `telemetry-maintenance-srv`, or the monolith) before deploying
+  instrumented applications built with this version.** Older analytics services do not know
+  the new event: they log a warning and drop those entries. A proc macro (`__log_impl!`) builds
+  the log calls: it binds every `{key}` placeholder to the property's value and picks the
+  event kind at compile time (static, template or formatted), so the runtime `fmt_str`
+  comparison is gone. A placeholder whose name is a property key now refers to that property's
+  value, evaluated once, not to a local of the same name (`info!(user = %account.name, "{user}")`
+  prints `account.name`); other placeholders keep their meaning, and a placeholder only binds a
+  key spelled exactly like it. A call is deferred when every placeholder is a plain `{key}` over
+  a `%`, bare, `static` or string, char, bool or integer literal property (or `{key:?}` over a
+  `?` property) and it has no other format arguments; anything else is formatted as before.
+  Medians before and after (`rust/tracing/benches/properties.rs`):
+  `log/dyn_low_card_msg` 83.1 -> 50.8 ns, `log/dyn_high_card_msg` 214.6 -> 174.9 ns,
+  `log/static_low_card_msg` 57.5 -> 24.5 ns; object bytes per event for the `_msg` cases fall
+  from 44-45 to 25, and `extract` for `log/dyn_low_card_msg` goes from 323 us to 57.5 us,
+  `log/dyn_high_card_msg` 454 us to 161 us, `log/static_low_card_msg` 351 us to 90.6 us. The
+  other cases are within noise (`log/static` 16.8 -> 15.9 ns, `log/formatted` 58.9 -> 57.9 ns,
+  `dispatch/log` 225 -> 221 ps; `log/dyn_high_card` measured 179 -> 188-209 ns across runs, where
+  interning dominates and the run-to-run spread is wide). No SQL change. **Minor breaking
+  change:** `PropertyValue` is sealed, `LogEntry::msg` is `Cow<'a, str>`, the `dispatch::log*` functions take a
+  `LogMsgForm`, `LogMsgQueue` gains a variant (exhaustive matches on `LogMsgQueueAny` must add
+  `TaggedLogTemplateEvent`), and a placeholder that matches two property keys, or a format spec
+  or `{key:?}` on a literal or `static` property, is a compile error.
 * **Performance:** Cheaper dynamic property path for log and metric calls (#1682).
   `merge_properties` now builds the merged list in a stack buffer and merges the static set's
   canonical-order view with the sorted dynamic list, instead of allocating a `Vec`, running a

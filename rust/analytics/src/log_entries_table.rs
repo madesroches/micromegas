@@ -163,7 +163,7 @@ impl LogEntriesRecordBuilder {
         self.times.append_value(row.time);
         self.targets.append(row.target)?;
         self.levels.append_value(row.level);
-        self.msgs.append_value(row.msg);
+        self.msgs.append_value(&*row.msg);
         self.properties.append_property_set(&row.properties)?;
         self.process_properties.append(&*row.process.properties)?;
         self.audiences.append(&*row.process.audience)?;
@@ -176,7 +176,7 @@ impl LogEntriesRecordBuilder {
         self.times.append_value(row.time);
         self.targets.append(row.target)?;
         self.levels.append_value(row.level);
-        self.msgs.append_value(row.msg);
+        self.msgs.append_value(&*row.msg);
         self.properties.append_property_set(&row.properties)?;
         Ok(())
     }

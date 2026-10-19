@@ -30,6 +30,7 @@ use opentelemetry_proto::tonic::metrics::v1::{
     metric, number_data_point, summary_data_point::ValueAtQuantile,
 };
 use prost::Message;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -186,7 +187,7 @@ fn log_entries_record_builder_overflow() {
             time: i as i64,
             level: 4,
             target: &target,
-            msg: &msg,
+            msg: Cow::Borrowed(&msg),
             properties: PropertySet::empty(),
         };
         builder
