@@ -75,9 +75,13 @@ meaning.
 
 - `info!(user = %account.name, "login for {user}")` prints and stores `account.name`.
 - `info!(n = %n, "{n:.2}")` formats the original `n`, not its `Display` string. Specs keep
-  working, so the output doesn't change.
+  working for dynamic keys, so the output doesn't change.
+- A static or literal key binds only as a plain `{k}`. A placeholder naming one with a format
+  spec (`{l:>8}`, `{n:.2}`) or `{l:?}` is a `compile_error!` whose message tells the user to bind
+  the value to a differently named local and format that (`let label = ..; "{label:?}"`), since a
+  local named after the key would hit the same error.
 - A placeholder bound to a literal key binds the original literal token, taken back out of the
-  muncher's `concat!` wrapper, so `info!(n = 1.5, "{n:.2}")` prints `1.50`. A literal whose token
+  muncher's `concat!` wrapper. A literal whose token
   isn't a valid standalone expression (a negated non-numeric such as `-"abc"`, `-true` or `-'a'`,
   or an integer out of range for `i32`) isn't bound.
 - A placeholder binds only a key with exactly the same spelling: an identifier key, or a
@@ -102,8 +106,9 @@ sink gating, property merging and interning, and analytics rendering remain.
 | Placeholder name matches two keys case-insensitively | `compile_error!`, since the binding would be ambiguous |
 | Placeholder name matches a lone key only case-insensitively (`{user}` with key `User`) | Not bound; the placeholder keeps its local-capture meaning; `Formatted` |
 | Literal key whose token isn't a valid standalone expression (`-"abc"`, `-true`, `-'a'`, out-of-range int) | Not bound; `Formatted` |
+| Placeholder with a spec or `:?` names a static or literal key | `compile_error!` |
 | Placeholder name is also passed explicitly (`"{user}", user = x`) | Not bound (the explicit argument wins); `Formatted` |
-| Every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key, and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
+| Every placeholder is `{k}` with a `%`/bare/static key or a string, char, bool or non-negated integer literal key, or `{k:?}` with a `?` key (a spec or `:?` on a static or literal key is the error above), and there are no extra arguments | `Template` (escapes allowed, zero placeholders allowed) |
 | Anything else (specs, positional, unbound names, extra arguments) | Bind what matches a key; `Formatted` |
 
 The pairing rule exists because a deferred placeholder renders as the stored property string.
@@ -152,7 +157,8 @@ if <level gate> {
 
 - A literal key's value is bound as the original literal token, not the muncher's
   `concat!(..)` (or `concat!("-", ..)` for negatives) string, and only for the Template-eligible
-  literal kinds (string, char, bool, non-negated integer) with a valid standalone token.
+  literal kinds (string, char, bool, non-negated integer) with a valid standalone token, and only
+  for plain `{k}`: a spec or `{k:?}` on a static or literal key emits `compile_error!`.
 - Hidden locals use `Span::mixed_site()` so they can't collide with user identifiers. Static
   values are hoisted the same way and passed to the static-set cache, so they're evaluated once.
 - Only names found in argument position are passed as named arguments. The scanner reads the
@@ -263,8 +269,7 @@ doesn't expose the message template, so the interop path can't benefit.
    match), `property_macro_tests.rs` (record the new kind;
    `tagged_messages_that_differ_from_the_format_string_are_formatted` loses its
    `info!(a = "1", "a {{b}}")` case, which becomes a `TaggedLogTemplateEvent` and moves to that
-   group, so the test keeps only cases that stay `TaggedLogString`), and `stream_flush_tests.rs` (read
-   `properties` from the new event too). `dyn_deps_tests.rs` calls `log`, `log_tagged` and
+   group, so the test keeps only cases that stay `TaggedLogString`),. `dyn_deps_tests.rs` calls `log`, `log_tagged` and
    `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` so each
    call keeps its current event kind.
 
@@ -296,7 +301,7 @@ doesn't expose the message template, so the interop path can't benefit.
   `rust/tracing/src/logs/block.rs`, `rust/tracing/src/logs/mod.rs`
 - `rust/tracing/src/dispatch.rs`, `rust/tracing/src/dispatch_wasm.rs`
 - `rust/tracing/benches/properties.rs`
-- `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`, `stream_flush_tests.rs`,
+- `rust/tracing/tests/utils.rs`, `property_macro_tests.rs`,
   `dyn_deps_tests.rs`
 - `rust/analytics/src/log_msg_template.rs` (new), `rust/analytics/src/lib.rs`,
   `rust/analytics/src/log_entry.rs`, `rust/analytics/src/log_entries_table.rs`
@@ -331,6 +336,9 @@ doesn't expose the message template, so the interop path can't benefit.
 - Case-insensitive property names are inherited behavior, not a hard requirement. If supporting
   them adds real complexity, switch the tracing crate to case-sensitive names instead, even
   though that changes current behavior (user call, 2026-10-19).
+- A static or literal key used with a format spec or `{k:?}` is a compile error pointing to a
+  differently named local, so static properties never fall back to per-call formatting (user
+  call, 2026-10-19).
 - Static and literal properties must not add per-call cost on the instrumented process: binding
   one into the message must not format, allocate or evaluate anything beyond what the existing
   static-set path already does (user call, 2026-10-19).
@@ -339,7 +347,8 @@ doesn't expose the message template, so the interop path can't benefit.
 
 - `log!` rustdoc (`rust/tracing/src/macros.rs`): the placeholder semantics; which calls are
   stored as a template (the pairing rule) and why that's the cheapest way to put a property in
-  the message; a `compile_fail` doctest for the ambiguous-key error.
+  the message; `compile_fail` doctests for the ambiguous-key error and for a spec or `{k:?}` on a static or
+  literal key.
 - Crate docs (`rust/tracing/src/lib.rs:72`): the example
   `rows = %n, "fetched {n} rows"` becomes `"fetched {rows} rows"`, the form that defers.
 - No `mkdocs/` page documents log macro properties or event types.
@@ -349,7 +358,7 @@ doesn't expose the message template, so the interop path can't benefit.
   - the before/after medians;
   - **Minor breaking change:** `LogEntry::msg` is `Cow<'a, str>`, the `dispatch::log*`
     functions take a `LogMsgForm`, `LogMsgQueue` gains a variant (exhaustive matches on
-    `LogMsgQueueAny` must add it), and a placeholder naming two keys is a compile error;
+    `LogMsgQueueAny` must add it), and a placeholder naming two keys, or a spec or `{k:?}` on a static or literal key, is a compile error;
   - no SQL change.
 
 ## Testing Strategy
@@ -376,7 +385,7 @@ sink). Each call also checks that the sink's `on_log` arguments format to the ex
   - `info!(User = %u, "{user}")` with a local `user` (case-mismatched lone key, not bound);
   - `info!(x = -"abc", "{x}")` and `info!(x = 99999999999999999999, "{x}")` (literal not bound,
     expansion unchanged from today);
-  - `info!(n = %n, "{n:>8}")`, which formats the original `n`;
+  - `info!(n = %n, "{n:>8}")`, which formats the original `n` (dynamic key);
   - `info!(v = ?v, "{v}")`;
   - `info!(user = %user, "{user} {}", 3)`;
   - `info!(a = "1", "{}", "{}")`;
@@ -388,7 +397,8 @@ sink). Each call also checks that the sink's `on_log` arguments format to the ex
 - Disabled entries: a gated call at a filtered level doesn't evaluate dynamic or static values
   (counter in the value expression).
 
-**Doctests in `macros.rs`**: `compile_fail` for `info!(user = %a, User = %b, "{user}")`.
+**Doctests in `macros.rs`**: `compile_fail` for `info!(user = %a, User = %b, "{user}")`, for
+`info!(l = static x, "{l:?}")`, and for a spec on a literal key (`info!(n = 1, "{n:>8}")`).
 
 **`rust/analytics/tests/log_msg_template_tests.rs`**: `render_msg_template` on text, escapes,
 adjacent and edge placeholders, `{name:?}`, a missing property (kept verbatim), and an
@@ -396,8 +406,11 @@ unsupported placeholder (kept verbatim).
 
 **`rust/analytics/tests/log_tests.rs`**:
 
-- A round trip through the real macros: `init_in_memory_tracing`, then the template-event calls
-  above, then `parse_entries`. The test takes the owned `Arc<LogBlock>` out of the in-memory sink and
+- A round trip through the real macros: `init_in_memory_tracing`, then
+  `set_max_level(LevelFilter::Trace)` (the max level starts at Off, so nothing is collected
+  otherwise), then the template-event calls above, then `flush_log_buffer()`, then
+  `parse_entries`. The test takes the owned `Arc<LogBlock>`s out of the in-memory sink with
+  `std::mem::take(&mut state.log_blocks)` (`parse_entries` needs `Arc::get_mut`) and
   builds a throwaway `LogStream` from the sink's `StreamDesc`
   (`LogStream::new(.., desc.process_id, &desc.tags, desc.properties.clone())`) and calls the
   existing `parse_entries`. Mark it `#[serial]`. Assert that each `msg` equals the `format!` of the same template
