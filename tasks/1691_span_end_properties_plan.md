@@ -150,7 +150,7 @@ pub fn on_end_async_named_scope_tagged(span_id: u64, parent_span_id: u64, loc: &
 ### Properties held by the guard
 
 ```rust
-let span = span_scope!(name = "fetch_rows", region = "eu", request = %req_id);
+let mut span = span_scope!(name = "fetch_rows", region = "eu", request = %req_id);
 let rows = fetch()?;                       // an early return still records region and request
 span.set_property("rows", rows.len());
 span.set_property("cache", if hit { "hit" } else { "miss" });
@@ -197,7 +197,7 @@ impl SpanProperties {
   - `()`, the default, which ends the span plainly. Every existing guard keeps its size and its
     drop path.
   - `SpanProperties`, which ends the span through the tagged path.
-- `set_property` exists only when `P = SpanProperties`. It forwards to the storage.
+- `set_property` exists only when `P = SpanProperties`, takes `&mut self`, and forwards to the storage.
 - Both guard types become `#[must_use]`.
 
 **Macros.** `span_scope!`, `span_scope_named!` and `span_scope_named_dyn!` each gain a `name =`
@@ -332,7 +332,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 **Phase 2: async spans** (can ship as its own PR)
 
 10. Add `TaggedEndAsyncSpanEvent` and `TaggedEndAsyncNamedSpanEvent` to the events, the queue
-    and `extract`. Add `on_end_async_scope_tagged` and `on_end_async_named_scope_tagged`, with
+    and `extract`; add the two new `ThreadEventQueueAny` arms in `rust/tracing/tests/utils.rs`. Add `on_end_async_scope_tagged` and `on_end_async_named_scope_tagged`, with
     wasm stubs.
 11. `instrumented_future.rs`: add the end-hook type parameter,
     `InstrumentFuture::instrument_with`, and the closure arms on the four async macros.
@@ -389,7 +389,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 
 ## Decisions
 
-- A span with properties is created with `let span = span_scope!(name = .., k = v, ..)`, which
+- A span with properties is created with `let mut span = span_scope!(name = .., k = v, ..)`, which
   returns the guard. `name` is a reserved property key. A `let` form inside the macro
   (`span_scope!(let span = ..)`) was rejected (user call).
 - Results are added with `span.set_property(name, value)` on the live guard. There is no
@@ -427,7 +427,7 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   `thread_spans`, `async_events` and `process_spans`, and the **Minor breaking change** clause
   above.
 - `rust/tracing/src/lib.rs` crate docs: a "Span properties" section next to the span section
-  (`:100`). It shows `span_scope!(name = ..)` with `set_property` and the async closure form,
+  (`:100`). It shows `let mut span = span_scope!(name = ..)` with `set_property` and the async closure form,
   and calls out the gotchas:
   - `let _ = span_scope!(name = ..)` drops the guard at once, like any `let _`. Bind a name.
   - A span that never ends, or that is cut at the edge of a query range, has no properties.
@@ -469,7 +469,7 @@ All of these are no-DB unit tests.
   - Two spans with the same dynamic set in one block share one set record.
   - `SpanProperties`: setting a name twice keeps the last value and doesn't grow the buffer, a
     case-insensitive repeat replaces, and a value longer than the inline capacity round-trips.
-  - Compile-fail doctests: `name` repeated as a property key, `..set` not in last position, and a
+  - Compile-fail doctests: `name` repeated as a property key and a
     bare-statement `span_scope!(name = "x");` under `#![deny(unused_must_use)]`.
   - Phase 2: a future built with `instrument_named!(.., |out, span| ..)` passes its output to the
     closure and emits a tagged async end with the matching `span_id`. A closure that sets nothing
