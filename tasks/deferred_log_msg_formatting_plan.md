@@ -265,7 +265,7 @@ doesn't expose the message template, so the interop path can't benefit.
    `info!(a = "1", "a {{b}}")` case, which becomes a `TaggedLogTemplateEvent` and moves to that
    group, so the test keeps only cases that stay `TaggedLogString`), and `stream_flush_tests.rs` (read
    `properties` from the new event too). `dyn_deps_tests.rs` calls `log`, `log_tagged` and
-   `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` (`Static` for `"static"`) so each
+   `log_dyn_tagged` directly: pass `LogMsgForm::Formatted` so each
    call keeps its current event kind.
 
 ### Phase 3: Analytics
@@ -399,8 +399,6 @@ unsupported placeholder (kept verbatim).
   (`LogStream::new(.., desc.process_id, &desc.tags, desc.properties.clone())`) and calls the
   existing `parse_entries`. Mark it `#[serial]`. Assert that each `msg` equals the `format!` of the same template
   and values. This pins agreement between the proc macro's grammar and the analytics renderer.
-- A `level`/`target` override property on a template event still applies through
-  `tagged_log_entry`.
 
 The existing `dyn_deps`, stream-flush, analytics log and corrupt-block suites cover the rest of
 the extract and parse plumbing once they're updated.
