@@ -32,6 +32,7 @@ memoffset.workspace = true
 micromegas-transit.workspace = true
 raw-cpuid.workspace = true
 rustc-hash.workspace = true
+smallvec.workspace = true
 thread-id.workspace = true
 whoami.workspace = true
 xxhash-rust = { workspace = true, features = ["xxh3"] }

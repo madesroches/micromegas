@@ -10,6 +10,7 @@ use micromegas_transit::{
     HeterogeneousQueue, StaticStringDependency, read_any, string_codec::StringCodec,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use std::{borrow::Cow, collections::hash_map::Entry, fmt};
 use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
@@ -38,21 +39,30 @@ fn dyn_offset(id: u64) -> u32 {
     ((id & !DYN_ID_TAG) >> 1) as u32
 }
 
+/// Callsites rarely carry more than a handful of properties, so this keeps the merge off the heap.
+const INLINE_PROPERTIES: usize = 8;
+
 /// The result of combining a callsite's static set with runtime properties.
 pub struct MergedProperties<'a> {
-    pub properties: Vec<DynProperty<'a>>,
+    properties: SmallVec<[DynProperty<'a>; INLINE_PROPERTIES]>,
     // Bit i set: properties[i].value comes from the `&'static` set.
     static_values: u64,
     // Bit i set: properties[i].name is `'static`.
     static_names: u64,
 }
 
-impl MergedProperties<'_> {
-    fn is_static_value(&self, index: usize) -> bool {
+impl<'a> MergedProperties<'a> {
+    pub fn properties(&self) -> &[DynProperty<'a>] {
+        &self.properties
+    }
+
+    #[doc(hidden)]
+    pub fn is_static_value(&self, index: usize) -> bool {
         is_static_bit(self.static_values, index)
     }
 
-    fn is_static_name(&self, index: usize) -> bool {
+    #[doc(hidden)]
+    pub fn is_static_name(&self, index: usize) -> bool {
         is_static_bit(self.static_names, index)
     }
 }
@@ -64,44 +74,79 @@ fn is_static_bit(mask: u64, index: usize) -> bool {
 /// Combines a static set with dynamic properties into one sorted list.
 ///
 /// A dynamic value replaces a static property of the same name (compared case-insensitively
-/// to match `property_get`).
+/// to match `property_get`). Among dynamic properties, the last of a name wins.
 #[inline]
 pub fn merge_properties<'a>(
     static_set: &'static PropertySet,
     dyn_properties: &[DynProperty<'a>],
 ) -> MergedProperties<'a> {
-    let mut merged: Vec<DynProperty<'a>> = static_set.dyn_properties().to_vec();
+    let mut properties: SmallVec<[DynProperty<'a>; INLINE_PROPERTIES]> = SmallVec::new();
     for dyn_prop in dyn_properties {
-        merged.retain(|p| !p.name().eq_ignore_ascii_case(dyn_prop.name()));
-        merged.push(*dyn_prop);
+        properties.retain(|p| !p.name().eq_ignore_ascii_case(dyn_prop.name()));
+        properties.push(*dyn_prop);
     }
-    merged.sort_by(cmp_dyn_properties);
-    // A value that is the very memory of a static property's value is `'static` whoever
-    // passed it. This avoids carrying a flag through the retain and the sort.
-    let (static_values, static_names) =
-        merged
+    properties.sort_by(cmp_dyn_properties);
+
+    let statics = static_set.dyn_properties();
+    if statics.is_empty() {
+        // The `_dyn` metric macros and interop logs land here: nothing to merge. Building in
+        // place keeps the inline buffer from being copied on the way out.
+        let static_names = properties
             .iter()
             .take(64)
             .enumerate()
-            .fold((0u64, 0u64), |(values, names), (i, p)| {
-                let is_static = static_set.get_properties().iter().any(|s| {
-                    s.value.id() == p.value().as_ptr() as u64
-                        && s.value.len as usize == p.value().len()
-                        && s.name.as_str() == p.name()
-                });
-                (
-                    values | (u64::from(is_static) << i),
-                    names | (u64::from(p.is_static_name()) << i),
-                )
+            .fold(0u64, |names, (i, p)| {
+                names | (u64::from(p.is_static_name()) << i)
             });
+        return MergedProperties {
+            properties,
+            static_values: 0,
+            static_names,
+        };
+    }
+    let deduped = std::mem::take(&mut properties);
+    // The static view is already in canonical order, so this is a merge of two sorted lists.
+    // Static entries keep their relative order, as a stable sort of the concatenation would.
+    let mut static_values = 0u64;
+    let mut static_names = 0u64;
+    let mut dynamic = deduped.iter().peekable();
+    let mut statics = statics
+        .iter()
+        .filter(|s| {
+            !deduped
+                .iter()
+                .any(|d| d.name().eq_ignore_ascii_case(s.name()))
+        })
+        .peekable();
+    loop {
+        let from_static = match (statics.peek(), dynamic.peek()) {
+            (None, None) => break,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            // An exact name match was filtered out, so the heads never tie.
+            (Some(s), Some(d)) => cmp_dyn_properties(s, d).is_le(),
+        };
+        let prop = if from_static {
+            *statics.next().unwrap()
+        } else {
+            *dynamic.next().unwrap()
+        };
+        let i = properties.len();
+        if i < 64 {
+            static_values |= u64::from(from_static) << i;
+            static_names |= u64::from(prop.is_static_name()) << i;
+        }
+        properties.push(prop);
+    }
     MergedProperties {
-        properties: merged,
+        properties,
         static_values,
         static_names,
     }
 }
 
-fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64 {
+#[doc(hidden)]
+pub fn content_hash<'a>(properties: impl Iterator<Item = (&'a str, &'a str)>) -> u64 {
     properties.fold(0, |h, (name, value)| {
         xxh3_64_with_seed(value.as_bytes(), xxh3_64_with_seed(name.as_bytes(), h))
     })

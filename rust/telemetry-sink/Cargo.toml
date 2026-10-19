@@ -33,6 +33,7 @@ log.workspace = true
 micromegas-telemetry.workspace = true
 micromegas-transit.workspace = true
 reqwest.workspace = true
+smallvec.workspace = true
 sysinfo.workspace = true
 tokio-retry2.workspace = true
 tokio.workspace = true

@@ -4,7 +4,7 @@ use micromegas_tracing::{
         log, log_dyn_tagged, log_tagged, shutdown_dispatch, tagged_float_metric,
         tagged_float_metric_dyn,
     },
-    dyn_deps::{DYN_ID_TAG, DynDeps, MergedProperties, merge_properties},
+    dyn_deps::{DYN_ID_TAG, DynDeps, MergedProperties, content_hash, merge_properties},
     event::{EventSink, ExtractDeps, TracingBlock},
     levels::Level,
     logs::{
@@ -17,7 +17,9 @@ use micromegas_tracing::{
     },
     prelude::*,
     process_info::ProcessInfo,
-    property_set::{Property, PropertySet, PropertySetId, dyn_property_get},
+    property_set::{
+        DynProperty, Property, PropertySet, PropertySetId, cmp_dyn_properties, dyn_property_get,
+    },
     spans::{ThreadBlock, ThreadStream},
     static_string_ref::BlockStringRef,
 };
@@ -324,11 +326,11 @@ fn merge_dynamic_overrides_static_case_insensitively() {
             DynProperty::new("correlation_id", "abc"),
         ],
     );
-    let merged = merged.properties;
+    let merged = merged.properties();
     assert_eq!(merged.len(), 3);
-    assert_eq!(dyn_property_get(&merged, "region"), Some("us"));
-    assert_eq!(dyn_property_get(&merged, "kind"), Some("t"));
-    assert_eq!(dyn_property_get(&merged, "correlation_id"), Some("abc"));
+    assert_eq!(dyn_property_get(merged, "region"), Some("us"));
+    assert_eq!(dyn_property_get(merged, "kind"), Some("t"));
+    assert_eq!(dyn_property_get(merged, "correlation_id"), Some("abc"));
 }
 
 #[test]
@@ -802,4 +804,153 @@ fn set_properties_decodes_dynamic_names_and_extract_emits_only_static_ones() {
     assert_eq!(static_strings.len(), 2);
     assert!(static_strings.contains(&kind.name.id()));
     assert!(static_strings.contains(&kind.value.id()));
+}
+
+/// The algorithm `merge_properties` replaced, kept as the specification of its output.
+fn reference_merge(
+    static_set: &'static PropertySet,
+    dyn_properties: &[DynProperty<'static>],
+) -> (Vec<(String, String, bool, bool)>, u64) {
+    let mut merged: Vec<DynProperty<'static>> = static_set.dyn_properties().to_vec();
+    for dyn_prop in dyn_properties {
+        merged.retain(|p| !p.name().eq_ignore_ascii_case(dyn_prop.name()));
+        merged.push(*dyn_prop);
+    }
+    merged.sort_by(cmp_dyn_properties);
+    let entries = merged
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let is_static_value = i < 64
+                && static_set.get_properties().iter().any(|s| {
+                    s.value.id() == p.value().as_ptr() as u64
+                        && s.value.len as usize == p.value().len()
+                        && s.name.as_str() == p.name()
+                });
+            let is_static_name = i < 64 && p.is_static_name();
+            (
+                p.name().to_owned(),
+                p.value().to_owned(),
+                is_static_value,
+                is_static_name,
+            )
+        })
+        .collect();
+    let hash = content_hash(merged.iter().map(|p| (p.name(), p.value())));
+    (entries, hash)
+}
+
+fn assert_merge_matches_reference(
+    label: &str,
+    static_set: &'static PropertySet,
+    dyn_properties: &[DynProperty<'static>],
+) {
+    let (expected, expected_hash) = reference_merge(static_set, dyn_properties);
+    let merged = merge_properties(static_set, dyn_properties);
+    let actual: Vec<_> = merged
+        .properties()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            (
+                p.name().to_owned(),
+                p.value().to_owned(),
+                merged.is_static_value(i),
+                merged.is_static_name(i),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "{label}");
+    let actual_hash = content_hash(merged.properties().iter().map(|p| (p.name(), p.value())));
+    assert_eq!(actual_hash, expected_hash, "{label}");
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+#[test]
+fn merge_matches_the_reference_algorithm() {
+    let abc = PropertySet::find_or_create(vec![
+        Property::new("b", "static_b"),
+        Property::new("d", "static_d"),
+        Property::new("f", "static_f"),
+    ]);
+    let case_variants = PropertySet::find_or_create(vec![
+        Property::new("Key", "upper"),
+        Property::new("key", "lower"),
+        Property::new("other", "x"),
+    ]);
+    let static_names = ["N0", "N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8", "N9"];
+    let many_static = PropertySet::find_or_create(
+        (0..70)
+            .map(|i| Property::new(leak(format!("s{i:03}")), leak(format!("sv{i}"))))
+            .collect(),
+    );
+    let many_dyn: Vec<DynProperty<'static>> = (0..70)
+        .map(|i| DynProperty::new(leak(format!("d{i:03}")), leak(format!("dv{i}"))))
+        .collect();
+    let owned_name = leak(String::from("owned_name"));
+
+    assert_merge_matches_reference("both empty", PropertySet::empty(), &[]);
+    assert_merge_matches_reference(
+        "empty static",
+        PropertySet::empty(),
+        &[DynProperty::new("a", "1")],
+    );
+    assert_merge_matches_reference("empty dynamic", abc, &[]);
+    assert_merge_matches_reference(
+        "sorts before, between and after",
+        abc,
+        &[
+            DynProperty::new("a", "1"),
+            DynProperty::new("c", "2"),
+            DynProperty::new("g", "3"),
+        ],
+    );
+    assert_merge_matches_reference(
+        "case-insensitive override",
+        abc,
+        &[DynProperty::new("D", "override")],
+    );
+    assert_merge_matches_reference(
+        "case-insensitive duplicates, last wins",
+        abc,
+        &[
+            DynProperty::new("x", "1"),
+            DynProperty::new("X", "2"),
+            DynProperty::new("y", "3"),
+            DynProperty::new("x", "4"),
+        ],
+    );
+    assert_merge_matches_reference("case-variant statics kept", case_variants, &[]);
+    assert_merge_matches_reference(
+        "case-variant statics with other dynamic",
+        case_variants,
+        &[DynProperty::new("zzz", "1"), DynProperty::new("a", "2")],
+    );
+    assert_merge_matches_reference(
+        "case-variant statics overridden",
+        case_variants,
+        &[DynProperty::new("KEY", "new")],
+    );
+    assert_merge_matches_reference(
+        "dyn names",
+        abc,
+        &[
+            DynProperty::with_dyn_name(owned_name, "v"),
+            DynProperty::with_dyn_name("B", "over"),
+        ],
+    );
+    let nine: Vec<DynProperty<'static>> = static_names
+        .iter()
+        .map(|n| DynProperty::new(n, "v"))
+        .collect();
+    assert_merge_matches_reference("spills past 8 entries", abc, &nine);
+    assert_merge_matches_reference("past 64 entries", many_static, &many_dyn);
+    assert_merge_matches_reference(
+        "past 64 with overrides",
+        many_static,
+        &[DynProperty::new("S005", "o"), DynProperty::new("d000", "o")],
+    );
 }

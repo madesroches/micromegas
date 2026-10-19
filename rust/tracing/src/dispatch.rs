@@ -1070,7 +1070,7 @@ impl Dispatch {
         let time = now();
         let merged = merge_properties(properties, dyn_properties);
         // Before taking the lock, so that local sinks can log without deadlocking.
-        sink.on_log(desc, &merged.properties, time, args);
+        sink.on_log(desc, merged.properties(), time, args);
         let msg = if is_static_msg(desc, &args) {
             None
         } else {
@@ -1108,16 +1108,17 @@ impl Dispatch {
         let is_override = |p: &DynProperty<'_>| {
             p.name().eq_ignore_ascii_case("target") || p.name().eq_ignore_ascii_case("level")
         };
-        if merged.properties.iter().any(is_override) {
+        if merged.properties().iter().any(is_override) {
             let filtered: Vec<DynProperty<'_>> = merged
-                .properties
+                .properties()
                 .iter()
                 .copied()
                 .filter(|p| !is_override(p))
                 .collect();
             self.get_sink().on_log(desc, &filtered, time, args);
         } else {
-            self.get_sink().on_log(desc, &merged.properties, time, args);
+            self.get_sink()
+                .on_log(desc, merged.properties(), time, args);
         }
         let msg = micromegas_transit::DynString(args.to_string());
         let mut log_stream = self.log_stream.lock().unwrap();
