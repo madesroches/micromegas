@@ -246,9 +246,12 @@ fn metric_batch_export_cases() -> [(usize, Case); 2] {
     [(10, record_batch::<10>), (100, record_batch::<100>)]
 }
 
-const SPAN_CASES: [(&str, Case); 2] = [
+const SPAN_CASES: [(&str, Case); 3] = [
     ("static", |_| {
         span_scope!("static");
+    }),
+    ("attrs", |i| {
+        let _span = span_scope!(name = "static", id = %i);
     }),
     ("dyn_name", |i| {
         span_scope_named_dyn!(format!("span {i}"));
