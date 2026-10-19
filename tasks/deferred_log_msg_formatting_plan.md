@@ -300,6 +300,9 @@ doesn't expose the message template, so the interop path can't benefit.
   2026-10-19).
 - A placeholder that matches two keys case-insensitively is a compile error rather than
   following the merge's "last wins" rule.
+- Case-insensitive property names are inherited behavior, not a hard requirement. If supporting
+  them adds real complexity, switch the tracing crate to case-sensitive names instead, even
+  though that changes current behavior (user call, 2026-10-19).
 
 ## Documentation
 
