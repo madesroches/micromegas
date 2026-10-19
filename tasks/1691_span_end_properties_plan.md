@@ -231,8 +231,8 @@ arm, placed before the existing arms. The arm is an expression that returns the 
   runtime are evaluated the same way.
 
 **Async spans.** `InstrumentFuture` gains
-`instrument_with(self, desc, on_end: impl SpanEndHook<Self::Output>)`, the public entry point for
-the unnamed `InstrumentedFuture`. The four
+`instrument_with<H: FnOnce(&Self::Output, &mut SpanProperties)>(self, desc, on_end: H)`, the public
+entry point for the unnamed `InstrumentedFuture`. The four
 async macros (`instrument_named!`, `instrument_named_dyn!`, `span_async_named!`,
 `span_async_named_dyn!`) each gain an optional trailing closure argument:
 
@@ -253,6 +253,10 @@ let rows = instrument_named!(fetch(id), "fetch", |out, span| {
   build `InstrumentedNamedFuture`. The closure arms instead call new hidden
   `__instrument_named_with_internal` and `__instrument_named_dyn_with_internal` methods on
   `InstrumentFuture`, which use a hook-taking `InstrumentedNamedFuture` constructor.
+- `instrument_with` and the two hidden `_with_internal` methods are bounded directly by
+  `H: FnOnce(&Self::Output, &mut SpanProperties)`, not by `SpanEndHook`: closures infer their
+  parameter types only from a direct `FnOnce` bound, so `|out, span|` fails to compile through the
+  blanket impl. `SpanEndHook` bounds only the future types and their `Future` impls.
 - On `Ready`, the future builds an empty `SpanProperties` on the stack and passes it to the hook
   with the output. It then emits the tagged end, or the plain end when the hook set nothing.
 - The hook is a separate type parameter, so a non-capturing closure keeps the future `Send`.
@@ -512,7 +516,9 @@ All of these are no-DB unit tests.
   - Feed `CallTreeBuilder` directly. A span ended with properties gets the right JSONB in the
     `SpanRecordBuilder` column, and plain spans get the empty set.
   - Fold a properties assertion into the existing `test_span_crossing_a_block_boundary_is_one_node`.
-  - A span whose begin is before the range (the root-adoption path) keeps its end properties.
+  - A single span whose begin is before the range (the empty-stack path) keeps its end properties.
+  - A nested pair that both began before the range: the outer end hits root adoption. Assert the end
+    properties on both spans.
   - A span left open at the end of the range gets the empty set.
   - Two trees appended to one builder that share a set produce one dictionary value.
   - The batch's last field is `properties`.
