@@ -136,9 +136,12 @@ pub fn on_end_async_named_scope_tagged(span_id: u64, parent_span_id: u64, loc: &
                                        dyn_properties: &[DynProperty<'_>]);
 ```
 
-- If both the set and `dyn_properties` are empty, each function calls the matching plain end, so
-  a guard that recorded nothing costs what a plain span costs. Async spans have no plain end for
-  a runtime name, so the async named function uses the `_dyn` plain end.
+- If both the set and `dyn_properties` are empty, the unnamed tagged functions fall back to
+  `on_end_scope` / `on_end_async_scope`, and the two named ones fall back to
+  `on_end_named_scope_dyn` / `on_end_async_named_scope_dyn`, because they take a runtime
+  `&str`. Guards and futures check for emptiness first and end through `SpanName::end_*`, so
+  static-named spans keep their exact bytes. The dispatch fallback is only reached by direct
+  callers.
 - Otherwise the function reads `now()` first, as the existing `_dyn` end paths do. It then goes
   through a new `on_thread_tagged_event` helper, which has the same shape as
   `on_thread_dyn_named_event`. No lock is taken, because the thread stream is thread-local.
@@ -300,7 +303,9 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 1. `span_events.rs`: add `TaggedEndThreadSpanEvent` and `TaggedEndThreadNamedSpanEvent`.
 2. `spans/block.rs`: add the queue entries, `PropertySetDependency` in `ThreadDepsQueue` with
    its `PropertyDepsQueue` impl, the new `extract` arms with `record_properties` and
-   `record_static_refs`, and `push_tagged` / `push_tagged_named`.
+   `record_static_refs`, and `push_tagged` / `push_tagged_named`. Switch `recorded_deps` and the
+   three `record_*_dependencies` helper signatures from `std::collections::HashSet` to
+   `rustc_hash::FxHashSet`, as `logs/block.rs` and `metrics/block.rs` do.
 3. `dispatch.rs`: add `on_thread_tagged_event`, `on_end_scope_tagged` and
    `on_end_named_scope_tagged`. `dispatch_wasm.rs`: add stubs.
 4. `spans/span_properties.rs` (new, plus its `mod` / `pub use` in `spans/mod.rs`):
@@ -350,6 +355,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `CHANGELOG.md`, `mkdocs/docs/query-guide/schema-reference.md`,
   `mkdocs/docs/query-guide/functions-reference.md`,
   `mkdocs/docs/when-to-use/instrumentation-overhead.md`
+- `claude-plugin/skills/micromegas-query/SKILL.md`, `rust/tracing/README.md`,
+  `doc/how_to_query/README.md`
 
 ## Trade-offs
 
@@ -425,6 +432,13 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
 - `mkdocs/docs/query-guide/schema-reference.md`: add a `properties` row to the `thread_spans` and
   `async_events` tables, plus an example
   (`SELECT name, property_get(properties, 'rows') ... FROM view_instance('thread_spans', ..)`).
+- `mkdocs/docs/query-guide/schema-reference.md` (`:659`): the `properties` description ("log
+  properties, metric properties") also covers spans.
+- `claude-plugin/skills/micromegas-query/SKILL.md` (`:329-364`): add a `properties` row to the
+  `thread_spans` and `async_events` column tables.
+- `rust/tracing/README.md` (`:25`): properties attach to logs, metrics and spans.
+- `doc/how_to_query/README.md` (`:339+`): add `properties` to the `thread_spans` section of this
+  legacy schema copy.
 - `mkdocs/docs/query-guide/functions-reference.md`: `process_spans` returns `properties`.
 - `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace "Micromegas
   spans carry no attributes" with a note that spans can carry end-time properties, which this
@@ -499,5 +513,4 @@ first use.
 
 ## Open Questions
 
-- **Phase 2 packaging:** the plan assumes async ships in the same PR when it's ready, and as a
-  follow-up PR otherwise.
+None.
