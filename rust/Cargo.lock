@@ -4015,6 +4015,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serial_test",
+ "smallvec",
  "sysinfo",
  "tikv-jemalloc-ctl",
  "tikv-jemallocator",

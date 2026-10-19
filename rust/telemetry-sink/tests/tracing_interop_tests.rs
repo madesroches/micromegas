@@ -84,6 +84,31 @@ fn event_fields_become_properties() {
     assert!(props.iter().all(|(k, _)| !k.starts_with("log.")));
 }
 
+#[test]
+#[serial]
+fn consecutive_events_do_not_share_fields() {
+    let guard = init_in_memory_tracing();
+    let subscriber = tracing_subscriber::registry().with(TracingCaptureLayer {
+        max_level: LevelFilter::Trace,
+    });
+    let large = "x".repeat(10_000);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(a = 1, "first");
+        tracing::info!(big = %large, "second");
+        tracing::info!(c = "3", "third");
+    });
+    flush_log_buffer();
+
+    let (tagged, _) = captured_interop_events(&guard);
+    assert_eq!(tagged.len(), 3);
+    assert_eq!(tagged[0].0, "first a=1 ");
+    assert_eq!(tagged[0].1, vec![("a".to_owned(), "1".to_owned())]);
+    assert_eq!(tagged[1].0, format!("second big={large} "));
+    assert_eq!(tagged[1].1, vec![("big".to_owned(), large.clone())]);
+    assert_eq!(tagged[2].0, "third c=\"3\" ");
+    assert_eq!(tagged[2].1, vec![("c".to_owned(), "3".to_owned())]);
+}
+
 struct PropertyCaptureSink {
     inner: InMemorySink,
     on_log_props: Mutex<Vec<Vec<(String, String)>>>,

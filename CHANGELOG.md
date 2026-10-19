@@ -16,8 +16,13 @@ This file documents the historical progress of the Micromegas project. For curre
   precomputing static entry hashes were evaluated and not adopted: neither showed a measurable
   difference. A dynamic value that happens to share the memory of a static value is no longer
   recognized as static, which costs one extra string record. The instrumentation overhead page
-  is re-measured. **Minor breaking change:** `MergedProperties::properties` is now a method
-  returning a slice instead of a public `Vec` field. No SQL change.
+  is re-measured. The `tracing` interop layer now formats each field once and reuses per-thread
+  scratch buffers instead of allocating a `String` per field and two `Vec`s per event:
+  `log/dyn_high_card/micromegas_interop` 444 -> 277 ns, `log/formatted/micromegas_interop`
+  195 -> 105 ns, `log/static/micromegas_interop` 140 -> 90 ns. **Minor breaking change:**
+  `MergedProperties::properties` is now a method returning a slice instead of a public `Vec`
+  field, and `FieldFormatVisitor` gains a `values` buffer and holds its properties as ranges
+  into it. No SQL change.
 * **Docs:** Refresh the intro deck's cost and scale figures to the vendor comparison's reference
   workload (~2 trillion events over 90 days, ~27.5 TB, ~$1,100/month) and align the per-process
   throughput claim to up to 300k events/second across the deck, landing page, `llms.txt`, README,

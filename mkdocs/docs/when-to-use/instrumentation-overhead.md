@@ -12,21 +12,21 @@ This is the time the application thread spends recording one item, which is the 
 
 | case | `micromegas` | `micromegas_interop` | `otel` |
 |---|---|---|---|
-| `static` | 17.2 | 123.6 | 238.9 |
-| `formatted` | 57.7 | 173.8 | 225.9 |
-| `static_attrs` | 18.9 | — | 561.3 |
-| `dyn_low_card` | 49.5 | — | 294.7 |
-| `dyn_high_card` | 191.1 | 448.9 | 340.7 |
+| `static` | 17.2 | 91.3 | 246.0 |
+| `formatted` | 60.4 | 103.3 | 255.9 |
+| `static_attrs` | 19.4 | — | 586.2 |
+| `dyn_low_card` | 49.0 | — | 321.7 |
+| `dyn_high_card` | 217.7 | 263.9 | 343.1 |
 
-Micromegas is faster in every native case; a `tracing` event routed into Micromegas costs more than the native macro, and for `dyn_high_card` more than OpenTelemetry, but less than it in the other cases.
+Micromegas is faster in every native case. A `tracing` event routed into Micromegas costs more than the native macro but still less than OpenTelemetry.
 
 **`span`: median ns per span on the calling thread** (one operation records a begin and an end event)
 
 | case | `micromegas` | `otel` | `otel_tracing` |
 |---|---|---|---|
-| `static` | 22.9 | 181.3 | 861.8 |
-| `attrs` | — | 241.7 | 945.2 |
-| `dyn_name` | 110.8 | 215.3 | 948.5 |
+| `static` | 17.0 | 161.3 | 870.5 |
+| `attrs` | — | 241.3 | 957.0 |
+| `dyn_name` | 109.3 | 220.1 | 934.5 |
 
 `otel_tracing` is OpenTelemetry through the `tracing-opentelemetry` bridge, which costs several times more than the direct tracer.
 
@@ -34,8 +34,8 @@ Micromegas is faster in every native case; a `tracing` event routed into Microme
 
 | case | `micromegas` | `otel` |
 |---|---|---|
-| 10 series | 11.9 | 75.7 |
-| 100 series | 11.9 | 78.6 |
+| 10 series | 12.9 | 73.6 |
+| 100 series | 12.6 | 78.9 |
 
 A sample costs the calling thread about 6 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
 
@@ -47,10 +47,10 @@ This work runs on a background thread and does not affect the instrumented threa
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| `log_static_attrs` | 807.3 | 590.8 | 1179.1 |
-| `log_dyn_high_card` | 4388.0 | 354.6 | 1151.2 |
-| `span_static` | 1432.0 | 298.3 | 2404.1 |
-| `span_dyn_name` | 3578.9 | 309.1 | 3946.4 |
+| `log_static_attrs` | 852.9 | 595.8 | 1182.8 |
+| `log_dyn_high_card` | 4502.1 | 368.0 | 1192.8 |
+| `span_static` | 1463.8 | 300.0 | 2455.4 |
+| `span_dyn_name` | 3690.8 | 315.3 | 4044.6 |
 
 OpenTelemetry encodes faster per event, most clearly for `log_dyn_high_card`. With gzip it is costlier than Micromegas for the static cases and about equal for `span_dyn_name`.
 
@@ -58,10 +58,10 @@ OpenTelemetry encodes faster per event, most clearly for `log_dyn_high_card`. Wi
 
 | case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| `log_static_attrs` | 25.0 | 5.4 | 117.0 | 3.7 |
-| `log_dyn_high_card` | 95.9 | 27.2 | 100.9 | 4.9 |
-| `span_static` | 34.0 | 8.6 | 66.0 | 34.5 |
-| `span_dyn_name` | 76.9 | 24.5 | 68.9 | 37.0 |
+| `log_static_attrs` | 25.0 | 5.4 | 117.0 | 3.6 |
+| `log_dyn_high_card` | 95.9 | 27.3 | 100.9 | 4.9 |
+| `span_static` | 34.0 | 8.6 | 66.0 | 34.6 |
+| `span_dyn_name` | 76.9 | 24.5 | 68.9 | 36.9 |
 
 The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is smaller than Micromegas for logs and larger for spans.
 
@@ -69,8 +69,8 @@ The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is sm
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| 10 series | 1541.3 | 811.6 | 2303.1 |
-| 100 series | 1453.2 | 868.8 | 1280.7 |
+| 10 series | 1557.7 | 806.9 | 2336.3 |
+| 100 series | 1469.1 | 873.7 | 1308.9 |
 
 OpenTelemetry wins metric export cost: its collect, conversion and encode is cheaper per sample than Micromegas's share of `encode_bin`, and gzip erases that lead only at 10 series.
 
@@ -78,8 +78,8 @@ OpenTelemetry wins metric export cost: its collect, conversion and encode is che
 
 | case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| 10 series | 33.2 | 8.3 | 90.4 | 24.6 |
-| 100 series | 34.7 | 8.4 | 76.5 | 5.8 |
+| 10 series | 33.2 | 8.3 | 90.4 | 24.4 |
+| 100 series | 34.7 | 8.4 | 76.5 | 5.9 |
 
 Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 series and smaller at 100, where OpenTelemetry wins on size.
 

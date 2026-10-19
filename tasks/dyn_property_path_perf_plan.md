@@ -214,7 +214,11 @@ Hashing static strings by pointer, the issue's other idea, is rejected (see Deci
   `metric/dyn_low_card` measured 53.2 ns against 50.1 ns with the real hash, and `log/dyn_low_card`
   60.5 ns against 55.1 ns. Removing the hash entirely does not make the path faster, so
   precomputing part of it cannot pay off. The remaining ~30 ns over `static_low_card` is the lock,
-  the probe and `same_content`.
+  the probe and `same_content`. The later profile (see Results) qualifies this: the
+  property-count hash makes every set of a given size collide, which moves the saved cost into
+  the probe, and the real hash is 16% of `metric/dyn_low_card` and 9% of `log/dyn_mixed`. Step 7
+  would still save nothing on `metric/dyn_low_card`, whose only property is dynamic, and at most
+  that 9% on `log/dyn_mixed`, where three of four entries are static; it stays out of this change.
 - **Merge fast path for an empty static set.** The `_dyn` metric macros and interop logs merge
   into an empty static set. With the plain merge-walk, `dispatch/metric_dyn` regressed from 68.9
   to 74.1 ns, because two copies of the 320-byte inline buffer cost more than the `Vec` they
@@ -257,9 +261,28 @@ per-call medians, which are regenerated in step 8 along with the rest of the pag
 
 ## Results
 
-`perf` is not available on this machine (`perf: command not found`), so the profile split of
-step 1 could not be taken; the gates for steps 5 and 7 were decided from criterion (see
-Decisions). Medians are criterion's central estimate on the machine described in
+`perf` was not available while steps 1 to 7 ran, so the gates for steps 5 and 7 were decided
+from criterion (see Decisions). It was installed afterwards and both cases were profiled on the
+old and new code (`perf record -e cpu-clock --call-graph dwarf`, 8 s `--profile-time` runs,
+samples bucketed by the first matching frame from the leaf):
+
+| bucket | `metric/dyn_low_card` before | after | `log/dyn_mixed` before | after |
+|---|---|---|---|---|
+| allocation | 15.7% | 0.7% | 26.2% | 12.1% |
+| sort | 0.0% | 0.4% | 5.0% | 0.8% |
+| mask scan / merge walk | 12.0% | 19.9% | 9.6% | 18.2% |
+| content hash | 16.8% | 15.9% | 10.0% | 8.6% |
+| probe + `same_content` | 24.0% | 25.1% | 18.6% | 22.7% |
+| `now()` | 13.9% | 11.4% | 3.5% | 4.5% |
+| lock + event push | 7.4% | 9.1% | 11.7% | 12.8% |
+| other (dispatch, bench loop) | 10.1% | 17.4% | 15.2% | 20.3% |
+
+Allocation was the largest removable cost and is gone from the metric path; the `log/dyn_mixed`
+allocation left is its formatted message. The merge walk's share includes copying the inline
+buffers by value. Hashing is 9 to 16% of the path, all of it single-threaded work outside any
+contention.
+
+Medians are criterion's central estimate on the machine described in
 `instrumentation-overhead.md`, single-threaded unless noted. `before` is the `main` merge, `after`
 is this change.
 
@@ -303,3 +326,25 @@ runs; the standalone re-runs of the two high-cardinality micromegas cases are in
 The full-run `dyn_high_card` figures vary more between runs than the change does (the same code
 gave 192 and 282 ns in two full runs), so the standalone re-runs are the better comparison.
 `instrumentation-overhead.md` is regenerated from the final full run.
+
+### `tracing` interop layer
+
+With the merge rewrite in, `log/dyn_high_card/micromegas_interop` still measured 444 ns against
+342 ns for OpenTelemetry. On the calling thread, about 55% of its time was in
+`TracingCaptureLayer` before reaching Micromegas: each field was formatted twice (message and
+property), each property value got its own `String`, and every event allocated a property `Vec`,
+a `DynProperty` `Vec` and a growing message buffer. The layer now formats each field once into a
+per-thread `values` buffer, keeps properties as ranges into it in a `SmallVec`, and reuses a
+per-thread message buffer (fresh buffers when re-entered or during thread teardown, and buffers
+over 4 KiB are not retained). Standalone medians:
+
+| case | before (ns) | after (ns) |
+|---|---|---|
+| `log/static/micromegas_interop` | 140.2 | 90.1 |
+| `log/formatted/micromegas_interop` | 194.6 | 105.3 |
+| `log/dyn_high_card/micromegas_interop` | 444.5 | 277.4 (276 to 292 in repeat runs) |
+| `log/dyn_high_card/otel` (unchanged, for reference) | 342.3 | 361 to 376 in repeat runs |
+
+The final full run used for `instrumentation-overhead.md` has 263.9 ns for `micromegas_interop`
+against 343.1 ns for `otel`. What is left on that path is interning the new value strings and
+probing the set index (about 27%) plus the owned copy of the message.

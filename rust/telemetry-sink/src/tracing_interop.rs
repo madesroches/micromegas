@@ -4,24 +4,37 @@ use micromegas_tracing::{
     logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
     property_set::DynProperty,
 };
+use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::ops::Range;
 use std::sync::atomic::AtomicU32;
 use tracing_subscriber::{layer::Context, prelude::*};
 
 use std::fmt::{self, Write};
 use tracing::field::{Field, Visit};
+
+const INLINE_FIELDS: usize = 4;
+
+/// Larger scratch buffers are dropped after the event instead of being kept for the thread's
+/// lifetime.
+const MAX_RETAINED_SCRATCH: usize = 4096;
+
 pub struct FieldFormatVisitor<'a> {
     pub buffer: &'a mut String,
     pub target: Option<String>,
-    /// Event fields that become dynamic properties, in addition to their message text.
-    pub properties: Vec<(&'static str, String)>,
+    /// Values of the event fields that become dynamic properties, concatenated.
+    pub values: &'a mut String,
+    /// Event fields that become dynamic properties, in addition to their message text, as
+    /// ranges into `values`.
+    pub properties: SmallVec<[(&'static str, Range<usize>); INLINE_FIELDS]>,
 }
 
 impl FieldFormatVisitor<'_> {
     fn write_message_part(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            write!(self.buffer, "{value:?} ").unwrap();
+            write!(self.buffer, "{value:?} ").expect("formatting into a String");
         } else {
-            write!(self.buffer, "{}={:?} ", field.name(), value).unwrap();
+            write!(self.buffer, "{}={:?} ", field.name(), value).expect("formatting into a String");
         }
     }
 
@@ -38,19 +51,40 @@ impl Visit for FieldFormatVisitor<'_> {
             return;
         }
         if Self::is_property(field) {
-            self.properties.push((field.name(), value.to_owned()));
+            let start = self.values.len();
+            self.values.push_str(value);
+            self.properties
+                .push((field.name(), start..self.values.len()));
         }
         self.write_message_part(field, &value);
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        let formatted = format!("{value:?}");
-        // `Arguments` debug-prints verbatim, so the value is not formatted a second time.
-        self.write_message_part(field, &format_args!("{formatted}"));
-        if Self::is_property(field) {
-            self.properties.push((field.name(), formatted));
+        if !Self::is_property(field) {
+            self.write_message_part(field, value);
+            return;
         }
+        // Formatted once into `values`; the message reuses that text.
+        let start = self.values.len();
+        write!(self.values, "{value:?}").expect("formatting into a String");
+        let range = start..self.values.len();
+        self.buffer.push_str(field.name());
+        self.buffer.push('=');
+        self.buffer.push_str(&self.values[range.clone()]);
+        self.buffer.push(' ');
+        self.properties.push((field.name(), range));
     }
+}
+
+#[derive(Default)]
+struct Scratch {
+    buffer: String,
+    values: String,
+}
+
+thread_local! {
+    // Reused across events so that capturing one does not allocate its working buffers.
+    static SCRATCH: RefCell<Scratch> = RefCell::default();
 }
 
 /// A tracing layer compatible with `tracing_subscriber`.
@@ -78,35 +112,67 @@ where
         if level > self.max_level {
             return;
         }
-        let mut buffer = String::new();
-        let mut formatter = FieldFormatVisitor {
-            buffer: &mut buffer,
-            target: None,
-            properties: vec![],
-        };
-        event.record(&mut formatter);
-        let FieldFormatVisitor {
-            target, properties, ..
-        } = formatter;
-        let log_desc = LogMetadata {
-            level,
-            level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
-            fmt_str: "{}",
-            target: target.as_deref().unwrap_or(event.metadata().target()),
-            module_path: event.metadata().module_path().unwrap_or_default(),
-            file: "",
-            line: 0,
-        };
-
-        if properties.is_empty() {
-            log_interop(&log_desc, format_args!("{}", buffer));
-        } else {
-            let dyn_properties: Vec<DynProperty<'_>> = properties
-                .iter()
-                .map(|(name, value)| DynProperty::new(name, value))
-                .collect();
-            log_interop_dyn_tagged(&log_desc, &dyn_properties, format_args!("{}", buffer));
+        let capture = |scratch: &mut Scratch| capture_event(event, level, scratch);
+        // A sink that emits `tracing` events re-enters here while the scratch is borrowed, and
+        // thread-local destruction makes it unavailable; both fall back to fresh buffers.
+        let reused = SCRATCH
+            .try_with(|cell| match cell.try_borrow_mut() {
+                Ok(mut scratch) => {
+                    capture(&mut scratch);
+                    scratch.buffer.clear();
+                    scratch.values.clear();
+                    if scratch.buffer.capacity() > MAX_RETAINED_SCRATCH
+                        || scratch.values.capacity() > MAX_RETAINED_SCRATCH
+                    {
+                        *scratch = Scratch::default();
+                    }
+                    true
+                }
+                Err(_) => false,
+            })
+            .unwrap_or(false);
+        if !reused {
+            capture(&mut Scratch::default());
         }
+    }
+}
+
+fn capture_event(
+    event: &tracing::Event<'_>,
+    level: micromegas_tracing::levels::Level,
+    scratch: &mut Scratch,
+) {
+    let mut formatter = FieldFormatVisitor {
+        buffer: &mut scratch.buffer,
+        target: None,
+        values: &mut scratch.values,
+        properties: SmallVec::new(),
+    };
+    event.record(&mut formatter);
+    let FieldFormatVisitor {
+        buffer,
+        target,
+        values,
+        properties,
+    } = formatter;
+    let log_desc = LogMetadata {
+        level,
+        level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "{}",
+        target: target.as_deref().unwrap_or(event.metadata().target()),
+        module_path: event.metadata().module_path().unwrap_or_default(),
+        file: "",
+        line: 0,
+    };
+
+    if properties.is_empty() {
+        log_interop(&log_desc, format_args!("{buffer}"));
+    } else {
+        let dyn_properties: SmallVec<[DynProperty<'_>; INLINE_FIELDS]> = properties
+            .iter()
+            .map(|(name, range)| DynProperty::new(name, &values[range.clone()]))
+            .collect();
+        log_interop_dyn_tagged(&log_desc, &dyn_properties, format_args!("{buffer}"));
     }
 }
 
