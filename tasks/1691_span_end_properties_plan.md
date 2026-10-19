@@ -9,8 +9,7 @@ properties are recorded on the span's **end** event, so a span can report its re
 counts, bytes, cache hit/miss, error status) as well as context the caller attaches. Today the
 only way to put context on a span is a runtime name (`span_scope_named_dyn!`,
 `span_async_named_dyn!`). That puts high-cardinality values in the name and breaks name-based
-aggregation. Properties keep names low-cardinality. Begin events and plain end events don't
-change. New tagged end events reuse the per-block dynamic dependency queue (`DynDeps`) and
+aggregation. Properties keep names low-cardinality. New tagged end events reuse the per-block dynamic dependency queue (`DynDeps`) and
 `merge_properties`. `thread_spans`, `async_events` and `process_spans` each gain a `properties`
 column, appended last.
 
@@ -65,7 +64,7 @@ literal set, `static` values and dynamic values, with `log` and `metric` kinds. 
   `thread_spans`, and `process_spans` (`lakehouse/process_spans_table_function.rs:59`) reuses
   the same schema. Its async half is a SQL join over `async_events` (`:385`) with an explicit
   column list.
-- `parse_async_block_payload` (`rust/analytics/src/async_block_processing.rs:59`) feeds
+- `parse_async_block_payload` (`rust/analytics/src/async_block_processing.rs:58`) feeds
   `AsyncEventCollector` (`lakehouse/async_events_block_processor.rs:34`). A new collector is
   built for every block, so `PropertySetJsonbDictionaryBuilder`'s one-arena invariant holds
   there. `async_events_table_schema` is in `rust/analytics/src/async_events_table.rs`.
@@ -78,7 +77,7 @@ literal set, `static` values and dynamic values, with `log` and `metric` kinds. 
 
 ### Events (`span_events.rs`)
 
-There are four new tagged end events. Each existing end event keeps its layout and cost.
+There are four new tagged end events.
 
 ```rust
 #[derive(Debug, TransitReflect)]
@@ -189,7 +188,7 @@ impl SpanProperties {
   native-only `dyn_deps`, while `guards` and `instrumented_future` compile on wasm32. Following
   the stub convention in `lib.rs`, wasm32 gets a cfg'd `SpanProperties` stub holding only the
   `static_set`, with a no-op `set_property`. The guard's tagged drop path is cfg'd to the plain
-  end there, so the wasm clippy build (`-D warnings`) stays clean.
+  end there, so tracing still compiles for wasm32 (checked by the wasm clippy build).
 
 **Guards.** `SpanName` gains `fn as_str(&self) -> &str`, so that both name kinds reach the single
 `_named_scope_tagged` dispatch.
@@ -224,15 +223,15 @@ arm, placed before the existing arms. The arm is an expression that returns the 
     path, which sends the literals as dynamic entries, does not apply because the guard holds a
     single `static_set`. A `..set` alone is used as the `static_set` directly.
   - Each dynamic entry becomes a `set_property` call on the new guard. `%v` goes in as
-    `Display` with no `format!`. `?v` goes in through a small `Debug`-as-`Display` adapter. A
+    `Display` with no `format!`. `?v` goes in as `format_args!("{:?}", v)`. A
     bare value goes through `PropertyValue`.
 - `__prop_key!(span name)` / `(span "name")` is a compile error, because `name` is the span's
   name. `span_scope!(name = "x", name = "y")` therefore fails to compile.
 - Writing `span_scope!(name = "x", ...);` as a bare statement drops the guard at once. That
-  triggers the `#[must_use]` warning. CI clippy runs without `--all-targets`, so the warning is
-  denied in library code only; the compile-fail doctest's `#![deny(unused_must_use)]` covers the
-  rest.
+  triggers the `#[must_use]` warning, pinned by a compile-fail doctest.
 - The existing arms don't change. They stay statements with a hidden guard and no properties.
+  Turning `span_scope!("x")` into an expression would make every existing `span_scope!("x");`
+  statement drop the guard at once and silently record a zero-length span.
 - Dynamic values are evaluated without a check. Spans have no level gate, and span names built at
   runtime are evaluated the same way.
 
@@ -265,7 +264,7 @@ let rows = instrument_named!(fetch(id), "fetch", |out, span| {
   blanket impl. `SpanEndHook` bounds only the future types and their `Future` impls.
 - On `Ready`, the future builds an empty `SpanProperties` on the stack and passes it to the hook
   with the output. It then emits the tagged end, or the plain end when the hook set nothing.
-- The hook is a separate type parameter, so a non-capturing closure keeps the future `Send`.
+- The hook is a generic type parameter (no boxing), so the future is `Send` whenever the closure is.
 
 ### Analytics
 
@@ -408,10 +407,6 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   too).** The static-name variant would save one string hash per tagged end, which is small next
   to the property merge. Two fewer types means less code in the producer, `extract` and both
   parsers.
-- **A `name =` arm that returns the guard vs. turning the existing `span_scope*!` arms into
-  expressions.** If `span_scope!("x")` returned the guard, every existing `span_scope!("x");`
-  statement would drop it at once and silently record a zero-length span. A new arm keeps
-  existing call sites correct, and `#[must_use]` catches the same mistake in the new form.
 - **A content-keyed dictionary for `thread_spans` vs. Arrow's `BinaryDictionaryBuilder`.**
   Arrow's builder would hash the JSONB bytes of every row, including the empty set on every plain
   span in the largest table. The index scheme hashes once per distinct set per tree.
@@ -466,8 +461,8 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   - `let _ = span_scope!(name = ..)` drops the guard at once, like any `let _`. Bind a name.
   - A span that never ends, or that is cut at the edge of a query range, has no properties.
 - Rustdoc on the `name =` arms, `SpanProperties::set_property`, the guards and
-  `instrument_with`, with a passing doctest for each form. The compile-fail doctests are listed
-  under Testing Strategy.
+  `instrument_with`, with a passing doctest for each form. The two compile-fail doctests go in the
+  `span_scope!` rustdoc (see Testing Strategy).
 - `mkdocs/docs/query-guide/schema-reference.md`: add a `properties` row to the `thread_spans` and
   `async_events` tables, plus an example
   (`SELECT name, property_get(properties, 'rows') ... FROM view_instance('thread_spans', ..)`).
@@ -477,15 +472,17 @@ The column is non-null and an empty set means "no properties", as in `log_entrie
   `thread_spans` and `async_events` column tables.
 - `rust/tracing/README.md` (`:25`): properties attach to logs, metrics and spans.
 - `doc/how_to_query/README.md` (`:323+`, `:339+`): add `properties` to the `async_events` and
-  `thread_spans` tables of this legacy schema copy.
+  `thread_spans` tables of this legacy schema copy. `:428` repeats the `properties` description
+  sentence; it also covers spans.
 - `mkdocs/docs/query-guide/functions-reference.md`: `process_spans` returns `properties`.
 - `mkdocs/docs/when-to-use/index.md` (`:151`, `:169`, `:232`): the producer-side cardinality
   contract, "Code vs. data" and the FAQ say per-call context goes in span properties rather than
   in a `_dyn` name.
 - `rust/analytics/src/lakehouse/view_factory.rs` module rustdoc (`:70-100`): add a `properties`
   row to the `thread_spans` and `async_events` column tables.
-- `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace "Micromegas
-  spans carry no attributes" with a note that spans can carry end-time properties, which this
+- `mkdocs/docs/when-to-use/instrumentation-overhead.md` (`:5`, `:165`): replace the two "no
+  attributes" statements ("Micromegas spans carry no attributes" at `:5`, "Micromegas spans have no
+  attributes" at `:165`) with a note that spans can carry end-time properties, which this
   comparison doesn't measure.
 
 ## Testing Strategy
@@ -508,11 +505,12 @@ All of these are no-DB unit tests.
   - Two spans with the same dynamic set in one block share one set record.
   - `SpanProperties`: setting a name twice keeps the last value and doesn't grow the buffer, a
     case-insensitive repeat replaces, and a value longer than the inline capacity round-trips.
-  - Compile-fail doctests: `name` repeated as a property key and a
-    bare-statement `span_scope!(name = "x");` under `#![deny(unused_must_use)]`.
   - Phase 2: a future built with `instrument_named!(.., |out, span| ..)` passes its output to the
     closure and emits a tagged async end with the matching `span_id`. A closure that sets nothing
     yields the plain end, and a future without a closure is unchanged.
+- **Compile-fail doctests** (rustdoc of the `span_scope!` macro in `rust/tracing/src/macros.rs`, next
+  to the `name =` arm's passing doctest): `name` repeated as a property key, and a bare-statement
+  `span_scope!(name = "x");` under `#![deny(unused_must_use)]`.
 - **Encode/parse round trip** (`rust/analytics/tests/span_tests.rs`):
   - Build a `ThreadStream` block with begin plus tagged ends (an interned set, a dynamic set with
     a static name inside, and a named span), then encode it with `StreamBlock::encode_bin`.
@@ -540,9 +538,7 @@ All of these are no-DB unit tests.
 
 ## Manual Verification
 
-These need running services. One measures partition size, which can't be asserted. The other
-exercises `process_spans`' SQL against materialized views, and a mismatch there fails loudly on
-first use.
+Both need running services.
 
 1. Start the services: `python3 local_test_env/ai_scripts/start_services.py --monolith`. Run an
    instrumented example that records many spans and gives a fraction of them properties.
@@ -554,8 +550,8 @@ first use.
    negligible, since the column is one repeated dictionary key. Record the numbers in the PR.
 3. **`process_spans`.** Run
    `micromegas-query "SELECT thread_name, name, property_get(properties, 'rows') FROM process_spans('<process_id>', 'both') WHERE properties_length(properties) > 0"`.
-   Expected: thread rows and async rows (`thread_name = 'async'`) both show their end
-   properties.
+   Expected: thread rows, and at least one async row (`thread_name = 'async'`) with non-empty
+   properties, both show their end properties.
 
 ## Open Questions
 
