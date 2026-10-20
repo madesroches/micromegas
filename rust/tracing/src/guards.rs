@@ -4,12 +4,13 @@ use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use crate::{
     dispatch::{
         flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
-        init_thread_stream, on_begin_scope, on_end_scope, shutdown_dispatch,
+        init_thread_stream, on_begin_scope, on_end_named_scope_tagged, on_end_scope,
+        on_end_scope_tagged, shutdown_dispatch,
     },
     errors::Result,
     event::EventSink,
     panic_hook::init_panic_hook,
-    spans::{SpanLocation, SpanMetadata, SpanName, StaticSpanName},
+    spans::{SpanLocation, SpanMetadata, SpanName, SpanProperties, StaticSpanName},
 };
 
 pub struct TracingSystemGuard {}
@@ -94,9 +95,59 @@ impl Default for TracingThreadGuard {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for () {}
+    impl Sealed for super::SpanProperties {}
+}
+
+/// What a thread span guard carries until its end: nothing (`()`), which ends the span plainly,
+/// or [`SpanProperties`], which ends it with the properties that were set.
+pub trait SpanEndProperties: sealed::Sealed {
+    #[doc(hidden)]
+    fn end_thread(&self, desc: &'static SpanMetadata);
+    #[doc(hidden)]
+    fn end_thread_named<N: SpanName>(&self, location: &'static SpanLocation, name: &N);
+}
+
+impl SpanEndProperties for () {
+    #[inline(always)]
+    fn end_thread(&self, desc: &'static SpanMetadata) {
+        on_end_scope(desc);
+    }
+
+    #[inline(always)]
+    fn end_thread_named<N: SpanName>(&self, location: &'static SpanLocation, name: &N) {
+        name.end_thread(location);
+    }
+}
+
+impl SpanEndProperties for SpanProperties {
+    fn end_thread(&self, desc: &'static SpanMetadata) {
+        if self.is_empty() {
+            on_end_scope(desc);
+        } else {
+            self.with_dyn(|set, dyn_properties| on_end_scope_tagged(desc, set, dyn_properties));
+        }
+    }
+
+    fn end_thread_named<N: SpanName>(&self, location: &'static SpanLocation, name: &N) {
+        if self.is_empty() {
+            name.end_thread(location);
+        } else {
+            self.with_dyn(|set, dyn_properties| {
+                on_end_named_scope_tagged(location, name.as_str(), set, dyn_properties);
+            });
+        }
+    }
+}
+
+/// Ends a span when dropped. Bind it to a name: `let _ = ..` drops it at once.
 // sync scope guard
-pub struct ThreadSpanGuard {
+#[must_use = "the span ends when the guard is dropped"]
+pub struct ThreadSpanGuard<P: SpanEndProperties = ()> {
     thread_span_desc: &'static SpanMetadata,
+    properties: P,
     _dummy_ptr: PhantomData<*mut u8>, // to mark the object as !Send
 }
 
@@ -104,6 +155,7 @@ impl ThreadSpanGuard {
     pub fn new(thread_span_desc: &'static SpanMetadata) -> Self {
         let guard = Self {
             thread_span_desc,
+            properties: (),
             _dummy_ptr: std::marker::PhantomData {},
         };
         on_begin_scope(thread_span_desc);
@@ -111,15 +163,39 @@ impl ThreadSpanGuard {
     }
 }
 
-impl Drop for ThreadSpanGuard {
-    fn drop(&mut self) {
-        on_end_scope(self.thread_span_desc);
+impl ThreadSpanGuard<SpanProperties> {
+    /// Begins a span whose end event carries `properties`, plus the ones set on the guard later.
+    pub fn with_properties(
+        thread_span_desc: &'static SpanMetadata,
+        properties: SpanProperties,
+    ) -> Self {
+        let guard = Self {
+            thread_span_desc,
+            properties,
+            _dummy_ptr: std::marker::PhantomData {},
+        };
+        on_begin_scope(thread_span_desc);
+        guard
+    }
+
+    /// See [`SpanProperties::set_property`].
+    pub fn set_property(&mut self, name: &'static str, value: impl std::fmt::Display) {
+        self.properties.set_property(name, value);
     }
 }
 
-pub struct ThreadNamedSpanGuard<N: SpanName = StaticSpanName> {
+impl<P: SpanEndProperties> Drop for ThreadSpanGuard<P> {
+    fn drop(&mut self) {
+        self.properties.end_thread(self.thread_span_desc);
+    }
+}
+
+/// Ends a named span when dropped. Bind it to a name: `let _ = ..` drops it at once.
+#[must_use = "the span ends when the guard is dropped"]
+pub struct ThreadNamedSpanGuard<N: SpanName = StaticSpanName, P: SpanEndProperties = ()> {
     thread_span_location: &'static SpanLocation,
     name: N,
+    properties: P,
     _dummy_ptr: PhantomData<*mut u8>, // to mark the object as !Send
 }
 
@@ -134,6 +210,7 @@ impl<N: SpanName> ThreadNamedSpanGuard<N> {
         let guard = Self {
             thread_span_location,
             name,
+            properties: (),
             _dummy_ptr: std::marker::PhantomData {},
         };
         guard.name.begin_thread(guard.thread_span_location);
@@ -141,8 +218,32 @@ impl<N: SpanName> ThreadNamedSpanGuard<N> {
     }
 }
 
-impl<N: SpanName> Drop for ThreadNamedSpanGuard<N> {
+impl<N: SpanName> ThreadNamedSpanGuard<N, SpanProperties> {
+    /// Begins a span whose end event carries `properties`, plus the ones set on the guard later.
+    pub fn with_properties(
+        thread_span_location: &'static SpanLocation,
+        name: N,
+        properties: SpanProperties,
+    ) -> Self {
+        let guard = Self {
+            thread_span_location,
+            name,
+            properties,
+            _dummy_ptr: std::marker::PhantomData {},
+        };
+        guard.name.begin_thread(guard.thread_span_location);
+        guard
+    }
+
+    /// See [`SpanProperties::set_property`].
+    pub fn set_property(&mut self, name: &'static str, value: impl std::fmt::Display) {
+        self.properties.set_property(name, value);
+    }
+}
+
+impl<N: SpanName, P: SpanEndProperties> Drop for ThreadNamedSpanGuard<N, P> {
     fn drop(&mut self) {
-        self.name.end_thread(self.thread_span_location);
+        self.properties
+            .end_thread_named(self.thread_span_location, &self.name);
     }
 }

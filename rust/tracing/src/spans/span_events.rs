@@ -1,3 +1,4 @@
+use crate::property_set::PropertySetId;
 use crate::string_id::{DynStringId, StringId};
 use micromegas_transit::prelude::*;
 
@@ -158,3 +159,55 @@ pub struct EndAsyncDynNamedSpanEvent {
 }
 
 impl InProcSerialize for EndAsyncDynNamedSpanEvent {}
+
+//
+// end events that carry properties
+//
+#[derive(Debug, TransitReflect)]
+pub struct TaggedEndThreadSpanEvent {
+    pub thread_span_desc: &'static SpanMetadata,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedEndThreadSpanEvent {}
+
+/// The name is always a block-scoped string record, whether it was `'static` or built at runtime.
+#[derive(Debug, TransitReflect)]
+pub struct TaggedEndThreadNamedSpanEvent {
+    pub thread_span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedEndThreadNamedSpanEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct TaggedEndAsyncSpanEvent {
+    pub span_desc: &'static SpanMetadata,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub span_id: u64,
+    pub parent_span_id: u64, // parent span at future creation time
+    pub depth: u32,          // nesting depth in async call hierarchy
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedEndAsyncSpanEvent {}
+
+#[derive(Debug, TransitReflect)]
+pub struct TaggedEndAsyncNamedSpanEvent {
+    pub span_location: &'static SpanLocation,
+    pub name: DynStringId,
+    #[transit(reference)]
+    pub properties: PropertySetId,
+    pub span_id: u64,
+    pub parent_span_id: u64, // parent span at future creation time
+    pub depth: u32,          // nesting depth in async call hierarchy
+    pub time: i64,
+}
+
+impl InProcSerialize for TaggedEndAsyncNamedSpanEvent {}

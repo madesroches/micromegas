@@ -15,6 +15,8 @@ use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::RecordBatch;
 
+use crate::properties::property_set::PropertySet;
+use crate::properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use crate::time::TimeRange;
 
 /// Represents a single async span event record.
@@ -36,6 +38,8 @@ pub struct AsyncEventRecord<'a> {
     pub filename: &'a str,
     pub target: &'a str,
     pub line: u32,
+    /// The properties on the end event; the empty set on begin rows.
+    pub properties: PropertySet<'a>,
 }
 
 /// Returns the schema for the async events table.
@@ -82,6 +86,11 @@ pub fn async_events_table_schema() -> Schema {
             false,
         ),
         Field::new("line", DataType::UInt32, false),
+        Field::new(
+            "properties",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            false,
+        ),
     ])
 }
 
@@ -99,6 +108,7 @@ pub struct AsyncEventRecordBuilder {
     filenames: StringDictionaryBuilder<Int32Type>,
     targets: StringDictionaryBuilder<Int32Type>,
     lines: PrimitiveBuilder<UInt32Type>,
+    properties: PropertySetJsonbDictionaryBuilder,
 }
 
 impl AsyncEventRecordBuilder {
@@ -116,6 +126,7 @@ impl AsyncEventRecordBuilder {
             filenames: StringDictionaryBuilder::new(),
             targets: StringDictionaryBuilder::new(),
             lines: PrimitiveBuilder::with_capacity(capacity),
+            properties: PropertySetJsonbDictionaryBuilder::new(capacity),
         }
     }
 
@@ -152,6 +163,7 @@ impl AsyncEventRecordBuilder {
         self.filenames.append(record.filename)?;
         self.targets.append(record.target)?;
         self.lines.append_value(record.line);
+        self.properties.append_property_set(&record.properties)?;
         Ok(())
     }
 
@@ -171,6 +183,7 @@ impl AsyncEventRecordBuilder {
                 Arc::new(self.filenames.finish()),
                 Arc::new(self.targets.finish()),
                 Arc::new(self.lines.finish()),
+                Arc::new(self.properties.finish()?),
             ],
         )
         .with_context(|| "building record batch")

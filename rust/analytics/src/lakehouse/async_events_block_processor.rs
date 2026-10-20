@@ -6,6 +6,7 @@ use crate::{
     async_block_processing::{AsyncBlockProcessor, parse_async_block_payload},
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder},
     payload::fetch_block_payload,
+    properties::property_set::PropertySet,
     scope::BorrowedScopeDesc,
     time::ConvertTicks,
 };
@@ -78,6 +79,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             filename: scope.filename,
             target: scope.target,
             line: scope.line,
+            properties: PropertySet::empty(),
         };
         self.record_builder.append(&record)?;
         Ok(true)
@@ -91,6 +93,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
         span_id: i64,
         parent_span_id: i64,
         depth: u32,
+        properties: PropertySet<'_>,
     ) -> Result<bool> {
         let time_ns = self.convert_ticks.ticks_to_nanoseconds(ts);
         let record = AsyncEventRecord {
@@ -106,6 +109,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             filename: scope.filename,
             target: scope.target,
             line: scope.line,
+            properties,
         };
         self.record_builder.append(&record)?;
         Ok(true)

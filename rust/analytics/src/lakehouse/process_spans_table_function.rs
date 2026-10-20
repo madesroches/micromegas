@@ -11,7 +11,7 @@ use async_stream::try_stream;
 use datafusion::{
     arrow::{
         array::{ArrayRef, RecordBatch, StringDictionaryBuilder},
-        datatypes::{DataType, Field, Int16Type, Schema, SchemaRef},
+        datatypes::{DataType, Field, Int32Type, Schema, SchemaRef},
     },
     catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider},
     common::{Result as DFResult, plan_err},
@@ -47,12 +47,12 @@ fn output_schema() -> SchemaRef {
     let mut fields = vec![
         Field::new(
             "stream_id",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
         Field::new(
             "thread_name",
-            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         ),
     ];
@@ -67,8 +67,8 @@ fn augment_batch(
     thread_name: &str,
 ) -> DFResult<RecordBatch> {
     let n = batch.num_rows();
-    let mut stream_id_builder = StringDictionaryBuilder::<Int16Type>::new();
-    let mut thread_name_builder = StringDictionaryBuilder::<Int16Type>::new();
+    let mut stream_id_builder = StringDictionaryBuilder::<Int32Type>::new();
+    let mut thread_name_builder = StringDictionaryBuilder::<Int32Type>::new();
     stream_id_builder.append_values(stream_id, n);
     thread_name_builder.append_values(thread_name, n);
     let mut columns: Vec<ArrayRef> = vec![
@@ -394,7 +394,8 @@ impl ExecutionPlan for ProcessSpansExecutionPlan {
                         b.name, \
                         b.target, \
                         b.filename, \
-                        b.line \
+                        b.line, \
+                        e.properties \
                     FROM (SELECT * FROM view_instance('async_events', '{process_id}') \
                           WHERE event_type = 'begin') b \
                     INNER JOIN (SELECT * FROM view_instance('async_events', '{process_id}') \

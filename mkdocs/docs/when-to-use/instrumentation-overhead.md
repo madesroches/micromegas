@@ -2,7 +2,7 @@
 
 Instrumentation must not change the shape of the thread it instruments. This page measures what `micromegas-tracing` and the OpenTelemetry Rust SDK add to the calling thread per log event, span and metric sample, so that recording telemetry does not change the timing profile of the code it observes.
 
-Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one workstation, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: Micromegas spans carry no attributes, and `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
+Both libraries record the same logs, spans and metric samples, each with its production defaults and with the network replaced by an in-process encoder. Every figure is a median per log event, span or metric sample, measured on one workstation, so treat it as a comparison rather than a promise for your hardware. [Methodology](#methodology) explains how it was measured. A dash in a table marks a combination that does not exist: `micromegas_interop` (`tracing` crate macros captured by Micromegas through `install_tracing_interop`) only has the cases that `tracing` can express.
 
 ## Calling-thread cost
 
@@ -12,11 +12,11 @@ This is the time the application thread spends recording one item, which is the 
 
 | case | `micromegas` | `micromegas_interop` | `otel` |
 |---|---|---|---|
-| `static` | 17.2 | 91.3 | 246.0 |
-| `formatted` | 60.4 | 103.3 | 255.9 |
-| `static_attrs` | 19.4 | — | 586.2 |
-| `dyn_low_card` | 49.0 | — | 321.7 |
-| `dyn_high_card` | 217.7 | 263.9 | 343.1 |
+| `static` | 16.7 | 88.2 | 241.6 |
+| `formatted` | 57.9 | 99.2 | 266.0 |
+| `static_attrs` | 19.1 | — | 504.5 |
+| `dyn_low_card` | 51.3 | — | 266.6 |
+| `dyn_high_card` | 178.2 | 253.2 | 284.0 |
 
 Micromegas is faster in every native case. A `tracing` event routed into Micromegas costs more than the native macro but still less than OpenTelemetry.
 
@@ -24,18 +24,18 @@ Micromegas is faster in every native case. A `tracing` event routed into Microme
 
 | case | `micromegas` | `otel` | `otel_tracing` |
 |---|---|---|---|
-| `static` | 17.0 | 161.3 | 870.5 |
-| `attrs` | — | 241.3 | 957.0 |
-| `dyn_name` | 109.3 | 220.1 | 934.5 |
+| `static` | 18.0 | 163.0 | 850.5 |
+| `attrs` | 204.7 | 251.4 | 947.4 |
+| `dyn_name` | 106.5 | 229.5 | 930.4 |
 
-`otel_tracing` is OpenTelemetry through the `tracing-opentelemetry` bridge, which costs several times more than the direct tracer.
+`attrs` is a span with one attribute whose value changes on every call: a Micromegas span property recorded at span end (`span_scope!(name = "static", id = %i)`), an OpenTelemetry span attribute. Micromegas keeps its lead, but a property value that is unique per span builds a new property set each time, so the gap is the smallest of the span cases. `otel_tracing` is OpenTelemetry through the `tracing-opentelemetry` bridge, which costs several times more than the direct tracer.
 
 **`metric`: median ns per metric sample on the calling thread** (one value of one series; the series setup is in [Metric samples](#metric-samples))
 
 | case | `micromegas` | `otel` |
 |---|---|---|
-| 10 series | 12.9 | 73.6 |
-| 100 series | 12.6 | 78.9 |
+| 10 series | 12.3 | 75.2 |
+| 100 series | 12.2 | 77.8 |
 
 A sample costs the calling thread about 6 times less with Micromegas (`imetric!`) than with OpenTelemetry (`Gauge::record`).
 
@@ -47,21 +47,23 @@ This work runs on a background thread and does not affect the instrumented threa
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| `log_static_attrs` | 852.9 | 595.8 | 1182.8 |
-| `log_dyn_high_card` | 4502.1 | 368.0 | 1192.8 |
-| `span_static` | 1463.8 | 300.0 | 2455.4 |
-| `span_dyn_name` | 3690.8 | 315.3 | 4044.6 |
+| `log_static_attrs` | 799.7 | 594.2 | 1216.9 |
+| `log_dyn_high_card` | 4430.7 | 360.1 | 1175.2 |
+| `span_static` | 1420.3 | 296.7 | 2452.7 |
+| `span_attrs` | 5292.5 | 487.2 | 3790.2 |
+| `span_dyn_name` | 3549.2 | 313.3 | 4033.2 |
 
-OpenTelemetry encodes faster per event, most clearly for `log_dyn_high_card`. With gzip it is costlier than Micromegas for the static cases and about equal for `span_dyn_name`.
+OpenTelemetry encodes faster per event, most clearly for the high-cardinality cases `log_dyn_high_card` and `span_attrs`. With gzip it is costlier than Micromegas for the static cases and `span_dyn_name`, and cheaper for `log_dyn_high_card` and `span_attrs`.
 
 **Bytes per log event or span**
 
 | case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| `log_static_attrs` | 25.0 | 5.4 | 117.0 | 3.6 |
-| `log_dyn_high_card` | 95.9 | 27.3 | 100.9 | 4.9 |
+| `log_static_attrs` | 25.0 | 5.4 | 117.0 | 3.7 |
+| `log_dyn_high_card` | 95.9 | 27.2 | 100.9 | 4.9 |
 | `span_static` | 34.0 | 8.6 | 66.0 | 34.6 |
-| `span_dyn_name` | 76.9 | 24.5 | 68.9 | 36.9 |
+| `span_attrs` | 112.9 | 32.1 | 79.9 | 37.3 |
+| `span_dyn_name` | 76.9 | 24.5 | 68.9 | 37.1 |
 
 The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is smaller than Micromegas for logs and larger for spans.
 
@@ -69,8 +71,8 @@ The Micromegas wire format is smaller than uncompressed OTLP. Gzipped OTLP is sm
 
 | case | `micromegas` | `otel` | `otel_gzip` |
 |---|---|---|---|
-| 10 series | 1557.7 | 806.9 | 2336.3 |
-| 100 series | 1469.1 | 873.7 | 1308.9 |
+| 10 series | 1514.4 | 786.7 | 2249.4 |
+| 100 series | 1469.8 | 860.0 | 1267.4 |
 
 OpenTelemetry wins metric export cost: its collect, conversion and encode is cheaper per sample than Micromegas's share of `encode_bin`, and gzip erases that lead only at 10 series.
 
@@ -78,8 +80,8 @@ OpenTelemetry wins metric export cost: its collect, conversion and encode is che
 
 | case | `micromegas` raw | `micromegas` wire (LZ4 + CBOR) | `otel` protobuf | `otel_gzip` |
 |---|---|---|---|---|
-| 10 series | 33.2 | 8.3 | 90.4 | 24.4 |
-| 100 series | 34.7 | 8.4 | 76.5 | 5.9 |
+| 10 series | 33.2 | 8.3 | 90.4 | 24.8 |
+| 100 series | 34.7 | 8.4 | 76.5 | 5.7 |
 
 Micromegas is smaller than uncompressed OTLP. Gzipped OTLP is larger at 10 series and smaller at 100, where OpenTelemetry wins on size.
 
@@ -114,7 +116,7 @@ An OpenTelemetry counter or gauge reduces repeated records of the same series to
 
 ### Encode benchmarks
 
-Each `encode` sample is one block or batch of 10 000 events captured from the cases named in the table, so the cost and bytes are per event. Both libraries encode data of identical content. Micromegas extracts the block's dependencies, compresses dependencies and objects with LZ4 and encodes the block as CBOR, which is why its cost is highest for the cases with dynamic content (`log_dyn_high_card`, `span_dyn_name`): the objects refer to dependency records by id. The raw bytes column is the in-memory size of the events and, for Micromegas, the extracted dependencies; the wire column is what is sent.
+Each `encode` sample is one block or batch of 10 000 events captured from the cases named in the table, so the cost and bytes are per event. Both libraries encode data of identical content. Micromegas extracts the block's dependencies, compresses dependencies and objects with LZ4 and encodes the block as CBOR, which is why its cost is highest for the cases with dynamic content (`log_dyn_high_card`, `span_attrs`, `span_dyn_name`): the objects refer to dependency records by id. The raw bytes column is the in-memory size of the events and, for Micromegas, the extracted dependencies; the wire column is what is sent.
 
 ### Two processes
 
@@ -162,7 +164,7 @@ python3 otel-comparison-bench/report.py bench.log
 ### Semantic differences
 
 - Micromegas metrics are samples, one per call. OpenTelemetry instruments aggregate in the process and export one point per series per interval, with a cardinality limit per instrument (2000 attribute sets by default). That is why metrics are measured per batch and reported per sample.
-- Micromegas spans have no attributes. A name built at run time (`span_scope_named_dyn!`) is the closest equivalent, and the `span/dyn_name` case compares it with an OpenTelemetry span of the same name.
+- Micromegas span properties are recorded at span end, while OpenTelemetry attributes can be set at any time before then; both are exported with the finished span. The `span/dyn_name` case compares a name built at run time (`span_scope_named_dyn!`) with an OpenTelemetry span of the same name.
 - OpenTelemetry drops records when its queue is full and Micromegas drops blocks when its queue passes its byte caps. Neither reports the drop on the calling thread.
 - Attribute values are strings in both libraries in these cases. OpenTelemetry supports typed values, which would change its encoded size.
 - The cases record to an in-process sink. The network, the ingestion service and storage are not part of any number on this page; see [Cost Effectiveness](saas-vendors.md) for the storage side.

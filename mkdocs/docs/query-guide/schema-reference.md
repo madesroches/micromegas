@@ -340,9 +340,18 @@ extra sort).
 | `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `line` | `UInt32` | Line number |
+| `properties` | `Dictionary(Int32, Binary)` | Properties recorded on the span's end event (JSONB format); the empty set for a span without any |
+
+A span that never ends, or that is cut at the edge of the query range, has no properties.
 
 **Example Queries:**
 ```sql
+-- Read the properties a span recorded at its end
+SELECT name, property_get(properties, 'rows') AS rows, duration
+FROM view_instance('thread_spans', 'stream_123')
+WHERE properties_length(properties) > 0
+ORDER BY begin;
+
 -- Get slowest functions in a stream
 SELECT name, AVG(duration) as avg_duration_ns, COUNT(*) as call_count
 FROM view_instance('thread_spans', 'stream_123')
@@ -378,6 +387,7 @@ Asynchronous span events for tracking async operations with call hierarchy depth
 | `filename` | `Dictionary(Int32, Utf8)` | Source file |
 | `target` | `Dictionary(Int32, Utf8)` | Module/target |
 | `line` | `UInt32` | Line number |
+| `properties` | `Dictionary(Int32, Binary)` | Properties recorded on the span's end event (JSONB format); the empty set on begin rows and on spans without any |
 
 **Example Queries:**
 
@@ -659,7 +669,7 @@ index) and JSONB efficiency (native binary JSON format for fast property access)
 
 **Common properties fields:**
 
-- `properties` - Event-specific metadata (log properties, metric properties)
+- `properties` - Event-specific metadata (log properties, metric properties, span end properties)
 - `process_properties` - Process-wide metadata shared across all events from a process
 
 **Querying properties:**

@@ -343,6 +343,7 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 | target | Dictionary(Utf8) |
 | filename | Dictionary(Utf8) |
 | line | UInt32 |
+| properties | Dictionary(Int32, Binary) — end-event properties, use `property_get()`; empty set when none |
 
 ### `async_events` — async span events (NO global view, view_instance only)
 
@@ -362,6 +363,7 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 | filename | Dictionary(Utf8) |
 | target | Dictionary(Utf8) |
 | line | UInt32 |
+| properties | Dictionary(Int32, Binary) — end-event properties, use `property_get()`; empty set on begin rows |
 
 ## Key functions
 

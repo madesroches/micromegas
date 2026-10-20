@@ -22,7 +22,9 @@ use crate::{
         BeginThreadDynNamedSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
         EndAsyncDynNamedSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent,
         EndThreadDynNamedSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent, SpanLocation,
-        SpanMetadata, ThreadBlock, ThreadEventQueueTypeIndex, ThreadStream,
+        SpanMetadata, TaggedEndAsyncNamedSpanEvent, TaggedEndAsyncSpanEvent,
+        TaggedEndThreadNamedSpanEvent, TaggedEndThreadSpanEvent, ThreadBlock,
+        ThreadEventQueueTypeIndex, ThreadStream,
     },
     string_id::DynStringId,
     warn,
@@ -510,6 +512,105 @@ pub fn on_end_async_named_scope_dyn(
     });
 }
 
+/// Ends a thread span with properties: `properties` plus `dyn_properties`, the latter winning
+/// on a name clash. Without any, it is the plain end event.
+#[inline(always)]
+pub fn on_end_scope_tagged(
+    scope: &'static SpanMetadata,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) {
+    if properties.get_properties().is_empty() && dyn_properties.is_empty() {
+        return on_end_scope(scope);
+    }
+    let time = now();
+    on_thread_tagged_event(properties, dyn_properties, |properties| {
+        TaggedEndThreadSpanEvent {
+            thread_span_desc: scope,
+            properties,
+            time,
+        }
+    });
+}
+
+/// Like `on_end_scope_tagged`, for a named span. The name is written to the block that is
+/// current now.
+#[inline(always)]
+pub fn on_end_named_scope_tagged(
+    thread_span_location: &'static SpanLocation,
+    name: &str,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) {
+    if properties.get_properties().is_empty() && dyn_properties.is_empty() {
+        return on_end_named_scope_dyn(thread_span_location, name);
+    }
+    let time = now();
+    on_thread_tagged_named_event(name, properties, dyn_properties, |name, properties| {
+        TaggedEndThreadNamedSpanEvent {
+            thread_span_location,
+            name,
+            properties,
+            time,
+        }
+    });
+}
+
+/// Like `on_end_async_scope`, with the properties of `on_end_scope_tagged`.
+#[inline(always)]
+pub fn on_end_async_scope_tagged(
+    span_id: u64,
+    parent_span_id: u64,
+    scope: &'static SpanMetadata,
+    depth: u32,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) {
+    if properties.get_properties().is_empty() && dyn_properties.is_empty() {
+        return on_end_async_scope(span_id, parent_span_id, scope, depth);
+    }
+    let time = now();
+    on_thread_tagged_event(properties, dyn_properties, |properties| {
+        TaggedEndAsyncSpanEvent {
+            span_desc: scope,
+            properties,
+            span_id,
+            parent_span_id,
+            depth,
+            time,
+        }
+    });
+}
+
+/// Like `on_end_async_named_scope`, with the properties of `on_end_scope_tagged`. The name is
+/// written to the block that is current now, which may differ from the block of the begin event.
+#[inline(always)]
+pub fn on_end_async_named_scope_tagged(
+    span_id: u64,
+    parent_span_id: u64,
+    span_location: &'static SpanLocation,
+    name: &str,
+    depth: u32,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) {
+    if properties.get_properties().is_empty() && dyn_properties.is_empty() {
+        return on_end_async_named_scope_dyn(span_id, parent_span_id, span_location, name, depth);
+    }
+    let time = now();
+    on_thread_tagged_named_event(name, properties, dyn_properties, |name, properties| {
+        TaggedEndAsyncNamedSpanEvent {
+            span_location,
+            name,
+            properties,
+            span_id,
+            parent_span_id,
+            depth,
+            time,
+        }
+    });
+}
+
 pub struct DispatchCell {
     // unsafecell is only necessary for force_uninit()
     inner: UnsafeCell<OnceCell<Dispatch>>,
@@ -576,6 +677,45 @@ where
         let opt_stream = &mut *cell.as_ptr();
         if let Some(stream) = opt_stream {
             stream.push_dyn_named(name, make);
+            if stream.is_full() {
+                flush_thread_buffer();
+            }
+        }
+    });
+}
+
+#[inline(always)]
+fn on_thread_tagged_event<T>(
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    make: impl FnOnce(PropertySetId) -> T,
+) where
+    T: micromegas_transit::InProcSerialize + ThreadEventQueueTypeIndex,
+{
+    LOCAL_THREAD_STREAM.with(|cell| unsafe {
+        let opt_stream = &mut *cell.as_ptr();
+        if let Some(stream) = opt_stream {
+            stream.push_tagged(properties, dyn_properties, make);
+            if stream.is_full() {
+                flush_thread_buffer();
+            }
+        }
+    });
+}
+
+#[inline(always)]
+fn on_thread_tagged_named_event<T>(
+    name: &str,
+    properties: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+    make: impl FnOnce(DynStringId, PropertySetId) -> T,
+) where
+    T: micromegas_transit::InProcSerialize + ThreadEventQueueTypeIndex,
+{
+    LOCAL_THREAD_STREAM.with(|cell| unsafe {
+        let opt_stream = &mut *cell.as_ptr();
+        if let Some(stream) = opt_stream {
+            stream.push_tagged_named(name, properties, dyn_properties, make);
             if stream.is_full() {
                 flush_thread_buffer();
             }

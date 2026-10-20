@@ -3,16 +3,20 @@ use super::{
     BeginThreadDynNamedSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
     EndAsyncDynNamedSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent,
     EndThreadDynNamedSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent, SpanLocation,
-    SpanLocationRecord, SpanMetadata, SpanRecord,
+    SpanLocationRecord, SpanMetadata, SpanRecord, TaggedEndAsyncNamedSpanEvent,
+    TaggedEndAsyncSpanEvent, TaggedEndThreadNamedSpanEvent, TaggedEndThreadSpanEvent,
 };
 use crate::{
-    dyn_deps::DynDeps,
+    dyn_deps::{DynDeps, merge_properties},
     event::{EventBlock, EventStream, ExtractDeps},
-    property_set::StringDepsQueue,
+    property_set::{
+        DynProperty, PropertyDepsQueue, PropertySet, PropertySetDependency, PropertySetId,
+        StringDepsQueue, record_properties,
+    },
     string_id::{DynStringId, StringId},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 declare_queue_struct!(
     struct ThreadEventQueue<
@@ -28,6 +32,10 @@ declare_queue_struct!(
         EndThreadDynNamedSpanEvent,
         BeginAsyncDynNamedSpanEvent,
         EndAsyncDynNamedSpanEvent,
+        TaggedEndThreadSpanEvent,
+        TaggedEndThreadNamedSpanEvent,
+        TaggedEndAsyncSpanEvent,
+        TaggedEndAsyncNamedSpanEvent,
     > {}
 );
 
@@ -37,6 +45,7 @@ declare_queue_struct!(
         SpanLocationRecord,
         Utf8StaticStringDependency,
         StaticStringDependency,
+        PropertySetDependency,
     > {}
 );
 
@@ -46,9 +55,15 @@ impl StringDepsQueue for ThreadDepsQueue {
     }
 }
 
+impl PropertyDepsQueue for ThreadDepsQueue {
+    fn push_set(&mut self, dep: PropertySetDependency) {
+        self.push(dep);
+    }
+}
+
 fn record_scope_event_dependencies(
     thread_span_desc: &'static SpanMetadata,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut ThreadDepsQueue,
 ) {
     let thread_span_ptr = thread_span_desc as *const _ as u64;
@@ -83,7 +98,7 @@ fn record_scope_event_dependencies(
 
 fn record_span_location_dependencies(
     thread_span_location: &'static SpanLocation,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut ThreadDepsQueue,
 ) {
     let location_id = thread_span_location as *const _ as u64;
@@ -114,7 +129,7 @@ fn record_span_location_dependencies(
 fn record_named_scope_event_dependencies(
     thread_span_location: &'static SpanLocation,
     name: &StringId,
-    recorded_deps: &mut HashSet<u64>,
+    recorded_deps: &mut FxHashSet<u64>,
     deps: &mut ThreadDepsQueue,
 ) {
     record_span_location_dependencies(thread_span_location, recorded_deps, deps);
@@ -123,12 +138,27 @@ fn record_named_scope_event_dependencies(
     }
 }
 
+fn record_last_set(
+    properties: PropertySetId,
+    last_set: &mut PropertySetId,
+    recorded_deps: &mut FxHashSet<u64>,
+    deps: &mut ThreadDepsQueue,
+) {
+    if properties != *last_set {
+        *last_set = properties;
+        if let Some(set) = properties.as_interned() {
+            record_properties(set, recorded_deps, deps);
+        }
+    }
+}
+
 impl ExtractDeps for ThreadEventQueue {
     type DepsQueue = ThreadDepsQueue;
 
     fn extract(&self, dyn_deps: &DynDeps<Self::DepsQueue>) -> Self::DepsQueue {
         let mut deps = ThreadDepsQueue::new(1024 * 1024);
-        let mut recorded_deps = HashSet::new();
+        let mut recorded_deps = FxHashSet::default();
+        let mut last_set = PropertySetId(0);
         for x in self.iter() {
             match x {
                 ThreadEventQueueAny::BeginThreadSpanEvent(evt) => {
@@ -211,8 +241,39 @@ impl ExtractDeps for ThreadEventQueue {
                         &mut deps,
                     );
                 }
+                ThreadEventQueueAny::TaggedEndThreadSpanEvent(evt) => {
+                    record_scope_event_dependencies(
+                        evt.thread_span_desc,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                    record_last_set(evt.properties, &mut last_set, &mut recorded_deps, &mut deps);
+                }
+                ThreadEventQueueAny::TaggedEndThreadNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.thread_span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                    record_last_set(evt.properties, &mut last_set, &mut recorded_deps, &mut deps);
+                }
+                ThreadEventQueueAny::TaggedEndAsyncSpanEvent(evt) => {
+                    record_scope_event_dependencies(evt.span_desc, &mut recorded_deps, &mut deps);
+                    record_last_set(evt.properties, &mut last_set, &mut recorded_deps, &mut deps);
+                }
+                ThreadEventQueueAny::TaggedEndAsyncNamedSpanEvent(evt) => {
+                    record_span_location_dependencies(
+                        evt.span_location,
+                        &mut recorded_deps,
+                        &mut deps,
+                    );
+                    record_last_set(evt.properties, &mut last_set, &mut recorded_deps, &mut deps);
+                }
             }
         }
+        // The parser needs the `'static` names and values of dynamic sets before the queue that
+        // references them.
+        dyn_deps.record_static_refs(&mut recorded_deps, &mut deps);
         deps.extend_from(dyn_deps.queue());
         deps
     }
@@ -231,4 +292,45 @@ impl ThreadStream {
         let id = dyn_deps.intern_str(name);
         events.push(make(DynStringId { id }));
     }
+
+    /// Pushes the event built from the id of `set` combined with `dyn_properties`.
+    pub fn push_tagged<T>(
+        &mut self,
+        set: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        make: impl FnOnce(PropertySetId) -> T,
+    ) where
+        T: InProcSerialize + ThreadEventQueueTypeIndex,
+    {
+        let (events, dyn_deps) = self.get_block_mut_parts();
+        let properties = tagged_set_id(dyn_deps, set, dyn_properties);
+        events.push(make(properties));
+    }
+
+    /// Like `push_tagged`, for an event that also names a span with a block-scoped string.
+    pub fn push_tagged_named<T>(
+        &mut self,
+        name: &str,
+        set: &'static PropertySet,
+        dyn_properties: &[DynProperty<'_>],
+        make: impl FnOnce(DynStringId, PropertySetId) -> T,
+    ) where
+        T: InProcSerialize + ThreadEventQueueTypeIndex,
+    {
+        let (events, dyn_deps) = self.get_block_mut_parts();
+        let id = dyn_deps.intern_str(name);
+        let properties = tagged_set_id(dyn_deps, set, dyn_properties);
+        events.push(make(DynStringId { id }, properties));
+    }
+}
+
+fn tagged_set_id(
+    dyn_deps: &mut DynDeps<ThreadDepsQueue>,
+    set: &'static PropertySet,
+    dyn_properties: &[DynProperty<'_>],
+) -> PropertySetId {
+    if dyn_properties.is_empty() {
+        return PropertySetId::interned(set);
+    }
+    dyn_deps.intern_set(&merge_properties(set, dyn_properties))
 }

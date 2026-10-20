@@ -1,4 +1,7 @@
-use crate::{metadata::StreamMetadata, payload::parse_block, scope::BorrowedScopeDesc};
+use crate::{
+    metadata::StreamMetadata, payload::parse_block, properties::property_set::PropertySet,
+    scope::BorrowedScopeDesc,
+};
 use anyhow::{Context, Result};
 use micromegas_telemetry::block_wire_format::BlockPayload;
 use micromegas_tracing::prelude::*;
@@ -31,6 +34,15 @@ where
     fun(span_location, name, span_id, parent_span_id, depth, time)
 }
 
+/// The properties of a tagged end event, or the empty set for a plain one.
+fn end_properties<'a>(obj: &'a Object<'a>) -> Result<PropertySet<'a>> {
+    if obj.type_name.starts_with("TaggedEnd") {
+        Ok(obj.get::<&Object>("properties")?.into())
+    } else {
+        Ok(PropertySet::empty())
+    }
+}
+
 /// Trait for processing async event blocks.
 pub trait AsyncBlockProcessor {
     fn on_begin_async_scope(
@@ -42,6 +54,8 @@ pub trait AsyncBlockProcessor {
         parent_span_id: i64,
         depth: u32,
     ) -> Result<bool>;
+    /// `properties` is the empty set for a span that ended without any.
+    #[allow(clippy::too_many_arguments)]
     fn on_end_async_scope(
         &mut self,
         block_id: &str,
@@ -50,6 +64,7 @@ pub trait AsyncBlockProcessor {
         span_id: i64,
         parent_span_id: i64,
         depth: u32,
+        properties: PropertySet<'_>,
     ) -> Result<bool>;
 }
 
@@ -83,7 +98,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     })
                     .with_context(|| "reading BeginAsyncSpanEvent")
                 }
-                "EndAsyncSpanEvent" => {
+                "EndAsyncSpanEvent" | "TaggedEndAsyncSpanEvent" => {
                     on_async_event(obj, |span_desc, span_id, parent_span_id, depth, ts| {
                         let name = span_desc.get::<&str>("name")?;
                         let filename = span_desc.get::<&str>("file")?;
@@ -97,6 +112,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             span_id as i64,
                             parent_span_id as i64,
                             depth,
+                            end_properties(obj)?,
                         )
                     })
                     .with_context(|| "reading EndAsyncSpanEvent")
@@ -119,7 +135,9 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     },
                 )
                 .with_context(|| "reading BeginAsyncNamedSpanEvent"),
-                "EndAsyncNamedSpanEvent" | "EndAsyncDynNamedSpanEvent" => on_async_named_event(
+                "EndAsyncNamedSpanEvent"
+                | "EndAsyncDynNamedSpanEvent"
+                | "TaggedEndAsyncNamedSpanEvent" => on_async_named_event(
                     obj,
                     |span_location, name, span_id, parent_span_id, depth, ts| {
                         let filename = span_location.get::<&str>("file")?;
@@ -133,6 +151,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             span_id as i64,
                             parent_span_id as i64,
                             depth,
+                            end_properties(obj)?,
                         )
                     },
                 )

@@ -112,6 +112,40 @@
 //! }
 //! ```
 //!
+//! # Span properties
+//!
+//! A span can carry properties on its end event, so that it reports its results (row counts,
+//! cache hit or miss, an error status) as well as the context the caller attaches. Put per-call
+//! context there rather than in a runtime name, which keeps span names low-cardinality. With
+//! `name =`, the scope macros return the guard; the property list is the one the log macros take,
+//! and `set_property` adds values later:
+//!
+//! ```rust,ignore
+//! use micromegas_tracing::prelude::*;
+//!
+//! let mut span = span_scope!(name = "fetch_rows", region = "eu", request = %req_id);
+//! let rows = fetch()?; // an early return still records region and request
+//! span.set_property("rows", rows.len());
+//! span.set_property("cache", if hit { "hit" } else { "miss" });
+//! ```
+//!
+//! An async span takes a closure that receives the output of the future:
+//!
+//! ```rust,ignore
+//! let rows = instrument_named!(fetch(id), "fetch", |out, span| {
+//!     if let Ok(rows) = out {
+//!         span.set_property("rows", rows.len());
+//!     }
+//! })
+//! .await;
+//! ```
+//!
+//! Gotchas:
+//!
+//! - `let _ = span_scope!(name = ..)` drops the guard at once, like any `let _`. Bind a name.
+//! - A span that never ends, or that is cut at the edge of a query range, has no properties.
+//! - Deploy analytics before instrumented code that records span properties.
+//!
 //! # Initialization
 //!
 //! Libraries should not initialize tracing - that's the application's responsibility.

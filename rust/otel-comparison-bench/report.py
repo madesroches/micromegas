@@ -36,6 +36,7 @@ ENCODE_ORDER = [
     "log_static_attrs",
     "log_dyn_high_card",
     "span_static",
+    "span_attrs",
     "span_dyn_name",
 ]
 SERIES_COUNTS = [10, 100]

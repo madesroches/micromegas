@@ -20,6 +20,9 @@ pub use span_events::*;
 mod span_name;
 pub use span_name::*;
 
+mod span_properties;
+pub use span_properties::*;
+
 mod instrumented_future;
 pub use instrumented_future::*;
 

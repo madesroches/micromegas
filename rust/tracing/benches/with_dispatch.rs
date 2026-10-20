@@ -77,6 +77,17 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             span_scope!("test");
         });
     });
+    c.bench_function("dispatch/span_props_literal", |b| {
+        b.iter(|| {
+            let _span = span_scope!(name = "test", region = "eu");
+        })
+    });
+    c.bench_function("dispatch/span_props_dyn", |b| {
+        b.iter(|| {
+            let mut span = span_scope!(name = "test", region = "eu");
+            span.set_property("rows", 42);
+        })
+    });
     c.bench_function("dispatch/span_scope_named", |b| {
         b.iter(|| {
             span_scope_named!("test");

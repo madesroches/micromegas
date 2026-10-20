@@ -1,10 +1,13 @@
 use anyhow::Result;
+use datafusion::arrow::array::AsArray;
 use micromegas_analytics::{
     async_block_processing::AsyncBlockProcessor,
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder, async_events_table_schema},
     lakehouse::{async_events_view::AsyncEventsView, view::View, view_factory::ViewFactory},
+    properties::property_set::PropertySet,
     scope::{BorrowedScopeDesc, ScopeDesc},
 };
+use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
 /// Create a dummy ViewFactory for testing
@@ -15,6 +18,7 @@ fn create_test_view_factory() -> Arc<ViewFactory> {
 /// Test implementation of AsyncBlockProcessor for testing
 struct TestAsyncProcessor {
     events: Vec<TestAsyncEvent>,
+    end_properties: Vec<Vec<(String, String)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +36,10 @@ struct TestAsyncEvent {
 
 impl TestAsyncProcessor {
     fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            end_properties: Vec::new(),
+        }
     }
 }
 
@@ -68,7 +75,14 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
         span_id: i64,
         parent_span_id: i64,
         _depth: u32,
+        properties: PropertySet<'_>,
     ) -> Result<bool> {
+        let mut end_properties = vec![];
+        properties.for_each_property(|k, v| {
+            end_properties.push((k.to_owned(), v.to_owned()));
+            Ok(())
+        })?;
+        self.end_properties.push(end_properties);
         self.events.push(TestAsyncEvent {
             event_type: "end".to_string(),
             scope_name: scope.name.to_string(),
@@ -105,7 +119,8 @@ fn test_async_events_table_schema() {
     assert!(field_names.contains(&"hash"));
 
     // Verify we have the expected number of fields (optimized for high-frequency data)
-    assert_eq!(field_names.len(), 12);
+    assert_eq!(field_names.len(), 13);
+    assert_eq!(field_names.last(), Some(&"properties"));
 }
 
 #[test]
@@ -126,6 +141,7 @@ fn test_async_event_record_builder() {
         filename: "test.rs",
         target: "test_target",
         line: 42,
+        properties: PropertySet::empty(),
     };
 
     let record2 = AsyncEventRecord {
@@ -141,6 +157,7 @@ fn test_async_event_record_builder() {
         filename: "test.rs",
         target: "test_target",
         line: 42,
+        properties: PropertySet::empty(),
     };
 
     // Test appending records
@@ -159,7 +176,7 @@ fn test_async_event_record_builder() {
     // Test building the record batch (optimized schema has 12 columns including depth and hash)
     let batch = builder.finish().expect("Failed to build record batch");
     assert_eq!(batch.num_rows(), 2);
-    assert_eq!(batch.num_columns(), 12);
+    assert_eq!(batch.num_columns(), 13);
 }
 
 #[test]
@@ -222,6 +239,7 @@ fn test_async_block_processor_trait() {
             1,
             0,
             0, // depth
+            PropertySet::empty(),
         )
         .expect("Failed to process end event");
 
@@ -255,7 +273,7 @@ fn test_empty_record_builder() {
 
     let batch = builder.finish().expect("Failed to build empty batch");
     assert_eq!(batch.num_rows(), 0);
-    assert_eq!(batch.num_columns(), 12);
+    assert_eq!(batch.num_columns(), 13);
 }
 
 #[test]
@@ -319,6 +337,7 @@ fn test_async_events_high_frequency_performance() {
             filename: &filename,
             target: &target,
             line: (i % 1000) as u32 + 1,
+            properties: PropertySet::empty(),
         };
         builder
             .append(&record)
@@ -337,7 +356,7 @@ fn test_async_events_high_frequency_performance() {
     // Test batch creation with many records
     let batch = builder.finish().expect("Failed to build large batch");
     assert_eq!(batch.num_rows(), 1000);
-    assert_eq!(batch.num_columns(), 12);
+    assert_eq!(batch.num_columns(), 13);
 }
 
 #[test]
@@ -361,6 +380,7 @@ fn test_async_events_cross_stream_scenarios() {
             filename: "worker.rs",
             target: "worker",
             line: 42,
+            properties: PropertySet::empty(),
         },
         // Subtask starts on stream 2 (work stealing)
         AsyncEventRecord {
@@ -376,6 +396,7 @@ fn test_async_events_cross_stream_scenarios() {
             filename: "worker.rs",
             target: "worker",
             line: 55,
+            properties: PropertySet::empty(),
         },
         // Subtask ends on stream 2
         AsyncEventRecord {
@@ -391,6 +412,7 @@ fn test_async_events_cross_stream_scenarios() {
             filename: "worker.rs",
             target: "worker",
             line: 55,
+            properties: PropertySet::empty(),
         },
         // Main task continues on stream 1
         AsyncEventRecord {
@@ -406,6 +428,7 @@ fn test_async_events_cross_stream_scenarios() {
             filename: "worker.rs",
             target: "worker",
             line: 42,
+            properties: PropertySet::empty(),
         },
     ];
 
@@ -445,4 +468,52 @@ fn test_async_events_view_maker_integration() {
     // Test invalid UUID rejection
     let invalid_result = maker.make_view("not-a-uuid");
     assert!(invalid_result.is_err());
+}
+
+#[test]
+fn test_async_event_rows_carry_end_properties() {
+    let object = Object {
+        type_name: "PropertySet",
+        members: &[("rows", Value::String("42"))],
+    };
+    let mut builder = AsyncEventRecordBuilder::with_capacity(2);
+    for (event_type, properties) in [
+        ("begin", PropertySet::empty()),
+        ("end", PropertySet::new(&object)),
+    ] {
+        builder
+            .append(&AsyncEventRecord {
+                stream_id: Arc::new("stream1".to_string()),
+                block_id: Arc::new("block1".to_string()),
+                time: 1000,
+                event_type,
+                span_id: 1,
+                parent_span_id: 0,
+                depth: 0,
+                hash: 0,
+                name: "f",
+                filename: "f.rs",
+                target: "t",
+                line: 1,
+                properties,
+            })
+            .unwrap();
+    }
+    let batch = builder.finish().unwrap();
+    let column = batch.column_by_name("properties").unwrap();
+    assert_eq!(batch.schema().fields().last().unwrap().name(), "properties");
+    let dict = column.as_dictionary::<datafusion::arrow::datatypes::Int32Type>();
+    let values = dict.values().as_binary::<i32>();
+    let empty = micromegas_analytics::arrow_properties::serialize_property_set_to_jsonb(
+        &PropertySet::empty(),
+    )
+    .unwrap();
+    let with_rows = micromegas_analytics::arrow_properties::serialize_property_set_to_jsonb(
+        &PropertySet::new(&object),
+    )
+    .unwrap();
+    let keys = dict.keys();
+    assert_eq!(values.value(keys.value(0) as usize), &empty[..]);
+    assert_eq!(values.value(keys.value(1) as usize), &with_rows[..]);
+    assert_ne!(empty, with_rows);
 }

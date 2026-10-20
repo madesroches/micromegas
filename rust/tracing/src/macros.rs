@@ -27,8 +27,44 @@ macro_rules! static_span_desc {
 /// span_scope!("scope");
 /// # }
 /// ```
+///
+/// With `name =`, the macro is an expression that returns the guard, and the span's end event
+/// carries the properties. The list is the one `log!` takes (literals, `static` values, `%`, `?`
+/// and bare values, and a trailing `..set`); `name` is reserved for the span's name. Add results
+/// later with `set_property`, which wins over a property of the same name given here.
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let request = 7;
+/// let mut span = span_scope!(name = "fetch_rows", region = "eu", request = %request);
+/// span.set_property("rows", 42);
+/// # }
+/// ```
+///
+/// Bind the guard to a name: `let _ = span_scope!(name = ..)` drops it at once, like any
+/// `let _`. A bare statement is a compile error under `deny(unused_must_use)`:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// use micromegas_tracing::span_scope;
+///
+/// span_scope!(name = "x");
+/// ```
+///
+/// `name` can't also be a property key:
+///
+/// ```compile_fail
+/// use micromegas_tracing::span_scope;
+///
+/// let _span = span_scope!(name = "x", name = "y");
+/// ```
 #[macro_export]
 macro_rules! span_scope {
+    (name = $name:expr $(, $($rest:tt)*)?) => {
+        $crate::__props!(@m span [scope $name] [] [] [] [] [] $($($rest)*)?)
+    };
     ($static_var_name:ident, $name:expr) => {
         $crate::static_span_desc!($static_var_name, $name);
         let guard_named = $crate::guards::ThreadSpanGuard::new(&$static_var_name);
@@ -55,8 +91,23 @@ macro_rules! span_scope {
 /// span_scope_named!(get_name());
 /// # }
 /// ```
+///
+/// `span_scope_named!(name = get_name(), key = value, ..)` returns a guard whose end event
+/// carries properties; see [`span_scope!`](crate::span_scope!).
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let mut span = span_scope_named!(name = "fetch", region = "eu");
+/// span.set_property("rows", 42);
+/// # }
+/// ```
 #[macro_export]
 macro_rules! span_scope_named {
+    (name = $name:expr $(, $($rest:tt)*)?) => {
+        $crate::__props!(@m span [named $name] [] [] [] [] [] $($($rest)*)?)
+    };
     ($static_var_name:ident, $name:expr) => {
         static $static_var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
             lod: $crate::levels::Verbosity::Max,
@@ -87,8 +138,24 @@ macro_rules! span_scope_named {
 /// span_scope_named_dyn!(format!("load {asset}"));
 /// # }
 /// ```
+///
+/// `span_scope_named_dyn!(name = format!(..), key = value, ..)` returns a guard whose end event
+/// carries properties; see [`span_scope!`](crate::span_scope!).
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # fn main() {
+/// let asset = String::from("hero.png");
+/// let mut span = span_scope_named_dyn!(name = format!("load {asset}"), kind = "texture");
+/// span.set_property("bytes", 1024);
+/// # }
+/// ```
 #[macro_export]
 macro_rules! span_scope_named_dyn {
+    (name = $name:expr $(, $($rest:tt)*)?) => {
+        $crate::__props!(@m span [named_dyn $name] [] [] [] [] [] $($($rest)*)?)
+    };
     ($static_var_name:ident, $name:expr) => {
         static $static_var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
             lod: $crate::levels::Verbosity::Max,
@@ -151,12 +218,30 @@ macro_rules! static_span_location {
 /// }).await;
 /// # }
 /// ```
+///
+/// A trailing closure receives the output and a `&mut SpanProperties` to set end properties on:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let rows = span_async_named!("database_query", async { vec![1, 2] }, |rows, span| {
+///     span.set_property("rows", rows.len());
+/// }).await;
+/// # }
+/// ```
 #[macro_export]
 macro_rules! span_async_named {
     ($name:expr, $async_block:expr) => {{
         use $crate::spans::InstrumentFuture as _;
         $crate::static_span_location!(_ASYNC_LOCATION);
         $async_block.__instrument_named_internal(&_ASYNC_LOCATION, $name)
+    }};
+    ($name:expr, $async_block:expr, $on_end:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_ASYNC_LOCATION);
+        $async_block.__instrument_named_with_internal(&_ASYNC_LOCATION, $name, $on_end)
     }};
 }
 
@@ -174,12 +259,31 @@ macro_rules! span_async_named {
 /// let result = instrument_named!(future, "operation_name").await;
 /// # }
 /// ```
+///
+/// A trailing closure receives the output and a `&mut SpanProperties` to set end properties on:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let rows = instrument_named!(async { vec![1, 2] }, "fetch", |rows, span| {
+///     span.set_property("rows", rows.len());
+/// })
+/// .await;
+/// # }
+/// ```
 #[macro_export]
 macro_rules! instrument_named {
     ($future:expr, $name:expr) => {{
         use $crate::spans::InstrumentFuture as _;
         $crate::static_span_location!(_INSTRUMENT_LOCATION);
         $future.__instrument_named_internal(&_INSTRUMENT_LOCATION, $name)
+    }};
+    ($future:expr, $name:expr, $on_end:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_INSTRUMENT_LOCATION);
+        $future.__instrument_named_with_internal(&_INSTRUMENT_LOCATION, $name, $on_end)
     }};
 }
 
@@ -199,12 +303,31 @@ macro_rules! instrument_named {
 /// }).await;
 /// # }
 /// ```
+///
+/// A trailing closure receives the output and a `&mut SpanProperties` to set end properties on:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let id = 7;
+/// let n = span_async_named_dyn!(format!("query {id}"), async { 42 }, |n, span| {
+///     span.set_property("n", n);
+/// }).await;
+/// # }
+/// ```
 #[macro_export]
 macro_rules! span_async_named_dyn {
     ($name:expr, $async_block:expr) => {{
         use $crate::spans::InstrumentFuture as _;
         $crate::static_span_location!(_ASYNC_LOCATION);
         $async_block.__instrument_named_dyn_internal(&_ASYNC_LOCATION, $name)
+    }};
+    ($name:expr, $async_block:expr, $on_end:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_ASYNC_LOCATION);
+        $async_block.__instrument_named_dyn_with_internal(&_ASYNC_LOCATION, $name, $on_end)
     }};
 }
 
@@ -223,12 +346,31 @@ macro_rules! span_async_named_dyn {
 /// let result = instrument_named_dyn!(future, format!("operation {}", 1)).await;
 /// # }
 /// ```
+///
+/// A trailing closure receives the output and a `&mut SpanProperties` to set end properties on:
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let n = instrument_named_dyn!(async { 42 }, format!("operation {}", 1), |n, span| {
+///     span.set_property("n", n);
+/// })
+/// .await;
+/// # }
+/// ```
 #[macro_export]
 macro_rules! instrument_named_dyn {
     ($future:expr, $name:expr) => {{
         use $crate::spans::InstrumentFuture as _;
         $crate::static_span_location!(_INSTRUMENT_LOCATION);
         $future.__instrument_named_dyn_internal(&_INSTRUMENT_LOCATION, $name)
+    }};
+    ($future:expr, $name:expr, $on_end:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_INSTRUMENT_LOCATION);
+        $future.__instrument_named_dyn_with_internal(&_INSTRUMENT_LOCATION, $name, $on_end)
     }};
 }
 
@@ -719,6 +861,14 @@ macro_rules! log {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __props {
+    // Span property lists have no trailing format string or value, so they can end here, and can
+    // end on a `..set` with nothing after it.
+    (@m span $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt) => {
+        $crate::__props!(@end span $ctx $s $d $a $set $t)
+    };
+    (@m span $ctx:tt $s:tt $d:tt $a:tt [] $t:tt .. $new_set:expr $(,)?) => {
+        $crate::__props!(@end span $ctx $s $d $a [$new_set] $t)
+    };
     // `..set` is only accepted as the last property.
     (@m $kind:ident $ctx:tt $s:tt $d:tt $a:tt $set:tt $t:tt
         .. $new_set:expr, $k:tt = $($x:tt)*) => {
@@ -808,6 +958,27 @@ macro_rules! __props {
     (@end metric $ctx:tt [] [] [] [] [] $value:expr) => {
         $crate::__metric_call!(plain $ctx $value)
     };
+
+    // A span's static set goes to its guard: the callsite literals, or the literals and static
+    // values over the spread set, or the spread set alone.
+    (@end span $ctx:tt [] [$($d:tt)*] [$($a:tt)*] [] []) => {
+        $crate::__span_guard_call!($ctx $crate::property_set::PropertySet::empty(), [$($d)*])
+    };
+    (@end span $ctx:tt [] [$($d:tt)*] [$($a:tt)*] [$set:tt] []) => {
+        $crate::__span_guard_call!($ctx $set, [$($d)*])
+    };
+    (@end span $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] [static]) => {
+        $crate::__span_guard_call!($ctx $crate::__static_set!(span [] $($s)+), [$($d)*])
+    };
+    (@end span $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] [static]) => {
+        $crate::__span_guard_call!($ctx $crate::__static_set!(span [$set] $($s)+), [$($d)*])
+    };
+    (@end span $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [] []) => {
+        $crate::__span_guard_call!($ctx $crate::__callsite_set!(span $($s)+), [$($d)*])
+    };
+    (@end span $ctx:tt [$($s:tt)+] [$($d:tt)*] [$($a:tt)*] [$set:tt] []) => {
+        $crate::__span_guard_call!($ctx $crate::__static_set!(span [$set] $($s)+), [$($d)*])
+    };
     (@end metric $ctx:tt [$($s:tt)*] [$($d:tt)*] [$($a:tt)*] [$set:tt] [] $value:expr $(,)?) => {
         $crate::__metric_call!(tagged $ctx $set, [$($a)*], $value)
     };
@@ -887,6 +1058,73 @@ macro_rules! __metric_call {
             $value,
         );
     }};
+}
+
+/// Builds the guard of a span with properties. The dynamic values are formatted before the begin
+/// event, so that formatting is not charged to the span.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __span_guard_call {
+    ([scope $name:expr] $set:expr, [$($d:tt)*]) => {{
+        $crate::static_span_desc!(_METADATA_NAMED, $name);
+        let mut properties = $crate::spans::SpanProperties::new($set);
+        $crate::__span_set_properties!(properties $($d)*);
+        $crate::guards::ThreadSpanGuard::with_properties(&_METADATA_NAMED, properties)
+    }};
+    ([named $name:expr] $set:expr, [$($d:tt)*]) => {{
+        $crate::__span_guard_call!(@loc _LOCATION);
+        let mut properties = $crate::spans::SpanProperties::new($set);
+        $crate::__span_set_properties!(properties $($d)*);
+        $crate::guards::ThreadNamedSpanGuard::with_properties(
+            &_LOCATION,
+            $crate::spans::StaticSpanName($name),
+            properties,
+        )
+    }};
+    ([named_dyn $name:expr] $set:expr, [$($d:tt)*]) => {{
+        $crate::__span_guard_call!(@loc _LOCATION);
+        let mut properties = $crate::spans::SpanProperties::new($set);
+        $crate::__span_set_properties!(properties $($d)*);
+        $crate::guards::ThreadNamedSpanGuard::with_properties(
+            &_LOCATION,
+            $crate::spans::DynSpanName($name),
+            properties,
+        )
+    }};
+    (@loc $var:ident) => {
+        static $var: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
+            lod: $crate::levels::Verbosity::Max,
+            target: module_path!(),
+            module_path: module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __span_set_properties {
+    ($props:ident $(($k:tt, $vk:ident, $v:tt))*) => {
+        $($crate::__span_set_property!($props $k $vk $v);)*
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __span_set_property {
+    ($props:ident $k:tt disp $v:tt) => {
+        $props.set_property($crate::__prop_key!(span $k), &$v)
+    };
+    ($props:ident $k:tt dbg $v:tt) => {
+        $props.set_property($crate::__prop_key!(span $k), ::std::format_args!("{:?}", $v))
+    };
+    ($props:ident $k:tt bare $v:tt) => {
+        $props.set_property(
+            $crate::__prop_key!(span $k),
+            &*$crate::property_value::PropertyValue::property_value(&$v),
+        )
+    };
 }
 
 /// Interns the literal properties of a callsite on its first execution.
@@ -1013,6 +1251,12 @@ macro_rules! __prop_key {
     };
     (metric "unit") => {
         compile_error!("`unit` is reserved: it is the second argument of the metric")
+    };
+    (span name) => {
+        compile_error!("`name` is reserved: it is the span's name")
+    };
+    (span "name") => {
+        compile_error!("`name` is reserved: it is the span's name")
     };
     ($kind:ident $k:ident) => {
         stringify!($k)

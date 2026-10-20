@@ -339,7 +339,7 @@ fn bench_encode_group(c: &mut Criterion) {
             b.iter(|| gzip(&encode_logs(&batch, resource)))
         });
     }
-    for (name, case) in [SPAN_CASES[0], SPAN_CASES[2]] {
+    for (name, case) in SPAN_CASES {
         let name = format!("span_{name}");
         let spans = capture_spans(case, ENCODE_SPANS);
         let proto = encode_spans(spans.clone(), resource);

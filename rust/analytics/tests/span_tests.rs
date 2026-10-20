@@ -5,6 +5,7 @@ use micromegas_analytics::async_block_processing::{
 };
 use micromegas_analytics::metadata::StreamMetadata;
 use micromegas_analytics::payload::parse_block;
+use micromegas_analytics::properties::property_set::PropertySet as AnalyticsPropertySet;
 use micromegas_analytics::scope::BorrowedScopeDesc;
 use micromegas_analytics::thread_block_processor::{
     ThreadBlockProcessor, parse_thread_block_payload,
@@ -17,8 +18,10 @@ use micromegas_tracing::{
     spans::{
         BeginAsyncDynNamedSpanEvent, BeginAsyncNamedSpanEvent, BeginThreadDynNamedSpanEvent,
         BeginThreadNamedSpanEvent, BeginThreadSpanEvent, EndAsyncDynNamedSpanEvent,
-        EndAsyncNamedSpanEvent, EndThreadDynNamedSpanEvent, EndThreadNamedSpanEvent, SpanLocation,
-        SpanMetadata, ThreadBlock, ThreadStream,
+        EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadDynNamedSpanEvent,
+        EndThreadNamedSpanEvent, EndThreadSpanEvent, SpanLocation, SpanMetadata,
+        TaggedEndAsyncNamedSpanEvent, TaggedEndAsyncSpanEvent, TaggedEndThreadNamedSpanEvent,
+        TaggedEndThreadSpanEvent, ThreadBlock, ThreadStream,
     },
     test_utils::init_in_memory_tracing,
 };
@@ -88,6 +91,20 @@ fn test_parse_span_interops() {
 struct NameCollector {
     thread: Vec<(&'static str, String)>,
     async_spans: Vec<(&'static str, String)>,
+    thread_end_properties: Vec<Vec<(String, String)>>,
+    async_end_properties: Vec<Vec<(String, String)>>,
+}
+
+fn collect_pairs(properties: &AnalyticsPropertySet<'_>) -> Vec<(String, String)> {
+    let mut pairs = vec![];
+    properties
+        .for_each_property(|k, v| {
+            pairs.push((k.to_owned(), v.to_owned()));
+            Ok(())
+        })
+        .unwrap();
+    pairs.sort();
+    pairs
 }
 
 impl ThreadBlockProcessor for NameCollector {
@@ -108,7 +125,9 @@ impl ThreadBlockProcessor for NameCollector {
         _event_id: i64,
         scope: BorrowedScopeDesc<'_>,
         _ts: i64,
+        properties: AnalyticsPropertySet<'_>,
     ) -> anyhow::Result<bool> {
+        self.thread_end_properties.push(collect_pairs(&properties));
         self.thread.push(("end", scope.name.to_owned()));
         Ok(true)
     }
@@ -136,7 +155,9 @@ impl AsyncBlockProcessor for NameCollector {
         _span_id: i64,
         _parent_span_id: i64,
         _depth: u32,
+        properties: AnalyticsPropertySet<'_>,
     ) -> anyhow::Result<bool> {
+        self.async_end_properties.push(collect_pairs(&properties));
         self.async_spans.push(("end", scope.name.to_owned()));
         Ok(true)
     }
@@ -279,5 +300,167 @@ fn test_parse_dyn_named_spans() {
             ("end", "other_text"),
             ("end", "shared_text"),
         ])
+    );
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[test]
+#[serial]
+fn test_parse_tagged_end_events() {
+    use micromegas_tracing::property_set::{DynProperty, Property, PropertySet};
+
+    static LOCATION: SpanLocation = SpanLocation {
+        lod: Verbosity::Med,
+        target: "target",
+        module_path: "module_path",
+        file: "file",
+        line: 1,
+    };
+    static SCOPE: SpanMetadata = SpanMetadata {
+        name: "plain_scope",
+        location: SpanLocation {
+            lod: Verbosity::Med,
+            target: "target",
+            module_path: "module_path",
+            file: "file",
+            line: 2,
+        },
+    };
+
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let mut stream = ThreadStream::new(64 * 1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    let interned = PropertySet::find_or_create(vec![Property::new("region", "eu")]);
+    let rows = String::from("42");
+
+    stream.get_events_mut().push(BeginThreadSpanEvent {
+        thread_span_desc: &SCOPE,
+        time: 1,
+    });
+    // an interned set
+    stream.push_tagged(interned, &[], |properties| TaggedEndThreadSpanEvent {
+        thread_span_desc: &SCOPE,
+        properties,
+        time: 2,
+    });
+    stream.get_events_mut().push(BeginThreadSpanEvent {
+        thread_span_desc: &SCOPE,
+        time: 3,
+    });
+    // a dynamic set that references a 'static name
+    stream.push_tagged(interned, &[DynProperty::new("rows", &rows)], |properties| {
+        TaggedEndThreadSpanEvent {
+            thread_span_desc: &SCOPE,
+            properties,
+            time: 4,
+        }
+    });
+    stream.get_events_mut().push(BeginThreadNamedSpanEvent {
+        thread_span_location: &LOCATION,
+        name: "named".into(),
+        time: 5,
+    });
+    stream.push_tagged_named(
+        "named",
+        PropertySet::empty(),
+        &[DynProperty::new("rows", &rows)],
+        |name, properties| TaggedEndThreadNamedSpanEvent {
+            thread_span_location: &LOCATION,
+            name,
+            properties,
+            time: 6,
+        },
+    );
+    stream.get_events_mut().push(BeginThreadSpanEvent {
+        thread_span_desc: &SCOPE,
+        time: 7,
+    });
+    stream.get_events_mut().push(EndThreadSpanEvent {
+        thread_span_desc: &SCOPE,
+        time: 8,
+    });
+    stream.get_events_mut().push(EndAsyncSpanEvent {
+        span_desc: &SCOPE,
+        span_id: 1,
+        parent_span_id: 0,
+        depth: 0,
+        time: 9,
+    });
+    stream.push_tagged(interned, &[DynProperty::new("rows", &rows)], |properties| {
+        TaggedEndAsyncSpanEvent {
+            span_desc: &SCOPE,
+            properties,
+            span_id: 2,
+            parent_span_id: 0,
+            depth: 0,
+            time: 10,
+        }
+    });
+    stream.push_tagged_named("named", interned, &[], |name, properties| {
+        TaggedEndAsyncNamedSpanEvent {
+            span_location: &LOCATION,
+            name,
+            properties,
+            span_id: 3,
+            parent_span_id: 0,
+            depth: 0,
+            time: 11,
+        }
+    });
+
+    let mut block = stream.replace_block(Arc::new(ThreadBlock::new(
+        64 * 1024,
+        process_id,
+        stream_id,
+        0,
+    )));
+    Arc::get_mut(&mut block).unwrap().close();
+    let encoded = block.encode_bin(&process_info).unwrap();
+    let received_block: micromegas_telemetry::block_wire_format::Block =
+        ciborium::from_reader(&encoded[..]).unwrap();
+    let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
+
+    let mut collector = NameCollector::default();
+    parse_thread_block_payload(
+        "block",
+        0,
+        &received_block.payload,
+        &stream_metadata,
+        &mut collector,
+    )
+    .unwrap();
+    parse_async_block_payload(
+        "block",
+        0,
+        &received_block.payload,
+        &stream_metadata,
+        &mut collector,
+    )
+    .unwrap();
+
+    assert_eq!(
+        collector.thread_end_properties,
+        vec![
+            pairs(&[("region", "eu")]),
+            pairs(&[("region", "eu"), ("rows", "42")]),
+            pairs(&[("rows", "42")]),
+            pairs(&[]),
+        ]
+    );
+    assert_eq!(
+        collector.async_end_properties,
+        vec![
+            pairs(&[]),
+            pairs(&[("region", "eu"), ("rows", "42")]),
+            pairs(&[("region", "eu")]),
+        ]
     );
 }

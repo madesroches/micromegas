@@ -43,20 +43,27 @@ const OVERFLOW_COUNT: usize = 33_000;
 #[test]
 fn span_record_builder_overflow() {
     let mut builder = SpanRecordBuilder::with_capacity(OVERFLOW_COUNT);
+    let empty_jsonb = micromegas_analytics::arrow_properties::serialize_property_set_to_jsonb(
+        &PropertySet::empty(),
+    )
+    .unwrap();
     for i in 0..OVERFLOW_COUNT {
         builder
-            .append(SpanRow {
-                id: i as i64,
-                parent: -1,
-                depth: 0,
-                begin: i as i64,
-                end: i as i64 + 1,
-                hash: i as u32,
-                name: Arc::new(format!("name-{i}")),
-                target: Arc::new(format!("target-{i}")),
-                filename: Arc::new(format!("filename-{i}")),
-                line: 1,
-            })
+            .append(
+                SpanRow {
+                    id: i as i64,
+                    parent: -1,
+                    depth: 0,
+                    begin: i as i64,
+                    end: i as i64 + 1,
+                    hash: i as u32,
+                    name: Arc::new(format!("name-{i}")),
+                    target: Arc::new(format!("target-{i}")),
+                    filename: Arc::new(format!("filename-{i}")),
+                    line: 1,
+                },
+                &empty_jsonb,
+            )
             .expect("append must not panic past the old Int16 dictionary cap");
     }
     let batch = builder
@@ -88,6 +95,7 @@ fn async_event_record_builder_overflow() {
                 filename: &filename,
                 target: &target,
                 line: 1,
+                properties: PropertySet::empty(),
             })
             .expect("append must not panic past the old Int16 dictionary cap");
     }
