@@ -219,13 +219,14 @@ def main():
     ps = run_quiet(build_compose_cmd("ps", "--status", "running", "-q", SERVICE_NAME))
     already_running = ps.returncode == 0 and is_already_running(ps.stdout)
 
-    if already_running:
+    if already_running and not args.pull:
         print_status("Monolith is already running", "warning")
     else:
-        for port in (WEB_PORT, INGESTION_PORT, FLIGHTSQL_PORT):
-            if check_port_in_use(port):
-                print_status(f"Port {port} is already in use", "error")
-                return 1
+        if not already_running:
+            for port in (WEB_PORT, INGESTION_PORT, FLIGHTSQL_PORT):
+                if check_port_in_use(port):
+                    print_status(f"Port {port} is already in use", "error")
+                    return 1
         print_status("Starting containers...", "info")
         result = run_quiet(build_up_cmd(args.pull))
         if result.returncode != 0:
