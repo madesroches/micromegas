@@ -28,7 +28,7 @@ Behavior:
 
 Flags: `--pull`, `--follow`, `--down` (stop and remove containers; `--down --volumes` wipes data), `--timeout`. No port/image flags: the compose file hardcodes them, and adding overrides would need compose-file interpolation for little benefit — add later if wanted (open/closed: compose file can gain `${VAR:-default}` without changing the script's contract).
 
-`print_status`, `check_docker`, and `check_port_in_use` are duplicated in `start_analytics_web_docker.py`. Rather than copy a third time, extract them into `local_test_env/ai_scripts/_docker_common.py`... but the web-app script lives in a different tree, so it is left untouched; the new script defines its own small helpers. A shared module is a follow-up if a third script appears.
+`print_status`, `check_docker`, and `check_port_in_use` are duplicated in `start_analytics_web_docker.py`. The web-app script lives in a different tree and is left untouched; the new script defines its own small helpers. A shared module is a follow-up if a third script appears.
 
 Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_ready` with an injectable probe) are separate functions so they can be unit tested without Docker.
 
