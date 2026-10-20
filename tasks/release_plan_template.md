@@ -1,7 +1,36 @@
 # Release Plan Template for Micromegas
 
 This template is updated after each release with lessons learned.
-Last updated: v0.31.0 (2026-09-14)
+Last updated: v0.32.0 (2026-10-20)
+
+---
+
+## Lessons Learned from v0.32.0
+
+### New RustSec advisories can fail `rust_ci.py` between cycles
+
+`cargo audit` failed on `rustls-webpki` and `webpki-roots` in both the main and `datafusion-wasm`
+lockfiles. `cargo update -p <crate>` in each workspace fixed it; commit the lockfiles with the
+release docs, before tagging. `cargo deny check advisories` reports older accepted items too, but
+CI only runs `cargo audit` for advisories, so that is the check to trust.
+
+### Docker: a failed service does not stop the run, and the exit looks like success
+
+Three of eight services failed on transient crates.io / rust-lang.org 502s and "transfer too slow"
+errors, and the script ended with `Total: 10/16 built` at a normal exit. Read the BUILD SUMMARY
+rather than waiting for the process to end, then re-run only the failed services with the same
+command (buildx cache makes it incremental). Verify all 16 tags with `imagetools inspect`. Making
+the script fail loudly is tracked in #1699.
+
+### Don't wait on a process with `pgrep -f` from a shell whose own command line matches
+
+A `while pgrep -f rust_ci.py` loop matches itself and never exits. Use a bracket pattern
+(`pgrep -f "[r]ust_ci.py"`).
+
+### Clean cycle otherwise
+
+Both tag workflows fired with the two-command tag push, and the main release held the "Latest"
+badge. crates.io (16 crates) finished in about 25 minutes.
 
 ---
 
