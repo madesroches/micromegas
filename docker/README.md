@@ -37,7 +37,7 @@ docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.
 
 ## Running the monolith
 
-`python3 docker/start_monolith_docker.py` starts the published monolith image through `docker-compose.monolith.yaml`, waits until it is ready, and prints the URLs (`--down` removes it).
+`python3 docker/start_monolith_docker.py` starts the published monolith image through `docker-compose.monolith.yaml`, waits until it is ready, and prints the URLs (`--down` removes it). It uses its own compose project, `micromegas-monolith`, separate from stacks started with raw `docker compose`.
 
 ## Building
 

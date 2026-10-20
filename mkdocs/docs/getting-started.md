@@ -25,7 +25,7 @@ cd micromegas
 docker compose -f docker/docker-compose.monolith.yaml up
 ```
 
-From a clone you can also use `python3 docker/start_monolith_docker.py`, which runs the same compose file in the background, waits until the stack is ready, and prints the URLs to open. Pass `--pull` to fetch the latest image, `--follow` to tail the logs, and `--down` (with `--volumes` to also wipe the data) to remove the stack.
+From a clone you can also use `python3 docker/start_monolith_docker.py`, which runs the same compose file in the background under its own compose project, `micromegas-monolith`, waits until the stack is ready, and prints the URLs to open. Pass `--pull` to fetch the latest image, `--follow` to tail the logs, and `--down` (with `--volumes` to also wipe the data) to remove the stack. Its containers and volumes are separate from a stack started with raw `docker compose`, so use the same method to stop it.
 
 Either way, Docker pulls `marcantoinedesroches/micromegas-monolith:latest` and starts PostgreSQL plus a single monolith process running all roles (ingestion, analytics, web, maintenance). Data is stored in Docker volumes (Postgres data + a file-backed object store), so it persists across restarts but is easy to wipe (see [Stopping / cleaning up](#stopping-cleaning-up)).
 
@@ -138,6 +138,18 @@ This setup is for **evaluation, not production**:
     For a real deployment, see [Authentication](admin/authentication.md) to secure your instance and [Monolith Deployment](admin/monolith.md) for configuration options, or split into per-role services for horizontal scale-out.
 
 ## Stopping / cleaning up
+
+If you started the stack with the script, stop it with the script (it uses the compose project `micromegas-monolith`, which raw `docker compose ... down` does not touch):
+
+```bash
+# Stop the containers (keeps data)
+python3 docker/start_monolith_docker.py --down
+
+# Stop and delete all data (Postgres + object store volumes)
+python3 docker/start_monolith_docker.py --down --volumes
+```
+
+If you started it with `docker compose ... up`:
 
 ```bash
 # Stop the containers (keeps data)
