@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.0 (2026-10-20)
+
+Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence.
+
 ## 0.31.0 (2026-09-14)
 
 Version sync release. Security fix from a Dependabot dependency bump: `google.golang.org/grpc` 1.83.2, resolving Dependabot alert 475 (xDS servers DoS via missing `:authority`/`Host` headers) (#1578).

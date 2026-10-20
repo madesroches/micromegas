@@ -2,7 +2,7 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## Unreleased
+## v0.32.0 - 2026-10-20
 
 * **Tracing, Analytics:** Properties on thread and async spans, recorded at span end (#1691).
   `span_scope!(name = "x", k = v, ..)`, `span_scope_named!(name = ..)` and
