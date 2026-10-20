@@ -76,6 +76,14 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.32.0 (October 2026)
+* **Properties on spans and dynamic names** — thread and async spans record properties at span end, logs and metrics take dynamic properties, and span and metric names can be built at runtime, with a leak-free C API
+* **Cheaper instrumentation** — shorter critical sections, cheaper hashers, and no formatting for log messages that only repeat their properties; benchmarked against OpenTelemetry
+* **Views as code** — eagerly materialized views defined in DDL, plus a `micromegas-views` CLI
+* **Access control hardening** — per-key IP allowlists, a narrower `is_admin`, and an audit record for every control-plane mutation
+* **Web app** — Stacked Bar cell, `$me.*` identity macros, query-backed markdown cells, and collapsed repeated log lines
+* **Storage and deps** — GCS and Azure object backends, DataFusion 55.2, and a lightweight client feature on the `micromegas` crate
+
 ### v0.31.0 (September 2026)
 * **Postgres is the sole source of API keys and audience grants** — the env keyrings are gone; manage both at runtime with `micromegas-grants` and the admin routes
 * **Access control is configured in one place** — one `MICROMEGAS_PUBLIC_VIEW_SETS`, resolved once on every auth path, and the audience model gets its own documentation page
@@ -103,13 +111,6 @@ Building from source or contributing code? See the [Build Guide](https://microme
 * **Screens folders** — organize saved screens in a sidebar tree, with a folder picker in the Save dialog
 * **More self-observability** — per-query FlightSQL audit log, a `pg_stat_*` collector, RSS/jemalloc gauges on every service, and per-view failure isolation during materialization
 * Object-cache hardening (circuit breaker, race fix, shutdown drain); Python 3.11 minimum; DataFusion 54.1; Rust 1.97.1
-
-### v0.27.0 (July 2026)
-* **Tiered object read cache** — a range-aware S3 read cache service (`micromegas-object-cache-srv`, RAM + disk) and an in-process L1, with single-flight coalescing, bounded prefetch, streamed range responses, and write-time warming
-* **The `partition_metadata` table is gone** — Parquet metadata is read straight from the footer through the cache, removing TOAST and write-path overhead
-* **Blender add-on** — built on a new `micromegas-capi` C-ABI crate, capturing actions, performance metrics, crashes, and exceptions
-* **Tougher clients** — resilient sink transport (priority queues, retry tuning, in-flight gating) and block parsing hardened against malformed payloads
-* Supply-chain gates (`cargo audit`, `cargo deny`) on every CI build; `telemetry-admin` renamed to `telemetry-maintenance-srv`; DataFusion 54.0
 
 Every item of every release, including breaking-change notes and dependency bumps, is in [CHANGELOG.md](./CHANGELOG.md).
 
