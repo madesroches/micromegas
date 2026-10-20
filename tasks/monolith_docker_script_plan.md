@@ -11,7 +11,7 @@ Add a Python script that runs the monolith from the pre-built `marcantoinedesroc
 - No script ties the compose file to a "start it and tell me where to click" experience. `docs/GETTING_STARTED.md` and `mkdocs/docs/getting-started.md` document raw compose commands.
 
 ## Design
-New script `local_test_env/ai_scripts/start_monolith_docker.py` (next to `start_services.py`/`stop_services.py`, so the local-run tooling stays in one place). It is a thin driver over the existing compose file, which stays the single source of truth for the stack's configuration (DRY — no second copy of env vars/ports in Python).
+New script `docker/start_monolith_docker.py` (beside `docker-compose.monolith.yaml`, which it drives and locates as a sibling file). It is a thin driver over the existing compose file, which stays the single source of truth for the stack's configuration (DRY — no second copy of env vars/ports in Python).
 
 Behavior:
 1. Verify `docker info` and `docker compose version` (error with the Compose v2.23.1+ requirement, mirroring `docker/docker-compose.monolith.yaml`).
@@ -34,23 +34,24 @@ Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_rea
 
 ## Implementation Steps
 1. Create branch `monolith_docker_script` (done).
-2. Write `local_test_env/ai_scripts/start_monolith_docker.py` per Design.
+2. Write `docker/start_monolith_docker.py` per Design.
 3. Add unit tests (see Testing Strategy).
 4. Update docs (see Documentation) and `CHANGELOG.md` entry.
 
 ## Files to Modify
-- `local_test_env/ai_scripts/start_monolith_docker.py` (new)
-- `local_test_env/ai_scripts/test_start_monolith_docker.py` (new)
+- `docker/start_monolith_docker.py` (new)
+- `docker/test_start_monolith_docker.py` (new)
 - `mkdocs/docs/getting-started.md`, `mkdocs/docs/development/build.md`, `docker/README.md` (mention)
 - `CHANGELOG.md`
 
 ## Trade-offs
 - **Wrap compose vs. `docker run` the monolith image.** `docker run` would need a separate Postgres container, network, and the `micromegas_app` DB bootstrap, duplicating the compose file. Wrapping compose reuses it unchanged.
-- **Location.** Alongside the web-app script was considered, but the monolith spans web+ingestion+FlightSQL, and `ai_scripts/` already hosts `start_services.py --monolith`.
+- **Location.** `docker/` holds the compose file the script wraps, so the two stay together. `local_test_env/ai_scripts/` (next to `start_services.py --monolith`) was considered and rejected.
 - **Detached by default** (differs from the web-app script's foreground default) because compose manages multiple containers and the user typically wants their terminal back after seeing the URLs; `--follow` gives the foreground behavior.
 
 ## Decisions
 - Compose file is not modified in this change.
+- Script lives in `docker/`, beside the compose file it wraps.
 
 ## Documentation
 - `mkdocs/docs/getting-started.md`: mention the script as a convenience over raw `docker compose up` for repo checkouts (curl-only path stays compose-based).
@@ -63,12 +64,11 @@ No-DB unit tests (pytest, run with the python poetry venv) for the pure helpers:
 
 ## Manual Verification
 Not automatable without Docker in CI; failure is immediately visible.
-1. `python3 local_test_env/ai_scripts/start_monolith_docker.py` — expect the summary with `http://localhost:3000/`; open it and see the web app.
+1. `python3 docker/start_monolith_docker.py` — expect the summary with `http://localhost:3000/`; open it and see the web app.
 2. `micromegas-query "SELECT count(*) FROM log_entries" --begin 1h` — expect rows (self-telemetry) after a few seconds.
 3. Re-run the script while running — expect it to report already running, not a port conflict.
-4. `python3 local_test_env/ai_scripts/start_monolith_docker.py --down` — expect containers removed; `docker ps` shows none.
+4. `python3 docker/start_monolith_docker.py --down` — expect containers removed; `docker ps` shows none.
 5. Occupy port 3000 (`python3 -m http.server 3000`) and start — expect a clear port-in-use error.
 
 ## Open Questions
-- Should the script live under `docker/` instead (so a clone-free-ish user finds it beside the compose file)? Defaulting to `local_test_env/ai_scripts/` for consistency with other start scripts.
 - Do we want `--port`/`--image` overrides now (requires compose interpolation)?
