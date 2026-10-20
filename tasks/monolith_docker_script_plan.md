@@ -8,7 +8,7 @@ Add a Python script that runs the monolith from the pre-built `marcantoinedesroc
 - `local_test_env/ai_scripts/start_services.py --monolith` runs the source-built monolith and prints PIDs and log paths; `stop_services.py` stops it.
 - `docker/docker-compose.monolith.yaml` is already self-contained (Postgres 16, inline `pg_init` config creating `micromegas_app`, file-backed object store on the `lake` volume, `--disable-auth`, ports 3000/9000/50051, `MICROMEGAS_BASE_PATH=/`). It needs Compose v2.23.1+.
 - `build/docker_command.py` and `build/run_*_container.py` are build/release helpers, not a user-facing launcher.
-- No script ties the compose file to a "start it and tell me where to click" experience. `docs/GETTING_STARTED.md` and `mkdocs/docs/getting-started.md` document raw compose commands.
+- No script ties the compose file to a "start it and tell me where to click" experience. `mkdocs/docs/getting-started.md` document raw compose commands.
 
 ## Design
 New script `docker/start_monolith_docker.py` (beside `docker-compose.monolith.yaml`, which it drives and locates as a sibling file). It is a thin driver over the existing compose file, which stays the single source of truth for the stack's configuration (DRY — no second copy of env vars/ports in Python).
@@ -18,25 +18,22 @@ Behavior:
 2. Use a fixed compose project name (`micromegas-monolith`) so containers/volumes don't depend on the checkout directory name and `--down` finds them.
 3. Detect an already-running stack via `docker compose -p micromegas-monolith -f <compose file> ps --status running -q micromegas` (non-empty output means running; the decision is a pure helper over that output). If running, print an "already running" status, skip the port check and `up`, and continue to the readiness poll and summary. Otherwise check that ports 3000, 9000 and 50051 are free; fail with the offending port.
 4. Unless already running: `docker compose -f <repo>/docker/docker-compose.monolith.yaml -p micromegas-monolith up -d` (with `--pull always` when `--pull` is given; default uses the local image if present, otherwise compose pulls).
-5. Poll until ready: web app (`http://localhost:3000/`) responds, and ingestion `GET http://localhost:9000/ready` returns 200 (probe from the ready-probe work). Timeout ~90s; on timeout print `docker compose logs --tail 50 micromegas` and exit 1.
+5. Poll until ready: web app (`http://localhost:3000/`) responds, and ingestion `GET http://localhost:9000/ready` returns 200 (probe from the ready-probe work). The default probe uses stdlib `urllib.request` (no third-party dependencies, since the script runs via plain `python3`). Timeout ~90s; on timeout print the last 50 log lines (`logs --tail 50 micromegas`) and exit 1. All compose commands the script runs or prints (logs, stop, down) are built with `build_compose_cmd`, so they carry `-p micromegas-monolith -f <compose file>` and work from any directory.
 6. Print summary in the same `print_status` style:
    - Web App: `http://localhost:3000/`
    - Ingestion: `http://localhost:9000`
    - FlightSQL: `grpc://localhost:50051` plus a ready-to-copy `micromegas-query "SELECT ..."` hint
    - Logs / stop commands (`docker compose ... logs -f`, `--down`)
-7. Default mode is detached (the compose stack outlives the script). `--follow` tails logs after the summary and stops the stack on Ctrl+C, matching the foreground behavior of the web-app script.
+7. Default mode is detached (the compose stack outlives the script). `--follow` tails logs after the summary and runs `docker compose -p micromegas-monolith -f <compose file> stop` on Ctrl+C (keeps containers and data), matching the foreground behavior of the web-app script. If the script found the stack already running, Ctrl+C only stops the log tail and leaves the stack running.
 
-Flags: `--pull`, `--follow`, `--down` (stop and remove containers; `--down --volumes` wipes data), `--timeout`. No port/image flags (see Decisions).
-
-`print_status`, `check_docker`, and `check_port_in_use` are duplicated in `start_analytics_web_docker.py`. The web-app script lives in a different tree and is left untouched; the new script defines its own small helpers. A shared module is a follow-up if a third script appears.
+Flags: `--pull`, `--follow`, `--down` (stop and remove containers), `--volumes` (only valid with `--down`; adds `-v` to wipe data; error if given without `--down`), `--timeout`. No port/image flags (see Decisions).
 
 Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_ready` with an injectable probe) are separate functions so they can be unit tested without Docker.
 
 ## Implementation Steps
-1. Create branch `monolith_docker_script` (done).
-2. Write `docker/start_monolith_docker.py` per Design.
-3. Add unit tests (see Testing Strategy).
-4. Update docs (see Documentation) and `CHANGELOG.md` entry.
+1. Write `docker/start_monolith_docker.py` per Design.
+2. Add unit tests (see Testing Strategy).
+3. Update docs (see Documentation) and `CHANGELOG.md` entry.
 
 ## Files to Modify
 - `docker/start_monolith_docker.py` (new)
@@ -46,12 +43,12 @@ Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_rea
 
 ## Trade-offs
 - **Wrap compose vs. `docker run` the monolith image.** `docker run` would need a separate Postgres container, network, and the `micromegas_app` DB bootstrap, duplicating the compose file. Wrapping compose reuses it unchanged.
-- **Location.** `docker/` holds the compose file the script wraps, so the two stay together. `local_test_env/ai_scripts/` (next to `start_services.py --monolith`) was considered and rejected.
 - **Detached by default** (differs from the web-app script's foreground default) because compose manages multiple containers and the user typically wants their terminal back after seeing the URLs; `--follow` gives the foreground behavior.
 
 ## Decisions
 - Compose file is not modified in this change.
-- Script lives in `docker/`, beside the compose file it wraps.
+- Script lives in `docker/`, beside the compose file it wraps (not `local_test_env/ai_scripts/`).
+- Helpers are duplicated from `start_analytics_web_docker.py`, not shared; extract a module if a third script appears.
 - No `--port`/`--image` overrides; the compose file hardcodes them — add `${VAR:-default}` interpolation later if wanted.
 
 ## Documentation
