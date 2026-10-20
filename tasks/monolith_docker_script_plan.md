@@ -14,10 +14,10 @@ Add a Python script that runs the monolith from the pre-built `marcantoinedesroc
 New script `docker/start_monolith_docker.py` (beside `docker-compose.monolith.yaml`, which it drives and locates as a sibling file). It is a thin driver over the existing compose file, which stays the single source of truth for the stack's configuration (DRY — no second copy of env vars/ports in Python).
 
 Behavior:
-1. Verify `docker info` and `docker compose version` (error with the Compose v2.23.1+ requirement, mirroring `docker/docker-compose.monolith.yaml`).
+1. Verify `docker info`, then parse `docker compose version --short` (tolerating a leading `v`) and compare against 2.23.1; error with the Compose v2.23.1+ requirement if older (inline `configs.content` in `docker/docker-compose.monolith.yaml` needs it).
 2. Use a fixed compose project name (`micromegas-monolith`) so containers/volumes don't depend on the checkout directory name and `--down` finds them.
-3. Check that ports 3000, 9000 and 50051 are free (skipping the check if the project is already running); fail with the offending port.
-4. `docker compose -f <repo>/docker/docker-compose.monolith.yaml -p micromegas-monolith up -d` (with `--pull always` when `--pull` is given; default uses the local image if present, otherwise compose pulls).
+3. Detect an already-running stack via `docker compose -p micromegas-monolith -f <compose file> ps --status running -q micromegas` (non-empty output means running; the decision is a pure helper over that output). If running, print an "already running" status, skip the port check and `up`, and continue to the readiness poll and summary. Otherwise check that ports 3000, 9000 and 50051 are free; fail with the offending port.
+4. Unless already running: `docker compose -f <repo>/docker/docker-compose.monolith.yaml -p micromegas-monolith up -d` (with `--pull always` when `--pull` is given; default uses the local image if present, otherwise compose pulls).
 5. Poll until ready: web app (`http://localhost:3000/`) responds, and ingestion `GET http://localhost:9000/ready` returns 200 (probe from the ready-probe work). Timeout ~90s; on timeout print `docker compose logs --tail 50 micromegas` and exit 1.
 6. Print summary in the same `print_status` style:
    - Web App: `http://localhost:3000/`
@@ -26,7 +26,7 @@ Behavior:
    - Logs / stop commands (`docker compose ... logs -f`, `--down`)
 7. Default mode is detached (the compose stack outlives the script). `--follow` tails logs after the summary and stops the stack on Ctrl+C, matching the foreground behavior of the web-app script.
 
-Flags: `--pull`, `--follow`, `--down` (stop and remove containers; `--down --volumes` wipes data), `--timeout`. No port/image flags: the compose file hardcodes them, and adding overrides would need compose-file interpolation for little benefit — add later if wanted (open/closed: compose file can gain `${VAR:-default}` without changing the script's contract).
+Flags: `--pull`, `--follow`, `--down` (stop and remove containers; `--down --volumes` wipes data), `--timeout`. No port/image flags (see Decisions).
 
 `print_status`, `check_docker`, and `check_port_in_use` are duplicated in `start_analytics_web_docker.py`. The web-app script lives in a different tree and is left untouched; the new script defines its own small helpers. A shared module is a follow-up if a third script appears.
 
@@ -52,6 +52,7 @@ Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_rea
 ## Decisions
 - Compose file is not modified in this change.
 - Script lives in `docker/`, beside the compose file it wraps.
+- No `--port`/`--image` overrides; the compose file hardcodes them — add `${VAR:-default}` interpolation later if wanted.
 
 ## Documentation
 - `mkdocs/docs/getting-started.md`: mention the script as a convenience over raw `docker compose up` for repo checkouts (curl-only path stays compose-based).
@@ -60,7 +61,7 @@ Pure helpers (`parse_args`, `build_compose_cmd`, `format_summary`, `wait_for_rea
 - `CHANGELOG.md`: new script entry.
 
 ## Testing Strategy
-No-DB unit tests (pytest, run with the python poetry venv) for the pure helpers: argument parsing, compose command construction (`--pull`, `--down`, `--volumes`, project name, file path resolution from the script location), summary formatting (URLs/ports), and `wait_for_ready` with a fake probe covering success, eventual success, and timeout. No live Docker test: nothing here is a witnessed bug, and breakage in the wiring is obvious on first run.
+No-DB unit tests (pytest, run with the python poetry venv) for the pure helpers: argument parsing, compose command construction (`--pull`, `--down`, `--volumes`, project name, file path resolution from the script location), summary formatting (URLs/ports), the Compose version parse/compare helper (older, equal, newer, leading `v`), the already-running decision over `ps` output (empty vs. non-empty), and `wait_for_ready` with a fake probe covering success, eventual success, and timeout. No live Docker test: nothing here is a witnessed bug, and breakage in the wiring is obvious on first run.
 
 ## Manual Verification
 Not automatable without Docker in CI; failure is immediately visible.
@@ -69,6 +70,3 @@ Not automatable without Docker in CI; failure is immediately visible.
 3. Re-run the script while running — expect it to report already running, not a port conflict.
 4. `python3 docker/start_monolith_docker.py --down` — expect containers removed; `docker ps` shows none.
 5. Occupy port 3000 (`python3 -m http.server 3000`) and start — expect a clear port-in-use error.
-
-## Open Questions
-- Do we want `--port`/`--image` overrides now (requires compose interpolation)?
