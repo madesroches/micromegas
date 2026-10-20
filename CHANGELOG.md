@@ -80,6 +80,10 @@ This file documents the historical progress of the Micromegas project. For curre
   `MergedProperties::properties` is now a method returning a slice instead of a public `Vec`
   field, and `FieldFormatVisitor` gains a `values` buffer and holds its properties as ranges
   into it. No SQL change.
+* **Docs:** Getting started: the Compose v2.23.1+ requirement now appears in Prerequisites, the
+  troubleshooting entry is titled with the exact `configs.pg_init Additional property content is
+  not allowed` error, names Rancher Desktop, and describes a local init-file fallback for Compose
+  versions that cannot be upgraded. No SQL change.
 * **Docs:** Refresh the intro deck's cost and scale figures to the vendor comparison's reference
   workload (~2 trillion events over 90 days, ~27.5 TB, ~$1,100/month) and align the per-process
   throughput claim to up to 300k events/second across the deck, landing page, `llms.txt`, README,
