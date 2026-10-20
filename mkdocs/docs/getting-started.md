@@ -4,7 +4,7 @@ Try Micromegas locally with Docker — no build, no dev environment.
 
 ## Prerequisites
 
-- **[Docker](https://www.docker.com/get-started/)** with Compose v2 (v2.23.1+; bundled with current Docker Desktop and recent Docker Engine)
+- **[Docker](https://www.docker.com/get-started/)** with Compose v2 (v2.23.1+; bundled with current Docker Desktop, Rancher Desktop and recent Docker Engine). Check with `docker compose version`; if it is older, see [Troubleshooting](#troubleshooting)
 
 ## 1. Start Micromegas
 
@@ -164,8 +164,16 @@ Building from source or contributing code? See the [Build Guide](development/bui
 **Image pull fails or hangs**
 : Make sure Docker can reach Docker Hub, and that you're signed in if your organization requires it (`docker login`).
 
-**`docker compose` rejects the `configs.content` block**
-: You need Docker Compose v2.23.1+ for inline config content. Check your version with `docker compose version` and upgrade Docker Desktop / the `docker-compose-plugin` package.
+**`configs.pg_init Additional property content is not allowed`**
+: Your Docker Compose is older than v2.23.1 and does not support inline config content. Check your version with `docker compose version` (use `docker compose`, not the legacy `docker-compose`), then upgrade Docker Desktop, Rancher Desktop (with the dockerd/moby engine) or the `docker-compose-plugin` package.
+
+    If you can't upgrade, replace the inline config with a local file. Create `init-databases.sql` next to the compose file, containing `CREATE DATABASE micromegas_app;`. Then delete the top-level `configs:` block and the `configs:` entry of the `postgres` service, and add this line to that service's `volumes:`:
+
+    ```yaml
+          - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    ```
+
+    The init script only runs on an empty database, so run `docker compose -f docker-compose.monolith.yaml down -v` first if a `pgdata` volume already exists.
 
 **Empty query results**
 : Expected for the first few seconds after startup — the sample query returns Micromegas's own self-telemetry, but rows only appear after the first sink flush (~5s) and the next maintenance materialization cycle (~1s cron). Wait a couple of seconds and re-run the query.
