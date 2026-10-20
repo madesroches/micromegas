@@ -226,7 +226,7 @@ To run the pre-built `marcantoinedesroches/micromegas-monolith` image instead of
 
 ```bash
 python3 docker/start_monolith_docker.py            # start in the background
-python3 docker/start_monolith_docker.py --follow   # tail logs; Ctrl+C stops the stack
+python3 docker/start_monolith_docker.py --follow   # tail logs; Ctrl+C stops the stack if this run started it
 python3 docker/start_monolith_docker.py --pull     # fetch the latest image first
 python3 docker/start_monolith_docker.py --down     # remove the containers (--volumes also wipes data)
 ```

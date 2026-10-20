@@ -52,7 +52,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--follow",
         action="store_true",
-        help="Tail logs after startup; Ctrl+C stops the stack (keeps containers and data)",
+        help="Tail logs after startup; Ctrl+C stops the stack if this run started it (keeps containers and data)",
     )
     parser.add_argument(
         "--down",
