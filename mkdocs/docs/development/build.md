@@ -222,6 +222,15 @@ This will automatically:
 python3 local_test_env/ai_scripts/stop_services.py
 ```
 
+To run the pre-built `marcantoinedesroches/micromegas-monolith` image instead of building from source, use the Docker variant. It drives `docker/docker-compose.monolith.yaml` (Docker Compose v2.23.1+), waits until the stack is ready, and prints the URLs:
+
+```bash
+python3 docker/start_monolith_docker.py            # start in the background
+python3 docker/start_monolith_docker.py --follow   # tail logs; Ctrl+C stops the stack
+python3 docker/start_monolith_docker.py --pull     # fetch the latest image first
+python3 docker/start_monolith_docker.py --down     # remove the containers (--volumes also wipes data)
+```
+
 ### Option B: Split Services
 
 To run the four services separately (closer to a production topology):

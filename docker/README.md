@@ -35,6 +35,10 @@ when applicable), so the exact source commit of a running image can always be re
 docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>
 ```
 
+## Running the monolith
+
+`python3 docker/start_monolith_docker.py` starts the published monolith image through `docker-compose.monolith.yaml`, waits until it is ready, and prints the URLs (`--down` removes it).
+
 ## Building
 
 Use the build script from the repository root:

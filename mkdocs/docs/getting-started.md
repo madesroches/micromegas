@@ -25,6 +25,8 @@ cd micromegas
 docker compose -f docker/docker-compose.monolith.yaml up
 ```
 
+From a clone you can also use `python3 docker/start_monolith_docker.py`, which runs the same compose file in the background, waits until the stack is ready, and prints the URLs to open. Pass `--pull` to fetch the latest image, `--follow` to tail the logs, and `--down` (with `--volumes` to also wipe the data) to remove the stack.
+
 Either way, Docker pulls `marcantoinedesroches/micromegas-monolith:latest` and starts PostgreSQL plus a single monolith process running all roles (ingestion, analytics, web, maintenance). Data is stored in Docker volumes (Postgres data + a file-backed object store), so it persists across restarts but is easy to wipe (see [Stopping / cleaning up](#stopping-cleaning-up)).
 
 ??? note "Compose file contents"
