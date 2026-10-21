@@ -2,6 +2,10 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+
+* **Security:** Resolve open Dependabot alerts: bump `vite` to 8.1.6+ / 7.3.7+ across the web app, welcome page and doc projects (`launch-editor` advisories), `certifi` to 2026.10.19 in the Python client, and `github.com/klauspost/compress` to 1.18.7 in the Grafana plugin.
+
 ## v0.32.0 - 2026-10-20
 
 * **Docker:** New `docker/start_monolith_docker.py` runs the pre-built monolith image through `docker/docker-compose.monolith.yaml`, waits for the web app and ingestion `/ready`, and prints the web, ingestion and FlightSQL URLs. Flags: `--pull`, `--follow`, `--down`, `--volumes`, `--timeout`.
