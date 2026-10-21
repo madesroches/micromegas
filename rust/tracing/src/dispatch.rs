@@ -300,7 +300,10 @@ pub fn init_thread_stream() {
 /// are recorded.
 #[inline(always)]
 pub fn has_thread_stream() -> bool {
-    LOCAL_THREAD_STREAM.with(|cell| unsafe { (*cell.as_ptr()).is_some() })
+    // try_with: a span can be created from another TLS destructor at thread exit, where `with` would panic.
+    LOCAL_THREAD_STREAM
+        .try_with(|cell| unsafe { (*cell.as_ptr()).is_some() })
+        .unwrap_or(false)
 }
 
 pub fn for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream)) {
