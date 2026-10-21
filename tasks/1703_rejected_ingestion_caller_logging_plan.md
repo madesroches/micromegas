@@ -220,7 +220,9 @@ carry `insert_process`.
    `"[auth_failure] insert_process body unparseable"`, with `client_ip`.
 4. **Rate limit.** Log only when `recent.entry((client_ip, process_id)).or_insert(()).is_fresh()`.
    - Settings: `max_capacity(10_000)`, `time_to_live(60 s)`.
-   - The key's `process_id` is the sanitized value, so a cache entry is bounded too.
+   - The claims line's key is always `Some(sanitized_process_id)`, using `Some("")` when the body has
+     no `process_id`, so it never collides with the `(client_ip, None)` key of steps 1–3. The
+     sanitized value also keeps a cache entry bounded.
    - All four log sites (steps 1–3 and the claims line) go through one rate-limit helper that
      checks `recent.entry(...)` before logging. Steps 1–3 key on `(client_ip, None)`. A client stuck in a retry loop produces at most one
      line per minute per (IP, process), on top of the unchanged per-request `[auth_failure]` line.
