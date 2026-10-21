@@ -299,7 +299,10 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    `start_paused`). Add a `[[test]] name = "ingestion_auth_tests"` entry with
    `required-features = ["server"]`, as `auth_observability_tests` and `firehose_tests` have
    (`default = []`).
-8. Write the tests (see Testing Strategy), the docs, and the CHANGELOG entry.
+8. **Sink User-Agent.** In `rust/telemetry-sink/src/http_event_sink.rs` (`run`), add
+   `.user_agent(concat!("micromegas-telemetry-sink/", env!("CARGO_PKG_VERSION")))` to the
+   `reqwest::Client` builder, so Rust clients' rejection lines carry a non-empty `user_agent`.
+9. Write the tests (see Testing Strategy), the docs, and the CHANGELOG entry.
 
 ## Files to Modify
 
@@ -314,6 +317,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
 - `rust/public/Cargo.toml` (optional deps, tokio `test-util` dev feature, `[[test]]` entry)
 - `rust/public/tests/ingestion_auth_tests.rs` (new), `read_policy_threading_tests.rs`,
   `firehose_tests.rs`
+- `rust/telemetry-sink/src/http_event_sink.rs`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`
 - `CHANGELOG.md`
 
@@ -350,6 +354,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
 - `CHANGELOG.md` → new *Unreleased* section. **Minor breaking change:** `AuthProvider` gains a
   required `name()`. `micromegas_auth::axum::authenticate` is new. `object-cache-srv`'s rejection
   line gains the same properties, with an unprefixed reason.
+  The Rust telemetry sink now sends `User-Agent: micromegas-telemetry-sink/<version>`.
 
 ## Testing Strategy
 
@@ -412,9 +417,6 @@ asserts the `client_ip` property.
 
 No live-DB tests. Nothing here fixes a bug seen in the wild that only a live DB reproduces.
 
-## Open Questions
+## Decisions
 
-- The Rust telemetry sink's `reqwest::Client` sends no `User-Agent`, so `user_agent` comes out
-  empty for Rust clients. Should the sink set
-  `micromegas-telemetry-sink/<CARGO_PKG_VERSION>`? It's one line and helps attribution by client
-  version, but it's outside the issue's scope.
+- The Rust telemetry sink sets `User-Agent: micromegas-telemetry-sink/<version>` (step 8).
