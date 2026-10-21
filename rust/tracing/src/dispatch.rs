@@ -296,6 +296,16 @@ pub fn init_thread_stream() {
     });
 }
 
+/// Whether the current thread has a registered thread stream, i.e. whether its thread events
+/// are recorded.
+#[inline(always)]
+pub fn has_thread_stream() -> bool {
+    // try_with: a span can be created from another TLS destructor at thread exit, where `with` would panic.
+    LOCAL_THREAD_STREAM
+        .try_with(|cell| unsafe { (*cell.as_ptr()).is_some() })
+        .unwrap_or(false)
+}
+
 pub fn for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream)) {
     if let Some(d) = G_DISPATCH.get() {
         d.for_each_thread_stream(fun);
