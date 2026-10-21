@@ -10,6 +10,9 @@ on:
       - 'build/rust_command.py'
       - 'build/test_check_client_deps.py'
       - 'build/test_rust_ci.py'
+      - 'docker/start_monolith_docker.py'
+      - 'docker/test_start_monolith_docker.py'
+      - 'docker/docker-compose.monolith.yaml'
       - '.github/workflows/rust.yml'
   pull_request:
     branches: [ "main" ]
@@ -20,6 +23,9 @@ on:
       - 'build/rust_command.py'
       - 'build/test_check_client_deps.py'
       - 'build/test_rust_ci.py'
+      - 'docker/start_monolith_docker.py'
+      - 'docker/test_start_monolith_docker.py'
+      - 'docker/docker-compose.monolith.yaml'
       - '.github/workflows/rust.yml'
   workflow_dispatch:  # Allow manual runs from the Actions UI
 
@@ -88,7 +94,7 @@ jobs:
       run: python3 -m pip install --quiet pytest
 
     - name: Test rust_ci.py orchestration
-      run: python3 -m pytest build/test_rust_ci.py build/test_check_client_deps.py
+      run: python3 -m pytest build/test_rust_ci.py build/test_check_client_deps.py docker/test_start_monolith_docker.py
 
     - name: Run native CI
       run: |

@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## v0.32.0 - 2026-10-20
 
+* **Docker:** New `docker/start_monolith_docker.py` runs the pre-built monolith image through `docker/docker-compose.monolith.yaml`, waits for the web app and ingestion `/ready`, and prints the web, ingestion and FlightSQL URLs. Flags: `--pull`, `--follow`, `--down`, `--volumes`, `--timeout`.
 * **Tracing, Analytics:** Properties on thread and async spans, recorded at span end (#1691).
   `span_scope!(name = "x", k = v, ..)`, `span_scope_named!(name = ..)` and
   `span_scope_named_dyn!(name = ..)` return a guard whose end event carries the properties, taking
