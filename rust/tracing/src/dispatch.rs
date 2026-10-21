@@ -296,6 +296,13 @@ pub fn init_thread_stream() {
     });
 }
 
+/// Whether the current thread has a registered thread stream, i.e. whether its thread events
+/// are recorded.
+#[inline(always)]
+pub fn has_thread_stream() -> bool {
+    LOCAL_THREAD_STREAM.with(|cell| unsafe { (*cell.as_ptr()).is_some() })
+}
+
 pub fn for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream)) {
     if let Some(d) = G_DISPATCH.get() {
         d.for_each_thread_stream(fun);

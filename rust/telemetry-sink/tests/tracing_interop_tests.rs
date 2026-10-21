@@ -1,6 +1,8 @@
 use micromegas_telemetry_sink::tracing_interop::TracingCaptureLayer;
 use micromegas_tracing::{
-    dispatch::{flush_log_buffer, flush_thread_buffer},
+    dispatch::{
+        flush_log_buffer, flush_thread_buffer, init_thread_stream, unregister_thread_stream,
+    },
     levels::LevelFilter,
     logs::LogMsgQueueAny,
     test_utils::init_in_memory_tracing,
@@ -276,6 +278,7 @@ fn props(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 #[serial]
 fn a_span_yields_one_matched_begin_and_end() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(true)), || {
         let _span = tracing::info_span!("solo").entered();
     });
@@ -297,6 +300,7 @@ fn a_span_yields_one_matched_begin_and_end() {
 #[serial]
 fn nested_spans_link_parent_and_increase_depth() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(true)), || {
         let _outer = tracing::info_span!("outer").entered();
         let _inner = tracing::info_span!("inner").entered();
@@ -325,6 +329,7 @@ fn nested_spans_link_parent_and_increase_depth() {
 #[serial]
 fn span_fields_become_end_properties_and_later_records_win() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(true)), || {
         let span = tracing::info_span!(
             "work",
@@ -351,6 +356,7 @@ fn span_fields_become_end_properties_and_later_records_win() {
 #[serial]
 fn children_of_a_level_filtered_span_attach_to_the_nearest_captured_ancestor() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     let layer = TracingCaptureLayer {
         max_level: LevelFilter::Info,
         capture_spans: true,
@@ -385,6 +391,7 @@ fn children_of_a_level_filtered_span_attach_to_the_nearest_captured_ancestor() {
 #[serial]
 fn a_child_of_a_filtered_root_becomes_a_root() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     let layer = TracingCaptureLayer {
         max_level: LevelFilter::Info,
         capture_spans: true,
@@ -405,6 +412,7 @@ fn a_child_of_a_filtered_root_becomes_a_root() {
 #[serial]
 fn disabled_span_capture_emits_nothing() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(false)), || {
         let _span = tracing::info_span!("quiet", k = 1).entered();
         tracing::info!("still logged");
@@ -423,6 +431,7 @@ fn disabled_span_capture_emits_nothing() {
 #[serial]
 fn a_span_closed_on_another_thread_still_ends() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     let span = Arc::new(Mutex::new(None));
     let subscriber = tracing_subscriber::registry().with(layer(true));
     let dispatch = tracing::Dispatch::new(subscriber);
@@ -432,8 +441,10 @@ fn a_span_closed_on_another_thread_still_ends() {
     flush_thread_buffer();
     let closer = span.clone();
     std::thread::spawn(move || {
+        init_thread_stream();
         drop(closer.lock().unwrap().take());
         flush_thread_buffer();
+        unregister_thread_stream();
     })
     .join()
     .unwrap();
@@ -449,6 +460,7 @@ fn a_span_closed_on_another_thread_still_ends() {
 #[serial]
 fn spans_from_one_callsite_share_a_location() {
     let guard = init_in_memory_tracing();
+    init_thread_stream();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(true)), || {
         for _ in 0..2 {
             let _span = tracing::info_span!("repeated").entered();
@@ -462,4 +474,31 @@ fn spans_from_one_callsite_share_a_location() {
     assert_eq!(begins[0].location, begins[1].location);
     assert_ne!(begins[0].location, begins[2].location);
     assert_eq!(begins[0].location, ends[0].location);
+}
+
+struct SpanOnDebug;
+
+impl fmt::Debug for SpanOnDebug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let _inner = tracing::info_span!("from_debug").entered();
+        f.write_str("formatted")
+    }
+}
+
+#[test]
+#[serial]
+fn a_debug_impl_creating_a_span_during_record_does_not_deadlock() {
+    let guard = init_in_memory_tracing();
+    init_thread_stream();
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(layer(true)), || {
+        let span = tracing::info_span!("outer", k = tracing::field::Empty).entered();
+        span.record("k", tracing::field::debug(SpanOnDebug));
+    });
+    flush_thread_buffer();
+
+    let (begins, ends) = captured_async_spans(&guard);
+    assert_eq!(begins.len(), 2);
+    assert_eq!(ends.len(), 2);
+    let outer = ends.iter().find(|s| s.name == "outer").unwrap();
+    assert_eq!(outer.properties, props(&[("k", "formatted")]));
 }

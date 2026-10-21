@@ -60,13 +60,14 @@ struct CapturedSpan {
      uses `parent: None`.
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
-  3. Call `init_thread_stream()` (idempotent; a cheap early return once the thread stream exists
-     or when CPU tracing is disabled), then `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
-     returned id.
-- `on_record(id, values, ctx)`: append the recorded fields to `CapturedSpan::fields`, overwriting by field name (late-bound
-  `Empty` fields are the common OTel pattern).
-- `on_close(id, ctx)`: take the extension, call `init_thread_stream()` (the closing thread may
-  differ from the opening one), then call `on_end_async_named_scope_tagged(span_id,
+  3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)` and store
+     the returned id. Step 1 first returns early when the current thread has no thread stream
+     (`dispatch::has_thread_stream()`).
+- `on_record(id, values, ctx)`: record the values into a temporary list without holding the
+  extensions lock (a `Debug` impl may create a span, which reads its ancestors' extensions), then
+  merge them into `CapturedSpan::fields`, overwriting by field name (late-bound `Empty` fields
+  are the common OTel pattern).
+- `on_close(id, ctx)`: take the extension, then call `on_end_async_named_scope_tagged(span_id,
   parent_span_id, location, name, depth, PropertySet::empty(), &dyn_properties)`.
 
 `Metadata::name()` is used as the name for both the begin and end events (analytics reads them
@@ -74,8 +75,11 @@ independently). The span name is not stored in the extension; it is re-read from
 
 Async span events are written only to the calling thread's stream, which exists only when CPU
 tracing is enabled (`MICROMEGAS_ENABLE_CPU_TRACING`); with it disabled, spans are not recorded.
-Calling `init_thread_stream()` in the layer lets plain tokio/`std::thread` threads, which never
-create a `TracingThreadGuard`, record spans.
+The layer never creates a thread stream itself: a stream registered by a thread that later exits
+would leave a dangling pointer in the dispatch. Spans are therefore recorded only on threads that
+already have a thread stream, such as micromegas runtime threads or threads holding a
+`TracingThreadGuard`; spans on other threads are not captured. A span that closes on a thread
+without a stream emits no end event.
 
 Using `on_close` (not `on_exit`) matches the issue's "open/close" wording and the async model: a
 `tracing` span entered/exited repeatedly across `.await`s is one logical operation, whereas
@@ -153,9 +157,10 @@ and depth, fields as end-event properties, `capture_spans` opt-out, and that spa
 `tracing_interop_tests.rs` currently has only a log-block helper. Add a thread-block helper
 (modeled on `rust/tracing/tests/span_properties_tests.rs:215-245`) matching
 `BeginAsyncDynNamedSpanEvent`, `EndAsyncDynNamedSpanEvent` and `TaggedEndAsyncNamedSpanEvent`.
-Thread blocks reach the sink only after a flush; the layer calls `init_thread_stream()` itself, so
-tests need not, but CPU tracing must be enabled in the test setup and the cross-thread close test
-must flush on each thread.
+Thread blocks reach the sink only after a flush; the layer does not create thread streams, so each
+test calls `init_thread_stream()` on every thread that opens or closes spans (and unregisters
+spawned threads' streams before they exit). CPU tracing must be enabled in the test setup and the
+cross-thread close test must flush on each thread.
 
 All no-DB unit tests in `rust/telemetry-sink/tests/tracing_interop_tests.rs` using
 `init_in_memory_tracing` and `tracing::subscriber::with_default`, inspecting the captured thread
@@ -171,7 +176,9 @@ blocks for async begin/end events:
   resolve the same way; a root results only when there is no captured ancestor or the child uses
   `parent: None`.
 - `capture_spans = false` emits nothing.
-- Span closed on a different thread than opened still produces a matched end event.
+- Span closed on a different thread than opened (both with a thread stream) still produces a
+  matched end event.
+- A `Debug` impl that creates a span while a field is being recorded does not deadlock.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (added to
   `tracing_interop_reentrancy_tests.rs`, a separate binary with its own `ReentrantSink`,
   `set_global_default` and `init_event_dispatch`). Its setup currently passes `false` for the

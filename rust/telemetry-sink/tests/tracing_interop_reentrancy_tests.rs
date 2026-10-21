@@ -86,6 +86,7 @@ fn event_emitted_by_sink_during_capture_is_not_dropped() {
         true,
     )
     .unwrap();
+    micromegas_tracing::dispatch::init_thread_stream();
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(
         TracingCaptureLayer {
             max_level: LevelFilter::Trace,

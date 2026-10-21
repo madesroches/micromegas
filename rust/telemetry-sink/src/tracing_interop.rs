@@ -1,6 +1,6 @@
 use micromegas_tracing::{
     dispatch::{
-        init_thread_stream, log_interop, log_interop_dyn_tagged, on_begin_async_named_scope_dyn,
+        has_thread_stream, log_interop, log_interop_dyn_tagged, on_begin_async_named_scope_dyn,
         on_end_async_named_scope_tagged,
     },
     levels::{LevelFilter, Verbosity},
@@ -173,7 +173,10 @@ where
         ctx: Context<'_, S>,
     ) {
         // A combined layer stack still creates spans that this layer's `enabled` rejected.
+        // The layer never creates a thread stream: one registered by a thread that then exits
+        // would be left dangling in the dispatch, so only threads that already own one record.
         if !self.capture_spans
+            || !has_thread_stream()
             || tracing_level_to_mm_level(attrs.metadata().level()) > self.max_level
         {
             return;
@@ -200,7 +203,6 @@ where
         // The registry borrow is released before dispatching, since a sink may emit spans too.
         drop(span);
 
-        init_thread_stream();
         let span_id = on_begin_async_named_scope_dyn(location, name, parent_span_id, depth);
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(CapturedSpan {
@@ -222,11 +224,23 @@ where
         let Some(span) = ctx.span(id) else {
             return;
         };
+        if span.extensions().get::<CapturedSpan>().is_none() {
+            return;
+        }
+        // Recorded without holding the extensions lock, because a `Debug` impl may create a
+        // span, whose `on_new_span` reads the extensions of its ancestors.
+        let mut recorded = vec![];
+        values.record(&mut SpanFieldVisitor {
+            fields: &mut recorded,
+        });
         let mut extensions = span.extensions_mut();
         if let Some(captured) = extensions.get_mut::<CapturedSpan>() {
-            values.record(&mut SpanFieldVisitor {
-                fields: &mut captured.fields,
-            });
+            for (name, value) in recorded {
+                match captured.fields.iter_mut().find(|(n, _)| *n == name) {
+                    Some(entry) => entry.1 = value,
+                    None => captured.fields.push((name, value)),
+                }
+            }
         }
     }
 
@@ -241,8 +255,6 @@ where
             return;
         };
 
-        // The span may close on a thread that never opened one.
-        init_thread_stream();
         let dyn_properties: SmallVec<[DynProperty<'_>; INLINE_FIELDS]> = captured
             .fields
             .iter()
