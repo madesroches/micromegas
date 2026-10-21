@@ -54,8 +54,9 @@ struct CapturedSpan {
      the parent's `CapturedSpan` extension: `parent_span_id = parent.span_id`,
      `depth = parent.depth + 1`; a parent with no `CapturedSpan` extension → `0` / `0`. `enabled`
      already filters span metadata, so a level-filtered span never reaches the registry and
-     `on_new_span` needs no level check of its own; its children attach to the nearest enabled
-     ancestor.
+     `on_new_span` needs no level check of its own. Only contextual children attach to the nearest
+     enabled ancestor; a child with an explicit `parent:` naming a filtered span becomes a root
+     (`0` / `0`).
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
   3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
@@ -75,16 +76,20 @@ semantics for tasks migrating across threads. `on_enter`/`on_exit` are not mappe
 
 ### Span location
 
-`tracing::Metadata` is `&'static` and unique per callsite. Keep a global
+`attrs.metadata()` is not `'static`; build the location from `ctx.span(id).metadata()`, which is
+`&'static Metadata<'static>` and unique per callsite. Keep a global
 `Mutex<HashMap<callsite identifier, &'static SpanLocation>>` (keyed by the `Metadata` pointer) that
 leaks one `SpanLocation { lod, target, module_path, file, line }` per callsite on first use. The
-set of callsites is bounded by the program text, so the leak is bounded. `lod` is mapped from the
-tracing level.
+set of callsites is bounded by the program text, so the leak is bounded. `module_path` and `file`
+use `unwrap_or_default()` and `line` uses `unwrap_or(0)`, since tracing exposes them as Options.
+`lod: Verbosity` is mapped from the tracing level by a new helper (the existing helper returns
+`Level`); default mapping: ERROR/WARN → Min, INFO → Med, DEBUG/TRACE → Max.
 
 ### Properties
 
-Reuse `FieldFormatVisitor`: span fields become dynamic properties (`DynProperty`), excluding
-`message` handling (spans have none) and `log.*` filtering stays as is. Because values must outlive
+Span fields become dynamic properties (`DynProperty`). The owned span visitor has no message
+buffer, skips `log.*` fields, and on record replaces an existing entry with the same name rather
+than appending (`FieldFormatVisitor` never dedupes). Because values must outlive
 `on_new_span` until `on_close`, the extension owns the data as `Vec<(&'static str, String)>`
 (allocated per span; acceptable since span creation is far less frequent than events and the
 thread-local scratch cannot be held across callbacks). Factor the visitor so the event path keeps
@@ -107,15 +112,17 @@ so deployments that only want logs are unaffected.
    extension type, the callsite→`SpanLocation` registry, an owned field visitor for spans, and
    `on_new_span` / `on_record` / `on_close`. Require `S: for<'a> LookupSpan<'a>` on the `Layer`
    impl.
-2. Update `install_tracing_interop` and any construction sites of `TracingCaptureLayer`
-   (`rust/telemetry-sink/tests/*`, examples) for the new field.
+2. Update `install_tracing_interop` and every construction site of `TracingCaptureLayer` for the new
+   field: `rust/telemetry-sink/tests/tracing_interop_tests.rs` (struct literals at lines 55, 91,
+   180) and `rust/telemetry-sink/tests/tracing_interop_reentrancy_tests.rs:88`.
 3. Add tests (below).
 4. Docs and `CHANGELOG.md`.
 
 ## Files to Modify
 
 - `rust/telemetry-sink/src/tracing_interop.rs`
-- `rust/telemetry-sink/tests/tracing_interop_tests.rs` (and construction sites in other tests)
+- `rust/telemetry-sink/tests/tracing_interop_tests.rs`
+- `rust/telemetry-sink/tests/tracing_interop_reentrancy_tests.rs`
 - `rust/telemetry-sink/Cargo.toml` (only if `tracing-subscriber` needs the `registry` feature)
 - `mkdocs/docs/when-to-use/index.md` (see Documentation)
 - `CHANGELOG.md`
@@ -150,12 +157,14 @@ blocks for async begin/end events:
 - Nested spans: child's `parent_span_id` equals parent's `span_id`, `depth` increments, end events
   reference the same ids.
 - Fields at creation and via `on_record` appear as end-event properties; later record overrides.
-- A level-filtered parent: the child attaches to the nearest captured ancestor, or becomes root
-  (`parent_span_id = 0`, `depth = 0`) if none.
+- A level-filtered parent: a contextual child (created while an enabled ancestor is current)
+  attaches to the nearest captured ancestor, or becomes root (`parent_span_id = 0`, `depth = 0`)
+  if none.
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened still produces a matched end event.
-- Re-entrancy: a sink that creates a span during capture does not panic or deadlock (extend the
-  existing reentrancy tests).
+- Re-entrancy: a sink that creates a span during capture does not panic or deadlock (added to
+  `tracing_interop_reentrancy_tests.rs`, a separate binary with its own `ReentrantSink`,
+  `set_global_default` and `init_event_dispatch`).
 - Two spans from the same callsite record the same `SpanLocation` address in the block (events
   store `SpanLocation` only as an address).
 
