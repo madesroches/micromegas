@@ -40,23 +40,31 @@ micromegas as a native backend with trace trees.
 Store per-span state in the `tracing_subscriber` registry via span extensions:
 
 ```
-struct CapturedSpan { span_id: u64, parent_span_id: u64, depth: u32, location: &'static SpanLocation }
+struct CapturedSpan {
+    span_id: u64,
+    parent_span_id: u64,
+    depth: u32,
+    location: &'static SpanLocation,
+    fields: Vec<(&'static str, String)>,
+}
 ```
 
 - `on_new_span(attrs, id, ctx)`:
-  1. Skip if `level > max_level` (same filter as events).
-  2. Resolve the parent with `attrs.parent()` / contextual parent (`ctx.span(id).parent()`), taking
+  1. Resolve the parent with `attrs.parent()` / contextual parent (`ctx.span(id).parent()`), taking
      the parent's `CapturedSpan` extension: `parent_span_id = parent.span_id`,
-     `depth = parent.depth + 1`; no captured parent → `0` / `0`. If the parent was filtered out,
-     walk up `scope()` to the nearest captured ancestor so filtered spans do not break the tree.
-  3. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
+     `depth = parent.depth + 1`; a parent with no `CapturedSpan` extension → `0` / `0`.
+  2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
-  4. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
+  3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
      returned id.
-- `on_record(id, values, ctx)`: append/overwrite the recorded fields in the extension (late-bound
+- `on_record(id, values, ctx)`: append the recorded fields to `CapturedSpan::fields`, overwriting by field name (late-bound
   `Empty` fields are the common OTel pattern).
 - `on_close(id, ctx)`: take the extension, call `on_end_async_named_scope_tagged(span_id,
   parent_span_id, location, name, depth, PropertySet::empty(), &dyn_properties)`.
+
+`Metadata::name()` is used as the name for both the begin and end events (analytics reads them
+independently). If an `otel.name` field is recorded, it is exposed as an ordinary end-event
+property. The span name is not stored in the extension; it is re-read from `ctx.span(id)`.
 
 Using `on_close` (not `on_exit`) matches the issue's "open/close" wording and the async model: a
 `tracing` span entered/exited repeatedly across `.await`s is one logical operation. `on_enter`/
@@ -106,7 +114,7 @@ so deployments that only want logs are unaffected.
 - `rust/telemetry-sink/src/tracing_interop.rs`
 - `rust/telemetry-sink/tests/tracing_interop_tests.rs` (and construction sites in other tests)
 - `rust/telemetry-sink/Cargo.toml` (only if `tracing-subscriber` needs the `registry` feature)
-- `mkdocs/docs/` page covering tracing interop (see Documentation)
+- `mkdocs/docs/when-to-use/index.md` (see Documentation)
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -129,11 +137,18 @@ so deployments that only want logs are unaffected.
 
 ## Documentation
 
-Update the mkdocs page that documents `tracing` interop (locate via `install_tracing_interop`
-mentions; add a short section if none exists) describing: spans become async spans, parent/child
+Update `mkdocs/docs/when-to-use/index.md`: the lines at ~13 and ~252 say interop "captures existing
+`tracing` events as logs" and become stale; revise them and add a short passage there (the
+`native/index.md` page covers only the C ABI, so it is not the destination) describing: spans become async spans, parent/child
 and depth, fields as end-event properties, `capture_spans` opt-out. Add `CHANGELOG.md` entry.
 
 ## Testing Strategy
+
+`tracing_interop_tests.rs` currently has only a log-block helper. Add a thread-block helper
+(modeled on `rust/tracing/tests/span_properties_tests.rs:215-245`) matching
+`BeginAsyncDynNamedSpanEvent`, `EndAsyncDynNamedSpanEvent` and `TaggedEndAsyncNamedSpanEvent`.
+Thread blocks reach the sink only after `init_thread_stream()` and a flush; the cross-thread close
+test must do both on each thread.
 
 All no-DB unit tests in `rust/telemetry-sink/tests/tracing_interop_tests.rs` using
 `init_in_memory_tracing` and `tracing::subscriber::with_default`, inspecting the captured thread
@@ -144,13 +159,13 @@ blocks for async begin/end events:
 - Nested spans: child's `parent_span_id` equals parent's `span_id`, `depth` increments, end events
   reference the same ids.
 - Fields at creation and via `on_record` appear as end-event properties; later record overrides.
-- A span above `max_level` is not captured and its children attach to the nearest captured
-  ancestor.
+- A span whose parent is not captured: the child is a root (`parent_span_id = 0`, `depth = 0`).
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened still produces a matched end event.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (extend the
   existing reentrancy tests).
-- Two spans from the same callsite share one `SpanLocation`.
+- Two spans from the same callsite record the same `SpanLocation` address in the block (events
+  store `SpanLocation` only as an address).
 
 ## Manual Verification
 
@@ -159,9 +174,3 @@ blocks for async begin/end events:
 2. `micromegas-query "SELECT * FROM process_spans('<process-id>', 'async') ORDER BY begin"`
    → expect rows with the nested names and increasing `depth`. Not automated because it needs the
    full ingestion/analytics stack; the capture logic itself is unit-tested above.
-
-## Open Questions
-
-- Should `on_enter`/`on_exit` timing be exposed (e.g. busy time) as properties? Out of scope here.
-- Span name source: `Metadata::name()` is static per callsite; confirm that is sufficient for
-  OTel-style spans that rename via a `otel.name` field.
