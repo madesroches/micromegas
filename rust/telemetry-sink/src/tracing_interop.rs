@@ -98,6 +98,9 @@ thread_local! {
 pub struct TracingCaptureLayer {
     pub max_level: LevelFilter,
     /// Maps each `tracing` span to an async span, with its fields as end-event properties.
+    /// Only recorded when CPU tracing is enabled and on threads that have a Micromegas thread
+    /// stream (e.g. runtime threads or a thread holding a `TracingThreadGuard`); spans on other
+    /// threads are not recorded.
     pub capture_spans: bool,
 }
 
@@ -360,8 +363,9 @@ fn capture_event(
 ///   for the `tracing` layer. If `None`, the global Micromegas max level is used.
 ///
 /// `tracing` spans are recorded as async spans, but only when CPU tracing is enabled
-/// (`MICROMEGAS_ENABLE_CPU_TRACING`). Build a `TracingCaptureLayer` with `capture_spans: false`
-/// to forward events only.
+/// (`MICROMEGAS_ENABLE_CPU_TRACING`) and only on threads that have a Micromegas thread stream
+/// (e.g. runtime threads or a thread holding a `TracingThreadGuard`); spans on other threads are
+/// not recorded. Build a `TracingCaptureLayer` with `capture_spans: false` to forward events only.
 pub fn install_tracing_interop(interop_max_level_override: Option<LevelFilter>) {
     let max_level = interop_max_level_override.unwrap_or(micromegas_tracing::levels::max_level());
 

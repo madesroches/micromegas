@@ -178,6 +178,8 @@ blocks for async begin/end events:
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened (both with a thread stream) still produces a
   matched end event.
+- A span opened on a thread without a thread stream and closed on one with a stream emits
+  neither a begin nor an end event.
 - A `Debug` impl that creates a span while a field is being recorded does not deadlock.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (added to
   `tracing_interop_reentrancy_tests.rs`, a separate binary with its own `ReentrantSink`,

@@ -458,6 +458,26 @@ fn a_span_closed_on_another_thread_still_ends() {
 
 #[test]
 #[serial]
+fn a_span_opened_on_a_thread_without_a_stream_is_not_recorded() {
+    let guard = init_in_memory_tracing();
+    init_thread_stream();
+    let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(layer(true)));
+    let opener = dispatch.clone();
+    let span = std::thread::spawn(move || {
+        tracing::dispatcher::with_default(&opener, || tracing::info_span!("streamless"))
+    })
+    .join()
+    .expect("opener thread panicked");
+    tracing::dispatcher::with_default(&dispatch, || drop(span));
+    flush_thread_buffer();
+
+    let (begins, ends) = captured_async_spans(&guard);
+    assert!(begins.is_empty());
+    assert!(ends.is_empty());
+}
+
+#[test]
+#[serial]
 fn spans_from_one_callsite_share_a_location() {
     let guard = init_in_memory_tracing();
     init_thread_stream();

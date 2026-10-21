@@ -11,9 +11,10 @@ This file documents the historical progress of the Micromegas project. For curre
   The span's fields, including those set later with `Span::record`, become properties of the end
   event. This lets an application whose libraries emit `tracing` spans, such as LLM client
   libraries, show trace trees in `async_events` and `process_spans(..., 'async')` with no SQL
-  change. Spans are recorded only when CPU tracing is enabled (`MICROMEGAS_ENABLE_CPU_TRACING`),
-  and `install_tracing_interop` enables span capture; build the layer with
-  `capture_spans: false` to forward events only. **Minor breaking change:**
+  change. Spans are recorded only when CPU tracing is enabled (`MICROMEGAS_ENABLE_CPU_TRACING`) and
+  only on threads that have a Micromegas thread stream (e.g. runtime threads or a thread holding
+  a `TracingThreadGuard`); spans on other threads are not recorded. `install_tracing_interop`
+  enables span capture; build the layer with `capture_spans: false` to forward events only. **Minor breaking change:**
   `TracingCaptureLayer` gains a public `capture_spans` field, and its `Layer` impl now requires a
   subscriber that implements `LookupSpan`.
 
