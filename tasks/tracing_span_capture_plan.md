@@ -50,13 +50,13 @@ struct CapturedSpan {
 ```
 
 - `on_new_span(attrs, id, ctx)`:
-  1. Resolve the parent with `attrs.parent()` / contextual parent (`ctx.span(id).parent()`), taking
-     the parent's `CapturedSpan` extension: `parent_span_id = parent.span_id`,
-     `depth = parent.depth + 1`; a parent with no `CapturedSpan` extension → `0` / `0`. `enabled`
-     already filters span metadata, so a level-filtered span never reaches the registry and
-     `on_new_span` needs no level check of its own. Only contextual children attach to the nearest
-     enabled ancestor; a child with an explicit `parent:` naming a filtered span becomes a root
-     (`0` / `0`).
+  1. Skip the span (no extension, no begin event) when its level is above `max_level`, mirroring
+     `on_event`: in a combined layer stack the registry still creates spans this layer's `enabled`
+     rejected. Otherwise resolve the parent by walking the span's `scope()` (skipping itself) to
+     the first span that has a `CapturedSpan` extension: `parent_span_id = parent.span_id`,
+     `depth = parent.depth + 1`; no such ancestor → `0` / `0`. A contextual child of a
+     level-filtered span thus attaches to the nearest captured ancestor; a child with an explicit
+     `parent:` naming a filtered span becomes a root (`0` / `0`).
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
   3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
@@ -157,9 +157,9 @@ blocks for async begin/end events:
 - Nested spans: child's `parent_span_id` equals parent's `span_id`, `depth` increments, end events
   reference the same ids.
 - Fields at creation and via `on_record` appear as end-event properties; later record overrides.
-- A level-filtered parent: a contextual child (created while an enabled ancestor is current)
-  attaches to the nearest captured ancestor, or becomes root (`parent_span_id = 0`, `depth = 0`)
-  if none.
+- A level-filtered parent: a contextual child attaches to the nearest captured ancestor, or
+  becomes root (`parent_span_id = 0`, `depth = 0`) if none; an explicit-parent child of a
+  filtered span is a root.
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened still produces a matched end event.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (added to
