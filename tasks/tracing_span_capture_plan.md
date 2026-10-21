@@ -55,8 +55,9 @@ struct CapturedSpan {
      rejected. Otherwise resolve the parent by walking the span's `scope()` (skipping itself) to
      the first span that has a `CapturedSpan` extension: `parent_span_id = parent.span_id`,
      `depth = parent.depth + 1`; no such ancestor → `0` / `0`. A contextual child of a
-     level-filtered span thus attaches to the nearest captured ancestor; a child with an explicit
-     `parent:` naming a filtered span becomes a root (`0` / `0`).
+     level-filtered span thus attaches to the nearest captured ancestor, whether its parent is
+     explicit or contextual; a root results only when there is no captured ancestor or the child
+     uses `parent: None`.
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
   3. Call `init_thread_stream()` (idempotent; a cheap early return once the thread stream exists
@@ -122,7 +123,7 @@ so deployments that only want logs are unaffected.
 2. Update `install_tracing_interop` and every construction site of `TracingCaptureLayer` for the new
    field: `rust/telemetry-sink/tests/tracing_interop_tests.rs` (struct literals at lines 55, 91,
    180) and `rust/telemetry-sink/tests/tracing_interop_reentrancy_tests.rs:88`.
-3. Add tests (below).
+3. Add tests (below); the reentrancy test setup must enable CPU tracing in `init_event_dispatch`.
 4. Docs and `CHANGELOG.md`.
 
 ## Files to Modify
@@ -130,7 +131,6 @@ so deployments that only want logs are unaffected.
 - `rust/telemetry-sink/src/tracing_interop.rs`
 - `rust/telemetry-sink/tests/tracing_interop_tests.rs`
 - `rust/telemetry-sink/tests/tracing_interop_reentrancy_tests.rs`
-- `rust/telemetry-sink/Cargo.toml` (only if `tracing-subscriber` needs the `registry` feature)
 - `mkdocs/docs/when-to-use/index.md` (see Documentation)
 - `CHANGELOG.md`
 
@@ -167,13 +167,17 @@ blocks for async begin/end events:
   reference the same ids.
 - Fields at creation and via `on_record` appear as end-event properties; later record overrides.
 - A level-filtered parent: a contextual child attaches to the nearest captured ancestor, or
-  becomes root (`parent_span_id = 0`, `depth = 0`) if none; an explicit-parent child of a
-  filtered span is a root.
+  becomes root (`parent_span_id = 0`, `depth = 0`) if none. Explicit and contextual parents
+  resolve the same way; a root results only when there is no captured ancestor or the child uses
+  `parent: None`.
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened still produces a matched end event.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (added to
   `tracing_interop_reentrancy_tests.rs`, a separate binary with its own `ReentrantSink`,
-  `set_global_default` and `init_event_dispatch`).
+  `set_global_default` and `init_event_dispatch`). Its setup currently passes `false` for the
+  CPU-tracing argument of `init_event_dispatch`, so no async span events would be written; switch
+  it to `true`, and have the test flush and inspect the thread blocks to assert the nested span
+  was captured.
 - Two spans from the same callsite record the same `SpanLocation` address in the block (events
   store `SpanLocation` only as an address).
 
