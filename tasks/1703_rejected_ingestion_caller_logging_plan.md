@@ -48,7 +48,7 @@ the client learns nothing new.
   `ciborium::from_reader` in `WebIngestionService::insert_process`
   (`rust/ingestion/src/web_ingestion_service.rs:641`). The Rust sink sends a `Bytes` body, so
   `Content-Length` is always present (`rust/telemetry-sink/src/http_event_sink.rs:503`).
-- Process properties sent by the Unreal sink (`unreal/MicromegasTelemetrySink/Private/HttpEventSink.cpp:519-528`):
+- Process properties sent by the Unreal sink (`unreal/MicromegasTelemetrySink/Private/HttpEventSink.cpp:519-531`):
   - Build identity: `platform-name`, `build-version`, `engine-version`, `build-config`,
     `build-target`, `branch-name`, `commit`.
   - Command line: `exe_args` and `command-line`. These carry the raw command line, which may
@@ -194,7 +194,7 @@ carry `insert_process`.
 2. **Bounded read.** `tokio::time::timeout(BODY_READ_TIMEOUT /* 2 s */,
    axum::body::to_bytes(body, MAX_INSPECTED_BODY_BYTES))`. A timeout or read error logs the same "not inspected" line with
    `reason = read_timeout|read_error`.
-3. **Lenient minimal decode.** `ciborium::de::from_reader_with_recursion_limit(bytes, 16)` into:
+3. **Lenient minimal decode.** `ciborium::de::from_reader_with_recursion_limit(&bytes[..], 16)` into:
 
    ```rust
    #[derive(Deserialize, Default)]
@@ -273,9 +273,11 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    rejection branch to `warn_auth_rejection`. Do the same for `firehose_auth_middleware`
    (`rust/public/src/servers/firehose_common.rs:127`) and `tower.rs:159`.
 5. **Test log collector.** Add `collect_logs(&InMemorySink) -> Vec<CapturedLog { msg: String,
-   properties: Vec<(String, String)> }>` to `rust/tracing/src/test_utils.rs`. It resolves
-   untagged, tagged static, tagged string, and template events, plus their dynamic properties,
-   the same way `property_macro_tests.rs:180-230` does. The auth and public tests share it, so
+   properties: Vec<(String, String)> }>` to `rust/tracing/src/test_utils.rs`. The message
+   comes from `desc.fmt_str` for static events (`LogStaticStrEvent`, `TaggedLogStaticStrEvent`)
+   and from the string payload for string events; template events are not covered. Dynamic
+   properties are resolved the way `property_macro_tests.rs:180-230` does, via
+   `block.dyn_deps.set_properties`. The auth and public tests share it, so
    neither crate grows another copy.
 6. **Ingestion layer.** Add `rust/public/src/servers/ingestion_auth.rs` (`INSERT_PROCESS_PATH`,
    `ClaimedProcessInfo`, `RejectedProcessLogger`, `ingestion_auth_middleware`) and register it in
@@ -287,8 +289,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    (`ingestion.rs:125`).
 7. **Dependencies.** Add `ciborium` and `moka` (`features = ["sync"]`) as optional `server`-feature
    dependencies of `rust/public/Cargo.toml`. Both are already workspace dependencies. Keep the
-   list alphabetical. Confirm `ciborium::de::from_reader_with_recursion_limit` exists in the
-   pinned 0.2.2. Add `features = ["test-util"]` to the tokio dev-dependency (needed by
+   list alphabetical, and add `"dep:ciborium"` and `"dep:moka"` to the `server` feature list. Add `features = ["test-util"]` to the tokio dev-dependency (needed by
    `start_paused`). Add a `[[test]] name = "ingestion_auth_tests"` entry with
    `required-features = ["server"]`, as `auth_observability_tests` and `firehose_tests` have
    (`default = []`).
@@ -329,7 +330,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
   they're queryable directly from `log_entries.properties`. The rejection *reason* stays in the
   message so the existing `[auth_failure] authentication failed with all providers` text still
   matches.
-- **No rejection counter.** Count `[auth_failure]` rows in `log_entries` instead.
+- **No rejection counter or request span.** Both are optional in the issue; count `[auth_failure]` rows in `log_entries` instead.
 - **Full `properties` map vs. allowlist.** The full map would include `command-line`. Allowlist.
 - **`insert_stream` / `insert_block`.** They could log a claimed `process_id` the same way. Left
   out, as the issue suggests. `insert_process` is the first call any client makes, so a client
@@ -416,5 +417,3 @@ No live-DB tests. Nothing here fixes a bug seen in the wild that only a live DB 
   empty for Rust clients. Should the sink set
   `micromegas-telemetry-sink/<CARGO_PKG_VERSION>`? It's one line and helps attribution by client
   version, but it's outside the issue's scope.
-- The issue's optional request span and a failure counter metric by provider/reason are left out
-  until someone asks for them.
