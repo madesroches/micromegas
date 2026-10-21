@@ -190,8 +190,7 @@ carry `insert_process`.
    with `client_ip`, `reason = missing_content_length|oversize`, and `content_length`, then
    return. A real `ProcessInfo` is a few KiB.
 2. **Bounded read.** `tokio::time::timeout(BODY_READ_TIMEOUT /* 2 s */,
-   axum::body::to_bytes(body, MAX_INSPECTED_BODY_BYTES))`. `to_bytes`'s own limit also catches a
-   body longer than it declared. A timeout or read error logs the same "not inspected" line with
+   axum::body::to_bytes(body, MAX_INSPECTED_BODY_BYTES))`. A timeout or read error logs the same "not inspected" line with
    `reason = read_timeout|read_error`.
 3. **Lenient minimal decode.** `ciborium::de::from_reader_with_recursion_limit(bytes, 16)` into:
 
@@ -213,7 +212,8 @@ carry `insert_process`.
 4. **Rate limit.** Log only when `recent.entry((client_ip, process_id)).or_insert(()).is_fresh()`.
    - Settings: `max_capacity(10_000)`, `time_to_live(60 s)`.
    - The key's `process_id` is the sanitized value, so a cache entry is bounded too.
-   - Steps 1–3 key on `(client_ip, None)`. A client stuck in a retry loop produces at most one
+   - All four log sites (steps 1–3 and the claims line) go through one rate-limit helper that
+     checks `recent.entry(...)` before logging. Steps 1–3 key on `(client_ip, None)`. A client stuck in a retry loop produces at most one
      line per minute per (IP, process), on top of the unchanged per-request `[auth_failure]` line.
 5. **Sanitized, structured emit.** Every value goes through `sanitize_for_log(_, 128)`. Absent
    values are `""`. The message is static, and every caller-supplied value is a property prefixed
@@ -282,7 +282,10 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
 7. **Dependencies.** Add `ciborium` and `moka` (`features = ["sync"]`) as optional `server`-feature
    dependencies of `rust/public/Cargo.toml`. Both are already workspace dependencies. Keep the
    list alphabetical. Confirm `ciborium::de::from_reader_with_recursion_limit` exists in the
-   pinned 0.2.2.
+   pinned 0.2.2. Add `features = ["test-util"]` to the tokio dev-dependency (needed by
+   `start_paused`). Add a `[[test]] name = "ingestion_auth_tests"` entry with
+   `required-features = ["server"]`, as `auth_observability_tests` and `firehose_tests` have
+   (`default = []`).
 8. Write the tests (see Testing Strategy), the docs, and the CHANGELOG entry.
 
 ## Files to Modify
@@ -295,7 +298,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
 - `rust/tracing/src/test_utils.rs`
 - `rust/public/src/servers/ingestion_auth.rs` (new), `servers/mod.rs`, `servers/ingestion.rs`,
   `servers/firehose_common.rs`
-- `rust/public/Cargo.toml`
+- `rust/public/Cargo.toml` (optional deps, tokio `test-util` dev feature, `[[test]]` entry)
 - `rust/public/tests/ingestion_auth_tests.rs` (new), `read_policy_threading_tests.rs`,
   `firehose_tests.rs`
 - `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`
@@ -320,6 +323,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
   they're queryable directly from `log_entries.properties`. The rejection *reason* stays in the
   message so the existing `[auth_failure] authentication failed with all providers` text still
   matches.
+- **No rejection counter.** Count `[auth_failure]` rows in `log_entries` instead.
 - **Full `properties` map vs. allowlist.** The full map would include `command-line`. Allowlist.
 - **`insert_stream` / `insert_block`.** They could log a claimed `process_id` the same way. Left
   out, as the issue suggests. `insert_process` is the first call any client makes, so a client
@@ -375,7 +379,8 @@ All tests are no-DB unit tests built on a real `Router` + middleware + `InMemory
 - Missing `Content-Length` → the `not inspected` line with `missing_content_length`, and the
   body isn't read.
 - `Content-Length` > 64 KiB → `oversize`.
-- A body longer than its declared `Content-Length` → `read_error`.
+- A body stream that yields an error (`Body::from_stream` over a stream returning an `Err`) →
+  `read_error`.
 - A body stream that never finishes, under `#[tokio::test(start_paused = true)]` → `read_timeout`.
   Paused time advances deterministically, so there's no real sleep.
 - Truncated CBOR and non-CBOR bytes → one `unparseable` line.
@@ -385,7 +390,9 @@ All tests are no-DB unit tests built on a real `Router` + middleware + `InMemory
   claims line is logged.
 - A rejected `/ingestion/insert_stream` → only the generic `[auth_failure]` line.
 
-`firehose_tests.rs`: the existing rejection test also checks the `client_ip` property.
+`firehose_tests.rs`: `wrong_access_key_is_rejected_with_firehose_error_shape` gains in-memory log
+capture via `collect_logs`, `#[serial]`, `set_max_level`, and an `X-Forwarded-For` header, and
+asserts the `client_ip` property.
 
 No live-DB tests. Nothing here fixes a bug seen in the wild that only a live DB reproduces.
 
@@ -396,4 +403,4 @@ No live-DB tests. Nothing here fixes a bug seen in the wild that only a live DB 
   `micromegas-telemetry-sink/<CARGO_PKG_VERSION>`? It's one line and helps attribution by client
   version, but it's outside the issue's scope.
 - The issue's optional request span and a failure counter metric by provider/reason are left out
-  until someone asks for them. Should a plain `auth_rejection_count` counter come in now?
+  until someone asks for them.
