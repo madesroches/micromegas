@@ -123,14 +123,14 @@ impl SpanFieldVisitor<'_> {
         if field.name().starts_with("log.") {
             return;
         }
-        match self
-            .fields
-            .iter_mut()
-            .find(|(name, _)| *name == field.name())
-        {
-            Some(entry) => entry.1 = value,
-            None => self.fields.push((field.name(), value)),
-        }
+        upsert(self.fields, field.name(), value);
+    }
+}
+
+fn upsert(fields: &mut Vec<(&'static str, String)>, name: &'static str, value: String) {
+    match fields.iter_mut().find(|(n, _)| *n == name) {
+        Some(entry) => entry.1 = value,
+        None => fields.push((name, value)),
     }
 }
 
@@ -239,10 +239,7 @@ where
         let mut extensions = span.extensions_mut();
         if let Some(captured) = extensions.get_mut::<CapturedSpan>() {
             for (name, value) in recorded {
-                match captured.fields.iter_mut().find(|(n, _)| *n == name) {
-                    Some(entry) => entry.1 = value,
-                    None => captured.fields.push((name, value)),
-                }
+                upsert(&mut captured.fields, name, value);
             }
         }
     }
