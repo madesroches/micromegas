@@ -5,8 +5,9 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    spans::{ThreadBlock, ThreadStream},
+    spans::{ThreadBlock, ThreadEventQueueAny, ThreadStream},
 };
+use micromegas_transit::HeterogeneousQueue;
 use std::{
     collections::HashMap,
     fmt,
@@ -43,6 +44,7 @@ impl EventSink for ReentrantSink {
         self.messages.lock().unwrap().push(args.to_string());
         if !self.nested_emitted.swap(true, Ordering::SeqCst) {
             tracing::info!(inner = 2, "nested");
+            drop(tracing::info_span!("sink_span", inner = 3).entered());
         }
     }
     fn on_init_log_stream(&self, log_stream: &LogStream) {
@@ -81,17 +83,35 @@ fn event_emitted_by_sink_during_capture_is_not_dropped() {
         1024,
         sink.clone(),
         HashMap::new(),
-        false,
+        true,
     )
     .unwrap();
     tracing::subscriber::set_global_default(tracing_subscriber::registry().with(
         TracingCaptureLayer {
             max_level: LevelFilter::Trace,
+            capture_spans: true,
         },
     ))
     .expect("no global tracing subscriber is installed yet");
 
     tracing::info!(outer = 1, "outer");
+    micromegas_tracing::dispatch::flush_thread_buffer();
+
+    let span_names: Vec<String> = {
+        let state = sink.inner.state.lock().unwrap();
+        state
+            .thread_blocks
+            .iter()
+            .flat_map(|block| {
+                block.events.iter().filter_map(|evt| match evt {
+                    ThreadEventQueueAny::BeginAsyncDynNamedSpanEvent(e) => {
+                        Some(block.dyn_deps.str(e.name.id).to_owned())
+                    }
+                    _ => None,
+                })
+            })
+            .collect()
+    };
 
     micromegas_tracing::dispatch::shutdown_dispatch();
     unsafe { micromegas_tracing::dispatch::force_uninit() };
@@ -100,4 +120,5 @@ fn event_emitted_by_sink_during_capture_is_not_dropped() {
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert_eq!(messages[0], "outer outer=1 ");
     assert_eq!(messages[1], "nested inner=2 ");
+    assert_eq!(span_names, vec!["sink_span"]);
 }

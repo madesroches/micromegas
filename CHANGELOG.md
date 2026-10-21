@@ -5,6 +5,17 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Security:** Resolve open Dependabot alerts: bump `vite` to 8.1.6+ / 7.3.7+ across the web app, welcome page and doc projects (`launch-editor` advisories), `certifi` to 2026.10.19 in the Python client, and `github.com/klauspost/compress` to 1.18.7 in the Grafana plugin.
+* **Tracing:** `TracingCaptureLayer` now records `tracing` spans as async spans (#1704). A span's
+  lifetime, from creation to close, becomes a begin and end event pair carrying a span id, the
+  parent's span id and the depth; the parent is the nearest enclosing span that was captured.
+  The span's fields, including those set later with `Span::record`, become properties of the end
+  event. This lets an application whose libraries emit `tracing` spans, such as LLM client
+  libraries, show trace trees in `async_events` and `process_spans(..., 'async')` with no SQL
+  change. Spans are recorded only when CPU tracing is enabled (`MICROMEGAS_ENABLE_CPU_TRACING`),
+  and `install_tracing_interop` enables span capture; build the layer with
+  `capture_spans: false` to forward events only. **Minor breaking change:**
+  `TracingCaptureLayer` gains a public `capture_spans` field, and its `Layer` impl now requires a
+  subscriber that implements `LookupSpan`.
 
 ## v0.32.0 - 2026-10-20
 
