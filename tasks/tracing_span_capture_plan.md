@@ -59,15 +59,22 @@ struct CapturedSpan {
      `parent:` naming a filtered span becomes a root (`0` / `0`).
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
-  3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
+  3. Call `init_thread_stream()` (idempotent; a cheap early return once the thread stream exists
+     or when CPU tracing is disabled), then `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
      returned id.
 - `on_record(id, values, ctx)`: append the recorded fields to `CapturedSpan::fields`, overwriting by field name (late-bound
   `Empty` fields are the common OTel pattern).
-- `on_close(id, ctx)`: take the extension, call `on_end_async_named_scope_tagged(span_id,
+- `on_close(id, ctx)`: take the extension, call `init_thread_stream()` (the closing thread may
+  differ from the opening one), then call `on_end_async_named_scope_tagged(span_id,
   parent_span_id, location, name, depth, PropertySet::empty(), &dyn_properties)`.
 
 `Metadata::name()` is used as the name for both the begin and end events (analytics reads them
 independently). The span name is not stored in the extension; it is re-read from `ctx.span(id)`.
+
+Async span events are written only to the calling thread's stream, which exists only when CPU
+tracing is enabled (`MICROMEGAS_ENABLE_CPU_TRACING`); with it disabled, spans are not recorded.
+Calling `init_thread_stream()` in the layer lets plain tokio/`std::thread` threads, which never
+create a `TracingThreadGuard`, record spans.
 
 Using `on_close` (not `on_exit`) matches the issue's "open/close" wording and the async model: a
 `tracing` span entered/exited repeatedly across `.await`s is one logical operation, whereas
@@ -138,15 +145,17 @@ so deployments that only want logs are unaffected.
 Update `mkdocs/docs/when-to-use/index.md`: the lines at ~13 and ~252 say interop "captures existing
 `tracing` events as logs" and become stale; revise them and add a short passage there (the
 `native/index.md` page covers only the C ABI, so it is not the destination) describing: spans become async spans, parent/child
-and depth, fields as end-event properties, `capture_spans` opt-out. Add `CHANGELOG.md` entry.
+and depth, fields as end-event properties, `capture_spans` opt-out, and that spans are recorded only when CPU tracing is enabled
+(`MICROMEGAS_ENABLE_CPU_TRACING`). Add `CHANGELOG.md` entry.
 
 ## Testing Strategy
 
 `tracing_interop_tests.rs` currently has only a log-block helper. Add a thread-block helper
 (modeled on `rust/tracing/tests/span_properties_tests.rs:215-245`) matching
 `BeginAsyncDynNamedSpanEvent`, `EndAsyncDynNamedSpanEvent` and `TaggedEndAsyncNamedSpanEvent`.
-Thread blocks reach the sink only after `init_thread_stream()` and a flush; the cross-thread close
-test must do both on each thread.
+Thread blocks reach the sink only after a flush; the layer calls `init_thread_stream()` itself, so
+tests need not, but CPU tracing must be enabled in the test setup and the cross-thread close test
+must flush on each thread.
 
 All no-DB unit tests in `rust/telemetry-sink/tests/tracing_interop_tests.rs` using
 `init_in_memory_tracing` and `tracing::subscriber::with_default`, inspecting the captured thread
