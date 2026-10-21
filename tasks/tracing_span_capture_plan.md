@@ -52,7 +52,10 @@ struct CapturedSpan {
 - `on_new_span(attrs, id, ctx)`:
   1. Resolve the parent with `attrs.parent()` / contextual parent (`ctx.span(id).parent()`), taking
      the parent's `CapturedSpan` extension: `parent_span_id = parent.span_id`,
-     `depth = parent.depth + 1`; a parent with no `CapturedSpan` extension → `0` / `0`.
+     `depth = parent.depth + 1`; a parent with no `CapturedSpan` extension → `0` / `0`. `enabled`
+     already filters span metadata, so a level-filtered span never reaches the registry and
+     `on_new_span` needs no level check of its own; its children attach to the nearest enabled
+     ancestor.
   2. Record the `attrs` fields into a visitor (see below) and stash them in the extension —
      fields known at creation are needed at end, and `on_record` may add more.
   3. Call `on_begin_async_named_scope_dyn(location, span.name(), parent_span_id, depth)`; store the
@@ -63,12 +66,12 @@ struct CapturedSpan {
   parent_span_id, location, name, depth, PropertySet::empty(), &dyn_properties)`.
 
 `Metadata::name()` is used as the name for both the begin and end events (analytics reads them
-independently). If an `otel.name` field is recorded, it is exposed as an ordinary end-event
-property. The span name is not stored in the extension; it is re-read from `ctx.span(id)`.
+independently). The span name is not stored in the extension; it is re-read from `ctx.span(id)`.
 
 Using `on_close` (not `on_exit`) matches the issue's "open/close" wording and the async model: a
-`tracing` span entered/exited repeatedly across `.await`s is one logical operation. `on_enter`/
-`on_exit` are not mapped.
+`tracing` span entered/exited repeatedly across `.await`s is one logical operation, whereas
+enter/exit would produce one span per poll of an instrumented future and break parent/child
+semantics for tasks migrating across threads. `on_enter`/`on_exit` are not mapped.
 
 ### Span location
 
@@ -117,18 +120,6 @@ so deployments that only want logs are unaffected.
 - `mkdocs/docs/when-to-use/index.md` (see Documentation)
 - `CHANGELOG.md`
 
-## Trade-offs
-
-- **`on_close` vs `on_enter`/`on_exit` as begin/end**: enter/exit would produce one span per poll
-  of an instrumented future and break parent/child semantics for tasks migrating across threads.
-- **Thread spans vs async spans**: the issue asks for async spans; they carry explicit
-  `span_id`/`parent_span_id`, which is what a `tracing` tree provides, and tolerate end on another
-  thread.
-- **Leak per callsite vs per-span location**: locations are keyed by address, so per-span
-  allocation would leak per span; per-callsite is bounded.
-- **Owned `String` properties**: costs an allocation per span field, but spans are rare compared to
-  events and the values must survive across callbacks.
-
 ## Decisions
 
 - Public `TracingCaptureLayer` gains a field (Rust API break, acceptable per the project's
@@ -159,7 +150,8 @@ blocks for async begin/end events:
 - Nested spans: child's `parent_span_id` equals parent's `span_id`, `depth` increments, end events
   reference the same ids.
 - Fields at creation and via `on_record` appear as end-event properties; later record overrides.
-- A span whose parent is not captured: the child is a root (`parent_span_id = 0`, `depth = 0`).
+- A level-filtered parent: the child attaches to the nearest captured ancestor, or becomes root
+  (`parent_span_id = 0`, `depth = 0`) if none.
 - `capture_spans = false` emits nothing.
 - Span closed on a different thread than opened still produces a matched end event.
 - Re-entrancy: a sink that creates a span during capture does not panic or deadlock (extend the
