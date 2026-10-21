@@ -279,8 +279,12 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    neither crate grows another copy.
 6. **Ingestion layer.** Add `rust/public/src/servers/ingestion_auth.rs` (`INSERT_PROCESS_PATH`,
    `ClaimedProcessInfo`, `RejectedProcessLogger`, `ingestion_auth_middleware`) and register it in
-   `servers/mod.rs` under the `server` feature. Wire it into `serve_ingestion` and use
-   `INSERT_PROCESS_PATH` in `register_routes` (`ingestion.rs:125`).
+   `servers/mod.rs` as `pub mod ingestion_auth;` (integration tests reach it via
+   `micromegas::servers::ingestion_auth`). `RejectedProcessLogger` gets a `pub fn new() -> Self`
+   building the cache with `max_capacity(10_000)` and `time_to_live(60 s)`. Wire it into
+   `serve_ingestion` with a closure cloning both `provider` and `logger` into
+   `ingestion_auth_middleware`, and use `INSERT_PROCESS_PATH` in `register_routes`
+   (`ingestion.rs:125`).
 7. **Dependencies.** Add `ciborium` and `moka` (`features = ["sync"]`) as optional `server`-feature
    dependencies of `rust/public/Cargo.toml`. Both are already workspace dependencies. Keep the
    list alphabetical. Confirm `ciborium::de::from_reader_with_recursion_limit` exists in the
