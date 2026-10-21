@@ -35,9 +35,12 @@ the client learns nothing new.
     (`oidc.rs:381-544`).
   - `Unknown issuer` echoes an unverified, attacker-chosen JWT claim, so reasons themselves need
     sanitizing before they reach a log line.
-- Two more rejection sites log the same bare error:
+- Three more rejection sites log the same bare error:
   - `rust/public/src/servers/firehose_common.rs:127` `warn!("[firehose auth_failure] {e}")`.
   - `rust/auth/src/tower.rs:159` (gRPC / flight-sql) `warn!("authentication failed: {e}")`.
+  - `rust/analytics-web-srv/src/auth/handlers.rs:397` (`auth_me`) and `:514`
+    (`cookie_auth_middleware`) `warn!("[auth_failure] {e}")`. Out of scope: they're web-app login,
+    not ingestion, and `CookieTokenRequestParts` carries no caller network details to log.
 - `auth_middleware`'s production callers are `serve_ingestion`
   (`rust/public/src/servers/ingestion.rs:187`) and `rust/object-cache-srv/src/object_cache_srv.rs:207`
   (bare `ApiKeyAuthProvider`, no Multi wrapper). The ingestion one wraps `protected_app` (native routes + OTLP +
@@ -91,7 +94,8 @@ The auth middleware and the ingestion body logger both use it.
   - every test double → its own label
 
   It's required rather than defaulted, so the compiler lists every implementation, embedders'
-  included (see `CLAUDE.md` Interface stability).
+  included (see `CLAUDE.md` Interface stability); an `"unknown"` default would hide unnamed
+  providers in the reasons forever.
 - `MultiAuthProvider::validate_request` collects `"{name}: {reason}"` for each rejection, where
   `reason` is `sanitize_for_log(&format!("{e:#}"), 160)`. Truncating each reason separately means
   one huge `Unknown issuer: …` can't push the others off the line. The final error becomes:
@@ -142,7 +146,7 @@ warn!(
 ### 4. Split `auth_middleware` so ingestion can act on the rejected request
 
 `auth_middleware` currently returns 401 itself, so no outer layer ever gets the rejected request
-back. Buffering the body ahead of auth would cost every successful request too. Instead, factor
+back. Buffering the body ahead of auth would cost every successful request a full-body buffer ahead of the 100 MiB limit layer. Instead, factor
 the body of `auth_middleware` into:
 
 ```rust
@@ -319,14 +323,9 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
   parameter on `auth_middleware` (`on_reject: Option<Fn(Request)>`). That puts an
   ingestion-shaped concept into the auth crate. Splitting out `authenticate` keeps the auth crate
   generic, and the ingestion layer composes it. Any service can do the same later (open/closed).
-- **Buffering the body before auth.** Simplest to write, but it charges every *successful*
-  request a full-body buffer ahead of the 100 MiB limit layer. Rejected.
 - **Reading the body in a spawned task after responding.** It doesn't delay the 401, but it
   holds a connection-bound body past the response and adds a detached task whose failures are
   invisible. The 2 s inline cap is simpler and only slows down rejected callers.
-- **Required vs. defaulted `AuthProvider::name`.** A default (`"unknown"`) would hide unnamed
-  embedder providers in the reasons forever. Required follows the project's "make the compiler
-  enumerate call sites" rule.
 - **Message interpolation vs. properties.** Existing lines interpolate `key=value`. For the new
   caller fields, properties keep attacker text out of the message (no fake `key=` injection), and
   they're queryable directly from `log_entries.properties`. The rejection *reason* stays in the
