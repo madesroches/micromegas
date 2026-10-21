@@ -636,8 +636,10 @@ This prevents authorization code interception attacks even if the client secret 
 5. Clear tokens and re-authenticate: `micromegas-logout` (clears every cached token file; use `--profile <name>` to narrow to one)
 
 **Finding the caller of a rejected request.** Every rejection is logged as a line starting with
-`[auth_failure]` (or `authentication failed:` for gRPC). The caller's network details are log
-properties: `client_ip`, `method`, `path` (without the query string) and `user_agent`. The
+`[auth_failure]`, `[firehose auth_failure]` or (for gRPC) `authentication failed:`. The caller's
+network details are log properties: `client_ip`, `method`, `path` (without the query string) and
+`user_agent`. gRPC rejection lines carry only `client_ip` and `user_agent`; `method` and `path` are
+empty. The
 message lists why each provider refused the credential, in chain order:
 
 ```
@@ -645,7 +647,7 @@ authentication failed with all providers: oidc: Invalid JWT format; db_api_key: 
 ```
 
 ```sql
-SELECT time, msg, properties FROM log_entries WHERE msg LIKE '[auth_failure]%'
+SELECT time, msg, properties FROM log_entries WHERE msg LIKE '%auth_failure]%' OR msg LIKE 'authentication failed:%'
 ```
 
 The credential is never logged, and caller-supplied text is sanitized and length-bounded.
