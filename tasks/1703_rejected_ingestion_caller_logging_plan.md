@@ -38,8 +38,9 @@ the client learns nothing new.
 - Two more rejection sites log the same bare error:
   - `rust/public/src/servers/firehose_common.rs:127` `warn!("[firehose auth_failure] {e}")`.
   - `rust/auth/src/tower.rs:159` (gRPC / flight-sql) `warn!("authentication failed: {e}")`.
-- `auth_middleware`'s only production caller is `serve_ingestion`
-  (`rust/public/src/servers/ingestion.rs:187`). It wraps `protected_app` (native routes + OTLP +
+- `auth_middleware`'s production callers are `serve_ingestion`
+  (`rust/public/src/servers/ingestion.rs:187`) and `rust/object-cache-srv/src/object_cache_srv.rs:207`
+  (bare `ApiKeyAuthProvider`, no Multi wrapper). The ingestion one wraps `protected_app` (native routes + OTLP +
   webhook) as the outermost layer, so it runs before `RequestBodyLimitLayer(100 MiB)` and before
   any handler reads the body.
 - `/ingestion/insert_process` (`ingestion.rs:66`, route string at `ingestion.rs:125`) receives an
@@ -151,7 +152,8 @@ pub async fn authenticate(provider: &dyn AuthProvider, req: &mut Request) -> Res
 ```
 
 `auth_middleware` becomes `authenticate(...)?; Ok(next.run(req).await)`, with the same behavior
-as today.
+as today. `object-cache-srv` layers `auth_middleware` and so gets the enriched line
+automatically, with an unprefixed reason (bare provider, no `name:` prefix).
 
 ### 5. Ingestion-specific rejection layer
 
@@ -340,13 +342,17 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
     rate-limited per client IP + process id per minute, and username/computer are PII.
 - `mkdocs/docs/admin/ingestion.md` → *Authentication*: a short paragraph linking to the above.
 - `CHANGELOG.md` → new *Unreleased* section. **Minor breaking change:** `AuthProvider` gains a
-  required `name()`. `micromegas_auth::axum::authenticate` is new.
+  required `name()`. `micromegas_auth::axum::authenticate` is new. `object-cache-srv`'s rejection
+  line gains the same properties, with an unprefixed reason.
 
 ## Testing Strategy
 
 All tests are no-DB unit tests built on a real `Router` + middleware + `InMemorySink`, using the
-`collect_logs` helper from step 5. Tests that capture logs are `#[serial]` and call
-`set_max_level(LevelFilter::Trace)` (see `auth_observability_tests.rs:35`).
+`collect_logs` helper from step 5. Tests that capture logs call
+`set_max_level(LevelFilter::Trace)` (see `auth_observability_tests.rs:35`). In every test binary
+that gains log capture (`axum_tests`, `tower_tests`, `firehose_tests`, `ingestion_auth_tests`),
+every test that can emit logs is `#[serial]`, and assertions select their line by a unique marker
+such as the `X-Forwarded-For` IP.
 
 `rust/auth/tests/log_sanitize_tests.rs`:
 - CR/LF/ESC and bidi overrides are replaced.
