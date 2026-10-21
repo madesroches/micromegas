@@ -257,6 +257,11 @@ where
         let Some(captured) = captured else {
             return;
         };
+        // A span dropped during thread-local teardown would panic (and abort) when the end
+        // event reaches the already-destroyed thread stream.
+        if !has_thread_stream() {
+            return;
+        }
 
         let dyn_properties: SmallVec<[DynProperty<'_>; INLINE_FIELDS]> = captured
             .fields
