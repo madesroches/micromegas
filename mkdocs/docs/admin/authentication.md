@@ -635,6 +635,34 @@ This prevents authorization code interception attacks even if the client secret 
 4. Check token expiration: `cat ~/.micromegas/tokens.json | jq .token.expires_at` (or `tokens-<profile>.json` if a `profiles` map is in use)
 5. Clear tokens and re-authenticate: `micromegas-logout` (clears every cached token file; use `--profile <name>` to narrow to one)
 
+**Finding the caller of a rejected request.** Every rejection is logged as a line starting with
+`[auth_failure]` (or `authentication failed:` for gRPC). The caller's network details are log
+properties: `client_ip`, `method`, `path` (without the query string) and `user_agent`. The
+message lists why each provider refused the credential, in chain order:
+
+```
+authentication failed with all providers: oidc: Invalid JWT format; db_api_key: invalid API token
+```
+
+```sql
+SELECT time, msg, properties FROM log_entries WHERE msg LIKE '[auth_failure]%'
+```
+
+The credential is never logged, and caller-supplied text is sanitized and length-bounded.
+
+A rejected `/ingestion/insert_process` request also logs the process identity its body claims, as
+`[auth_failure] rejected insert_process caller claims`. The properties are `client_ip` and the
+`claimed_*` fields: `claimed_process_id`, `claimed_exe`, `claimed_username`, `claimed_computer`,
+`claimed_parent_process_id`, `claimed_start_time` and the build properties (`claimed_platform_name`,
+`claimed_build_version`, `claimed_engine_version`, `claimed_build_config`, `claimed_build_target`,
+`claimed_branch_name`, `claimed_commit`). These values come from the unauthenticated caller and are
+not verified. The line is limited to one per client IP and process id per minute. When the body is
+not read (no `Content-Length`, over 64 KiB, or unreadable within 2 seconds) or does not decode, a
+`[auth_failure] insert_process body ...` line with a `reason` is logged instead. The command line
+properties are never logged. `claimed_username` and `claimed_computer` are personal data of the
+same kind stored in the `processes` table, so give the ingestion service's log stream the same
+access controls as process metadata.
+
 ### Token Refresh Failures
 
 **Symptom:** Browser opens on every CLI invocation

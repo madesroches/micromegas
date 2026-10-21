@@ -12,6 +12,9 @@ pub mod cron_task;
 /// routes for ingestion server based on axum
 pub mod ingestion;
 
+/// ingestion authentication layer that attributes rejected `insert_process` callers
+pub mod ingestion_auth;
+
 /// OTLP/HTTP routes (logs, metrics, traces) for the ingestion server
 pub mod otlp;
 

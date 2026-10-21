@@ -16,6 +16,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
 use micromegas_auth::client_ip::resolve_client_ip;
+use micromegas_auth::log_sanitize::warn_auth_rejection;
 use micromegas_auth::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -127,7 +128,7 @@ pub async fn firehose_auth_middleware(
                     Some("auth provider unavailable"),
                 )
             } else {
-                warn!("[firehose auth_failure] {e}");
+                warn_auth_rejection("[firehose auth_failure]", &parts, &e);
                 firehose_response(
                     StatusCode::UNAUTHORIZED,
                     &request_id,

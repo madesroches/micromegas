@@ -547,6 +547,10 @@ impl OidcAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for OidcAuthProvider {
+    fn name(&self) -> &'static str {
+        "oidc"
+    }
+
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,

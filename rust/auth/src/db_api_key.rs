@@ -334,6 +334,10 @@ async fn lookup_key_row(
 
 #[async_trait::async_trait]
 impl AuthProvider for DbApiKeyAuthProvider {
+    fn name(&self) -> &'static str {
+        "db_api_key"
+    }
+
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext> {
         let token = parts
             .bearer_token()

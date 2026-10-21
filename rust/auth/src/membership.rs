@@ -42,6 +42,10 @@ impl MembershipProvider {
 
 #[async_trait]
 impl AuthProvider for MembershipProvider {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext> {
         let mut ctx = self.inner.validate_request(parts).await?;
         // `ProviderUnavailable` propagates unchanged: a group-store outage denies the request

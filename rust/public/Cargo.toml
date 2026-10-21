@@ -28,6 +28,7 @@ server = [
     "dep:async-stream",
     "dep:axum",
     "dep:bytes",
+    "dep:ciborium",
     "dep:clap",
     "dep:datafusion",
     "dep:micromegas-analytics",
@@ -36,6 +37,7 @@ server = [
     "dep:micromegas-object-cache",
     "dep:micromegas-otel-ingestion",
     "dep:micromegas-perfetto",
+    "dep:moka",
     "dep:object_store",
     "dep:once_cell",
     "dep:prost",
@@ -73,6 +75,7 @@ tonic = { workspace = true, optional = true }
 async-stream = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+ciborium = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 datafusion = { workspace = true, optional = true }
 micromegas-analytics = { workspace = true, optional = true }
@@ -81,6 +84,7 @@ micromegas-ingestion = { workspace = true, optional = true }
 micromegas-object-cache = { workspace = true, optional = true }
 micromegas-otel-ingestion = { workspace = true, optional = true }
 micromegas-perfetto = { workspace = true, optional = true }
+moka = { workspace = true, features = ["sync"], optional = true }
 object_store = { workspace = true, optional = true }
 once_cell = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
@@ -98,7 +102,7 @@ flate2.workspace = true
 opentelemetry-proto.workspace = true
 reqwest.workspace = true
 serial_test = "3.2"
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 
 # Note: jsonwebtoken and rsa are also used in production code for OIDC token validation
@@ -142,6 +146,11 @@ required-features = ["server"]
 [[test]]
 name = "read_policy_threading_tests"
 path = "tests/read_policy_threading_tests.rs"
+required-features = ["server"]
+
+[[test]]
+name = "ingestion_auth_tests"
+path = "tests/ingestion_auth_tests.rs"
 required-features = ["server"]
 
 [[test]]

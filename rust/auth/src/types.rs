@@ -186,6 +186,9 @@ impl RequestParts for GrpcRequestParts {
 /// Trait for authentication providers
 #[async_trait::async_trait]
 pub trait AuthProvider: Send + Sync {
+    /// Short label naming this provider in aggregated rejection reasons.
+    fn name(&self) -> &'static str;
+
     /// Validate a request and return authentication context
     async fn validate_request(&self, parts: &dyn RequestParts) -> Result<AuthContext>;
 }

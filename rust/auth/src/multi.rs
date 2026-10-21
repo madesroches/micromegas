@@ -1,5 +1,6 @@
 //! Multi-provider authentication that tries multiple auth methods in sequence.
 
+use crate::log_sanitize::sanitize_for_log;
 use crate::types::{AuthContext, AuthProvider, ProviderUnavailable};
 use async_trait::async_trait;
 use micromegas_tracing::prelude::*;
@@ -77,6 +78,10 @@ impl MultiAuthProvider {
 
 #[async_trait]
 impl AuthProvider for MultiAuthProvider {
+    fn name(&self) -> &'static str {
+        "multi"
+    }
+
     async fn validate_request(
         &self,
         parts: &dyn crate::types::RequestParts,
@@ -86,6 +91,7 @@ impl AuthProvider for MultiAuthProvider {
         // might have matched a live key had the store been reachable must not be
         // treated as a confirmed rejection once every provider has been tried.
         let mut unavailable: Option<anyhow::Error> = None;
+        let mut reasons: Vec<String> = Vec::new();
         for provider in &self.providers {
             match provider.validate_request(parts).await {
                 Ok(auth_ctx) => {
@@ -93,6 +99,12 @@ impl AuthProvider for MultiAuthProvider {
                 }
                 Err(e) => {
                     debug!("partial auth failed: {e:?}");
+                    // Truncated per provider so one huge reason can't push the others off the line.
+                    reasons.push(format!(
+                        "{}: {}",
+                        provider.name(),
+                        sanitize_for_log(&format!("{e:#}"), 160)
+                    ));
                     if e.downcast_ref::<ProviderUnavailable>().is_some() {
                         unavailable = Some(e);
                     }
@@ -102,6 +114,12 @@ impl AuthProvider for MultiAuthProvider {
         if let Some(e) = unavailable {
             return Err(e);
         }
-        anyhow::bail!("authentication failed with all providers")
+        if reasons.is_empty() {
+            anyhow::bail!("authentication failed with all providers: none configured");
+        }
+        anyhow::bail!(
+            "authentication failed with all providers: {}",
+            reasons.join("; ")
+        )
     }
 }

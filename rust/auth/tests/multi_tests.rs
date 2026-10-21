@@ -9,6 +9,10 @@ struct UnavailableProvider;
 
 #[async_trait::async_trait]
 impl AuthProvider for UnavailableProvider {
+    fn name(&self) -> &'static str {
+        "unavailable"
+    }
+
     async fn validate_request(
         &self,
         _parts: &dyn RequestParts,
@@ -143,9 +147,78 @@ async fn test_multi_provider_all_reject_no_unavailable() {
     let result = multi.validate_request(&parts as &dyn RequestParts).await;
     let err = result.expect_err("expected an error");
     assert!(err.downcast_ref::<ProviderUnavailable>().is_none());
-    assert!(
-        err.to_string()
-            .contains("authentication failed with all providers")
+    assert_eq!(
+        err.to_string(),
+        "authentication failed with all providers: api_key: invalid API token"
+    );
+}
+
+struct RejectingProvider {
+    name: &'static str,
+    reason: String,
+}
+
+#[async_trait::async_trait]
+impl AuthProvider for RejectingProvider {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    async fn validate_request(
+        &self,
+        _parts: &dyn RequestParts,
+    ) -> anyhow::Result<micromegas_auth::types::AuthContext> {
+        anyhow::bail!("{}", self.reason)
+    }
+}
+
+fn rejecting(name: &'static str, reason: &str) -> Arc<RejectingProvider> {
+    Arc::new(RejectingProvider {
+        name,
+        reason: reason.to_owned(),
+    })
+}
+
+#[tokio::test]
+async fn test_multi_provider_lists_each_reason_in_chain_order() {
+    let multi = MultiAuthProvider::new()
+        .with_provider(rejecting("a", "first reason"))
+        .with_provider(rejecting("b", "second reason"));
+    let err = multi
+        .validate_request(&any_bearer_parts() as &dyn RequestParts)
+        .await
+        .expect_err("expected an error");
+    assert_eq!(
+        err.to_string(),
+        "authentication failed with all providers: a: first reason; b: second reason"
+    );
+}
+
+#[tokio::test]
+async fn test_multi_provider_truncates_an_oversized_reason() {
+    let huge = "x".repeat(10_000);
+    let multi = MultiAuthProvider::new()
+        .with_provider(rejecting("a", &huge))
+        .with_provider(rejecting("b", "second reason"));
+    let msg = multi
+        .validate_request(&any_bearer_parts() as &dyn RequestParts)
+        .await
+        .expect_err("expected an error")
+        .to_string();
+    assert!(msg.len() < 400, "{}", msg.len());
+    assert!(msg.contains('…'));
+    assert!(msg.ends_with("; b: second reason"));
+}
+
+#[tokio::test]
+async fn test_multi_provider_empty_chain_says_none_configured() {
+    let err = MultiAuthProvider::new()
+        .validate_request(&any_bearer_parts() as &dyn RequestParts)
+        .await
+        .expect_err("expected an error");
+    assert_eq!(
+        err.to_string(),
+        "authentication failed with all providers: none configured"
     );
 }
 

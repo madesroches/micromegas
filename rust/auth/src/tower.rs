@@ -5,6 +5,7 @@
 //! validates them using an AuthProvider, and injects the AuthContext into request extensions.
 
 use crate::client_ip::resolve_client_ip;
+use crate::log_sanitize::warn_auth_rejection;
 use crate::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
@@ -156,7 +157,7 @@ where
                             debug!("authentication failed: {e}");
                             Status::unavailable("auth provider unavailable")
                         } else {
-                            warn!("authentication failed: {e}");
+                            warn_auth_rejection("authentication failed:", &request_parts, &e);
                             Status::unauthenticated("invalid token")
                         };
                         Err(Box::new(status) as Box<dyn std::error::Error + Send + Sync>)

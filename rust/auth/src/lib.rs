@@ -112,6 +112,9 @@ pub mod tower;
 /// Axum middleware for HTTP authentication
 pub mod axum;
 
+/// Sanitizing of caller-controlled text for log lines, and the shared auth-rejection log line
+pub mod log_sanitize;
+
 /// URL validation utilities for authentication flows
 pub mod url_validation;
 

@@ -8,6 +8,7 @@
 //!    when a provider's backing store is unreachable
 
 use crate::client_ip::resolve_client_ip;
+use crate::log_sanitize::warn_auth_rejection;
 use crate::types::{AuthProvider, HttpRequestParts, ProviderUnavailable, RequestParts};
 use axum::{
     extract::Request,
@@ -43,6 +44,19 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
+    authenticate(auth_provider.as_ref(), &mut req).await?;
+    Ok(next.run(req).await)
+}
+
+/// Validates `req`, logs a rejection, strips the spoofable `x-auth-*` headers and inserts the
+/// `AuthContext` on success.
+///
+/// `auth_middleware` is this plus running the next layer. Callers that need the rejected request
+/// back (to inspect it before responding) compose this directly.
+pub async fn authenticate(
+    auth_provider: &dyn AuthProvider,
+    req: &mut Request,
+) -> Result<(), AuthError> {
     // Resolved before building `HttpRequestParts`: axum's `ConnectInfo<SocketAddr>` extension is
     // already on `req` for every service that enables it, same as `get_client_ip`'s existing
     // HTTP callers rely on.
@@ -65,7 +79,7 @@ pub async fn auth_middleware(
                 debug!("[auth_failure] {e}");
                 AuthError::Unavailable
             } else {
-                warn!("[auth_failure] {e}");
+                warn_auth_rejection("[auth_failure]", &parts, &e);
                 AuthError::InvalidToken
             }
         })?;
@@ -91,8 +105,7 @@ pub async fn auth_middleware(
     // Inject auth context into request extensions for downstream handlers
     req.extensions_mut().insert(auth_ctx);
 
-    // Continue to next middleware/handler
-    Ok(next.run(req).await)
+    Ok(())
 }
 
 /// Authentication errors for HTTP responses
