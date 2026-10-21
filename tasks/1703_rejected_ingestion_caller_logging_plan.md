@@ -35,9 +35,11 @@ the client learns nothing new.
     (`oidc.rs:381-544`).
   - `Unknown issuer` echoes an unverified, attacker-chosen JWT claim, so reasons themselves need
     sanitizing before they reach a log line.
-- Three more rejection sites log the same bare error:
+- Four more rejection sites log the same bare error:
   - `rust/public/src/servers/firehose_common.rs:127` `warn!("[firehose auth_failure] {e}")`.
   - `rust/auth/src/tower.rs:159` (gRPC / flight-sql) `warn!("authentication failed: {e}")`.
+  - `rust/public/src/servers/tonic_auth_interceptor.rs:32` (`check_auth`, exported for embedders)
+    `warn!("authentication failed: {e}")`.
   - `rust/analytics-web-srv/src/auth/handlers.rs:397` (`auth_me`) and `:514`
     (`cookie_auth_middleware`) `warn!("[auth_failure] {e}")`. Out of scope: they're web-app login,
     not ingestion, and `CookieTokenRequestParts` carries no caller network details to log.
@@ -133,10 +135,11 @@ warn!(
 - It never reads `authorization_header()`, `bearer_token()`, or any header but `user-agent`, so
   the token has no path into the line. Only the path is logged, never the query string, which
   matches the `/auth/*` redaction rule in `axum_utils.rs:16`.
-- Three call sites switch to it, each keeping its current prefix:
+- Four call sites switch to it, each keeping its current prefix:
   - `auth_middleware` (`"[auth_failure]"`)
   - `firehose_auth_middleware` (`"[firehose auth_failure]"`)
   - `tower.rs` AuthService (`"authentication failed:"`)
+  - `tonic_auth_interceptor.rs` `check_auth` (`"authentication failed:"`)
 
   For gRPC, `method`/`path` are empty because `GrpcRequestParts` has neither; client IP and the
   gRPC user-agent still identify the caller.
@@ -275,7 +278,8 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    (`rust/auth/src/multi.rs:83`).
 4. **`authenticate`.** Factor it out of `auth_middleware` (`rust/auth/src/axum.rs`) and switch its
    rejection branch to `warn_auth_rejection`. Do the same for `firehose_auth_middleware`
-   (`rust/public/src/servers/firehose_common.rs:127`) and `tower.rs:159`.
+   (`rust/public/src/servers/firehose_common.rs:127`), `tower.rs:159`, and `check_auth`
+   (`rust/public/src/servers/tonic_auth_interceptor.rs:32`).
 5. **Test log collector.** Add `collect_logs(&InMemorySink) -> Vec<CapturedLog { msg: String,
    properties: Vec<(String, String)> }>` to `rust/tracing/src/test_utils.rs`. It calls
    `flush_log_buffer()` first, since blocks only reach the sink once flushed. The message
@@ -313,7 +317,7 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
   `log_sanitize_tests.rs` (new)
 - `rust/tracing/src/test_utils.rs`
 - `rust/public/src/servers/ingestion_auth.rs` (new), `servers/mod.rs`, `servers/ingestion.rs`,
-  `servers/firehose_common.rs`
+  `servers/firehose_common.rs`, `servers/tonic_auth_interceptor.rs`
 - `rust/public/Cargo.toml` (optional deps, tokio `test-util` dev feature, `[[test]]` entry)
 - `rust/public/tests/ingestion_auth_tests.rs` (new), `read_policy_threading_tests.rs`,
   `firehose_tests.rs`
