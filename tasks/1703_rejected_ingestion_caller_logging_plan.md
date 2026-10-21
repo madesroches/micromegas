@@ -354,6 +354,10 @@ that gains log capture (`axum_tests`, `tower_tests`, `firehose_tests`, `ingestio
 every test that can emit logs is `#[serial]`, and assertions select their line by a unique marker
 such as the `X-Forwarded-For` IP.
 
+Every `ingestion_auth_tests` test except the `missing_content_length` one sets `Content-Length`
+explicitly, since `oneshot` bypasses hyper and adds no headers; for the streaming
+`read_error`/`read_timeout` bodies the declared length is ≤ 64 KiB.
+
 `rust/auth/tests/log_sanitize_tests.rs`:
 - CR/LF/ESC and bidi overrides are replaced.
 - Truncation never splits a multi-byte character and appends `…`.
