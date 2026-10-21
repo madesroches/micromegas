@@ -94,10 +94,6 @@ The auth middleware and the ingestion body logger both use it.
   - `MultiAuthProvider` → `"multi"`
   - `MembershipProvider` → `self.inner.name()`
   - every test double → its own label
-
-  It's required rather than defaulted, so the compiler lists every implementation, embedders'
-  included (see `CLAUDE.md` Interface stability); an `"unknown"` default would hide unnamed
-  providers in the reasons forever.
 - `MultiAuthProvider::validate_request` collects `"{name}: {reason}"` for each rejection, where
   `reason` is `sanitize_for_log(&format!("{e:#}"), 160)`. Truncating each reason separately means
   one huge `Unknown issuer: …` can't push the others off the line. The final error becomes:
@@ -109,8 +105,7 @@ The auth middleware and the ingestion body logger both use it.
   The existing prefix stays, so saved searches on it keep matching. An empty chain bails with
   `authentication failed with all providers: none configured`. The per-provider
   `debug!("partial auth failed")` stays. `ProviderUnavailable` still wins over plain rejections,
-  unchanged. The error stays `anyhow`, because no caller branches on the reasons (`rust/CLAUDE.md`
-  anyhow-vs-thiserror rule).
+  unchanged.
 
 ### 3. Enriched rejection log line (auth crate)
 
@@ -126,7 +121,7 @@ It emits:
 warn!(
     client_ip = %ip_or_empty,
     method = %method_or_empty,
-    path = %sanitized_path,          // RequestParts::uri() is already path-only for HTTP
+    path = %sanitized_path,          // RequestParts::uri() is already path-only for HTTP, 256 chars
     user_agent = %sanitized_ua,      // get_header("user-agent"), 256 chars
     "{prefix} {reason}"              // reason = sanitize_for_log(&format!("{err}"), 1024)
 );
@@ -258,14 +253,11 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
 
 ### Security / privacy
 
-- Every `claimed_*` value is attacker-controlled. The `claimed_` prefix says so in the data
-  itself, not just in docs.
 - `claimed_username` / `claimed_computer` are PII of the same kind already stored in `processes`.
   They go only to the ingestion service's own log stream, which should have the same access
   controls as process metadata. The docs say so.
 - Extra cost falls only on rejected `insert_process` requests, capped at 64 KiB, 2 s, and one
-  10k-entry cache. Waiting up to 2 s on a slow body delays only a 401 that would otherwise be
-  sent at once. The authenticated route already reads up to 100 MiB with no timeout.
+  10k-entry cache.
 
 ## Implementation Steps
 
@@ -420,6 +412,10 @@ explicitly, since `oneshot` bypasses hyper and adds no headers; for the streamin
 `firehose_tests.rs`: `wrong_access_key_is_rejected_with_firehose_error_shape` gains in-memory log
 capture via `collect_logs`, `#[serial]`, `set_max_level`, and an `X-Forwarded-For` header, and
 asserts the `client_ip` property.
+
+`ingestion_auth_tests.rs` also gains a `#[serial]` test that calls `check_auth` with a rejecting stub
+provider and `x-forwarded-for` / `user-agent` metadata, and asserts the `client_ip` and `user_agent`
+properties on the `authentication failed:` line.
 
 No live-DB tests. Nothing here fixes a bug seen in the wild that only a live DB reproduces.
 
