@@ -31,7 +31,7 @@ This file documents the historical progress of the Micromegas project. For curre
   unchanged. `object-cache-srv`'s rejection line gains the same properties, with an unprefixed
   reason. The Rust telemetry sink now sends `User-Agent: micromegas-telemetry-sink/<version>`.
   **Minor breaking change:** `AuthProvider` gains a required `name()`.
-  `micromegas_auth::axum::authenticate` and `micromegas_auth::log_sanitize` are new.
+  `micromegas_auth::axum::authenticate` and `micromegas_auth::log_sanitize` are new (#1703).
 
 ## v0.32.0 - 2026-10-20
 
