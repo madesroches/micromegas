@@ -273,10 +273,12 @@ request ─► observability_middleware ─► ingestion_auth_middleware ──o
    rejection branch to `warn_auth_rejection`. Do the same for `firehose_auth_middleware`
    (`rust/public/src/servers/firehose_common.rs:127`) and `tower.rs:159`.
 5. **Test log collector.** Add `collect_logs(&InMemorySink) -> Vec<CapturedLog { msg: String,
-   properties: Vec<(String, String)> }>` to `rust/tracing/src/test_utils.rs`. The message
-   comes from `desc.fmt_str` for static events (`LogStaticStrEvent`, `TaggedLogStaticStrEvent`)
-   and from the string payload for string events; template events are not covered. Dynamic
-   properties are resolved the way `property_macro_tests.rs:180-230` does, via
+   properties: Vec<(String, String)> }>` to `rust/tracing/src/test_utils.rs`. It calls
+   `flush_log_buffer()` first, since blocks only reach the sink once flushed. The message
+   comes from `desc.fmt_str` for `LogStaticStrEvent` and `TaggedLogStaticStrEvent`, and from
+   `msg` for `LogStringEvent` and `TaggedLogString` (the type of every `warn_auth_rejection`
+   line); template events are not covered. Dynamic properties of both tagged types are
+   resolved the way `property_macro_tests.rs:180-230` does, via
    `block.dyn_deps.set_properties`. The auth and public tests share it, so
    neither crate grows another copy.
 6. **Ingestion layer.** Add `rust/public/src/servers/ingestion_auth.rs` (`INSERT_PROCESS_PATH`,
