@@ -10,7 +10,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 authlib = "^1.6.7"
-certifi = "^2025.4.26"
+certifi = ">=2026.10.19"
 giturlparse = "^0.12.0"
 grpcio = "^1.69.0"
 numpy = "^2.2.6"

@@ -20,7 +20,7 @@
     "reveal.js-mermaid-plugin": "11.6.0"
   },
   "devDependencies": {
-    "vite": "^7.3.5"
+    "vite": "^7.3.7"
   },
   "resolutions": {
     "dompurify": "^3.4.16",
