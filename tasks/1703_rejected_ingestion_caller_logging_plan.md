@@ -78,8 +78,8 @@ pub fn sanitize_for_log(value: &str, max_chars: usize) -> String
 - Replaces every `char::is_control()` character (CR, LF, TAB, ESC, …) and every bidi
   override/isolate (U+202A–U+202E, U+2066–U+2069) with `?`, so one log line can't pretend to be
   two and terminal-rendered logs can't be visually reordered.
-- Truncates to `max_chars` *characters* (never splitting a code point) and appends `…` when it
-  truncates.
+- When the input exceeds `max_chars` characters, truncates to `max_chars - 1` *characters*
+  (never splitting a code point) and appends `…`, so the output is never longer than `max_chars`.
 
 The auth middleware and the ingestion body logger both use it.
 
@@ -396,7 +396,7 @@ explicitly, since `oneshot` bypasses hyper and adds no headers; for the streamin
 - A valid CBOR `ProcessInfo` (encoded with `ciborium` from a real `ProcessInfo`) → the claims line
   has every `claimed_*` field. `command-line` / `exe_args` values appear in no property.
 - Log-injection payloads (`exe` with `\n[auth_success] …`, bidi chars, 10 KB `username`) → the
-  values come out sanitized and ≤128 chars, and only one log event is produced.
+  values come out sanitized and ≤128 chars, and exactly one claims line is produced (the injected text creates no extra line).
 - Missing `Content-Length` → the `not inspected` line with `missing_content_length`, and the
   body isn't read.
 - `Content-Length` > 64 KiB → `oversize`.
