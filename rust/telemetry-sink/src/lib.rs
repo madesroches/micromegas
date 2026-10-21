@@ -97,6 +97,18 @@ mod native {
     /// an unparseable value fails `build()`.
     pub const LOCAL_SINK_MAX_LEVEL_ENV_VAR: &str = "MICROMEGAS_LOCAL_SINK_MAX_LEVEL";
 
+    /// Environment variable enabling CPU tracing (thread span streams) when set to
+    /// `true`. Read once by [`TelemetryGuardBuilder::build`]. Precedence is
+    /// *[`TelemetryGuardBuilder::with_cpu_tracing_enabled`] > this variable >
+    /// disabled*.
+    pub const ENABLE_CPU_TRACING_ENV_VAR: &str = "MICROMEGAS_ENABLE_CPU_TRACING";
+
+    /// Resolves whether CPU tracing is enabled: the explicit builder value,
+    /// else `env_value == "true"`, else `false`.
+    pub fn resolve_cpu_tracing_enabled(explicit: Option<bool>, env_value: Option<&str>) -> bool {
+        explicit.unwrap_or_else(|| env_value == Some("true"))
+    }
+
     /// Environment variable capping the HTTP telemetry sink's max level.
     /// Read once by [`TelemetryGuardBuilder::build`]. Precedence is
     /// *[`TelemetryGuardBuilder::with_telemetry_sink_max_level`] > this
@@ -178,6 +190,7 @@ mod native {
         install_tracing_capture: bool,
         local_sink_enabled: bool,
         local_sink_max_level: Option<LevelFilter>,
+        cpu_tracing_enabled: Option<bool>,
         telemetry_sink_url: Option<String>,
         telemetry_sink_max_level: Option<LevelFilter>,
         telemetry_max_queue_bytes: Option<usize>,
@@ -201,6 +214,7 @@ mod native {
                 threads_buffer_size: 10 * 1024 * 1024,
                 local_sink_enabled: true,
                 local_sink_max_level: None,
+                cpu_tracing_enabled: None,
                 telemetry_sink_url: None,
                 telemetry_sink_max_level: None,
                 telemetry_max_queue_bytes: None,
@@ -278,6 +292,18 @@ mod native {
         #[must_use]
         pub fn with_local_sink_max_level(mut self, level_filter: LevelFilter) -> Self {
             self.local_sink_max_level = Some(level_filter);
+            self
+        }
+
+        /// Enables or disables CPU tracing (thread span streams, which async span
+        /// events also flow through). Pins the value in code, so
+        /// [`ENABLE_CPU_TRACING_ENV_VAR`] no longer applies. Falls back to that
+        /// variable, then disabled. `#[micromegas_main]` decides about tokio
+        /// runtime callbacks from the variable alone, so use this option with a
+        /// manually built guard.
+        #[must_use]
+        pub fn with_cpu_tracing_enabled(mut self, enabled: bool) -> Self {
+            self.cpu_tracing_enabled = Some(enabled);
             self
         }
 
@@ -663,9 +689,10 @@ mod native {
                         self.threads_buffer_size,
                         sink.into(),
                         self.process_properties,
-                        std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
-                            .map(|v| v == "true")
-                            .unwrap_or(false), // Default to disabled for minimal overhead
+                        resolve_cpu_tracing_enabled(
+                            self.cpu_tracing_enabled,
+                            std::env::var(ENABLE_CPU_TRACING_ENV_VAR).ok().as_deref(),
+                        ),
                     )?);
 
                     if self.system_metrics_enabled {
