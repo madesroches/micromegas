@@ -483,13 +483,13 @@ ingestion-key mint/revoke goes through it.
 **This is a v0.31.0 upgrade requirement, not an option.** As of v0.31.0,
 ingestion and flight-sql no longer read `MICROMEGAS_API_KEYS` (or its
 per-role/prefixed forms) at all — only `ingestion_api_keys` /
-`analytics_api_keys` and OIDC authenticate a caller. A still-set variable logs
-a `warn!` naming it, but does not stop startup or restore the old behavior.
+`analytics_api_keys` and OIDC authenticate a caller. A still-set variable is
+ignored silently: it does not stop startup or restore the old behavior.
 
 **The consequence of skipping this migration depends on what else is
 configured:** with OIDC also configured, the service starts normally and
-every keyring token silently stops authenticating — the `warn!` line is the
-only signal. Without OIDC and with an empty `ingestion_api_keys` /
+every keyring token silently stops authenticating, with no log line to flag
+it. Without OIDC and with an empty `ingestion_api_keys` /
 `analytics_api_keys` table, the service refuses to start at all (the
 pre-existing "no auth providers configured" bail), since an env-only keyring
 no longer counts as configured auth.
@@ -527,8 +527,8 @@ presenting the old ones.
      distinct keys, one per table** — mint one from each page and configure
      each client with whichever half it actually needs.
 3. **Unset `MICROMEGAS_API_KEYS`** (and prefixed variants) on ingestion and
-   flight-sql once the tables are populated; leaving it set logs a warning
-   and changes nothing, since neither service reads it anymore. A non-empty
+   flight-sql once the tables are populated; leaving it set changes
+   nothing, since neither service reads it anymore. A non-empty
    key store counts as "auth configured" on its own, so both services keep
    serving without OIDC — including a key-only flight-sql deployment (see
    [Grafana Authentication](../grafana/authentication.md)). `object-cache-srv`

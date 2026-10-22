@@ -6,9 +6,7 @@
 use crate::db_api_key::{
     ApiKeyTable, DbApiKeyAuthProvider, DbApiKeyConfig, key_store_has_live_rows,
 };
-use crate::env::{
-    resolve_prefixed_var, warn_removed_api_key_vars, warn_removed_audience_grant_vars,
-};
+use crate::env::resolve_prefixed_var;
 use crate::groups::{DbGroupsConfig, DbGroupsSource};
 use crate::membership::MembershipProvider;
 use crate::multi::MultiAuthProvider;
@@ -69,9 +67,6 @@ impl ProviderBuilder {
     /// Takes `&self` rather than `self` so `build()` can still reach the
     /// attached key store's pool for its existence query afterwards.
     async fn compose(&self) -> Result<(MultiAuthProvider, bool)> {
-        warn_removed_api_key_vars();
-        warn_removed_audience_grant_vars();
-
         let oidc_config_var = self.oidc_config_var();
 
         let mut multi = MultiAuthProvider::new();
