@@ -218,7 +218,7 @@ follow `groups.rs`'s structure:
 
 | Route | Behavior |
 |---|---|
-| `GET {base}/api/settings` | Returns one entry per `SETTINGS` item: `{key, kind, env_var, default, description, value \| null, updated_at \| null, updated_by \| null}`. Reads the table directly, not through the cache, so the page shows what was just written. |
+| `GET {base}/api/settings` | Returns one entry per `SETTINGS` item: `{key, kind, env_var, default, description, value \| null, updated_at \| null, updated_by \| null}`. Reads the table directly, not through the cache, so the page shows what was just written. The handler is split so the step that turns `SETTINGS` plus `(key, value, updated_at, updated_by)` rows into the response entries is a pure `pub` function; the handler only runs the query and calls it. |
 | `PUT {base}/api/settings/{key}` with body `{value}` | Rejects an unknown key with 404 and a failed `validate` with 400. Otherwise, in one transaction: `SELECT value … FOR UPDATE` (the previous value), then `INSERT … ON CONFLICT (key) DO UPDATE`, writing `updated_by` as the caller's identity (email if present, else subject) via a `caller_identity(&ValidatedUser)` copy in `settings.rs`, as `groups.rs` does. Returns the new entry. |
 | `DELETE {base}/api/settings/{key}` | Runs `DELETE FROM settings WHERE key = $1 RETURNING value`, so the key reverts to env or default. The returned value is the audit `previous_value`; no returned row is the 404 case. |
 
@@ -252,7 +252,8 @@ follow `groups.rs`'s structure:
   button that opens a `ConfirmDialog`. After every write the page re-fetches the list instead of
   patching it locally.
 - `AdminPage.tsx`: adds a "Settings" card with `adminOnly: true`. `router.tsx` adds the
-  `/admin/settings` route.
+  `/admin/settings` route. `components/layout/AppShell.tsx` adds `/admin/settings` to
+  `ADMIN_ONLY_PATHS`, so the Sidebar does not mount for non-admins.
 
 ## Mockups
 
@@ -296,7 +297,7 @@ follow `groups.rs`'s structure:
 - `rust/public/tests/read_policy_threading_tests.rs`, `rust/public/tests/settings_tests.rs` (new)
 - `rust/analytics-web-srv/src/web_server.rs`, `ingestion_keys.rs`, `audience_grants.rs`, `mutation_audit.rs`, `settings.rs` (new), `lib.rs`
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `audience_grants_tests.rs`, `routing_tests.rs`, `mutation_audit_tests.rs`, `settings_tests.rs` (new)
-- `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, plus tests under `__tests__`
+- `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, `src/components/layout/AppShell.tsx`, plus tests under `__tests__`
 - `mkdocs/docs/admin/authorization.md`, `flight-sql.md`, `monolith.md`, `web-app.md`, `control-plane-audit-log.md`, `api-keys.md`
 - the `functions-reference.md` and `query-guide/python-api.md` pages and the `web_client.py:105` docstring that mention `MICROMEGAS_SELF_SERVICE_*` / `MICROMEGAS_PUBLIC_VIEW_SETS` (reword "MICROMEGAS_SELF_SERVICE_MINT is on" to "the `self_service_mint` setting is on")
 - `CHANGELOG.md`
@@ -408,7 +409,7 @@ and the `with_overrides` seam.
     - A non-admin is rejected with 403 and a `"denied"` audit record.
     - An unknown key on PUT returns 404.
     - An invalid body returns 400 before any DB access (lazy pool).
-    - The GET response shape is built from `SETTINGS` plus canned rows.
+    - The GET response shape: call the pure `pub` entry-building function with `SETTINGS` plus canned rows.
   - `mutation_audit_tests.rs`: the new fields serialize, and are omitted when absent.
     PUT and DELETE on `/api/settings/self_service_mint` with `SettingsState { pool: None }`
     return 503 and emit one `set_setting` / `reset_setting` record with outcome "error" and
