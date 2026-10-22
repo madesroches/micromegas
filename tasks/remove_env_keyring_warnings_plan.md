@@ -10,7 +10,7 @@ The startup warnings for still-set `MICROMEGAS_API_KEYS`, `MICROMEGAS_INGESTION_
 - `rust/auth/src/default_provider.rs` imports both warn functions and calls them at the top of `compose()` (lines ~10, 72-73).
 - `rust/auth/tests/env_tests.rs` only tests `removed_vars_that_are_set`.
 - The module doc comment of `env.rs` does not mention the warnings, so it needs no change.
-- Docs that describe the warning: `mkdocs/docs/admin/api-keys.md` ("Migrating from the env keyring" section, which says a still-set variable "logs a `warn!`" and that "the `warn!` line is the only signal").
+- Docs that describe the warning: `mkdocs/docs/admin/api-keys.md` ("Migrating from the env keyring" section, which says a still-set variable "logs a `warn!`" and that "the `warn!` line is the only signal"), plus step 3 of the migration list ("leaving it set logs a warning and changes nothing").
 - `rust/auth/tests/default_provider_tests.rs` mentions the upgrade-shim warning in a comment near line 470.
 
 ## Design
@@ -19,9 +19,8 @@ Delete the three functions from `env.rs`, the import and two calls in `default_p
 ## Implementation Steps
 1. `rust/auth/src/env.rs`: remove `removed_vars_that_are_set`, `warn_removed_api_key_vars`, `warn_removed_audience_grant_vars`.
 2. `rust/auth/src/default_provider.rs`: drop the two functions from the `use crate::env::{...}` import (leaving `resolve_prefixed_var`) and remove the two calls in `compose()`.
-3. Delete `rust/auth/tests/env_tests.rs`. Drop `serial_test` from `rust/auth/Cargo.toml` only if no other test uses it (others do, so keep it).
-4. `rust/auth/tests/default_provider_tests.rs`: reword the comment near line 470 that refers to the warning, if it would otherwise be stale.
-5. `mkdocs/docs/admin/api-keys.md`: update "Migrating from the env keyring" to stop describing a `warn!` line; state that the variables are ignored silently and that skipping the migration leaves keyring tokens unauthenticated. Keep docs free of issue numbers.
+3. Delete `rust/auth/tests/env_tests.rs`.4. `rust/auth/tests/default_provider_tests.rs`: reword the comment near line 470 that refers to the warning, if it would otherwise be stale.
+5. `mkdocs/docs/admin/api-keys.md`: update "Migrating from the env keyring" to stop describing a `warn!` line (three places: the intro paragraph, the consequences paragraph, and migration step 3); state that the variables are ignored silently and that skipping the migration leaves keyring tokens unauthenticated. Keep docs free of issue numbers.
 6. `CHANGELOG.md`: add an Unreleased entry (with `#1698`) saying the startup warnings were removed and that the variables are now ignored silently. **Minor breaking change:** `micromegas_auth::env::removed_vars_that_are_set` is removed.
 
 ## Files to Modify
