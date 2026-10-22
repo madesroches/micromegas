@@ -243,7 +243,6 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
   `cursor.drag.dist`, and `TimeSeriesChart` setting `rowIndex`
 - `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` — renderer state and publish, editor section
 - `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` — `rowIndex` coverage and updated `toEqual` assertions
-- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx` — chart child selection wiring
 - `analytics-web-app/src/components/__tests__/xychart-selection.test.ts` — **new**
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/ChartCell.test.tsx` — **new**
 - `mkdocs/docs/web-app/notebooks/cell-types.md`, `mkdocs/docs/web-app/notebooks/variables.md`
@@ -287,7 +286,7 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
 - `mkdocs/docs/web-app/notebooks/variables.md`:
   - macro table (line 46): reword to "the selected row in an upstream cell"
   - "Row Selection" section (line 116): scope the radio-button sentence to table cells, and add that
-    chart and map cells select by clicking a mark (flame graph and swimlane already publish too)
+    chart and map cells select by clicking a mark
 - `CHANGELOG.md` → Unreleased: `* **Notebooks:** Chart cells support \`selectionMode: 'single'\` … (#1717)`.
   This is an additive config option, not a breaking change.
 
@@ -323,9 +322,6 @@ Every unit test below runs without a DB.
   - editor: click the "Row Selection" header to expand it first (`RowSelectionEditor` starts
     collapsed when the mode is `'none'`), then toggling it on a v1 config writes a v2 config with
     `options.selectionMode: 'single'`
-- `HorizontalGroupCell.test.tsx`: with a prop-capturing renderer (`__test-utils__/cell-registry-mock.ts`
-  doesn't expose selection props), a chart child with `selectionMode: 'single'` receives
-  `selectionMode`, and calling its `onSelectionChange(row)` reaches `updateCellSelection(child.name, row)`.
 
 The uPlot wiring (the canvas `each` callback, DOM mouse events on `u.over`, `posToIdx`/`valToPos`,
 and the draw hook) needs real canvas layout, which jsdom does not provide. If it breaks, the next
