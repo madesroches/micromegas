@@ -293,11 +293,16 @@ impl FlightSqlServerBuilder {
         // from.
         let lake_pool_for_keys = lakehouse.lake().db_pool.clone();
 
+        let warn_on_shadowed_env = self.isolation_config.is_none()
+            && (self.auth_provider.is_some() || self.use_default_auth);
         let settings = Arc::new(resolve_settings(
             self.isolation_config,
             env_fallbacks,
             &lake_pool_for_keys,
         )?);
+        if warn_on_shadowed_env {
+            settings.warn_on_shadowed_env().await;
+        }
 
         let session_configurator: Arc<dyn SessionConfigurator> =
             if let Some(cfg) = self.session_configurator {
