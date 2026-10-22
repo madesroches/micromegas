@@ -219,7 +219,7 @@ follow `groups.rs`'s structure:
 | Route | Behavior |
 |---|---|
 | `GET {base}/api/settings` | Returns one entry per `SETTINGS` item: `{key, kind, env_var, default, description, value \| null, updated_at \| null, updated_by \| null}`. Reads the table directly, not through the cache, so the page shows what was just written. |
-| `PUT {base}/api/settings/{key}` with body `{value}` | Rejects an unknown key with 404 and a failed `validate` with 400. Otherwise, in one transaction: `SELECT value … FOR UPDATE` (the previous value), then `INSERT … ON CONFLICT (key) DO UPDATE`. Returns the new entry. |
+| `PUT {base}/api/settings/{key}` with body `{value}` | Rejects an unknown key with 404 and a failed `validate` with 400. Otherwise, in one transaction: `SELECT value … FOR UPDATE` (the previous value), then `INSERT … ON CONFLICT (key) DO UPDATE`, writing `updated_by` as the caller's identity (email if present, else subject) via a `caller_identity(&ValidatedUser)` copy in `settings.rs`, as `groups.rs` does. Returns the new entry. |
 | `DELETE {base}/api/settings/{key}` | Runs `DELETE FROM settings WHERE key = $1 RETURNING value`, so the key reverts to env or default. The returned value is the audit `previous_value`; no returned row is the 404 case. |
 
 - **State:** a `SettingsState { pool: Option<PgPool> }` added to `AdminRoutesState` (and to the
