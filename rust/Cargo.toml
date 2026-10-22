@@ -83,6 +83,7 @@ quote = "1.0"
 rand = "0.9"
 raw-cpuid = "11.3.0"
 redis = { version = "1.6", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 reqwest = { version = "0.13", default-features = false, features = ["charset", "form", "http2", "json", "rustls", "stream", "system-proxy"] }
 rsa = "0.9.10"
 rustc-hash = "2.1"

@@ -5339,6 +5339,7 @@ dependencies = [
  "clap",
  "micromegas",
  "redis",
+ "rustls",
  "tikv-jemallocator",
  "tokio",
 ]
