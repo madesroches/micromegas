@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useEffect, useState } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -8,7 +8,10 @@ import type {
 import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from '@/components/chart-constants'
 import { XYChart, ScaleMode, ChartType, ReferenceLine } from '@/components/XYChart'
-import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
+import type { ChartPointHit } from '@/components/xychart-selection'
+import { RowSelectionEditor } from '@/components/RowSelectionEditor'
+import { useLatestRef } from '@/hooks/useLatestRef'
+import { extractChartData, extractMultiSeriesChartData, rowValues } from '@/lib/arrow-utils'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
@@ -146,7 +149,7 @@ function resolveReferenceLine(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect, cellResults, cellSelections }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect, cellResults, cellSelections, selectionMode, onSelectionChange }: CellRendererProps) {
   // Detect multi-series: more than one table in the data array
   const isMultiSeries = data.length > 1
 
@@ -157,13 +160,17 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     return extractChartData(table)
   }, [data, isMultiSeries])
 
+  // Query metadata (set by getRendererProps) is rebuilt on every parent render, so memos key on its serialized form.
+  const queryMeta = (options as Record<string, unknown>)?._queryMeta as
+    { unit?: string; label?: string; color?: string }[] | undefined
+  const queryMetaKey = JSON.stringify(queryMeta ?? [])
+
   // Multi-series result: build from data tables + options
   const multiResult = useMemo(() => {
     if (!isMultiSeries || data.length === 0) return null
 
-    // Get query metadata from options (set by getRendererProps)
-    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string; color?: string }[] | undefined
+    const queryMeta = JSON.parse(queryMetaKey) as
+      { unit?: string; label?: string; color?: string }[]
 
     const tableInputs = data.map((table, i) => ({
       table,
@@ -172,7 +179,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     }))
 
     return extractMultiSeriesChartData(tableInputs)
-  }, [data, isMultiSeries, options])
+  }, [data, isMultiSeries, queryMetaKey])
 
   // Substitute macros in options
   const resolvedOptions = useMemo(
@@ -206,6 +213,47 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     [options, onOptionsChange]
   )
 
+  const [selected, setSelected] = useState<ChartPointHit | null>(null)
+
+  // Cleared during render so XYChart never sees a stale selection against new data.
+  const [dataForSelection, setDataForSelection] = useState(data)
+  if (dataForSelection !== data) {
+    setDataForSelection(data)
+    setSelected(null)
+  }
+
+  // onSelectionChange is an inline arrow in NotebookRenderer; a ref keeps it out of effect deps.
+  const onSelectionChangeRef = useLatestRef(onSelectionChange)
+
+  // Published after commit: calling it during render would update a parent while rendering.
+  useEffect(() => {
+    onSelectionChangeRef.current?.(null)
+  }, [data, onSelectionChangeRef])
+
+  const handlePointSelect = useCallback(
+    (hit: ChartPointHit | null) => {
+      setSelected(hit)
+      onSelectionChangeRef.current?.(hit ? rowValues(data[hit.seriesIndex], hit.rowIndex) : null)
+    },
+    [data, onSelectionChangeRef]
+  )
+
+  // Memoized so a selection click keeps XYChart's series identity and avoids rebuilding uPlot.
+  const resolvedSeriesMetaKey = multiResult && multiResult.ok
+    ? JSON.stringify(multiResult.series.map((s, i) => ({
+        label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
+        unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
+        color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
+      })))
+    : null
+  const resolvedSeries = useMemo<ChartSeriesData[] | null>(() => {
+    if (!multiResult || !multiResult.ok || resolvedSeriesMetaKey === null) return null
+    const meta = JSON.parse(resolvedSeriesMetaKey) as { label: string; unit: string; color: string }[]
+    return multiResult.series.map((s, i) => ({ ...s, ...meta[i] }))
+  }, [multiResult, resolvedSeriesMetaKey])
+
+  const selectable = selectionMode === 'single'
+
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center h-[200px]">
@@ -232,22 +280,10 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
       )
     }
 
-    // Get query metadata for per-series colors and labels
-    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string; color?: string }[] | undefined
-
-    // Resolve macros in per-series units and labels, and inject series colors
-    const resolvedSeries: ChartSeriesData[] = multiResult.series.map((s, i) => ({
-      ...s,
-      label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
-      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
-      color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
-    }))
-
     return (
       <div className="h-full">
         <XYChart
-          series={resolvedSeries}
+          series={resolvedSeries ?? []}
           xAxisMode={multiResult.xAxisMode}
           xLabels={multiResult.xLabels}
           xColumnName={multiResult.xColumnName}
@@ -257,6 +293,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
           onChartTypeChange={handleChartTypeChange}
           onTimeRangeSelect={onTimeRangeSelect}
           referenceLines={resolvedReferenceLines}
+          onPointSelect={selectable ? handlePointSelect : undefined}
+          selectedPoint={selectable ? selected : null}
         />
       </div>
     )
@@ -309,6 +347,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
         color={chartColor}
         onTimeRangeSelect={onTimeRangeSelect}
         referenceLines={resolvedReferenceLines}
+        onPointSelect={selectable ? handlePointSelect : undefined}
+        selectedPoint={selectable ? selected : null}
       />
     </div>
   )
@@ -578,6 +618,12 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
           </button>
         </div>
       </div>
+
+      <RowSelectionEditor
+        selectionMode={(v2.options?.selectionMode as 'none' | 'single' | undefined) ?? 'none'}
+        cellName={v2.name}
+        onChange={(mode) => updateConfig({ options: { ...v2.options, selectionMode: mode } })}
+      />
 
       {validationErrors.length > 0 && (
         <div className="text-red-400 text-sm space-y-1">

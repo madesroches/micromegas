@@ -43,7 +43,7 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 | Macro | Description |
 |-------|-------------|
 | `$cellName[N].column` | Replaced with a value from an upstream cell's result table (row N, named column) |
-| `$cellName.selected.column` | Replaced with a value from the selected row in an upstream table cell |
+| `$cellName.selected.column` | Replaced with a value from the selected row in an upstream cell |
 | `$variableName` | Replaced with the variable's value |
 | `$variableName.column` | Replaced with a specific column from a multi-column variable |
 | `$from` | Start of the current time range (ISO 8601 timestamp) |
@@ -113,9 +113,9 @@ LIMIT 100
 
 ### Row Selection
 
-Table cells support interactive row selection. When enabled (via the **Row Selection** section in the cell editor), a radio-button column appears in the table. Clicking a row selects it, and its values become available to downstream cells via `$cellName.selected.column` macros.
+Table, chart, and map cells support interactive selection. For table and chart cells, selection is enabled via the **Row Selection** section in the cell editor; a radio-button column appears in table cells and clicking a row selects it, and chart cells select by clicking a mark (a bar or a point). Map cells have no Row Selection section and always publish the clicked marker. The selected row's values become available to downstream cells via `$cellName.selected.column` macros.
 
-- **Selection mode** is configured in the cell editor: None (default) or Single.
+- **Selection mode** (table and chart cells) is configured in the cell editor: None (default) or Single.
 - **Selection state** is ephemeral (like pagination) — it resets when the cell re-executes.
 - **Waiting for selection**: when a downstream cell references `$cell.selected.column` but no row is selected yet, the cell shows a "waiting for selection" placeholder instead of executing.
 - The Available Variables panel shows `$cellName.selected.column` entries for cells with selection enabled.

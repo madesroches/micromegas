@@ -13,6 +13,24 @@ import type { ChartSeriesData, ChartPoint } from '@/lib/arrow-utils'
 
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from './chart-constants'
 import { buildXAxisConfig, buildXScale, buildYAxisConfig } from './xychart-axis'
+import {
+  type BarRect,
+  type ChartPointHit,
+  CLICK_THRESHOLD,
+  POINT_HIT_RADIUS,
+  DIM_FILL,
+  DIM_STROKE,
+  DIM_LINE,
+  DIM_POINT,
+  hitTestBars,
+  findNearestPoint,
+  isClick,
+  nextSelection,
+  resolveSelection,
+  fadeCss,
+  fadeStops,
+  barColors,
+} from './xychart-selection'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -90,6 +108,39 @@ export function normalizeGradientStops(
   return deduped
 }
 
+type GradientStops = { x: number; color: string }[]
+
+function horizontalGradient(u: uPlot, stops: GradientStops, fallback: string): string | CanvasGradient {
+  const { left, width } = u.bbox
+  if (width <= 0) return fallback
+  const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
+  const normalized = normalizeGradientStops(u, stops)
+  if (normalized.length === 0) return fallback
+  for (const stop of normalized) {
+    g.addColorStop(stop.x, stop.color)
+  }
+  return g
+}
+
+type ActiveSelection = (u: uPlot) => { seriesIndex: number; dataIdx: number } | null
+
+// While a selection exists the points fade, so the selected one (drawn by the selection plugin)
+// stands out. With none, `fill: null` keeps uPlot's default point fill.
+function selectionPoints(seriesIndex: number, color: string, gradStops: GradientStops | null, activeSelection: ActiveSelection): uPlot.Series.Points {
+  const style = (u: uPlot, factor: number): string | CanvasGradient =>
+    gradStops
+      ? horizontalGradient(u, factor === 1 ? gradStops : fadeStops(gradStops, factor), color)
+      : fadeCss(color, factor)
+  // Other series are dimmed by series.alpha alone; fading their points too would compound.
+  const owns = (u: uPlot) => activeSelection(u)?.seriesIndex === seriesIndex
+  return {
+    show: true,
+    stroke: (u: uPlot) => style(u, owns(u) ? DIM_POINT : 1),
+    // uPlot accepts null at runtime but its typings do not
+    fill: (u: uPlot) => (owns(u) ? style(u, DIM_POINT) : (null as unknown as string)),
+  }
+}
+
 interface XYChartProps {
   data?: ChartPoint[] // categorical: x is index into xLabels
   xAxisMode: XAxisMode // required, determined by extractChartData
@@ -110,6 +161,9 @@ interface XYChartProps {
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
   referenceLines?: ReferenceLine[]
+  /** When set, clicking a bar/point reports it; clicking empty space reports null. */
+  onPointSelect?: (hit: ChartPointHit | null) => void
+  selectedPoint?: ChartPointHit | null
 }
 
 // Format X value based on axis mode
@@ -174,6 +228,8 @@ export function XYChart({
   onWidthChange,
   onAxisBoundsChange,
   referenceLines,
+  onPointSelect,
+  selectedPoint,
 }: XYChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
@@ -186,10 +242,17 @@ export function XYChart({
   // Use refs for callbacks to avoid chart recreation when callbacks change
   const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
   const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
+  const onPointSelectRef = useRef(onPointSelect)
   useLayoutEffect(() => {
     onTimeRangeSelectRef.current = onTimeRangeSelect
     onAxisBoundsChangeRef.current = onAxisBoundsChange
+    onPointSelectRef.current = onPointSelect
   })
+
+  // Selection state read at draw/event time so a selection change never rebuilds the chart.
+  const selectedRef = useRef<ChartPointHit | null>(selectedPoint ?? null)
+  const selectionDataRef = useRef<{ rowIndex: (number | null)[][]; color: string[][] }>({ rowIndex: [], color: [] })
+  const barRectsRef = useRef<BarRect[]>([])
 
   // Reference line plugin state (updated without recreating chart)
   const refLineStateRef = useRef<{
@@ -354,6 +417,149 @@ export function XYChart({
       chartRef.current.redraw(false)
     }
   }, [referenceLines])
+
+  // Redraw with rebuilt paths so the bar `disp` color callbacks run again
+  useEffect(() => {
+    selectedRef.current = selectedPoint ?? null
+    chartRef.current?.redraw(true)
+  }, [selectedPoint])
+
+  // A selection whose series is hidden dims nothing.
+  const activeSelection = useCallback<ActiveSelection>((u) => {
+    const sel = resolveSelection(selectedRef.current, selectionDataRef.current.rowIndex)
+    if (!sel || u.series[sel.seriesIndex + 1]?.show === false) return null
+    return sel
+  }, [])
+
+  const makeBarPaths = useCallback(
+    (seriesIndex: number, size: number, align: number | undefined, baseFill: string[], baseStroke: string[]): uPlot.Series.PathBuilder => {
+      const colors = (base: string[], factor: number) => (u: uPlot) => {
+        const sel = activeSelection(u)
+        return barColors(base, sel?.dataIdx ?? null, seriesIndex, sel?.seriesIndex ?? null, factor)
+      }
+      const bars = uPlot.paths.bars!({
+        size: [size],
+        gap: 1,
+        ...(align !== undefined ? { align: align as never } : {}),
+        each: (_u, sIdx, dIdx, l, t, w, h) => {
+          barRectsRef.current.push({ seriesIndex: sIdx - 1, dataIdx: dIdx, left: l, top: t, width: w, height: h })
+        },
+        disp: {
+          fill: { unit: 3 as never, kind: 2 as never, values: colors(baseFill, DIM_FILL) },
+          stroke: { unit: 3 as never, kind: 2 as never, values: colors(baseStroke, DIM_STROKE) },
+        },
+      })
+      // uPlot reuses cached paths on redraw(false), which would not refill the rects, so a series'
+      // rects are reset exactly when its paths are rebuilt.
+      return (u, si, i0, i1) => {
+        barRectsRef.current = barRectsRef.current.filter((r) => r.seriesIndex !== seriesIndex)
+        return bars(u, si, i0, i1)
+      }
+    },
+    [activeSelection],
+  )
+
+  const createSelectionPlugin = useCallback(
+    (kind: ChartType): uPlot.Plugin => {
+      const hitAt = (u: uPlot): ChartPointHit | null => {
+        const { left, top } = u.cursor
+        if (left == null || top == null || left < 0 || top < 0) return null
+        const rowIndex = selectionDataRef.current.rowIndex
+
+        if (kind === 'bar') {
+          const rects = barRectsRef.current.filter((r) => u.series[r.seriesIndex + 1]?.show !== false)
+          const hit = hitTestBars(rects, u.bbox.left + left * devicePixelRatio, u.bbox.top + top * devicePixelRatio)
+          if (!hit) return null
+          const row = rowIndex[hit.seriesIndex]?.[hit.dataIdx]
+          return row == null ? null : { seriesIndex: hit.seriesIndex, rowIndex: row }
+        }
+
+        const xs = u.data[0] as number[]
+        if (xs.length === 0) return null
+        const i0 = Math.max(0, u.valToIdx(u.posToVal(left - POINT_HIT_RADIUS, 'x')))
+        const i1 = Math.min(xs.length - 1, u.valToIdx(u.posToVal(left + POINT_HIT_RADIUS, 'x')))
+        const candidates: { px: number; py: number; seriesIndex: number; dataIdx: number }[] = []
+        for (let si = 1; si < u.series.length; si++) {
+          const series = u.series[si]
+          if (!series.show) continue
+          const ys = u.data[si] as (number | null)[]
+          for (let idx = i0; idx <= i1; idx++) {
+            const y = ys[idx]
+            if (y == null) continue
+            candidates.push({
+              px: u.valToPos(xs[idx], 'x'),
+              py: u.valToPos(y, series.scale ?? 'y'),
+              seriesIndex: si - 1,
+              dataIdx: idx,
+            })
+          }
+        }
+        const nearest = findNearestPoint(candidates, left, top, POINT_HIT_RADIUS)
+        if (!nearest) return null
+        const row = rowIndex[nearest.seriesIndex]?.[nearest.dataIdx]
+        return row == null ? null : { seriesIndex: nearest.seriesIndex, rowIndex: row }
+      }
+
+      let down: { x: number; y: number } | null = null
+
+      return {
+        hooks: {
+          init: (u: uPlot) => {
+            u.over.addEventListener('mousedown', (e) => {
+              down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null
+            })
+            u.over.addEventListener('mouseup', (e) => {
+              const start = down
+              down = null
+              const onSelect = onPointSelectRef.current
+              if (!start || e.button !== 0 || !onSelect) return
+              if (!isClick(start, { x: e.clientX, y: e.clientY })) return
+              onSelect(nextSelection(selectedRef.current, hitAt(u)))
+            })
+          },
+          setCursor: (u: uPlot) => {
+            if (!onPointSelectRef.current) {
+              if (u.over.style.cursor) u.over.style.cursor = ''
+              return
+            }
+            u.over.style.cursor = hitAt(u) ? 'pointer' : ''
+          },
+          drawClear: (u: uPlot) => {
+            if (kind !== 'line') return
+            const sel = activeSelection(u)
+            for (let si = 1; si < u.series.length; si++) {
+              u.series[si].alpha = sel && si - 1 !== sel.seriesIndex ? DIM_LINE : 1
+            }
+          },
+          draw: (u: uPlot) => {
+            if (kind !== 'line') return
+            const sel = activeSelection(u)
+            if (!sel) return
+            const x = u.data[0][sel.dataIdx]
+            const y = u.data[sel.seriesIndex + 1][sel.dataIdx]
+            if (x == null || y == null) return
+            const series = u.series[sel.seriesIndex + 1]
+            const color = selectionDataRef.current.color[sel.seriesIndex]?.[sel.dataIdx]
+            if (!color) return
+
+            const ctx = u.ctx
+            const { left, top, width, height } = u.bbox
+            ctx.save()
+            ctx.beginPath()
+            ctx.rect(left, top, width, height)
+            ctx.clip()
+            ctx.globalAlpha = 1
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.arc(u.valToPos(x, 'x', true), u.valToPos(y, series.scale ?? 'y', true), 6 * devicePixelRatio, 0, 2 * Math.PI)
+            ctx.fill()
+            ctx.restore()
+          },
+        },
+      }
+    },
+    [activeSelection],
+  )
 
   // Reference line draw plugin — reads from ref so chart is not recreated on line edits
   const createReferenceLinePlugin = useCallback((): uPlot.Plugin => {
@@ -618,6 +824,8 @@ export function XYChart({
     const { axis: xAxisConfig, rightPadding } = buildXAxisConfig(xAxisMode, xLabels)
 
     const refLinePlugin = createReferenceLinePlugin()
+    const selectionPlugin = createSelectionPlugin(chartType)
+    barRectsRef.current = []
 
     if (isMultiSeries && normalizedSeries.length > 1) {
       // ===================== MULTI-SERIES PATH =====================
@@ -643,15 +851,28 @@ export function XYChart({
       const xIndex = new Map<number, number>()
       unionX.forEach((v, i) => xIndex.set(v, i))
 
-      for (const s of normalizedSeries) {
+      const rowIndexBySeries: (number | null)[][] = []
+      const markColorBySeries: string[][] = []
+
+      normalizedSeries.forEach((s, si) => {
+        const seriesColor = s.color ?? SERIES_COLORS[si % SERIES_COLORS.length]
         const yArr: (number | null)[] = new Array(unionX.length).fill(null)
+        const rowArr: (number | null)[] = new Array(unionX.length).fill(null)
+        const colorArr: string[] = new Array(unionX.length).fill(seriesColor)
         for (const d of s.data) {
           const xVal = xAxisMode === 'time' ? d.x / 1000 : d.x
           const idx = xIndex.get(xVal)
-          if (idx != null) yArr[idx] = d.y
+          if (idx != null) {
+            yArr[idx] = d.y
+            rowArr[idx] = d.rowIndex
+            colorArr[idx] = d.color ?? seriesColor
+          }
         }
         uPlotData.push(yArr)
-      }
+        rowIndexBySeries.push(rowArr)
+        markColorBySeries.push(colorArr)
+      })
+      selectionDataRef.current = { rowIndex: rowIndexBySeries, color: markColorBySeries }
 
       // Build color arrays aligned to union-X for each series (bar disp)
       // and gradient stop lists (line)
@@ -772,43 +993,23 @@ export function XYChart({
           stroke: color,
           width: chartType === 'bar' ? 1 : 2,
           fill: chartType === 'bar' ? hexToRgba(color, 0.6) : hexToRgba(color, 0.1),
-          points: { show: chartType !== 'bar' },
+          points: chartType === 'bar' ? { show: false } : selectionPoints(i, color, gradStops, activeSelection),
           show: seriesVisibility ? seriesVisibility[i] : true,
           spanGaps: chartType === 'line',
         }
 
         if (chartType === 'bar') {
-          if (fillArr && strokeArr) {
-            seriesEntry.paths = uPlot.paths.bars!({
-              size: [0.8 / normalizedSeries.length],
-              gap: 1,
-              align: i as never,
-              disp: {
-                fill: { unit: 3 as never, kind: 2 as never, values: () => fillArr },
-                stroke: { unit: 3 as never, kind: 2 as never, values: () => strokeArr },
-              },
-            })
-          } else {
-            seriesEntry.paths = uPlot.paths.bars!({
-              size: [0.8 / normalizedSeries.length],
-              gap: 1,
-              align: i as never,
-            })
-          }
+          seriesEntry.paths = makeBarPaths(
+            i,
+            0.8 / normalizedSeries.length,
+            i,
+            fillArr ?? new Array(unionX.length).fill(hexToRgba(color, 0.6)),
+            strokeArr ?? new Array(unionX.length).fill(color),
+          )
         } else if (gradStops) {
           // Line mode with per-row colors: gradient stroke
           const capturedStops = gradStops
-          seriesEntry.stroke = (u: uPlot) => {
-            const { left, width } = u.bbox
-            if (width <= 0) return color
-            const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
-            const stops = normalizeGradientStops(u, capturedStops)
-            if (stops.length === 0) return color
-            for (const stop of stops) {
-              g.addColorStop(stop.x, stop.color)
-            }
-            return g
-          }
+          seriesEntry.stroke = (u: uPlot) => horizontalGradient(u, capturedStops, color)
           seriesEntry.fill = (u: uPlot) => {
             const { left, width } = u.bbox
             if (width <= 0) return hexToRgba(color, 0.1)
@@ -834,7 +1035,7 @@ export function XYChart({
       const opts: uPlot.Options = {
         width: dimensions.width,
         height: dimensions.height,
-        plugins: [createMultiSeriesTooltipPlugin(seriesInfoForTooltip, xAxisMode, xLabels), refLinePlugin],
+        plugins: [createMultiSeriesTooltipPlugin(seriesInfoForTooltip, xAxisMode, xLabels), refLinePlugin, selectionPlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
         padding: [null, rightPadding, null, null],
         scales,
@@ -848,6 +1049,7 @@ export function XYChart({
             x: xAxisMode === 'time',
             y: false,
             setScale: false,
+            dist: CLICK_THRESHOLD,
           },
         },
         hooks: {
@@ -907,6 +1109,10 @@ export function XYChart({
         ? singleData.map((d) => d.x / 1000)
         : singleData.map((d) => d.x)
       const yValues = singleData.map((d) => d.y * conversionFactor)
+      selectionDataRef.current = {
+        rowIndex: [singleData.map((d) => d.rowIndex)],
+        color: [singleData.map((d) => d.color ?? seriesColor)],
+      }
 
       const displayP99 = stats.p99 * conversionFactor
       const displayMax = stats.max * conversionFactor
@@ -937,32 +1143,17 @@ export function XYChart({
       let seriesPaths: uPlot.Series['paths'] = undefined
 
       if (chartType === 'bar') {
-        if (fillArr && strokeArr) {
-          seriesPaths = uPlot.paths.bars!({
-            size: [0.8],
-            gap: 1,
-            disp: {
-              fill: { unit: 3 as never, kind: 2 as never, values: () => fillArr },
-              stroke: { unit: 3 as never, kind: 2 as never, values: () => strokeArr },
-            },
-          })
-        } else {
-          seriesPaths = uPlot.paths.bars!({ size: [0.8], gap: 1 })
-        }
+        seriesPaths = makeBarPaths(
+          0,
+          0.8,
+          undefined,
+          fillArr ?? new Array(singleData.length).fill(hexToRgba(seriesColor, 0.6)),
+          strokeArr ?? new Array(singleData.length).fill(seriesColor),
+        )
       } else if (gradStops) {
         // Line with per-row gradient
         const capturedStops = gradStops
-        seriesStroke = (u: uPlot) => {
-          const { left, width } = u.bbox
-          if (width <= 0) return seriesColor
-          const g = u.ctx.createLinearGradient(left, 0, left + width, 0)
-          const stops = normalizeGradientStops(u, capturedStops)
-          if (stops.length === 0) return seriesColor
-          for (const stop of stops) {
-            g.addColorStop(stop.x, stop.color)
-          }
-          return g
-        }
+        seriesStroke = (u: uPlot) => horizontalGradient(u, capturedStops, seriesColor)
         seriesFill = (u: uPlot) => {
           const { left, width } = u.bbox
           if (width <= 0) return hexToRgba(seriesColor, 0.1)
@@ -983,7 +1174,7 @@ export function XYChart({
       const opts: uPlot.Options = {
         width: dimensions.width,
         height: dimensions.height,
-        plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels), refLinePlugin],
+        plugins: [createTooltipPlugin(primaryUnit, conversionFactor, xAxisMode, xLabels), refLinePlugin, selectionPlugin],
         tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
         padding: [null, rightPadding, null, null],
         scales: {
@@ -1013,7 +1204,7 @@ export function XYChart({
             width: chartType === 'bar' ? 1 : 2,
             fill: seriesFill,
             paths: seriesPaths,
-            points: { show: chartType !== 'bar' },
+            points: chartType === 'bar' ? { show: false } : selectionPoints(0, seriesColor, gradStops, activeSelection),
           },
         ],
         cursor: {
@@ -1024,6 +1215,7 @@ export function XYChart({
             x: xAxisMode === 'time',
             y: false,
             setScale: false,
+            dist: CLICK_THRESHOLD,
           },
         },
         hooks: {
@@ -1075,7 +1267,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, createReferenceLinePlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, adaptiveBitUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility, colorProp])
+  }, [data, normalizedSeries, title, unit, primaryUnit, createTooltipPlugin, createMultiSeriesTooltipPlugin, createReferenceLinePlugin, createSelectionPlugin, makeBarPaths, activeSelection, stats, adaptiveTimeUnit, adaptiveSizeUnit, adaptiveBitUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName, isMultiSeries, unitScaleInfo, seriesVisibility, colorProp])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {
@@ -1262,7 +1454,7 @@ export function TimeSeriesChart({
   onAxisBoundsChange,
 }: TimeSeriesChartProps) {
   // Convert time/value format to x/y format
-  const xyData = useMemo(() => data.map((d) => ({ x: d.time, y: d.value })), [data])
+  const xyData = useMemo(() => data.map((d, i) => ({ x: d.time, y: d.value, rowIndex: i })), [data])
 
   return (
     <XYChart
