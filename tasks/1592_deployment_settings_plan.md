@@ -214,8 +214,9 @@ impl SettingsSource {
   `Some`, and `env_only` otherwise.
 - Every read site listed under Current State calls `state.settings.self_service().await`, but only
   on the non-admin branch (admins bypass these knobs via `!caller.is_admin()` and must not 503 on
-  a settings outage). `MintGate` and the `mint_key` handler each read it; `try_claim_and_mint`
-  (`ingestion_keys.rs:598`) receives the value as a parameter instead of reading it.
+  a settings outage). `MintGate` reads it, and `mint_key` reads it inside its existing `!caller.is_admin()` block
+  (`ingestion_keys.rs:688`); `try_claim_and_mint` takes no settings parameter, so the admin path
+  passes nothing.
 - Error mapping: a settings error maps to `IngestionKeyError::Unavailable` (the DB-outage variant,
   since `NotConfigured` would mislead). `AudienceGrantError` gains a matching `Unavailable` (503)
   variant, and `GrantGate` emits the gate `"error"` audit (`emit_gate_outcome("error", ...)`) for
@@ -397,7 +398,9 @@ and the `with_overrides` seam.
 - `isolation_config_fail_fast_tests.rs`: still fails at build time on a malformed
   `MICROMEGAS_PUBLIC_VIEW_SETS`, now on every auth branch (pins #1561).
 - Harness test (in `read_policy_threading_tests.rs`, mirroring `provider_unavailable_maps_to_status_unavailable`, `:368`): build the
-  service with a DB-backed source over the existing `connect_lazy` pool and an `AuthContext`
+  service with a read policy that resolves successfully (`AudienceReadPolicy::new(AudienceGrants::empty())`,
+  so the read-policy step does not produce the `Unavailable`) and a DB-backed source over
+  `dedicated_key_store_pool(&pool)` (2 s acquire timeout, as in production) with an `AuthContext`
   present; the cold load fails, so the request returns `Code::Unavailable`. A/B value semantics
   (overrides A then B give different `public_view_sets`) are tested directly on the source's
   `isolation_config()`.
