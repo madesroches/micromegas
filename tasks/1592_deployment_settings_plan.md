@@ -110,7 +110,9 @@ pub struct SettingSpec {
     pub description: &'static str,
 }
 
-pub const SETTINGS: &[SettingSpec] = &[ /* the five entries */ ];
+pub const SETTINGS: &[SettingSpec] = &[ /* the five entries, keyed: public_view_sets, self_service_mint,
+   self_service_max_claims_per_caller, self_service_max_keys_per_caller,
+   self_service_max_grants_per_caller */ ];
 
 impl SettingSpec {
     pub fn validate(&self, value: &serde_json::Value) -> anyhow::Result<()>;
