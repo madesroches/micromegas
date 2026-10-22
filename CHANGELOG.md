@@ -5,6 +5,7 @@ This file documents the historical progress of the Micromegas project. For curre
 ## Unreleased
 
 * **Tracing:** `TelemetryGuardBuilder::with_cpu_tracing_enabled(bool)` enables CPU tracing (thread span streams, which async spans flow through) in code, without mutating the process environment (#1705). It takes precedence over `MICROMEGAS_ENABLE_CPU_TRACING`, which remains the fallback; the new `ENABLE_CPU_TRACING_ENV_VAR` constant names it. `#[micromegas_main]` still reads only the variable to decide about tokio runtime callbacks.
+* **Security:** Bump `vitest` and `@vitest/coverage-v8` to 4.1.12 in the web app, resolving the `@vitest/mocker` Dependabot alerts.
 * **Security:** Resolve open Dependabot alerts: bump `vite` to 8.1.6+ / 7.3.7+ across the web app, welcome page and doc projects (`launch-editor` advisories), `certifi` to 2026.10.19 in the Python client, and `github.com/klauspost/compress` to 1.18.7 in the Grafana plugin.
 * **Tracing:** `TracingCaptureLayer` now records `tracing` spans as async spans (#1704). A span's
   lifetime, from creation to close, becomes a begin and end event pair carrying a span id, the
