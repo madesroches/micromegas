@@ -8,15 +8,15 @@ HEAD commit sha, with `-dirty` appended if the worktree has uncommitted changes)
 `org.opencontainers.image.revision=<full-sha>[-dirty]`.
 
 Usage:
-    python build_docker_images.py                         # Build all services (amd64)
-    python build_docker_images.py ingestion flight-sql    # Build specific services
-    python build_docker_images.py --push                  # Build and push amd64 images to Docker Hub
-    python build_docker_images.py --push ingestion        # Build and push specific service
-    python build_docker_images.py --arm64                 # Build arm64 locally (cross-compiled, no push)
-    python build_docker_images.py --arm64 --push          # Build and push arm64 images to Docker Hub
-    python build_docker_images.py --all-arches            # Build both amd64 and arm64 locally
-    python build_docker_images.py --all-arches --push     # Build and push both amd64 and arm64 (release)
-    python build_docker_images.py --list                  # List available services
+    python build/build_docker_images.py                         # Build all services (amd64)
+    python build/build_docker_images.py ingestion flight-sql    # Build specific services
+    python build/build_docker_images.py --push                  # Build and push amd64 images to Docker Hub
+    python build/build_docker_images.py --push ingestion        # Build and push specific service
+    python build/build_docker_images.py --arm64                 # Build arm64 locally (cross-compiled, no push)
+    python build/build_docker_images.py --arm64 --push          # Build and push arm64 images to Docker Hub
+    python build/build_docker_images.py --all-arches            # Build both amd64 and arm64 locally
+    python build/build_docker_images.py --all-arches --push     # Build and push both amd64 and arm64 (release)
+    python build/build_docker_images.py --list                  # List available services
 """
 
 import argparse
@@ -329,7 +329,11 @@ def main():
         print("\nFailed:")
         for r in failed:
             arch = "arm64" if r["arm64"] else "amd64"
-            reason = "not built" if not r["built"] else "not pushed"
+            if not r["built"]:
+                # buildx builds and pushes arm64 in one command, so the two can't be told apart.
+                reason = "build/push failed" if r["arm64"] and args.push else "not built"
+            else:
+                reason = "not pushed"
             print(f"  {r['service']} ({arch}): {reason}")
         print("\nRe-run only the failed images:")
         print(rerun_command(failed, args))

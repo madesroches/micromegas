@@ -275,6 +275,18 @@ class TestMainExitCode:
         )
         assert out.rstrip().endswith("FAILED: 1 image(s)")
 
+    def test_arm64_push_failure_says_build_push_failed(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["build_docker_images.py", "--arm64", "--push", "ingestion"])
+        monkeypatch.setattr("build_docker_images.get_revision", lambda: FULL_SHA)
+        monkeypatch.setattr(
+            "build_docker_images.build_image",
+            lambda service, version, revision, push, arm64: result(
+                service, arm64=arm64, built=False
+            ),
+        )
+        assert main() == 1
+        assert "ingestion (arm64): build/push failed" in capsys.readouterr().out
+
     def test_success_exits_zero(self, monkeypatch):
         code = self.run_main(
             monkeypatch, ["--push", "--version", "1.2.3", "ingestion"], pushed=True
