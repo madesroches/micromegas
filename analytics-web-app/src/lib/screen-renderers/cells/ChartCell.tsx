@@ -234,6 +234,19 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     [data, onSelectionChangeRef]
   )
 
+  // Memoized so a selection click keeps XYChart's series identity and avoids rebuilding uPlot.
+  const resolvedSeries = useMemo<ChartSeriesData[] | null>(() => {
+    if (!multiResult || !multiResult.ok) return null
+    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
+      { unit?: string; label?: string; color?: string }[] | undefined
+    return multiResult.series.map((s, i) => ({
+      ...s,
+      label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
+      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
+      color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
+    }))
+  }, [multiResult, options, variables, timeRange, cellResults, cellSelections])
+
   const selectable = selectionMode === 'single'
 
   if (status === 'loading') {
@@ -262,22 +275,10 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
       )
     }
 
-    // Get query metadata for per-series colors and labels
-    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string; color?: string }[] | undefined
-
-    // Resolve macros in per-series units and labels, and inject series colors
-    const resolvedSeries: ChartSeriesData[] = multiResult.series.map((s, i) => ({
-      ...s,
-      label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
-      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
-      color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
-    }))
-
     return (
       <div className="h-full">
         <XYChart
-          series={resolvedSeries}
+          series={resolvedSeries ?? []}
           xAxisMode={multiResult.xAxisMode}
           xLabels={multiResult.xLabels}
           xColumnName={multiResult.xColumnName}
