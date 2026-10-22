@@ -264,7 +264,7 @@ follow `groups.rs`'s structure:
 
 ## Mockups
 
-- `tasks/1592_deployment_settings_mockups/settings-page.html`: the settings page with grouped
+- `tasks/completed/1592_deployment_settings_mockups/settings-page.html`: the settings page with grouped
   tables, source pills and the list-editor dialog open.
 
 ## Implementation Steps
