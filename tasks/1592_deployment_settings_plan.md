@@ -204,8 +204,9 @@ impl SettingsSource {
 - Every read site listed under Current State calls `state.settings.self_service().await`, but only
   on the non-admin branch (admins bypass these knobs via `!caller.is_admin()` and must not 503 on
   a settings outage). `MintGate` reads it, and `mint_key` calls it inside its existing `!caller.is_admin()` block
-  (`ingestion_keys.rs:440`) once, before `pool.begin()`, and passes the resolved
-  `SelfServiceSettings` into `try_claim_and_mint` instead of reading inside its transaction (the
+  (`ingestion_keys.rs:440`) once, before `pool.begin()`, and passes it into
+  `try_claim_and_mint` as an `Option<SelfServiceSettings>` (`Some` for non-admins, `None` for admins,
+  whose claim-count check is skipped) instead of reading inside its transaction (the
   2-connection `analytics_keys_pool` could be exhausted while the advisory lock is held).
 - Error mapping: a settings error maps to `IngestionKeyError::Unavailable` (the DB-outage variant,
   since `NotConfigured` would mislead). `AudienceGrantError` gains a matching `Unavailable` (503)
