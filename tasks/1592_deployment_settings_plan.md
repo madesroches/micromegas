@@ -403,8 +403,6 @@ and the `with_overrides` seam.
   pass an explicit `EnvFallbacks` to `with_overrides`.
 - `rust/analytics-web-srv/tests/`:
   - The existing self-service gate tests are ported to `with_overrides`.
-  - A new case shows that one state with overrides off returns 403, and with overrides on lets the
-    caller through (per-request read).
   - `settings_tests.rs`:
     - A non-admin is rejected with 403 and a `"denied"` audit record.
     - An unknown key on PUT returns 404.
