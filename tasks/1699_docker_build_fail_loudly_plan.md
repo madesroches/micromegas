@@ -36,8 +36,6 @@ re-run incremental).
   `Re-run only the failed images:` heading, and returns 1.
 - Summary header on failure is a clear `FAILED: N image(s)` line placed at the end of the output
   so it is the last thing on screen.
-- Unknown-service early return in `build_image` keeps `built=False`, so it is counted as failed;
-  `main` already validates names up front so this is unreachable in practice.
 
 ## Implementation Steps
 1. Add `arm64` to the `build_image` result dict.
@@ -66,6 +64,6 @@ No-Docker unit tests (monkeypatched `run_command`, as existing tests do):
   pushed) → included only when `push=True`; not flagged without push.
 - `rerun_command`: amd64-only, arm64-only, mixed arches (two lines), `--push` carried over,
   `--version` carried over only when given.
-- `build_image` result carries the `arm64` flag.
+- Existing `build_image` tests also assert the `arm64` key in the result (including one arm64 case).
 - `main` exit code: with `build_image` monkeypatched, a push-failure result yields exit 1 and the
   output contains the re-run command; an all-success run yields 0.
