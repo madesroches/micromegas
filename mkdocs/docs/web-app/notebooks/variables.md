@@ -43,7 +43,7 @@ SQL queries, markdown content, and chart unit labels all support macro substitut
 | Macro | Description |
 |-------|-------------|
 | `$cellName[N].column` | Replaced with a value from an upstream cell's result table (row N, named column) |
-| `$cellName.selected.column` | Replaced with a value from the selected row in an upstream table cell |
+| `$cellName.selected.column` | Replaced with a value from the selected row in an upstream cell |
 | `$variableName` | Replaced with the variable's value |
 | `$variableName.column` | Replaced with a specific column from a multi-column variable |
 | `$from` | Start of the current time range (ISO 8601 timestamp) |
@@ -113,7 +113,7 @@ LIMIT 100
 
 ### Row Selection
 
-Table cells support interactive row selection. When enabled (via the **Row Selection** section in the cell editor), a radio-button column appears in the table. Clicking a row selects it, and its values become available to downstream cells via `$cellName.selected.column` macros.
+Table, chart, and map cells support interactive selection. When enabled (via the **Row Selection** section in the cell editor), a radio-button column appears in table cells and clicking a row selects it. Chart and map cells select by clicking a mark (a bar, a point, or a map marker). The selected row's values become available to downstream cells via `$cellName.selected.column` macros.
 
 - **Selection mode** is configured in the cell editor: None (default) or Single.
 - **Selection state** is ephemeral (like pagination) — it resets when the cell re-executes.

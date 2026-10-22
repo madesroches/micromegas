@@ -208,6 +208,8 @@ export function detectXAxisMode(dataType: DataType): XAxisMode {
 export interface ChartPoint {
   x: number
   y: number
+  /** Arrow row this point was built from; sorting and null-skipping break positional mapping. */
+  rowIndex: number
   /** CSS color decoded from the SQL `color` column, if present. */
   color?: string
 }
@@ -472,7 +474,7 @@ export function extractMultiSeriesChartData(
         if (xVal == null || yVal == null) continue
         const yNum = Number(yVal)
         if (!Number.isFinite(yNum)) continue
-        data.push({ x: 0, y: yNum }) // placeholder x; rebuilt below
+        data.push({ x: 0, y: yNum, rowIndex: r }) // placeholder x; rebuilt below
       }
     } else {
       for (let r = 0; r < table.numRows; r++) {
@@ -490,7 +492,7 @@ export function extractMultiSeriesChartData(
         const yNum = Number(yVal)
         if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
-        const point: ChartPoint = { x: xNum, y: yNum }
+        const point: ChartPoint = { x: xNum, y: yNum, rowIndex: r }
         if (v.colorColumnName && v.colorColumnKind) {
           const colorVal = row[v.colorColumnName]
           if (colorVal != null) {
@@ -555,7 +557,7 @@ export function extractMultiSeriesChartData(
         const idx = labelMap.get(str)
         if (idx == null) continue
 
-        const point: ChartPoint = { x: idx, y: yNum }
+        const point: ChartPoint = { x: idx, y: yNum, rowIndex: r }
         if (v.colorColumnName && v.colorColumnKind) {
           const colorVal = row[v.colorColumnName]
           if (colorVal != null) {
@@ -623,7 +625,7 @@ export function extractChartData(table: Table):
         xLabels.push(str)
       }
 
-      const point: ChartPoint = { x: labelMap.get(str)!, y: yNum }
+      const point: ChartPoint = { x: labelMap.get(str)!, y: yNum, rowIndex: i }
       if (colorColumnName && colorColumnKind) {
         const colorVal = row[colorColumnName]
         if (colorVal != null) {
@@ -664,7 +666,7 @@ export function extractChartData(table: Table):
 
       if (!Number.isFinite(xNum) || !Number.isFinite(yNum)) continue
 
-      const point: ChartPoint = { x: xNum, y: yNum }
+      const point: ChartPoint = { x: xNum, y: yNum, rowIndex: i }
       if (colorColumnName && colorColumnKind) {
         const colorVal = row[colorColumnName]
         if (colorVal != null) {

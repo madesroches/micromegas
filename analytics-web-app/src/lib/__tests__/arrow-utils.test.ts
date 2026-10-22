@@ -596,9 +596,9 @@ describe('extractChartData', () => {
         expect(result.xColumnName).toBe('x')
         expect(result.yColumnName).toBe('y')
         expect(result.data).toEqual([
-          { x: 1, y: 10 },
-          { x: 2, y: 20 },
-          { x: 3, y: 30 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 2, y: 20, rowIndex: 1 },
+          { x: 3, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -619,9 +619,9 @@ describe('extractChartData', () => {
       expect(result.ok).toBe(true)
       if (result.ok) {
         expect(result.data).toEqual([
-          { x: 1, y: 10 },
-          { x: 2, y: 20 },
-          { x: 3, y: 30 },
+          { x: 1, y: 10, rowIndex: 1 },
+          { x: 2, y: 20, rowIndex: 2 },
+          { x: 3, y: 30, rowIndex: 0 },
         ])
       }
     })
@@ -699,8 +699,8 @@ describe('extractChartData', () => {
       expect(result.ok).toBe(true)
       if (result.ok) {
         expect(result.data).toEqual([
-          { x: 1, y: 10 },
-          { x: 4, y: 40 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 4, y: 40, rowIndex: 3 },
         ])
       }
     })
@@ -721,8 +721,8 @@ describe('extractChartData', () => {
       expect(result.ok).toBe(true)
       if (result.ok) {
         expect(result.data).toEqual([
-          { x: 1, y: 10 },
-          { x: 3, y: 30 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 3, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -749,9 +749,9 @@ describe('extractChartData', () => {
         expect(result.yColumnName).toBe('value')
         // timestampToMs returns number values directly
         expect(result.data).toEqual([
-          { x: 1000, y: 10 },
-          { x: 2000, y: 20 },
-          { x: 3000, y: 30 },
+          { x: 1000, y: 10, rowIndex: 0 },
+          { x: 2000, y: 20, rowIndex: 1 },
+          { x: 3000, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -797,9 +797,9 @@ describe('extractChartData', () => {
         expect(result.xAxisMode).toBe('categorical')
         expect(result.xLabels).toEqual(['A', 'B', 'C'])
         expect(result.data).toEqual([
-          { x: 0, y: 10 },
-          { x: 1, y: 20 },
-          { x: 2, y: 30 },
+          { x: 0, y: 10, rowIndex: 0 },
+          { x: 1, y: 20, rowIndex: 1 },
+          { x: 2, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -822,9 +822,9 @@ describe('extractChartData', () => {
         // Labels should be in SQL order, not sorted
         expect(result.xLabels).toEqual(['C', 'A', 'B'])
         expect(result.data).toEqual([
-          { x: 0, y: 30 },
-          { x: 1, y: 10 },
-          { x: 2, y: 20 },
+          { x: 0, y: 30, rowIndex: 0 },
+          { x: 1, y: 10, rowIndex: 1 },
+          { x: 2, y: 20, rowIndex: 2 },
         ])
       }
     })
@@ -846,9 +846,9 @@ describe('extractChartData', () => {
       if (result.ok) {
         expect(result.xLabels).toEqual(['A', 'B'])
         expect(result.data).toEqual([
-          { x: 0, y: 10 },
-          { x: 0, y: 15 },
-          { x: 1, y: 20 },
+          { x: 0, y: 10, rowIndex: 0 },
+          { x: 0, y: 15, rowIndex: 1 },
+          { x: 1, y: 20, rowIndex: 2 },
         ])
       }
     })
@@ -871,8 +871,8 @@ describe('extractChartData', () => {
       if (result.ok) {
         expect(result.xLabels).toEqual(['A', 'D'])
         expect(result.data).toEqual([
-          { x: 0, y: 10 },
-          { x: 1, y: 40 },
+          { x: 0, y: 10, rowIndex: 0 },
+          { x: 1, y: 40, rowIndex: 3 },
         ])
       }
     })
@@ -1028,9 +1028,9 @@ describe('extractMultiSeriesChartData', () => {
         expect(result.xColumnName).toBe('x')
         expect(result.series).toHaveLength(1)
         expect(result.series[0].data).toEqual([
-          { x: 1, y: 10 },
-          { x: 2, y: 20 },
-          { x: 3, y: 30 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 2, y: 20, rowIndex: 1 },
+          { x: 3, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -1052,8 +1052,8 @@ describe('extractMultiSeriesChartData', () => {
       expect(result.ok).toBe(true)
       if (result.ok) {
         expect(result.series[0].data).toEqual([
-          { x: 1, y: 10 },
-          { x: 4, y: 40 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 4, y: 40, rowIndex: 3 },
         ])
       }
     })
@@ -1074,8 +1074,8 @@ describe('extractMultiSeriesChartData', () => {
       expect(result.ok).toBe(true)
       if (result.ok) {
         expect(result.series[0].data).toEqual([
-          { x: 1, y: 10 },
-          { x: 3, y: 30 },
+          { x: 1, y: 10, rowIndex: 0 },
+          { x: 3, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -1099,9 +1099,9 @@ describe('extractMultiSeriesChartData', () => {
       if (result.ok) {
         expect(result.xAxisMode).toBe('categorical')
         expect(result.series[0].data).toEqual([
-          { x: 0, y: 10 },
-          { x: 1, y: 20 },
-          { x: 2, y: 30 },
+          { x: 0, y: 10, rowIndex: 0 },
+          { x: 1, y: 20, rowIndex: 1 },
+          { x: 2, y: 30, rowIndex: 2 },
         ])
       }
     })
@@ -1127,8 +1127,36 @@ describe('extractMultiSeriesChartData', () => {
         // compacted to indices 0 and 1 — matching extractChartData.
         expect(result.xLabels).toEqual(['A', 'D'])
         expect(result.series[0].data).toEqual([
-          { x: 0, y: 10 },
-          { x: 1, y: 40 },
+          { x: 0, y: 10, rowIndex: 0 },
+          { x: 1, y: 40, rowIndex: 3 },
+        ])
+      }
+    })
+
+    it('should remap rowIndex per table in the second pass', () => {
+      const fields = [
+        { name: 'category', type: createUtf8Type() },
+        { name: 'count', type: createIntType() },
+      ]
+      const t1 = createMockTable(fields, [
+        { category: 'B', count: 1 },
+        { category: 'A', count: 2 },
+      ])
+      const t2 = createMockTable(fields, [
+        { category: 'C', count: 3 },
+        { category: 'B', count: null },
+        { category: 'A', count: 4 },
+      ])
+      const result = extractMultiSeriesChartData([{ table: t1 as never }, { table: t2 as never }])
+      expect(result.ok).toBe(true)
+      if (result.ok) {
+        expect(result.series[0].data).toEqual([
+          { x: 1, y: 1, rowIndex: 0 },
+          { x: 0, y: 2, rowIndex: 1 },
+        ])
+        expect(result.series[1].data).toEqual([
+          { x: 2, y: 3, rowIndex: 0 },
+          { x: 0, y: 4, rowIndex: 2 },
         ])
       }
     })

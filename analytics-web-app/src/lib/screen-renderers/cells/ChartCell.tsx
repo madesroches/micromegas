@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useEffect, useState } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -8,7 +8,10 @@ import type {
 import type { CellConfigBase, CellConfig, CellState, VariableValue } from '../notebook-types'
 import { SERIES_COLORS, DEFAULT_SERIES_COLOR, DEFAULT_REFERENCE_LINE_COLOR } from '@/components/chart-constants'
 import { XYChart, ScaleMode, ChartType, ReferenceLine } from '@/components/XYChart'
-import { extractChartData, extractMultiSeriesChartData } from '@/lib/arrow-utils'
+import type { ChartPointHit } from '@/components/xychart-selection'
+import { RowSelectionEditor } from '@/components/RowSelectionEditor'
+import { useLatestRef } from '@/hooks/useLatestRef'
+import { extractChartData, extractMultiSeriesChartData, rowValues } from '@/lib/arrow-utils'
 import type { ChartSeriesData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
@@ -146,7 +149,7 @@ function resolveReferenceLine(
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect, cellResults, cellSelections }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange, onTimeRangeSelect, cellResults, cellSelections, selectionMode, onSelectionChange }: CellRendererProps) {
   // Detect multi-series: more than one table in the data array
   const isMultiSeries = data.length > 1
 
@@ -206,6 +209,33 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     [options, onOptionsChange]
   )
 
+  const [selected, setSelected] = useState<ChartPointHit | null>(null)
+
+  // Cleared during render so XYChart never sees a stale selection against new data.
+  const [dataForSelection, setDataForSelection] = useState(data)
+  if (dataForSelection !== data) {
+    setDataForSelection(data)
+    setSelected(null)
+  }
+
+  // onSelectionChange is an inline arrow in NotebookRenderer; a ref keeps it out of effect deps.
+  const onSelectionChangeRef = useLatestRef(onSelectionChange)
+
+  // Published after commit: calling it during render would update a parent while rendering.
+  useEffect(() => {
+    onSelectionChangeRef.current?.(null)
+  }, [data, onSelectionChangeRef])
+
+  const handlePointSelect = useCallback(
+    (hit: ChartPointHit | null) => {
+      setSelected(hit)
+      onSelectionChangeRef.current?.(hit ? rowValues(data[hit.seriesIndex], hit.rowIndex) : null)
+    },
+    [data, onSelectionChangeRef]
+  )
+
+  const selectable = selectionMode === 'single'
+
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center h-[200px]">
@@ -257,6 +287,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
           onChartTypeChange={handleChartTypeChange}
           onTimeRangeSelect={onTimeRangeSelect}
           referenceLines={resolvedReferenceLines}
+          onPointSelect={selectable ? handlePointSelect : undefined}
+          selectedPoint={selectable ? selected : null}
         />
       </div>
     )
@@ -309,6 +341,8 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
         color={chartColor}
         onTimeRangeSelect={onTimeRangeSelect}
         referenceLines={resolvedReferenceLines}
+        onPointSelect={selectable ? handlePointSelect : undefined}
+        selectedPoint={selectable ? selected : null}
       />
     </div>
   )
@@ -578,6 +612,12 @@ function ChartCellEditor({ config, onChange, variables, timeRange, datasourceVar
           </button>
         </div>
       </div>
+
+      <RowSelectionEditor
+        selectionMode={(v2.options?.selectionMode as 'none' | 'single' | undefined) ?? 'none'}
+        cellName={v2.name}
+        onChange={(mode) => updateConfig({ options: { ...v2.options, selectionMode: mode } })}
+      />
 
       {validationErrors.length > 0 && (
         <div className="text-red-400 text-sm space-y-1">
