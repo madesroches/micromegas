@@ -12,6 +12,8 @@ reqwest/hyper/rustls stack instead of two.
   `reqwest = { version = "0.12.23", default-features = false, features = ["charset", "http2", "json", "macos-system-configuration", "rustls-tls"] }`.
 - Consumers (all `reqwest.workspace = true`): `rust/telemetry-sink`, `rust/auth`, `rust/object-cache`,
   and `rust/public` (dev-dependency, used by `tests/graceful_shutdown_tests.rs`).
+  `rust/analytics-web-srv` does not declare reqwest; it uses `.form()` (`src/auth/handlers.rs:160,275`) on
+  the reqwest 0.13 it receives via the `micromegas` re-export and feature unification, so it is affected by the feature list.
 - `telemetry-sink` re-exports reqwest (`src/lib.rs:82`, `pub use reqwest::*`) and exposes
   `reqwest::Request` in the public `RequestDecorator` trait, so the bump is visible to downstream crates.
 - `Cargo.lock` has `reqwest 0.12.28`, which is also pulled in transitively by `oauth2 5.0.0` and
@@ -20,16 +22,16 @@ reqwest/hyper/rustls stack instead of two.
 
 ## Design
 Change the workspace dependency only; the call sites use stable API (`Client`, `ClientBuilder`,
-`Request`, `RequestBuilder`, `header`, `redirect::Policy`, `StatusCode`, `bytes_stream`).
+`Request`, `RequestBuilder`, `header`, `redirect::Policy`, `StatusCode`). `bytes_stream()`
+(`object-cache/src/client.rs:345,418,610`) needs feature `stream`; `.form()`
+(`telemetry-sink/src/oidc_client_credentials_decorator.rs:117`, `analytics-web-srv/src/auth/handlers.rs:160,275`)
+needs feature `form`.
 
 - Version: `0.13`.
-- Features: reqwest 0.13 renames `rustls-tls` to `rustls` (now the default TLS backend, using
-  aws-lc-rs) and may drop `macos-system-configuration`; `charset`, `http2`, `json` remain opt-in.
-  Keep `default-features = false` and map the feature list to the 0.13 names, verified against the
-  0.13 `Cargo.toml` rather than assumed.
-- TLS crypto provider: the workspace uses ring elsewhere (`tonic` `tls-ring`). If the 0.13 rustls
-  feature pulls in aws-lc-rs, prefer the ring-based variant if 0.13 offers one, so the build does not
-  gain a second crypto provider and a C toolchain requirement; otherwise accept the default and note it.
+- Features: `default-features = false` with `charset`, `http2`, `json`, `form`, `stream`, `system-proxy`, `rustls`.
+  `rustls` replaces `rustls-tls` (aws-lc-rs backed; 0.13 has no ring feature). `macos-system-configuration`
+  no longer exists; its replacement is `system-proxy` (in the default set, so it must be listed explicitly).
+  Do not use `rustls-no-provider`.
 - Compile fixes: address whatever `cargo build --all-targets` reports (e.g. renamed/removed methods
   in `ClientBuilder`, or behavior changes in default redirect/timeouts). `Cargo.lock` is regenerated.
 - Re-check the `object-cache/src/client.rs:523` comment: if 0.13's `json()` no longer re-wraps body
@@ -37,17 +39,19 @@ Change the workspace dependency only; the call sites use stable API (`Client`, `
   stays either way unless the behavior makes it pointless.
 
 ## Implementation Steps
-1. Edit `rust/Cargo.toml:86` to `0.13` with the renamed features.
+1. Edit `rust/Cargo.toml:86` to `0.13` with the feature list from Design.
 2. `cargo update -p reqwest` / `cargo build --all-targets` from `rust/`; fix compile errors in
    `telemetry-sink`, `auth`, `object-cache`, `public` tests.
 3. Review `object-cache/src/client.rs:523` comment against 0.13 behavior.
 4. Confirm via `cargo tree -d` that `telemetry-sink`, `auth`, `object-cache` resolve to one reqwest 0.13
-   (a residual 0.12 only via `oauth2`/`object_store` is expected).
+   (a residual 0.12 only via `oauth2`/`object_store` is expected). `cargo tree -d` will also show two
+   crypto providers (ring via tonic, aws-lc-rs via reqwest); this is accepted (see Decisions).
 5. Add CHANGELOG entry with a **Minor breaking change** note (public `RequestDecorator` /
    `micromegas_telemetry_sink::reqwest` re-export now expose reqwest 0.13 types).
 
 ## Files to Modify
 - `rust/Cargo.toml`, `rust/Cargo.lock`
+- `rust/analytics-web-srv` (no manifest change expected; verify it compiles)
 - `rust/object-cache/src/client.rs` (comment, possibly)
 - Any call site the compiler flags
 - `CHANGELOG.md`
@@ -66,5 +70,5 @@ No `mkdocs/` pages reference the reqwest version; none to update beyond the CHAN
   `micromegas` (graceful shutdown tests). Existing unit tests (e.g. `api_key_decorator_tests.rs`)
   cover the `Request`/header surface; no new tests are needed for a dependency bump.
 
-## Open Questions
-- Whether reqwest 0.13 offers a ring-backed rustls feature (resolved when reading its Cargo.toml in step 1).
+## Decisions
+- TLS uses reqwest's `rustls` feature (aws-lc-rs); Cargo.lock gains aws-lc-rs alongside tonic's ring. The two-crypto-provider outcome is accepted.
