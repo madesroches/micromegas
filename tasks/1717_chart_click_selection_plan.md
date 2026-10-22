@@ -163,15 +163,18 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
     `fillArr`/`strokeArr` or, without per-row colors, the series color repeated. When a selection
     exists, `barColors` (Design §2) returns `fadeCss(color, DIM_FILL = 0.25)` (stroke `DIM_STROKE = 0.5`) for every
     bar except the selected `(seriesIndex, dataIdx)`, which keeps its base color. SQL per-row colors are faded, not replaced, so their hue stays readable.
-  - **Lines.** Unselected series get `u.series[i].alpha = DIM_LINE (0.3)`. The series that owns
-    the selection stays at 1, so its line keeps full strength. While a selection exists, its
+  - **Lines.** A `drawClear` hook in the selection plugin sets every series' `alpha` from
+    `selectedRef` before the series draw: `DIM_LINE (0.3)` for unselected series while a selection
+    exists, 1 otherwise. This covers the first draw after a rebuild and every `redraw(true)`.
+    The series that owns the selection stays at 1, so its line keeps full strength. While a selection exists, its
     `points.stroke` and `points.fill` both become a faded copy of the line's own style with
     `DIM_POINT = 0.3`: `fadeCss(color, DIM_POINT)` for a plain series, or, for a per-row-colored
     series, the same gradient as its line stroke built from `fadeStops(gradStops, DIM_POINT)`, so
-    each point keeps its row's hue. With no selection they return what uPlot uses today (the series
-    stroke, and `#fff` fill). The line-stroke gradient code moves into one helper taking a stop
+    each point keeps its row's hue. With no selection `points.stroke` returns the series stroke and
+    `points.fill` returns `undefined`, keeping uPlot's default (the canvas `#fff` comes from uPlot's
+    own fallback, so the hover dot stays solid in the series color). The line-stroke gradient code moves into one helper taking a stop
     list, shared by the stroke and the faded points. A `draw` hook then paints the selected point as
-    a 6px dot filled with `point.color ?? seriesColor`, in the same overlay style as `refLinePlugin`.
+    a dot of radius 6 CSS px (12px diameter, scaled by `devicePixelRatio` in the draw hook) filled with `point.color ?? seriesColor`, in the same overlay style as `refLinePlugin`.
     uPlot's hover dot also uses `points.stroke`, so it looks faded on that series while a selection
     exists.
   - Hidden series (legend toggle) are unaffected. When the selected series is hidden, nothing is
@@ -348,7 +351,7 @@ Run `python3 local_test_env/ai_scripts/start_services.py --monolith`, then `yarn
    → The table shows "Select a row in "by_level"…". Clicking a bar dims the other bars and fills
    the table with that level's logs. Clicking the same bar clears it, and the table goes back to
    waiting. Clicking empty plot area also clears it.
-2. Switch the chart to line type → clicking near a point (within about 8px) enlarges it, fades
+2. Switch the chart to line type → clicking near a point (within about 8px) enlarges it to a dot of radius 6 CSS px, fades
    the other points, and publishes it. A click far from any point clears the selection. The cursor becomes a pointer
    over points.
 3. Time-axis line chart with selection on (`SELECT date_bin(INTERVAL '1 minute', time) AS t, COUNT(*) AS n FROM log_entries GROUP BY 1 ORDER BY 1`):
