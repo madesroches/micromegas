@@ -5,11 +5,13 @@ use chrono::{DateTime, TimeDelta, Utc};
 use jsonwebtoken::{Algorithm, Validation, decode, decode_header};
 use moka::future::Cache;
 use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
-use openidconnect::{IssuerUrl, JsonWebKey};
+use openidconnect::{HttpClientError, HttpRequest, HttpResponse, IssuerUrl, JsonWebKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::{BigUint, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,19 +48,50 @@ pub fn create_http_client() -> Result<reqwest::Client> {
         .map_err(|e| anyhow!("Failed to create HTTP client: {e:?}"))
 }
 
+type HttpFuture =
+    Pin<Box<dyn Future<Output = Result<HttpResponse, HttpClientError<reqwest::Error>>> + Send>>;
+
+/// Adapts a reqwest client to openidconnect's HTTP client interface.
+///
+/// openidconnect ships its own adapter only for the reqwest version it depends on,
+/// which can differ from the one used here.
+pub fn openidconnect_http_client(client: reqwest::Client) -> impl Fn(HttpRequest) -> HttpFuture {
+    move |request: HttpRequest| {
+        let client = client.clone();
+        Box::pin(async move {
+            let response = client
+                .execute(request.try_into().map_err(Box::new)?)
+                .await
+                .map_err(Box::new)?;
+            let mut builder = http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+            for (name, value) in response.headers() {
+                builder = builder.header(name, value);
+            }
+            builder
+                .body(response.bytes().await.map_err(Box::new)?.to_vec())
+                .map_err(HttpClientError::Http)
+        })
+    }
+}
+
 /// Fetch JWKS from the OIDC provider using openidconnect's built-in discovery
 async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
     let http_client = create_http_client()?;
 
     // Use openidconnect's built-in OIDC discovery
-    let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "Failed to discover OIDC metadata from {}: {e:?}",
-                issuer_url
-            )
-        })?;
+    let metadata = CoreProviderMetadata::discover_async(
+        issuer_url.clone(),
+        &openidconnect_http_client(http_client.clone()),
+    )
+    .await
+    .map_err(|e| {
+        anyhow!(
+            "Failed to discover OIDC metadata from {}: {e:?}",
+            issuer_url
+        )
+    })?;
 
     // Fetch JWKS from jwks_uri
     let jwks_uri = metadata.jwks_uri();

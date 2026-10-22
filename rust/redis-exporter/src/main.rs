@@ -35,6 +35,9 @@ use redis_exporter::sampler::{build_base_properties, sample_once};
 
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
+    // Both ring and aws-lc-rs providers are enabled in this build, so rustls cannot
+    // auto-detect one and the rediss:// path would panic without an explicit choice.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Cli::parse();
     let password = std::env::var("MICROMEGAS_REDIS_EXPORTER_REDIS_PASSWORD").ok();
     let config = args.into_config(password)?;

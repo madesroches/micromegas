@@ -520,10 +520,9 @@ impl CacheClientStore {
                 return Err(anyhow!("cache prefetch {url} status {}", resp.status()));
             }
             // Read as two explicit steps rather than via the combined
-            // `resp.json()` helper: in reqwest 0.12.28 `json()` re-wraps
-            // every error from its internal body read as `Kind::Decode`, so
-            // `is_body()`/`is_decode()` can't distinguish a transport
-            // failure from a parse failure on that path. See "What does not
+            // `resp.json()` helper so the transport failure (body read) and
+            // the parse failure stay separately classified here instead of
+            // depending on how the helper tags errors. See "What does not
             // feed the breaker as a failure".
             let bytes = match resp.bytes().await {
                 Ok(bytes) => bytes,

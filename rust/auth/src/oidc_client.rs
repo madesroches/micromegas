@@ -13,7 +13,7 @@
 //! different lazy caches for different purposes (login-flow client vs. JWKS
 //! validation).
 
-use crate::oidc::create_http_client;
+use crate::oidc::{create_http_client, openidconnect_http_client};
 use anyhow::{Result, anyhow};
 use openidconnect::core::{CoreClient, CoreProviderMetadata};
 use openidconnect::{ClientId, IssuerUrl, RedirectUrl};
@@ -59,9 +59,12 @@ impl DiscoveredProvider {
         let issuer_url =
             IssuerUrl::new(issuer.to_string()).map_err(|e| anyhow!("Invalid issuer URL: {e:?}"))?;
         let http_client = create_http_client()?;
-        let metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
-            .await
-            .map_err(|e| anyhow!("Failed to discover OIDC provider: {e:?}"))?;
+        let metadata = CoreProviderMetadata::discover_async(
+            issuer_url,
+            &openidconnect_http_client(http_client),
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to discover OIDC provider: {e:?}"))?;
         let redirect_uri = RedirectUrl::new(redirect_uri.to_string())
             .map_err(|e| anyhow!("Invalid redirect URI: {e:?}"))?;
         Ok(Self {
