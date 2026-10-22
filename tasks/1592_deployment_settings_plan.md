@@ -201,7 +201,7 @@ impl SettingsSource {
 
 - `IngestionKeysState` and `AudienceGrantsState` drop their four knob fields and gain
   `settings: Arc<SettingsSource>`. `run_web_server` builds one instance and shares it
-  between the two states and the new settings route. It uses `new` when `analytics_keys_pool` is
+  between the two states. It uses `new` when `analytics_keys_pool` is
   `Some`, and `env_only` otherwise. The TTL comes from
   `DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs`, resolved before the source is built.
 - Every read site listed under Current State calls `state.settings.self_service().await`, but only
@@ -300,7 +300,7 @@ follow `groups.rs`'s structure:
    `MutationAudit::new` at `:112-124` and the two full `MutationAuditRecord { .. }` literals in
    `mutation_audit_tests.rs`, `full_record` ~:43 and ~:93, with `setting` / `value` /
    `previous_value`), and register the routes in `web_server.rs`.
-6. **Frontend:** add the API client, the page, the admin card and the route, plus their tests.
+6. **Frontend:** add the API client, the page, the admin card and the route, plus their tests: `AdminPage.test.tsx` (add "Settings" to `adminOnlyTitles`, update the "shows all nine cards" test and header comment to the new count) and `AppShell.test.tsx` (add a `/admin/settings` case).
 7. **Docs and changelog:** see Documentation.
 
 ## Files to Modify
@@ -311,10 +311,10 @@ follow `groups.rs`'s structure:
 - `rust/public/tests/read_policy_threading_tests.rs`, `rust/public/tests/settings_tests.rs` (new)
 - `rust/analytics-web-srv/src/web_server.rs`, `ingestion_keys.rs`, `audience_grants.rs`, `mutation_audit.rs`, `settings.rs` (new), `lib.rs`
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `audience_grants_tests.rs`, `routing_tests.rs`, `mutation_audit_tests.rs`, `settings_tests.rs` (new)
-- `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, `src/components/layout/AppShell.tsx`, plus tests under `__tests__`
+- `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, `src/components/layout/AppShell.tsx`, plus `src/routes/__tests__/AdminPage.test.tsx` and `src/components/layout/__tests__/AppShell.test.tsx`
 - `mkdocs/docs/admin/authorization.md`, `flight-sql.md`, `monolith.md`, `web-app.md`, `control-plane-audit-log.md`, `api-keys.md`
 - `README.md:89`, `rust/analytics/tests/ownership_rewrite_config_tests.rs` (header comment)
-- the `functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` pages and the `web_client.py:105` docstring that mention `MICROMEGAS_SELF_SERVICE_*` / `MICROMEGAS_PUBLIC_VIEW_SETS` (reword "MICROMEGAS_SELF_SERVICE_MINT is on" to "the `self_service_mint` setting is on")
+- the `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` pages and the `web_client.py:105` docstring that mention `MICROMEGAS_SELF_SERVICE_*` / `MICROMEGAS_PUBLIC_VIEW_SETS` (reword "MICROMEGAS_SELF_SERVICE_MINT is on" to "the `self_service_mint` setting is on")
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -375,7 +375,7 @@ follow `groups.rs`'s structure:
 - `README.md:89`: the "resolved once on every auth path" wording is reworded for the setting.
 - `mkdocs/docs/admin/authorization.md:26` and `flight-sql.md:31`: `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`
   is described as covering the key, grant and group stores; it also governs settings.
-- `mkdocs/docs/admin/api-keys.md`, `functions-reference.md`, `mkdocs/docs/query-guide/python-api.md`: mentions
+- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/functions-reference.md`, `mkdocs/docs/query-guide/python-api.md`: mentions
   of the moved env vars become mentions of the settings (env as fallback).
 - `mkdocs/docs/admin/control-plane-audit-log.md`: the `set_setting` / `reset_setting` actions and
   the `setting` / `value` / `previous_value` fields, plus an example query; the existing env-var
