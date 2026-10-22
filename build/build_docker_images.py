@@ -158,6 +158,7 @@ def build_image(
         - 'service': service name
         - 'image': full image name
         - 'tags': list of tags applied
+        - 'arm64': True for the arm64 image
         - 'built': True if build succeeded
         - 'pushed': True if push succeeded (only if push=True)
     """
@@ -165,6 +166,7 @@ def build_image(
         "service": service,
         "image": None,
         "tags": [],
+        "arm64": arm64,
         "built": False,
         "pushed": False,
     }
@@ -206,6 +208,33 @@ def build_image(
         result["pushed"] = True
 
     return result
+
+
+def failed_results(results: list[dict], push: bool) -> list[dict]:
+    """Results that were not built, or, under `push`, not pushed."""
+    return [r for r in results if not r["built"] or (push and not r["pushed"])]
+
+
+def rerun_command(failed: list[dict], args: argparse.Namespace) -> str:
+    """Command line(s) re-running only the failed images, one line per architecture.
+
+    Arches are selected by flag, so a single invocation cannot target different service
+    sets per arch.
+    """
+    lines = []
+    for arm64 in (False, True):
+        services = [r["service"] for r in failed if r["arm64"] == arm64]
+        if not services:
+            continue
+        parts = ["python3", "build/build_docker_images.py"]
+        if arm64:
+            parts.append("--arm64")
+        if args.push:
+            parts.append("--push")
+        if args.version:
+            parts += ["--version", args.version]
+        lines.append(" ".join(parts + services))
+    return "\n".join(lines)
 
 
 def main():
@@ -280,7 +309,7 @@ def main():
     print()
 
     built = [r for r in results if r["built"]]
-    failed = [r for r in results if not r["built"]]
+    failed = failed_results(results, args.push)
     pushed = [r for r in results if r["pushed"]]
 
     if built:
@@ -290,11 +319,6 @@ def main():
             for tag in r["tags"]:
                 print(f"  {r['image']}:{tag}{status}")
 
-    if failed:
-        print("\nFailed:")
-        for r in failed:
-            print(f"  {r['service']}")
-
     print()
     print(f"Total: {len(built)}/{len(results)} built", end="")
     if args.push:
@@ -302,6 +326,14 @@ def main():
     print()
 
     if failed:
+        print("\nFailed:")
+        for r in failed:
+            arch = "arm64" if r["arm64"] else "amd64"
+            reason = "not built" if not r["built"] else "not pushed"
+            print(f"  {r['service']} ({arch}): {reason}")
+        print("\nRe-run only the failed images:")
+        print(rerun_command(failed, args))
+        print(f"\nFAILED: {len(failed)} image(s)")
         return 1
 
     return 0
