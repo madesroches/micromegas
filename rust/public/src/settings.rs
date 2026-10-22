@@ -72,14 +72,14 @@ pub const SETTINGS: &[SettingSpec] = &[
         env_var: "MICROMEGAS_SELF_SERVICE_MINT",
         kind: SettingKind::Bool,
         default: "false",
-        description: "Let non-admin callers mint ingestion keys and read their own audience grants.",
+        description: "Let non-admin callers mint their own ingestion keys and manage audience grants.",
     },
     SettingSpec {
         key: SELF_SERVICE_MAX_CLAIMS_PER_CALLER,
         env_var: "MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER",
         kind: SettingKind::Count,
         default: "25",
-        description: "Maximum number of ingestion-key claims a non-admin caller may hold.",
+        description: "Maximum number of distinct audiences one non-admin caller may claim.",
     },
     SettingSpec {
         key: SELF_SERVICE_MAX_KEYS_PER_CALLER,
@@ -93,7 +93,7 @@ pub const SETTINGS: &[SettingSpec] = &[
         env_var: "MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER",
         kind: SettingKind::Count,
         default: "50",
-        description: "Maximum number of audience grants a non-admin caller may hold.",
+        description: "Maximum number of audience grants one non-admin caller may have created, excluding their own user:<email> rows.",
     },
 ];
 
