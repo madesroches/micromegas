@@ -233,7 +233,8 @@ follow `groups.rs`'s structure:
 - **Audit:** new `action::SET_SETTING` / `action::RESET_SETTING`. `MutationAuditRecord` gets three
   optional fields, appended last: `setting`, `value`, and `previous_value`. The two values are
   JSON text, truncated by `truncate_for_audit`. Each handler follows the existing wrapper +
-  `_inner` + `audit.emit(&result)` shape, and a new `SettingsError` implements
+  `_inner` + `audit.emit(&result)` shape (the wrapper attaches `.setting(&key)` before `_inner`
+  runs, as `create_group` does with `.group(&body.name)`), and a new `SettingsError` implements
   `AuditOutcome`.
 - **Propagation:** the replica that handled the write sees the new value within one TTL. There is
   no local invalidation, which matches how grants behave today. The page says "within one cache
@@ -409,6 +410,11 @@ and the `with_overrides` seam.
     - An invalid body returns 400 before any DB access (lazy pool).
     - The GET response shape is built from `SETTINGS` plus canned rows.
   - `mutation_audit_tests.rs`: the new fields serialize, and are omitted when absent.
+    PUT and DELETE on `/api/settings/self_service_mint` with `SettingsState { pool: None }`
+    return 503 and emit one `set_setting` / `reset_setting` record with outcome "error" and
+    `setting == "self_service_mint"`, mirroring
+    `group_mutation_routes_pool_unconfigured_emit_error_records_with_targets`. A
+    `settings_error_outcome_classification` test mirrors `groups_error_outcome_classification`.
 - Frontend (vitest): API client encoding and error mapping; the page renders the source pill,
   each Edit dialog submits the right JSON per kind, and the page re-fetches after a write.
 
