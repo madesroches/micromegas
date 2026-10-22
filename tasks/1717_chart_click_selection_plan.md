@@ -152,19 +152,23 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
 - **Highlight: dim the unselected marks** (mockup option B). While a selection exists, every
   mark except the selected one fades. With no selection, the chart looks exactly as it does today.
   The style is read from `selectedRef` when the chart draws. The selected `dataIdx` is
-  `rowIndexBySeries[seriesIndex].indexOf(rowIndex)` (the union-X index in multi-series), recomputed
-  whenever the chart is rebuilt. A `seriesIndex` out of range or an `indexOf` of -1 (a stale
+  `rowIndexBySeries[seriesIndex].indexOf(rowIndex)` (the union-X index in multi-series). Only
+  `rowIndexBySeries` is rebuilt with the chart; the selected `dataIdx` is derived from
+  `selectedRef.current` and `rowIndexBySeries` on every use: the bar `disp` `values()` callbacks, the
+  points callbacks, and the `drawClear`/`draw` hooks. A `seriesIndex` out of range or an `indexOf` of -1 (a stale
   selection from before new data arrived) counts as no selection. A selection change only triggers
   `chartRef.current?.redraw(true)`. `true` rebuilds the cached paths so the bar `disp` callbacks
   run again; the uPlot instance itself is not rebuilt.
   - **Bars.** Every bar series always gets `disp.fill` and `disp.stroke` facets. Today only
     per-row-colored series have them. uPlot requires both when the stroke width is non-zero.
     Their `values()` callbacks start from the series' base color arrays, which are the existing
-    `fillArr`/`strokeArr` or, without per-row colors, the series color repeated. When a selection
+    `fillArr`/`strokeArr` or, without per-row colors, the series color repeated as `hexToRgba(seriesColor, 0.6)` for fill and `seriesColor` for stroke
+    (matching today's `fill`/`stroke`). When a selection
     exists, `barColors` (Design §2) returns `fadeCss(color, DIM_FILL = 0.25)` (stroke `DIM_STROKE = 0.5`) for every
     bar except the selected `(seriesIndex, dataIdx)`, which keeps its base color. SQL per-row colors are faded, not replaced, so their hue stays readable.
   - **Lines.** A `drawClear` hook in the selection plugin sets every series' `alpha` from
-    `selectedRef` before the series draw: `DIM_LINE (0.3)` for unselected series while a selection
+    `selectedRef` before the series draw, only when `chartType === 'line'` (bar series keep
+    `alpha = 1` and are dimmed only through `barColors`): `DIM_LINE (0.3)` for unselected series while a selection
     exists, 1 otherwise. This covers the first draw after a rebuild and every `redraw(true)`.
     The series that owns the selection stays at 1, so its line keeps full strength. While a selection exists, its
     `points.stroke` and `points.fill` both become a faded copy of the line's own style with
@@ -182,7 +186,9 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
   - XYChart does not enable uPlot's `cursor.focus` (which also drives `series.alpha`), so nothing
     competes for that field. Keep it off.
   A separate `useEffect([selectedPoint])` updates `selectedRef` and triggers the redraw.
-- **Affordance.** When `onPointSelect` is set, a `setCursor` hook sets `u.over.style.cursor` to
+- **Affordance.** The selection plugin is always installed in both paths and checks
+  `onPointSelectRef.current` at event time. When it is undefined, clicks do nothing and the
+  `setCursor` hook leaves the default cursor. When set, the hook sets `u.over.style.cursor` to
   `pointer` while the cursor is over a hit, and back to the default otherwise.
 
 ### 4. ChartCell: own the selection and publish the row
@@ -198,7 +204,7 @@ In `ChartCell`, following the `TableCell`/`MapCell` pattern:
 - `handlePointSelect(hit)`: set the state, then publish `hit ? rowValues(data[hit.seriesIndex], hit.rowIndex) : null`.
   The index works because XYChart series `i` is query `i`'s table in both paths.
 - Pass `onPointSelect={selectionMode === 'single' ? handlePointSelect : undefined}` and
-  `selectedPoint={selected}` to both `<XYChart>` usages. `selectionMode` is already a
+  `selectedPoint={selectionMode === 'single' ? selected : null}` to both `<XYChart>` usages. `selectionMode` is already a
   `CellRendererProps` field that `NotebookRenderer` fills from `options.selectionMode`, so the
   chart cell needs no registry change. It does **not** set `defaultSelectionMode`, so the
   default stays `'none'`.
@@ -240,7 +246,8 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
    rect collection, `createSelectionPlugin` (click, highlight, cursor) in both paths, and the
    redraw-on-selection effect. Keep `onPointSelect` out of the main effect's deps by reading it through
    `onPointSelectRef`, updated in the same `useLayoutEffect` as `onTimeRangeSelectRef`, so a new
-   callback identity does not rebuild the chart.
+   callback identity does not rebuild the chart. The plugin is installed unconditionally and guards
+   `onPointSelectRef.current` at event time.
 4. **ChartCell renderer**: selection state, clear-on-data-change, `handlePointSelect`, and passing
    the new props in both paths.
 5. **ChartCell editor**: add `RowSelectionEditor`.
@@ -330,6 +337,7 @@ Every unit test below runs without a DB.
     publishes `rowValues(data[0], 2)` and passes `selectedPoint` back
   - multi-query: `seriesIndex: 1` publishes from `data[1]`, not `data[0]`
   - `onPointSelect(null)` publishes `null`
+  - re-rendering with `selectionMode` undefined after a selection passes `selectedPoint` as null
   - new `data` clears both the state and the published selection
   - editor: click the "Row Selection" header to expand it first (`RowSelectionEditor` starts
     collapsed when the mode is `'none'`), then toggling it on a v1 config writes a v2 config with
