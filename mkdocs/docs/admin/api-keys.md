@@ -17,8 +17,8 @@ Analytics API Keys) that calls `analytics-web-srv`'s routes directly (see
 Minting an ingestion key is not purely an admin operation: a caller — admin or not — with a
 matching `mint` grant, or naming a brand-new audience explicitly (which lazily claims it), can
 mint an `ingestion_api_keys` row directly; a non-admin additionally needs an operator to have
-turned on `MICROMEGAS_SELF_SERVICE_MINT` (off by default), while an admin is exempt from that
-knob. See [Self-service mint](authorization.md#self-service-ingestion-key-mint) for the full
+turned on the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`; off by default), while an admin is exempt from that
+setting. See [Self-service mint](authorization.md#self-service-ingestion-key-mint) for the full
 mechanism. List and revoke stay admin-only and unconditional, unaffected by any of this — see
 [HTTP routes](#http-routes-key-management) below. The analytics-key table's routes are
 admin-only throughout.
@@ -97,7 +97,7 @@ resolved from membership in the reserved `admins` local group; see
 [Groups](groups.md)). `POST {base_path}/api/ingestion-api-keys`
 (mint) runs through a `MintGate`/`AuthenticatedUser` extractor instead, so a
 non-admin caller with a matching grant (or a lazy claim) can reach it once
-`MICROMEGAS_SELF_SERVICE_MINT` is on. Ingestion itself
+the `self_service_mint` setting is on. Ingestion itself
 exposes no key-management HTTP surface — consolidating both tables' admin surface onto
 one service keeps a single admin list (see [Security](#security)).
 
@@ -212,7 +212,7 @@ grant (or a lazy claim).
 fresh, never-before-granted name is minted *and* granted in the same
 request, writing `user:<email>` `mint`+`read` rows in the same transaction as
 the key insert. For a non-admin this additionally requires
-`MICROMEGAS_SELF_SERVICE_MINT` to be on; an admin is exempt from that knob but
+the `self_service_mint` setting to be on; an admin is exempt from that setting but
 takes the identical claim path otherwise — `is_admin` confers no bypass of
 its own. `micromegas-setup-telemetry` exposes this via `--user-audience
 SUFFIX`: the prefix is composed server-side from the caller's own email (e.g.
@@ -345,7 +345,7 @@ user, with role-filtered content.** `AuthGuard` on both routes carries no
   (`ApiKeysAdminPage`); a non-admin sees a mint-only panel — the same
   self-service mint dialog Audience Access uses, no table, no revoke UI.
   `list_keys`/`revoke_key` stay admin-only server-side. Mint only appears
-  once `MICROMEGAS_SELF_SERVICE_MINT` is on and the caller holds a matching
+  once the `self_service_mint` setting is on and the caller holds a matching
   `mint` grant (or names a fresh audience); with the knob off, the panel
   explains why and points to Audience Access.
 - On `/admin`, see [Admin hub](web-app.md#admin-hub) for the role-filtered
@@ -380,7 +380,7 @@ gate on the same `analytics-web-srv` admin check (membership in the
 reserved `admins` local group — see [Groups](groups.md)). Ingestion's own
 mint route is authorized by a `mint` grant for every caller, admin
 included; `admins` membership only waives the
-`MICROMEGAS_SELF_SERVICE_MINT` knob that otherwise blocks a non-admin
+`self_service_mint` setting that otherwise blocks a non-admin
 caller from minting at all.
 
 **Under `--disable-auth` on `analytics-web-srv`, all three key/grant

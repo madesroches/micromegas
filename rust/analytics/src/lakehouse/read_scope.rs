@@ -52,11 +52,10 @@ pub struct CallerContext {
     pub read_scope: ReadScope,
     /// Whether the caller may use the five mutating lakehouse UDTFs/UDFs.
     pub is_admin: bool,
-    /// Per-service data-isolation deployment config (`MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved
-    /// once at server startup, not per request, but bundled here rather than as a new
-    /// `make_session_context` parameter: per-request resolved values ride the context,
-    /// per-service objects live on the service, and this rides along with `read_scope` at every
-    /// real call site anyway.
+    /// Per-service data-isolation deployment config (the `public_view_sets` setting, env
+    /// fallback `MICROMEGAS_PUBLIC_VIEW_SETS`) -- resolved per request by the service and bundled
+    /// here rather than as a new `make_session_context` parameter: it rides along with
+    /// `read_scope` at every real call site anyway.
     pub isolation_config: Arc<IsolationConfig>,
     /// The caller's identity, as recorded in `deny_queries`'s `created_by` column. `None` on
     /// internal/maintenance paths -- such a caller cannot call `deny_queries`, which requires
@@ -110,7 +109,7 @@ impl CallerContext {
 pub struct IsolationConfig {
     /// View-set names `OwnershipRewrite` skips entirely -- no predicate injected at all,
     /// regardless of scope. Off (empty) by default, fail-closed for this
-    /// operator-responsibility allowlist. Parsed from `MICROMEGAS_PUBLIC_VIEW_SETS`.
+    /// operator-responsibility allowlist. Built from the `public_view_sets` setting, or parsed from the `MICROMEGAS_PUBLIC_VIEW_SETS` env fallback.
     pub public_view_sets: Vec<String>,
 }
 

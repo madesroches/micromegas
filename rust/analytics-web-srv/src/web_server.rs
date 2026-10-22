@@ -7,6 +7,7 @@ use crate::data_source_cache::DataSourceCache;
 use crate::groups;
 use crate::ingestion_keys;
 use crate::maps;
+use crate::settings;
 use crate::stream_query;
 use crate::{analytics_keys, data_sources, folders, screens};
 use anyhow::{Context, Result};
@@ -26,6 +27,7 @@ use micromegas::ingestion::data_lake_connection::read_write_pool_options;
 use micromegas::ingestion::sql_migration::warn_if_data_lake_schema_stale;
 use micromegas::servers::axum_utils::{auth_observability_middleware, observability_middleware};
 use micromegas::servers::shutdown::serve_axum_with_graceful_shutdown;
+use micromegas::settings::{EnvFallbacks, SettingsSource, resolve_bool_env};
 use micromegas::tracing::prelude::*;
 use serde::Serialize;
 use sqlx::PgPool;
@@ -99,40 +101,6 @@ impl WebServerConfig {
             disable_auth: cli.disable_auth,
         })
     }
-}
-
-/// Parses a boolean env knob the same `v == "true" || v == "1"` way `secure_cookies` above
-/// already does -- one more instance of this codebase's existing boolean-knob convention.
-fn resolve_bool_env(var: &str, default: bool) -> bool {
-    std::env::var(var)
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(default)
-}
-
-/// Parses an unsigned integer env knob, warn-and-default on an unparseable value -- the same
-/// shape `micromegas_auth::db_api_key::resolve_u64` and `MICROMEGAS_MAPS_MAX_UPLOAD_BYTES` above
-/// already use elsewhere in this codebase. Parsing unsigned
-/// settles both sub-questions for free: a negative value is simply a parse failure (warned and
-/// defaulted), and `0` is a valid, meaningful parse -- "none permitted."
-fn resolve_u64_env(var: &str, default: u64) -> u64 {
-    match std::env::var(var) {
-        Ok(raw) => raw.parse::<u64>().unwrap_or_else(|_| {
-            warn!("Invalid {var} value '{raw}', using default {default}");
-            default
-        }),
-        Err(_) => default,
-    }
-}
-
-/// Same as `resolve_u64_env`, but for a knob that's stored as `i64` downstream (e.g. compared
-/// against a `COUNT(*)` result) -- warn-and-default the same way on a value that parses as a
-/// valid `u64` but overflows `i64`, rather than silently wrapping negative via `as i64`.
-fn resolve_i64_env(var: &str, default: i64) -> i64 {
-    let value = resolve_u64_env(var, default as u64);
-    i64::try_from(value).unwrap_or_else(|_| {
-        warn!("{var} value {value} exceeds i64::MAX, using default {default}");
-        default
-    })
 }
 
 fn read_base_path() -> Result<String> {
@@ -368,6 +336,14 @@ fn key_management_disabled_router(base_path: &str) -> Router {
             &format!("{base_path}/api/groups/{{*rest}}"),
             any(key_management_disabled),
         )
+        .route(
+            &format!("{base_path}/api/settings"),
+            any(key_management_disabled),
+        )
+        .route(
+            &format!("{base_path}/api/settings/{{*rest}}"),
+            any(key_management_disabled),
+        )
 }
 
 /// The three admin `Extension` states `build_protected_routes` layers onto the
@@ -378,6 +354,7 @@ pub struct AdminRoutesState {
     pub ingestion_keys: ingestion_keys::IngestionKeysState,
     pub audience_grants: audience_grants::AudienceGrantsState,
     pub groups: groups::GroupsState,
+    pub settings: settings::SettingsState,
 }
 
 /// `pub` (unlike the other `build_*` helpers here) so integration tests
@@ -461,10 +438,12 @@ pub fn build_protected_routes(
             .merge(ingestion_keys::ingestion_keys_router(base_path))
             .merge(audience_grants::audience_grants_router(base_path))
             .merge(groups::groups_router(base_path))
+            .merge(settings::settings_router(base_path))
             .layer(Extension(admin_state.analytics_keys))
             .layer(Extension(admin_state.ingestion_keys))
             .layer(Extension(admin_state.audience_grants))
             .layer(Extension(admin_state.groups))
+            .layer(Extension(admin_state.settings))
     } else {
         routes.merge(key_management_disabled_router(base_path))
     };
@@ -772,20 +751,20 @@ pub async fn run_web_server(
         pool: analytics_keys_pool.clone(),
     };
 
-    // Off by default: mint stays admin-only until an operator explicitly opts in. Resolved once
-    // at startup, empty-prefix convention (this service's own knobs never take a role prefix,
-    // unlike the monolith's per-role vars).
-    let self_service_mint_enabled = resolve_bool_env("MICROMEGAS_SELF_SERVICE_MINT", false);
-    let max_claims_per_caller =
-        resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER", 25);
-    let max_keys_per_caller = resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER", 100);
-    let max_grants_per_caller =
-        resolve_i64_env("MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER", 50);
-    if self_service_mint_enabled {
-        info!(
-            "MICROMEGAS_SELF_SERVICE_MINT enabled: max_claims_per_caller={max_claims_per_caller} \
-             max_keys_per_caller={max_keys_per_caller} max_grants_per_caller={max_grants_per_caller}"
-        );
+    // One source shared by the ingestion-key and audience-grant states, so both read the same
+    // snapshot. Built before them because the env half fails fast on a malformed
+    // `MICROMEGAS_PUBLIC_VIEW_SETS`, like `MICROMEGAS_DEFAULT_AUDIENCE` below.
+    let env_fallbacks = EnvFallbacks::from_env()?;
+    let settings_source = Arc::new(match &analytics_keys_pool {
+        Some(pool) => SettingsSource::new(
+            env_fallbacks,
+            pool.clone(),
+            Duration::from_secs(DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs),
+        ),
+        None => SettingsSource::env_only(env_fallbacks),
+    });
+    if !config.disable_auth && analytics_keys_pool.is_some() {
+        settings_source.warn_on_shadowed_env().await;
     }
 
     // Both tables live in the same telemetry DB behind the same
@@ -797,9 +776,7 @@ pub async fn run_web_server(
     let ingestion_keys_state = ingestion_keys::IngestionKeysState {
         pool: analytics_keys_pool.clone(),
         default_audience: micromegas::auth::policy::default_audience_from_env("")?,
-        self_service_mint_enabled,
-        max_claims_per_caller,
-        max_keys_per_caller,
+        settings: settings_source.clone(),
     };
     // A custom `MICROMEGAS_DEFAULT_AUDIENCE` used to be reachable with no grant row at all, via
     // `AudienceMintPolicy`'s now-removed admin arm -- a deployment that relied on that for its
@@ -840,18 +817,19 @@ pub async fn run_web_server(
 
     // Same telemetry-DB pool as the two key-management states above --
     // `audience_grants` lives in the same database behind the same
-    // `MICROMEGAS_SQL_CONNECTION_STRING`. Carries its own copy of the knob above
-    // so `GET .../audience-grants/my-audiences` can gate itself the same way
-    // `MintGate` gates `mint_key` -- the two states are layered independently, so this route has
-    // no other access to `IngestionKeysState`'s copy.
+    // `MICROMEGAS_SQL_CONNECTION_STRING`. Holds the shared settings source so
+    // `GET .../audience-grants/my-audiences` can gate itself the same way `MintGate` gates
+    // `mint_key` -- the two states are layered independently.
     let audience_grants_state = audience_grants::AudienceGrantsState {
         pool: analytics_keys_pool.clone(),
-        self_service_mint_enabled,
-        max_grants_per_caller,
+        settings: settings_source,
     };
 
     // Same telemetry-DB pool as the states above -- the group-admin routes' own reads/writes.
     let groups_state = groups::GroupsState {
+        pool: analytics_keys_pool.clone(),
+    };
+    let settings_state = settings::SettingsState {
         pool: analytics_keys_pool.clone(),
     };
 
@@ -881,6 +859,7 @@ pub async fn run_web_server(
                 ingestion_keys: ingestion_keys_state,
                 audience_grants: audience_grants_state,
                 groups: groups_state,
+                settings: settings_state,
             },
         ))
         .merge(build_auth_routes(&config.base_path, &auth_state));

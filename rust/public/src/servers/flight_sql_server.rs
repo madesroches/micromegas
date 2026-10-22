@@ -1,4 +1,5 @@
 use crate::config::DEFAULT_FLIGHTSQL_LISTEN_ADDR;
+use crate::settings::{EnvFallbacks, SettingsSource, settings_cache_ttl};
 use anyhow::{Context, Result};
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::LivePartitionProvider;
@@ -49,12 +50,29 @@ type AuthAndDefaults = (Option<Arc<dyn AuthProvider>>, Arc<dyn ReadPolicy>);
 /// The env is not read at all when the caller supplied a config: `with_isolation_config` wins
 /// regardless, so reading anyway would invent a startup failure on a variable the caller
 /// deliberately overrode.
-fn resolve_isolation_config(
-    explicit: Option<Arc<IsolationConfig>>,
-) -> Result<Arc<IsolationConfig>> {
+fn resolve_env_fallbacks(explicit: &Option<Arc<IsolationConfig>>) -> Result<Option<EnvFallbacks>> {
     match explicit {
-        Some(config) => Ok(config),
-        None => Ok(Arc::new(IsolationConfig::from_env()?)),
+        Some(_) => Ok(None),
+        None => Ok(Some(EnvFallbacks::from_env()?)),
+    }
+}
+
+/// An explicit config pins the source; otherwise the settings table is cached over a dedicated
+/// pool on every auth branch, so a setting stored in the DB cannot be ignored on one path while
+/// looking effective on another.
+fn resolve_settings(
+    explicit: Option<Arc<IsolationConfig>>,
+    env: Option<EnvFallbacks>,
+    lake_pool: &sqlx::PgPool,
+) -> Result<SettingsSource> {
+    match (explicit, env) {
+        (Some(config), _) => Ok(SettingsSource::pinned(config)),
+        (None, Some(env)) => Ok(SettingsSource::new(
+            env,
+            dedicated_key_store_pool(lake_pool),
+            settings_cache_ttl(),
+        )),
+        (None, None) => anyhow::bail!("env fallbacks must be resolved when no explicit config"),
     }
 }
 
@@ -164,11 +182,10 @@ impl FlightSqlServerBuilder {
         self
     }
 
-    /// Set an explicit `IsolationConfig` -- the data-isolation deployment knob
-    /// (`MICROMEGAS_PUBLIC_VIEW_SETS`) consumed by the row-level filter
-    /// (`OwnershipRewrite`). Mirrors `with_read_policy`: wins regardless of how auth is
-    /// configured, overriding the single default `build_and_serve` would otherwise resolve via
-    /// `IsolationConfig::from_env()`.
+    /// Set an explicit `IsolationConfig` -- the data-isolation config consumed by the row-level
+    /// filter (`OwnershipRewrite`). Mirrors `with_read_policy`: wins regardless of how auth is
+    /// configured, pinning the settings source so neither the `public_view_sets` setting nor its
+    /// `MICROMEGAS_PUBLIC_VIEW_SETS` env fallback is consulted.
     pub fn with_isolation_config(mut self, config: Arc<IsolationConfig>) -> Self {
         self.isolation_config = Some(config);
         self
@@ -232,7 +249,7 @@ impl FlightSqlServerBuilder {
     pub async fn build_and_serve(self) -> Result<()> {
         // Resolved first, ahead of the Postgres/object-store setup below, so a malformed
         // `MICROMEGAS_PUBLIC_VIEW_SETS` fails fast at no cost.
-        let isolation_config = resolve_isolation_config(self.isolation_config)?;
+        let env_fallbacks = resolve_env_fallbacks(&self.isolation_config)?;
 
         // Use injected lakehouse or build one from environment. The non-injected path is
         // standalone FlightSQL, the one role that prefers a writable primary but falls back to
@@ -275,6 +292,12 @@ impl FlightSqlServerBuilder {
         // below, so `dedicated_key_store_pool` has a pool to read pool options
         // from.
         let lake_pool_for_keys = lakehouse.lake().db_pool.clone();
+
+        let settings = Arc::new(resolve_settings(
+            self.isolation_config,
+            env_fallbacks,
+            &lake_pool_for_keys,
+        )?);
 
         let session_configurator: Arc<dyn SessionConfigurator> =
             if let Some(cfg) = self.session_configurator {
@@ -396,7 +419,7 @@ impl FlightSqlServerBuilder {
             view_registry.clone(),
             session_configurator,
             read_policy,
-            isolation_config,
+            settings,
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 
@@ -514,84 +537,32 @@ mod tests {
         }
     }
 
+    /// An explicit config skips the env read entirely, even when the env is malformed: reading
+    /// anyway would invent a startup failure on a variable the caller deliberately overrode.
     #[test]
     #[serial]
-    fn env_set_is_parsed() {
-        let _guard = EnvGuard;
-        // SAFETY: serialized via `#[serial]`.
-        unsafe {
-            std::env::set_var(PUBLIC_VIEW_SETS_VAR, "log_stats,images");
-        }
-        let config = resolve_isolation_config(None).expect("resolve_isolation_config");
-        assert_eq!(
-            config.public_view_sets,
-            vec!["log_stats".to_string(), "images".to_string()]
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn env_unset_is_empty() {
-        let _guard = EnvGuard;
-        // SAFETY: serialized via `#[serial]`.
-        unsafe {
-            std::env::remove_var(PUBLIC_VIEW_SETS_VAR);
-        }
-        let config = resolve_isolation_config(None).expect("resolve_isolation_config");
-        assert!(
-            config.public_view_sets.is_empty(),
-            "an unset var must resolve to no public view sets"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn env_malformed_is_err() {
+    fn explicit_config_skips_a_malformed_env_value() {
         let _guard = EnvGuard;
         // SAFETY: serialized via `#[serial]`.
         unsafe {
             std::env::set_var(PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
         }
-        let err =
-            resolve_isolation_config(None).expect_err("a JSON-array-shaped value must be rejected");
+        let explicit = Some(Arc::new(IsolationConfig {
+            public_view_sets: vec!["images".to_string()],
+        }));
+        let env = resolve_env_fallbacks(&explicit).expect("resolve_env_fallbacks");
+        assert!(env.is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn no_explicit_config_reads_env_and_fails_fast_when_malformed() {
+        let _guard = EnvGuard;
+        // SAFETY: serialized via `#[serial]`.
+        unsafe {
+            std::env::set_var(PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
+        }
+        let err = resolve_env_fallbacks(&None).expect_err("malformed value must be rejected");
         assert!(err.to_string().contains(PUBLIC_VIEW_SETS_VAR));
-    }
-
-    /// An explicit config wins even when the env is set to a different value -- pinning that
-    /// `with_isolation_config` skips the env read entirely on this path, not merely that it
-    /// takes precedence over a matching value.
-    #[test]
-    #[serial]
-    fn explicit_config_wins_over_a_different_env_value() {
-        let _guard = EnvGuard;
-        // SAFETY: serialized via `#[serial]`.
-        unsafe {
-            std::env::set_var(PUBLIC_VIEW_SETS_VAR, "log_stats");
-        }
-        let explicit = Arc::new(IsolationConfig {
-            public_view_sets: vec!["images".to_string()],
-        });
-        let config =
-            resolve_isolation_config(Some(explicit.clone())).expect("resolve_isolation_config");
-        assert_eq!(config.public_view_sets, explicit.public_view_sets);
-    }
-
-    /// Same as above, but with the env set to a value that would fail to parse -- proving the
-    /// explicit config really does skip the env read, rather than merely winning after a
-    /// successful-but-discarded parse.
-    #[test]
-    #[serial]
-    fn explicit_config_wins_over_a_malformed_env_value() {
-        let _guard = EnvGuard;
-        // SAFETY: serialized via `#[serial]`.
-        unsafe {
-            std::env::set_var(PUBLIC_VIEW_SETS_VAR, r#"["log_stats"]"#);
-        }
-        let explicit = Arc::new(IsolationConfig {
-            public_view_sets: vec!["images".to_string()],
-        });
-        let config =
-            resolve_isolation_config(Some(explicit.clone())).expect("resolve_isolation_config");
-        assert_eq!(config.public_view_sets, explicit.public_view_sets);
     }
 }

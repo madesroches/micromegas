@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 11;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 12;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -49,7 +49,8 @@ pub async fn warn_if_data_lake_schema_stale(pool: &sqlx::Pool<sqlx::Postgres>) {
              will resolve to an empty read scope and return zero rows until the schema is upgraded; \
              on a schema older than v10 the `groups`/`group_members` tables do not exist yet, so \
              every request fails with a retryable 503 until the migration runs, because the group \
-             store cannot load"
+             store cannot load; likewise on a schema older than v12 the `settings` table does not \
+             exist yet, so the settings store cannot load"
         );
     }
 }
@@ -432,6 +433,28 @@ pub async fn upgrade_data_lake_schema_v11(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 12.
+/// Adds `settings`, a generic key/value table of deployment-wide settings that each service
+/// caches; a key with no row means "unset" and falls back to the env var or built-in default.
+pub async fn upgrade_data_lake_schema_v12(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "CREATE TABLE settings (
+            key        VARCHAR(255) PRIMARY KEY,
+            value      JSONB        NOT NULL,
+            updated_at TIMESTAMPTZ  NOT NULL,
+            updated_by VARCHAR(255) NOT NULL
+        );",
+    )
+    .await
+    .with_context(|| "creating settings table")?;
+    tr.execute("UPDATE migration SET version=12;")
+        .await
+        .with_context(|| "updating data lake schema version to 12")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -584,6 +607,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v11");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v11(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 11 == current_version {
+        info!("upgrading data_lake_schema to v12");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v12(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

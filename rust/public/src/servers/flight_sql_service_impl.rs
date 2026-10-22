@@ -4,6 +4,7 @@ use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
     SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
 };
+use crate::settings::SettingsSource;
 use anyhow::Result;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::{DictionaryHandling, FlightDataEncoderBuilder};
@@ -42,7 +43,7 @@ use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::query_deny_list::{
     QueryAttribution, fingerprint_of, skip_for_admin_recovery,
 };
-use micromegas_analytics::lakehouse::read_scope::{CallerContext, IsolationConfig, ReadScope};
+use micromegas_analytics::lakehouse::read_scope::{CallerContext, ReadScope};
 use micromegas_analytics::lakehouse::runtime::scoped_runtime;
 use micromegas_analytics::lakehouse::scoped_memory_pool::ScopedMemoryPool;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
@@ -546,7 +547,7 @@ pub struct FlightSqlServiceImpl {
     view_registry: Arc<ViewRegistry>,
     session_configurator: Arc<dyn SessionConfigurator>,
     read_policy: Arc<dyn ReadPolicy>,
-    isolation_config: Arc<IsolationConfig>,
+    settings: Arc<SettingsSource>,
 }
 
 impl FlightSqlServiceImpl {
@@ -556,7 +557,7 @@ impl FlightSqlServiceImpl {
         view_registry: Arc<ViewRegistry>,
         session_configurator: Arc<dyn SessionConfigurator>,
         read_policy: Arc<dyn ReadPolicy>,
-        isolation_config: Arc<IsolationConfig>,
+        settings: Arc<SettingsSource>,
     ) -> Self {
         Self {
             lakehouse,
@@ -564,7 +565,7 @@ impl FlightSqlServiceImpl {
             view_registry,
             session_configurator,
             read_policy,
-            isolation_config,
+            settings,
         }
     }
 
@@ -607,9 +608,23 @@ impl FlightSqlServiceImpl {
         // can consult the same `AuthContext` -- the `Some(auth_ctx)` arm's
         // binding otherwise goes out of scope before the `CallerContext` literal is built.
         let auth_ctx = ext.get::<AuthContext>();
+        // Resolved only on the `Some(auth_ctx)` arm: with no `AuthContext` the scope is
+        // `ReadScope::All`, which makes the isolation config irrelevant, so an auth-disabled
+        // server never has to load the settings table.
+        let mut isolation_config = None;
         let read_scope = match auth_ctx {
             Some(auth_ctx) => match self.read_policy.resolve(auth_ctx).await {
-                Ok(audiences) => ReadScope::Audiences(audiences.into_inner()),
+                Ok(audiences) => {
+                    isolation_config =
+                        Some(self.settings.isolation_config().await.map_err(|e| {
+                            if e.downcast_ref::<ProviderUnavailable>().is_some() {
+                                Status::unavailable(format!("settings unavailable: {e:#}"))
+                            } else {
+                                Status::internal(format!("settings load failed: {e:#}"))
+                            }
+                        })?);
+                    ReadScope::Audiences(audiences.into_inner())
+                }
                 Err(e) => {
                     return Err(if e.downcast_ref::<ProviderUnavailable>().is_some() {
                         Status::unavailable(format!("read policy unavailable: {e:#}"))
@@ -623,10 +638,8 @@ impl FlightSqlServiceImpl {
         Ok(CallerContext {
             read_scope,
             is_admin: is_admin(md),
-            // Not permission-sensitive the way `read_scope` is (it's deployment config, not
-            // derived from the caller's identity), so it is copied verbatim on both branches
-            // above rather than participating in the absent-extension/`Err` distinction.
-            isolation_config: self.isolation_config.clone(),
+            isolation_config: isolation_config
+                .unwrap_or_else(|| self.settings.env_isolation_config()),
             identity,
             // Empty when there's no `AuthContext` extension at all (no auth provider configured,
             // e.g. `--disable-auth`) -- the same absent-extension convention `read_scope` follows

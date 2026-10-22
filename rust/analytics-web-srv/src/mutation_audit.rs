@@ -1,4 +1,4 @@
-//! Structured audit record for control-plane mutations (audience grants, groups, and
+//! Structured audit record for control-plane mutations (audience grants, groups, settings, and
 //! self-service audience claims).
 //!
 //! Mirrors `QueryAuditRecord` (`micromegas::servers::query_audit`): one JSON-serialized record
@@ -54,6 +54,8 @@ pub mod action {
     pub const DELETE_GROUP: &str = "delete_group";
     pub const ADD_MEMBER: &str = "add_member";
     pub const REMOVE_MEMBER: &str = "remove_member";
+    pub const SET_SETTING: &str = "set_setting";
+    pub const RESET_SETTING: &str = "reset_setting";
 }
 
 /// One control-plane mutation attempt, allowed or denied. Flat rather than nested, so every
@@ -87,6 +89,15 @@ pub struct MutationAuditRecord {
     /// The denial/error message. Absent when `outcome == "allowed"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The settings key (`set_setting` / `reset_setting`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setting: Option<String>,
+    /// JSON text of the value written. Absent on a reset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// JSON text of the value that was replaced or removed. Absent when the key had no row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_value: Option<String>,
 }
 
 /// Classifies an error variant for the audit record. Implemented next to each error enum this
@@ -122,6 +133,9 @@ impl MutationAudit {
                 member: None,
                 created: None,
                 reason: None,
+                setting: None,
+                value: None,
+                previous_value: None,
             },
         }
     }
@@ -163,6 +177,23 @@ impl MutationAudit {
 
     pub fn member(mut self, member: &str) -> Self {
         self.record.member = Some(truncate_for_audit(member));
+        self
+    }
+
+    pub fn setting(mut self, setting: &str) -> Self {
+        self.record.setting = Some(truncate_for_audit(setting));
+        self
+    }
+
+    /// `value` is JSON text.
+    pub fn value(mut self, value: &str) -> Self {
+        self.record.value = Some(truncate_for_audit(value));
+        self
+    }
+
+    /// `previous_value` is JSON text.
+    pub fn previous_value(mut self, previous_value: &str) -> Self {
+        self.record.previous_value = Some(truncate_for_audit(previous_value));
         self
     }
 

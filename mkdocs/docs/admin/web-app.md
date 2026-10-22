@@ -40,7 +40,7 @@ export MICROMEGAS_BASE_PATH="/"
 # PostgreSQL database for the web app (screens, data sources, maps catalog)
 export MICROMEGAS_APP_SQL_CONNECTION_STRING="postgres://user:pass@localhost/analytics_web"
 
-# Key management (Admin -> Analytics API Keys / Ingestion API Keys / Groups);
+# Key management (Admin -> Analytics API Keys / Ingestion API Keys / Groups / Settings);
 # audience grants are managed from the Audience Access page (/audiences,
 # open to every authenticated user -- see "Audience Access" below), the
 # micromegas-grants CLI, or list_audience_grants() from any SQL client.
@@ -52,11 +52,12 @@ export MICROMEGAS_APP_SQL_CONNECTION_STRING="postgres://user:pass@localhost/anal
 # these routes return a fixed 503 (`AUTH_DISABLED`) regardless. Backs ALL
 # FOUR route groups -- analytics-web-srv is the sole admin HTTP surface for
 # ingestion_api_keys, analytics_api_keys, audience_grants, and
-# groups/group_members, writing directly to Postgres for each (see
-# mkdocs/docs/admin/api-keys.md). Must point at a telemetry DB where the v10
-# migration has already run (via ingestion or a lakehouse-role monolith) --
-# v10 is required, not just v7, since the group store needs the
-# groups/group_members tables added at v10 -- or every session fails with a
+# groups/group_members, plus the settings table, writing directly to Postgres
+# for each (see mkdocs/docs/admin/api-keys.md). Must point at a telemetry DB
+# where the v12 migration has already run (via ingestion or a lakehouse-role
+# monolith) -- v12 is required, not just v7, since the group store needs the
+# groups/group_members tables added at v10 and the settings store needs the
+# settings table added at v12 -- or the self-service routes fail with a
 # retryable 503 until the migration runs.
 export MICROMEGAS_SQL_CONNECTION_STRING="postgres://user:pass@localhost/telemetry"
 ```
@@ -80,15 +81,16 @@ export MICROMEGAS_MAPS_MAX_UPLOAD_BYTES="268435456"  # 256 MiB default
 # mkdocs/docs/admin/api-keys.md#what-audience-does-a-key-carry.
 export MICROMEGAS_DEFAULT_AUDIENCE="public"
 
-# Self-service ingestion key mint -- off by default, admin-only mint until
-# explicitly enabled. Lets a non-admin caller with a matching `mint` grant
+# Env fallback for the `self_service_mint` setting (Admin -> Settings; a stored
+# value wins). Self-service ingestion key mint -- off by default, admin-only
+# mint until explicitly enabled. Lets a non-admin caller with a matching `mint` grant
 # (or lazily claiming a brand-new audience) mint their own key, and gates
 # GET .../audience-grants/my-audiences the same way -- see
 # mkdocs/docs/admin/authorization.md#self-service-ingestion-key-mint.
 export MICROMEGAS_SELF_SERVICE_MINT="false"
 
-# Per-caller bounds once MICROMEGAS_SELF_SERVICE_MINT is on -- backstops
-# against a runaway/abusive caller, not routine-use quotas.
+# Env fallbacks for the per-caller bound settings once `self_service_mint` is
+# on -- backstops against a runaway/abusive caller, not routine-use quotas.
 export MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER="25"
 export MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER="100"
 
@@ -102,10 +104,10 @@ analytics-web-srv --disable-auth
 
 **Admin** (`/admin`) is open to **every authenticated user**, not just admins — `AuthGuard` on
 this route carries no `requireAdmin`. It renders a role-filtered card grid: an admin sees all
-nine cards; a non-admin sees only the two that have a real non-admin capability —
+ten cards; a non-admin sees only the two that have a real non-admin capability —
 **Ingestion API Keys** (mint only — see [Web app admin pages](api-keys.md#web-app-admin-pages))
-and **Audience Access** (see [Audience Access](#audience-access)). The other seven — Data Sources,
-Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List, Groups — have no
+and **Audience Access** (see [Audience Access](#audience-access)). The other eight — Data Sources,
+Export Screens, Import Screens, Maps, Analytics API Keys, Query Deny List, Groups, Settings — have no
 non-admin capability at all and stay hidden from a non-admin, same as their pages stay gated by
 `<AuthGuard requireAdmin>`.
 
@@ -126,6 +128,19 @@ shows every group with its member count; selecting one shows its members as chip
 highlighted, `group:` chips linking to the nested group) with a remove control and an **Add
 member** dialog whose kind toggle (everyone / user / group) mirrors the Audience Access page's
 own grant dialog.
+
+## Settings
+
+**Admin → Settings** (`/admin/settings`) edits the deployment-wide [settings](authorization.md#settings)
+stored in the database: `public_view_sets` and the four `self_service_*` settings. Rows are grouped
+by key prefix, each showing the stored value, a source pill (**Database** for a stored value,
+**Env / default** otherwise), and who last changed it. **Edit** opens a dialog that fits the
+setting (a toggle, a number, or a list of names); **Reset** deletes the stored value so the key
+reverts to its environment variable or default. A change reaches every replica within one cache
+refresh, not immediately. The page cannot see each service's environment, so it shows the variable
+name and the built-in default rather than an effective value. Every change is recorded in the
+[control-plane audit log](control-plane-audit-log.md). Like the other admin pages it is unavailable
+under `--disable-auth`.
 
 ## Maps
 
@@ -222,7 +237,7 @@ every write) 503 with `AUTH_DISABLED` in that mode, same as the admin key-manage
 [`api-keys.md`](api-keys.md#web-app-admin-pages)); the page detects this and renders a single
 explanatory panel instead of the normal list, with no Add grant / Share / Mint / delete controls.
 
-**What a non-admin sees and may do**, once `MICROMEGAS_SELF_SERVICE_MINT` is on:
+**What a non-admin sees and may do**, once the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`) is on:
 
 - **See** every grant on each `(audience, axis)` pair they hold a matching grant on — including
   other principals' rows on that same pair, which is what lets them answer "who else can see
@@ -296,6 +311,7 @@ Without `MICROMEGAS_BASE_PATH` (or with `"/"`):
 - `GET`/`POST /api/ingestion-api-keys`, `DELETE /api/ingestion-api-keys/{key_id}`, `PATCH /api/ingestion-api-keys/{key_id}/allowlist` — List/mint/revoke ingestion API keys, written directly to Postgres, and set their IP allowlist, admin-only (503 under `--disable-auth`, otherwise `MICROMEGAS_SQL_CONNECTION_STRING` is required at startup — see [API Keys](api-keys.md))
 - `GET`/`POST /api/audience-grants`, `DELETE /api/audience-grants?audience=&axis=&selector=`, `GET /api/audience-grants/visible`, `GET /api/audience-grants/my-audiences` — Audience grant CRUD and the caller-scoped reads (see [Authorization](authorization.md#audiences-and-grants))
 - `GET`/`POST /api/groups`, `DELETE /api/groups/{name}`, `GET`/`POST /api/groups/{name}/members`, `DELETE /api/groups/{name}/members?member=` — Group CRUD and membership management, admin-only (see [Groups](groups.md))
+- `GET /api/settings`, `PUT`/`DELETE /api/settings/{key}` — List, set and reset deployment settings, admin-only (see [Settings](authorization.md#settings))
 - `GET /auth/login` — Initiate OAuth login
 - `GET /auth/callback` — OAuth callback
 - `POST /auth/refresh` — Refresh tokens

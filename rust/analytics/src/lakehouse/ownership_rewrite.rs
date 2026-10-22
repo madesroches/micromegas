@@ -3,7 +3,7 @@
 //! An `AnalyzerRule` that injects an audience-filtering predicate into every
 //! `MaterializedView`-backed `TableScan` a query plan touches, based on the caller's `ReadScope`
 //! (`read_scope.rs`) and [`crate::lakehouse::read_scope::IsolationConfig`]'s
-//! `MICROMEGAS_PUBLIC_VIEW_SETS`.
+//! `public_view_sets` (a deployment setting, with `MICROMEGAS_PUBLIC_VIEW_SETS` as its env fallback).
 //!
 //! ## `ReadScope::All` is a true no-op
 //!

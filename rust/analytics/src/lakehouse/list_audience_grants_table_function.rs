@@ -17,7 +17,7 @@
 //!
 //! **What this is not.** This function reads the DB table directly on every call, never
 //! `DbAudienceGrantsSource`'s TTL snapshot, so a write is visible immediately. It also does not
-//! (and structurally cannot) apply `analytics-web-srv`'s `self_service_mint_enabled` knob --
+//! (and structurally cannot) apply `analytics-web-srv`'s `self_service_mint` setting --
 //! see the REST `GET .../audience-grants/visible` route for the knob-aware narrowing that backs
 //! the Audience Access page's own list; this function is the always-on SQL auditing surface,
 //! like `list_query_denials()`.

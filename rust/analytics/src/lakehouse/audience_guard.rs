@@ -446,7 +446,7 @@ impl AudienceGuard {
             .collect())
     }
 
-    /// Whether `view_set_name` is on the `MICROMEGAS_PUBLIC_VIEW_SETS` allowlist -- an operator
+    /// Whether `view_set_name` is on the `public_view_sets` setting's allowlist (env fallback `MICROMEGAS_PUBLIC_VIEW_SETS`) -- an operator
     /// declaring every row of a view set readable by any authenticated caller. Shared by
     /// [`Self::global_rows_visible`] and [`Self::authorize_view_instance`]'s rule (2) so the two
     /// read the same allowlist through one accessor.

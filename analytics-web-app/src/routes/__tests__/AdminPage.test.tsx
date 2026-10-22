@@ -1,6 +1,6 @@
 /**
  * `AdminPage`: the hub is viewable by every authenticated user, with its card grid filtered by
- * role — an admin sees all nine cards, a non-admin only the two with a real non-admin
+ * role — an admin sees all ten cards, a non-admin only the two with a real non-admin
  * capability (Ingestion API Keys, Audience Access). Also covers the wildcard-admin warning
  * banner, fetched only for an admin.
  */
@@ -48,6 +48,7 @@ const adminOnlyTitles = [
   'Analytics API Keys',
   'Query Deny List',
   'Groups',
+  'Settings',
 ]
 
 describe('AdminPage — admin', () => {
@@ -58,7 +59,7 @@ describe('AdminPage — admin', () => {
     ])
   })
 
-  it('shows all nine cards and the admin subtitle', async () => {
+  it('shows all ten cards and the admin subtitle', async () => {
     renderPage()
 
     await screen.findByText('Ingestion API Keys')

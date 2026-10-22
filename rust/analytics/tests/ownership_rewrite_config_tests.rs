@@ -1,12 +1,13 @@
-//! Unit tests for `IsolationConfig::from_env`, modeled on `resolve_isolation_config`'s own
-//! inline test module (`rust/public/src/servers/flight_sql_server.rs::mod tests`).
+//! Unit tests for `IsolationConfig::from_env`, the env-fallback half of the `public_view_sets`
+//! setting. `EnvFallbacks::from_env` (`rust/public/src/settings.rs`) has its own tests in
+//! `rust/public/tests/settings_tests.rs`.
 //!
 //! Every test here mutates process-wide env vars, so all are `#[serial]` with an `EnvGuard` that
 //! restores them on drop, the same pattern as `rust/auth/tests/default_provider_tests.rs`. Within
 //! this crate, this file's tests are the only ones that touch `MICROMEGAS_PUBLIC_VIEW_SETS` and
 //! `MICROMEGAS_ANALYTICS_PUBLIC_VIEW_SETS` (checked via grep), so `EnvGuard` clears both. The
 //! `rust/public` crate has its own tests that touch these vars too
-//! (`flight_sql_server.rs::mod tests`, `tests/isolation_config_fail_fast_tests.rs`), but those run
+//! (`tests/settings_tests.rs`, `tests/isolation_config_fail_fast_tests.rs`), but those run
 //! in their own processes, so they can't interleave with this crate's `#[serial]` tests.
 
 #![cfg(test)]

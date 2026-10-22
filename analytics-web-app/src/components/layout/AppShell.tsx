@@ -15,6 +15,7 @@ const ADMIN_ONLY_PATHS = [
   '/admin/analytics-keys',
   '/admin/query-deny-list',
   '/admin/groups',
+  '/admin/settings',
 ]
 
 export function AppShell() {

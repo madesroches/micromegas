@@ -24,8 +24,11 @@ use analytics_web_srv::ingestion_keys::IngestionKeyError;
 use analytics_web_srv::mutation_audit::{
     AuditOutcome, CONTROL_PLANE_AUDIT_TARGET, MutationAudit, MutationAuditRecord, action,
 };
+use analytics_web_srv::settings::{SettingsError, SettingsState, settings_router};
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
+use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
 use micromegas::tracing::event::in_memory_sink::InMemorySink;
 use micromegas::tracing::levels::{LevelFilter, set_max_level};
 use micromegas::tracing::logs::LogMsgQueueAny;
@@ -33,7 +36,26 @@ use micromegas::tracing::test_utils::init_in_memory_tracing;
 use micromegas::transit::HeterogeneousQueue;
 use serde_json::Value;
 use serial_test::serial;
+use std::sync::Arc;
 use tower::ServiceExt;
+
+/// A fixed settings source holding the self-service knobs as stored values, so no test reads
+/// process env or a database.
+fn test_settings(mint: bool, claims: i64, keys: i64, grants: i64) -> Arc<SettingsSource> {
+    Arc::new(SettingsSource::with_overrides(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings::default(),
+        },
+        DbOverrides {
+            self_service_mint: Some(mint),
+            max_claims_per_caller: Some(claims),
+            max_keys_per_caller: Some(keys),
+            max_grants_per_caller: Some(grants),
+            ..DbOverrides::default()
+        },
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // Serialization
@@ -53,6 +75,9 @@ fn full_record() -> MutationAuditRecord {
         member: None,
         created: Some(true),
         reason: None,
+        setting: None,
+        value: None,
+        previous_value: None,
     }
 }
 
@@ -103,12 +128,38 @@ fn gate_denial_record_carries_no_target_fields() {
         member: None,
         created: None,
         reason: Some("authentication required".to_string()),
+        setting: None,
+        value: None,
+        previous_value: None,
     };
     let json: Value = serde_json::to_value(record).expect("serialize");
-    for field in ["audience", "axis", "selector", "group", "member", "created"] {
+    for field in [
+        "audience",
+        "axis",
+        "selector",
+        "group",
+        "member",
+        "created",
+        "setting",
+        "value",
+        "previous_value",
+    ] {
         assert!(json.get(field).is_none(), "unexpected {field} in {json}");
     }
     assert_eq!(json["reason"], "authentication required");
+}
+
+#[test]
+fn setting_fields_serialize_when_present() {
+    let mut record = full_record();
+    record.action = action::SET_SETTING;
+    record.setting = Some("self_service_mint".to_string());
+    record.value = Some("true".to_string());
+    record.previous_value = Some("false".to_string());
+    let json: Value = serde_json::to_value(record).expect("serialize");
+    assert_eq!(json["setting"], "self_service_mint");
+    assert_eq!(json["value"], "true");
+    assert_eq!(json["previous_value"], "false");
 }
 
 #[test]
@@ -147,6 +198,7 @@ fn audience_grant_error_outcome_classification() {
     }
 
     let errors: Vec<AudienceGrantError> = vec![
+        AudienceGrantError::Unavailable("settings store unavailable".to_string()),
         AudienceGrantError::Database(sqlx::Error::RowNotFound),
         AudienceGrantError::NotConfigured,
         AudienceGrantError::Internal("boom".to_string()),
@@ -181,6 +233,29 @@ fn groups_error_outcome_classification() {
     }
 
     let (_, reason) = GroupsError::Database(sqlx::Error::RowNotFound).audit_outcome();
+    assert_eq!(reason, Some("internal database error".to_string()));
+}
+
+#[test]
+fn settings_error_outcome_classification() {
+    let denied: Vec<SettingsError> = vec![
+        SettingsError::BadRequest("nope".to_string()),
+        SettingsError::NotFound,
+    ];
+    for err in denied {
+        assert_eq!(err.audit_outcome().0, "denied");
+    }
+
+    let errors: Vec<SettingsError> = vec![
+        SettingsError::Database(sqlx::Error::RowNotFound),
+        SettingsError::NotConfigured,
+        SettingsError::Internal("boom".to_string()),
+    ];
+    for err in errors {
+        assert_eq!(err.audit_outcome().0, "error");
+    }
+
+    let (_, reason) = SettingsError::Database(sqlx::Error::RowNotFound).audit_outcome();
     assert_eq!(reason, Some("internal database error".to_string()));
 }
 
@@ -308,6 +383,13 @@ fn groups_router_with_user(state: GroupsState, user: ValidatedUser) -> Router {
         .layer(Extension(user))
 }
 
+fn settings_router_with_user(state: SettingsState, user: ValidatedUser) -> Router {
+    settings_router("")
+        .layer(Extension(state))
+        .layer(Extension(AuthToken(String::new())))
+        .layer(Extension(user))
+}
+
 fn post_request(uri: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -380,8 +462,7 @@ async fn create_grant_gate_denial_emits_a_denied_record_with_no_target_fields() 
     let app = grant_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -418,8 +499,7 @@ async fn delete_grant_gate_denial_emits_the_delete_grant_action() {
     let app = grant_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -446,8 +526,7 @@ async fn grant_gate_with_no_identity_extension_records_unauthenticated_actor() {
 
     let app = grant_router_with_no_identity(AudienceGrantsState {
         pool: Some(lazy_pool()),
-        self_service_mint_enabled: true,
-        max_grants_per_caller: 50,
+        settings: test_settings(true, 25, 100, 50),
     });
     let response = app
         .oneshot(post_request(
@@ -507,8 +586,7 @@ async fn create_grant_pool_unconfigured_emits_an_error_record() {
     let app = grant_router_with_user(
         AudienceGrantsState {
             pool: None,
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -593,6 +671,38 @@ async fn group_mutation_routes_pool_unconfigured_emit_error_records_with_targets
         if uri.contains("members") {
             assert_eq!(record["member"], "user:x@example.com", "{method} {uri}");
         }
+    }
+}
+
+/// PUT and DELETE on a registered key with no pool configured: the handler runs (the admin gate
+/// admits), fails with 503 and still emits one `error` record carrying the setting key.
+#[tokio::test]
+#[serial]
+async fn setting_mutation_routes_pool_unconfigured_emit_error_records_with_targets() {
+    for (method, body, expected_action) in [
+        ("PUT", Some(r#"{"value":true}"#), "set_setting"),
+        ("DELETE", None, "reset_setting"),
+    ] {
+        let guard = init_in_memory_tracing();
+        enable_info_logging();
+
+        let app = settings_router_with_user(SettingsState { pool: None }, admin_user());
+        let request = group_mutation_request(method, "/api/settings/self_service_mint", body);
+        let response = app.oneshot(request).await.expect("call service");
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method}"
+        );
+
+        micromegas::tracing::dispatch::flush_log_buffer();
+        let records = collect_audit_records(&guard.sink);
+        assert_eq!(records.len(), 1, "{method}: {records:?}");
+        let record = &records[0];
+        assert_eq!(record["action"], expected_action, "{method}");
+        assert_eq!(record["outcome"], "error");
+        assert_eq!(record["actor"], "admin@example.com");
+        assert_eq!(record["setting"], "self_service_mint", "{method}");
     }
 }
 
