@@ -244,7 +244,9 @@ class TestRerunCommand:
 
 class TestBuildImageArch:
     def test_arm64_key(self, monkeypatch):
-        monkeypatch.setattr("build_docker_images.run_command", lambda cmd, cwd=None: True)
+        monkeypatch.setattr(
+            "build_docker_images.run_command", lambda cmd, cwd=None: True
+        )
         r = build_image("redis-exporter", "1.2.3", FULL_SHA, push=True, arm64=True)
         assert r["arm64"] is True
         assert r["pushed"] is True
@@ -276,7 +278,9 @@ class TestMainExitCode:
         assert out.rstrip().endswith("FAILED: 1 image(s)")
 
     def test_arm64_push_failure_says_build_push_failed(self, monkeypatch, capsys):
-        monkeypatch.setattr(sys, "argv", ["build_docker_images.py", "--arm64", "--push", "ingestion"])
+        monkeypatch.setattr(
+            sys, "argv", ["build_docker_images.py", "--arm64", "--push", "ingestion"]
+        )
         monkeypatch.setattr("build_docker_images.get_revision", lambda: FULL_SHA)
         monkeypatch.setattr(
             "build_docker_images.build_image",

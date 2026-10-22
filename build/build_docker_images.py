@@ -331,7 +331,9 @@ def main():
             arch = "arm64" if r["arm64"] else "amd64"
             if not r["built"]:
                 # buildx builds and pushes arm64 in one command, so the two can't be told apart.
-                reason = "build/push failed" if r["arm64"] and args.push else "not built"
+                reason = (
+                    "build/push failed" if r["arm64"] and args.push else "not built"
+                )
             else:
                 reason = "not pushed"
             print(f"  {r['service']} ({arch}): {reason}")
