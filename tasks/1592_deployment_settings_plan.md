@@ -55,12 +55,6 @@ policy in #1695, become one registry entry each, with no new migration.
   and `AuditOutcome`. On the frontend, `audience-grants-api.ts` and `groups-api.ts` call these
   routes with plain `authenticatedFetch`, and `AdminPage.tsx` lists the admin cards.
 
-**Not moving: `MICROMEGAS_DEFAULT_AUDIENCE`.** The ingestion role stamps it onto new rows. The
-read side uses it to `COALESCE` unstamped rows. The maintenance role writes it into materialized
-partitions (`metadata_partition_spec.rs:37`, and `mkdocs/docs/admin/flight-sql.md:33`). Changing
-it at runtime would leave already-materialized partitions disagreeing with new ones, and the
-`AudienceIndex` cache (5-min TTL) would keep serving the old value.
-
 ## Design
 
 ### Which env vars move
@@ -69,7 +63,7 @@ it at runtime would leave already-materialized partitions disagreeing with new o
 |---|---|---|
 | **Move now** | `MICROMEGAS_PUBLIC_VIEW_SETS`, `MICROMEGAS_SELF_SERVICE_MINT`, `MICROMEGAS_SELF_SERVICE_MAX_{CLAIMS,KEYS,GRANTS}_PER_CALLER` | Deployment-wide policy, already read on a per-request path. They need the same value on every replica. |
 | **Good later candidates** (separate issues) | `MICROMEGAS_RETENTION_DAYS` → #1695's per-tag retention policy; `MICROMEGAS_QUERY_DENY_MAX_RULES` | Deployment-wide policy. Each is one registry entry plus a call-site change once this store exists. |
-| **Stay env-only** | `MICROMEGAS_DEFAULT_AUDIENCE` (see above); connection strings, object-store URIs, listen addresses, OIDC config and secrets, `MICROMEGAS_API_KEYS`; memory budgets, cache sizes, temp-dir caps, telemetry-sink knobs; refresh intervals and TTLs, including `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, which governs this cache | Needed before the DB is reachable, secret, per-process or per-replica tuning, or baked into stored data. |
+| **Stay env-only** | `MICROMEGAS_DEFAULT_AUDIENCE` (see Decisions); connection strings, object-store URIs, listen addresses, OIDC config and secrets, `MICROMEGAS_API_KEYS`; memory budgets, cache sizes, temp-dir caps, telemetry-sink knobs; refresh intervals and TTLs, including `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, which governs this cache | Needed before the DB is reachable, secret, per-process or per-replica tuning, or baked into stored data. |
 
 ### Table: data-lake migration v12 (`rust/ingestion/src/sql_migration.rs`)
 
@@ -393,6 +387,7 @@ and the `with_overrides` seam.
     `(key, value)` pairs.
   - Resolution order for each accessor: DB, then env, then default.
   - `pinned` ignores both env and DB.
+  - Each `spec.default` parses to the default actually applied by `EnvFallbacks` and `pinned`.
   - The shadowed-env warning logic, as a pure `shadowed(&rows, env_lookup)` function.
 - `isolation_config_fail_fast_tests.rs`: unchanged; `EnvFallbacks::from_env` propagates the
   `IsolationConfig::from_env` error unchanged (no added context), before the lake is touched, so
