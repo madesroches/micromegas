@@ -60,7 +60,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bo
 </style></head><body>
 <div class="banner">
   <h1>Option B — Dim the others</h1>
-  <p>While a selection exists, unselected bars and points fade to about 15–25% opacity and the selected mark stays at full strength. In line mode the selected point grows and fills, and other series fade.</p>
+  <p>While a selection exists, every mark except the selected one fades, and SQL per-row colors keep their hue. <b>Bars:</b> unselected fill ×0.25, stroke ×0.5 (<code>DIM_FILL</code>, <code>DIM_STROKE</code>); the selected bar keeps its base color. <b>Lines:</b> other series fade to <code>DIM_LINE</code> = 0.3. The selected series' line stays at full strength, and its points (stroke and fill) use a copy of the line's per-row gradient faded to <code>DIM_POINT</code> = 0.3. The selected point is a 6px dot filled with its own row color.</p>
 </div>
 <div class="layout">
   <div class="notebook">
@@ -72,6 +72,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bo
         </div>
         <div class="ctrl">
           <span class="stat">max: <b>$412.80</b></span><span class="stat">avg: <b>$171.24</b></span><span class="stat">count: <b>8</b></span>
+          <div class="seg" id="seg-colors"><button data-c="on" class="on">Row colors</button><button data-c="off">Series color</button></div>
           <div class="seg" data-chart="cost"><button data-t="line">Line</button><button data-t="bar" class="on">Bar</button></div>
           <div class="seg"><button class="on">P99</button><button>Max</button></div>
         </div>
@@ -122,18 +123,25 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bo
       <div class="body note"><ul style="margin:0;padding-left:16px">
         <li>Click a bar to select it. Click it again, or click empty plot area, to clear.</li>
         <li>Switch to <b>Line</b>: click within ~8px of a point. The selection survives the toggle.</li>
+        <li><b>cost_by_user</b> colors each row from a SQL <code>color</code> column (red above $200, green below). Toggle <b>Series color</b> to compare with a plain series.</li>
+        <li>In <b>Line</b> mode, the selected series' line keeps its gradient while its other points fade to the same gradient at 0.3, so each point keeps its row's hue.</li>
         <li>In <b>service_health</b> (2 queries), each bar in a group is selectable on its own. The published row comes from that bar's query.</li>
       </ul>
-      <div class="help" style="margin-top:10px"><b>Pro:</b> the selection stands out most, and the effect is familiar from BI tools. <b>Con:</b> the chart has to rebuild its per-bar fill arrays on every click (uPlot bakes them in), so a click costs a chart rebuild instead of a redraw. It also overrides SQL-driven per-row colors, which then can't be read while a selection is active.</div></div>
+      <div class="help" style="margin-top:10px"><b>Pro:</b> the selection stands out most, and the effect is familiar from BI tools. Dimming is redraw-only, and per-row colors are faded rather than replaced, so they stay readable. <b>Con:</b> uPlot's hover dot reuses <code>points.stroke</code>, so it also looks faded on the selected series while a selection exists.</div></div>
     </div>
   </div>
 </div>
 
 <script>
 const OPTION = "B";
+// color = CASE WHEN cost > 200 THEN rgba(0.8,0.1,0.1,1) ELSE rgba(0.2,0.7,0.2,1) END
+const RED = "#cc1a1a", GREEN = "#33b333";
 const COST = [
   {username:"alice",cost:412.8},{username:"bob",cost:96.4},{username:"carol",cost:288.1},{username:"dmitri",cost:37.9},
-  {username:"emma",cost:201.5},{username:"farid",cost:154.0},{username:"grace",cost:63.2},{username:"hiro",cost:116.0}];
+  {username:"emma",cost:201.5},{username:"farid",cost:154.0},{username:"grace",cost:63.2},{username:"hiro",cost:116.0}]
+  .map(r=>({...r,color:r.cost>200?RED:GREEN}));
+let rowColors = true;
+const DIM_FILL=0.25, DIM_STROKE=0.5, DIM_LINE=0.3, DIM_POINT=0.3;
 const SVC_X = ["auth","billing","catalog","ingest","search"];
 const SVC = [
   {label:"p95 latency",color:"#bf360c",y:"p95_ms",unit:"ms",rows:[{service:"auth",p95_ms:42},{service:"billing",p95_ms:118},{service:"catalog",p95_ms:65},{service:"ingest",p95_ms:203},{service:"search",p95_ms:88}]},
@@ -152,6 +160,18 @@ const state = {cost:{type:"bar",sel:null}, svc:{type:"bar",sel:null}};
 const NS="http://www.w3.org/2000/svg";
 function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e}
 function rgba(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`}
+// Mirrors the planned fadeCss: multiplies the existing alpha.
+function fadeCss(css,f){
+  if(css.startsWith("#")){const a=css.length===9?parseInt(css.slice(7,9),16)/255:1;return rgba(css.slice(0,7),+(a*f).toFixed(3))}
+  const m=css.match(/rgba?\(([^,]+),([^,]+),([^,)]+)(?:,([^)]+))?\)/);
+  return `rgba(${m[1]},${m[2]},${m[3]},${+((m[4]!=null?+m[4]:1)*f).toFixed(3)})`}
+let gradSeq=0;
+// Horizontal gradient across the plot, like XYChart's per-row line stroke; mapStop fades each stop.
+function gradient(svg,L,pw,stops,mapStop){
+  const id="g"+(gradSeq++), defs=svg.querySelector("defs")||el("defs",{},svg);
+  const lg=el("linearGradient",{id,gradientUnits:"userSpaceOnUse",x1:L,x2:L+pw,y1:0,y2:0},defs);
+  stops.forEach(s=>el("stop",{offset:((s.x-L)/pw).toFixed(4),"stop-color":mapStop(s.color)},lg));
+  return `url(#${id})`}
 const HL = "#e7e9ea";       // --text-primary
 const GOLD = "#ffb300";     // --chart-selection-border
 
@@ -189,25 +209,33 @@ function draw(key){
       s.rows.forEach((row,ri)=>{
         const i=xs.indexOf(row[xcol]); const x=L+slot*i+slot*0.1+bw*si+1, y=yPos(row[s.y]), w=bw-2, h=T+ph-y;
         const sel=isSel(si,ri);
-        let fa=0.6, sa=1;
-        if(OPTION==="B"&&any&&!sel){fa=0.15;sa=0.3}
-        if(OPTION==="B"&&sel){fa=0.9}
-        const r=el("rect",{x,y,width:w,height:h,fill:rgba(s.color,fa),stroke:rgba(s.color,sa),"stroke-width":1,class:"hit"},marks);
+        // Base colors as XYChart builds them: a per-row color is used as-is for fill and stroke.
+        const rc=rowColors&&row.color;
+        let fill=rc?row.color:rgba(s.color,0.6), stroke=rc?row.color:s.color;
+        if(any&&!sel){fill=fadeCss(fill,DIM_FILL);stroke=fadeCss(stroke,DIM_STROKE)}
+        const r=el("rect",{x,y,width:w,height:h,fill,stroke,"stroke-width":1,class:"hit"},marks);
         r.addEventListener("click",e=>{e.stopPropagation();select(key,{s:si,r:ri})});
         if(sel&&OPTION==="A") el("rect",{x:x-2,y:y-2,width:w+4,height:h+2,fill:"none",stroke:HL,"stroke-width":2,"pointer-events":"none"},over);
         if(sel&&OPTION==="C") el("rect",{x:x-1,y:y-1,width:w+2,height:h+1,fill:"none",stroke:GOLD,"stroke-width":1.5,"pointer-events":"none"},over);
       });
     } else {
-      const pts=s.rows.map((row,ri)=>({x:L+slot*(xs.indexOf(row[xcol])+.5),y:yPos(row[s.y]),ri}));
-      const la=(OPTION==="B"&&any&&st.sel.s!==si)?0.3:1;
-      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L")+`L${pts[pts.length-1].x},${T+ph}L${pts[0].x},${T+ph}Z`,fill:rgba(s.color,0.1*la),stroke:"none","pointer-events":"none"},marks);
-      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L"),fill:"none",stroke:rgba(s.color,la),"stroke-width":2,"pointer-events":"none"},marks);
+      const pts=s.rows.map((row,ri)=>({x:L+slot*(xs.indexOf(row[xcol])+.5),y:yPos(row[s.y]),ri,color:rowColors&&row.color?row.color:s.color}));
+      const perRow=rowColors&&s.rows.some(r=>r.color);
+      // uPlot series.alpha: the whole series (area, line, points) fades when another series owns the selection.
+      const sg=el("g",{opacity:(any&&st.sel.s!==si)?DIM_LINE:1},marks);
+      const ownsSel=any&&st.sel.s===si;
+      const lineStroke=perRow?gradient(svg,L,pw,pts,c=>c):s.color;
+      const areaFill=perRow?gradient(svg,L,pw,pts,c=>fadeCss(c,0.15)):rgba(s.color,0.1);
+      // points.stroke / points.fill: the line's style, or a faded copy of it while this series owns the selection.
+      const ptStroke=ownsSel?(perRow?gradient(svg,L,pw,pts,c=>fadeCss(c,DIM_POINT)):fadeCss(s.color,DIM_POINT)):lineStroke;
+      const ptFill=ownsSel?ptStroke:"#fff";
+      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L")+`L${pts[pts.length-1].x},${T+ph}L${pts[0].x},${T+ph}Z`,fill:areaFill,stroke:"none","pointer-events":"none"},sg);
+      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L"),fill:"none",stroke:lineStroke,"stroke-width":2,"pointer-events":"none"},sg);
       pts.forEach(p=>{
         const sel=isSel(si,p.ri);
-        let pa=1, rad=3;
-        if(OPTION==="B"&&any&&!sel){pa=0.25}
-        if(OPTION==="B"&&sel){rad=6}
-        el("circle",{cx:p.x,cy:p.y,r:rad,fill:sel&&OPTION==="B"?s.color:"#12121a",stroke:rgba(s.color,pa),"stroke-width":2,"pointer-events":"none"},marks);
+        el("circle",{cx:p.x,cy:p.y,r:3,fill:ptFill,stroke:ptStroke,"stroke-width":2,"pointer-events":"none"},sg);
+        // draw hook overlay: the selected point, filled with point.color ?? seriesColor
+        if(sel) el("circle",{cx:p.x,cy:p.y,r:6,fill:p.color,stroke:p.color,"stroke-width":2,"pointer-events":"none"},over);
         if(sel&&OPTION==="A") el("circle",{cx:p.x,cy:p.y,r:7,fill:"none",stroke:HL,"stroke-width":2,"pointer-events":"none"},over);
         if(sel&&OPTION==="C") el("circle",{cx:p.x,cy:p.y,r:6,fill:"none",stroke:GOLD,"stroke-width":2,"pointer-events":"none"},over);
         const hit=el("circle",{cx:p.x,cy:p.y,r:8,fill:"transparent",class:"hit"},svg);
@@ -249,6 +277,10 @@ document.querySelectorAll(".seg[data-chart]").forEach(seg=>{
     seg.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b)); draw(key);
   }));
 });
+document.querySelectorAll("#seg-colors button").forEach(b=>b.addEventListener("click",()=>{
+  rowColors=b.dataset.c==="on";
+  document.querySelectorAll("#seg-colors button").forEach(x=>x.classList.toggle("on",x===b)); draw("cost");
+}));
 state.cost.sel={s:0,r:2}; // pre-select carol so the highlight is visible on open
 draw("cost"); draw("svc"); publish();
 </script>
