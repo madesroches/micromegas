@@ -6,15 +6,20 @@ throwaway `git init` repo in `tmp_path`, and everything else is pure functions o
 monkeypatched `run_command`.
 """
 
+import argparse
 import subprocess
+import sys
 
 import pytest
 
 from build_docker_images import (
     build_command,
     build_image,
+    failed_results,
     get_revision,
     image_tags,
+    main,
+    rerun_command,
 )
 
 FULL_SHA = "6a6822cb3f1ecba1234567890abcdef123456789"
@@ -173,6 +178,7 @@ class TestBuildImagePushLoop:
 
         assert result["built"] is True
         assert result["pushed"] is True
+        assert result["arm64"] is False
 
         push_calls = [c for c in calls if c[:2] == ["docker", "push"]]
         assert len(push_calls) == 3
@@ -181,6 +187,115 @@ class TestBuildImagePushLoop:
             f"marcantoinedesroches/micromegas-redis-exporter:{tag}"
             for tag in result["tags"]
         }
+
+
+def result(service, arm64=False, built=True, pushed=True):
+    return {
+        "service": service,
+        "image": f"u/r-{service}",
+        "tags": ["1.2.3"],
+        "arm64": arm64,
+        "built": built,
+        "pushed": pushed,
+    }
+
+
+def ns(push=False, version=None):
+    return argparse.Namespace(push=push, version=version)
+
+
+class TestFailedResults:
+    def test_all_ok(self):
+        assert failed_results([result("a"), result("b", arm64=True)], push=True) == []
+
+    def test_build_failure(self):
+        bad = result("a", built=False, pushed=False)
+        assert failed_results([result("b"), bad], push=False) == [bad]
+
+    def test_push_failure_only_with_push(self):
+        bad = result("a", built=True, pushed=False)
+        assert failed_results([bad], push=True) == [bad]
+        assert failed_results([bad], push=False) == []
+
+
+class TestRerunCommand:
+    def test_amd64_only(self):
+        cmd = rerun_command([result("a"), result("b")], ns())
+        assert cmd == "python3 build/build_docker_images.py a b"
+
+    def test_arm64_only(self):
+        cmd = rerun_command([result("a", arm64=True)], ns())
+        assert cmd == "python3 build/build_docker_images.py --arm64 a"
+
+    def test_mixed_arches_two_lines(self):
+        cmd = rerun_command([result("a"), result("b", arm64=True)], ns())
+        assert cmd.splitlines() == [
+            "python3 build/build_docker_images.py a",
+            "python3 build/build_docker_images.py --arm64 b",
+        ]
+
+    def test_push_and_version_carried_over(self):
+        cmd = rerun_command([result("a")], ns(push=True, version="9.9.9"))
+        assert cmd == "python3 build/build_docker_images.py --push --version 9.9.9 a"
+
+    def test_no_version_when_not_given(self):
+        assert "--version" not in rerun_command([result("a")], ns(push=True))
+
+
+class TestBuildImageArch:
+    def test_arm64_key(self, monkeypatch):
+        monkeypatch.setattr(
+            "build_docker_images.run_command", lambda cmd, cwd=None: True
+        )
+        r = build_image("redis-exporter", "1.2.3", FULL_SHA, push=True, arm64=True)
+        assert r["arm64"] is True
+        assert r["pushed"] is True
+
+
+class TestMainExitCode:
+    def run_main(self, monkeypatch, argv, pushed):
+        monkeypatch.setattr(sys, "argv", ["build_docker_images.py", *argv])
+        monkeypatch.setattr("build_docker_images.get_revision", lambda: FULL_SHA)
+        monkeypatch.setattr(
+            "build_docker_images.build_image",
+            lambda service, version, revision, push, arm64: result(
+                service, arm64=arm64, pushed=pushed
+            ),
+        )
+        return main()
+
+    def test_push_failure_exits_nonzero(self, monkeypatch, capsys):
+        code = self.run_main(
+            monkeypatch, ["--push", "--version", "1.2.3", "ingestion"], pushed=False
+        )
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "ingestion (amd64): not pushed" in out
+        assert (
+            "python3 build/build_docker_images.py --push --version 1.2.3 ingestion"
+            in out
+        )
+        assert out.rstrip().endswith("FAILED: 1 image(s)")
+
+    def test_arm64_push_failure_says_build_push_failed(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            sys, "argv", ["build_docker_images.py", "--arm64", "--push", "ingestion"]
+        )
+        monkeypatch.setattr("build_docker_images.get_revision", lambda: FULL_SHA)
+        monkeypatch.setattr(
+            "build_docker_images.build_image",
+            lambda service, version, revision, push, arm64: result(
+                service, arm64=arm64, built=False
+            ),
+        )
+        assert main() == 1
+        assert "ingestion (arm64): build/push failed" in capsys.readouterr().out
+
+    def test_success_exits_zero(self, monkeypatch):
+        code = self.run_main(
+            monkeypatch, ["--push", "--version", "1.2.3", "ingestion"], pushed=True
+        )
+        assert code == 0
 
 
 if __name__ == "__main__":
