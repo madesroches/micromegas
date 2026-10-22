@@ -209,9 +209,9 @@ impl SettingsSource {
   `Some`, and `env_only` otherwise.
 - Every read site listed under Current State calls `state.settings.self_service().await`, but only
   on the non-admin branch (admins bypass these knobs via `!caller.is_admin()` and must not 503 on
-  a settings outage). `MintGate` reads it, and `mint_key` reads it inside its existing `!caller.is_admin()` block
-  (`ingestion_keys.rs:688`); `try_claim_and_mint` takes no settings parameter, so the admin path
-  passes nothing.
+  a settings outage). `MintGate` reads it, and `mint_key` calls it inside its existing `!caller.is_admin()` block
+  (`ingestion_keys.rs:440`), and `try_claim_and_mint` calls it inside its own non-admin block
+  (`:687`).
 - Error mapping: a settings error maps to `IngestionKeyError::Unavailable` (the DB-outage variant,
   since `NotConfigured` would mislead). `AudienceGrantError` gains a matching `Unavailable` (503)
   variant, and `GrantGate` emits the gate `"error"` audit (`emit_gate_outcome("error", ...)`) for
@@ -226,7 +226,7 @@ follow `groups.rs`'s structure:
 |---|---|
 | `GET {base}/api/settings` | Returns one entry per `SETTINGS` item: `{key, kind, env_var, default, description, value \| null, updated_at \| null, updated_by \| null}`. Reads the table directly, not through the cache, so the page shows what was just written. |
 | `PUT {base}/api/settings/{key}` with body `{value}` | Rejects an unknown key with 404 and a failed `validate` with 400. Otherwise, in one transaction: `SELECT value … FOR UPDATE` (the previous value), then `INSERT … ON CONFLICT (key) DO UPDATE`. Returns the new entry. |
-| `DELETE {base}/api/settings/{key}` | Deletes the row, so the key reverts to env or default. Returns 404 when no row existed. |
+| `DELETE {base}/api/settings/{key}` | Runs `DELETE FROM settings WHERE key = $1 RETURNING value`, so the key reverts to env or default. The returned value is the audit `previous_value`; no returned row is the 404 case. |
 
 - **State:** a `SettingsState { pool: Option<PgPool> }` added to `AdminRoutesState` (and to the
   field-by-field construction in `routing_tests.rs`), following `GroupsState` / `require_pool`.
@@ -347,6 +347,7 @@ follow `groups.rs`'s structure:
   flight-sql/monolith never loads the settings table, since the value has no effect there.
 - Env stays a fallback, with no one-time seeding into the DB, per the grant/group precedent.
 - `MICROMEGAS_QUERY_DENY_MAX_RULES` is deferred to a separate issue.
+- `analytics-web-srv` newly fails at startup on a malformed `MICROMEGAS_PUBLIC_VIEW_SETS` (it builds `EnvFallbacks::from_env()`), accepted as for `MICROMEGAS_DEFAULT_AUDIENCE`.
 - The feature is named plain "settings" (matching e.g. Elasticsearch/CockroachDB cluster settings,
   GitLab admin settings), with no scope prefix since there is only one scope.
 
@@ -374,7 +375,7 @@ follow `groups.rs`'s structure:
 - Rust doc comments that describe env-only or startup-time resolution are reworded to describe the setting with env as fallback: `rust/analytics/src/lakehouse/read_scope.rs:55-56,113`, `audience_guard.rs:449`, `ownership_rewrite.rs:5-6`, `list_audience_grants_table_function.rs:20`, `rust/public/src/servers/flight_sql_server.rs:168`, `rust/analytics-web-srv/src/audience_grants.rs:17`.
 - `CHANGELOG.md` (Unreleased): the feature (#1592), and **Minor breaking change:**
   `FlightSqlServiceImpl::new` takes a `SettingsSource` instead of an `IsolationConfig`,
-  `IngestionKeysState` / `AudienceGrantsState` replace their knob fields with `settings`, and `MutationAuditRecord` gains `setting` / `value` / `previous_value`.
+  `IngestionKeysState` / `AudienceGrantsState` replace their knob fields with `settings`, and `MutationAuditRecord` gains `setting` / `value` / `previous_value`. `analytics-web-srv` now fails at startup on a malformed `MICROMEGAS_PUBLIC_VIEW_SETS`, like `MICROMEGAS_DEFAULT_AUDIENCE`.
 
 ## Testing Strategy
 
@@ -428,8 +429,9 @@ but not the end-to-end path through a real Postgres and two processes.
    `analytics-web-srv` explicitly with the same OIDC env and a built frontend (`analytics-web-app/dist`)
    on port 3000. Confirm that `/tmp/ingestion.log` shows the migration reaching v12.
 2. Open `http://127.0.0.1:3000/admin/settings` as an admin. All five settings show "Env / default".
-   A fresh DB seeds `admins = ['*']`; remove `*` from admins before steps 3 and 4 so a non-admin
-   exists.
+   A fresh DB seeds `admins = ['*']`; first add `user:<admin email>` to `admins` (Groups page or
+   `micromegas-groups`), then remove `*` so a non-admin exists (removing `*` alone is rejected by
+   the admins-lockout guard), and wait about one cache TTL before steps 3 and 4.
 3. As a non-admin, query a view set's rows through `micromegas-query`. Rows are audience-filtered.
    Then, as admin, set `public_view_sets` to that view set and wait about 60 s. The same query now
    returns unfiltered rows, with no restart.
