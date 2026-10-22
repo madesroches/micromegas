@@ -99,6 +99,9 @@ export function fadeCss(css: string, factor: number): string
 
 /** Per-bar colors for one series: the base colors, faded for every bar except the selected one. */
 export function barColors(base: string[], selectedDataIdx: number | null, seriesIndex: number, selectedSeriesIndex: number | null): string[]
+
+/** `fadeCss` applied to each gradient stop's color. */
+export function fadeStops(stops: { x: number; color: string }[], factor: number): { x: number; color: string }[]
 ```
 
 `fadeCss` must accept every format a mark color arrives in: the series color (`#rrggbb`),
@@ -159,13 +162,18 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
     Their `values()` callbacks start from the series' base color arrays, which are the existing
     `fillArr`/`strokeArr` or, without per-row colors, the series color repeated. When a selection
     exists, `barColors` (Design §2) returns `fadeCss(color, DIM_FILL = 0.25)` (stroke `DIM_STROKE = 0.5`) for every
-    bar except the selected `(seriesIndex, dataIdx)`. The selected bar's fill is raised to 0.9
-    alpha. SQL per-row colors are faded, not replaced, so their hue stays readable.
+    bar except the selected `(seriesIndex, dataIdx)`, which keeps its base color. SQL per-row colors are faded, not replaced, so their hue stays readable.
   - **Lines.** Unselected series get `u.series[i].alpha = DIM_LINE (0.3)`. The series that owns
-    the selection stays at 1, but its points' `stroke` becomes a function that returns
-    `fadeCss(color, DIM_POINT)` while a selection exists, and its `points.fill` is likewise a function
-    returning the faded color (uPlot defaults `points.fill` to `#fff`). A `draw` hook then paints the selected
-    point as a 6px dot filled with its own color, in the same overlay style as `refLinePlugin`.
+    the selection stays at 1, so its line keeps full strength. While a selection exists, its
+    `points.stroke` and `points.fill` both become a faded copy of the line's own style with
+    `DIM_POINT = 0.3`: `fadeCss(color, DIM_POINT)` for a plain series, or, for a per-row-colored
+    series, the same gradient as its line stroke built from `fadeStops(gradStops, DIM_POINT)`, so
+    each point keeps its row's hue. With no selection they return what uPlot uses today (the series
+    stroke, and `#fff` fill). The line-stroke gradient code moves into one helper taking a stop
+    list, shared by the stroke and the faded points. A `draw` hook then paints the selected point as
+    a 6px dot filled with `point.color ?? seriesColor`, in the same overlay style as `refLinePlugin`.
+    uPlot's hover dot also uses `points.stroke`, so it looks faded on that series while a selection
+    exists.
   - Hidden series (legend toggle) are unaffected. When the selected series is hidden, nothing is
     dimmed.
   - XYChart does not enable uPlot's `cursor.focus` (which also drives `series.alpha`), so nothing
@@ -307,6 +315,7 @@ Every unit test below runs without a DB.
   - `nextSelection`: select, re-click clears, click another switches, miss clears
   - `fadeCss`: `#rrggbb`, `#rrggbbaa` (the existing alpha is multiplied), `rgba(...)`, factor 1
     returns the same color
+- `fadeStops`: every stop's color is faded and its `x` is unchanged.
 - `barColors`: no selection keeps the base colors,
   a selection fades every bar but the selected one, and a selection in another series fades all
   bars of this series.
