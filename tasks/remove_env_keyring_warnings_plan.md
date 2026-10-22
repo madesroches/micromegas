@@ -19,7 +19,8 @@ Delete the three functions from `env.rs`, the import and two calls in `default_p
 ## Implementation Steps
 1. `rust/auth/src/env.rs`: remove `removed_vars_that_are_set`, `warn_removed_api_key_vars`, `warn_removed_audience_grant_vars`.
 2. `rust/auth/src/default_provider.rs`: drop the two functions from the `use crate::env::{...}` import (leaving `resolve_prefixed_var`) and remove the two calls in `compose()`.
-3. Delete `rust/auth/tests/env_tests.rs`.4. `rust/auth/tests/default_provider_tests.rs`: reword the comment near line 470 that refers to the warning, if it would otherwise be stale.
+3. Delete `rust/auth/tests/env_tests.rs`.
+4. `rust/auth/tests/default_provider_tests.rs`: reword the comment near line 470 that refers to the warning, if it would otherwise be stale.
 5. `mkdocs/docs/admin/api-keys.md`: update "Migrating from the env keyring" to stop describing a `warn!` line (three places: the intro paragraph, the consequences paragraph, and migration step 3); state that the variables are ignored silently and that skipping the migration leaves keyring tokens unauthenticated. Keep docs free of issue numbers.
 6. `CHANGELOG.md`: add an Unreleased entry (with `#1698`) saying the startup warnings were removed and that the variables are now ignored silently. **Minor breaking change:** `micromegas_auth::env::removed_vars_that_are_set` is removed.
 
