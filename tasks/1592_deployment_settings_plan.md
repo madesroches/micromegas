@@ -153,8 +153,9 @@ pub struct SettingsSource {
 impl SettingsSource {
     pub fn new(env: EnvFallbacks, pool: PgPool, ttl: Duration) -> Self;  // env already resolved by the caller
     pub fn env_only(env: EnvFallbacks) -> Self;                          // no telemetry-DB pool configured
-    pub fn pinned(isolation: Arc<IsolationConfig>) -> Self;              // with_isolation_config / tests
+    pub fn pinned(isolation: Arc<IsolationConfig>) -> Self;              // with_isolation_config / tests; env = {isolation, built-in self_service defaults}
     pub fn with_overrides(env: EnvFallbacks, db: DbOverrides) -> Self;   // no-DB tests; never reads process env
+    pub fn env_isolation_config(&self) -> Arc<IsolationConfig>;          // sync, no DB: env.isolation (the pinned config for `pinned`)
     pub async fn isolation_config(&self) -> Result<Arc<IsolationConfig>>;
     pub async fn self_service(&self) -> Result<SelfServiceSettings>;
     pub async fn warn_on_shadowed_env(&self);                  // best-effort startup diagnostic
@@ -178,7 +179,7 @@ impl SettingsSource {
   the process. No new knob.
 - **Accessor cost per request:** one `SnapshotSource::current()` (an RwLock read on the fast path)
   plus an `Option` check and an `Arc` clone.
-- **`warn_on_shadowed_env`:** called once at startup by each server, best effort, in the same way
+- **`warn_on_shadowed_env`:** called once at startup by each server, best effort (skipped for `pinned` sources and on the auth-disabled branch, which never read the settings table), in the same way
   `web_server.rs:811-839` checks for a missing mint grant. For every key whose env var is set
   *and* has a DB row, it logs `"{env_var} is set but ignored: settings.{key} is
   stored"`. This targets the #1561 failure mode: an env var that looks set but has no effect.
@@ -190,11 +191,13 @@ impl SettingsSource {
   `isolation_config: self.settings.isolation_config().await.map_err(...)` maps a
   `ProviderUnavailable` error to `Status::unavailable` and any other error to `Status::internal`.
   This is the same downcast the `read_policy` arm uses just above. The call is made only on the
-  `Some(auth_ctx)` arm; the `None` (auth-disabled) arm uses the env fallback, because
+  `Some(auth_ctx)` arm; the `None` (auth-disabled) arm uses `env_isolation_config()`, because
   `ReadScope::All` makes `OwnershipRewrite` and `AudienceGuard` ignore the value.
 - `FlightSqlServer::build_and_serve`: `resolve_isolation_config` (at `:235`) becomes
-  `EnvFallbacks::from_env()?` at the same spot, before any Postgres/object-store setup, so a
-  malformed `MICROMEGAS_PUBLIC_VIEW_SETS` still fails fast. `resolve_settings` then runs after
+  `EnvFallbacks::from_env()?` at the same spot, called only when `with_isolation_config` was not
+  set (that path builds a `pinned` source and never reads env), before any Postgres/object-store
+  setup, so a malformed `MICROMEGAS_PUBLIC_VIEW_SETS` still fails fast. The existing
+  explicit-config-wins tests at `flight_sql_server.rs:561-597` carry over. `resolve_settings` then runs after
   `lake_pool_for_keys` exists (`:245,:277`): it returns `SettingsSource::pinned(c)` when
   `with_isolation_config(c)` was called, otherwise `SettingsSource::new(env, pool, ttl)`
   over a `dedicated_key_store_pool(&lake_pool_for_keys)`, the same construction the grant store
@@ -279,7 +282,9 @@ follow `groups.rs`'s structure:
    `resolve_bool_env` / `resolve_u64_env` / `resolve_i64_env` from `web_server.rs` into it.
 3. **FlightSQL:** replace `isolation_config` with `settings` in `flight_sql_service_impl.rs`, and
    replace `resolve_isolation_config` with `resolve_settings` in `flight_sql_server.rs`. Update
-   `isolation_config_fail_fast_tests.rs` and the in-file tests at `flight_sql_server.rs:500-600`.
+   `isolation_config_fail_fast_tests.rs`, the in-file tests at `flight_sql_server.rs:500-600`, and
+   both `FlightSqlServiceImpl::new` helpers in `read_policy_threading_tests.rs`, which pass
+   `Arc::new(SettingsSource::pinned(Arc::new(IsolationConfig::default())))`.
 4. **Web server state:** switch `IngestionKeysState` / `AudienceGrantsState` to `settings`, update
    every read site, and build the shared source in `run_web_server`. Update
    `ingestion_keys_tests.rs`, `audience_grants_tests.rs` and `routing_tests.rs` to construct the
@@ -295,7 +300,7 @@ follow `groups.rs`'s structure:
 - `rust/ingestion/src/sql_migration.rs`
 - `rust/public/src/settings.rs` (new), `rust/public/src/lib.rs`
 - `rust/public/src/servers/flight_sql_server.rs`, `rust/public/src/servers/flight_sql_service_impl.rs`
-- `rust/public/tests/isolation_config_fail_fast_tests.rs`, `rust/public/tests/settings_tests.rs` (new)
+- `rust/public/tests/isolation_config_fail_fast_tests.rs`, `rust/public/tests/read_policy_threading_tests.rs`, `rust/public/tests/settings_tests.rs` (new)
 - `rust/analytics-web-srv/src/web_server.rs`, `ingestion_keys.rs`, `audience_grants.rs`, `mutation_audit.rs`, `settings.rs` (new), `lib.rs`
 - `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `audience_grants_tests.rs`, `routing_tests.rs`, `mutation_audit_tests.rs`, `settings_tests.rs` (new)
 - `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, plus tests under `__tests__`
@@ -353,16 +358,21 @@ follow `groups.rs`'s structure:
   key, and a short "Settings" section covers the admin page, the DB → env → default
   order, propagation within the cache TTL, and the shadowed-env warning. The self-service sections
   (`:226`, `:330`) say "the `self_service_mint` setting (env fallback
-  `MICROMEGAS_SELF_SERVICE_MINT`)".
+  `MICROMEGAS_SELF_SERVICE_MINT`)", and the other mentions of the moved env vars (`:94`, `:166`)
+  are reworded the same way.
 - `mkdocs/docs/admin/flight-sql.md:32` and `monolith.md`: `MICROMEGAS_PUBLIC_VIEW_SETS` is
-  described as the fallback for `public_view_sets`.
-- `mkdocs/docs/admin/web-app.md`: the Settings page and its REST routes; the telemetry
+  described as the fallback for `public_view_sets`, and the four `MICROMEGAS_SELF_SERVICE_*` rows
+  (`monolith.md:54-57`, `:68-69`) become env fallbacks for their settings.
+- `mkdocs/docs/admin/web-app.md`: the Settings page and its REST routes; the
+  `export MICROMEGAS_SELF_SERVICE_*` block (`:88-93`) and the mention at `:225` become env
+  fallbacks; the telemetry
   DB requirement at `:56-60` changes from v10 to v12; the card count at `:104-108` ("nine cards")
   and the admin-only card list gain the new card.
 - `mkdocs/docs/admin/api-keys.md`, `functions-reference.md`, `query-guide/python-api.md`: mentions
   of the moved env vars become mentions of the settings (env as fallback).
 - `mkdocs/docs/admin/control-plane-audit-log.md`: the `set_setting` / `reset_setting` actions and
-  the `setting` / `value` / `previous_value` fields, plus an example query.
+  the `setting` / `value` / `previous_value` fields, plus an example query; the existing env-var
+  mention at `:133` is reworded.
 - `CHANGELOG.md` (Unreleased): the feature (#1592), and **Minor breaking change:**
   `FlightSqlServiceImpl::new` takes a `SettingsSource` instead of an `IsolationConfig`,
   and `IngestionKeysState` / `AudienceGrantsState` replace their knob fields with `settings`.
@@ -386,7 +396,7 @@ and the `with_overrides` seam.
   - The shadowed-env warning logic, as a pure `shadowed(&rows, env_lookup)` function.
 - `isolation_config_fail_fast_tests.rs`: still fails at build time on a malformed
   `MICROMEGAS_PUBLIC_VIEW_SETS`, now on every auth branch (pins #1561).
-- Harness test (mirroring `provider_unavailable_maps_to_status_unavailable`, `:368`): build the
+- Harness test (in `read_policy_threading_tests.rs`, mirroring `provider_unavailable_maps_to_status_unavailable`, `:368`): build the
   service with a DB-backed source over the existing `connect_lazy` pool and an `AuthContext`
   present; the cold load fails, so the request returns `Code::Unavailable`. A/B value semantics
   (overrides A then B give different `public_view_sets`) are tested directly on the source's
