@@ -113,9 +113,9 @@ LIMIT 100
 
 ### Row Selection
 
-Table, chart, and map cells support interactive selection. When enabled (via the **Row Selection** section in the cell editor), a radio-button column appears in table cells and clicking a row selects it. Chart and map cells select by clicking a mark (a bar, a point, or a map marker). The selected row's values become available to downstream cells via `$cellName.selected.column` macros.
+Table, chart, and map cells support interactive selection. For table and chart cells, selection is enabled via the **Row Selection** section in the cell editor; a radio-button column appears in table cells and clicking a row selects it, and chart cells select by clicking a mark (a bar or a point). Map cells have no Row Selection section and always publish the clicked marker. The selected row's values become available to downstream cells via `$cellName.selected.column` macros.
 
-- **Selection mode** is configured in the cell editor: None (default) or Single.
+- **Selection mode** (table and chart cells) is configured in the cell editor: None (default) or Single.
 - **Selection state** is ephemeral (like pagination) — it resets when the cell re-executes.
 - **Waiting for selection**: when a downstream cell references `$cell.selected.column` but no row is selected yet, the cell shows a "waiting for selection" placeholder instead of executing.
 - The Available Variables panel shows `$cellName.selected.column` entries for cells with selection enabled.
