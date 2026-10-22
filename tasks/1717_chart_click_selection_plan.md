@@ -63,8 +63,9 @@ columns (`validateChartColumns`, `arrow-utils.ts:304-358`). The published row is
 
 Add `rowIndex: number` to `ChartPoint` (`lib/arrow-utils.ts:208`). Both extract functions set it
 to the Arrow row `r`/`i` the point was built from. That covers the categorical second pass at
-`arrow-utils.ts:558` too. The field is required, so every construction site has to set it, and
-all of them are in `arrow-utils.ts`. Sorting and null-skipping then no longer lose the mapping.
+`arrow-utils.ts:558` too. The field is required, so every construction site has to set it. Besides
+`arrow-utils.ts`, `TimeSeriesChart` in `XYChart.tsx` (~line 1265) builds `ChartPoint`s from its
+`{ time, value }` data, so it maps `(d, i) => ({ x: d.time, y: d.value, rowIndex: i })`. Sorting and null-skipping then no longer lose the mapping.
 
 ### 2. Hit-testing helpers (pure, new module)
 
@@ -95,6 +96,9 @@ export function sameHit(a: ChartPointHit | null, b: ChartPointHit | null): boole
 
 /** Multiply the alpha of a CSS color (`#rrggbb`, `#rrggbbaa`, or `rgba(...)`) by `factor`. */
 export function fadeCss(css: string, factor: number): string
+
+/** Per-bar colors for one series: the base colors, faded for every bar except the selected one. */
+export function barColors(base: string[], selectedDataIdx: number | null, seriesIndex: number, selectedSeriesIndex: number | null): string[]
 ```
 
 `fadeCss` must accept every format a mark color arrives in: the series color (`#rrggbb`),
@@ -111,10 +115,6 @@ onPointSelect?: (hit: ChartPointHit | null) => void
 selectedPoint?: ChartPointHit | null
 ```
 
-The props are optional because XYChart is shared with `MetricsRenderer`, which has no selection
-concept. Leaving `onPointSelect` unset turns the feature off, so existing callers keep working
-without changes.
-
 Implementation inside XYChart. Both the single- and multi-series paths get a shared
 `createSelectionPlugin()`, built like `createReferenceLinePlugin`:
 
@@ -127,32 +127,40 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
   `drawClear` hook. uPlot reports these rects in canvas pixels and `sIdx` is 1-based, so subtract
   1 to get `seriesIndex`.
 - **Click.** On `init`, attach `mousedown`/`mouseup` listeners to `u.over`. On a mouseup where
-  `isClick(down, up)` holds (so a drag-to-zoom in time mode is never also a click):
+  `isClick(down, up)` holds (so a drag-to-zoom in time mode is never also a click). uPlot's
+  `cursor.drag.dist` defaults to 0, so a 1px jitter would otherwise create a selection and zoom
+  (`XYChart.tsx:870-883`) while also passing `isClick`. Both cursor configs (~lines 847 and 1023)
+  therefore set `cursor.drag.dist` to the same threshold constant `isClick` uses, measured on X as
+  uPlot does:
   - bar charts: convert the cursor to canvas px (`u.bbox.left + u.cursor.left * devicePixelRatio`,
     same for top) and run `hitTestBars`.
-  - line charts: take `idx = u.posToIdx(cursor.left)` and a ±1 window, since multi-series has
-    `null` gaps. For each visible series with a non-null y, build candidates
-    `{ px: u.valToPos(x[idx], 'x'), py: u.valToPos(y, series.scale) }` and run
-    `findNearestPoint(..., radius = 8)`.
+  - line charts: with `r = 8`, scan each visible series over the indices
+    `u.valToIdx(u.posToVal(left - r, 'x'))`..`u.valToIdx(u.posToVal(left + r, 'x'))`, so every
+    point within the radius is a candidate even with `null` gaps or dense data. For each non-null
+    y, build candidates `{ px: u.valToPos(x[idx], 'x'), py: u.valToPos(y, series.scale) }` and run
+    `findNearestPoint(..., radius = r)`.
   - Map the hit to `ChartPointHit` with `rowIndexBySeries`, then call
     `onPointSelectRef.current(nextSelection(selectedRef.current, hit))`. A miss passes `null`,
     which clears the selection.
   - Hidden series (legend toggle) are skipped in both modes.
 - **Highlight: dim the unselected marks** (mockup option B). While a selection exists, every
   mark except the selected one fades. With no selection, the chart looks exactly as it does today.
-  The style is read from `selectedRef` when the chart draws, so a selection change only triggers
+  The style is read from `selectedRef` when the chart draws. The selected `dataIdx` is
+  `rowIndexBySeries[seriesIndex].indexOf(rowIndex)` (the union-X index in multi-series), recomputed
+  whenever the chart is rebuilt. A selection change only triggers
   `chartRef.current?.redraw(true)`. `true` rebuilds the cached paths so the bar `disp` callbacks
   run again; the uPlot instance itself is not rebuilt.
   - **Bars.** Every bar series always gets `disp.fill` and `disp.stroke` facets. Today only
     per-row-colored series have them. uPlot requires both when the stroke width is non-zero.
     Their `values()` callbacks start from the series' base color arrays, which are the existing
     `fillArr`/`strokeArr` or, without per-row colors, the series color repeated. When a selection
-    exists, they return `fadeCss(color, DIM_FILL = 0.25)` (stroke `DIM_STROKE = 0.5`) for every
+    exists, `barColors` (Design §2) returns `fadeCss(color, DIM_FILL = 0.25)` (stroke `DIM_STROKE = 0.5`) for every
     bar except the selected `(seriesIndex, dataIdx)`. The selected bar's fill is raised to 0.9
     alpha. SQL per-row colors are faded, not replaced, so their hue stays readable.
   - **Lines.** Unselected series get `u.series[i].alpha = DIM_LINE (0.3)`. The series that owns
     the selection stays at 1, but its points' `stroke` becomes a function that returns
-    `fadeCss(color, DIM_POINT)` while a selection exists. A `draw` hook then paints the selected
+    `fadeCss(color, DIM_POINT)` while a selection exists, and its `points.fill` is likewise a function
+    returning the faded color (uPlot defaults `points.fill` to `#fff`). A `draw` hook then paints the selected
     point as a 6px dot filled with its own color, in the same overlay style as `refLinePlugin`.
   - Hidden series (legend toggle) are unaffected. When the selected series is hidden, nothing is
     dimmed. Dimming the visible series to point at an invisible mark would read as a bug.
@@ -168,7 +176,7 @@ In `ChartCell`, following the `TableCell`/`MapCell` pattern:
 
 - `const [selected, setSelected] = useState<ChartPointHit | null>(null)`.
 - `onSelectionChangeRef = useLatestRef(onSelectionChange)`.
-- Clear on data change: `useEffect(() => { setSelected(null); onSelectionChangeRef.current?.(null) }, [data])`,
+- Clear on data change: `useEffect(() => { setSelected(null); onSelectionChangeRef.current?.(null) }, [data, onSelectionChangeRef])`,
   using the run-wrapper form `TableCell` uses for `react-hooks/set-state-in-effect`.
 - `handlePointSelect(hit)`: set the state, then publish `hit ? rowValues(data[hit.seriesIndex], hit.rowIndex) : null`.
   The index works because XYChart series `i` is query `i`'s table in both paths.
@@ -215,8 +223,9 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
 
 1. **arrow-utils**: add `rowIndex` to `ChartPoint` and populate it at every construction site
    in `extractChartData` / `extractMultiSeriesChartData`, including the categorical first-pass
-   placeholder (`arrow-utils.ts:488`), which the second pass replaces. Update any test literals that build
-   `ChartPoint`s.
+   placeholder (`arrow-utils.ts:475`), which the second pass replaces. Update `TimeSeriesChart` in
+   `XYChart.tsx`, and the ~14 `toEqual([{x, y}])` assertions in `arrow-utils.test.ts` (and any other
+   test literals that build `ChartPoint`s) to include `rowIndex`.
 2. **xychart-selection.ts**: add the pure helpers from Design §2, with unit tests.
 3. **XYChart**: add `onPointSelect` / `selectedPoint` props, `rowIndexBySeries`, the bar `each`
    rect collection, `createSelectionPlugin` (click, highlight, cursor) in both paths, and the
@@ -231,9 +240,11 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
 
 - `analytics-web-app/src/lib/arrow-utils.ts` — `ChartPoint.rowIndex`
 - `analytics-web-app/src/components/xychart-selection.ts` — **new**, pure hit-test helpers
-- `analytics-web-app/src/components/XYChart.tsx` — selection props, plugin, bar rects, row lookup
+- `analytics-web-app/src/components/XYChart.tsx` — selection props, plugin, bar rects, row lookup,
+  `cursor.drag.dist`, and `TimeSeriesChart` setting `rowIndex`
 - `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` — renderer state and publish, editor section
-- `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` — `rowIndex` coverage
+- `analytics-web-app/src/lib/__tests__/arrow-utils.test.ts` — `rowIndex` coverage and updated `toEqual` assertions
+- `analytics-web-app/src/lib/screen-renderers/cells/__tests__/HorizontalGroupCell.test.tsx` — chart child selection wiring
 - `analytics-web-app/src/components/__tests__/xychart-selection.test.ts` — **new**
 - `analytics-web-app/src/lib/screen-renderers/cells/__tests__/ChartCell.test.tsx` — **new**
 - `mkdocs/docs/web-app/notebooks/cell-types.md`, `mkdocs/docs/web-app/notebooks/variables.md`
@@ -248,31 +259,18 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
   would select something on every click, so "click empty space to clear" would never trigger and
   a stray click would re-run the notebook. An 8px radius makes clearing possible and matches how
   people aim at points.
-- **Selection held in ChartCell, highlight drawn by XYChart through a ref and `redraw`.** This
-  matches the table/map ownership model (the cell owns ephemeral selection and publishes it). A
-  redraw is much cheaper than rebuilding the uPlot instance on every click.
-- **Required `rowIndex` vs. optional.** All `ChartPoint`s come from Arrow tables in
-  `arrow-utils.ts`, so a required field costs nothing and stops a point from silently becoming
-  unselectable.
-- **Reusing `RowSelectionEditor` vs. a chart-specific editor.** The semantics are identical, so
-  a fork would be duplication.
-- **Highlight style: dim the others (B), not an outline/ring (A) or a band (C).** Dimming makes
-  the selection unmistakable even on dense charts, where a thin outline gets lost. A band looks
-  like the drag-to-zoom selection, and its gold clashes with the Wheat series color. Dimming
-  costs no more than the others: uPlot evaluates bar `disp` callbacks when it rebuilds paths and
-  reads `series.alpha` at draw time, so it is still a `redraw(true)` rather than a chart rebuild.
-  Fading SQL per-row colors through `fadeCss`, instead of replacing them, keeps their hue
-  legible.
 
 ## Decisions
 
 - Highlight style: dim the unselected marks (mockup option B), chosen by the user over the
   outline (A) and band (C) mockups.
 - Downstream type resolution for `$chart.selected.col` reads the column type from the cell's
-  first query table (`cellResults[cell]` = `data[0]`). This matters for typed formatting such as
-  timestamps. In a multi-query chart, a click on query N resolves correctly only when its column
-  shares query 1's name and type. This is accepted and documented ("alias X columns identically
-  across queries"). Changing `cellResults` to hold per-selection schemas is out of scope.
+  first query table (`cellResults[cell]` = `data[0]`). Type-sensitive formatting (e.g.
+  timestamps) is correct only when the column has the same name and type in query 1; other values
+  substitute as plain strings. Documented as "alias X columns identically across queries".
+  Changing `cellResults` to hold per-selection schemas is out of scope.
+- No synthetic `series` key in the multi-query payload; publishers emit only source-row columns,
+  matching table/map.
 - Hiding the selected series through the legend keeps the selection published and only hides
   the highlight. The row is still valid data, and clearing would re-run downstream cells as a
   side effect of a view toggle.
@@ -288,9 +286,10 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
     drag-to-zoom is unaffected
   - note the multi-query aliasing guidance from Decisions
 - `mkdocs/docs/web-app/notebooks/variables.md`:
-  - "Row Selection" section (line 114) and the macro table (line 46): say that chart and map cells
-    publish selections too, not only table cells
-- `CHANGELOG.md` → Unreleased: **Web app:** chart cells support `selectionMode: 'single'` (#1717).
+  - macro table (line 46): reword to "the selected row in an upstream cell"
+  - "Row Selection" section (line 116): scope the radio-button sentence to table cells, and add that
+    chart and map cells select by clicking a mark (flame graph and swimlane already publish too)
+- `CHANGELOG.md` → Unreleased: `* **Notebooks:** Chart cells support \`selectionMode: 'single'\` … (#1717)`.
   This is an additive config option, not a breaking change.
 
 ## Testing Strategy
@@ -310,20 +309,24 @@ Every unit test below runs without a DB.
   - `nextSelection`: select, re-click clears, click another switches, miss clears
   - `fadeCss`: `#rrggbb`, `#rrggbbaa` (the existing alpha is multiplied), `rgba(...)`, factor 1
     returns the same color
-- If the per-bar fill/stroke computation is extracted as a pure function
-  (`barColors(base, selected, seriesIndex)`), test it too: no selection keeps the base colors,
+- `barColors`: no selection keeps the base colors,
   a selection fades every bar but the selected one, and a selection in another series fades all
   bars of this series.
-- `ChartCell.test.tsx`: mock `@/components/XYChart` to capture props, build Arrow tables with
-  the existing test fixtures, then check:
+- `ChartCell.test.tsx`: mock `@/components/XYChart` to capture props, build tables inline with
+  `tableFromArrays` (as `MapCell.test.tsx` / `PieChartCell.test.tsx` do), and mock
+  `@/lib/data-sources-api` as `HorizontalGroupCell.test.tsx:63-66` does, then check:
   - with no `selectionMode`, `onPointSelect` is undefined (the feature is off, so behavior is unchanged)
   - with `selectionMode: 'single'`, calling the captured `onPointSelect({ seriesIndex: 0, rowIndex: 2 })`
     publishes `rowValues(data[0], 2)` and passes `selectedPoint` back
   - multi-query: `seriesIndex: 1` publishes from `data[1]`, not `data[0]`
   - `onPointSelect(null)` publishes `null`
   - new `data` clears both the state and the published selection
-  - editor: toggling `RowSelectionEditor` on a v1 config writes a v2 config with
+  - editor: click the "Row Selection" header to expand it first (`RowSelectionEditor` starts
+    collapsed when the mode is `'none'`), then toggling it on a v1 config writes a v2 config with
     `options.selectionMode: 'single'`
+- `HorizontalGroupCell.test.tsx`: with a prop-capturing renderer (`__test-utils__/cell-registry-mock.ts`
+  doesn't expose selection props), a chart child with `selectionMode: 'single'` receives
+  `selectionMode`, and calling its `onSelectionChange(row)` reaches `updateCellSelection(child.name, row)`.
 
 The uPlot wiring (the canvas `each` callback, DOM mouse events on `u.over`, `posToIdx`/`valToPos`,
 and the draw hook) needs real canvas layout, which jsdom does not provide. If it breaks, the next
@@ -353,12 +356,3 @@ Run `python3 local_test_env/ai_scripts/start_services.py --monolith`, then `yarn
    resolves downstream.
 5. Add a `color` column (`CASE WHEN n > 100 THEN rgba(0.8,0.1,0.1,1) ELSE rgba(0.2,0.7,0.2,1) END AS color`)
    → after selecting, the unselected bars stay red or green, just faded.
-6. Put the chart inside a horizontal group next to the table → selection still drives the table.
-
-These steps are manual because they exercise uPlot's canvas geometry and mouse handling, which
-jsdom cannot lay out. Any breakage is visible on the first click.
-
-## Open Questions
-
-- Should multi-query selection add a synthetic `series` key (query name or label) after all? The
-  plan leaves it out (see Design §4). Adding it later is additive.
