@@ -254,9 +254,8 @@ that ingestion/flight-sql's DB-backed keys use.
 
 This `MICROMEGAS_API_KEYS` keyring is unaffected by ingestion/flight-sql's move
 to DB-backed keys and stays permanent: a deployment that shares one
-environment across roles will see the *other* roles log a "no longer read"
-startup warning about this same variable name — harmless, since only
-`object-cache-srv` reads it.
+environment across roles is fine — the *other* roles silently ignore this
+variable, since only `object-cache-srv` reads it.
 
 Apply defense in depth: API keys are the application-layer check, but the cache is a purely internal service with no public role, so restrict it at the network layer too. Bind it to a private network and use a security group / firewall / Kubernetes `NetworkPolicy` so that **only the services that use the cache can reach its listen endpoint** — nothing else, the public internet included, should be able to open a connection.
 

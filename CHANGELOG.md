@@ -4,6 +4,7 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## Unreleased
 
+* **Auth:** Removed the startup warnings for the still-set `MICROMEGAS_API_KEYS`, `MICROMEGAS_INGESTION_API_KEYS`, `MICROMEGAS_ANALYTICS_API_KEYS`, `MICROMEGAS_AUDIENCE_GRANTS` and `MICROMEGAS_ANALYTICS_AUDIENCE_GRANTS` variables; they are now ignored silently (#1698). `object-cache-srv`'s own `MICROMEGAS_API_KEYS` keyring is unaffected. **Minor breaking change:** `micromegas_auth::env::removed_vars_that_are_set` is removed.
 * **Build:** `build/build_docker_images.py` now exits non-zero when any image fails to build or, under `--push`, to push (a push failure after a successful build used to exit 0). The summary lists each failed image with its architecture and reason, prints the command to re-run only those images, and ends with a `FAILED: N image(s)` line (#1699).
 * **Tracing:** `TelemetryGuardBuilder::with_cpu_tracing_enabled(bool)` enables CPU tracing (thread span streams, which async spans flow through) in code, without mutating the process environment (#1705). It takes precedence over `MICROMEGAS_ENABLE_CPU_TRACING`, which remains the fallback; the new `ENABLE_CPU_TRACING_ENV_VAR` constant names it. `#[micromegas_main]` still reads only the variable to decide about tokio runtime callbacks.
 * **Security:** Bump `vitest` and `@vitest/coverage-v8` to 4.1.12 in the web app, resolving the `@vitest/mocker` Dependabot alerts.

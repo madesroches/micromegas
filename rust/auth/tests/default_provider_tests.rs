@@ -467,9 +467,9 @@ async fn build_chain_issues_no_startup_query() {
 }
 
 /// **`MICROMEGAS_API_KEYS` alone, no key store**: `build_chain()` still succeeds (nothing fails
-/// startup, per the removed keyring's upgrade-shim warning) but the chain **rejects** a key from
-/// that variable — the direct assertion that the env-keyring arm is gone, stronger than a
-/// startup-error check would have been, since a refusal could pass with the arm still present.
+/// startup) but the chain **rejects** a key from that
+/// variable — the direct assertion that the env-keyring arm is gone, stronger than a startup-error
+/// check would have been, since a refusal could pass with the arm still present.
 #[tokio::test]
 #[serial]
 async fn build_chain_with_env_keys_only_rejects_them() {
