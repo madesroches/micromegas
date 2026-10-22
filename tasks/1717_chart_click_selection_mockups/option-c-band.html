@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Chart click selection — Selection band + outline</title>
+<style>
+:root{--app-bg:#0a0a0f;--panel-bg:#12121a;--card-bg:#1a1a2e;--border-color:#2a2a3e;--border-hover:#3a3a4e;
+--text-primary:#e7e9ea;--text-secondary:#9ca3af;--text-muted:#6b7280;--accent-link:#1565c0;--accent-highlight:#ffb300;
+--accent-variable:#bf360c;--selection-bg:rgba(21,101,192,.15);--chart-selection:rgba(255,179,0,.3);--chart-selection-border:#ffb300}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px}
+.banner{background:var(--card-bg);border-bottom:1px solid var(--border-color);padding:12px 24px}
+.banner h1{margin:0 0 4px;font-size:15px;font-weight:600}
+.banner p{margin:0;color:var(--text-secondary);font-size:12px;max-width:1100px;line-height:1.5}
+.banner b{color:var(--text-primary)}
+.layout{display:flex;gap:16px;padding:16px 24px}
+.notebook{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}
+.cell{background:var(--panel-bg);border:1px solid var(--border-color);border-radius:8px;overflow:hidden}
+.cell.sel{border-color:var(--accent-link)}
+.cell-head{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border-color);font-size:12px}
+.cell-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-primary)}
+.badge{font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:3px;background:var(--border-color);color:var(--text-secondary)}
+.status{margin-left:auto;color:var(--text-muted);font-size:11px}
+.chart-head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border-color)}
+.chart-title{font-size:15px;font-weight:500}
+.chart-title .u{color:var(--text-muted);font-weight:400}
+.chart-title .vs{color:var(--text-muted);font-weight:400;font-size:13px;margin-left:8px}
+.legend{display:flex;gap:6px;margin-right:12px}
+.legend span{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);padding:2px 6px}
+.legend i{width:10px;height:3px;border-radius:1px;display:inline-block}
+.ctrl{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--text-muted)}
+.ctrl .stat b{color:var(--text-secondary);font-weight:400}
+.seg{display:flex;border:1px solid var(--border-color);border-radius:3px;overflow:hidden}
+.seg button{background:none;border:0;color:var(--text-muted);font-size:11px;padding:2px 8px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--border-color)}
+.seg button.on{background:var(--accent-link);color:#fff}
+.plot{padding:8px 16px 4px}
+svg{display:block;width:100%;height:auto;user-select:none}
+.axis text{fill:#6a6a7a;font-size:11px}
+.grid line{stroke:#2a2a35}
+.hit{cursor:pointer}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--text-secondary);padding:6px 12px;background:var(--card-bg);border-bottom:2px solid var(--border-color)}
+td{padding:5px 12px;border-bottom:1px solid var(--border-color);color:var(--text-primary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.waiting{padding:28px;text-align:center;color:var(--text-muted);font-size:13px}
+.waiting code{color:var(--accent-highlight)}
+.side{width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}
+.panel{background:var(--panel-bg);border:1px solid var(--border-color);border-radius:8px}
+.panel h3{margin:0;padding:8px 12px;font-size:12px;text-transform:uppercase;color:var(--text-secondary);font-weight:500;background:var(--card-bg);border-bottom:1px solid var(--border-color);border-radius:8px 8px 0 0}
+.panel .body{padding:10px 12px;font-size:12px;line-height:1.6}
+.radio{display:flex;align-items:center;gap:8px;color:var(--text-primary);font-size:13px}
+.radio input{accent-color:var(--accent-link)}
+.help{color:var(--text-muted);border-top:1px solid var(--border-color);margin-top:8px;padding-top:8px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--border-color);padding:1px 4px;border-radius:3px;font-size:11px}
+.kv{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+.kv div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.kv .k{color:var(--accent-variable)}
+.kv .v{color:var(--text-primary)}
+.empty{color:var(--text-muted);font-style:italic}
+.note{color:var(--text-secondary);font-size:12px;line-height:1.5}
+.note li{margin-bottom:4px}
+</style></head><body>
+<div class="banner">
+  <h1>Option C — Selection band + outline</h1>
+  <p>A translucent gold band spans the selected X slot. It reuses the <b>--chart-selection</b> color that drag-to-zoom already uses, plus a thin gold outline on the exact bar or point.</p>
+</div>
+<div class="layout">
+  <div class="notebook">
+    <div class="cell sel" id="cell-cost">
+      <div class="cell-head"><span class="cell-name">cost_by_user</span><span class="badge">chart</span><span class="status">success · 8 rows</span></div>
+      <div class="chart-head">
+        <div style="display:flex;align-items:center">
+          <div class="chart-title">cost <span class="u">(USD)</span><span class="vs">vs username</span></div>
+        </div>
+        <div class="ctrl">
+          <span class="stat">max: <b>$412.80</b></span><span class="stat">avg: <b>$171.24</b></span><span class="stat">count: <b>8</b></span>
+          <div class="seg" data-chart="cost"><button data-t="line">Line</button><button data-t="bar" class="on">Bar</button></div>
+          <div class="seg"><button class="on">P99</button><button>Max</button></div>
+        </div>
+      </div>
+      <div class="plot"><svg id="svg-cost" viewBox="0 0 900 240"></svg></div>
+    </div>
+
+    <div class="cell" id="cell-detail">
+      <div class="cell-head"><span class="cell-name">user_requests</span><span class="badge">table</span><span class="status" id="detail-status">blocked</span></div>
+      <div id="detail-body"></div>
+    </div>
+
+    <div class="cell" id="cell-svc">
+      <div class="cell-head"><span class="cell-name">service_health</span><span class="badge">chart</span><span class="status">success · 2 queries</span></div>
+      <div class="chart-head">
+        <div style="display:flex;align-items:center">
+          <div class="legend"><span><i style="background:#bf360c"></i>p95 latency</span><span><i style="background:#1565c0"></i>errors</span></div>
+          <div class="chart-title"><span class="vs" style="margin-left:0">vs service</span></div>
+        </div>
+        <div class="ctrl">
+          <div class="seg" data-chart="svc"><button data-t="line">Line</button><button data-t="bar" class="on">Bar</button></div>
+          <div class="seg"><button class="on">P99</button><button>Max</button></div>
+        </div>
+      </div>
+      <div class="plot"><svg id="svg-svc" viewBox="0 0 900 220"></svg></div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h3>Row Selection</h3>
+      <div class="body">
+        <label class="radio"><input type="radio" name="m"> None</label>
+        <label class="radio"><input type="radio" name="m" checked> Single</label>
+        <div class="help">Selected row values are available as:<br><code>$cost_by_user.selected.column</code></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Published: $cost_by_user.selected</h3>
+      <div class="body kv" id="pub-cost"></div>
+    </div>
+    <div class="panel">
+      <h3>Published: $service_health.selected</h3>
+      <div class="body kv" id="pub-svc"></div>
+    </div>
+    <div class="panel">
+      <h3>Try it</h3>
+      <div class="body note"><ul style="margin:0;padding-left:16px">
+        <li>Click a bar to select it. Click it again, or click empty plot area, to clear.</li>
+        <li>Switch to <b>Line</b>: click within ~8px of a point. The selection survives the toggle.</li>
+        <li>In <b>service_health</b> (2 queries), each bar in a group is selectable on its own. The published row comes from that bar's query.</li>
+      </ul>
+      <div class="help" style="margin-top:10px"><b>Pro:</b> visible at any density, it reads as "this X value is selected", and it reuses an existing app color. Still a redraw-only overlay. <b>Con:</b> gold resembles drag-to-zoom's selection, so users may read it as a pending time range. The gold outline also clashes with a gold (Wheat) series.</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const OPTION = "C";
+const COST = [
+  {username:"alice",cost:412.8},{username:"bob",cost:96.4},{username:"carol",cost:288.1},{username:"dmitri",cost:37.9},
+  {username:"emma",cost:201.5},{username:"farid",cost:154.0},{username:"grace",cost:63.2},{username:"hiro",cost:116.0}];
+const SVC_X = ["auth","billing","catalog","ingest","search"];
+const SVC = [
+  {label:"p95 latency",color:"#bf360c",y:"p95_ms",unit:"ms",rows:[{service:"auth",p95_ms:42},{service:"billing",p95_ms:118},{service:"catalog",p95_ms:65},{service:"ingest",p95_ms:203},{service:"search",p95_ms:88}]},
+  {label:"errors",color:"#1565c0",y:"errors",unit:"",rows:[{service:"auth",errors:12},{service:"billing",errors:31},{service:"catalog",errors:4},{service:"ingest",errors:57},{service:"search",errors:9}]}];
+const REQUESTS = {
+  alice:[["2026-10-22 14:02:11","claude-opus","18 204","$3.12"],["2026-10-22 13:47:55","claude-opus","9 881","$1.71"],["2026-10-22 13:12:03","claude-sonnet","44 120","$0.94"]],
+  bob:[["2026-10-22 12:40:19","claude-haiku","120 004","$0.38"],["2026-10-22 11:05:42","claude-sonnet","8 230","$0.17"]],
+  carol:[["2026-10-22 14:10:00","claude-opus","12 400","$2.15"],["2026-10-22 09:31:27","claude-opus","7 020","$1.22"]],
+  dmitri:[["2026-10-22 10:12:44","claude-haiku","15 300","$0.05"]],
+  emma:[["2026-10-22 13:58:31","claude-sonnet","66 010","$1.40"],["2026-10-22 08:22:16","claude-opus","3 900","$0.68"]],
+  farid:[["2026-10-22 12:01:09","claude-sonnet","51 777","$1.10"]],
+  grace:[["2026-10-22 07:45:50","claude-haiku","88 120","$0.27"]],
+  hiro:[["2026-10-22 11:59:02","claude-sonnet","29 400","$0.62"],["2026-10-22 10:44:38","claude-haiku","40 210","$0.13"]]};
+
+const state = {cost:{type:"bar",sel:null}, svc:{type:"bar",sel:null}};
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e}
+function rgba(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`}
+const HL = "#e7e9ea";       // --text-primary
+const GOLD = "#ffb300";     // --chart-selection-border
+
+function draw(key){
+  const svg=document.getElementById("svg-"+key); svg.innerHTML="";
+  const W=900, H=key==="cost"?240:220, L=60, R=key==="svc"?60:16, T=10, B=28;
+  const pw=W-L-R, ph=H-T-B;
+  const series = key==="cost" ? [{color:"#bf360c",y:"cost",rows:COST}] : SVC;
+  const xs = key==="cost" ? COST.map(r=>r.username) : SVC_X;
+  const xcol = key==="cost" ? "username" : "service";
+  const st=state[key], n=series.length, slot=pw/xs.length;
+  const maxes=series.map(s=>Math.max(...s.rows.map(r=>r[s.y]))*1.05);
+  const g=el("g",{class:"grid"},svg), ax=el("g",{class:"axis"},svg);
+  for(let i=0;i<=4;i++){const y=T+ph*i/4;el("line",{x1:L,x2:L+pw,y1:y,y2:y},g);
+    const t=el("text",{x:L-8,y:y+4,"text-anchor":"end"},ax);t.textContent=key==="cost"?"$"+Math.round(maxes[0]*(1-i/4)):Math.round(maxes[0]*(1-i/4))+" ms";
+    if(key==="svc"){const t2=el("text",{x:L+pw+8,y:y+4},ax);t2.textContent=Math.round(maxes[1]*(1-i/4));}}
+  xs.forEach((x,i)=>{const t=el("text",{x:L+slot*(i+.5),y:H-8,"text-anchor":"middle"},ax);t.textContent=x});
+  // background: click empty space clears
+  const bg=el("rect",{x:L,y:T,width:pw,height:ph,fill:"transparent"},svg);
+  bg.addEventListener("click",()=>select(key,null));
+  const isSel=(si,ri)=>st.sel&&st.sel.s===si&&st.sel.r===ri;
+  const any=!!st.sel;
+  const marks=el("g",{},svg), over=el("g",{},svg);
+
+  // Option C: selection band behind marks (drawn first)
+  if(OPTION==="C"&&any){const i=xs.indexOf(series[st.sel.s].rows[st.sel.r][xcol]);
+    el("rect",{x:L+slot*i,y:T,width:slot,height:ph,fill:"rgba(255,179,0,0.10)","pointer-events":"none"},marks);
+    el("line",{x1:L+slot*i,x2:L+slot*i,y1:T,y2:T+ph,stroke:"rgba(255,179,0,0.5)","stroke-width":1,"pointer-events":"none"},marks);
+    el("line",{x1:L+slot*(i+1),x2:L+slot*(i+1),y1:T,y2:T+ph,stroke:"rgba(255,179,0,0.5)","stroke-width":1,"pointer-events":"none"},marks);}
+
+  series.forEach((s,si)=>{
+    const yPos=v=>T+ph-(v/maxes[si])*ph;
+    if(st.type==="bar"){
+      const bw=slot*0.8/n;
+      s.rows.forEach((row,ri)=>{
+        const i=xs.indexOf(row[xcol]); const x=L+slot*i+slot*0.1+bw*si+1, y=yPos(row[s.y]), w=bw-2, h=T+ph-y;
+        const sel=isSel(si,ri);
+        let fa=0.6, sa=1;
+        if(OPTION==="B"&&any&&!sel){fa=0.15;sa=0.3}
+        if(OPTION==="B"&&sel){fa=0.9}
+        const r=el("rect",{x,y,width:w,height:h,fill:rgba(s.color,fa),stroke:rgba(s.color,sa),"stroke-width":1,class:"hit"},marks);
+        r.addEventListener("click",e=>{e.stopPropagation();select(key,{s:si,r:ri})});
+        if(sel&&OPTION==="A") el("rect",{x:x-2,y:y-2,width:w+4,height:h+2,fill:"none",stroke:HL,"stroke-width":2,"pointer-events":"none"},over);
+        if(sel&&OPTION==="C") el("rect",{x:x-1,y:y-1,width:w+2,height:h+1,fill:"none",stroke:GOLD,"stroke-width":1.5,"pointer-events":"none"},over);
+      });
+    } else {
+      const pts=s.rows.map((row,ri)=>({x:L+slot*(xs.indexOf(row[xcol])+.5),y:yPos(row[s.y]),ri}));
+      const la=(OPTION==="B"&&any&&st.sel.s!==si)?0.3:1;
+      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L")+`L${pts[pts.length-1].x},${T+ph}L${pts[0].x},${T+ph}Z`,fill:rgba(s.color,0.1*la),stroke:"none","pointer-events":"none"},marks);
+      el("path",{d:"M"+pts.map(p=>p.x+","+p.y).join("L"),fill:"none",stroke:rgba(s.color,la),"stroke-width":2,"pointer-events":"none"},marks);
+      pts.forEach(p=>{
+        const sel=isSel(si,p.ri);
+        let pa=1, rad=3;
+        if(OPTION==="B"&&any&&!sel){pa=0.25}
+        if(OPTION==="B"&&sel){rad=6}
+        el("circle",{cx:p.x,cy:p.y,r:rad,fill:sel&&OPTION==="B"?s.color:"#12121a",stroke:rgba(s.color,pa),"stroke-width":2,"pointer-events":"none"},marks);
+        if(sel&&OPTION==="A") el("circle",{cx:p.x,cy:p.y,r:7,fill:"none",stroke:HL,"stroke-width":2,"pointer-events":"none"},over);
+        if(sel&&OPTION==="C") el("circle",{cx:p.x,cy:p.y,r:6,fill:"none",stroke:GOLD,"stroke-width":2,"pointer-events":"none"},over);
+        const hit=el("circle",{cx:p.x,cy:p.y,r:8,fill:"transparent",class:"hit"},svg);
+        hit.addEventListener("click",e=>{e.stopPropagation();select(key,{s:si,r:p.ri})});
+      });
+    }
+  });
+}
+
+function select(key,hit){
+  const st=state[key];
+  st.sel = hit && st.sel && st.sel.s===hit.s && st.sel.r===hit.r ? null : hit;
+  draw(key); publish();
+}
+
+function rowOf(key){
+  const st=state[key]; if(!st.sel) return null;
+  if(key==="cost") return COST[st.sel.r];
+  const s=SVC[st.sel.s]; return s.rows[st.sel.r];
+}
+
+function publish(){
+  for(const key of ["cost","svc"]){
+    const box=document.getElementById("pub-"+key), row=rowOf(key);
+    box.innerHTML = row ? Object.entries(row).map(([k,v])=>`<div><span class="k">.selected.${k}</span><span class="v">${v}</span></div>`).join("")
+      : `<div class="empty">no selection</div>`;
+  }
+  const row=rowOf("cost"), body=document.getElementById("detail-body"), status=document.getElementById("detail-status");
+  if(!row){body.innerHTML=`<div class="waiting">Select a row in "cost_by_user" to view results<br><br><code>WHERE username = '$cost_by_user.selected.username'</code></div>`;status.textContent="blocked";return}
+  const rows=REQUESTS[row.username];
+  status.textContent=`success · ${rows.length} rows`;
+  body.innerHTML=`<table><thead><tr><th>time</th><th>model</th><th>tokens</th><th>cost</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")+`</tbody></table>`;
+}
+
+document.querySelectorAll(".seg[data-chart]").forEach(seg=>{
+  seg.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>{
+    const key=seg.dataset.chart; state[key].type=b.dataset.t;
+    seg.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b)); draw(key);
+  }));
+});
+state.cost.sel={s:0,r:2}; // pre-select carol so the highlight is visible on open
+draw("cost"); draw("svc"); publish();
+</script>
+</body></html>
