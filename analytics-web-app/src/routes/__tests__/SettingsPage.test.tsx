@@ -115,6 +115,21 @@ describe('SettingsPage', () => {
     expect(gets.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('notes the env fallback in the dialog only for an unstored entry', async () => {
+    installFetchMock({ self_service_mint: true })
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit self_service_max_keys_per_caller'))
+    expect(screen.getByText(/Pre-filled with the built-in default/)).toBeInTheDocument()
+    expect(
+      screen.getAllByText('MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER').length
+    ).toBeGreaterThan(0)
+    fireEvent.click(screen.getByLabelText('Close'))
+
+    fireEvent.click(await screen.findByLabelText('Edit self_service_mint'))
+    expect(screen.queryByText(/Pre-filled with the built-in default/)).not.toBeInTheDocument()
+  })
+
   it('submits a count as a number', async () => {
     const { writes } = installFetchMock()
     renderPage()

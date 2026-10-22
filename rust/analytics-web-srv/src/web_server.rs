@@ -759,7 +759,7 @@ pub async fn run_web_server(
         Some(pool) => SettingsSource::new(
             env_fallbacks,
             pool.clone(),
-            Duration::from_secs(DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs),
+            micromegas::settings::settings_cache_ttl(),
         ),
         None => SettingsSource::env_only(env_fallbacks),
     });

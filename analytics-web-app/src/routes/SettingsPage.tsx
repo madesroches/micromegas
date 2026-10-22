@@ -145,6 +145,13 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
             </div>
           )}
           <p className="text-sm text-theme-text-secondary">{entry.description}</p>
+          {entry.value === null && (
+            <p className="text-sm text-theme-text-muted">
+              Pre-filled with the built-in default. Each service currently uses{' '}
+              <code className="font-mono text-xs">{entry.env_var}</code> if it is set, otherwise
+              this default. Saving stores a value that overrides it for all services.
+            </p>
+          )}
           {entry.kind === 'bool' && (
             <label className="flex items-center gap-2 text-sm text-theme-text-primary">
               <input
