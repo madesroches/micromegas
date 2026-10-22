@@ -20,7 +20,7 @@ into the detail table" layout without a duplicate selectable table next to the c
   `HorizontalGroupCell` does the same for children (`HorizontalGroupCell.tsx:182-212`).
 - `useCellExecution.updateCellSelection` stores the row in `cellSelectionsRef` and re-runs every
   cell below (`useCellExecution.ts:461-479`). A downstream cell that references an unset selection
-  is marked `blocked` and execution halts (`useCellExecution.ts:150-176`).
+  is marked `blocked` and execution halts (`useCellExecution.ts:170-194`).
 - Macro type resolution for `$cell.selected.col` reads the column's Arrow type from
   `cellResults[cell]` (`macro-resolve.ts:86-92`), which holds the cell's `state.data[0]`
   (`useCellExecution.ts:122-131`).
@@ -179,7 +179,7 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
     own fallback, so the hover dot stays solid in the series color). The line-stroke gradient code moves into one helper taking a stop
     list, shared by the stroke and the faded points. A `draw` hook then paints the selected point as
     a dot of radius 6 CSS px (12px diameter, scaled by `devicePixelRatio` in the draw hook) filled with `point.color ?? seriesColor`, in the same overlay style as `refLinePlugin`.
-    uPlot's hover dot also uses `points.stroke`, so it looks faded on that series while a selection
+    uPlot's hover dot takes `points.fill` (falling back to `points.stroke`), so it looks faded on that series while a selection
     exists.
   - Hidden series (legend toggle) are unaffected. When the selected series is hidden, nothing is
     dimmed.
@@ -246,8 +246,7 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
    rect collection, `createSelectionPlugin` (click, highlight, cursor) in both paths, and the
    redraw-on-selection effect. Keep `onPointSelect` out of the main effect's deps by reading it through
    `onPointSelectRef`, updated in the same `useLayoutEffect` as `onTimeRangeSelectRef`, so a new
-   callback identity does not rebuild the chart. The plugin is installed unconditionally and guards
-   `onPointSelectRef.current` at event time.
+   callback identity does not rebuild the chart.
 4. **ChartCell renderer**: selection state, clear-on-data-change, `handlePointSelect`, and passing
    the new props in both paths.
 5. **ChartCell editor**: add `RowSelectionEditor`.
@@ -325,10 +324,10 @@ Every unit test below runs without a DB.
   - `nextSelection`: select, re-click clears, click another switches, miss clears
   - `fadeCss`: `#rrggbb`, `#rrggbbaa` (the existing alpha is multiplied), `rgba(...)`, factor 1
     returns the same color
-- `fadeStops`: every stop's color is faded and its `x` is unchanged.
-- `barColors`: no selection keeps the base colors,
-  a selection fades every bar but the selected one, and a selection in another series fades all
-  bars of this series.
+  - `fadeStops`: every stop's color is faded and its `x` is unchanged.
+  - `barColors`: no selection keeps the base colors,
+    a selection fades every bar but the selected one, and a selection in another series fades all
+    bars of this series.
 - `ChartCell.test.tsx`: mock `@/components/XYChart` to capture props, build tables inline with
   `tableFromArrays` (as `MapCell.test.tsx` / `PieChartCell.test.tsx` do), and mock
   `@/lib/data-sources-api` as `HorizontalGroupCell.test.tsx:63-66` does, then check:
@@ -343,7 +342,7 @@ Every unit test below runs without a DB.
     collapsed when the mode is `'none'`), then toggling it on a v1 config writes a v2 config with
     `options.selectionMode: 'single'`
 
-The uPlot wiring (the canvas `each` callback, DOM mouse events on `u.over`, `posToIdx`/`valToPos`,
+The uPlot wiring (the canvas `each` callback, DOM mouse events on `u.over`, `valToIdx`/`posToVal`/`valToPos`,
 and the draw hook) needs real canvas layout, which jsdom does not provide. If it breaks, the next
 click on a chart shows it right away, so it is verified by hand below.
 
