@@ -123,15 +123,14 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
   multi-series, fill it in the same loop that builds `yArr`, from the same `xIndex` lookup, so
   "last point at a duplicate X wins" applies to both. Store it in a ref the plugin reads.
 - **Bar rects.** Both `uPlot.paths.bars({...})` calls in each path get
-  `each: (u, sIdx, dIdx, l, t, w, h) => rects.push(...)`. The `rects` array is cleared in a
-  `drawClear` hook. uPlot reports these rects in canvas pixels and `sIdx` is 1-based, so subtract
+  `each: (u, sIdx, dIdx, l, t, w, h) => rects.push(...)`. Each bar series' `paths` function is
+  wrapped, `(u, si, i0, i1) => { clear the rects for si; return bars(u, si, i0, i1) }`, so a
+  series' rects are reset exactly when its paths are rebuilt. (A `drawClear` hook would empty them
+  on every `redraw(false)`, which reuses cached paths and never refills them.) uPlot reports these rects in canvas pixels and `sIdx` is 1-based, so subtract
   1 to get `seriesIndex`.
 - **Click.** On `init`, attach `mousedown`/`mouseup` listeners to `u.over`. On a mouseup where
-  `isClick(down, up)` holds (so a drag-to-zoom in time mode is never also a click). uPlot's
-  `cursor.drag.dist` defaults to 0, so a 1px jitter would otherwise create a selection and zoom
-  (`XYChart.tsx:870-883`) while also passing `isClick`. Both cursor configs (~lines 847 and 1023)
-  therefore set `cursor.drag.dist` to the same threshold constant `isClick` uses, measured on X as
-  uPlot does:
+  `isClick(down, up)` holds (so a drag-to-zoom in time mode is never also a click), hit-test as
+  follows:
   - bar charts: convert the cursor to canvas px (`u.bbox.left + u.cursor.left * devicePixelRatio`,
     same for top) and run `hitTestBars`.
   - line charts: with `r = 8`, scan each visible series over the indices
@@ -143,11 +142,16 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
     `onPointSelectRef.current(nextSelection(selectedRef.current, hit))`. A miss passes `null`,
     which clears the selection.
   - Hidden series (legend toggle) are skipped in both modes.
+  - uPlot's `cursor.drag.dist` defaults to 0, so a 1px jitter would otherwise create a selection and
+    zoom (`XYChart.tsx:870-883`) while also passing `isClick`. Both cursor configs (~lines 847 and
+    1023) therefore set `cursor.drag.dist` to the same threshold constant `isClick` uses, measured
+    on X as uPlot does.
 - **Highlight: dim the unselected marks** (mockup option B). While a selection exists, every
   mark except the selected one fades. With no selection, the chart looks exactly as it does today.
   The style is read from `selectedRef` when the chart draws. The selected `dataIdx` is
   `rowIndexBySeries[seriesIndex].indexOf(rowIndex)` (the union-X index in multi-series), recomputed
-  whenever the chart is rebuilt. A selection change only triggers
+  whenever the chart is rebuilt. A `seriesIndex` out of range or an `indexOf` of -1 (a stale
+  selection from before new data arrived) counts as no selection. A selection change only triggers
   `chartRef.current?.redraw(true)`. `true` rebuilds the cached paths so the bar `disp` callbacks
   run again; the uPlot instance itself is not rebuilt.
   - **Bars.** Every bar series always gets `disp.fill` and `disp.stroke` facets. Today only
@@ -163,7 +167,7 @@ Implementation inside XYChart. Both the single- and multi-series paths get a sha
     returning the faded color (uPlot defaults `points.fill` to `#fff`). A `draw` hook then paints the selected
     point as a 6px dot filled with its own color, in the same overlay style as `refLinePlugin`.
   - Hidden series (legend toggle) are unaffected. When the selected series is hidden, nothing is
-    dimmed. Dimming the visible series to point at an invisible mark would read as a bug.
+    dimmed.
   - XYChart does not enable uPlot's `cursor.focus` (which also drives `series.alpha`), so nothing
     competes for that field. Keep it off.
   A separate `useEffect([selectedPoint])` updates `selectedRef` and triggers the redraw.
@@ -176,8 +180,10 @@ In `ChartCell`, following the `TableCell`/`MapCell` pattern:
 
 - `const [selected, setSelected] = useState<ChartPointHit | null>(null)`.
 - `onSelectionChangeRef = useLatestRef(onSelectionChange)`.
-- Clear on data change: `useEffect(() => { setSelected(null); onSelectionChangeRef.current?.(null) }, [data, onSelectionChangeRef])`,
-  using the run-wrapper form `TableCell` uses for `react-hooks/set-state-in-effect`.
+- Clear on data change, as `MapCell` does: clear the state during render, keyed on `data`
+  (`const [dataForSelection, setDataForSelection] = useState(data); if (dataForSelection !== data) { setDataForSelection(data); setSelected(null) }`),
+  so XYChart never sees a stale `selectedPoint` against new data. Publish the clear after commit
+  with `useEffect(() => { onSelectionChangeRef.current?.(null) }, [data, onSelectionChangeRef])`.
 - `handlePointSelect(hit)`: set the state, then publish `hit ? rowValues(data[hit.seriesIndex], hit.rowIndex) : null`.
   The index works because XYChart series `i` is query `i`'s table in both paths.
 - Pass `onPointSelect={selectionMode === 'single' ? handlePointSelect : undefined}` and
@@ -185,11 +191,6 @@ In `ChartCell`, following the `TableCell`/`MapCell` pattern:
   `CellRendererProps` field that `NotebookRenderer` fills from `options.selectionMode`, so the
   chart cell needs no registry change. It does **not** set `defaultSelectionMode`, so the
   default stays `'none'`.
-
-**Multi-query selection payload.** The published row is the clicked series' own row. The
-downstream author can tell series apart by column names (each query aliases its Y column, e.g.
-`cost` vs `errors`), so the chart adds no synthetic `series`/`query` key. Such a key could collide
-with a user column, and the issue only asks for one "if needed".
 
 ### 5. Editor
 
@@ -211,13 +212,10 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
 `$cell.selected.*` values.
 
 - `option-a-outline.html` — the selected bar gets a 2px outline and the selected point a ring;
-  other marks are unchanged. It is the quietest of the three on dense charts.
+  other marks are unchanged.
 - `option-b-dim-others.html` — **chosen.** Unselected marks fade and the selected one stays at
-  full strength. The mockup note's cost concern doesn't apply: see Design §3, where dimming is
-  redraw-only.
-- `option-c-band.html` — a translucent gold band over the selected X slot plus a thin outline. It
-  is visible at any density and still redraw-only. But it looks like drag-to-zoom's selection, and
-  gold clashes with the Wheat series color.
+  full strength.
+- `option-c-band.html` — a translucent gold band over the selected X slot plus a thin outline.
 
 ## Implementation Steps
 
@@ -229,8 +227,9 @@ chart. Clicking a mark toggles the selection, and a side panel shows the publish
 2. **xychart-selection.ts**: add the pure helpers from Design §2, with unit tests.
 3. **XYChart**: add `onPointSelect` / `selectedPoint` props, `rowIndexBySeries`, the bar `each`
    rect collection, `createSelectionPlugin` (click, highlight, cursor) in both paths, and the
-   redraw-on-selection effect. Add `onPointSelect` to the main effect's deps through a ref, as
-   `onTimeRangeSelectRef` does, so a new callback identity does not rebuild the chart.
+   redraw-on-selection effect. Keep `onPointSelect` out of the main effect's deps by reading it through
+   `onPointSelectRef`, updated in the same `useLayoutEffect` as `onTimeRangeSelectRef`, so a new
+   callback identity does not rebuild the chart.
 4. **ChartCell renderer**: selection state, clear-on-data-change, `handlePointSelect`, and passing
    the new props in both paths.
 5. **ChartCell editor**: add `RowSelectionEditor`.
@@ -354,5 +353,5 @@ Run `python3 local_test_env/ai_scripts/start_services.py --monolith`, then `yarn
    Clicking the second bar in a group leaves only that bar at full strength. Every other bar in
    both series dims, and `$by_level.selected.n2`
    resolves downstream.
-5. Add a `color` column (`CASE WHEN n > 100 THEN rgba(0.8,0.1,0.1,1) ELSE rgba(0.2,0.7,0.2,1) END AS color`)
+5. Add a `color` column (`CASE WHEN COUNT(*) > 100 THEN rgba(0.8,0.1,0.1,1) ELSE rgba(0.2,0.7,0.2,1) END AS color`)
    → after selecting, the unselected bars stay red or green, just faded.
