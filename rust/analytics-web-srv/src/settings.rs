@@ -293,6 +293,12 @@ async fn put_setting_inner(
     let updated_by = caller_identity(&user);
 
     let mut tx = pool.begin().await?;
+    // FOR UPDATE locks nothing when the row doesn't exist yet, so concurrent first writes would
+    // both see no previous value.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
     let previous_raw: Option<String> =
         sqlx::query_scalar("SELECT value::text FROM settings WHERE key = $1 FOR UPDATE")
             .bind(key)

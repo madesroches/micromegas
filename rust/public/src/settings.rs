@@ -355,8 +355,8 @@ impl std::fmt::Debug for SettingsSource {
 }
 
 impl SettingsSource {
-    /// `env` is already resolved by the caller; `pool` should come from
-    /// `dedicated_key_store_pool`.
+    /// `env` is already resolved by the caller; `pool` should be small and bounded (e.g. from
+    /// `dedicated_key_store_pool`, or the service's existing key-store pool).
     pub fn new(env: EnvFallbacks, pool: PgPool, ttl: Duration) -> Self {
         Self {
             db: Backing::Db(SnapshotSource::new(pool, ttl)),
