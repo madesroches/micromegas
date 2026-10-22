@@ -126,16 +126,18 @@ type ActiveSelection = (u: uPlot) => { seriesIndex: number; dataIdx: number } | 
 
 // While a selection exists the points fade, so the selected one (drawn by the selection plugin)
 // stands out. With none, `fill: null` keeps uPlot's default point fill.
-function selectionPoints(color: string, gradStops: GradientStops | null, activeSelection: ActiveSelection): uPlot.Series.Points {
+function selectionPoints(seriesIndex: number, color: string, gradStops: GradientStops | null, activeSelection: ActiveSelection): uPlot.Series.Points {
   const style = (u: uPlot, factor: number): string | CanvasGradient =>
     gradStops
       ? horizontalGradient(u, factor === 1 ? gradStops : fadeStops(gradStops, factor), color)
       : fadeCss(color, factor)
+  // Other series are dimmed by series.alpha alone; fading their points too would compound.
+  const owns = (u: uPlot) => activeSelection(u)?.seriesIndex === seriesIndex
   return {
     show: true,
-    stroke: (u: uPlot) => style(u, activeSelection(u) ? DIM_POINT : 1),
+    stroke: (u: uPlot) => style(u, owns(u) ? DIM_POINT : 1),
     // uPlot accepts null at runtime but its typings do not
-    fill: (u: uPlot) => (activeSelection(u) ? style(u, DIM_POINT) : (null as unknown as string)),
+    fill: (u: uPlot) => (owns(u) ? style(u, DIM_POINT) : (null as unknown as string)),
   }
 }
 
@@ -991,7 +993,7 @@ export function XYChart({
           stroke: color,
           width: chartType === 'bar' ? 1 : 2,
           fill: chartType === 'bar' ? hexToRgba(color, 0.6) : hexToRgba(color, 0.1),
-          points: chartType === 'bar' ? { show: false } : selectionPoints(color, gradStops, activeSelection),
+          points: chartType === 'bar' ? { show: false } : selectionPoints(i, color, gradStops, activeSelection),
           show: seriesVisibility ? seriesVisibility[i] : true,
           spanGaps: chartType === 'line',
         }
@@ -1202,7 +1204,7 @@ export function XYChart({
             width: chartType === 'bar' ? 1 : 2,
             fill: seriesFill,
             paths: seriesPaths,
-            points: chartType === 'bar' ? { show: false } : selectionPoints(seriesColor, gradStops, activeSelection),
+            points: chartType === 'bar' ? { show: false } : selectionPoints(0, seriesColor, gradStops, activeSelection),
           },
         ],
         cursor: {

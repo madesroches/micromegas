@@ -160,13 +160,17 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     return extractChartData(table)
   }, [data, isMultiSeries])
 
+  // Query metadata (set by getRendererProps) is rebuilt on every parent render, so memos key on its serialized form.
+  const queryMeta = (options as Record<string, unknown>)?._queryMeta as
+    { unit?: string; label?: string; color?: string }[] | undefined
+  const queryMetaKey = JSON.stringify(queryMeta ?? [])
+
   // Multi-series result: build from data tables + options
   const multiResult = useMemo(() => {
     if (!isMultiSeries || data.length === 0) return null
 
-    // Get query metadata from options (set by getRendererProps)
-    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string; color?: string }[] | undefined
+    const queryMeta = JSON.parse(queryMetaKey) as
+      { unit?: string; label?: string; color?: string }[]
 
     const tableInputs = data.map((table, i) => ({
       table,
@@ -175,7 +179,7 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
     }))
 
     return extractMultiSeriesChartData(tableInputs)
-  }, [data, isMultiSeries, options])
+  }, [data, isMultiSeries, queryMetaKey])
 
   // Substitute macros in options
   const resolvedOptions = useMemo(
@@ -235,17 +239,18 @@ export function ChartCell({ data, status, options, onOptionsChange, variables, t
   )
 
   // Memoized so a selection click keeps XYChart's series identity and avoids rebuilding uPlot.
+  const resolvedSeriesMetaKey = multiResult && multiResult.ok
+    ? JSON.stringify(multiResult.series.map((s, i) => ({
+        label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
+        unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
+        color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
+      })))
+    : null
   const resolvedSeries = useMemo<ChartSeriesData[] | null>(() => {
-    if (!multiResult || !multiResult.ok) return null
-    const queryMeta = (options as Record<string, unknown>)?._queryMeta as
-      { unit?: string; label?: string; color?: string }[] | undefined
-    return multiResult.series.map((s, i) => ({
-      ...s,
-      label: s.label ? substituteMacros(s.label, variables, timeRange, cellResults, cellSelections) : s.label,
-      unit: s.unit ? substituteMacros(s.unit, variables, timeRange, cellResults, cellSelections) : '',
-      color: queryMeta?.[i]?.color ?? SERIES_COLORS[i % SERIES_COLORS.length],
-    }))
-  }, [multiResult, options, variables, timeRange, cellResults, cellSelections])
+    if (!multiResult || !multiResult.ok || resolvedSeriesMetaKey === null) return null
+    const meta = JSON.parse(resolvedSeriesMetaKey) as { label: string; unit: string; color: string }[]
+    return multiResult.series.map((s, i) => ({ ...s, ...meta[i] }))
+  }, [multiResult, resolvedSeriesMetaKey])
 
   const selectable = selectionMode === 'single'
 
