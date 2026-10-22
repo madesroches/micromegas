@@ -1,3 +1,6 @@
+use super::ingestion_auth::{
+    INSERT_PROCESS_PATH, RejectedProcessLogger, ingestion_auth_middleware,
+};
 use super::write_audience::resolve_write_audience;
 use axum::Extension;
 use axum::Router;
@@ -122,7 +125,7 @@ async fn ready_handler(Extension(service): Extension<Arc<WebIngestionService>>) 
 /// `/ingestion/insert_stream`, and `/ingestion/insert_block`.
 pub fn register_routes(router: Router) -> Router {
     router
-        .route("/ingestion/insert_process", post(insert_process_request))
+        .route(INSERT_PROCESS_PATH, post(insert_process_request))
         .route("/ingestion/insert_stream", post(insert_stream_request))
         .route("/ingestion/insert_block", post(insert_block_request))
 }
@@ -148,7 +151,6 @@ pub async fn serve_ingestion(
     use axum::extract::DefaultBodyLimit;
     use axum::middleware;
     use axum::routing::get;
-    use micromegas_auth::axum::auth_middleware;
     use tower_http::limit::RequestBodyLimitLayer;
 
     use super::axum_utils::observability_middleware;
@@ -184,8 +186,9 @@ pub async fn serve_ingestion(
     let auth_enabled = auth_provider.is_some();
     if let Some(provider) = auth_provider {
         info!("Ingestion: authentication enabled");
+        let logger = Arc::new(RejectedProcessLogger::new());
         protected_app = protected_app.layer(middleware::from_fn(move |req, next| {
-            auth_middleware(provider.clone(), req, next)
+            ingestion_auth_middleware(provider.clone(), logger.clone(), req, next)
         }));
     } else {
         warn!("Ingestion: authentication disabled — development mode only");

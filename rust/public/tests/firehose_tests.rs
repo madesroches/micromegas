@@ -24,8 +24,11 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_ingestion::write_audience::WriteAudience;
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::levels::{LevelFilter, set_max_level};
+use micromegas_tracing::test_utils::{collect_logs, init_in_memory_tracing};
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use serial_test::serial;
 use std::io::Write;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -63,6 +66,10 @@ struct BoundAudienceProvider {
 
 #[async_trait]
 impl AuthProvider for BoundAudienceProvider {
+    fn name(&self) -> &'static str {
+        "bound_audience"
+    }
+
     async fn validate_request(&self, _parts: &dyn RequestParts) -> Result<AuthContext> {
         Ok(AuthContext {
             subject: "bound-audience-test".to_string(),
@@ -97,6 +104,7 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
 }
 
 #[tokio::test]
+#[serial]
 async fn missing_access_key_is_rejected_with_firehose_error_shape() {
     let service = make_test_service();
     let provider = make_auth_provider();
@@ -119,7 +127,10 @@ async fn missing_access_key_is_rejected_with_firehose_error_shape() {
 }
 
 #[tokio::test]
+#[serial]
 async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
     let service = make_test_service();
     let provider = make_auth_provider();
     let app = firehose_router(service, Some(provider));
@@ -130,6 +141,7 @@ async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
         .header(header::CONTENT_TYPE, "application/json")
         .header("X-Amz-Firehose-Request-Id", "req-wrong-key")
         .header("X-Amz-Firehose-Access-Key", "not-the-right-key")
+        .header("x-forwarded-for", "198.51.100.90")
         .body(Body::from(empty_records_body("req-wrong-key")))
         .expect("build request");
 
@@ -138,9 +150,22 @@ async fn wrong_access_key_is_rejected_with_firehose_error_shape() {
     let json = response_json(response).await;
     assert_eq!(json["requestId"], "req-wrong-key");
     assert!(json["errorMessage"].is_string());
+
+    let logs = collect_logs(&guard.sink);
+    let line = logs
+        .iter()
+        .find(|l| l.property("client_ip") == Some("198.51.100.90"))
+        .expect("rejection line for the marker ip");
+    assert!(
+        line.msg.starts_with("[firehose auth_failure] "),
+        "{}",
+        line.msg
+    );
+    assert!(logs.iter().all(|l| !l.msg.contains("not-the-right-key")));
 }
 
 #[tokio::test]
+#[serial]
 async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
     let service = make_test_service();
     let provider = make_auth_provider();
@@ -169,6 +194,7 @@ async fn valid_key_gzip_empty_records_returns_ack_with_no_error_message() {
 }
 
 #[tokio::test]
+#[serial]
 async fn dev_mode_no_provider_accepts_request_without_access_key() {
     let service = make_test_service();
     let app = firehose_router(service, None);
@@ -195,6 +221,7 @@ async fn auth_context_probe(ctx: Option<Extension<AuthContext>>) -> String {
 }
 
 #[tokio::test]
+#[serial]
 async fn firehose_auth_middleware_propagates_bound_audience_to_the_extension() {
     // Guards that `firehose_auth_middleware`'s success arm propagates the validated
     // `AuthContext` into the request extensions.
@@ -231,6 +258,7 @@ async fn firehose_auth_middleware_propagates_bound_audience_to_the_extension() {
 // live stack — records are actually written through to Postgres/object storage.
 #[ignore]
 #[tokio::test]
+#[serial]
 async fn full_multi_record_ingest_succeeds_against_a_live_stack() {
     use base64::Engine as _;
     use micromegas_otel_ingestion::proto::{

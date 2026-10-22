@@ -4,6 +4,9 @@ use http::header::AUTHORIZATION;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::{AuthContext, AuthProvider, AuthType, RequestParts};
+use micromegas_tracing::levels::{LevelFilter, set_max_level};
+use micromegas_tracing::test_utils::{collect_logs, init_in_memory_tracing};
+use serial_test::serial;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tower::Service;
@@ -73,6 +76,10 @@ struct MockAdminAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for MockAdminAuthProvider {
+    fn name(&self) -> &'static str {
+        "mock_admin"
+    }
+
     async fn validate_request(&self, _parts: &dyn RequestParts) -> anyhow::Result<AuthContext> {
         let memberships: Arc<[String]> = if self.is_admin {
             Arc::from([micromegas_auth::groups::ADMINS_GROUP.to_string()])
@@ -95,6 +102,7 @@ impl AuthProvider for MockAdminAuthProvider {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_with_valid_token() {
     let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
     let auth_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
@@ -116,6 +124,7 @@ async fn test_auth_service_with_valid_token() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_with_invalid_token() {
     let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
     let auth_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
@@ -137,6 +146,7 @@ async fn test_auth_service_with_invalid_token() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_no_header() {
     let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
     let auth_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
@@ -155,6 +165,7 @@ async fn test_auth_service_no_header() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_no_provider() {
     let mut service = AuthService {
         inner: MockService {
@@ -170,6 +181,7 @@ async fn test_auth_service_no_provider() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_sets_is_admin_header_true() {
     let auth_provider = Arc::new(MockAdminAuthProvider { is_admin: true });
     let captured = Arc::new(std::sync::Mutex::new(None));
@@ -194,6 +206,7 @@ async fn test_auth_service_sets_is_admin_header_true() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_sets_is_admin_header_false() {
     let auth_provider = Arc::new(MockAdminAuthProvider { is_admin: false });
     let captured = Arc::new(std::sync::Mutex::new(None));
@@ -218,6 +231,7 @@ async fn test_auth_service_sets_is_admin_header_false() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_auth_service_strips_client_supplied_is_admin_header() {
     // A non-admin AuthContext must result in the re-injected header being "false", even though
     // the client tried to smuggle in "true" — AuthService::call strips it before re-setting it
@@ -244,4 +258,39 @@ async fn test_auth_service_strips_client_supplied_is_admin_header() {
         Some(Some("false".to_string())),
         "client-supplied x-auth-is-admin: true must not survive AuthService"
     );
+}
+
+#[tokio::test]
+#[serial]
+async fn test_rejected_grpc_call_logs_client_ip_and_user_agent() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
+
+    let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
+    let mut service = AuthService {
+        inner: MockService {
+            should_have_auth: false,
+        },
+        auth_provider: Some(Arc::new(ApiKeyAuthProvider::new(keyring)) as Arc<dyn AuthProvider>),
+    };
+    let req = Request::builder()
+        .header(AUTHORIZATION, "Bearer wrong")
+        .header("x-forwarded-for", "198.51.100.79")
+        .header("user-agent", "grpc-rust/1.0")
+        .body(tonic::body::Body::empty())
+        .unwrap();
+    assert!(service.ready().await.unwrap().call(req).await.is_err());
+
+    let logs = collect_logs(&guard.sink);
+    let line = logs
+        .iter()
+        .find(|l| l.property("client_ip") == Some("198.51.100.79"))
+        .expect("rejection line for the marker ip");
+    assert!(
+        line.msg.starts_with("authentication failed: "),
+        "{}",
+        line.msg
+    );
+    assert_eq!(line.property("user_agent"), Some("grpc-rust/1.0"));
+    assert_eq!(line.property("method"), Some(""));
 }

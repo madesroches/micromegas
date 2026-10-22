@@ -52,6 +52,11 @@ passed. This prevents accidentally running an open ingestion endpoint. For
 configuration details and provider precedence, see
 [Authentication](authentication.md).
 
+Rejected requests are logged with the caller's client IP, method, path and
+`User-Agent`, and a rejected `insert_process` request also logs the process
+identity it claims; see
+[Authentication Failures](authentication.md#authentication-failures).
+
 ### Schema migration and admin seeding
 
 This is the process (alongside the monolith) that runs the data-lake schema

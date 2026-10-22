@@ -1,4 +1,5 @@
 use micromegas_auth::client_ip::resolve_client_ip;
+use micromegas_auth::log_sanitize::warn_auth_rejection;
 use micromegas_auth::types::{AuthProvider, GrpcRequestParts, ProviderUnavailable, RequestParts};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ pub async fn check_auth(
                 debug!("authentication failed: {e}");
                 Status::unavailable("auth provider unavailable")
             } else {
-                warn!("authentication failed: {e}");
+                warn_auth_rejection("authentication failed:", &parts, &e);
                 Status::unauthenticated("invalid token")
             }
         })?;

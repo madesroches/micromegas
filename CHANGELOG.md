@@ -18,6 +18,21 @@ This file documents the historical progress of the Micromegas project. For curre
   enables span capture; build the layer with `capture_spans: false` to forward events only. **Minor breaking change:**
   `TracingCaptureLayer` gains a public `capture_spans` field, and its `Layer` impl now requires a
   subscriber that implements `LookupSpan`.
+* **Ingestion, Auth:** A rejected request now says who sent it. Every authentication rejection
+  log line (HTTP ingestion, Firehose, gRPC / FlightSQL, `check_auth`, `object-cache-srv`) carries
+  `client_ip`, `method`, `path` (no query string) and `user_agent` as log properties (gRPC lines
+  carry only `client_ip` and `user_agent`; `method` and `path` are empty), with control
+  and bidi characters replaced and lengths bounded; the token is never logged. The error now lists
+  each provider's reason, e.g. `authentication failed with all providers: oidc: Invalid JWT
+  format; db_api_key: invalid API token`, keeping the existing prefix. A rejected
+  `/ingestion/insert_process` request additionally logs the process identity its body claims
+  (`claimed_process_id`, `claimed_exe`, `claimed_username`, `claimed_computer`, build properties),
+  from a body read capped at 64 KiB and 2 s, sanitized and limited to one line per client IP and
+  process id per minute; `command-line` and `exe_args` are never logged. The 401 response is
+  unchanged. `object-cache-srv`'s rejection line gains the same properties, with an unprefixed
+  reason. The Rust telemetry sink now sends `User-Agent: micromegas-telemetry-sink/<version>`.
+  **Minor breaking change:** `AuthProvider` gains a required `name()`.
+  `micromegas_auth::axum::authenticate` and `micromegas_auth::log_sanitize` are new (#1703).
 
 ## v0.32.0 - 2026-10-20
 

@@ -40,6 +40,10 @@ struct FakeInner {
 
 #[async_trait]
 impl AuthProvider for FakeInner {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
     async fn validate_request(&self, _parts: &dyn RequestParts) -> Result<AuthContext> {
         self.result
             .lock()

@@ -752,6 +752,10 @@ impl HttpEventSink {
         let client = match reqwest::Client::builder()
             .pool_idle_timeout(Some(core::time::Duration::from_secs(2)))
             .timeout(config.request_timeout)
+            .user_agent(concat!(
+                "micromegas-telemetry-sink/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .build()
         {
             Ok(client) => client,

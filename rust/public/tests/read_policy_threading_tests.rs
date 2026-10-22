@@ -340,6 +340,10 @@ struct GroupsAuthProvider {
 
 #[async_trait]
 impl AuthProvider for GroupsAuthProvider {
+    fn name(&self) -> &'static str {
+        "groups"
+    }
+
     async fn validate_request(&self, _parts: &dyn RequestParts) -> Result<AuthContext> {
         Ok(AuthContext {
             subject: "groups-caller".to_string(),

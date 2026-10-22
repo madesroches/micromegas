@@ -100,6 +100,10 @@ impl ApiKeyAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for ApiKeyAuthProvider {
+    fn name(&self) -> &'static str {
+        "api_key"
+    }
+
     /// Validate an API key request using constant-time comparison
     ///
     /// This implementation protects against timing attacks by:
