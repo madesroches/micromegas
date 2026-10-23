@@ -26,6 +26,7 @@ function formatDate(iso: string): string {
 const GROUPS: { prefix: string; title: string }[] = [
   { prefix: 'public_', title: 'Data isolation' },
   { prefix: 'self_service_', title: 'Self-service ingestion keys' },
+  { prefix: 'retention_', title: 'Data retention' },
 ]
 
 function groupTitle(key: string): string {
@@ -53,7 +54,52 @@ function ValueView({ value, kind }: { value: SettingValue; kind: SettingEntry['k
       </span>
     )
   }
+  if (kind === 'tag_horizons') {
+    const entries = Object.entries(value as Record<string, number | 'forever'>)
+    if (entries.length === 0) return <span className="text-theme-text-muted">no overrides</span>
+    return (
+      <span className="flex flex-wrap gap-1">
+        {entries.map(([tag, horizon]) => (
+          <code key={tag} className="font-mono text-xs bg-app-bg px-1.5 py-0.5 rounded-sm">
+            {tag}: {horizon === 'forever' ? 'forever' : `${horizon} d`}
+          </code>
+        ))}
+      </span>
+    )
+  }
+  if (kind === 'days') return <code className="font-mono text-xs">{String(value)} d</code>
   return <code className="font-mono text-xs">{String(value)}</code>
+}
+
+const MAX_RETENTION_DAYS = 36500
+
+interface HorizonRow {
+  tag: string
+  daysText: string
+  forever: boolean
+}
+
+function validDays(text: string): boolean {
+  return /^\d+$/.test(text) && Number(text) >= 1 && Number(text) <= MAX_RETENTION_DAYS
+}
+
+function horizonRowsValid(rows: HorizonRow[]): boolean {
+  const tags = rows.map((r) => r.tag.trim())
+  return (
+    tags.every((t) => t !== '') &&
+    new Set(tags).size === tags.length &&
+    rows.every((r) => r.forever || validDays(r.daysText))
+  )
+}
+
+function horizonRowsToValue(rows: HorizonRow[]): Record<string, number | 'forever'> {
+  return Object.fromEntries(
+    rows.map((r) => [r.tag.trim(), r.forever ? 'forever' : Number(r.daysText)])
+  ) as Record<string, number | 'forever'>
+}
+
+function hasEnvFallback(entry: SettingEntry): boolean {
+  return entry.env_var !== null
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +117,7 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
   const [countText, setCountText] = useState('')
   const [names, setNames] = useState<string[]>([])
   const [nameInput, setNameInput] = useState('')
+  const [horizonRows, setHorizonRows] = useState<HorizonRow[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -80,7 +127,16 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
       if (!entry) return
       const current = entry.value ?? entry.default
       setBoolValue(entry.kind === 'bool' ? (current as boolean) : false)
-      setCountText(entry.kind === 'count' ? String(current) : '')
+      setCountText(entry.kind === 'count' || entry.kind === 'days' ? String(current) : '')
+      setHorizonRows(
+        entry.kind === 'tag_horizons'
+          ? Object.entries(current as Record<string, number | 'forever'>).map(([tag, h]) => ({
+              tag,
+              daysText: h === 'forever' ? '' : String(h),
+              forever: h === 'forever',
+            }))
+          : []
+      )
       setNames(entry.kind === 'name_list' ? [...(current as string[])] : [])
       setNameInput('')
       setError(null)
@@ -99,13 +155,25 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
 
   const pendingValue = (): SettingValue => {
     if (entry.kind === 'bool') return boolValue
-    if (entry.kind === 'count') return Number(countText)
+    if (entry.kind === 'count' || entry.kind === 'days') return Number(countText)
+    if (entry.kind === 'tag_horizons') return horizonRowsToValue(horizonRows)
     // A name typed but not yet confirmed with Enter is still part of what the admin sees.
     const trimmed = nameInput.trim()
     return trimmed && !names.includes(trimmed) ? [...names, trimmed] : names
   }
 
-  const canSubmit = !isSubmitting && (entry.kind !== 'count' || countValid)
+  const inputValid =
+    entry.kind === 'count'
+      ? countValid
+      : entry.kind === 'days'
+        ? validDays(countText)
+        : entry.kind === 'tag_horizons'
+          ? horizonRowsValid(horizonRows)
+          : true
+  const canSubmit = !isSubmitting && inputValid
+
+  const updateRow = (i: number, patch: Partial<HorizonRow>) =>
+    setHorizonRows(horizonRows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const handleSubmit = async () => {
     setIsSubmitting(true)
@@ -147,9 +215,20 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
           <p className="text-sm text-theme-text-secondary">{entry.description}</p>
           {entry.value === null && (
             <p className="text-sm text-theme-text-muted">
-              Pre-filled with the built-in default. Each service currently uses{' '}
-              <code className="font-mono text-xs">{entry.env_var}</code> if it is set, otherwise
-              this default. Saving stores a value that overrides it for all services.
+              Pre-filled with the built-in default.{' '}
+              {entry.env_var !== null && (
+                <>
+                  Each service currently uses{' '}
+                  {entry.key === 'retention_days' && (
+                    <>
+                      the <code className="font-mono text-xs">--retention-days</code> flag or{' '}
+                    </>
+                  )}
+                  <code className="font-mono text-xs">{entry.env_var}</code> if it is set,
+                  otherwise this default.{' '}
+                </>
+              )}
+              Saving stores a value that overrides it for all services.
             </p>
           )}
           {entry.kind === 'bool' && (
@@ -162,24 +241,86 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
               Enabled
             </label>
           )}
-          {entry.kind === 'count' && (
+          {(entry.kind === 'count' || entry.kind === 'days') && (
             <div>
               <label
                 htmlFor="setting-count"
                 className="block text-sm font-medium text-theme-text-secondary mb-1"
               >
-                Value
+                {entry.kind === 'days' ? 'Days' : 'Value'}
               </label>
               <input
                 id="setting-count"
                 type="number"
-                min={0}
+                min={entry.kind === 'days' ? 1 : 0}
+                max={entry.kind === 'days' ? MAX_RETENTION_DAYS : undefined}
                 step={1}
                 className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm font-mono text-theme-text-primary outline-hidden focus:border-accent-link"
                 value={countText}
                 onChange={(e) => setCountText(e.target.value)}
                 autoFocus
               />
+            </div>
+          )}
+          {entry.kind === 'tag_horizons' && (
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-theme-text-secondary">
+                Stream tag overrides
+              </div>
+              {horizonRows.map((row, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    aria-label={`Tag ${i + 1}`}
+                    placeholder="tag"
+                    className="flex-1 min-w-0 bg-app-bg border border-theme-border rounded-md px-2 py-1.5 text-sm font-mono text-theme-text-primary outline-hidden focus:border-accent-link"
+                    value={row.tag}
+                    onChange={(e) => updateRow(i, { tag: e.target.value })}
+                  />
+                  <input
+                    type="number"
+                    aria-label={`Days ${i + 1}`}
+                    placeholder="days"
+                    min={1}
+                    max={MAX_RETENTION_DAYS}
+                    step={1}
+                    disabled={row.forever}
+                    className="w-24 bg-app-bg border border-theme-border rounded-md px-2 py-1.5 text-sm font-mono text-theme-text-primary outline-hidden focus:border-accent-link disabled:opacity-50"
+                    value={row.forever ? '' : row.daysText}
+                    onChange={(e) => updateRow(i, { daysText: e.target.value })}
+                  />
+                  <label className="flex items-center gap-1 text-sm text-theme-text-primary">
+                    <input
+                      type="checkbox"
+                      aria-label={`Forever ${i + 1}`}
+                      checked={row.forever}
+                      onChange={(e) => updateRow(i, { forever: e.target.checked })}
+                    />
+                    Forever
+                  </label>
+                  <button
+                    type="button"
+                    aria-label={`Remove row ${i + 1}`}
+                    onClick={() => setHorizonRows(horizonRows.filter((_, j) => j !== i))}
+                    className="text-theme-text-muted hover:text-red-400"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setHorizonRows([...horizonRows, { tag: '', daysText: '', forever: false }])
+                }
+              >
+                Add tag
+              </Button>
+              <p className="text-xs text-accent-warning">
+                Removing or shortening an override lets older blocks be deleted at the next hourly
+                pass. This cannot be undone.
+              </p>
             </div>
           )}
           {entry.kind === 'name_list' && (
@@ -312,8 +453,9 @@ function SettingsPageContent() {
           </div>
 
           <div className="mb-6 p-3 rounded-lg border border-theme-border bg-app-panel text-sm text-theme-text-secondary">
-            A setting with no stored value falls back to its environment variable on each service,
-            then to its built-in default. Every change is recorded in the control-plane audit log.
+            A setting with no stored value falls back to its environment variable on each service
+            (or, for <code>retention_days</code>, the <code>--retention-days</code> flag), then to
+            its built-in default. Settings with no environment variable use the built-in default. Every change is recorded in the control-plane audit log.
           </div>
 
           {listError && (
@@ -330,7 +472,13 @@ function SettingsPageContent() {
             }}
             onConfirm={handleReset}
             title="Reset setting"
-            message={`Remove the stored value of \`${resetTarget?.key}\`? It reverts to its environment variable, then to its built-in default.`}
+            message={`Remove the stored value of \`${resetTarget?.key}\`? ${
+              resetTarget && hasEnvFallback(resetTarget)
+                ? resetTarget.key === 'retention_days'
+                  ? 'It reverts to the --retention-days flag or MICROMEGAS_RETENTION_DAYS, then to its built-in default.'
+                  : 'It reverts to its environment variable, then to its built-in default.'
+                : 'It reverts to its built-in default.'
+            }`}
             confirmLabel="Reset"
             isLoading={isResetting}
             variant="danger"
@@ -368,7 +516,14 @@ function SettingsPageContent() {
                             <div className="font-mono text-theme-text-primary">{e.key}</div>
                             <div className="text-theme-text-secondary">{e.description}</div>
                             <div className="text-xs text-theme-text-muted">
-                              env fallback: <code>{e.env_var}</code> · default:{' '}
+                              {e.env_var !== null ? (
+                                <>
+                                  env fallback: <code>{e.env_var}</code>
+                                </>
+                              ) : (
+                                'no env fallback'
+                              )}{' '}
+                              · default:{' '}
                               <code>{JSON.stringify(e.default)}</code>
                             </div>
                           </td>
@@ -387,7 +542,7 @@ function SettingsPageContent() {
                                   : 'border-accent-link text-accent-link'
                               }`}
                             >
-                              {e.value === null ? 'Env / default' : 'Database'}
+                              {e.value === null ? (hasEnvFallback(e) ? 'Env / default' : 'Default') : 'Database'}
                             </span>
                           </td>
                           <td className="px-3 py-2 text-theme-text-secondary">

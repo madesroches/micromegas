@@ -5,17 +5,18 @@
  */
 import { authenticatedFetch, getApiBase } from './api'
 
-export type SettingKind = 'bool' | 'count' | 'name_list'
+export type SettingKind = 'bool' | 'count' | 'name_list' | 'days' | 'tag_horizons'
 
-export type SettingValue = boolean | number | string[]
+export type SettingValue = boolean | number | string[] | Record<string, number | 'forever'>
 
 export interface SettingEntry {
   key: string
   kind: SettingKind
-  env_var: string
+  /** `null` for a setting with no environment variable fallback. */
+  env_var: string | null
   default: SettingValue
   description: string
-  /** `null` when no row is stored: the services fall back to the env var, then the default. */
+  /** `null` when no row is stored: the services fall back to the env var or flag where one exists, then the default. */
   value: SettingValue | null
   updated_at: string | null
   updated_by: string | null
@@ -73,7 +74,7 @@ export async function setSetting(key: string, value: SettingValue): Promise<Sett
   return handleResponse<SettingEntry>(response)
 }
 
-/** `DELETE {base}/api/settings/{key}`. `204`; the key reverts to its env var or default. */
+/** `DELETE {base}/api/settings/{key}`. `204`; the key reverts to its env var or flag where one exists, else its default. */
 export async function resetSetting(key: string): Promise<void> {
   const response = await authenticatedFetch(
     `${getApiBase()}/settings/${encodeURIComponent(key)}`,

@@ -125,7 +125,7 @@ clean, and it dedupes as it goes:
    CREATE INDEX CONCURRENTLY ... (stream_id / begin_time / end_time / insert_time);
    ```
 5. Roll insert code back to **Deploy-1** (schema-agnostic) or, once the global unique index exists
-   again, to targeted `ON CONFLICT (block_id)`. Restore `delete_expired_blocks` for retention (revert
+   again, to targeted `ON CONFLICT (block_id)`. Restore the tag-aware `BlockDeletePass`-based passes (`delete_expired_blocks`) for retention (revert
    the roll-off change) — this reintroduces DELETE churn, which is the pre-project status quo.
 6. Drop `blocks_partitioned_old` once reads are confirmed against the new plain `blocks`.
 

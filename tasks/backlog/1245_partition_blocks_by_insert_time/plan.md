@@ -684,6 +684,10 @@ Replace `delete_expired_blocks(lake, expiration)` in `delete_old_data` (`delete.
 partition-drop pass. `delete_empty_streams`/`delete_empty_processes`/`retire_expired_partitions`
 stay as-is.
 
+Note: the partition-drop pass must keep the blocks of streams whose tag override horizon
+(`retention_by_stream_tag`, `PayloadRetention` in `delete.rs`) is longer than the partition's age, so
+it cannot drop a whole partition blindly; it has to copy out or skip such blocks.
+
 1. Enumerate `blocks` child partitions (via `pg_inherits` join to `pg_class`, or list by name
    prefix) and select those whose entire range is `<= expiration` — i.e. `upper_bound <= expiration`.
    Derive the bound from `pg_get_expr(relpartbound, oid)` or from the name via the shared function;
@@ -778,7 +782,9 @@ every ingestion/replication instance before the migration cutover (steps 3–4) 
 9. Add a `drop_expired_block_partitions` function (new, in `analytics/src/delete.rs` or a sibling
    module) implementing enumerate → blob-delete → `DROP TABLE`, using the shared helper.
 10. Replace the `delete_expired_blocks` call in `delete_old_data` with it; delete
-    `delete_expired_blocks`/`delete_expired_blocks_batch` (dead after cutover). Update tests.
+    `delete_expired_blocks`/`delete_expired_blocks_batch` (dead after cutover). Update tests. The
+    replacement must keep the blocks of streams whose tag override horizon is longer than the
+    partition's age.
 
 **Phase 4 — Monitoring (#1243)** — after 2 and 3.
 11. Add the default-non-empty, low-forward-buffer, and recovery-arm metrics + alarm wiring.

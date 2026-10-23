@@ -3,11 +3,14 @@
 //! tests that read process env are `#[serial]` and restore it through `EnvGuard`.
 
 use micromegas::settings::{
-    DbOverrides, EnvFallbacks, SETTINGS, SelfServiceSettings, SettingsSource, find_spec, shadowed,
+    DbOverrides, EnvFallbacks, SETTINGS, SelfServiceSettings, SettingsSource, find_spec,
+    parse_tag_horizons, shadowed,
 };
+use micromegas_analytics::delete::RetentionHorizon;
 use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use serde_json::{Value, json};
 use serial_test::serial;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn spec(key: &str) -> &'static micromegas::settings::SettingSpec {
@@ -27,6 +30,7 @@ fn env_with(views: &[&str], self_service: SelfServiceSettings) -> EnvFallbacks {
             public_view_sets: views.iter().map(|s| s.to_string()).collect(),
         }),
         self_service,
+        retention_days: 90,
     }
 }
 
@@ -80,6 +84,74 @@ fn name_list_accepts_names_and_rejects_malformed_entries() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn days_accepts_the_range_and_rejects_everything_else() {
+    let s = spec("retention_days");
+    for ok in [json!(1), json!(36500)] {
+        s.validate(&ok).expect("valid");
+    }
+    for bad in [json!(0), json!(36501), json!("90"), json!(1.5), json!(-1)] {
+        assert!(s.validate(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn tag_horizons_accepts_a_map_and_rejects_malformed_ones() {
+    let s = spec("retention_by_stream_tag");
+    for ok in [json!({}), json!({"audit": "forever", "debug": 3})] {
+        s.validate(&ok).expect("valid");
+    }
+    for bad in [
+        json!([]),
+        json!({"": 3}),
+        json!({" a": 3}),
+        json!({"a": 0}),
+        json!({"a": "never"}),
+        json!({"a": null}),
+        json!({"a": 36501}),
+    ] {
+        assert!(s.validate(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn an_invalid_retention_by_stream_tag_fails_the_whole_parse() {
+    let result = DbOverrides::from_rows(rows(&[
+        ("self_service_mint", json!(true)),
+        ("retention_by_stream_tag", json!({"x": 0})),
+    ]));
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn payload_retention_resolves_db_then_env() {
+    let env = || EnvFallbacks {
+        retention_days: 45,
+        ..env_with(&[], SelfServiceSettings::default())
+    };
+    let from_env = SettingsSource::with_overrides(env(), DbOverrides::default());
+    let r = from_env.payload_retention().await.expect("resolve");
+    assert_eq!(r.default_days, 45);
+    assert!(r.by_stream_tag.is_empty());
+
+    let from_db = SettingsSource::with_overrides(
+        env(),
+        DbOverrides {
+            retention_days: Some(7),
+            retention_by_stream_tag: Some(
+                parse_tag_horizons("k", &json!({"audit": "forever"})).expect("parse"),
+            ),
+            ..DbOverrides::default()
+        },
+    );
+    let r = from_db.payload_retention().await.expect("resolve");
+    assert_eq!(r.default_days, 7);
+    assert_eq!(
+        r.by_stream_tag,
+        BTreeMap::from([("audit".to_string(), RetentionHorizon::Forever)])
+    );
+}
+
+#[test]
 fn unknown_keys_are_ignored() {
     let parsed = DbOverrides::from_rows(rows(&[
         ("from_a_newer_replica", json!({"anything": [1, 2]})),
@@ -107,8 +179,21 @@ fn every_registered_key_parses_into_its_field() {
         ("self_service_max_claims_per_caller", json!(1)),
         ("self_service_max_keys_per_caller", json!(2)),
         ("self_service_max_grants_per_caller", json!(3)),
+        ("retention_days", json!(30)),
+        (
+            "retention_by_stream_tag",
+            json!({"audit": "forever", "debug": 3}),
+        ),
     ]))
     .expect("parse");
+    assert_eq!(parsed.retention_days, Some(30));
+    assert_eq!(
+        parsed.retention_by_stream_tag,
+        Some(BTreeMap::from([
+            ("audit".to_string(), RetentionHorizon::Forever),
+            ("debug".to_string(), RetentionHorizon::Days(3)),
+        ]))
+    );
     assert_eq!(
         parsed.isolation.expect("isolation").public_view_sets,
         vec!["a".to_string(), "b".to_string()]
@@ -220,7 +305,7 @@ impl EnvGuard {
         let guard = Self(
             SETTINGS
                 .iter()
-                .map(|s| s.env_var)
+                .filter_map(|s| s.env_var)
                 .chain(vars.iter().map(|(k, _)| *k))
                 .collect(),
         );
@@ -256,8 +341,21 @@ fn env_fallbacks_default_to_the_registry_defaults() {
     assert!(env.isolation.public_view_sets.is_empty());
     assert_eq!(env.self_service, SelfServiceSettings::default());
 
+    assert_eq!(env.retention_days, 90);
+    let tags_default: Value =
+        serde_json::from_str(spec("retention_by_stream_tag").default).expect("default is JSON");
+    spec("retention_by_stream_tag")
+        .validate(&tags_default)
+        .expect("default validates");
+    assert!(
+        parse_tag_horizons("retention_by_stream_tag", &tags_default)
+            .expect("parse")
+            .is_empty()
+    );
+
     for (key, applied) in [
         ("public_view_sets", json!(env.isolation.public_view_sets)),
+        ("retention_days", json!(env.retention_days)),
         ("self_service_mint", json!(env.self_service.mint_enabled)),
         (
             "self_service_max_claims_per_caller",
@@ -327,4 +425,7 @@ fn shadowed_reports_only_keys_that_are_both_stored_and_set_in_env() {
     assert_eq!(keys, vec!["self_service_mint"]);
 
     assert!(shadowed(&[], set_in_env).is_empty());
+
+    // A spec with no env var is never reported, whatever the environment says.
+    assert!(shadowed(&["retention_by_stream_tag"], |_| true).is_empty());
 }

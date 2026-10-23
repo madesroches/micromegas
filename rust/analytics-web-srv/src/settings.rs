@@ -186,7 +186,7 @@ pub struct StoredSetting {
 pub struct SettingEntry {
     pub key: &'static str,
     pub kind: &'static str,
-    pub env_var: &'static str,
+    pub env_var: Option<&'static str>,
     pub default: serde_json::Value,
     pub description: &'static str,
     pub value: Option<serde_json::Value>,

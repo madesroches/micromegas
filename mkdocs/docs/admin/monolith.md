@@ -51,6 +51,7 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
 | `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Env fallback for the `public_view_sets` [setting](authorization.md#settings) (a stored value wins). Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint route falls back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
+| `MICROMEGAS_RETENTION_DAYS` | No | Fallback for the `retention_days` [setting](authorization.md#settings) (a stored value wins), maintenance role. Raw payloads and partitions older than this many days are deleted (default `90`, range `1` to `36500`). See [Retention](maintenance.md#retention) |
 | `MICROMEGAS_SELF_SERVICE_MINT` | No | Env fallback for the `self_service_mint` setting. Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authorization.md#self-service-ingestion-key-mint) |
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Env fallback for the `self_service_max_claims_per_caller` setting. Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Env fallback for the `self_service_max_keys_per_caller` setting. Caps how many live keys one non-admin caller may hold at once (default `100`) |
@@ -64,9 +65,9 @@ cargo run --bin micromegas-monolith -- \
     is always resolved **unprefixed**, even in-process — set the unprefixed name, not a
     `MICROMEGAS_INGESTION_`-prefixed one. Every role that builds a lakehouse (FlightSQL,
     maintenance, ingestion) reads the unprefixed name directly and has no prefixed variant at
-    all; the `web` role resolves the same unprefixed name too. The env fallbacks for the five [settings](authorization.md#settings)
-    (`MICROMEGAS_SELF_SERVICE_MINT`, its three per-caller bounds, and
-    `MICROMEGAS_PUBLIC_VIEW_SETS`) follow the same unprefixed convention under the monolith.
+    all; the `web` role resolves the same unprefixed name too. The env fallbacks for the six [settings](authorization.md#settings)
+    (`MICROMEGAS_SELF_SERVICE_MINT`, its three per-caller bounds,
+    `MICROMEGAS_PUBLIC_VIEW_SETS` and `MICROMEGAS_RETENTION_DAYS`) follow the same unprefixed convention under the monolith.
 
 ## CLI flags
 
@@ -80,6 +81,7 @@ cargo run --bin micromegas-monolith -- \
 | `--disable-auth` | off | Disable authentication for all roles |
 | `--disable-ingestion-auth` | off | Disable auth for ingestion only (useful with OIDC on web) |
 | `--no-seed-data-source` | off | Skip auto-seeding the local FlightSQL data source |
+| `--retention-days` | `90` | Fallback for the `retention_days` [setting](authorization.md#settings) when no value is stored (maintenance role); accepts `1` to `36500`. See [Retention](maintenance.md#retention) |
 | `--shutdown-grace-period-seconds` | `25` | Seconds to drain before hard exit on `SIGTERM` |
 
 See [Listen addresses](service-lifecycle.md#listen-addresses).

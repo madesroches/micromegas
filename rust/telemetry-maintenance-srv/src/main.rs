@@ -16,6 +16,7 @@ use micromegas::ingestion::data_lake_connection::WritablePolicy;
 use micromegas::micromegas_main;
 use micromegas::servers::maintenance::daemon;
 use micromegas::servers::shutdown::wait_for_sigterm;
+use micromegas::settings::{EnvFallbacks, SettingsSource, settings_cache_ttl};
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -26,9 +27,15 @@ use std::sync::Arc;
     author
 )]
 struct Cli {
-    /// Delete lake data older than this many days (retention horizon)
-    #[clap(long, default_value = "90", env = "MICROMEGAS_RETENTION_DAYS")]
-    retention_days: i32,
+    /// Fallback for the `retention_days` setting when no value is stored: raw payloads and
+    /// partitions older than this many days are deleted. Per-stream-tag overrides can change it.
+    #[clap(
+        long,
+        default_value = "90",
+        env = "MICROMEGAS_RETENTION_DAYS",
+        value_parser = clap::value_parser!(u32).range(1..=micromegas::analytics::delete::MAX_RETENTION_DAYS as i64)
+    )]
+    retention_days: u32,
 
     #[command(flatten)]
     common: micromegas::config::CommonServerArgs,
@@ -61,11 +68,20 @@ async fn main() -> Result<()> {
         data_lake,
         session_configurator,
     ));
+    let settings = Arc::new(SettingsSource::new(
+        EnvFallbacks {
+            retention_days: args.retention_days,
+            ..EnvFallbacks::from_env()?
+        },
+        lakehouse.lake().db_pool.clone(),
+        settings_cache_ttl(),
+    ));
+    settings.warn_on_shadowed_env().await;
     let grace = args.common.grace();
     daemon(
         lakehouse,
         view_registry,
-        args.retention_days,
+        settings,
         wait_for_sigterm(),
         grace,
     )
