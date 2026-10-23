@@ -48,7 +48,7 @@ pub mod list_audience_grants_table_function;
 pub mod list_partitions_table_function;
 /// Admin UDTF listing every query-deny-list rule currently in force
 pub mod list_query_denials_table_function;
-/// Admin UDTF listing every row of `lakehouse_view_set_definitions`, straight from Postgres
+/// Admin UDTF listing DDL-defined view sets (straight from Postgres) and built-in ones
 pub mod list_view_set_definitions_table_function;
 /// Read access to view sets with their schema information
 pub mod list_view_sets_table_function;

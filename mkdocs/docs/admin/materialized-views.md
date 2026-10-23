@@ -161,7 +161,8 @@ conventions instead:
   simply walks whatever is currently loaded.
 - [`list_view_set_definitions()`](functions-reference.md#list_view_set_definitions) lists every row in
   Postgres directly, including one that failed to load — so it is the way to see a definition
-  `list_view_sets()` doesn't know about.
+  `list_view_sets()` doesn't know about — plus the built-in view sets (`source = 'builtin'`), with
+  their `update_group`.
 - [View Sets as Code](views-as-code.md) manages a directory of `.sql` files against this table
   with a `plan`/`apply`/`pull`/`list`/`show` workflow, instead of hand-writing DDL statements.
 

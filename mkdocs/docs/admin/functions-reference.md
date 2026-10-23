@@ -688,14 +688,23 @@ ORDER BY size_percentage DESC;
 !!! note "Requires admin"
     Same gate as `retire_partitions()` and friends — see [Authorization](authorization.md#admin-gated-lakehouse-functions).
 
-**Description**: Lists every row of `lakehouse_view_set_definitions` — every
-[DDL-defined materialized view](materialized-views.md), straight from Postgres rather than from
-the currently-loaded view set. This is what lets an admin see a definition that exists on disk
-but failed to load (present here, absent from `list_view_sets()`).
+**Description**: Lists every view set. DDL-defined rows (`source = 'ddl'`) are every row of
+`lakehouse_view_set_definitions` — every [DDL-defined materialized view](materialized-views.md),
+read straight from Postgres rather than from the currently-loaded view set, so an admin can see a
+definition that exists on disk but failed to load (present here, absent from `list_view_sets()`).
+Built-in view sets (`source = 'builtin'`) have no stored definition: `definition_sql`,
+`updated_at` and `updated_by` are NULL, and `update_group` is the one reported by the view set's
+global view (NULL when it has none). A Postgres row wins when a name appears in both.
 
 **Usage**:
 ```sql
 SELECT * FROM list_view_set_definitions();
+
+-- materialization order
+SELECT view_set_name, update_group
+FROM list_view_set_definitions()
+WHERE update_group IS NOT NULL
+ORDER BY update_group, view_set_name;
 ```
 
 **Returns**: Table with columns:
@@ -703,7 +712,8 @@ SELECT * FROM list_view_set_definitions();
 | Column | Type | Description |
 |---|---|---|
 | `view_set_name` | String | The view set's name |
-| `definition_sql` | String | The `CREATE MATERIALIZED VIEW` statement text, verbatim, as last submitted |
-| `update_group` | Int32 | The daemon's materialization ordering group |
-| `updated_at` | Timestamp | When this row was last created or replaced |
+| `definition_sql` | String, nullable | The `CREATE MATERIALIZED VIEW` statement text, verbatim, as last submitted; NULL for built-in view sets |
+| `update_group` | Int32, nullable | The daemon's materialization ordering group; NULL for a built-in view set without one |
+| `updated_at` | Timestamp, nullable | When this row was last created or replaced; NULL for built-in view sets |
 | `updated_by` | String, nullable | The identity of the caller who last created or replaced it |
+| `source` | String | `'ddl'` or `'builtin'` |

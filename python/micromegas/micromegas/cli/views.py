@@ -179,10 +179,10 @@ def make_client(args):
 
 
 def read_server_state(client):
-    """-> DataFrame(view_set_name, definition_sql, update_group, updated_at, updated_by)"""
+    """DDL-defined view sets only; built-in rows have no definition. -> DataFrame(view_set_name, definition_sql, update_group, updated_at, updated_by)"""
     return client.query(
         "SELECT view_set_name, definition_sql, update_group, updated_at, updated_by "
-        "FROM list_view_set_definitions()"
+        "FROM list_view_set_definitions() WHERE definition_sql IS NOT NULL"
     )
 
 
