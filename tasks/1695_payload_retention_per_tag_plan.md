@@ -299,8 +299,9 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
   retention horizon" bullet, which stops being accurate with overrides) and the horizon paragraph at
   the end of `### Integrity counts` (`:146-156`) around the two settings. Cover the resolution order (stored, then `--retention-days` / `MICROMEGAS_RETENTION_DAYS`,
   then 90), the override format with an `{"audit": "forever", "debug": 3}` example, longest-wins
-  matching, the fact that overrides cover raw payloads only (partitions follow the default), that
-  removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
+  matching, the fact that overrides cover raw payloads only (partitions follow the default), so blocks
+  kept past the default horizon can't be queried until the `blocks` view, then its dependent views, are
+  rematerialized for that range, that removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
   and that payload deletion is skipped (with the rest of the hourly task still running) while settings can't be loaded. Note that a stored `retention_days` silently shadows an explicit
   `--retention-days` flag (no startup warning), and that infrastructure-as-code users can write the overrides with
   `PUT {base}/api/settings/retention_by_stream_tag`. Update the flag table row (`:46`)
@@ -325,8 +326,8 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
   reverts to the env var, flag or default only where one exists, and the shadow-warning text notes that a stored
   `retention_days` shadowing `--retention-days` is not reported.
 - `mkdocs/docs/when-to-use/index.md:16`: reword "every event keeps full resolution until the retention
-  horizon, 90 days by default" as "until the default retention horizon (90 days), adjustable per
-  stream tag".
+  horizon, 90 days by default" so that query access to full resolution still ends at the default
+  horizon (90 days) and only raw payload storage is adjustable per stream tag.
 - `tasks/backlog/1606_transactional_audit_write_plan.md`: the "Retention of the raw blocks" section
   becomes "set `retention_by_stream_tag` to `{"audit": "forever"}`", and the per-view table's
   "absent" row says `retention_days`. Also rewrite the manual step at `:566` so it no longer
