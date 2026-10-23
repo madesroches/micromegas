@@ -51,9 +51,6 @@ The cause must be confirmed in a browser before changing code; candidates, in ro
    `XYChart.tsx:1270` changing identity would destroy/recreate the chart on each click and
    re-run axis sizing from scratch (the effect comment at `XYChart.tsx:1264-1266` assumes it
    does not).
-4. **Selection-dependent drawing outside the plot.** The bar `disp` colors / stroke width change
-   the bar paths' extents, but uPlot sizes the plot independently of path content, so this is
-   unlikely to move the plot.
 
 Instrument by logging `u.bbox`, `u.over` left/width, and `dimensions` before/after a click in the
 reproducing notebook (a bar chart over `log_entries` grouped by level with a long-label category
