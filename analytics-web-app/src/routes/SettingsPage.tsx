@@ -98,7 +98,7 @@ function horizonRowsToValue(rows: HorizonRow[]): Record<string, number | 'foreve
   ) as Record<string, number | 'forever'>
 }
 
-function hasEnvFallback(entry: SettingEntry): boolean {
+function hasEnvFallback(entry: SettingEntry): entry is SettingEntry & { env_var: string } {
   return entry.env_var !== null
 }
 
@@ -216,7 +216,7 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
           {entry.value === null && (
             <p className="text-sm text-theme-text-muted">
               Pre-filled with the built-in default.{' '}
-              {entry.env_var !== null && (
+              {hasEnvFallback(entry) && (
                 <>
                   Each service currently uses{' '}
                   {entry.key === 'retention_days' && (
@@ -475,8 +475,8 @@ function SettingsPageContent() {
             message={`Remove the stored value of \`${resetTarget?.key}\`? ${
               resetTarget && hasEnvFallback(resetTarget)
                 ? resetTarget.key === 'retention_days'
-                  ? 'It reverts to the --retention-days flag or MICROMEGAS_RETENTION_DAYS, then to its built-in default.'
-                  : 'It reverts to its environment variable, then to its built-in default.'
+                  ? `It reverts to the --retention-days flag or ${resetTarget.env_var}, then to its built-in default.`
+                  : `It reverts to ${resetTarget.env_var}, then to its built-in default.`
                 : 'It reverts to its built-in default.'
             }`}
             confirmLabel="Reset"
@@ -516,7 +516,7 @@ function SettingsPageContent() {
                             <div className="font-mono text-theme-text-primary">{e.key}</div>
                             <div className="text-theme-text-secondary">{e.description}</div>
                             <div className="text-xs text-theme-text-muted">
-                              {e.env_var !== null ? (
+                              {hasEnvFallback(e) ? (
                                 <>
                                   env fallback: <code>{e.env_var}</code>
                                 </>

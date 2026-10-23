@@ -409,9 +409,6 @@ async fn settings_store_outage_maps_to_status_unavailable() {
         self_service: SelfServiceSettings::default(),
         retention_days: 90,
     };
-    // The maintenance daemon skips payload deletion on this error rather than using the default.
-    let retention_settings = SettingsSource::new(env(), pool.clone(), Duration::from_secs(60));
-    assert!(retention_settings.payload_retention().await.is_err());
     let settings = SettingsSource::new(env(), pool, Duration::from_secs(60));
     let addr = start_server(Some(auth_provider), policy, settings).await;
     let mut client = connect(addr).await;

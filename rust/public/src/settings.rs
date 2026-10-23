@@ -187,7 +187,7 @@ pub fn parse_tag_horizons(
         let horizon = if horizon.as_str() == Some("forever") {
             RetentionHorizon::Forever
         } else {
-            RetentionHorizon::Days(days(&format!("{key}.{tag}"), horizon).map_err(|_| {
+            RetentionHorizon::Days(days(key, horizon).map_err(|_| {
                 anyhow!(
                     "{key}: horizon for tag {tag:?} must be an integer between 1 and {MAX_RETENTION_DAYS}, or \"forever\""
                 )

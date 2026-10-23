@@ -429,3 +429,18 @@ fn shadowed_reports_only_keys_that_are_both_stored_and_set_in_env() {
     // A spec with no env var is never reported, whatever the environment says.
     assert!(shadowed(&["retention_by_stream_tag"], |_| true).is_empty());
 }
+
+/// The maintenance daemon skips payload deletion on this error rather than using the default.
+#[tokio::test]
+async fn payload_retention_errors_when_the_store_is_unreachable() {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(50))
+        .connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("connect_lazy should not touch the network");
+    let settings = SettingsSource::new(
+        env_with(&[], SelfServiceSettings::default()),
+        pool,
+        std::time::Duration::from_secs(60),
+    );
+    assert!(settings.payload_retention().await.is_err());
+}

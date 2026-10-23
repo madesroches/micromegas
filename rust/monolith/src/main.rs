@@ -366,8 +366,13 @@ async fn main() -> Result<()> {
             lh.lake().db_pool.clone(),
             settings_cache_ttl(),
         ));
+        // The FlightSQL server already warns when it runs with auth; warning again here would
+        // repeat every line.
+        let warn_on_shadowed_env = !(roles.flightsql && !args.disable_auth);
         join_set.spawn(async move {
-            settings.warn_on_shadowed_env().await;
+            if warn_on_shadowed_env {
+                settings.warn_on_shadowed_env().await;
+            }
             let base_view_factory = default_view_factory(
                 lh.runtime().clone(),
                 lh.lake().clone(),
