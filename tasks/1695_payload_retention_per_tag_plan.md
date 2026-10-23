@@ -181,15 +181,19 @@ Two new registry entries, grouped under the `retention_` prefix:
   once an hour, off any request path, so the small dedicated pool FlightSQL uses for auth isn't
   needed.
 - The `--retention-days` flag stays as the fallback (clap resolves flag, then env, then 90). Its
-  type becomes `u32` with `value_parser!(u32).range(1..=36_500)`, so the flag, env and DB all accept
+  type becomes `u32` with `value_parser!(u32).range(1..=micromegas::analytics::delete::MAX_RETENTION_DAYS as i64)` in both
+  mains (only the frontend keeps a literal), so the flag, env and DB all accept
   the same range. `warn_on_shadowed_env` only looks at the env var, so a stored value shadowing an
   explicit `--retention-days` is not reported. The docs say so.
+- Both `--retention-days` doc comments (`telemetry-maintenance-srv/src/main.rs:28`,
+  `monolith/src/main.rs:168`) are reworded: the flag is the fallback for the `retention_days`
+  setting when no value is stored, and tag overrides can change it per stream.
 
 ### Index: data-lake migration v13 (`rust/ingestion/src/sql_migration.rs`)
 
 Follow the v3 shape. Outside a transaction, run
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS stream_tags ON streams USING GIN (tags);`, then
-`check_index_is_valid(&pool, "stream_tags")`. If the index is invalid, drop it and bail so the next
+`check_index_is_valid(&pool, "stream_tags")`. If `check_index_is_valid` returns false (it has already dropped the index), bail so the next
 startup retries. Then bump to 13 in a transaction (`upgrade_data_lake_schema_v13`).
 `CONCURRENTLY` keeps ingestion writing to `streams` while the index builds. The default GIN
 `array_ops` opclass supports `&&`. A fresh DB gets the index through the same chain.
@@ -221,9 +225,10 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
     `env_var` and gains the `--retention-days` flag tier for `retention_days`. The Reset confirmation
     (`:333`) and page banner (`:314-317`) stop saying "environment variable, then default"
     unconditionally: no env var for `retention_by_stream_tag`, plus the flag tier for `retention_days`.
-  - `pendingValue` (`:100-106`), the pre-fill effect (`:81-84`) and `canSubmit` (`:108`) treat every
-    non-`bool`/`count` kind as a name list. Add explicit `days` and `tag_horizons` branches so `days`
-    is not submitted as a name list.
+  - `pendingValue` (`:100-106`) and `canSubmit` (`:108`) fall through to the name-list path for every
+    non-`bool`/`count` kind, and the pre-fill effect (`:81-84`) seeds only `countText` and `names`.
+    Add explicit `days` and `tag_horizons` branches to all three so `days` is not submitted as a
+    name list and both editors are seeded.
   - `settings-api.ts` doc comments at `:18` and `:76` repeat the "env var, then default" wording;
     update them.
 
@@ -264,9 +269,11 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
 - `analytics-web-app/src/lib/settings-api.ts`, `analytics-web-app/src/routes/SettingsPage.tsx`,
   plus `src/lib/__tests__/settings-api.test.ts` and `src/routes/__tests__/SettingsPage.test.tsx`
 - `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`,
-  `mkdocs/docs/admin/authorization.md`, `mkdocs/docs/when-to-use/index.md`
+  `mkdocs/docs/admin/authorization.md`, `mkdocs/docs/when-to-use/index.md`,
+  `welcome/public/llms.txt`
 - `tasks/backlog/1606_transactional_audit_write_plan.md`
-- `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`
+- `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`,
+  `tasks/backlog/1245_partition_blocks_by_insert_time/rollback.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -291,7 +298,7 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
 - `--retention-days 0` and negative values are now rejected at startup. A negative value already
   broke every hourly pass, and `0` deleted every payload hourly.
 - Accepted risk: on a schema behind v12 the settings load fails, so payload deletion is skipped (logged
-  each hour; the rest of the hourly task still runs) until ingestion runs the migration. Upgrade order is the same as for #1592.
+  each hour; the rest of the hourly task still runs) until ingestion (or the monolith) runs the migration. Upgrade order is the same as for #1592.
 
 ## Documentation
 
@@ -328,6 +335,8 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
 - `mkdocs/docs/when-to-use/index.md:16`: reword "every event keeps full resolution until the retention
   horizon, 90 days by default" so that query access to full resolution still ends at the default
   horizon (90 days) and only raw payload storage is adjustable per stream tag.
+- `welcome/public/llms.txt:12`: same rewording of "raw events keep full resolution for the whole
+  retention period".
 - `tasks/backlog/1606_transactional_audit_write_plan.md`: the "Retention of the raw blocks" section
   becomes "set `retention_by_stream_tag` to `{"audit": "forever"}`", and the per-view table's
   "absent" row says `retention_days`. Also rewrite the manual step at `:566` so it no longer
@@ -337,6 +346,8 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
 - `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`: add a note at `:681-696` and
   `:780-781` that the partition-drop deletion replacing `delete_expired_blocks` must keep the
   blocks of streams whose tag override horizon is longer than the partition's age.
+- `tasks/backlog/1245_partition_blocks_by_insert_time/rollback.md:128`: change "restore
+  `delete_expired_blocks`" to restore the tag-aware `BlockDeletePass`-based passes.
 - `CHANGELOG.md` (Unreleased): the feature (#1695) and data-lake schema v13 (GIN index on
   `streams.tags`). **Minor breaking change:** `delete_old_data` takes a `&PayloadRetention`,
   `delete_expired_blocks(_batch)` take a `&BlockDeletePass`, `daemon` takes an
@@ -371,7 +382,9 @@ database.
     default `{}` validates and parses via `parse_tag_horizons` to an empty map (it has no
     `EnvFallbacks` field).
 - `rust/public/tests/read_policy_threading_tests.rs` already builds a DB-backed source over an
-  unreachable lazy pool. Add one assertion that `payload_retention()` errors on that cold start.
+  unreachable lazy pool. Add one assertion that `payload_retention()` errors on that cold start. The existing
+  `SettingsSource` is moved into `start_server` (`:414`), so the assertion builds its own
+  `SettingsSource::new(..)` over the same unreachable lazy pool.
   The no-deletion-on-failure guarantee relies on that error.
 - `rust/analytics-web-srv/tests/settings_tests.rs`: the GET entry builder emits
   `env_var: null` for `retention_by_stream_tag`, and a PUT with an invalid tag map returns 400
