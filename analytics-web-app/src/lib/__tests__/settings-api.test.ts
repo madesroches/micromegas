@@ -36,6 +36,19 @@ describe('settings-api', () => {
     expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/settings$/)
   })
 
+  it('fetchSettings passes a null env_var and a tag map through', async () => {
+    const tagEntry = {
+      ...entry,
+      key: 'retention_by_stream_tag',
+      kind: 'tag_horizons',
+      env_var: null,
+      default: {},
+      value: { audit: 'forever', debug: 3 },
+    }
+    mockFetch({ ok: true, status: 200, json: () => [tagEntry] })
+    expect(await fetchSettings()).toEqual([tagEntry])
+  })
+
   it('setSetting PUTs {value} to the encoded key', async () => {
     const fetchMock = mockFetch({ ok: true, status: 200, json: () => entry })
     await setSetting('public_view_sets', ['a', 'b'])

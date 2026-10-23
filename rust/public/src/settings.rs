@@ -10,20 +10,25 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
+use micromegas_analytics::delete::{MAX_RETENTION_DAYS, PayloadRetention, RetentionHorizon};
 use micromegas_analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas_auth::db_audience_grants::DbAudienceGrantsConfig;
 use micromegas_auth::db_snapshot::{SnapshotLoader, SnapshotSource};
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub const PUBLIC_VIEW_SETS: &str = "public_view_sets";
+pub const RETENTION_DAYS: &str = "retention_days";
+pub const RETENTION_BY_STREAM_TAG: &str = "retention_by_stream_tag";
 pub const SELF_SERVICE_MINT: &str = "self_service_mint";
 pub const SELF_SERVICE_MAX_CLAIMS_PER_CALLER: &str = "self_service_max_claims_per_caller";
 pub const SELF_SERVICE_MAX_KEYS_PER_CALLER: &str = "self_service_max_keys_per_caller";
 pub const SELF_SERVICE_MAX_GRANTS_PER_CALLER: &str = "self_service_max_grants_per_caller";
 
+const DEFAULT_RETENTION_DAYS: u32 = 90;
 const DEFAULT_MAX_CLAIMS_PER_CALLER: i64 = 25;
 const DEFAULT_MAX_KEYS_PER_CALLER: i64 = 100;
 const DEFAULT_MAX_GRANTS_PER_CALLER: i64 = 50;
@@ -36,6 +41,10 @@ pub enum SettingKind {
     Count,
     /// JSON array of non-empty, trimmed, unique strings with no `[`, `]` or `"`.
     NameList,
+    /// JSON integer in `1..=MAX_RETENTION_DAYS`.
+    Days,
+    /// JSON object mapping a stream tag to a `Days` integer or the string `"forever"`.
+    TagHorizons,
 }
 
 impl SettingKind {
@@ -44,6 +53,8 @@ impl SettingKind {
             SettingKind::Bool => "bool",
             SettingKind::Count => "count",
             SettingKind::NameList => "name_list",
+            SettingKind::Days => "days",
+            SettingKind::TagHorizons => "tag_horizons",
         }
     }
 }
@@ -52,7 +63,8 @@ impl SettingKind {
 #[derive(Debug)]
 pub struct SettingSpec {
     pub key: &'static str,
-    pub env_var: &'static str,
+    /// `None` for a setting with no env fallback.
+    pub env_var: Option<&'static str>,
     pub kind: SettingKind,
     /// JSON text of the built-in default, shown in the admin page.
     pub default: &'static str,
@@ -62,35 +74,49 @@ pub struct SettingSpec {
 pub const SETTINGS: &[SettingSpec] = &[
     SettingSpec {
         key: PUBLIC_VIEW_SETS,
-        env_var: "MICROMEGAS_PUBLIC_VIEW_SETS",
+        env_var: Some("MICROMEGAS_PUBLIC_VIEW_SETS"),
         kind: SettingKind::NameList,
         default: "[]",
         description: "View sets exempt from the row-level audience filter: every caller sees all of their rows.",
     },
     SettingSpec {
+        key: RETENTION_DAYS,
+        env_var: Some("MICROMEGAS_RETENTION_DAYS"),
+        kind: SettingKind::Days,
+        default: "90",
+        description: "Default number of days raw payloads (blocks) and lakehouse partitions are kept.",
+    },
+    SettingSpec {
+        key: RETENTION_BY_STREAM_TAG,
+        env_var: None,
+        kind: SettingKind::TagHorizons,
+        default: "{}",
+        description: "Per stream tag override of how long raw payloads are kept: a number of days or \"forever\". A stream with several overridden tags keeps the longest.",
+    },
+    SettingSpec {
         key: SELF_SERVICE_MINT,
-        env_var: "MICROMEGAS_SELF_SERVICE_MINT",
+        env_var: Some("MICROMEGAS_SELF_SERVICE_MINT"),
         kind: SettingKind::Bool,
         default: "false",
         description: "Let non-admin callers mint their own ingestion keys and manage audience grants.",
     },
     SettingSpec {
         key: SELF_SERVICE_MAX_CLAIMS_PER_CALLER,
-        env_var: "MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER",
+        env_var: Some("MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER"),
         kind: SettingKind::Count,
         default: "25",
         description: "Maximum number of distinct audiences one non-admin caller may claim.",
     },
     SettingSpec {
         key: SELF_SERVICE_MAX_KEYS_PER_CALLER,
-        env_var: "MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER",
+        env_var: Some("MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER"),
         kind: SettingKind::Count,
         default: "100",
         description: "Maximum number of ingestion keys a non-admin caller may hold.",
     },
     SettingSpec {
         key: SELF_SERVICE_MAX_GRANTS_PER_CALLER,
-        env_var: "MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER",
+        env_var: Some("MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER"),
         kind: SettingKind::Count,
         default: "50",
         description: "Maximum number of audience grants one non-admin caller may have created, excluding their own user:<email> rows.",
@@ -123,9 +149,53 @@ impl SettingSpec {
             SettingKind::NameList => {
                 name_list(self.key, value)?;
             }
+            SettingKind::Days => {
+                days(self.key, value)?;
+            }
+            SettingKind::TagHorizons => {
+                parse_tag_horizons(self.key, value)?;
+            }
         }
         Ok(())
     }
+}
+
+fn days(key: &str, value: &serde_json::Value) -> Result<u32> {
+    value
+        .as_u64()
+        .filter(|n| (1..=u64::from(MAX_RETENTION_DAYS)).contains(n))
+        .map(|n| n as u32)
+        .ok_or_else(|| anyhow!("{key}: expected a JSON integer between 1 and {MAX_RETENTION_DAYS}"))
+}
+
+/// Parses `{tag: days | "forever"}`.
+pub fn parse_tag_horizons(
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<BTreeMap<String, RetentionHorizon>> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| anyhow!("{key}: expected a JSON object of tag to days or \"forever\""))?;
+    let mut out = BTreeMap::new();
+    for (tag, horizon) in map {
+        if tag.is_empty() {
+            bail!("{key}: empty tag");
+        }
+        if tag.trim() != tag {
+            bail!("{key}: tag {tag:?} has leading or trailing whitespace");
+        }
+        let horizon = if horizon.as_str() == Some("forever") {
+            RetentionHorizon::Forever
+        } else {
+            RetentionHorizon::Days(days(key, horizon).map_err(|_| {
+                anyhow!(
+                    "{key}: horizon for tag {tag:?} must be an integer between 1 and {MAX_RETENTION_DAYS}, or \"forever\""
+                )
+            })?)
+        };
+        out.insert(tag.clone(), horizon);
+    }
+    Ok(out)
 }
 
 fn name_list(key: &str, value: &serde_json::Value) -> Result<Vec<String>> {
@@ -182,6 +252,8 @@ pub struct DbOverrides {
     pub max_claims_per_caller: Option<i64>,
     pub max_keys_per_caller: Option<i64>,
     pub max_grants_per_caller: Option<i64>,
+    pub retention_days: Option<u32>,
+    pub retention_by_stream_tag: Option<BTreeMap<String, RetentionHorizon>>,
 }
 
 impl DbOverrides {
@@ -210,6 +282,10 @@ impl DbOverrides {
                 SELF_SERVICE_MAX_CLAIMS_PER_CALLER => out.max_claims_per_caller = value.as_i64(),
                 SELF_SERVICE_MAX_KEYS_PER_CALLER => out.max_keys_per_caller = value.as_i64(),
                 SELF_SERVICE_MAX_GRANTS_PER_CALLER => out.max_grants_per_caller = value.as_i64(),
+                RETENTION_DAYS => out.retention_days = Some(days(spec.key, &value)?),
+                RETENTION_BY_STREAM_TAG => {
+                    out.retention_by_stream_tag = Some(parse_tag_horizons(spec.key, &value)?);
+                }
                 other => bail!("settings key {other:?} is registered but not handled"),
             }
         }
@@ -233,6 +309,12 @@ impl DbOverrides {
         }
         if self.max_grants_per_caller.is_some() {
             keys.push(SELF_SERVICE_MAX_GRANTS_PER_CALLER);
+        }
+        if self.retention_days.is_some() {
+            keys.push(RETENTION_DAYS);
+        }
+        if self.retention_by_stream_tag.is_some() {
+            keys.push(RETENTION_BY_STREAM_TAG);
         }
         keys
     }
@@ -303,13 +385,21 @@ pub fn resolve_i64_env(var: &str, default: i64) -> i64 {
 pub struct EnvFallbacks {
     pub isolation: Arc<IsolationConfig>,
     pub self_service: SelfServiceSettings,
+    /// Fallback for `retention_days`; the maintenance services overwrite it through
+    /// [`EnvFallbacks::with_deprecated_retention_days`].
+    pub retention_days: u32,
 }
 
 impl EnvFallbacks {
     /// Fails fast on a malformed `MICROMEGAS_PUBLIC_VIEW_SETS`.
     pub fn from_env() -> Result<Self> {
         let isolation = Arc::new(IsolationConfig::from_env()?);
-        let spec = |key| find_spec(key).expect("registered key").env_var;
+        let spec = |key| {
+            find_spec(key)
+                .expect("registered key")
+                .env_var
+                .expect("setting has an env var")
+        };
         let self_service = SelfServiceSettings {
             mint_enabled: resolve_bool_env(spec(SELF_SERVICE_MINT), false),
             max_claims_per_caller: resolve_i64_env(
@@ -328,7 +418,20 @@ impl EnvFallbacks {
         Ok(Self {
             isolation,
             self_service,
+            retention_days: DEFAULT_RETENTION_DAYS,
         })
+    }
+
+    /// Applies the deprecated `--retention-days` flag / `MICROMEGAS_RETENTION_DAYS` value, if
+    /// one was given, and warns that it will stop being read.
+    pub fn with_deprecated_retention_days(mut self, retention_days: Option<u32>) -> Self {
+        if let Some(days) = retention_days {
+            warn!(
+                "--retention-days / MICROMEGAS_RETENTION_DAYS is deprecated and will be removed in the next release; set the `{RETENTION_DAYS}` setting instead (Admin -> Settings)"
+            );
+            self.retention_days = days;
+        }
+        self
     }
 }
 
@@ -375,6 +478,7 @@ impl SettingsSource {
         Self::env_only(EnvFallbacks {
             isolation,
             self_service: SelfServiceSettings::default(),
+            retention_days: DEFAULT_RETENTION_DAYS,
         })
     }
 
@@ -418,15 +522,26 @@ impl SettingsSource {
         })
     }
 
+    /// The payload retention policy. Errors when the settings can't be loaded, so the caller
+    /// never falls back to the default horizon and deletes what an override was keeping.
+    pub async fn payload_retention(&self) -> Result<PayloadRetention> {
+        let o = self.overrides().await?;
+        Ok(PayloadRetention {
+            default_days: o.retention_days.unwrap_or(self.env.retention_days),
+            by_stream_tag: o.retention_by_stream_tag.clone().unwrap_or_default(),
+        })
+    }
+
     /// Best-effort startup diagnostic: warns about each env var that is set but ignored because
     /// the setting has a stored value.
     pub async fn warn_on_shadowed_env(&self) {
         match self.overrides().await {
             Ok(overrides) => {
                 for spec in shadowed(&overrides.stored_keys(), |var| std::env::var(var).is_ok()) {
+                    let env_var = spec.env_var.expect("shadowed specs have an env var");
                     warn!(
-                        "{} is set but ignored: settings.{} is stored",
-                        spec.env_var, spec.key
+                        "{env_var} is set but ignored: settings.{} is stored",
+                        spec.key
                     );
                 }
             }
@@ -447,6 +562,6 @@ pub fn shadowed(
 ) -> Vec<&'static SettingSpec> {
     SETTINGS
         .iter()
-        .filter(|s| stored_keys.contains(&s.key) && env_is_set(s.env_var))
+        .filter(|s| stored_keys.contains(&s.key) && s.env_var.is_some_and(&env_is_set))
         .collect()
 }

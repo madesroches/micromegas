@@ -114,6 +114,15 @@ async fn invalid_value_is_400_before_any_db_access() {
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app(true)
+        .oneshot(put(
+            "/api/settings/retention_by_stream_tag",
+            r#"{"value":{"audit":0}}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[test]
@@ -158,6 +167,16 @@ fn entries_cover_every_registered_setting_with_stored_values_merged() {
         .find(|e| e["key"] == "public_view_sets")
         .expect("public_view_sets entry");
     assert_eq!(views["default"], json!([]));
+
+    let retention = json
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|e| e["key"] == "retention_by_stream_tag")
+        .expect("retention_by_stream_tag entry");
+    assert_eq!(retention["kind"], "tag_horizons");
+    assert!(retention["env_var"].is_null());
+    assert_eq!(retention["default"], json!({}));
     assert!(views["value"].is_null());
     assert!(views["updated_at"].is_null());
     assert!(views["updated_by"].is_null());

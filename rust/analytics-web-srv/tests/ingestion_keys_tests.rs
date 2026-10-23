@@ -51,6 +51,7 @@ fn test_settings(mint: bool, claims: i64, keys: i64, grants: i64) -> Arc<Setting
         EnvFallbacks {
             isolation: Arc::new(IsolationConfig::default()),
             self_service: SelfServiceSettings::default(),
+            retention_days: 90,
         },
         DbOverrides {
             self_service_mint: Some(mint),
@@ -306,6 +307,7 @@ fn settings_with_env_and_db_mint(env_mint: bool, db_mint: bool) -> Arc<SettingsS
                 mint_enabled: env_mint,
                 ..SelfServiceSettings::default()
             },
+            retention_days: 90,
         },
         DbOverrides {
             self_service_mint: Some(db_mint),

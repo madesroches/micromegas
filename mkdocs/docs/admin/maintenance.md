@@ -43,7 +43,7 @@ its entrypoint; no arguments are required.
 | Flag | Default | Description |
 |---|---|---|
 | `--shutdown-grace-period-seconds` | `25` | Seconds to let in-flight tasks finish on `SIGTERM` |
-| `--retention-days` | `90` | Delete lake data older than this many days (retention horizon) |
+| `--retention-days` | _(unset)_ | **Deprecated**, removed in the next release: store the `retention_days` [setting](authorization.md#settings) instead. Fallback for it when no value is stored (default `90`); accepts `1` to `36500` (see [Retention](#retention)) |
 
 On `SIGTERM` the daemon stops scheduling new tasks and drains those already
 running, up to the grace period. See
@@ -93,9 +93,44 @@ consolidated into coarser ones:
 
 The hourly task performs cleanup automatically:
 
-- **Deletes lake data older than the retention horizon** — blocks, streams, and
-  processes past the horizon are removed.
+- **Deletes lake data past its retention horizon** — blocks (the raw payloads and their
+  objects under `blobs/`) are removed per stream according to the two retention settings
+  below; streams and processes with no blocks left, and lakehouse partitions, are removed
+  once they are older than the default horizon.
 - **Deletes expired temporary files** left behind by query execution.
+
+Raw payload retention is controlled by two [settings](authorization.md#settings), editable
+from **Admin → Settings** with no restart:
+
+- `retention_days`: the default horizon. Resolution order is the stored value, then the
+  deprecated `--retention-days` flag or `MICROMEGAS_RETENTION_DAYS` environment variable (the flag
+  wins over the variable; either logs a warning at startup and both are removed in the next
+  release, after which only the stored value and 90 remain), then 90. A stored `retention_days` silently shadows an explicit
+  `--retention-days` flag: there is no startup warning for it.
+- `retention_by_stream_tag`: a map from stream tag to a horizon in days or `"forever"`. It has no
+  environment variable. For example:
+
+```json
+{"audit": "forever", "debug": 3}
+```
+
+A stream's horizon is the longest horizon among its tags that have an override; a stream with no
+overridden tag uses the default. An override can be shorter or longer than the default. Infrastructure
+as code can write the overrides with `PUT {base}/api/settings/retention_by_stream_tag`.
+
+Things to know:
+
+- Overrides cover raw payloads only. Partitions of materialized views keep following the default
+  horizon, so blocks kept past the default horizon cannot be queried until the `blocks` view, then
+  its dependent views, are rematerialized for that range.
+- Removing or shortening an override lets the older blocks be deleted at the next hourly pass, and
+  that cannot be undone.
+- A change reaches the daemon within one cache refresh (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`), and
+  takes effect at the next HH:10 pass.
+- While the settings cannot be loaded (for example a malformed stored value, or a database schema
+  older than v12), the daemon logs the error and skips payload deletion. The rest of the hourly task
+  still runs. It never falls back to the default horizon, which could delete blocks an override
+  is keeping.
 
 ### Integrity counts
 
@@ -143,8 +178,10 @@ never calls `MetadataPartitionSpec::write`. So it is a "some write saw a mismatc
 than a running total of distinct excluded blocks — trust `block_audience_mismatch_rows` above for
 sizing the drop.
 
-The retention horizon defaults to 90 days and is configurable via
-`--retention-days` or the `MICROMEGAS_RETENTION_DAYS` environment variable:
+The default retention horizon is 90 days. Set it with the `retention_days`
+setting. The `--retention-days` flag and `MICROMEGAS_RETENTION_DAYS` environment variable still
+work as its fallback but are deprecated and will be removed in the next release (see
+[Retention](#retention)):
 
 ```bash
 telemetry-maintenance-srv --retention-days 30
@@ -153,7 +190,7 @@ export MICROMEGAS_RETENTION_DAYS=30
 ```
 
 The flag takes precedence over the environment variable, which in turn takes
-precedence over the default.
+precedence over the default; a stored `retention_days` setting beats all three.
 
 ## Metadata Postgres self-observability
 

@@ -16,7 +16,7 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 ## Configuration
 
 The variables below marked with a setting key are the **env fallback** for a deployment
-[setting](#settings): a value stored in the database wins, then the variable, then the default.
+[setting](#settings): a value stored in the database wins, then the variable (for `retention_days`, the deprecated `--retention-days` flag, which also reads the variable), then the default. `retention_by_stream_tag` has no environment variable.
 
 | Variable | Setting key | Default | Description |
 |---|---|---|---|
@@ -26,28 +26,30 @@ The variables below marked with a setting key are the **env fallback** for a dep
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `self_service_max_claims_per_caller` | `25` | Distinct audiences one non-admin may claim. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `self_service_max_keys_per_caller` | `100` | Live keys one non-admin may hold. `list_keys`/`revoke_key` stay admin-only, so freeing a slot needs an admin. |
 | `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `self_service_max_grants_per_caller` | `50` | Rows one non-admin may have created in `audience_grants`, excluding their own `user:<email>` rows. Best-effort. |
+| `MICROMEGAS_RETENTION_DAYS` | `retention_days` | `90` | Default number of days raw payloads and lakehouse partitions are kept, `1` to `36500`. **Deprecated**: this variable and the `--retention-days` flag (the same fallback) log a warning at startup and are removed in the next release; store `retention_days` as a setting instead. The companion setting `retention_by_stream_tag` (a map from stream tag to days or `"forever"`) has no environment variable. See [Retention](maintenance.md#retention). |
 | `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | — (env only) | `60` | Snapshot lifetime for the grant, API-key, group, and settings stores. Flat and unprefixed — no role-scoped form, including on the monolith. |
 
 ## Settings
 
-The five variables above that have a setting key can be changed at runtime from
+The variables above that have a setting key, plus `retention_by_stream_tag` (a setting with no environment variable), can be changed at runtime from
 **Admin → Settings** in the web app, with no restart. A stored value lives in the
 `settings` table of the telemetry database and is read by every service through the same
 whole-table snapshot cache as the grant and group stores. Resolution order, per key:
 
 1. the value stored in the database;
-2. the environment variable (the fallback);
+2. the environment variable (the fallback), where the setting has one; for `retention_days` the
+   `--retention-days` flag takes this tier, falling back to the variable itself;
 3. the built-in default.
 
 A change reaches every replica within one cache refresh (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`,
 60 s by default), not immediately. **Reset** on the page deletes the stored value, so the key
-reverts to its environment variable or default. Every change is recorded in the
+reverts to its environment variable, flag or default, where one exists (`retention_by_stream_tag` has no environment variable and reverts to no overrides). Every change is recorded in the
 [control-plane audit log](control-plane-audit-log.md) as `set_setting` / `reset_setting`.
 
 If an environment variable is set for a key that also has a stored value, the service logs
-`<VAR> is set but ignored: settings.<key> is stored` at startup, since the variable has no effect.
+`<VAR> is set but ignored: settings.<key> is stored` at startup, since the variable has no effect. A stored `retention_days` that shadows an explicit `--retention-days` flag is not reported.
 A stored value that fails validation makes the whole settings load fail, so the service keeps
-serving the last good snapshot and, on a cold start, returns a retryable 503. The telemetry
+serving the last good snapshot and, on a cold start, returns a retryable 503. The maintenance daemon reads settings too: when they cannot be loaded it skips payload deletion and keeps running the rest of the hourly task. A malformed `retention_by_stream_tag` fails the settings load for every service. The telemetry
 database must be on schema v12 or later for the `settings` table to exist.
 
 ## Audiences and Grants

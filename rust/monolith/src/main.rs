@@ -41,6 +41,7 @@ use micromegas::servers::flight_sql_server::FlightSqlServer;
 use micromegas::servers::ingestion::serve_ingestion;
 use micromegas::servers::maintenance::daemon;
 use micromegas::servers::shutdown::{ShutdownFanout, wait_for_sigterm};
+use micromegas::settings::{EnvFallbacks, SettingsSource, settings_cache_ttl};
 use micromegas::tracing::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
@@ -165,9 +166,14 @@ struct Cli {
     #[clap(long)]
     no_seed_data_source: bool,
 
-    /// Delete lake data older than this many days (retention horizon, maintenance role)
-    #[clap(long, default_value = "90", env = "MICROMEGAS_RETENTION_DAYS")]
-    retention_days: i32,
+    /// Deprecated: store the `retention_days` setting in the database instead. Fallback for it (maintenance role) when no value is stored: raw payloads and
+    /// partitions older than this many days are deleted. Per-stream-tag overrides can change it.
+    #[clap(
+        long,
+        env = "MICROMEGAS_RETENTION_DAYS",
+        value_parser = clap::value_parser!(u32).range(1..=micromegas::analytics::delete::MAX_RETENTION_DAYS as i64)
+    )]
+    retention_days: Option<u32>,
 
     #[command(flatten)]
     common: micromegas::config::CommonServerArgs,
@@ -351,8 +357,18 @@ async fn main() -> Result<()> {
             .clone();
         let shutdown = fanout.subscribe();
         let grace_c = grace;
-        let retention_days = args.retention_days;
+        let settings = Arc::new(SettingsSource::new(
+            EnvFallbacks::from_env()?.with_deprecated_retention_days(args.retention_days),
+            lh.lake().db_pool.clone(),
+            settings_cache_ttl(),
+        ));
+        // The FlightSQL server already warns when it runs with auth; warning again here would
+        // repeat every line.
+        let warn_on_shadowed_env = !(roles.flightsql && !args.disable_auth);
         join_set.spawn(async move {
+            if warn_on_shadowed_env {
+                settings.warn_on_shadowed_env().await;
+            }
             let base_view_factory = default_view_factory(
                 lh.runtime().clone(),
                 lh.lake().clone(),
@@ -374,7 +390,7 @@ async fn main() -> Result<()> {
                 lh.lake().clone(),
                 session_configurator,
             ));
-            daemon(lh, view_registry, retention_days, shutdown, grace_c).await
+            daemon(lh, view_registry, settings, shutdown, grace_c).await
         });
     }
 

@@ -21,6 +21,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use super::cron_task::{CronTask, TaskCallback};
 use super::pg_stats::PgStatsTask;
+use crate::settings::SettingsSource;
 
 /// Resolves and sorts the view-carrying task's per-tick view list from `registry.current()`: the
 /// base plus every DDL-defined view with an `update_group`, sorted by that group. Computed fresh
@@ -216,14 +217,19 @@ async fn measure_block_audience_mismatch_rows(
 pub struct EveryHourTask {
     pub lakehouse: Arc<LakehouseContext>,
     pub view_registry: Arc<ViewRegistry>,
-    pub retention_days: i32,
+    pub settings: Arc<SettingsSource>,
 }
 
 #[async_trait]
 impl TaskCallback for EveryHourTask {
     #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
-        delete_old_data(self.lakehouse.lake(), self.retention_days).await?;
+        // A settings failure must not fall back to the default horizon: that would delete blocks
+        // an override is keeping. Skip deletion and let the rest of the hourly task run.
+        match self.settings.payload_retention().await {
+            Ok(retention) => delete_old_data(self.lakehouse.lake(), &retention).await?,
+            Err(e) => error!("skipping payload deletion, could not load retention settings: {e:#}"),
+        }
         delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
 
         let since = task_scheduled_time - TimeDelta::hours(1);
@@ -423,13 +429,13 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 ///   each view-carrying task resolves and sorts its own view list from `view_registry.current()`
 ///   fresh on every tick, so a view set created or dropped after the daemon started is picked up
 ///   without a restart.
-/// * `retention_days` - Delete lake data older than this many days (retention horizon).
+/// * `settings` - Source of the payload retention policy, read on every hourly pass.
 /// * `shutdown` - Future that completes when the process should begin shutting down.
 /// * `grace` - Maximum time to wait for in-flight tasks after the shutdown signal.
 pub async fn daemon<F>(
     lakehouse: Arc<LakehouseContext>,
     view_registry: Arc<ViewRegistry>,
-    retention_days: i32,
+    settings: Arc<SettingsSource>,
     shutdown: F,
     grace: Duration,
 ) -> Result<()>
@@ -462,7 +468,7 @@ where
         Arc::new(EveryHourTask {
             lakehouse: lakehouse.clone(),
             view_registry: view_registry.clone(),
-            retention_days,
+            settings,
         }),
     )?;
     let every_minute = CronTask::new(

@@ -30,7 +30,7 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 function entries(stored: Record<string, unknown> = {}) {
-  const base = (key: string, kind: string, def: unknown, env_var: string) => ({
+  const base = (key: string, kind: string, def: unknown, env_var: string | null) => ({
     key,
     kind,
     env_var,
@@ -49,6 +49,8 @@ function entries(stored: Record<string, unknown> = {}) {
       100,
       'MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER'
     ),
+    base('retention_days', 'days', 90, 'MICROMEGAS_RETENTION_DAYS'),
+    base('retention_by_stream_tag', 'tag_horizons', {}, null),
   ]
 }
 
@@ -94,7 +96,8 @@ describe('SettingsPage', () => {
 
     await screen.findByText('self_service_mint')
     expect(screen.getAllByText('Database')).toHaveLength(1)
-    expect(screen.getAllByText('Env / default')).toHaveLength(2)
+    expect(screen.getAllByText('Env / default')).toHaveLength(3)
+    expect(screen.getAllByText('Default')).toHaveLength(1)
     expect(screen.getByLabelText('Reset self_service_mint')).toBeInTheDocument()
     expect(screen.queryByLabelText('Reset public_view_sets')).not.toBeInTheDocument()
   })
@@ -167,5 +170,63 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(writes).toHaveLength(1))
     expect(writes[0].method).toBe('DELETE')
     await waitFor(() => expect(screen.queryByText('Database')).not.toBeInTheDocument())
+  })
+
+  it('shows "no env fallback" for a setting without an env var', async () => {
+    installFetchMock()
+    renderPage()
+
+    await screen.findByText('retention_by_stream_tag')
+    expect(screen.getByText(/no env fallback/)).toBeInTheDocument()
+    expect(screen.getByText('Default')).toBeInTheDocument()
+  })
+
+  it('rejects 0 days in the days editor', async () => {
+    const { writes } = installFetchMock()
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit retention_days'))
+    fireEvent.change(screen.getByLabelText('Days'), { target: { value: '0' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Days'), { target: { value: '36501' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Days'), { target: { value: '30' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect(writes[0].body).toEqual({ value: 30 })
+  })
+
+  it('submits tag horizons from rows, with Forever disabling days', async () => {
+    const { writes } = installFetchMock()
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit retention_by_stream_tag'))
+    fireEvent.click(screen.getByText('Add tag'))
+    fireEvent.change(screen.getByLabelText('Tag 1'), { target: { value: 'audit' } })
+    fireEvent.click(screen.getByLabelText('Forever 1'))
+    expect(screen.getByLabelText('Days 1')).toBeDisabled()
+    fireEvent.click(screen.getByText('Add tag'))
+    fireEvent.change(screen.getByLabelText('Tag 2'), { target: { value: 'debug' } })
+    fireEvent.change(screen.getByLabelText('Days 2'), { target: { value: '3' } })
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect(writes[0].body).toEqual({ value: { audit: 'forever', debug: 3 } })
+  })
+
+  it('blocks Save on empty or duplicate tags', async () => {
+    installFetchMock()
+    renderPage()
+
+    fireEvent.click(await screen.findByLabelText('Edit retention_by_stream_tag'))
+    fireEvent.click(screen.getByText('Add tag'))
+    fireEvent.change(screen.getByLabelText('Days 1'), { target: { value: '3' } })
+    expect(screen.getByText('Save')).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Tag 1'), { target: { value: 'debug' } })
+    expect(screen.getByText('Save')).not.toBeDisabled()
+    fireEvent.click(screen.getByText('Add tag'))
+    fireEvent.change(screen.getByLabelText('Tag 2'), { target: { value: ' debug ' } })
+    fireEvent.change(screen.getByLabelText('Days 2'), { target: { value: '5' } })
+    expect(screen.getByText('Save')).toBeDisabled()
   })
 })

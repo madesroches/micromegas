@@ -113,7 +113,7 @@ reaches over HTTP.
   `lakehouse_partitions` row (`write_partition.rs:86-135`). There is no per-stream or per-view
   exemption. `EveryHourTask` calls it (`maintenance.rs:219-227`) and already holds the daemon's
   view list.
-- The cutoff is `--retention-days` / `MICROMEGAS_RETENTION_DAYS` (default 90), set in both
+- The cutoff is the `retention_days` setting (fallback `--retention-days` / `MICROMEGAS_RETENTION_DAYS`, default 90); the flag is defined in both
   `telemetry-maintenance-srv/src/main.rs:29-31` and `monolith/src/main.rs:168-170`.
 - `streams` has no index on `tags` (`ingestion/src/sql_telemetry_db.rs:61-63`).
 
@@ -303,11 +303,9 @@ case, and the audience is the trust boundary for the second. The docs say so.
 
 ### Retention of the raw blocks
 
-Keeping audit blocks past the default horizon is **not built here**. It is #1695: configurable
-payload retention keyed by stream tag (`audit` → keep forever), stored in the DB-backed deployment
-config from #1592 rather than as another env var. This plan depends on #1695 for that. Until it
-lands, audit blocks follow the default horizon like every other stream. The `audit` tag is what
-#1695's override will key on.
+Keeping audit blocks past the default horizon is configuration, not code here: set
+`retention_by_stream_tag` to `{"audit": "forever"}` (#1695), stored in the DB-backed settings from
+#1592 rather than as another env var. The `audit` tag is what the override keys on.
 
 Kept blocks are the durable source of truth, but on their own they aren't queryable past the
 default horizon. `log_entries` partitions retire as usual, and so do the `blocks` partitions that
@@ -320,7 +318,7 @@ gains a `retention` option:
 
 | Value | Meaning |
 |---|---|
-| absent | the deployment default (`MICROMEGAS_RETENTION_DAYS`), as today |
+| absent | the deployment default (the `retention_days` setting), as today |
 | `'<n> <unit>'` | this view's partitions retire at that horizon, longer or shorter than the default; parsed by `parse_time_delta` |
 | `'forever'` | this view's partitions are never retired by age |
 
@@ -463,8 +461,8 @@ configured views covers long horizons, and it is useful beyond audit.
   audited routes).
 - No hardcoded audit view (user call): records stay log entries, on a stream tagged
   `["log", "audit"]`. Views should move toward being configured, not hardcoded.
-- Raw block retention for the audit stream is deferred to #1695 (user call). It will be configured
-  in the DB-backed deployment config (#1592), not through a new flag or env var.
+- Raw block retention for the audit stream is set with `retention_by_stream_tag` (#1695) in the
+  DB-backed settings (#1592), not through a new flag or env var.
 - No migration-seeded audit view either (user call). The docs ship an example
   `CREATE MATERIALIZED VIEW` that a deployment runs if it wants long-horizon queries.
 
@@ -489,7 +487,7 @@ configured views covers long horizons, and it is useful beyond audit.
   - add the example `control_plane_audit` materialized view with `retention = 'forever'`.
 - `mkdocs/docs/admin/materialized-views.md`: the `retention` option in the options table, plus
   the caveat about regenerating ranges past the source's horizon.
-- `mkdocs/docs/admin/maintenance.md`: per-view `retention` overrides `MICROMEGAS_RETENTION_DAYS`
+- `mkdocs/docs/admin/maintenance.md`: per-view `retention` overrides the `retention_days` setting
   for partitions.
 - `CHANGELOG.md`: the feature, fail-closed when unconfigured, the `retention` view option, and the
   **Minor breaking change** clause for the Rust API.
@@ -563,7 +561,8 @@ stubs above replace.
 5. Run the documented `CREATE MATERIALIZED VIEW control_plane_audit …` and wait for one
    materialization pass. `SELECT * FROM control_plane_audit` returns the same eight rows. This
    also validates the doc's example SQL.
-6. Restart maintenance with `--retention-days 0`. Expect `control_plane_audit` rows to survive
+6. Store a short `retention_days` (or a short tag override on the `log` tag, since `--retention-days 0` is
+   now rejected) and wait for the next hourly pass. Expect `control_plane_audit` rows to survive
    while `log_entries` empties.
 
 ## Open Questions
