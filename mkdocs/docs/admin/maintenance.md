@@ -43,7 +43,7 @@ its entrypoint; no arguments are required.
 | Flag | Default | Description |
 |---|---|---|
 | `--shutdown-grace-period-seconds` | `25` | Seconds to let in-flight tasks finish on `SIGTERM` |
-| `--retention-days` | `90` | Fallback for the `retention_days` [setting](authorization.md#settings) when no value is stored; accepts `1` to `36500` (see [Retention](#retention)) |
+| `--retention-days` | _(unset)_ | **Deprecated**, removed in the next release: store the `retention_days` [setting](authorization.md#settings) instead. Fallback for it when no value is stored (default `90`); accepts `1` to `36500` (see [Retention](#retention)) |
 
 On `SIGTERM` the daemon stops scheduling new tasks and drains those already
 running, up to the grace period. See
@@ -103,8 +103,9 @@ Raw payload retention is controlled by two [settings](authorization.md#settings)
 from **Admin → Settings** with no restart:
 
 - `retention_days`: the default horizon. Resolution order is the stored value, then the
-  `--retention-days` flag or `MICROMEGAS_RETENTION_DAYS` environment variable (the flag wins over
-  the variable), then 90. A stored `retention_days` silently shadows an explicit
+  deprecated `--retention-days` flag or `MICROMEGAS_RETENTION_DAYS` environment variable (the flag
+  wins over the variable; either logs a warning at startup and both are removed in the next
+  release, after which only the stored value and 90 remain), then 90. A stored `retention_days` silently shadows an explicit
   `--retention-days` flag: there is no startup warning for it.
 - `retention_by_stream_tag`: a map from stream tag to a horizon in days or `"forever"`. It has no
   environment variable. For example:
@@ -178,8 +179,9 @@ than a running total of distinct excluded blocks — trust `block_audience_misma
 sizing the drop.
 
 The default retention horizon is 90 days. Set it with the `retention_days`
-setting, or with the `--retention-days` flag or `MICROMEGAS_RETENTION_DAYS` environment variable
-as its fallback (see [Retention](#retention)):
+setting. The `--retention-days` flag and `MICROMEGAS_RETENTION_DAYS` environment variable still
+work as its fallback but are deprecated and will be removed in the next release (see
+[Retention](#retention)):
 
 ```bash
 telemetry-maintenance-srv --retention-days 30

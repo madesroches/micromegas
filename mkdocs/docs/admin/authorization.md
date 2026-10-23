@@ -16,7 +16,7 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 ## Configuration
 
 The variables below marked with a setting key are the **env fallback** for a deployment
-[setting](#settings): a value stored in the database wins, then the variable (for `retention_days`, the `--retention-days` flag, which also reads the variable), then the default. `retention_by_stream_tag` has no environment variable.
+[setting](#settings): a value stored in the database wins, then the variable (for `retention_days`, the deprecated `--retention-days` flag, which also reads the variable), then the default. `retention_by_stream_tag` has no environment variable.
 
 | Variable | Setting key | Default | Description |
 |---|---|---|---|
@@ -26,7 +26,7 @@ The variables below marked with a setting key are the **env fallback** for a dep
 | `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `self_service_max_claims_per_caller` | `25` | Distinct audiences one non-admin may claim. Best-effort under concurrency. |
 | `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `self_service_max_keys_per_caller` | `100` | Live keys one non-admin may hold. `list_keys`/`revoke_key` stay admin-only, so freeing a slot needs an admin. |
 | `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `self_service_max_grants_per_caller` | `50` | Rows one non-admin may have created in `audience_grants`, excluding their own `user:<email>` rows. Best-effort. |
-| `MICROMEGAS_RETENTION_DAYS` | `retention_days` | `90` | Default number of days raw payloads and lakehouse partitions are kept, `1` to `36500`; the `--retention-days` flag is the same fallback. The companion setting `retention_by_stream_tag` (a map from stream tag to days or `"forever"`) has no environment variable. See [Retention](maintenance.md#retention). |
+| `MICROMEGAS_RETENTION_DAYS` | `retention_days` | `90` | Default number of days raw payloads and lakehouse partitions are kept, `1` to `36500`. **Deprecated**: this variable and the `--retention-days` flag (the same fallback) log a warning at startup and are removed in the next release; store `retention_days` as a setting instead. The companion setting `retention_by_stream_tag` (a map from stream tag to days or `"forever"`) has no environment variable. See [Retention](maintenance.md#retention). |
 | `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | — (env only) | `60` | Snapshot lifetime for the grant, API-key, group, and settings stores. Flat and unprefixed — no role-scoped form, including on the monolith. |
 
 ## Settings

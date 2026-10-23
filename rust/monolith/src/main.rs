@@ -166,15 +166,14 @@ struct Cli {
     #[clap(long)]
     no_seed_data_source: bool,
 
-    /// Fallback for the `retention_days` setting (maintenance role) when no value is stored: raw payloads and
+    /// Deprecated: store the `retention_days` setting in the database instead. Fallback for it (maintenance role) when no value is stored: raw payloads and
     /// partitions older than this many days are deleted. Per-stream-tag overrides can change it.
     #[clap(
         long,
-        default_value = "90",
         env = "MICROMEGAS_RETENTION_DAYS",
         value_parser = clap::value_parser!(u32).range(1..=micromegas::analytics::delete::MAX_RETENTION_DAYS as i64)
     )]
-    retention_days: u32,
+    retention_days: Option<u32>,
 
     #[command(flatten)]
     common: micromegas::config::CommonServerArgs,
@@ -359,10 +358,7 @@ async fn main() -> Result<()> {
         let shutdown = fanout.subscribe();
         let grace_c = grace;
         let settings = Arc::new(SettingsSource::new(
-            EnvFallbacks {
-                retention_days: args.retention_days,
-                ..EnvFallbacks::from_env()?
-            },
+            EnvFallbacks::from_env()?.with_deprecated_retention_days(args.retention_days),
             lh.lake().db_pool.clone(),
             settings_cache_ttl(),
         ));

@@ -225,7 +225,8 @@ function EditDialog({ entry, onClose, onSaved }: EditDialogProps) {
                     </>
                   )}
                   <code className="font-mono text-xs">{entry.env_var}</code> if it is set,
-                  otherwise this default.{' '}
+                  otherwise this default.
+                  {entry.key === 'retention_days' && ' The flag and variable are deprecated.'}{' '}
                 </>
               )}
               Saving stores a value that overrides it for all services.
@@ -454,7 +455,7 @@ function SettingsPageContent() {
 
           <div className="mb-6 p-3 rounded-lg border border-theme-border bg-app-panel text-sm text-theme-text-secondary">
             A setting with no stored value falls back to its environment variable on each service
-            (or, for <code>retention_days</code>, the <code>--retention-days</code> flag), then to
+            (or, for <code>retention_days</code>, the deprecated <code>--retention-days</code> flag), then to
             its built-in default. Settings with no environment variable use the built-in default. Every change is recorded in the control-plane audit log.
           </div>
 

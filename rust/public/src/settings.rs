@@ -385,8 +385,8 @@ pub fn resolve_i64_env(var: &str, default: i64) -> i64 {
 pub struct EnvFallbacks {
     pub isolation: Arc<IsolationConfig>,
     pub self_service: SelfServiceSettings,
-    /// Fallback for `retention_days`; the maintenance services overwrite it with the
-    /// `--retention-days` flag, which already folds in the env var.
+    /// Fallback for `retention_days`; the maintenance services overwrite it through
+    /// [`EnvFallbacks::with_deprecated_retention_days`].
     pub retention_days: u32,
 }
 
@@ -420,6 +420,18 @@ impl EnvFallbacks {
             self_service,
             retention_days: DEFAULT_RETENTION_DAYS,
         })
+    }
+
+    /// Applies the deprecated `--retention-days` flag / `MICROMEGAS_RETENTION_DAYS` value, if
+    /// one was given, and warns that it will stop being read.
+    pub fn with_deprecated_retention_days(mut self, retention_days: Option<u32>) -> Self {
+        if let Some(days) = retention_days {
+            warn!(
+                "--retention-days / MICROMEGAS_RETENTION_DAYS is deprecated and will be removed in the next release; set the `{RETENTION_DAYS}` setting instead (Admin -> Settings)"
+            );
+            self.retention_days = days;
+        }
+        self
     }
 }
 
