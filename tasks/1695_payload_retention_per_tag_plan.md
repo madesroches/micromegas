@@ -29,7 +29,7 @@ that skips overridden streams, and one pass for each distinct override horizon. 
     older than the same cutoff.
 - **Caller:** `EveryHourTask { retention_days: i32, .. }` (`rust/public/src/servers/maintenance.rs:216-228`)
   calls `delete_old_data` first in its `run`, and a failure aborts the rest of the hourly task.
-  `daemon(lakehouse, view_registry, retention_days, shutdown, grace)` (`:431`) builds the task.
+  `daemon(lakehouse, view_registry, retention_days, shutdown, grace)` (`:429`) builds the task.
   The CronTask runs at HH:10 (`period = 1h`, `offset = 10m`; first run is the next hour boundary
   plus the offset, `cron_task.rs:35`).
 - **Flag:** `retention_days: i32` with `default_value = "90", env = "MICROMEGAS_RETENTION_DAYS"`
@@ -48,12 +48,12 @@ that skips overridden streams, and one pass for each distinct override horizon. 
   (`env_var` is serialized at `:189,207`) and validates PUTs with `spec.validate`. Every change is
   audited as `set_setting` / `reset_setting` with `value` / `previous_value`.
   `analytics-web-app/src/routes/SettingsPage.tsx` groups entries by key prefix (`GROUPS`, `:26`),
-  renders values per kind (`ValueView`, `:42`), and has one editor per kind (`EditDialog`, `:66`).
+  renders values per kind (`ValueView`, `:42`), and has one editor per kind (`EditDialog`, `:69`).
   It always shows `env fallback: <env_var>` (`:151,371`).
 - **Index:** `streams` has indexes on `stream_id`, `process_id` and `insert_time`
   (`rust/ingestion/src/sql_telemetry_db.rs:61-63`) and a unique index on `stream_id` (v3), none on
   `tags TEXT[]`. Schema is v12 (`rust/ingestion/src/sql_migration.rs:8`). v3 sets the precedent for
-  `CREATE INDEX CONCURRENTLY` outside a transaction, followed by `check_index_is_valid` (`:461`).
+  `CREATE INDEX CONCURRENTLY` outside a transaction, followed by `check_index_is_valid` (`:462`).
 - **Partition retention** for materialized views is a separate per-view option in the #1606 plan.
   This plan does not change it: partitions keep following the default horizon.
 
@@ -153,7 +153,10 @@ Two new registry entries, grouped under the `retention_` prefix:
   helper is shared by `validate` and `from_rows`, the way `name_list` is.
 - **`SettingSpec::env_var`** becomes `Option<&'static str>`. The overrides have no env fallback
   (the issue's point is not to add one more env var), and `None` says so. `shadowed` skips specs
-  with `None`, and `EnvFallbacks::from_env`'s `spec(..)` helper unwraps.
+  with `None`, and `EnvFallbacks::from_env`'s `spec(..)` helper unwraps. `warn_on_shadowed_env`
+  (`:427-430`) formats `spec.env_var` with `{}`, so it unwraps too (it is only reached through
+  `shadowed`). `EnvGuard::set` in `rust/public/tests/settings_tests.rs:223` collects
+  `.map(|s| s.env_var)` into `Vec<&'static str>` and switches to `filter_map`.
 - **`DbOverrides`** gains `retention_days: Option<u32>` and
   `retention_by_stream_tag: Option<BTreeMap<String, RetentionHorizon>>`, handled in `from_rows` and
   `stored_keys`.
@@ -193,6 +196,11 @@ startup retries. Then bump to 13 in a transaction (`upgrade_data_lake_schema_v13
 `LATEST_DATA_LAKE_SCHEMA_VERSION` becomes 13. A v12 schema still works, because the index only
 affects performance.
 
+Update `warn_if_data_lake_schema_stale` (`:29-55`) too: services that don't migrate (flight-sql-srv,
+analytics-web-srv) call it, and it must not warn falsely on a v12 database. Gate the existing
+zero-rows sentence on `version < 9`, and add a clause that a schema older than v13 only lacks the
+`stream_tags` index (payload deletion performance).
+
 ### Web server and frontend
 
 - `rust/analytics-web-srv/src/settings.rs`: the entry's `env_var` becomes `Option<&'static str>`
@@ -209,7 +217,15 @@ affects performance.
     says that removing or shortening an override lets older blocks be deleted at the next hourly
     pass and can't be undone.
   - A `null` `env_var` shows "no env fallback" in the row and the source pill "Default" when no
-    value is stored. The dialog's pre-fill note drops the env sentence.
+    value is stored. The dialog's pre-fill note (`:149-153`) drops the env sentence for a null
+    `env_var` and gains the `--retention-days` flag tier for `retention_days`. The Reset confirmation
+    (`:333`) and page banner (`:314-317`) stop saying "environment variable, then default"
+    unconditionally: no env var for `retention_by_stream_tag`, plus the flag tier for `retention_days`.
+  - `pendingValue` (`:100-106`), the pre-fill effect (`:81-84`) and `canSubmit` (`:108`) treat every
+    non-`bool`/`count` kind as a name list. Add explicit `days` and `tag_horizons` branches so `days`
+    is not submitted as a name list.
+  - `settings-api.ts` doc comments at `:18` and `:76` repeat the "env var, then default" wording;
+    update them.
 
 ## Mockups
 
@@ -248,7 +264,7 @@ affects performance.
 - `analytics-web-app/src/lib/settings-api.ts`, `analytics-web-app/src/routes/SettingsPage.tsx`,
   plus `src/lib/__tests__/settings-api.test.ts` and `src/routes/__tests__/SettingsPage.test.tsx`
 - `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`,
-  `mkdocs/docs/admin/authorization.md`
+  `mkdocs/docs/admin/authorization.md`, `mkdocs/docs/when-to-use/index.md`
 - `tasks/backlog/1606_transactional_audit_write_plan.md`
 - `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`
 - `CHANGELOG.md`
@@ -281,7 +297,7 @@ affects performance.
 
 - `mkdocs/docs/admin/maintenance.md`: rewrite the `### Retention` section (`:92-98`, including its "Deletes lake data older than the
   retention horizon" bullet, which stops being accurate with overrides) and the horizon paragraph at
-  the end of `### Integrity counts` (`:145-157`) around the two settings. Cover the resolution order (stored, then `--retention-days` / `MICROMEGAS_RETENTION_DAYS`,
+  the end of `### Integrity counts` (`:146-156`) around the two settings. Cover the resolution order (stored, then `--retention-days` / `MICROMEGAS_RETENTION_DAYS`,
   then 90), the override format with an `{"audit": "forever", "debug": 3}` example, longest-wins
   matching, the fact that overrides cover raw payloads only (partitions follow the default), that
   removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
@@ -294,17 +310,23 @@ affects performance.
   longer only "a toggle, a number, or a list of names" (add the tag-map editor), **Reset** reverts to
   "its environment variable or default" (not for `retention_by_stream_tag`, which has no env var),
   and the page shows the variable name only for settings that have one.
-- `mkdocs/docs/admin/monolith.md`: the CLI flag table (`:72-82`) is missing `--retention-days`
+- `mkdocs/docs/admin/monolith.md`: the CLI flag table (`:73-83`) is missing `--retention-days`
   today. Add it, described as the fallback for the `retention_days` setting (maintenance role),
   with a link to `maintenance.md`. Also add a `MICROMEGAS_RETENTION_DAYS` row to its env-var
   table (`:40-59`). Update the "five [settings]" env-fallback sentence (`:67-69`): the count becomes
   six and the list gains `MICROMEGAS_RETENTION_DAYS`.
-- `mkdocs/docs/admin/authorization.md`: in the Settings section, add `MICROMEGAS_RETENTION_DAYS`
+- `mkdocs/docs/admin/authorization.md`: in the Settings section, update `:18-19` ("a value stored in the
+  database wins, then the variable, then the default") for the flag tier and the no-env-var setting. Update `:49-51`
+  (invalid stored value) to say the maintenance daemon now reads settings and skips payload deletion, and
+  that a malformed `retention_by_stream_tag` fails the settings load for every service. Also add `MICROMEGAS_RETENTION_DAYS`
   -> `retention_days` to the env-var table (`:20-29`), update the "five variables" count
   (`:33`), and mention `retention_by_stream_tag` as a setting with no env var. Also update `:37-47`: the
   resolution order gains the `--retention-days` flag tier for `retention_days` and the no-env-var case, Reset
   reverts to the env var, flag or default only where one exists, and the shadow-warning text notes that a stored
   `retention_days` shadowing `--retention-days` is not reported.
+- `mkdocs/docs/when-to-use/index.md:16`: reword "every event keeps full resolution until the retention
+  horizon, 90 days by default" as "until the default retention horizon (90 days), adjustable per
+  stream tag".
 - `tasks/backlog/1606_transactional_audit_write_plan.md`: the "Retention of the raw blocks" section
   becomes "set `retention_by_stream_tag` to `{"audit": "forever"}`", and the per-view table's
   "absent" row says `retention_days`. Also rewrite the manual step at `:566` so it no longer
