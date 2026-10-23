@@ -157,9 +157,8 @@ Two new registry entries, grouped under the `retention_` prefix:
 - **`DbOverrides`** gains `retention_days: Option<u32>` and
   `retention_by_stream_tag: Option<BTreeMap<String, RetentionHorizon>>`, handled in `from_rows` and
   `stored_keys`.
-- **`EnvFallbacks`** gains `retention_days: u32`. `from_env` reads `MICROMEGAS_RETENTION_DAYS`
-  through `resolve_u64_env`. A value outside `1..=MAX_RETENTION_DAYS` warns and uses 90, as the
-  count knobs do. `pinned` uses 90.
+- **`EnvFallbacks`** gains `retention_days: u32`. `from_env` and `pinned` set 90;
+  maintenance overwrites it with the clap value.
 - **`SettingsSource::payload_retention(&self) -> Result<PayloadRetention>`**: `default_days` comes
   from the DB row, then the env value. `by_stream_tag` comes from the DB row, else empty.
 
@@ -167,10 +166,10 @@ Two new registry entries, grouped under the `retention_` prefix:
 
 - `daemon(lakehouse, view_registry, settings: Arc<SettingsSource>, shutdown, grace)` replaces
   `retention_days`. `EveryHourTask` holds `settings`. Its `run` starts with
-  `let retention = self.settings.payload_retention().await.context("loading retention settings")?;`
-  and then calls `delete_old_data(lake, &retention)`. **If the settings can't be loaded, nothing is
-  deleted.** A cold-start failure or an invalid stored value returns `Err` before any deletion,
-  exactly where a `delete_old_data` failure aborts the task today. After a first successful load,
+  `self.settings.payload_retention().await`. On `Ok` it calls `delete_old_data(lake, &retention)`.
+  **If the settings can't be loaded, the error is logged, `delete_old_data` is skipped, and the rest
+  of the hourly task (temporary-file cleanup, mismatch metrics, `materialize_all_views`) still
+  runs.** After a first successful load,
   `SnapshotSource` keeps serving the last good snapshot. Falling back to the default horizon instead
   would delete blocks the override was keeping.
 - `telemetry-maintenance-srv` and the monolith's maintenance role build
@@ -280,8 +279,8 @@ affects performance.
   the same choice for `analytics-web-srv` in #1592.
 - `--retention-days 0` and negative values are now rejected at startup. A negative value already
   broke every hourly pass, and `0` deleted every payload hourly.
-- Accepted risk: on a schema behind v12 the settings load fails, so payload deletion stops (logged
-  each hour) until ingestion runs the migration. Upgrade order is the same as for #1592.
+- Accepted risk: on a schema behind v12 the settings load fails, so payload deletion is skipped (logged
+  each hour; the rest of the hourly task still runs) until ingestion runs the migration. Upgrade order is the same as for #1592.
 
 ## Documentation
 
@@ -290,7 +289,7 @@ affects performance.
   then 90), the override format with an `{"audit": "forever", "debug": 3}` example, longest-wins
   matching, the fact that overrides cover raw payloads only (partitions follow the default), that
   removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
-  and that deletion is skipped while settings can't be loaded. Update the flag table row (`:46`)
+  and that payload deletion is skipped (with the rest of the hourly task still running) while settings can't be loaded. Update the flag table row (`:46`)
   with the new range.
 - `mkdocs/docs/admin/web-app.md:135`: add the two settings to the Settings page's list.
 - `mkdocs/docs/admin/monolith.md`: the CLI flag table (`:72-82`) is missing `--retention-days`
@@ -327,8 +326,6 @@ database.
     parse.
   - `payload_retention()` resolution: DB `retention_days` beats env, env beats the default, and
     the overrides come from the DB or are empty.
-  - `EnvFallbacks::from_env` (`#[serial]`, `EnvGuard`) on `MICROMEGAS_RETENTION_DAYS` unset, `30`,
-    `0` and `abc`: 90, 30, 90 (warn), 90 (warn).
   - `shadowed` never reports a spec with no env var.
   - The existing "each `spec.default` parses to the applied default" test covers both new specs.
 - `rust/public/tests/read_policy_threading_tests.rs` already builds a DB-backed source over an
@@ -367,7 +364,7 @@ wrong blocks would be silent, so this check runs before merge.
    `stream_tags`.
 8. Store an invalid value directly
    (`UPDATE settings SET value = '{"x": 0}' WHERE key = 'retention_by_stream_tag';`), restart the
-   maintenance daemon, and confirm the next pass logs the settings error and deletes nothing.
+   maintenance daemon, and confirm the next pass logs the settings error, deletes nothing, and still materializes views.
 
 ## Open Questions
 
