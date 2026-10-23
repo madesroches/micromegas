@@ -286,18 +286,24 @@ affects performance.
 
 ## Documentation
 
-- `mkdocs/docs/admin/maintenance.md`: rewrite the retention section (`:145-157`) around the two
-  settings. Cover the resolution order (stored, then `--retention-days` / `MICROMEGAS_RETENTION_DAYS`,
+- `mkdocs/docs/admin/maintenance.md`: rewrite the `### Retention` section (`:92-98`, including its "Deletes lake data older than the
+  retention horizon" bullet, which stops being accurate with overrides) and the horizon paragraph at
+  the end of `### Integrity counts` (`:145-157`) around the two settings. Cover the resolution order (stored, then `--retention-days` / `MICROMEGAS_RETENTION_DAYS`,
   then 90), the override format with an `{"audit": "forever", "debug": 3}` example, longest-wins
   matching, the fact that overrides cover raw payloads only (partitions follow the default), that
   removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
   and that payload deletion is skipped (with the rest of the hourly task still running) while settings can't be loaded. Update the flag table row (`:46`)
   with the new range.
-- `mkdocs/docs/admin/web-app.md:135`: add the two settings to the Settings page's list.
+- `mkdocs/docs/admin/web-app.md:133-140`: add the two settings to the Settings page's list, and fix
+  the rest of the paragraph: the source pill is no longer always "Env / default", the editors are no
+  longer only "a toggle, a number, or a list of names" (add the tag-map editor), **Reset** reverts to
+  "its environment variable or default" (not for `retention_by_stream_tag`, which has no env var),
+  and the page shows the variable name only for settings that have one.
 - `mkdocs/docs/admin/monolith.md`: the CLI flag table (`:72-82`) is missing `--retention-days`
   today. Add it, described as the fallback for the `retention_days` setting (maintenance role),
   with a link to `maintenance.md`. Also add a `MICROMEGAS_RETENTION_DAYS` row to its env-var
-  table (`:40-59`).
+  table (`:40-59`). Update the "five [settings]" env-fallback sentence (`:67-69`): the count becomes
+  six and the list gains `MICROMEGAS_RETENTION_DAYS`.
 - `mkdocs/docs/admin/authorization.md`: in the Settings section, add `MICROMEGAS_RETENTION_DAYS`
   -> `retention_days` to the env-var table (`:20-29`), update the "five variables" count
   (`:33`), and mention `retention_by_stream_tag` as a setting with no env var.
