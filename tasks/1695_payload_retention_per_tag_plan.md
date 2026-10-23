@@ -247,8 +247,10 @@ affects performance.
 - `rust/analytics-web-srv/src/settings.rs`, `rust/analytics-web-srv/tests/{settings_tests,routing_tests,audience_grants_tests,ingestion_keys_tests,mutation_audit_tests}.rs`
 - `analytics-web-app/src/lib/settings-api.ts`, `analytics-web-app/src/routes/SettingsPage.tsx`,
   plus `src/lib/__tests__/settings-api.test.ts` and `src/routes/__tests__/SettingsPage.test.tsx`
-- `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`
+- `mkdocs/docs/admin/maintenance.md`, `mkdocs/docs/admin/web-app.md`, `mkdocs/docs/admin/monolith.md`,
+  `mkdocs/docs/admin/authorization.md`
 - `tasks/backlog/1606_transactional_audit_write_plan.md`
+- `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -294,10 +296,20 @@ affects performance.
 - `mkdocs/docs/admin/web-app.md:135`: add the two settings to the Settings page's list.
 - `mkdocs/docs/admin/monolith.md`: the CLI flag table (`:72-82`) is missing `--retention-days`
   today. Add it, described as the fallback for the `retention_days` setting (maintenance role),
-  with a link to `maintenance.md`.
+  with a link to `maintenance.md`. Also add a `MICROMEGAS_RETENTION_DAYS` row to its env-var
+  table (`:40-59`).
+- `mkdocs/docs/admin/authorization.md`: in the Settings section, add `MICROMEGAS_RETENTION_DAYS`
+  -> `retention_days` to the env-var table (`:20-29`), update the "five variables" count
+  (`:33`), and mention `retention_by_stream_tag` as a setting with no env var.
 - `tasks/backlog/1606_transactional_audit_write_plan.md`: the "Retention of the raw blocks" section
   becomes "set `retention_by_stream_tag` to `{"audit": "forever"}`", and the per-view table's
-  "absent" row says `retention_days`.
+  "absent" row says `retention_days`. Also rewrite the manual step at `:566` so it no longer
+  uses `--retention-days 0` (now rejected; store a short `retention_days` or a short tag override
+  instead), and update `:492` (per-view `retention` overrides `MICROMEGAS_RETENTION_DAYS`) and
+  `:116` (Current State cutoff) to name the `retention_days` setting.
+- `tasks/backlog/1245_partition_blocks_by_insert_time/plan.md`: add a note at `:681-696` and
+  `:780-781` that the partition-drop deletion replacing `delete_expired_blocks` must keep the
+  blocks of streams whose tag override horizon is longer than the partition's age.
 - `CHANGELOG.md` (Unreleased): the feature (#1695) and data-lake schema v13 (GIN index on
   `streams.tags`). **Minor breaking change:** `delete_old_data` takes a `&PayloadRetention`,
   `delete_expired_blocks(_batch)` take a `&BlockDeletePass`, `daemon` takes an
@@ -327,7 +339,10 @@ database.
   - `payload_retention()` resolution: DB `retention_days` beats env, env beats the default, and
     the overrides come from the DB or are empty.
   - `shadowed` never reports a spec with no env var.
-  - The existing "each `spec.default` parses to the applied default" test covers both new specs.
+  - Add `retention_days` (against `env.retention_days`) to the key list of
+    `env_fallbacks_default_to_the_registry_defaults`, and assert that the `retention_by_stream_tag`
+    default `{}` validates and parses via `parse_tag_horizons` to an empty map (it has no
+    `EnvFallbacks` field).
 - `rust/public/tests/read_policy_threading_tests.rs` already builds a DB-backed source over an
   unreachable lazy pool. Add one assertion that `payload_retention()` errors on that cold start.
   The no-deletion-on-failure guarantee relies on that error.
@@ -348,19 +363,21 @@ wrong blocks would be silent, so this check runs before merge.
    the #1592 plan. Confirm `/tmp/ingestion.log` shows the migration reaching v13, and that
    `psql "$MICROMEGAS_SQL_CONNECTION_STRING" -c "\d streams"` lists `stream_tags` as a `gin` index.
 2. Let the services run a few minutes so they ingest their own telemetry (streams tagged `log`,
-   `metrics`, `cpu`). Note block counts per tag:
-   `SELECT s.tags, count(*) FROM blocks b JOIN streams s USING (stream_id) GROUP BY 1;`.
+   `metrics`, `cpu`). Note block counts per tag, restricted to back-dated rows (the live services keep writing
+   new blocks to the same streams):
+   `SELECT s.tags, count(*) FROM blocks b JOIN streams s USING (stream_id) WHERE b.insert_time < now() - interval '50 days' GROUP BY 1;`.
+   Run it after step 3 for the baseline.
 3. Back-date everything: `UPDATE blocks SET insert_time = insert_time - interval '100 days';` and
    the same for `streams` and `processes`.
 4. On **Admin → Settings**, set `retention_by_stream_tag` to `{"log": "forever", "metrics": 120}`
    and leave `retention_days` unset (90).
-5. Wait for the next HH:10 hourly pass (see `/tmp/daemon.log`). Rerun the step 2 query. `log` and
-   `metrics` blocks remain and `cpu` blocks are gone. Their objects under the local object store's
-   `blobs/<process>/<stream>/` are gone too, and so are their now-empty stream rows. Processes
-   that still own a `log` stream remain.
+5. Wait for the next HH:10 hourly pass (see `/tmp/daemon.log`). Rerun the step 2 query. Back-dated `log` and
+   `metrics` blocks remain and back-dated `cpu` blocks are gone. Their objects under the local
+   object store's `blobs/<process>/<stream>/` are gone too. Processes that still own a `log`
+   stream remain.
 6. Set `retention_by_stream_tag` to `{"metrics": 30}`, wait for the next pass, and confirm that
-   `log` and `metrics` blocks are now deleted.
-7. `EXPLAIN` the override-pass query with `s.tags && ARRAY['metrics']` and confirm it uses
+   the back-dated `log` and `metrics` blocks are now deleted.
+7. Run `SET enable_seqscan = off;`, then `EXPLAIN` the override-pass query with `s.tags && ARRAY['metrics']` and confirm it uses
    `stream_tags`.
 8. Store an invalid value directly
    (`UPDATE settings SET value = '{"x": 0}' WHERE key = 'retention_by_stream_tag';`), restart the
