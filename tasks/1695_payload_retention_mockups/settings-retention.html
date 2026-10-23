@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment Settings — admin screen</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-success: #22c55e;
+    --accent-highlight: #ffb300;
+    --accent-error: #f87171;
+    --radius: 0.5rem;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--app-bg); color: var(--text-primary);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .topbar { height: 48px; background: var(--header-bg); border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+  .logo { width: 22px; height: 22px; border-radius: 5px; background: linear-gradient(135deg, #bf360c, #1565c0); }
+  .topbar .name { font-weight: 600; }
+  .topbar .spacer { flex: 1; }
+  .topbar .user { color: var(--text-secondary); font-size: 13px; }
+  .page { padding: 24px; max-width: 1280px; }
+  .crumbs { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; display: flex; gap: 6px; }
+  .crumbs a { color: var(--accent-link); text-decoration: none; }
+  .head { margin-bottom: 24px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; }
+  .sub { margin: 4px 0 0; color: var(--text-secondary); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 8px 14px;
+    font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer;
+    background: var(--accent-link); color: #fff; }
+  .btn:hover { background: var(--accent-link-hover); }
+  .btn.outline { background: transparent; border-color: var(--border-color); color: var(--text-primary); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .banner { border: 1px solid var(--border-color); background: var(--card-bg); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); }
+  .group-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: .06em; margin: 24px 0 8px; }
+  .tablewrap { border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--panel-bg); }
+  th { text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  td { padding: 12px 16px; border-top: 1px solid var(--border-color); vertical-align: top; }
+  tbody tr:hover { background: rgba(21,101,192,.05); }
+  .key { font-weight: 500; }
+  .desc { color: var(--text-secondary); font-size: 13px; margin-top: 3px; max-width: 520px; }
+  .env { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .pill { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; border-radius: 999px;
+    padding: 2px 9px; letter-spacing: .03em; text-transform: uppercase; }
+  .pill.db { background: rgba(21,101,192,.18); color: #64a8f0; }
+  .pill.fallback { background: rgba(107,114,128,.18); color: var(--text-secondary); }
+  .val code { font-size: 12px; background: var(--app-bg); border: 1px solid var(--border-color);
+    border-radius: 5px; padding: 2px 6px; }
+  .muted { color: var(--text-muted); }
+  .sec { color: var(--text-secondary); font-size: 13px; }
+  .actions { text-align: right; white-space: nowrap; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 100%; max-width: 560px; background: var(--panel-bg); border: 1px solid var(--border-color);
+    border-radius: var(--radius); box-shadow: 0 24px 60px rgba(0,0,0,.6); }
+  .dialog h2 { font-size: 17px; font-weight: 500; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border-color); }
+  .dialog .body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .dialog .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); }
+  label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 5px; }
+  .hint { margin-top: 5px; font-size: 12px; color: var(--text-muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; background: var(--app-bg);
+    border: 1px solid var(--border-color); border-radius: 6px; }
+  .chip { font-size: 12px; background: var(--card-bg); border: 1px solid var(--border-color);
+    border-radius: 999px; padding: 3px 6px 3px 10px; color: var(--text-primary); display: inline-flex; gap: 6px; align-items: center; }
+  .chip .x { color: var(--text-muted); cursor: pointer; }
+  .chips input { flex: 1; min-width: 120px; background: transparent; border: 0; color: var(--text-primary); outline: none; font-size: 13px; }
+  .current { font-size: 12px; color: var(--text-muted); }
+  .mockup-note { padding: 10px 24px; font-size: 12px; color: var(--text-muted); border-top: 1px dashed var(--border-color); margin-top: 32px; }
+
+  .tagrows { display: flex; flex-direction: column; gap: 8px; }
+  .tagrow { display: grid; grid-template-columns: 1fr 130px 90px 28px; gap: 8px; align-items: center; }
+  .tagrow input[type=text], .tagrow input[type=number], .numin { background: var(--app-bg); border: 1px solid var(--border-color);
+    border-radius: 6px; color: var(--text-primary); padding: 7px 9px; font-size: 13px; width: 100%; }
+  .tagrow input:disabled { color: var(--text-muted); }
+  .tagrow .x { color: var(--text-muted); cursor: pointer; text-align: center; }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+  .colhead { display: grid; grid-template-columns: 1fr 130px 90px 28px; gap: 8px; font-size: 11px; font-weight: 600;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+  .warn { border: 1px solid rgba(255,179,0,.35); background: rgba(255,179,0,.08); color: #ffcf66; border-radius: 6px;
+    padding: 9px 11px; font-size: 12px; }
+  .linkbtn { color: var(--accent-link); font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo"></div>
+  <div class="name">micromegas</div>
+  <div class="spacer"></div>
+  <div class="user">admin@example.com</div>
+</div>
+
+<div class="page">
+  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Settings</span></div>
+
+  <div class="head">
+    <h1>Settings</h1>
+    <p class="sub">Deployment-wide settings stored in the database. Changes reach every replica within one cache refresh (60&nbsp;s by default), with no restart.</p>
+  </div>
+
+  <div class="group-title">Data isolation</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th style="width:45%">Setting</th><th>Value</th><th>Source</th><th>Last changed</th><th></th></tr></thead>
+    <tbody><tr>
+      <td><div class="key mono">public_view_sets</div>
+        <div class="desc">View sets exempt from the row-level audience filter.</div>
+        <div class="env">env fallback: <code>MICROMEGAS_PUBLIC_VIEW_SETS</code> · default: []</div></td>
+      <td class="val"><code>log_stats</code></td>
+      <td><span class="pill db">Database</span></td>
+      <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-10-21 09:14</div></td>
+      <td class="actions"><button class="btn outline small">Edit</button> <button class="btn outline small">Reset</button></td>
+    </tr></tbody>
+  </table></div>
+
+  <div class="group-title">Data retention</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th style="width:45%">Setting</th><th>Value</th><th>Source</th><th>Last changed</th><th></th></tr></thead>
+    <tbody>
+      <tr>
+        <td><div class="key mono">retention_days</div>
+          <div class="desc">Default retention horizon, in days, for raw payloads (blocks) and for materialized view partitions.</div>
+          <div class="env">env fallback: <code>MICROMEGAS_RETENTION_DAYS</code> · default: 90</div></td>
+        <td class="muted">not stored</td>
+        <td><span class="pill fallback">Env / default</span></td>
+        <td class="muted">—</td>
+        <td class="actions"><button class="btn outline small">Edit</button></td>
+      </tr>
+      <tr>
+        <td><div class="key mono">retention_by_stream_tag</div>
+          <div class="desc">Raw-payload retention overrides keyed by stream tag. A stream matching several tags keeps the longest horizon.</div>
+          <div class="env">no env fallback · default: {}</div></td>
+        <td class="val"><code>audit: forever</code> <code>debug: 3 d</code></td>
+        <td><span class="pill db">Database</span></td>
+        <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-10-23 10:02</div></td>
+        <td class="actions"><button class="btn outline small">Edit</button> <button class="btn outline small">Reset</button></td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <div class="mockup-note">
+    Mockup. The <code>retention_days</code> editor is the existing number input (minimum 1). The dialog below is the new
+    tag-override editor: one row per tag, with a days input that is disabled when "Forever" is checked.
+  </div>
+</div>
+
+<div class="overlay">
+  <div class="dialog">
+    <h2>Edit <span class="mono">retention_by_stream_tag</span></h2>
+    <div class="body">
+      <p class="sec" style="margin:0">Raw-payload retention overrides keyed by stream tag. A stream matching several tags keeps the longest horizon.</p>
+      <div>
+        <div class="colhead"><span>Stream tag</span><span>Days</span><span></span><span></span></div>
+        <div class="tagrows" style="margin-top:6px">
+          <div class="tagrow"><input type="text" value="audit"><input type="number" value="" disabled placeholder="—"><label class="chk" style="margin:0"><input type="checkbox" checked> Forever</label><span class="x">×</span></div>
+          <div class="tagrow"><input type="text" value="debug"><input type="number" value="3"><label class="chk" style="margin:0"><input type="checkbox"> Forever</label><span class="x">×</span></div>
+          <div class="tagrow"><input type="text" placeholder="tag"><input type="number" placeholder="days"><label class="chk" style="margin:0"><input type="checkbox"> Forever</label><span class="x">×</span></div>
+        </div>
+        <div style="margin-top:8px"><span class="linkbtn">+ Add tag</span></div>
+      </div>
+      <div class="warn">Removing an override or shortening its horizon makes older blocks of those streams eligible for deletion at the next hourly maintenance pass. Deleted payloads cannot be recovered.</div>
+      <div class="current">Stored value: <code>{"audit": "forever", "debug": 3}</code> · changed by admin@example.com, 2026-10-23 10:02</div>
+    </div>
+    <div class="foot">
+      <button class="btn outline">Cancel</button>
+      <button class="btn">Save</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
