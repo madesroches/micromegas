@@ -141,7 +141,14 @@ export function buildXScale(xAxisMode: XAxisMode): uPlot.Scale {
   if (xAxisMode === 'categorical') {
     // Pad by half a slot so end bars aren't clipped and end labels stay
     // centered under their bars. A slot is 1 index wide; bars span 0.8 of it.
-    scale.range = (_u, dataMin, dataMax) => [dataMin - 0.5, dataMax + 0.5]
+    // The bounds come from the data, not the incoming min/max: uPlot feeds an
+    // already-ranged scale back in on redraw(true), so padding the inputs would
+    // widen the range on every redraw and shift the plot area.
+    scale.range = (u, dataMin, dataMax) => {
+      const xs = u.data[0]
+      if (!xs || xs.length === 0) return [dataMin - 0.5, dataMax + 0.5]
+      return [xs[0] - 0.5, xs[xs.length - 1] + 0.5]
+    }
   }
   return scale
 }

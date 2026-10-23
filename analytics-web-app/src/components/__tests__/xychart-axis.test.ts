@@ -148,7 +148,32 @@ describe('buildXScale', () => {
     const scale = buildXScale('categorical')
     expect(scale.range).toBeDefined()
     const fn = scale.range as (u: uPlot, dataMin: number, dataMax: number) => [number, number]
-    expect(fn(u, 0, 3)).toEqual([-0.5, 3.5])
+    const uWithData = { data: [[0, 1, 2, 3]] } as unknown as uPlot
+    expect(fn(uWithData, 0, 3)).toEqual([-0.5, 3.5])
+  })
+
+  it('categorical range does not drift when redraw feeds the output back in', () => {
+    const fn = buildXScale('categorical').range as (
+      u: uPlot,
+      dataMin: number,
+      dataMax: number,
+    ) => [number, number]
+    const uWithData = { data: [[0, 1, 2, 3]] } as unknown as uPlot
+    let [min, max] = fn(uWithData, 0, 3)
+    for (let i = 0; i < 5; i++) {
+      ;[min, max] = fn(uWithData, min, max)
+    }
+    expect([min, max]).toEqual([-0.5, 3.5])
+  })
+
+  it('categorical range falls back to the incoming bounds when there is no data', () => {
+    const fn = buildXScale('categorical').range as (
+      u: uPlot,
+      dataMin: number,
+      dataMax: number,
+    ) => [number, number]
+    const empty = { data: [[]] } as unknown as uPlot
+    expect(fn(empty, 0, 3)).toEqual([-0.5, 3.5])
   })
 
   it('time and numeric modes leave range unset', () => {
