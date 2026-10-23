@@ -258,22 +258,15 @@ affects performance.
 - **Two settings rather than one `{default, overrides}` object.** The default has an env and flag
   fallback and the overrides don't. One key would force all-or-nothing storage: storing only the
   overrides would also pin the default and silently shadow `MICROMEGAS_RETENTION_DAYS`.
-- **Overrides keyed by tag, not by stream id or process property.** Tags are set by the
-  instrumented code and are stable across processes, and the #1606 audit stream is identified by
-  its `audit` tag. Stream ids change with every process.
-- **One pass per distinct horizon rather than one query with a per-row computed cutoff.** A
-  `CASE`/lateral cutoff per block would defeat the `insert_time` index for the default pass. With
-  a handful of overrides, a handful of bounded batch loops is cheap and keeps each query simple.
 - **Known cost of the default pass:** blocks of long-horizon streams older than the default cutoff
   stay at the head of the `block_insert_time` index, and every default batch walks past them
   through the `NOT EXISTS` probe. That is fine for low-volume streams like audit. A high-volume
   stream with a long override would need a different approach (e.g. a per-stream cutoff column),
   which is not built until someone needs it.
-- **No env fallback for the overrides.** The issue's sequencing asks for them to live in the DB.
-  Infrastructure-as-code users can write them with `PUT {base}/api/settings/retention_by_stream_tag`.
 
 ## Decisions
 
+- Overrides use one pass per distinct horizon, not a per-row cutoff, which would defeat the `insert_time` index.
 - Partition retirement keeps using the default horizon. Partition retention per view is the #1606
   plan's per-view `retention` option, whose "absent" case now means `retention_days`.
 - `telemetry-maintenance-srv` and the monolith maintenance role now fail at startup on a malformed
@@ -292,7 +285,9 @@ affects performance.
   then 90), the override format with an `{"audit": "forever", "debug": 3}` example, longest-wins
   matching, the fact that overrides cover raw payloads only (partitions follow the default), that
   removing an override can't be undone, propagation within one cache TTL plus the next HH:10 pass,
-  and that payload deletion is skipped (with the rest of the hourly task still running) while settings can't be loaded. Update the flag table row (`:46`)
+  and that payload deletion is skipped (with the rest of the hourly task still running) while settings can't be loaded. Note that a stored `retention_days` silently shadows an explicit
+  `--retention-days` flag (no startup warning), and that infrastructure-as-code users can write the overrides with
+  `PUT {base}/api/settings/retention_by_stream_tag`. Update the flag table row (`:46`)
   with the new range.
 - `mkdocs/docs/admin/web-app.md:133-140`: add the two settings to the Settings page's list, and fix
   the rest of the paragraph: the source pill is no longer always "Env / default", the editors are no
@@ -306,7 +301,10 @@ affects performance.
   six and the list gains `MICROMEGAS_RETENTION_DAYS`.
 - `mkdocs/docs/admin/authorization.md`: in the Settings section, add `MICROMEGAS_RETENTION_DAYS`
   -> `retention_days` to the env-var table (`:20-29`), update the "five variables" count
-  (`:33`), and mention `retention_by_stream_tag` as a setting with no env var.
+  (`:33`), and mention `retention_by_stream_tag` as a setting with no env var. Also update `:37-47`: the
+  resolution order gains the `--retention-days` flag tier for `retention_days` and the no-env-var case, Reset
+  reverts to the env var, flag or default only where one exists, and the shadow-warning text notes that a stored
+  `retention_days` shadowing `--retention-days` is not reported.
 - `tasks/backlog/1606_transactional_audit_write_plan.md`: the "Retention of the raw blocks" section
   becomes "set `retention_by_stream_tag` to `{"audit": "forever"}`", and the per-view table's
   "absent" row says `retention_days`. Also rewrite the manual step at `:566` so it no longer
@@ -369,23 +367,25 @@ wrong blocks would be silent, so this check runs before merge.
    the #1592 plan. Confirm `/tmp/ingestion.log` shows the migration reaching v13, and that
    `psql "$MICROMEGAS_SQL_CONNECTION_STRING" -c "\d streams"` lists `stream_tags` as a `gin` index.
 2. Let the services run a few minutes so they ingest their own telemetry (streams tagged `log`,
-   `metrics`, `cpu`). Note block counts per tag, restricted to back-dated rows (the live services keep writing
+   `metrics`, `cpu`).
+3. On **Admin → Settings**, set `retention_by_stream_tag` to `{"log": "forever", "metrics": 120}`
+   and leave `retention_days` unset (90). This comes before back-dating so that an HH:10 pass in
+   between cannot apply the default horizon without the overrides.
+4. Back-date everything: `UPDATE blocks SET insert_time = insert_time - interval '100 days';` and
+   the same for `streams` and `processes`.
+5. Note block counts per tag, restricted to back-dated rows (the live services keep writing
    new blocks to the same streams):
    `SELECT s.tags, count(*) FROM blocks b JOIN streams s USING (stream_id) WHERE b.insert_time < now() - interval '50 days' GROUP BY 1;`.
-   Run it after step 3 for the baseline.
-3. Back-date everything: `UPDATE blocks SET insert_time = insert_time - interval '100 days';` and
-   the same for `streams` and `processes`.
-4. On **Admin → Settings**, set `retention_by_stream_tag` to `{"log": "forever", "metrics": 120}`
-   and leave `retention_days` unset (90).
-5. Wait for the next HH:10 hourly pass (see `/tmp/daemon.log`). Rerun the step 2 query. Back-dated `log` and
+   This is the baseline.
+6. Wait for the next HH:10 hourly pass (see `/tmp/daemon.log`). Rerun the step 5 query. Back-dated `log` and
    `metrics` blocks remain and back-dated `cpu` blocks are gone. Their objects under the local
    object store's `blobs/<process>/<stream>/` are gone too. Processes that still own a `log`
    stream remain.
-6. Set `retention_by_stream_tag` to `{"metrics": 30}`, wait for the next pass, and confirm that
+7. Set `retention_by_stream_tag` to `{"metrics": 30}`, wait for the next pass, and confirm that
    the back-dated `log` and `metrics` blocks are now deleted.
-7. Run `SET enable_seqscan = off;`, then `EXPLAIN` the override-pass query with `s.tags && ARRAY['metrics']` and confirm it uses
+8. Run `SET enable_seqscan = off;`, then `EXPLAIN` the override-pass query with `s.tags && ARRAY['metrics']` and confirm it uses
    `stream_tags`.
-8. Store an invalid value directly
+9. Store an invalid value directly
    (`UPDATE settings SET value = '{"x": 0}' WHERE key = 'retention_by_stream_tag';`), restart the
    maintenance daemon, and confirm the next pass logs the settings error, deletes nothing, and still materializes views.
 
