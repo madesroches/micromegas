@@ -244,13 +244,13 @@ pub fn register_lakehouse_functions(
         ctx.register_udf(
             make_remove_query_denial_udf(lakehouse.query_denials().clone()).into_scalar_udf(),
         );
-        // DDL-defined view sets: lists every row of
-        // `lakehouse_view_set_definitions` straight from Postgres, so an admin can see a
-        // definition that exists on disk but failed to load.
+        // Reads `lakehouse_view_set_definitions` straight from Postgres, so an admin can see a
+        // definition that exists on disk but failed to load, and adds the built-in view sets.
         ctx.register_udtf(
             "list_view_set_definitions",
             Arc::new(ListViewSetDefinitionsTableFunction::new(
                 lakehouse.lake().clone(),
+                view_factory.clone(),
             )),
         );
     }

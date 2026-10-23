@@ -124,9 +124,9 @@ means](materialized-views.md#what-a-redefinition-means)).
 
 ## What this tool does not manage
 
-- **Built-in view sets** (the ones registered in code, not via DDL) have no stored definition and
-  never appear in `list_view_set_definitions()`, so they never appear in `micromegas-views list`
-  either — e.g. `log_entries` is not something you'd expect to `pull`.
+- **Built-in view sets** (the ones registered in code, not via DDL) have no stored definition
+  (`list_view_set_definitions()` reports them with a NULL `definition_sql`), and the tool ignores
+  them, so they never appear in `micromegas-views list` — e.g. `log_entries` is not something you'd expect to `pull`.
 - **On-demand cached queries** have no name and are not part of this inventory at all.
 
 ## Validation happens at `apply`, not at `plan`

@@ -463,6 +463,13 @@ class TestCmdPlan:
 # ---------------------------------------------------------------------------
 
 
+class TestReadServerState:
+    def test_filters_out_builtin_rows(self):
+        client = FakeClient()
+        views_module.read_server_state(client)
+        assert "WHERE definition_sql IS NOT NULL" in client.statements[0]
+
+
 class TestCmdApply:
     def test_creates_and_updates_run_before_drops_in_name_order(
         self, tmp_path, monkeypatch
