@@ -24,10 +24,14 @@ Selection state flows `ChartCell` → `XYChart` without rebuilding the uPlot ins
   categorical bar charts, the x-axis `rotate`/`size`/`space` callbacks and the `rightPadding`
   function in `xychart-axis.ts:60-150`). The categorical x-axis keeps shared mutable state
   (`rotated`, `maxWidth`) that `rotate()` writes and `size()`/`rightPadding()` read.
-- uPlot 1.6.32 `redraw(rebuildPaths, recalcAxes)` (`uPlot.esm.js:4919`) sets
-  `shouldConvergeSize = recalcAxes || false`, then `_setScale(x, ...)`. Reading the source, a
-  plain `redraw(true)` should not re-run axis sizing, so the shift is not explained by that call
-  alone; the root cause is not yet established.
+- uPlot 1.6.32 `redraw(true)` (`uPlot.esm.js:4919`) calls `_setScale(x, scaleX.min, scaleX.max)`;
+  `setScales` (`:4040-4065`) then runs `wsc.range(self, wsc.min, wsc.max)` on those already-ranged
+  values. The categorical x-scale `range` in `buildXScale` (`xychart-axis.ts:139-147`) is
+  `[dataMin - 0.5, dataMax + 0.5]`, which is not idempotent: every `redraw(true)` widens the x
+  range by 0.5 per side. The changed scale sets `shouldConvergeSize` (`:4172`), so axis sizing
+  (`rotate`/`size`/`rightPadding`) re-runs and the plot rectangle moves. This is the root cause;
+  the selection effect is only the trigger. Drag-zoom is disabled (`setScale: false`), so the x
+  range is always derived from the data.
 
 The reproducing notebook is a bar chart with `scale_mode: max`, a category axis of usernames
 (long labels, so the x-axis is rotated) and a downstream table. The issue reports the shift
@@ -35,69 +39,42 @@ happens on every select/deselect, in both directions.
 
 ## Design
 
-### Step 0: reproduce and isolate (decides the fix)
+### Step 1: make the categorical x range idempotent
 
-The cause must be confirmed in a browser before changing code; candidates, in rough likelihood:
+Change `buildXScale`'s categorical `range` to ignore its `dataMin`/`dataMax` arguments and derive
+the bounds from the data: `[u.data[0][0] - 0.5, u.data[0][last] + 0.5]` (the x data is the slot
+index). When `u.data[0]` is empty, fall back to the incoming min/max. The output is then identical
+on every call, so `redraw(true)` leaves the scale unchanged, no convergence is triggered, and
+selection becomes a pure repaint. The half-slot padding and its comment (why, not history) stay.
 
-1. **Re-measurement after the selection round trip.** `onSelectionChange` publishes
-   `$cell.selected.*`; downstream cells re-render/re-execute, which can change the container
-   width (scrollbar appearing/disappearing, or the cell wrapper) and `measureContainer`
-   (`XYChart.tsx:367-380`, `rect.width - 32`) feeds `setSize`. A drift in what is measured would
-   explain a shift that accumulates per click.
-2. **Category-axis shared state.** `rotated`/`maxWidth` in `buildXAxisConfig` persist across
-   `redraw`; if `rotate()` is re-invoked with a different `foundSpace` during the selection
-   redraw, the `rightPadding`/`size` readers change the plot's left/right insets.
-3. **Chart rebuild on selection.** `activeSelection` or another dep in the effect list at
-   `XYChart.tsx:1270` changing identity would destroy/recreate the chart on each click and
-   re-run axis sizing from scratch (the effect comment at `XYChart.tsx:1264-1266` assumes it
-   does not).
-
-Instrument by logging `u.bbox`, `u.over` left/width, and `dimensions` before/after a click in the
-reproducing notebook (a bar chart over `log_entries` grouped by level with a long-label category
-is enough) and identify which of the above changes. Whichever field moves names the cause.
-
-### Step 1: fix at the cause, and make layout independent of selection
-
-Fix per the confirmed cause; the invariant to enforce is "a selection change never changes plot
-layout". Expected shapes, to be chosen after Step 0:
-
-- Cause 1: make the measured container size independent of the downstream cells (stable
-  scrollbar gutter on the cell scroll container, or measure the content box rather than a
-  value that includes the selection-dependent area).
-- Cause 2: recompute/pin the categorical axis state only when data or width change, not on
-  selection redraws (for example, compute `rotated`/`maxWidth` once per chart build).
-- Cause 3: remove the changing dep from the effect list (route it through a ref, as
-  `selectedRef` already does).
+Alternative considered and rejected: avoid re-ranging on selection redraws (for example by
+repainting without `_setScale`). That depends on uPlot internals and leaves any other
+`redraw(true)` caller (and `setData`-less re-ranging) with the same drift.
 
 ## Implementation Steps
 
-1. Reproduce in the browser (monolith + `yarn dev`, see CLAUDE.md "Service Management") with a
-   bar chart cell, `selectionMode: single`, a long-label category and a downstream table;
-   instrument as in Step 0 and record which value changes. Remove the instrumentation afterward.
-2. Apply the fix at the identified cause in `analytics-web-app/src/components/XYChart.tsx`,
-   `xychart-axis.ts`, or the cell/notebook container, per Design Step 1.
-3. Add a unit test that pins the layout invariant at the lowest tier that reproduces the cause
-   (see Testing Strategy).
-4. Add a `CHANGELOG.md` entry under the unreleased section.
+1. Make the categorical `range` in `xychart-axis.ts` idempotent per Design Step 1.
+2. Add the unit test described in Testing Strategy.
+3. Add a `CHANGELOG.md` entry under the unreleased section.
+4. Confirm in the browser (Manual Verification).
 
 ## Files to Modify
 
-- `analytics-web-app/src/components/XYChart.tsx` (likely)
-- `analytics-web-app/src/components/xychart-axis.ts` (if cause 2)
-- `analytics-web-app/src/lib/screen-renderers/cells/ChartCell.tsx` or the notebook cell wrapper
-  (if cause 1)
-- A test under `analytics-web-app/src/components/__tests__/` or the cell `__tests__` folder
+- `analytics-web-app/src/components/xychart-axis.ts`
+- `analytics-web-app/src/components/__tests__/xychart-axis.test.ts`
 - `CHANGELOG.md`
 
 ## Trade-offs
 
-- **Fix at the cause vs. pin the plot rectangle with a post-redraw `setSize`/padding override.**
-  An override would hide the symptom for any cause and leave the real layout instability in
-  place, so it is rejected.
-- **Diagnose first vs. guess a fix.** Static reading of uPlot and `XYChart` does not explain the
-  shift (a plain `redraw(true)` skips axis convergence), so a guessed fix risks shipping a no-op.
+- **Fix the range vs. pin the plot rectangle with a post-redraw `setSize`/padding override.**
+  An override would hide the symptom and leave the drifting scale in place, so it is rejected.
+- **Idempotent range vs. skipping the re-range on selection redraws.** The range fix is a
+  one-function change inside our code and cannot be reintroduced by another `redraw(true)` caller;
+  the alternative relies on uPlot internals.
 
 ## Decisions
+
+- AFK: Fixed the cause by making the categorical x-scale `range` ignore its inputs (derive from `u.data[0]`) rather than avoiding re-ranging on selection redraws, as the smaller change that also covers every other `redraw(true)` caller.
 
 ## Documentation
 
@@ -107,13 +84,11 @@ behavior.
 
 ## Testing Strategy
 
-Automated: a no-DB vitest unit test that pins the confirmed cause, named for the bug it covers
-(chart plot rectangle shifts on selection change), at whichever tier reproduces it. If the cause
-is in `buildXAxisConfig` state or an effect dependency, the test calls the pure axis builder or
-renders `XYChart` with a mocked uPlot and asserts the layout inputs (`size`/`padding`
-callbacks, chart construction count) are unchanged across a `selectedPoint` change. If the cause is
-container measurement, the test asserts the measured width is unaffected by selection state.
-No live-DB test is needed: the bug needs only a client-side chart and constructed data.
+Automated: a no-DB vitest unit test in `xychart-axis.test.ts`, named for the bug (categorical x
+range drifts on redraw). It builds `buildXScale('categorical')`, calls `range` with a stub `u`
+whose `data[0]` is `[0, 1, 2, 3]`, feeds the output back in as `dataMin`/`dataMax` several times,
+and asserts the result stays `[-0.5, 3.5]`. A second case covers empty `data[0]`. The existing
+`fn(u, 0, 3)` case needs its stub `u` to carry `data`. No live-DB test is needed.
 
 Existing suites (`ChartCell.test.tsx`, `xychart-selection.test.ts`) and lint/`tsc` must pass.
 
@@ -127,8 +102,9 @@ uPlot canvas layout needs a real browser (jsdom has no layout), so the final che
    `SELECT CAST(level AS VARCHAR) AS level, COUNT(*) AS n FROM log_entries GROUP BY level`,
    followed by a table cell using `$<chart>.selected.level`.
 3. Click a bar, then the same bar again, then another bar. Expected: the plot's left edge and
-   width do not move on any click. Repeat with long category labels so the x-axis is rotated.
+   width do not move on any click. Repeat with long category labels so the x-axis is rotated. This browser check confirms the
+unit-tested fix; jsdom cannot show the layout.
 
 ## Open Questions
 
-None; the root cause is determined in Step 0.
+None.
