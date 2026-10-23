@@ -72,7 +72,7 @@ SELECT * FROM list_partitions();
     Under a `ReadScope::Audiences` session (auth enabled), rows are filtered to the caller's own
     audiences: a `view_instance_id` row is kept only if its owning process/stream resolves to a
     readable audience, and a `'global'` row (a multi-audience partition, no single audience to
-    check) is kept only when its view set is on `MICROMEGAS_PUBLIC_VIEW_SETS`, the caller passes
+    check) is kept only when its view set is in the `public_view_sets` setting (env fallback `MICROMEGAS_PUBLIC_VIEW_SETS`), the caller passes
     the lakehouse admin gate (the same boolean gating `retire_partitions`/`regenerate_partitions`
     below), or the caller holds `ReadScope::All`. See
     [Authorization](authorization.md#query-time-audience-filtering).
@@ -465,7 +465,7 @@ above is visible on the very next call, with no TTL to wait out.
 
 **Does not apply `analytics-web-srv`'s self-service knob.** `GET /api/audience-grants/visible`
 (the REST route backing the Audience Access page's own list) narrows a non-admin's view to their
-own rows when `MICROMEGAS_SELF_SERVICE_MINT` is off; this function cannot make that check at all
+own rows when the `self_service_mint` setting is off; this function cannot make that check at all
 — it runs in `flight-sql-srv`/`micromegas-analytics`, which has no visibility into
 `analytics-web-srv`'s config — so it always applies the wider held-pair rule above for a
 non-admin, knob or no knob. This is a deliberate, accepted asymmetry between the two read paths,

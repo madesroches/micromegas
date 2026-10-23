@@ -102,7 +102,7 @@ class WebClient:
         The route is not purely admin-gated: a non-admin caller with a matching
         `mint` grant (or naming a brand-new audience explicitly, which
         lazily claims it) can mint their own key once the deployment has
-        `MICROMEGAS_SELF_SERVICE_MINT` enabled. `audience` is omitted from
+        the `self_service_mint` setting on. `audience` is omitted from
         the request body when `None`, so the server applies its own
         default/authorization rules rather than receiving an explicit
         `null`. `allowed_cidrs` (a list of CIDR ranges or bare IPs the key

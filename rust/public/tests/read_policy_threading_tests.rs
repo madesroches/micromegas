@@ -24,6 +24,7 @@ use datafusion::arrow::datatypes::Schema;
 use futures::TryStreamExt;
 use micromegas::servers::connect_info_layer::ConnectedIncoming;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
+use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::NullPartitionProvider;
@@ -36,7 +37,7 @@ use micromegas_analytics::lakehouse::view_definition_store::PgViewDefinitionStor
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::lakehouse::view_registry::ViewRegistry;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-use micromegas_auth::policy::{AudienceReadPolicy, ReadPolicy, ReadableAudiences};
+use micromegas_auth::policy::{AudienceGrants, AudienceReadPolicy, ReadPolicy, ReadableAudiences};
 use micromegas_auth::tower::AuthService;
 use micromegas_auth::types::{
     AuthContext, AuthProvider, AuthType, ProviderUnavailable, RequestParts,
@@ -107,6 +108,11 @@ async fn make_view_factory_with_processes_and_streams(
     ]))
 }
 
+/// The settings every pre-existing test runs under: pinned to an empty isolation config.
+fn default_settings() -> SettingsSource {
+    SettingsSource::pinned(Arc::new(IsolationConfig::default()))
+}
+
 /// Poll the given address until a TCP connection succeeds or the timeout elapses.
 async fn wait_for_server_ready(addr: SocketAddr, timeout: Duration) {
     let start = std::time::Instant::now();
@@ -126,6 +132,7 @@ async fn wait_for_server_ready(addr: SocketAddr, timeout: Duration) {
 async fn start_server(
     auth_provider: Option<Arc<dyn AuthProvider>>,
     read_policy: Arc<dyn ReadPolicy>,
+    settings: SettingsSource,
 ) -> SocketAddr {
     let lakehouse = make_offline_lakehouse_context().await;
     let part_provider = Arc::new(NullPartitionProvider {});
@@ -147,7 +154,7 @@ async fn start_server(
         view_registry,
         session_configurator,
         read_policy,
-        Arc::new(IsolationConfig::default()),
+        Arc::new(settings),
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -191,6 +198,7 @@ async fn start_server_with_connect_info(
     auth_provider: Option<Arc<dyn AuthProvider>>,
     read_policy: Arc<dyn ReadPolicy>,
 ) -> SocketAddr {
+    let settings = default_settings();
     let lakehouse = make_offline_lakehouse_context().await;
     let part_provider = Arc::new(NullPartitionProvider {});
     let view_factory = make_view_factory_with_processes_and_streams(&lakehouse).await;
@@ -208,7 +216,7 @@ async fn start_server_with_connect_info(
         view_registry,
         session_configurator,
         read_policy,
-        Arc::new(IsolationConfig::default()),
+        Arc::new(settings),
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -368,7 +376,7 @@ impl AuthProvider for GroupsAuthProvider {
 async fn provider_unavailable_maps_to_status_unavailable() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -386,11 +394,101 @@ async fn provider_unavailable_maps_to_status_unavailable() {
     );
 }
 
+/// A DB-backed settings source whose cold load cannot reach a database: the read policy resolves,
+/// so the `Unavailable` can only come from the settings load on the `Some(auth_ctx)` arm.
+#[tokio::test]
+async fn settings_store_outage_maps_to_status_unavailable() {
+    let auth_provider = api_key_provider("test", "secret");
+    let policy = Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(50))
+        .connect_lazy("postgres://user:pass@127.0.0.1:1/db")
+        .expect("connect_lazy should not touch the network");
+    let settings = SettingsSource::new(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings::default(),
+        },
+        pool,
+        Duration::from_secs(60),
+    );
+    let addr = start_server(Some(auth_provider), policy, settings).await;
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+
+    let info = client
+        .execute("SELECT 1".to_string(), None)
+        .await
+        .expect("get_flight_info_statement itself does not resolve a scope");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+
+    let result = client.do_get(ticket).await;
+    assert_eq!(expect_status_code(result), Code::Unavailable);
+}
+
+/// Plans `EXPLAIN SELECT process_id FROM processes` and returns the plan text.
+async fn explain_processes(addr: SocketAddr) -> String {
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+    let info = client
+        .execute("EXPLAIN SELECT process_id FROM processes".to_string(), None)
+        .await
+        .expect("execute");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    let stream = client.do_get(ticket).await.expect("do_get");
+    let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect");
+    datafusion::arrow::util::pretty::pretty_format_batches(&batches)
+        .expect("format")
+        .to_string()
+}
+
+/// The `Some(auth_ctx)` arm must evaluate the request with the stored isolation config, not the
+/// env one: a stored `processes` public view set removes the ownership filter from the plan.
+#[tokio::test]
+async fn stored_isolation_config_is_applied_to_authenticated_requests() {
+    let empty_env = || EnvFallbacks {
+        isolation: Arc::new(IsolationConfig::default()),
+        self_service: SelfServiceSettings::default(),
+    };
+    let policy = || Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()));
+
+    let filtered = explain_processes(
+        start_server(
+            Some(api_key_provider("test", "secret")),
+            policy(),
+            SettingsSource::with_overrides(empty_env(), DbOverrides::default()),
+        )
+        .await,
+    )
+    .await;
+    let unfiltered = explain_processes(
+        start_server(
+            Some(api_key_provider("test", "secret")),
+            policy(),
+            SettingsSource::with_overrides(
+                empty_env(),
+                DbOverrides {
+                    isolation: Some(Arc::new(IsolationConfig {
+                        public_view_sets: vec!["processes".to_string()],
+                    })),
+                    ..DbOverrides::default()
+                },
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_ne!(
+        filtered, unfiltered,
+        "a stored public view set must change the plan:\n{filtered}\n---\n{unfiltered}"
+    );
+}
+
 #[tokio::test]
 async fn other_policy_error_maps_to_status_permission_denied() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: false });
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -414,7 +512,7 @@ async fn other_policy_error_maps_to_status_permission_denied() {
 async fn prepared_statement_path_also_fails_closed() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -430,7 +528,7 @@ async fn prepared_statement_path_also_fails_closed() {
 async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
     let auth_provider = api_key_provider("delegating-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone()).await;
+    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
     // A client-claimed attribution naming a different principal than the authenticated
@@ -515,7 +613,7 @@ async fn ip_allowlist_rejects_connection_from_an_out_of_range_peer_address() {
 async fn prepared_statement_resolves_the_same_scope_as_do_get() {
     let auth_provider = api_key_provider("same-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone()).await;
+    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -552,7 +650,7 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
         memberships: vec!["team-a".to_string(), "team-b".to_string()],
     });
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone()).await;
+    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
     let mut client = connect(addr).await;
     // GroupsAuthProvider ignores the bearer token's content, but AuthService still requires the
     // header to be present to invoke validate_request at all.
@@ -591,7 +689,7 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
 async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
     let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -627,7 +725,7 @@ async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaf
 async fn bulk_ingest_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -660,7 +758,7 @@ async fn bulk_ingest_denies_non_admin_caller() {
 async fn view_ddl_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 

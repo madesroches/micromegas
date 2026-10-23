@@ -12,7 +12,7 @@
 //! handler body starts, the latter by `create_grant`'s own check, which runs before the
 //! per-pair hold check that would otherwise touch the pool. The 400 cases fail validation before
 //! touching the pool, and the `NotConfigured` cases use `AudienceGrantsState { pool: None,
-//! self_service_mint_enabled: false }`, which never touches `state.pool` at all. Every other
+//! settings: .. }` with the `self_service_mint` setting off, which never touches `state.pool` at all. Every other
 //! branch -- held-pair create, own-row/created-by delete, `GET .../visible`'s three visibility
 //! cases -- reaches Postgres and is `#[ignore]`d, run manually against a real, v7-migrated
 //! Postgres, per `ingestion_keys_tests.rs`'s precedent.
@@ -22,8 +22,29 @@ use analytics_web_srv::audience_grants::{
 };
 use analytics_web_srv::auth::{AuthToken, ValidatedUser};
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
+use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
+use std::sync::Arc;
 use tower::ServiceExt;
+
+/// A fixed settings source holding the self-service knobs as stored values, so no test reads
+/// process env or a database.
+fn test_settings(mint: bool, claims: i64, keys: i64, grants: i64) -> Arc<SettingsSource> {
+    Arc::new(SettingsSource::with_overrides(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings::default(),
+        },
+        DbOverrides {
+            self_service_mint: Some(mint),
+            max_claims_per_caller: Some(claims),
+            max_keys_per_caller: Some(keys),
+            max_grants_per_caller: Some(grants),
+            ..DbOverrides::default()
+        },
+    ))
+}
 
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::PgPool::connect_lazy("postgres://localhost/unused")
@@ -132,8 +153,7 @@ async fn create_grant_403_for_non_admin_when_knob_disabled() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -152,8 +172,7 @@ async fn delete_grant_403_for_non_admin_when_knob_disabled() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -176,8 +195,7 @@ async fn create_grant_403_for_non_admin_star_selector() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -202,8 +220,7 @@ async fn create_grant_403_for_non_admin_own_mint_claim_marker() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -226,8 +243,7 @@ async fn create_grant_400_for_invalid_axis() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -246,8 +262,7 @@ async fn create_grant_400_for_invalid_audience() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -269,8 +284,7 @@ async fn create_grant_400_for_overlong_selector() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -297,8 +311,7 @@ async fn my_audiences_403_for_non_admin_when_knob_disabled() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(lazy_pool()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -314,8 +327,7 @@ async fn my_audiences_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: None,
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         admin_user(),
     );
@@ -365,7 +377,7 @@ fn mint_prefix_for_none_when_email_is_none() {
 }
 
 // ---------------------------------------------------------------------------
-// NotConfigured 503 -- `AudienceGrantsState { pool: None, self_service_mint_enabled: false }`
+// NotConfigured 503 -- `AudienceGrantsState { pool: None, settings: .. }` (mint setting off)
 // never touches the pool, so this needs no live DB either, same harness as
 // every other test here.
 // ---------------------------------------------------------------------------
@@ -375,8 +387,7 @@ async fn create_grant_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: None,
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -395,8 +406,7 @@ async fn delete_grant_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: None,
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -414,8 +424,7 @@ async fn visible_503_when_pool_unconfigured() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: None,
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -465,8 +474,7 @@ async fn live_create_delete_round_trip() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -560,8 +568,7 @@ async fn live_create_grant_403_when_caller_does_not_hold_the_pair() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -590,8 +597,7 @@ async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
     let app = build_handler_router_with_user_and_groups(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
         vec!["eng".to_string()],
@@ -612,7 +618,7 @@ async fn live_create_grant_201_when_caller_holds_the_pair_via_a_group() {
 
 /// A non-admin who already holds the pair is still refused once they are at
 /// `max_grants_per_caller` distinct rows already created -- the per-caller bound (mirrors
-/// `IngestionKeysState::max_keys_per_caller` on the mint side of this same knob), which caps how
+/// the `self_service_max_keys_per_caller` bound on the mint side of this same setting), which caps how
 /// many `audience_grants` rows one non-admin may have `created_by`, counted across every pair,
 /// not just the one being shared into here.
 #[ignore]
@@ -651,8 +657,7 @@ async fn live_create_grant_403_when_max_grants_per_caller_reached() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 1,
+            settings: test_settings(true, 25, 100, 1),
         },
         non_admin_user(),
     );
@@ -714,8 +719,7 @@ async fn live_create_grant_201_when_bound_reached_only_via_own_identity_rows() {
     let app = build_handler_router_with_user_and_groups(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 2,
+            settings: test_settings(true, 25, 100, 2),
         },
         non_admin_user(),
         vec!["eng".to_string()],
@@ -757,8 +761,7 @@ async fn live_delete_grant_204_for_own_row() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -799,8 +802,7 @@ async fn live_delete_grant_403_for_own_mint_claim_marker() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -830,8 +832,7 @@ async fn live_delete_grant_204_for_a_row_the_caller_created() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -870,8 +871,7 @@ async fn live_delete_grant_403_for_someone_elses_row() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -908,8 +908,7 @@ async fn live_delete_grant_404_when_caller_does_not_hold_the_pair() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -934,8 +933,7 @@ async fn live_delete_grant_404_for_a_nonexistent_row() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -966,8 +964,7 @@ async fn live_visible_admin_sees_every_row() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -1001,8 +998,7 @@ async fn live_visible_non_admin_knob_on_sees_held_pairs() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1049,8 +1045,7 @@ async fn live_visible_non_admin_knob_on_star_row_does_not_leak_siblings() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1091,8 +1086,7 @@ async fn live_visible_non_admin_knob_off_star_row_does_not_leak_siblings() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1131,8 +1125,7 @@ async fn live_visible_non_admin_knob_off_sees_own_rows_only() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1171,8 +1164,7 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1208,8 +1200,7 @@ async fn live_my_audiences_filters_by_selector_match_and_reports_is_admin() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         other,
     );
@@ -1244,8 +1235,7 @@ async fn live_my_audiences_admin_gets_a_normal_response_regardless_of_knob() {
     let app = build_handler_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: false,
-            max_grants_per_caller: 50,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );

@@ -15,13 +15,35 @@ use analytics_web_srv::data_source_cache::DataSourceCache;
 use analytics_web_srv::groups::GroupsState;
 use analytics_web_srv::ingestion_keys::IngestionKeysState;
 use analytics_web_srv::maps::MapsState;
+use analytics_web_srv::settings::SettingsState;
 use analytics_web_srv::web_server::{AdminRoutesState, build_auth_routes, build_protected_routes};
 use axum::{
     Router, body::Body, extract::State, http::StatusCode, response::IntoResponse, routing::get,
 };
 use http::{Request, header};
+use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
+use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
+use std::sync::Arc;
 use tower::{Layer, ServiceExt};
 use tower_http::normalize_path::NormalizePathLayer;
+
+/// A fixed settings source holding the self-service knobs as stored values, so no test reads
+/// process env or a database.
+fn test_settings(mint: bool, claims: i64, keys: i64, grants: i64) -> Arc<SettingsSource> {
+    Arc::new(SettingsSource::with_overrides(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings::default(),
+        },
+        DbOverrides {
+            self_service_mint: Some(mint),
+            max_claims_per_caller: Some(claims),
+            max_keys_per_caller: Some(keys),
+            max_grants_per_caller: Some(grants),
+            ..DbOverrides::default()
+        },
+    ))
+}
 
 #[derive(Clone)]
 struct IndexState {
@@ -407,16 +429,14 @@ fn disabled_auth_app() -> Router {
     let ingestion_keys_state = IngestionKeysState {
         pool: None,
         default_audience: "public".to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     let audience_grants_state = AudienceGrantsState {
         pool: None,
-        self_service_mint_enabled: false,
-        max_grants_per_caller: 50,
+        settings: test_settings(false, 25, 100, 50),
     };
     let groups_state = GroupsState { pool: None };
+    let settings_state = SettingsState { pool: None };
     build_protected_routes(
         "",
         &None,
@@ -428,6 +448,7 @@ fn disabled_auth_app() -> Router {
             ingestion_keys: ingestion_keys_state,
             audience_grants: audience_grants_state,
             groups: groups_state,
+            settings: settings_state,
         },
     )
 }
@@ -497,6 +518,17 @@ async fn disable_auth_groups_base_route_returns_503() {
 #[tokio::test]
 async fn disable_auth_groups_sub_path_returns_503() {
     assert_key_management_disabled_503(disabled_auth_app(), "/api/groups/admins/members").await;
+}
+
+#[tokio::test]
+async fn disable_auth_settings_base_route_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/settings").await;
+}
+
+#[tokio::test]
+async fn disable_auth_settings_sub_path_returns_503() {
+    assert_key_management_disabled_503(disabled_auth_app(), "/api/settings/self_service_mint")
+        .await;
 }
 
 // ---------------------------------------------------------------------------

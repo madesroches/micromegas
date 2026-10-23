@@ -37,9 +37,30 @@ use analytics_web_srv::ingestion_keys::{
     CLAIM_COUNT_SQL, IngestionKeysState, ingestion_keys_router, resolve_audience,
 };
 use axum::{Extension, Router, body::Body, http::Request, http::StatusCode};
+use micromegas::analytics::lakehouse::read_scope::IsolationConfig;
 use micromegas::auth::policy::PUBLIC_AUDIENCE;
 use micromegas::auth::types::{AuthContext, AuthType};
+use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
+use std::sync::Arc;
 use tower::ServiceExt;
+
+/// A fixed settings source holding the self-service knobs as stored values, so no test reads
+/// process env or a database.
+fn test_settings(mint: bool, claims: i64, keys: i64, grants: i64) -> Arc<SettingsSource> {
+    Arc::new(SettingsSource::with_overrides(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings::default(),
+        },
+        DbOverrides {
+            self_service_mint: Some(mint),
+            max_claims_per_caller: Some(claims),
+            max_keys_per_caller: Some(keys),
+            max_grants_per_caller: Some(grants),
+            ..DbOverrides::default()
+        },
+    ))
+}
 
 fn lazy_pool() -> sqlx::PgPool {
     sqlx::PgPool::connect_lazy("postgres://localhost/unused")
@@ -175,9 +196,7 @@ fn resolve_audience_uses_the_explicit_request_value_over_the_knob() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: "knob-audience".to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     let resolved = resolve_audience(&state, Some("explicit-audience")).expect("resolve");
     assert_eq!(resolved, "explicit-audience");
@@ -188,9 +207,7 @@ fn resolve_audience_falls_back_to_the_knob_when_no_explicit_value() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: "knob-audience".to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     let resolved = resolve_audience(&state, None).expect("resolve");
     assert_eq!(resolved, "knob-audience");
@@ -204,9 +221,7 @@ fn resolve_audience_falls_back_to_public_by_default() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     assert_eq!(
         resolve_audience(&state, None).expect("resolve"),
@@ -221,9 +236,7 @@ fn resolve_audience_treats_an_empty_string_request_as_absent() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     let resolved = resolve_audience(&state, Some("")).expect("falls back to the default");
     assert_eq!(resolved, PUBLIC_AUDIENCE);
@@ -235,9 +248,7 @@ fn resolve_audience_rejects_an_invalid_explicit_value() {
     let state = IngestionKeysState {
         pool: None,
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: false,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(false, 25, 100, 50),
     };
     let result = resolve_audience(&state, Some("not valid!"));
     assert!(result.is_err());
@@ -255,9 +266,7 @@ async fn mint_403_for_non_admin() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -278,9 +287,7 @@ async fn mint_403_for_non_admin_before_body_is_parsed_even_with_malformed_json()
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -291,9 +298,68 @@ async fn mint_403_for_non_admin_before_body_is_parsed_even_with_malformed_json()
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+fn settings_with_env_and_db_mint(env_mint: bool, db_mint: bool) -> Arc<SettingsSource> {
+    Arc::new(SettingsSource::with_overrides(
+        EnvFallbacks {
+            isolation: Arc::new(IsolationConfig::default()),
+            self_service: SelfServiceSettings {
+                mint_enabled: env_mint,
+                ..SelfServiceSettings::default()
+            },
+        },
+        DbOverrides {
+            self_service_mint: Some(db_mint),
+            ..DbOverrides::default()
+        },
+    ))
+}
+
+/// The stored value wins over the env fallback: DB on and env off passes `MintGate` (and then
+/// fails on the malformed audience, proving the gate was passed).
+#[tokio::test]
+async fn mint_gate_passes_when_the_db_enables_it_and_env_does_not() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(lazy_pool()),
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            settings: settings_with_env_and_db_mint(false, true),
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "x", "audience": "not valid!"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// And the reverse: DB off and env on is still a 403.
+#[tokio::test]
+async fn mint_gate_rejects_when_the_db_disables_it_and_env_enables_it() {
+    let app = build_handler_router_with_user(
+        IngestionKeysState {
+            pool: Some(lazy_pool()),
+            default_audience: PUBLIC_AUDIENCE.to_string(),
+            settings: settings_with_env_and_db_mint(true, false),
+        },
+        non_admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/ingestion-api-keys",
+            r#"{"name": "x", "audience": "not valid!"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 /// A malformed `audience` from a non-admin caller is a plain 400 from `resolve_audience` --
 /// not the claim path, which is only reached once the format check passes.
-/// `self_service_mint_enabled: true` here so `MintGate` lets the request past the knob check and
+/// the `self_service_mint` setting on here so `MintGate` lets the request past the knob check and
 /// actually reach `resolve_audience`; no DB access either way, since `resolve_audience` fails
 /// before any query runs.
 #[tokio::test]
@@ -302,9 +368,7 @@ async fn mint_400_for_non_admin_with_a_malformed_audience() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -324,9 +388,7 @@ async fn list_403_for_non_admin() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -343,9 +405,7 @@ async fn revoke_403_for_non_admin() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -365,9 +425,7 @@ async fn set_allowlist_403_for_non_admin() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -391,9 +449,7 @@ async fn mint_400_for_empty_name() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -410,9 +466,7 @@ async fn list_400_for_negative_limit() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -431,9 +485,7 @@ async fn mint_400_for_invalid_audience() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -455,9 +507,7 @@ async fn mint_400_for_invalid_allowed_cidrs() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -479,9 +529,7 @@ async fn set_allowlist_400_for_invalid_allowed_cidrs() {
         IngestionKeysState {
             pool: Some(lazy_pool()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -510,9 +558,7 @@ async fn mint_503_when_pool_unconfigured() {
         IngestionKeysState {
             pool: None,
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -529,9 +575,7 @@ async fn list_503_when_pool_unconfigured() {
         IngestionKeysState {
             pool: None,
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -548,9 +592,7 @@ async fn revoke_503_when_pool_unconfigured() {
         IngestionKeysState {
             pool: None,
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -570,9 +612,7 @@ async fn set_allowlist_503_when_pool_unconfigured() {
         IngestionKeysState {
             pool: None,
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -673,9 +713,7 @@ async fn live_mint_list_revoke_round_trip() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -761,9 +799,7 @@ async fn live_admin_mint_into_a_brand_new_audience_claims_it() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -809,9 +845,7 @@ async fn live_admin_mint_into_an_existing_audience_is_denied_with_403() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -852,9 +886,7 @@ async fn live_admin_mint_of_the_default_audience_is_denied_with_no_mint_grant() 
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: audience.clone(),
-            self_service_mint_enabled: false,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(false, 25, 100, 50),
         },
         admin_user(),
     );
@@ -927,9 +959,7 @@ async fn live_mint_rejects_a_non_admin_claim_of_the_default_audience() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: audience.clone(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -969,9 +999,7 @@ async fn live_mint_succeeds_for_non_admin_with_a_matching_grant_no_claim_attempt
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 100,
+            settings: test_settings(true, 25, 100, 50),
         },
         non_admin_user(),
     );
@@ -1017,9 +1045,7 @@ async fn live_mint_claims_a_fresh_audience_then_denies_a_second_caller() {
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: true,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(true, 25, 100, 50),
     };
     let app = build_handler_router_with_user(state.clone(), non_admin_user());
     let name = format!("self-service-claim-key-{}", uuid::Uuid::new_v4());
@@ -1084,9 +1110,7 @@ async fn live_concurrent_claims_for_the_same_fresh_audience_never_double_claim()
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: true,
-        max_claims_per_caller: 25,
-        max_keys_per_caller: 100,
+        settings: test_settings(true, 25, 100, 50),
     };
     let app1 = build_handler_router_with_user(state.clone(), non_admin_user());
     let app2 = build_handler_router_with_user(state, non_admin_user());
@@ -1166,9 +1190,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 1,
-            max_keys_per_caller: 100,
+            settings: test_settings(true, 1, 100, 50),
         },
         caller.clone(),
     );
@@ -1193,9 +1215,7 @@ async fn live_claims_limit_denies_at_the_bound_and_allows_one_below_it() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 2,
-            max_keys_per_caller: 100,
+            settings: test_settings(true, 2, 100, 50),
         },
         caller,
     );
@@ -1233,9 +1253,7 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     let state = IngestionKeysState {
         pool: Some(pool.clone()),
         default_audience: PUBLIC_AUDIENCE.to_string(),
-        self_service_mint_enabled: true,
-        max_claims_per_caller: 1,
-        max_keys_per_caller: 100,
+        settings: test_settings(true, 1, 100, 50),
     };
     let app = build_handler_router_with_user(state.clone(), caller.clone());
     let response = app
@@ -1254,8 +1272,7 @@ async fn live_claims_limit_survives_caller_deleting_their_own_mint_grant_row() {
     let grants_app = build_grants_router_with_user(
         AudienceGrantsState {
             pool: Some(pool.clone()),
-            self_service_mint_enabled: true,
-            max_grants_per_caller: 50,
+            settings: test_settings(true, 25, 100, 50),
         },
         caller.clone(),
     );
@@ -1328,9 +1345,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 1,
+            settings: test_settings(true, 25, 1, 50),
         },
         caller.clone(),
     );
@@ -1354,9 +1369,7 @@ async fn live_keys_limit_denies_at_the_bound_and_allows_one_below_it() {
         IngestionKeysState {
             pool: Some(pool.clone()),
             default_audience: PUBLIC_AUDIENCE.to_string(),
-            self_service_mint_enabled: true,
-            max_claims_per_caller: 25,
-            max_keys_per_caller: 2,
+            settings: test_settings(true, 25, 2, 50),
         },
         caller,
     );

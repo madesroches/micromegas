@@ -71,6 +71,7 @@ vi.mock('@/routes/DataSourcesPage', () => ({ default: () => <div>data-sources-pa
 vi.mock('@/routes/ExportScreensPage', () => ({ default: () => <div>export-screens-page</div> }))
 vi.mock('@/routes/ImportScreensPage', () => ({ default: () => <div>import-screens-page</div> }))
 vi.mock('@/routes/MapsPage', () => ({ default: () => <div>maps-page</div> }))
+vi.mock('@/routes/SettingsPage', () => ({ default: () => <div>settings-page</div> }))
 vi.mock('@/routes/NotFoundPage', () => ({ default: () => <div>not-found-page</div> }))
 // `/admin/ingestion-keys` is no longer fully admin-gated: its real component mounts a
 // self-service panel whose effect calls `fetchMyAudiences`/`listIngestionApiKeys` against
@@ -133,6 +134,16 @@ describe('AppShell (via router.tsx)', () => {
     renderAt('/admin/maps')
 
     await screen.findByText('maps-page')
+    expect(sidebarMounts.count).toBe(0)
+  })
+
+  it('does not mount Sidebar on /admin/settings for a non-admin user', async () => {
+    authState.status = 'authenticated'
+    authState.user = { sub: 'u1', is_admin: false }
+
+    renderAt('/admin/settings')
+
+    await screen.findByText('settings-page')
     expect(sidebarMounts.count).toBe(0)
   })
 

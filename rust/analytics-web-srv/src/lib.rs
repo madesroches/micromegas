@@ -13,5 +13,6 @@ pub mod maps;
 pub mod mutation_audit;
 pub mod screen_types;
 pub mod screens;
+pub mod settings;
 pub mod stream_query;
 pub mod web_server;

@@ -1,0 +1,464 @@
+# DB-Backed Settings Plan
+
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1592
+
+## Overview
+
+Several deployment-wide toggles are env vars read once at startup, so changing one means editing
+the env and restarting every service that reads it. Nothing records who changed what, and #1561
+showed that a knob can be ignored on one code path while it looks set everywhere else. This plan
+adds a `settings` table in the telemetry DB. Each service caches it with the same
+whole-table snapshot cache the audience-grant and group stores already use. Admins edit it from a
+new **Admin → Settings** page, and every change goes to the control-plane audit log.
+The first settings to move are `MICROMEGAS_PUBLIC_VIEW_SETS` and the four
+`MICROMEGAS_SELF_SERVICE_*` knobs. Each env var stays as the fallback used when no row exists, so
+existing deployments behave the same on upgrade. Later settings, such as the per-tag retention
+policy in #1695, become one registry entry each, with no new migration.
+
+## Current State
+
+**The knobs being moved**
+
+- `MICROMEGAS_PUBLIC_VIEW_SETS`: parsed by `IsolationConfig::from_env`
+  (`rust/analytics/src/lakehouse/read_scope.rs:149-158`). A malformed value fails startup. It is
+  resolved once in `FlightSqlServer::build_and_serve` (`rust/public/src/servers/flight_sql_server.rs:235`,
+  via `resolve_isolation_config` at `:52`). `with_isolation_config(..)` (`:172`) overrides it.
+  `FlightSqlServiceImpl` holds it as `isolation_config: Arc<IsolationConfig>`
+  (`flight_sql_service_impl.rs:549`) and copies it into every `CallerContext` in `caller_context`
+  (`:629`). From there it reaches `OwnershipRewrite` and `AudienceGuard`
+  (`rust/analytics/src/lakehouse/query.rs:131,370`). Since `caller_context` builds the scope per
+  request, reading a new value per request needs no code change in `micromegas-analytics`.
+- `MICROMEGAS_SELF_SERVICE_MINT` and `..._MAX_CLAIMS_PER_CALLER` / `..._MAX_KEYS_PER_CALLER` /
+  `..._MAX_GRANTS_PER_CALLER`: read once in `run_web_server`
+  (`rust/analytics-web-srv/src/web_server.rs:778-789`) through `resolve_bool_env` /
+  `resolve_i64_env` (`:106-137`), then copied as plain fields into `IngestionKeysState`
+  (`ingestion_keys.rs:72-81`) and `AudienceGrantsState` (`audience_grants.rs:63,73`). They are
+  read at `ingestion_keys.rs:342,448,693` and `audience_grants.rs:323,547,808,944`.
+
+**Precedents being reused**
+
+- `rust/auth/src/db_snapshot.rs`: `SnapshotSource<L: SnapshotLoader>` is a generic whole-table
+  snapshot cache. It refreshes lazily, at most once per TTL. After the first successful load it
+  keeps serving the last good snapshot. When it has never loaded, it fails with
+  `ProviderUnavailable`, and cold-start retries are throttled. `DbAudienceGrantsSource`
+  (`db_audience_grants.rs`) and `DbGroupsSource` (`groups.rs:237`) are the two existing loaders.
+  Both use `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` (default 60).
+- `audience_grants` / `groups` tables: data-lake schema migrations in
+  `rust/ingestion/src/sql_migration.rs` (currently `LATEST_DATA_LAKE_SCHEMA_VERSION = 11`). These
+  tables live in the same DB, behind the same `MICROMEGAS_SQL_CONNECTION_STRING`, that both
+  `flight-sql-srv` and `analytics-web-srv` already read.
+- Admin REST plus audit: `groups.rs` has admin-only routes behind `GroupAdminGate`, which wraps
+  `AdminUser` and emits a `"denied"` `MutationAudit` record when it rejects a caller
+  (`groups.rs:202-232`). `mutation_audit.rs` provides `MutationAuditRecord`, the action constants
+  and `AuditOutcome`. On the frontend, `audience-grants-api.ts` and `groups-api.ts` call these
+  routes with plain `authenticatedFetch`, and `AdminPage.tsx` lists the admin cards.
+
+## Design
+
+### Which env vars move
+
+| Class | Vars | Why |
+|---|---|---|
+| **Move now** | `MICROMEGAS_PUBLIC_VIEW_SETS`, `MICROMEGAS_SELF_SERVICE_MINT`, `MICROMEGAS_SELF_SERVICE_MAX_{CLAIMS,KEYS,GRANTS}_PER_CALLER` | Deployment-wide policy, already read on a per-request path. They need the same value on every replica. |
+| **Good later candidates** (separate issues) | `MICROMEGAS_RETENTION_DAYS` → #1695's per-tag retention policy; `MICROMEGAS_QUERY_DENY_MAX_RULES` | Deployment-wide policy. Each is one registry entry plus a call-site change once this store exists. |
+| **Stay env-only** | `MICROMEGAS_DEFAULT_AUDIENCE` (see Decisions); connection strings, object-store URIs, listen addresses, OIDC config and secrets, `MICROMEGAS_API_KEYS`; memory budgets, cache sizes, temp-dir caps, telemetry-sink knobs; refresh intervals and TTLs, including `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, which governs this cache | Needed before the DB is reachable, secret, per-process or per-replica tuning, or baked into stored data. |
+
+### Table: data-lake migration v12 (`rust/ingestion/src/sql_migration.rs`)
+
+```sql
+CREATE TABLE settings (
+  key        VARCHAR(255) PRIMARY KEY,
+  value      JSONB        NOT NULL,
+  updated_at TIMESTAMPTZ  NOT NULL,
+  updated_by VARCHAR(255) NOT NULL
+);
+```
+
+This is one generic key/value table, not one table per feature. A key with no row means "unset":
+the consuming service falls back to the env var, then to the built-in default. Removing a value is
+a `DELETE`. The table keeps only the latest change; the full history lives in the audit log.
+
+### Registry and typed snapshot: new module `rust/public/src/settings.rs` (`micromegas::settings`)
+
+```rust
+pub enum SettingKind {
+    Bool,
+    Count,       // JSON integer in 0..=i64::MAX
+    NameList,    // JSON array of non-empty, trimmed, unique strings with no `[`, `]` or `"`
+}
+
+pub struct SettingSpec {
+    pub key: &'static str,         // "public_view_sets"
+    pub env_var: &'static str,     // "MICROMEGAS_PUBLIC_VIEW_SETS"
+    pub kind: SettingKind,
+    pub default: &'static str,     // JSON text, shown in the UI ("false", "25", "[]")
+    pub description: &'static str,
+}
+
+pub const SETTINGS: &[SettingSpec] = &[ /* the five entries, keyed: public_view_sets, self_service_mint,
+   self_service_max_claims_per_caller, self_service_max_keys_per_caller,
+   self_service_max_grants_per_caller */ ];
+
+impl SettingSpec {
+    pub fn validate(&self, value: &serde_json::Value) -> anyhow::Result<()>;
+}
+```
+
+`SETTINGS` serves two purposes. It is the list the admin page renders, and its `validate` is the
+single validation rule used by both the PUT handler and the loader.
+
+The cached snapshot holds the DB values already parsed into typed fields:
+
+```rust
+pub struct SelfServiceSettings { pub mint_enabled: bool, pub max_claims_per_caller: i64,
+                                 pub max_keys_per_caller: i64, pub max_grants_per_caller: i64 }
+
+#[derive(Default)]
+pub struct DbOverrides {                   // SnapshotLoader::Snapshot; pub fields so tests/ can build non-empty sets
+    pub isolation: Option<Arc<IsolationConfig>>,
+    pub self_service_mint: Option<bool>,
+    pub max_claims_per_caller: Option<i64>,
+    pub max_keys_per_caller: Option<i64>,
+    pub max_grants_per_caller: Option<i64>,
+}
+
+pub struct EnvFallbacks {                  // resolved once per process, at startup
+    pub isolation: Arc<IsolationConfig>,
+    pub self_service: SelfServiceSettings,
+}
+
+impl EnvFallbacks {
+    pub fn from_env() -> Result<Self>;     // fails fast on a malformed MICROMEGAS_PUBLIC_VIEW_SETS
+}
+
+pub struct SettingsSource {
+    db: Backing,   // enum { Db(SnapshotSource<SettingsLoader>), Fixed(Arc<DbOverrides>) }
+                   // Fixed(empty) for env_only/pinned; Fixed(x) for with_overrides
+    env: EnvFallbacks,
+}
+
+impl SettingsSource {
+    pub fn new(env: EnvFallbacks, pool: PgPool, ttl: Duration) -> Self;  // env already resolved by the caller
+    pub fn env_only(env: EnvFallbacks) -> Self;                          // no telemetry-DB pool configured
+    pub fn pinned(isolation: Arc<IsolationConfig>) -> Self;              // with_isolation_config / tests; env = {isolation, built-in self_service defaults}
+    pub fn with_overrides(env: EnvFallbacks, db: DbOverrides) -> Self;   // no-DB tests; never reads process env
+    pub fn env_isolation_config(&self) -> Arc<IsolationConfig>;          // sync, no DB: env.isolation (the pinned config for `pinned`)
+    pub async fn isolation_config(&self) -> Result<Arc<IsolationConfig>>;
+    pub async fn self_service(&self) -> Result<SelfServiceSettings>;
+    pub async fn warn_on_shadowed_env(&self);                  // best-effort startup diagnostic
+}
+```
+
+- **`public_view_sets`:** the validated array builds `IsolationConfig { public_view_sets }`
+  directly. NameList validation also rejects entries containing `[`, `]` or `"`, matching the env
+  parsing in `read_scope.rs:124-149`, so the DB never accepts a name env refuses.
+- **Resolution order, per key:** DB row, then env var, then built-in default. The env-and-default
+  half is exactly today's parsing. `IsolationConfig::from_env` stays as is and keeps failing fast
+  on a malformed value. The `resolve_bool_env` / `resolve_i64_env` logic moves from
+  `web_server.rs` (`resolve_bool_env` stays importable there for `MICROMEGAS_SECURE_COOKIES`) into `EnvFallbacks::from_env` unchanged, so counts still warn and fall back to
+  the default. Only `EnvFallbacks::from_env` reads process env; every constructor takes the
+  resolved `EnvFallbacks`.
+- **`SettingsLoader::fetch`** runs `SELECT key, value FROM settings`. It
+  ignores keys missing from `SETTINGS`, because during a rolling upgrade a newer replica may have
+  written keys an older one doesn't know. If a known key fails `validate`, the whole load fails (not a per-key env fallback, which could silently widen exposure).
+  `SnapshotSource` then keeps serving the last good snapshot, or returns `ProviderUnavailable` on a
+  cold start. This matches how `AudienceGrantsLoader` handles malformed rows. The refresh-error
+  metric is `settings_refresh_error_count`.
+- **TTL:** reuses `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` (default 60). Both settings being moved are
+  authorization knobs, and that variable already governs the key, grant and group caches across
+  the process. No new knob. `resolve_settings` reads it as
+  `DbAudienceGrantsConfig::from_env_with_prefix("").cache_ttl_secs`; `run_web_server` reads it as
+  `DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs`, called before building the shared source
+  (today only `build_auth_state` reads it, after the states are built and only with auth on).
+- **`warn_on_shadowed_env`:** called once at startup by each server, best effort (skipped for `pinned` sources and on the auth-disabled branch, which never read the settings table), in the same way
+  `web_server.rs:811-839` checks for a missing mint grant. For every key whose env var is set
+  *and* has a DB row, it logs `"{env_var} is set but ignored: settings.{key} is
+  stored"`. This targets the #1561 failure mode: an env var that looks set but has no effect.
+
+### FlightSQL wiring (`rust/public/src/servers/`)
+
+- `FlightSqlServiceImpl`: the field `isolation_config: Arc<IsolationConfig>` becomes
+  `settings: Arc<SettingsSource>`. In `caller_context`,
+  `isolation_config: self.settings.isolation_config().await.map_err(...)` maps a
+  `ProviderUnavailable` error to `Status::unavailable` and any other error to `Status::internal`.
+  This is the same downcast the `read_policy` arm uses just above. The call is made only on the
+  `Some(auth_ctx)` arm; the `None` (auth-disabled) arm uses `env_isolation_config()`, because
+  `ReadScope::All` makes `OwnershipRewrite` and `AudienceGuard` ignore the value.
+- `FlightSqlServer::build_and_serve`: `resolve_isolation_config` (at `:235`) becomes
+  `EnvFallbacks::from_env()?` at the same spot, called only when `with_isolation_config` was not
+  set (that path builds a `pinned` source and never reads env), before any Postgres/object-store
+  setup, so a malformed `MICROMEGAS_PUBLIC_VIEW_SETS` still fails fast. The existing
+  explicit-config-wins tests at `flight_sql_server.rs:561-597` carry over. `resolve_settings` then runs after
+  `lake_pool_for_keys` exists (`:277`): it returns `SettingsSource::pinned(c)` when
+  `with_isolation_config(c)` was called, otherwise `SettingsSource::new(env, pool, ttl)`
+  over a `dedicated_key_store_pool(&lake_pool_for_keys)`, the same construction the grant store
+  uses, with the TTL from `DbAudienceGrantsConfig::from_env_with_prefix("").cache_ttl_secs`, on **every** auth branch, so #1561 cannot come back. The lazy pool makes no connection
+  until the first query.
+- Monolith: no change needed. It does not call `with_isolation_config`, so the builder's own path
+  applies.
+
+### Web server wiring (`rust/analytics-web-srv/src/`)
+
+- `IngestionKeysState` and `AudienceGrantsState` drop their four knob fields and gain
+  `settings: Arc<SettingsSource>`. `run_web_server` builds one instance and shares it
+  between the two states. It uses `new` when `analytics_keys_pool` is
+  `Some`, and `env_only` otherwise. The TTL comes from
+  `DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs`, resolved before the source is built.
+- Every read site listed under Current State calls `state.settings.self_service().await`, but only
+  on the non-admin branch (admins bypass these knobs via `!caller.is_admin()` and must not 503 on
+  a settings outage). `MintGate` reads it, and `mint_key` calls it inside its existing `!caller.is_admin()` block
+  (`ingestion_keys.rs:440`) once, before `pool.begin()`, and passes it into
+  `try_claim_and_mint` as an `Option<SelfServiceSettings>` (`Some` for non-admins, `None` for admins,
+  whose claim-count check is skipped) instead of reading inside its transaction (the
+  2-connection `analytics_keys_pool` could be exhausted while the advisory lock is held).
+- Error mapping: a settings error maps to `IngestionKeyError::Unavailable` (the DB-outage variant,
+  since `NotConfigured` would mislead). `AudienceGrantError` gains a matching `Unavailable` (503)
+  variant, and `GrantGate` emits the gate `"error"` audit (`emit_gate_outcome("error", ...)`) for
+  it. The startup `info!` at `:784-789` is replaced by `warn_on_shadowed_env`.
+
+### Settings REST routes: new `rust/analytics-web-srv/src/settings.rs`
+
+The routes are admin-only. `settings_router(base_path)` is merged and `Extension(admin_state.settings)`
+is layered alongside `groups_router` in the auth-enabled branch (`web_server.rs:~457-466`). They
+follow `groups.rs`'s structure:
+
+| Route | Behavior |
+|---|---|
+| `GET {base}/api/settings` | Returns one entry per `SETTINGS` item: `{key, kind, env_var, default, description, value \| null, updated_at \| null, updated_by \| null}`. Reads the table directly, not through the cache, so the page shows what was just written. The handler is split so the step that turns `SETTINGS` plus `(key, value, updated_at, updated_by)` rows into the response entries is a pure `pub` function; the handler only runs the query and calls it. |
+| `PUT {base}/api/settings/{key}` with body `{value}` | Rejects an unknown key with 404 and a failed `validate` with 400. Otherwise, in one transaction: `SELECT value … FOR UPDATE` (the previous value), then `INSERT … ON CONFLICT (key) DO UPDATE`, writing `updated_by` as the caller's identity (email if present, else subject) via a `caller_identity(&ValidatedUser)` copy in `settings.rs`, as `groups.rs` does. Returns the new entry. |
+| `DELETE {base}/api/settings/{key}` | Runs `DELETE FROM settings WHERE key = $1 RETURNING value`, so the key reverts to env or default. The returned value is the audit `previous_value`; no returned row is the 404 case. |
+
+- **State:** a `SettingsState { pool: Option<PgPool> }` added to `AdminRoutesState` (and to the
+  field-by-field construction in `routing_tests.rs`), following `GroupsState` / `require_pool`.
+  `SettingsError` has a `NotConfigured` (503) variant returned when the pool is `None`.
+- **`--disable-auth`:** the settings router is merged only in the auth-enabled branch. The
+  settings path and its `{*rest}` are added to `key_management_disabled_router` (static 503),
+  with a `routing_tests.rs` case.
+- **Gate:** GET uses plain `AdminUser`. PUT and DELETE go through `SettingsAdminGate`, which copies
+  `GroupAdminGate`: it delegates to `AdminUser`, maps the method to `SET_SETTING` /
+  `RESET_SETTING` as `group_gate_action` does in `groups.rs`, and audits a rejection as `"denied"`.
+- **Audit:** new `action::SET_SETTING` / `action::RESET_SETTING`. `MutationAuditRecord` gets three
+  optional fields, appended last: `setting`, `value`, and `previous_value`. The two values are
+  JSON text, truncated by `truncate_for_audit`. Each handler follows the existing wrapper +
+  `_inner` + `audit.emit(&result)` shape (the wrapper attaches `.setting(&key)` before `_inner`
+  runs, as `create_group` does with `.group(&body.name)`), and a new `SettingsError` implements
+  `AuditOutcome`.
+- **Propagation:** the replica that handled the write sees the new value within one TTL. There is
+  no local invalidation, which matches how grants behave today. The page says "within one cache
+  refresh" rather than "immediately".
+
+### Frontend (`analytics-web-app/src/`)
+
+- `lib/settings-api.ts`: `fetchSettings`, `setSetting(key, value)`
+  and `resetSetting(key)`, with an error class, in the same `authenticatedFetch` shape as
+  `groups-api.ts`.
+- `routes/SettingsPage.tsx`: `AuthGuard requireAdmin`, with breadcrumb and header in the
+  same layout as `QueryDenyListPage`. Settings are grouped by key prefix into tables showing
+  setting, value, source pill (Database or Env/default) and last change. Each row has an Edit
+  dialog that fits its kind (toggle, number input, chip list) and, when a row is stored, a Reset
+  button that opens a `ConfirmDialog`. After every write the page re-fetches the list instead of
+  patching it locally.
+- `AdminPage.tsx`: adds a "Settings" card with `adminOnly: true`. `router.tsx` adds the
+  `/admin/settings` route. `components/layout/AppShell.tsx` adds `/admin/settings` to
+  `ADMIN_ONLY_PATHS`, so the Sidebar does not mount for non-admins.
+
+## Mockups
+
+- `tasks/completed/1592_deployment_settings_mockups/settings-page.html`: the settings page with grouped
+  tables, source pills and the list-editor dialog open.
+
+## Implementation Steps
+
+1. **Schema:** add `upgrade_data_lake_schema_v12` (the `settings` table) to
+   `rust/ingestion/src/sql_migration.rs`, bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 12, and add
+   the step to `execute_migration`. Extend the `warn_if_data_lake_schema_stale` text
+   (`sql_migration.rs:46-52`) to mention the settings table.
+2. **Store:** create `rust/public/src/settings.rs` with `SettingKind`, `SettingSpec`,
+   `SETTINGS`, `validate`, `SettingsLoader`, `EnvFallbacks` and
+   `SettingsSource`, and export it from `rust/public/src/lib.rs` as `#[cfg(feature = "server")] pub mod settings;`. Add a `[[test]] name = "settings_tests" path = "tests/settings_tests.rs" required-features = ["server"]` entry to `rust/public/Cargo.toml`. Move
+   `resolve_u64_env` / `resolve_i64_env` from `web_server.rs` into it, and move `resolve_bool_env` too, made `pub`; `web_server.rs` imports it for `MICROMEGAS_SECURE_COOKIES` (`build_auth_state`, `:163`).
+3. **FlightSQL:** replace `isolation_config` with `settings` in `flight_sql_service_impl.rs`, and
+   replace `resolve_isolation_config` with `resolve_settings` in `flight_sql_server.rs`. Port the
+   in-file `resolve_isolation_config` tests (`flight_sql_server.rs:500-600`) to
+   `EnvFallbacks::from_env` and the `pinned` path. Update both `FlightSqlServiceImpl::new` helpers
+   in `read_policy_threading_tests.rs`, which pass
+   `Arc::new(SettingsSource::pinned(Arc::new(IsolationConfig::default())))`; `start_server` takes
+   the `SettingsSource` as a parameter (existing callers pass `pinned`).
+4. **Web server state:** switch `IngestionKeysState` / `AudienceGrantsState` to `settings`, update
+   every read site, and build the shared source in `run_web_server`. Update
+   `ingestion_keys_tests.rs`, `audience_grants_tests.rs`, `routing_tests.rs` and `mutation_audit_tests.rs` (its four
+   `AudienceGrantsState` builds) to construct the source with `with_overrides`, and reword the stale
+   field mentions in doc comments at `audience_grants_tests.rs:14-15,368,615` and
+   `ingestion_keys_tests.rs:296`, and the stale comments at `ingestion_keys.rs:121` (names the
+   `MICROMEGAS_SELF_SERVICE_MINT` gate), `audience_grants.rs:~509-521` (names
+   `IngestionKeysState::max_keys_per_caller`) and `audience_grants.rs:932`
+   (`self_service_mint_enabled` knob). Reword the header of
+   `rust/analytics/tests/ownership_rewrite_config_tests.rs:1-2,8`, which says it is modeled on
+   `resolve_isolation_config`'s inline tests (removed/ported in step 3).
+5. **Settings routes:** add `settings.rs` (routes, `SettingsAdminGate`,
+   `SettingsError`), extend `mutation_audit.rs` (two actions and three fields; update
+   `MutationAudit::new` at `:112-124` and the two full `MutationAuditRecord { .. }` literals in
+   `mutation_audit_tests.rs`, `full_record` ~:43 and ~:93, with `setting` / `value` /
+   `previous_value`), and register the routes in `web_server.rs`.
+6. **Frontend:** add the API client, the page, the admin card and the route, plus their tests: `AdminPage.test.tsx` (add "Settings" to `adminOnlyTitles`, update the "shows all nine cards" test and header comment to the new count) and `AppShell.test.tsx` (add a `/admin/settings` case).
+7. **Docs and changelog:** see Documentation.
+
+## Files to Modify
+
+- `rust/ingestion/src/sql_migration.rs` (incl. `warn_if_data_lake_schema_stale` text)
+- `rust/public/src/settings.rs` (new), `rust/public/src/lib.rs`, `rust/public/Cargo.toml`
+- `rust/public/src/servers/flight_sql_server.rs`, `rust/public/src/servers/flight_sql_service_impl.rs`
+- `rust/public/tests/read_policy_threading_tests.rs`, `rust/public/tests/settings_tests.rs` (new)
+- `rust/analytics-web-srv/src/web_server.rs`, `ingestion_keys.rs`, `audience_grants.rs`, `mutation_audit.rs`, `settings.rs` (new), `lib.rs`
+- `rust/analytics-web-srv/tests/ingestion_keys_tests.rs`, `audience_grants_tests.rs`, `routing_tests.rs`, `mutation_audit_tests.rs`, `settings_tests.rs` (new)
+- `analytics-web-app/src/lib/settings-api.ts` (new), `src/routes/SettingsPage.tsx` (new), `src/routes/AdminPage.tsx`, `src/router.tsx`, `src/components/layout/AppShell.tsx`, plus `src/routes/__tests__/AdminPage.test.tsx` and `src/components/layout/__tests__/AppShell.test.tsx`
+- `mkdocs/docs/admin/authorization.md`, `flight-sql.md`, `monolith.md`, `web-app.md`, `control-plane-audit-log.md`, `api-keys.md`
+- `README.md:89`, `rust/analytics/tests/ownership_rewrite_config_tests.rs` (header comment)
+- the `mkdocs/docs/admin/functions-reference.md` and `mkdocs/docs/query-guide/python-api.md` pages and the `web_client.py:105` docstring that mention `MICROMEGAS_SELF_SERVICE_*` / `MICROMEGAS_PUBLIC_VIEW_SETS` (reword "MICROMEGAS_SELF_SERVICE_MINT is on" to "the `self_service_mint` setting is on")
+- `CHANGELOG.md`
+
+## Trade-offs
+
+- **One generic table rather than one table per feature.** `audience_grants` and
+  `query_deny_list` are collections of rows with their own natural keys. These settings are
+  scalars or small lists, so a table per knob would mean a migration and a bespoke loader for
+  every boolean. Typing is enforced in Rust (`SettingSpec::validate` on write and on load) rather
+  than with SQL `CHECK`s, since JSONB can't express per-key schemas cleanly. If a future setting
+  really is a collection with its own identity, it should still get its own table.
+- **Env as the fallback, not as an override or a one-time seed.** If env overrode the DB, the
+  admin UI would be unreliable: replicas whose env is set would ignore it. Seeding the DB from env
+  at first startup gives one source of truth, but it adds a startup write path and a surprise for
+  local dev, where editing an env var after the first boot would do nothing. With env as the
+  fallback, upgrading requires zero action. The remaining risk, an operator setting an env var
+  that a DB row already shadows, is reported by `warn_on_shadowed_env`.
+- **Lazy TTL cache (`SnapshotSource`) rather than a `query_deny_list`-style background timer.**
+  `SnapshotSource` already handles cold-start throttling and serving the last good snapshot, and
+  both of its existing loaders sit on the same pool. A 60 s propagation bound is fine for policy
+  toggles. The deny list needs ~10 s because it is an incident valve.
+- **The store lives in `micromegas` (`rust/public`), not `micromegas-auth`.** Settings are not all
+  auth-related (e.g. #1695's retention), and every consumer already depends on it
+  (flight-sql, analytics-web-srv, monolith, and later maintenance), and `rust/public` is the one
+  crate that can see both `SnapshotSource` and `IsolationConfig`.
+- **REST routes rather than SQL UDTFs.** The deny list page goes through FlightSQL because its
+  rules are evaluated there. Settings serve several services, and the grant and group admin pages
+  already set the REST-plus-audit precedent. This also adds nothing to the SQL surface, which is
+  the stable interface.
+
+## Decisions
+
+- `MICROMEGAS_DEFAULT_AUDIENCE` stays env-only: it is written into stored data, so changing it is
+  a data migration, not a toggle.
+- Accepted risk, following the grant/group precedent: on a schema behind v12 the settings load
+  fails, so FlightSQL queries and self-service routes return a retryable 503 until ingestion runs
+  the migration. Upgrade order is the same as for v10 (`groups`). Exempt: an auth-disabled
+  flight-sql/monolith never loads the settings table, since the value has no effect there.
+- `analytics-web-srv` newly fails at startup on a malformed `MICROMEGAS_PUBLIC_VIEW_SETS` (it builds `EnvFallbacks::from_env()`), accepted as for `MICROMEGAS_DEFAULT_AUDIENCE`.
+- The feature is named plain "settings" (matching e.g. Elasticsearch/CockroachDB cluster settings,
+  GitLab admin settings), with no scope prefix since there is only one scope.
+
+## Documentation
+
+- `mkdocs/docs/admin/authorization.md`: the knob table at `:18-25` gains a column for the setting
+  key, and a short "Settings" section covers the admin page, the DB → env → default
+  order, propagation within the cache TTL, and the shadowed-env warning. The self-service sections
+  (`:226`, `:330`) say "the `self_service_mint` setting (env fallback
+  `MICROMEGAS_SELF_SERVICE_MINT`)", and the other mentions of the moved env vars (`:94`, `:166`)
+  are reworded the same way.
+- `mkdocs/docs/admin/flight-sql.md:32` and `monolith.md`: `MICROMEGAS_PUBLIC_VIEW_SETS` is
+  described as the fallback for `public_view_sets`, and the four `MICROMEGAS_SELF_SERVICE_*` rows
+  (`monolith.md:54-57`, `:68-69`) become env fallbacks for their settings.
+- `mkdocs/docs/admin/web-app.md`: the Settings page and its REST routes; the
+  `export MICROMEGAS_SELF_SERVICE_*` block (`:88-93`) and the mention at `:225` become env
+  fallbacks; the telemetry
+  DB requirement at `:56-60` changes from v10 to v12; the card count at `:104-108` ("nine cards")
+  and the admin-only card list gain the new card.
+- `README.md:89`: the "resolved once on every auth path" wording is reworded for the setting.
+- `mkdocs/docs/admin/authorization.md:26` and `flight-sql.md:31`: `MICROMEGAS_AUTH_CACHE_TTL_SECONDS`
+  is described as covering the key, grant and group stores; it also governs settings.
+- `mkdocs/docs/admin/api-keys.md`, `mkdocs/docs/admin/functions-reference.md`, `mkdocs/docs/query-guide/python-api.md`: mentions
+  of the moved env vars become mentions of the settings (env as fallback).
+- `mkdocs/docs/admin/control-plane-audit-log.md`: the `set_setting` / `reset_setting` actions and
+  the `setting` / `value` / `previous_value` fields, plus an example query; the existing env-var
+  mention at `:133` is reworded.
+- Rust doc comments that describe env-only or startup-time resolution are reworded to describe the setting with env as fallback: `rust/analytics/src/lakehouse/read_scope.rs:55-56,113`, `audience_guard.rs:449`, `ownership_rewrite.rs:5-6`, `list_audience_grants_table_function.rs:20`, `rust/public/src/servers/flight_sql_server.rs:168`, `rust/analytics-web-srv/src/audience_grants.rs:17`.
+- `CHANGELOG.md` (Unreleased): the feature (#1592), and **Minor breaking change:**
+  `FlightSqlServiceImpl::new` takes a `SettingsSource` instead of an `IsolationConfig`,
+  `IngestionKeysState` / `AudienceGrantsState` replace their knob fields with `settings`, and `MutationAuditRecord` gains `setting` / `value` / `previous_value`. `analytics-web-srv` now fails at startup on a malformed `MICROMEGAS_PUBLIC_VIEW_SETS`, like `MICROMEGAS_DEFAULT_AUDIENCE`.
+
+## Testing Strategy
+
+All automated tests run without a database. Per `CONTRIBUTING.md`, they use `connect_lazy` pools
+and the `with_overrides` seam.
+
+- `rust/public/tests/settings_tests.rs`:
+  - `validate` for each kind:
+    - Bool: accepts a JSON bool and rejects `"true"`.
+    - Count: accepts `0` and rejects `-1`, `1.5` and a value above `i64::MAX`.
+    - NameList: accepts `["a","b"]` and rejects an empty string, untrimmed or duplicate entries,
+      and non-arrays.
+  - Row parsing into `DbOverrides`: unknown keys are ignored, and an invalid known key makes the
+    whole parse fail. Split `fetch` so the row → `DbOverrides` step is a pure function that takes
+    `(key, value)` pairs.
+  - Resolution order for each accessor: DB, then env, then default.
+  - `pinned` ignores both env and DB.
+  - Each `spec.default` parses to the default actually applied by `EnvFallbacks` and `pinned`.
+  - The shadowed-env warning logic, as a pure `shadowed(&rows, env_lookup)` function.
+- `isolation_config_fail_fast_tests.rs`: unchanged; `EnvFallbacks::from_env` propagates the
+  `IsolationConfig::from_env` error unchanged (no added context), before the lake is touched, so
+  the test passes as is.
+- Harness test (in `read_policy_threading_tests.rs`, mirroring only the request shape of `provider_unavailable_maps_to_status_unavailable`, `:368`: `SELECT 1`, `do_get`, `Code::Unavailable`; that test uses a stub policy): build the
+  service with a read policy that resolves successfully (`AudienceReadPolicy::new(AudienceGrants::empty())`,
+  so the read-policy step does not produce the `Unavailable`) and a DB-backed source over
+  a `connect_lazy` pool to `127.0.0.1:1` (as `make_offline_lakehouse_context` does in the same
+  file) with a short acquire timeout (e.g. 50 ms, as `rust/auth/src/db_api_key.rs:544`) and an
+  `AuthContext` present; the cold load fails, so the request returns `Code::Unavailable`.
+  A second harness test starts the server with
+  `SettingsSource::with_overrides(env with empty public_view_sets, DbOverrides { isolation: Some(X), .. })`
+  and an `AuthContext`, and asserts the request is evaluated with X (e.g. no ownership filter for
+  that view set), so the `Some(auth_ctx)` arm cannot silently pass `env_isolation_config()`. A/B value semantics
+  (overrides A then B give different `public_view_sets`) are tested directly on the source's
+  `isolation_config()`.
+- Tests that read process env (`EnvFallbacks::from_env`) use `#[serial]` + a local `EnvGuard`
+  defined in `rust/public/tests/settings_tests.rs`, as existing test files do (no shared helper exists); all others
+  pass an explicit `EnvFallbacks` to `with_overrides`.
+- `rust/analytics-web-srv/tests/`:
+  - The existing self-service gate tests are ported to `with_overrides`, including at least one
+    case with `DbOverrides { self_service_mint: Some(true), .. }` and env mint `false` that passes
+    `MintGate`, and a reversed case (DB `false`, env `true`) that returns 403.
+  - `settings_tests.rs`:
+    - A non-admin PUT is rejected with 403 and a `"denied"` audit record.
+    - An unknown key on PUT returns 404.
+    - An invalid body returns 400 before any DB access (lazy pool).
+    - The GET response shape: call the pure `pub` entry-building function with `SETTINGS` plus canned rows.
+  - `mutation_audit_tests.rs`: the new fields serialize, and are omitted when absent.
+    PUT and DELETE on `/api/settings/self_service_mint` with `SettingsState { pool: None }`
+    return 503 and emit one `set_setting` / `reset_setting` record with outcome "error" and
+    `setting == "self_service_mint"`, mirroring
+    `group_mutation_routes_pool_unconfigured_emit_error_records_with_targets`. A
+    `settings_error_outcome_classification` test mirrors `groups_error_outcome_classification`.
+- Frontend (vitest): API client encoding and error mapping; the page renders the source pill,
+  each Edit dialog submits the right JSON per kind, and the page re-fetches after a write.
+
+## Manual Verification
+
+These checks need several running services plus a browser. The unit tests above cover each piece,
+but not the end-to-end path through a real Postgres and two processes.
+
+1. `python3 local_test_env/ai_scripts/start_services_with_oidc.py` (split-mode `start_services.py`
+   runs flight-sql with `--disable-auth` and does not start the web server), then run
+   `analytics-web-srv` explicitly with the same OIDC env and a built frontend (`analytics-web-app/dist`)
+   on port 3000. Confirm that `/tmp/ingestion.log` shows the migration reaching v12.
+2. Open `http://127.0.0.1:3000/admin/settings` as an admin. All five settings show "Env / default".
+   A fresh DB seeds `admins = ['*']`; first add `user:<admin email>` to `admins` (Groups page or
+   `micromegas-groups`), then remove `*` so a non-admin exists (removing `*` alone is rejected by
+   the admins-lockout guard), and wait about one cache TTL before steps 3 and 4.
+3. As a non-admin, query a view set's rows through `micromegas-query` with a second `--profile` logged in as the non-admin user. Rows are audience-filtered.
+   Then, as admin, set `public_view_sets` to that view set and wait about 60 s. The same query now
+   returns unfiltered rows, with no restart.
+4. Turn `self_service_mint` on. Within about 60 s a non-admin's `/admin/ingestion-keys` mint
+   succeeds instead of returning 403.
+5. Run `micromegas-query "SELECT msg FROM log_entries WHERE target = 'control_plane_audit' ORDER BY time DESC LIMIT 5" --begin 1h`.
+   The output shows `set_setting` records (`previous_value` absent, since those keys had no row). Set one key a second time and confirm that record carries the earlier value in `previous_value`.
+6. Restart flight-sql with `MICROMEGAS_PUBLIC_VIEW_SETS` set. The log shows the shadowed-env
+   warning.
+7. Reset `public_view_sets`. Filtering returns within about 60 s.

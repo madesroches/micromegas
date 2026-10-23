@@ -15,15 +15,40 @@ shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 
 ## Configuration
 
-| Variable | Default | Description |
-|---|---|---|
-| `MICROMEGAS_DEFAULT_AUDIENCE` | `public` | Label stamped on rows whose credential carries no bound audience. Set it identically on **every** role that builds a lakehouse — FlightSQL, maintenance, monolith, **and ingestion**. |
-| `MICROMEGAS_PUBLIC_VIEW_SETS` | unset | Comma-separated view sets exempt from filtering entirely; an operator-responsibility allowlist. |
-| `MICROMEGAS_SELF_SERVICE_MINT` | `false` | Lets a non-admin mint their own ingestion key and manage grants. See [Self-service mint](#self-service-ingestion-key-mint). |
-| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `25` | Distinct audiences one non-admin may claim. Best-effort under concurrency. |
-| `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `100` | Live keys one non-admin may hold. `list_keys`/`revoke_key` stay admin-only, so freeing a slot needs an admin. |
-| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `50` | Rows one non-admin may have created in `audience_grants`, excluding their own `user:<email>` rows. Best-effort. |
-| `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | `60` | Snapshot lifetime for the grant, API-key, and group stores. Flat and unprefixed — no role-scoped form, including on the monolith. |
+The variables below marked with a setting key are the **env fallback** for a deployment
+[setting](#settings): a value stored in the database wins, then the variable, then the default.
+
+| Variable | Setting key | Default | Description |
+|---|---|---|---|
+| `MICROMEGAS_DEFAULT_AUDIENCE` | — (env only) | `public` | Label stamped on rows whose credential carries no bound audience. Set it identically on **every** role that builds a lakehouse — FlightSQL, maintenance, monolith, **and ingestion**. |
+| `MICROMEGAS_PUBLIC_VIEW_SETS` | `public_view_sets` | unset | Comma-separated view sets exempt from filtering entirely; an operator-responsibility allowlist. |
+| `MICROMEGAS_SELF_SERVICE_MINT` | `self_service_mint` | `false` | Lets a non-admin mint their own ingestion key and manage grants. See [Self-service mint](#self-service-ingestion-key-mint). |
+| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | `self_service_max_claims_per_caller` | `25` | Distinct audiences one non-admin may claim. Best-effort under concurrency. |
+| `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | `self_service_max_keys_per_caller` | `100` | Live keys one non-admin may hold. `list_keys`/`revoke_key` stay admin-only, so freeing a slot needs an admin. |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | `self_service_max_grants_per_caller` | `50` | Rows one non-admin may have created in `audience_grants`, excluding their own `user:<email>` rows. Best-effort. |
+| `MICROMEGAS_AUTH_CACHE_TTL_SECONDS` | — (env only) | `60` | Snapshot lifetime for the grant, API-key, group, and settings stores. Flat and unprefixed — no role-scoped form, including on the monolith. |
+
+## Settings
+
+The five variables above that have a setting key can be changed at runtime from
+**Admin → Settings** in the web app, with no restart. A stored value lives in the
+`settings` table of the telemetry database and is read by every service through the same
+whole-table snapshot cache as the grant and group stores. Resolution order, per key:
+
+1. the value stored in the database;
+2. the environment variable (the fallback);
+3. the built-in default.
+
+A change reaches every replica within one cache refresh (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`,
+60 s by default), not immediately. **Reset** on the page deletes the stored value, so the key
+reverts to its environment variable or default. Every change is recorded in the
+[control-plane audit log](control-plane-audit-log.md) as `set_setting` / `reset_setting`.
+
+If an environment variable is set for a key that also has a stored value, the service logs
+`<VAR> is set but ignored: settings.<key> is stored` at startup, since the variable has no effect.
+A stored value that fails validation makes the whole settings load fail, so the service keeps
+serving the last good snapshot and, on a cold start, returns a retryable 503. The telemetry
+database must be on schema v12 or later for the `settings` table to exist.
 
 ## Audiences and Grants
 
@@ -91,7 +116,7 @@ micromegas-grants --url https://analytics.example.com create alice-laptop read u
 ```
 
 Set a custom `MICROMEGAS_DEFAULT_AUDIENCE` and it needs a grant row of its own
-before `MICROMEGAS_SELF_SERVICE_MINT` goes on — nothing seeds one, and a
+before the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`) goes on — nothing seeds one, and a
 non-admin could otherwise claim the name (see
 [self-service mint](#self-service-ingestion-key-mint)).
 
@@ -163,7 +188,7 @@ Two exemptions from `view_instance`'s guard:
   row-level filtering covers one at a time. This is a different rule from
   `list_partitions()`'s `'global'`-row visibility, which gates partition
   *metadata* rather than the rows of the file.
-- View sets on `MICROMEGAS_PUBLIC_VIEW_SETS`, every row of which is already
+- View sets in the `public_view_sets` setting (env fallback `MICROMEGAS_PUBLIC_VIEW_SETS`), every row of which is already
   readable.
 
 **Freshness differs between the layers.** Row-level reads the
@@ -223,7 +248,7 @@ two audiences). This is enforced at `CREATE` time, not left to fail silently at 
 `POST {base_path}/api/ingestion-api-keys` is not purely admin-gated: a `mint`
 grant is the authorization instead, resolved per request by a point query
 against `audience_grants`, never a cached snapshot. Gated behind
-`MICROMEGAS_SELF_SERVICE_MINT`, off by default, along with three per-caller
+the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`), off by default, along with three per-caller
 caps — see [Configuration](#configuration). The knob also gates `GET
 .../audience-grants/my-audiences` for non-admins, non-admin grant
 create/delete, and `GET .../audience-grants/visible`'s non-admin narrowing.
@@ -327,7 +352,7 @@ micromegas-grants --url https://analytics.example.com delete team-alpha read gro
 An admin acts unconditionally here — unchanged by the data-plane narrowing above, because this
 is grant *administration*: creating/deleting a row in the store, not exercising the access a row
 grants. A non-admin is admitted only with
-`MICROMEGAS_SELF_SERVICE_MINT` on, then constrained per call:
+the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`) on, then constrained per call:
 
 - **Create**: `selector` must be `user:`/`group:`, never `*` — a caller who can
   read an audience must not be able to open it to every principal. The caller

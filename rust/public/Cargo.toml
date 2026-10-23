@@ -197,3 +197,8 @@ required-features = ["server"]
 name = "listen_args_tests"
 path = "tests/listen_args_tests.rs"
 required-features = ["server"]
+
+[[test]]
+name = "settings_tests"
+path = "tests/settings_tests.rs"
+required-features = ["server"]

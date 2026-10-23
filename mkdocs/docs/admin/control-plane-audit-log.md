@@ -2,7 +2,7 @@
 
 `analytics-web-srv` emits one structured JSON log line for every attempted mutation of the ABAC
 control plane -- creating or deleting an audience grant, creating or deleting a group, adding or
-removing a group member, and claiming a brand-new audience through self-service mint -- under the
+removing a group member, changing or resetting a deployment setting, and claiming a brand-new audience through self-service mint -- under the
 dedicated `control_plane_audit` log target. A record is emitted for every attempt that reaches a
 grant/group gate or handler, whether it was allowed or denied, so a rejected mutation is just as
 visible as a successful one -- a record exists even when the request never reached the database.
@@ -100,9 +100,30 @@ WHERE jsonb_as_string(jsonb_get(j, 'audience')) = 'team-alpha'
 ORDER BY time DESC;
 ```
 
+### Setting changes
+
+```sql
+WITH a AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'control_plane_audit'
+    AND time >= NOW() - INTERVAL '30 days'
+)
+SELECT
+  time,
+  jsonb_as_string(jsonb_get(j, 'actor'))          AS actor,
+  jsonb_as_string(jsonb_get(j, 'action'))         AS action,
+  jsonb_as_string(jsonb_get(j, 'setting'))        AS setting,
+  jsonb_as_string(jsonb_get(j, 'previous_value')) AS previous_value,
+  jsonb_as_string(jsonb_get(j, 'value'))          AS value
+FROM a
+WHERE jsonb_as_string(jsonb_get(j, 'action')) IN ('set_setting', 'reset_setting')
+ORDER BY time DESC;
+```
+
 ## Fields
 
-Every caller-supplied field (`audience`, `axis`, `selector`, `group`, `member`, `reason`) is
+Every caller-supplied field (`audience`, `axis`, `selector`, `group`, `member`, `setting`, `value`, `previous_value`, `reason`) is
 truncated to 255 bytes with a trailing `...` marker if it's longer; a value ending in `...` may
 be truncated rather than genuine data, and an equality filter on such a value can silently miss.
 
@@ -110,7 +131,7 @@ be truncated rather than genuine data, and an equality filter on such a value ca
 |-------|------|---------|--------------|
 | `actor` | string | always | Caller email, else subject, else `"unauthenticated"` when no identity was available at all (a missing/misconfigured auth extension -- normally unreachable) |
 | `is_admin` | bool | always | Whether `actor` was an administrator at the time of the attempt |
-| `action` | string | always | `create_grant`, `delete_grant`, `claim_audience`, `create_group`, `delete_group`, `add_member`, or `remove_member` |
+| `action` | string | always | `create_grant`, `delete_grant`, `claim_audience`, `create_group`, `delete_group`, `add_member`, `remove_member`, `set_setting`, or `reset_setting` |
 | `outcome` | string | always | `allowed`, `denied` (a caller-attributable authorization/validation refusal), or `error` (a server-side failure, e.g. the store isn't configured) |
 | `client_ip` | string | always | The rightmost `X-Forwarded-For` entry, falling back to `X-Real-IP` and then the socket address -- the same resolution [`flightsql_query_audit`'s `client_ip`](../query-guide/query-audit-log.md#fields) uses. `unknown` if none is available |
 | `audience` | string | grant/claim actions only | The audience named by the request |
@@ -119,6 +140,9 @@ be truncated rather than genuine data, and an equality filter on such a value ca
 | `group` | string | group actions only | The group name named by the request |
 | `member` | string | `add_member`/`remove_member` only | The member selector named by the request |
 | `created` | bool | `create_grant`/`add_member`, on `allowed` only | `false` when the row already existed (idempotent create), `true` when this call created it |
+| `setting` | string | `set_setting`/`reset_setting` only | The settings key named by the request |
+| `value` | string | `set_setting` only | JSON text of the value written |
+| `previous_value` | string | `set_setting`/`reset_setting`, when the key had a stored value | JSON text of the value that was replaced or removed. Absent on the first write of a key, since it had no row |
 | `reason` | string | when `outcome` is not `allowed` | The denial/error message. A database error's own text is never included here -- it's replaced with a fixed `"internal database error"` string, since a raw `sqlx::Error` can carry SQL/connection detail |
 
 ## Notes
@@ -130,7 +154,7 @@ be truncated rather than genuine data, and an equality filter on such a value ca
   observability log line records the method and URI at the same instant, so the two can be
   correlated by timestamp if the full request shape is needed.
 - **Some denied attempts emit no record at all.** A self-service mint request rejected by the
-  `MICROMEGAS_SELF_SERVICE_MINT` gate, and any grant/group request rejected by body or query
+  `self_service_mint` setting gate, and any grant/group request rejected by body or query
   deserialization (malformed JSON, an unknown field, a missing query parameter) before it reaches
   a gate or handler, produce no `control_plane_audit` record. The generic per-request log line is
   the only correlation point for that traffic.

@@ -49,12 +49,12 @@ cargo run --bin micromegas-monolith -- \
 | `MICROMEGAS_FLIGHTSQL_LISTEN_ADDR` | No | FlightSQL bind address (default: `0.0.0.0:50051`) |
 | `MICROMEGAS_WEB_LISTEN_ADDR` | No | Web server bind address (default: `0.0.0.0:3000`). The deprecated `MICROMEGAS_PORT` still works on its own, but setting both is a startup error |
 | `MICROMEGAS_SHUTDOWN_GRACE_PERIOD_SECONDS` | No | Drain timeout on `SIGTERM` (default: `25`) |
-| `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
+| `MICROMEGAS_PUBLIC_VIEW_SETS` | No | Env fallback for the `public_view_sets` [setting](authorization.md#settings) (a stored value wins). Comma-separated view-set names `OwnershipRewrite` skips entirely (no audience filtering) — an operator-responsibility allowlist for genuinely aggregated/non-PII view sets only; unset (empty) by default |
 | `MICROMEGAS_DEFAULT_AUDIENCE` | No | The deployment's default audience (default `public`): what the `web` role's ingestion-key mint route falls back to when a request supplies none — see [What audience does a key carry](api-keys.md#what-audience-does-a-key-carry) — *and* the audience the ingestion role stamps a credential with no bound audience with at write time. One knob for all of it, read unprefixed, joining the list in the note below. See [Audience stamping](authorization.md#audience-stamping) |
-| `MICROMEGAS_SELF_SERVICE_MINT` | No | Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authorization.md#self-service-ingestion-key-mint) |
-| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
-| `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Caps how many live keys one non-admin caller may hold at once (default `100`) |
-| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | No | Caps how many rows one non-admin caller may have created in `audience_grants`, counted across every audience/axis/selector but excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares) (default `50`) |
+| `MICROMEGAS_SELF_SERVICE_MINT` | No | Env fallback for the `self_service_mint` setting. Off (`false`) by default. Lets a non-admin caller mint their own ingestion key (a matching `mint` grant, or a lazy claim of a brand-new audience) and gates `GET .../audience-grants/my-audiences` for non-admin callers, plus non-admin audience-grant create/delete and `GET .../audience-grants/visible`'s non-admin narrowing — see [Self-service mint](authorization.md#self-service-ingestion-key-mint) |
+| `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER` | No | Env fallback for the `self_service_max_claims_per_caller` setting. Caps how many distinct audiences one non-admin caller may lazily claim (default `25`) |
+| `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER` | No | Env fallback for the `self_service_max_keys_per_caller` setting. Caps how many live keys one non-admin caller may hold at once (default `100`) |
+| `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER` | No | Env fallback for the `self_service_max_grants_per_caller` setting. Caps how many rows one non-admin caller may have created in `audience_grants`, counted across every audience/axis/selector but excluding the caller's own `user:<email>` rows (those are claim/self-access rows, not shares) (default `50`) |
 | `MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB` | No | Query engine memory budget in MB; unset means an unbounded pool (the local-development default). This **is** set in real deployments — each FlightSQL query gets its own `ScopedMemoryPool` wrapper over this shared budget, and its peak usage is reported per query as `peak_memory_bytes` in the [query audit log](../query-guide/query-audit-log.md). Merge scans (running under the monolith's maintenance role) open one reader per source file group -- one reader total for the concatenating path, or one per input partition for the ordered sort-merge path -- so merge memory does not scale with host core count |
 | `MICROMEGAS_DATAFUSION_MAX_TEMP_DIRECTORY_MB` | No | Cap on total spill-file bytes across all concurrent queries, in MB; default 100 GB (DataFusion's own default), far larger than a typical container's local disk. Exceeding the cap fails whichever query's spill write pushes past it — not necessarily the query that consumed most of the budget |
 
@@ -64,9 +64,9 @@ cargo run --bin micromegas-monolith -- \
     is always resolved **unprefixed**, even in-process — set the unprefixed name, not a
     `MICROMEGAS_INGESTION_`-prefixed one. Every role that builds a lakehouse (FlightSQL,
     maintenance, ingestion) reads the unprefixed name directly and has no prefixed variant at
-    all; the `web` role resolves the same unprefixed name too. The three self-service knobs
-    (`MICROMEGAS_SELF_SERVICE_MINT` and its two per-caller bounds) and
-    `MICROMEGAS_PUBLIC_VIEW_SETS` follow the same unprefixed convention under the monolith.
+    all; the `web` role resolves the same unprefixed name too. The env fallbacks for the five [settings](authorization.md#settings)
+    (`MICROMEGAS_SELF_SERVICE_MINT`, its three per-caller bounds, and
+    `MICROMEGAS_PUBLIC_VIEW_SETS`) follow the same unprefixed convention under the monolith.
 
 ## CLI flags
 

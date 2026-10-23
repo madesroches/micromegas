@@ -39,9 +39,11 @@ use micromegas::auth::policy::{
     AudienceGrants, AudienceMintPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE, is_valid_audience,
 };
 use micromegas::auth::types::AuthContext;
+use micromegas::settings::{SelfServiceSettings, SettingsSource};
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Bytes, not chars: deliberately stricter than the `VARCHAR(255)` column,
@@ -65,20 +67,10 @@ pub struct IngestionKeysState {
     /// unset. Always present: `mint` falls back to it when a request names no audience. See
     /// [`resolve_audience`].
     pub default_audience: String,
-    /// Off-by-default self-service mint gate. Resolved once at startup
-    /// from `MICROMEGAS_SELF_SERVICE_MINT` (`web_server.rs`), default `false`. Checked by
-    /// `MintGate` for every non-admin caller before `mint_key`'s body runs at all -- with the
-    /// knob off, mint stays admin-only.
-    pub self_service_mint_enabled: bool,
-    /// `MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER`, default 25 -- caps how many distinct
-    /// audiences one non-admin caller may claim via the lazy claim path
-    /// (`try_claim_and_mint`). Best-effort under concurrency, not a hard ceiling -- see that
-    /// function's own doc comment.
-    pub max_claims_per_caller: i64,
-    /// `MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER`, default 100 -- caps how many *live* keys
-    /// one non-admin caller may hold at once, checked in `mint_key` regardless of which path
-    /// mints the next one. Best-effort under concurrency, not a hard ceiling.
-    pub max_keys_per_caller: i64,
+    /// The self-service knobs (`self_service_mint` and the per-caller bounds), read per request
+    /// through the settings cache. `MintGate` checks the mint gate for every non-admin caller
+    /// before `mint_key`'s body runs at all -- with it off, mint stays admin-only.
+    pub settings: Arc<SettingsSource>,
 }
 
 /// JSON error body returned by every handler in this module. Same
@@ -118,7 +110,7 @@ pub enum IngestionKeyError {
     /// `state.pool == None` — the telemetry-DB pool was never configured
     /// (`MICROMEGAS_SQL_CONNECTION_STRING` unset).
     NotConfigured,
-    /// Mint denied: the `MICROMEGAS_SELF_SERVICE_MINT` gate is off for a non-admin caller
+    /// Mint denied: the `self_service_mint` setting is off for a non-admin caller
     /// minting, `authorize_mint` denied the request (no matching grant), the audience is not
     /// eligible for a lazy claim, or a per-caller bound
     /// (`max_claims_per_caller`/`max_keys_per_caller`) was reached.
@@ -339,10 +331,19 @@ impl<S: Send + Sync> FromRequestParts<S> for MintGate {
         // misconfigured; the 503 body's wording (about `MICROMEGAS_SQL_CONNECTION_STRING`)
         // doesn't literally describe this cause, but a 503 fail-closed beats a panic for a
         // case that should never happen in a correctly wired router.
-        if !caller.is_admin() && !ingestion_state.self_service_mint_enabled {
-            return Err(IngestionKeyError::Forbidden(
-                "self-service minting is disabled".to_string(),
-            ));
+        // Admins bypass the knob, so they never touch the settings store and cannot 503 on an
+        // outage of it.
+        if !caller.is_admin() {
+            let self_service = ingestion_state
+                .settings
+                .self_service()
+                .await
+                .map_err(settings_unavailable)?;
+            if !self_service.mint_enabled {
+                return Err(IngestionKeyError::Forbidden(
+                    "self-service minting is disabled".to_string(),
+                ));
+            }
         }
         Ok(MintGate(caller))
     }
@@ -397,6 +398,12 @@ async fn authorize_mint(
         .map_err(|e| IngestionKeyError::Forbidden(e.to_string()))
 }
 
+/// A settings-store failure is a DB-outage symptom, not a denial and not a missing pool.
+fn settings_unavailable(e: anyhow::Error) -> IngestionKeyError {
+    error!("settings store unavailable: {e:#}");
+    IngestionKeyError::Unavailable("settings store unavailable".to_string())
+}
+
 /// `POST {base_path}/api/ingestion-api-keys` — mints a new `ingestion_api_keys` row.
 ///
 /// Authorization is `MintGate` (the off-by-default self-service gate) plus
@@ -437,7 +444,22 @@ async fn mint_key(
     // runs on `pool` outside any transaction, so N concurrent mint requests from the same caller
     // all read the same pre-insert count and can all pass -- the cap is exact only for
     // sequential use from one caller.
-    if !caller.is_admin() {
+    //
+    // Resolved here, once, before any transaction opens: `try_claim_and_mint` runs on the
+    // 2-connection pool while holding an advisory lock, so a settings read inside it could
+    // exhaust the pool.
+    let self_service = if caller.is_admin() {
+        None
+    } else {
+        Some(
+            state
+                .settings
+                .self_service()
+                .await
+                .map_err(settings_unavailable)?,
+        )
+    };
+    if let Some(self_service) = &self_service {
         let caller_id = caller.email.as_deref().unwrap_or(&caller.subject);
         let key_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM ingestion_api_keys WHERE created_by = $1 AND revoked_at IS NULL",
@@ -445,10 +467,10 @@ async fn mint_key(
         .bind(caller_id)
         .fetch_one(&pool)
         .await?;
-        if key_count >= state.max_keys_per_caller {
+        if key_count >= self_service.max_keys_per_caller {
             return Err(IngestionKeyError::Forbidden(format!(
                 "caller already holds {key_count} live self-service keys (limit {})",
-                state.max_keys_per_caller
+                self_service.max_keys_per_caller
             )));
         }
     }
@@ -492,7 +514,16 @@ async fn mint_key(
                             .audience(&candidate)
                             .selector(&selector);
                     let result = try_claim_and_mint(
-                        &pool, &state, &candidate, &caller, &body, key, key_id, &hash, created_at,
+                        &pool,
+                        &state,
+                        self_service,
+                        &candidate,
+                        &caller,
+                        &body,
+                        key,
+                        key_id,
+                        &hash,
+                        created_at,
                     )
                     .await;
                     audit.emit(&result);
@@ -586,7 +617,7 @@ pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience
 /// and `ingestion_api_keys` for any existing row naming this audience -- a genuinely fresh
 /// audience has neither. On a fresh audience: rejects the two reserved names (`public` and
 /// `state.default_audience`), enforces the per-caller claim bound
-/// (`max_claims_per_caller`, skipped for an admin), and writes `user:<email>` grant rows on
+/// (`max_claims_per_caller`, skipped when `self_service` is `None`, i.e. for an admin), and writes `user:<email>` grant rows on
 /// **both** the `mint` and `read` axes (so the caller who just claimed the audience can read
 /// back what their own new key uploads) plus the `ingestion_api_keys` row itself, all in the
 /// same transaction.
@@ -598,6 +629,7 @@ pub const CLAIM_COUNT_SQL: &str = "SELECT COUNT(DISTINCT audience) FROM audience
 async fn try_claim_and_mint(
     pool: &PgPool,
     state: &IngestionKeysState,
+    self_service: Option<SelfServiceSettings>,
     audience: &str,
     caller: &AuthContext,
     body: &MintRequest,
@@ -684,17 +716,17 @@ async fn try_claim_and_mint(
         // Best-effort under concurrency: exact against another claim for *this same* audience
         // (serialized by the lock above), but not against concurrent claims by the same caller
         // for other, distinct fresh audience names, which take different locks.
-        if !caller.is_admin() {
+        if let Some(self_service) = &self_service {
             let claim_count: i64 = sqlx::query_scalar(CLAIM_COUNT_SQL)
                 .bind(&selector)
                 .bind(caller_email)
                 .fetch_one(&mut *tx)
                 .await?;
-            if claim_count >= state.max_claims_per_caller {
+            if claim_count >= self_service.max_claims_per_caller {
                 tx.rollback().await?;
                 return Err(IngestionKeyError::Forbidden(format!(
                     "caller has already claimed {claim_count} audiences (limit {})",
-                    state.max_claims_per_caller
+                    self_service.max_claims_per_caller
                 )));
             }
         }

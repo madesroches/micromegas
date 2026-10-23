@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment Settings — admin screen</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
+    --text-primary: #e7e9ea;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
+    --accent-success: #22c55e;
+    --accent-highlight: #ffb300;
+    --accent-error: #f87171;
+    --radius: 0.5rem;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--app-bg); color: var(--text-primary);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .topbar { height: 48px; background: var(--header-bg); border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; gap: 12px; padding: 0 16px; }
+  .logo { width: 22px; height: 22px; border-radius: 5px; background: linear-gradient(135deg, #bf360c, #1565c0); }
+  .topbar .name { font-weight: 600; }
+  .topbar .spacer { flex: 1; }
+  .topbar .user { color: var(--text-secondary); font-size: 13px; }
+  .page { padding: 24px; max-width: 1280px; }
+  .crumbs { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; display: flex; gap: 6px; }
+  .crumbs a { color: var(--accent-link); text-decoration: none; }
+  .head { margin-bottom: 24px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0; }
+  .sub { margin: 4px 0 0; color: var(--text-secondary); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 8px 14px;
+    font-size: 14px; font-weight: 500; border: 1px solid transparent; cursor: pointer;
+    background: var(--accent-link); color: #fff; }
+  .btn:hover { background: var(--accent-link-hover); }
+  .btn.outline { background: transparent; border-color: var(--border-color); color: var(--text-primary); }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .banner { border: 1px solid var(--border-color); background: var(--card-bg); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); }
+  .group-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: .06em; margin: 24px 0 8px; }
+  .tablewrap { border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--panel-bg); }
+  th { text-align: left; padding: 10px 16px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  td { padding: 12px 16px; border-top: 1px solid var(--border-color); vertical-align: top; }
+  tbody tr:hover { background: rgba(21,101,192,.05); }
+  .key { font-weight: 500; }
+  .desc { color: var(--text-secondary); font-size: 13px; margin-top: 3px; max-width: 520px; }
+  .env { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .pill { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; border-radius: 999px;
+    padding: 2px 9px; letter-spacing: .03em; text-transform: uppercase; }
+  .pill.db { background: rgba(21,101,192,.18); color: #64a8f0; }
+  .pill.fallback { background: rgba(107,114,128,.18); color: var(--text-secondary); }
+  .val code { font-size: 12px; background: var(--app-bg); border: 1px solid var(--border-color);
+    border-radius: 5px; padding: 2px 6px; }
+  .muted { color: var(--text-muted); }
+  .sec { color: var(--text-secondary); font-size: 13px; }
+  .actions { text-align: right; white-space: nowrap; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  .dialog { width: 100%; max-width: 560px; background: var(--panel-bg); border: 1px solid var(--border-color);
+    border-radius: var(--radius); box-shadow: 0 24px 60px rgba(0,0,0,.6); }
+  .dialog h2 { font-size: 17px; font-weight: 500; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border-color); }
+  .dialog .body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  .dialog .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-color); }
+  label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 5px; }
+  .hint { margin-top: 5px; font-size: 12px; color: var(--text-muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; background: var(--app-bg);
+    border: 1px solid var(--border-color); border-radius: 6px; }
+  .chip { font-size: 12px; background: var(--card-bg); border: 1px solid var(--border-color);
+    border-radius: 999px; padding: 3px 6px 3px 10px; color: var(--text-primary); display: inline-flex; gap: 6px; align-items: center; }
+  .chip .x { color: var(--text-muted); cursor: pointer; }
+  .chips input { flex: 1; min-width: 120px; background: transparent; border: 0; color: var(--text-primary); outline: none; font-size: 13px; }
+  .current { font-size: 12px; color: var(--text-muted); }
+  .mockup-note { padding: 10px 24px; font-size: 12px; color: var(--text-muted); border-top: 1px dashed var(--border-color); margin-top: 32px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo"></div>
+  <div class="name">micromegas</div>
+  <div class="spacer"></div>
+  <div class="user">admin@example.com</div>
+</div>
+
+<div class="page">
+  <div class="crumbs"><a href="#">Admin</a><span>/</span><span>Deployment Settings</span></div>
+
+  <div class="head">
+    <h1>Deployment Settings</h1>
+    <p class="sub">Deployment-wide settings stored in the database. Changes reach every replica within one cache refresh (60&nbsp;s by default), with no restart.</p>
+  </div>
+
+  <div class="banner">
+    A setting with no stored value falls back to its environment variable on each service, then to its
+    built-in default. Every change is recorded in the <a href="#" style="color:var(--accent-link)">control-plane audit log</a>.
+  </div>
+
+  <div class="group-title">Data isolation</div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:45%">Setting</th><th>Value</th><th>Source</th><th>Last changed</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="key mono">public_view_sets</div>
+            <div class="desc">View sets exempt from audience filtering. Every row of a listed view set is readable by any authenticated caller, so list only aggregated, non-PII view sets.</div>
+            <div class="env">env fallback: <code>MICROMEGAS_PUBLIC_VIEW_SETS</code> · default: empty</div>
+          </td>
+          <td class="val"><code>log_stats</code> <code>images</code></td>
+          <td><span class="pill db">Database</span></td>
+          <td class="sec">admin@example.com<div class="muted" style="font-size:12px">2026-10-21 09:14</div></td>
+          <td class="actions"><button class="btn outline small">Edit</button> <button class="btn outline small">Reset</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="group-title">Self-service ingestion keys</div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:45%">Setting</th><th>Value</th><th>Source</th><th>Last changed</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="key mono">self_service_mint</div>
+            <div class="desc">Lets a non-admin mint their own ingestion keys and manage grants on audiences they hold.</div>
+            <div class="env">env fallback: <code>MICROMEGAS_SELF_SERVICE_MINT</code> · default: false</div>
+          </td>
+          <td class="val"><code>true</code></td>
+          <td><span class="pill db">Database</span></td>
+          <td class="sec">other-admin@example.com<div class="muted" style="font-size:12px">2026-10-18 16:40</div></td>
+          <td class="actions"><button class="btn outline small">Edit</button> <button class="btn outline small">Reset</button></td>
+        </tr>
+        <tr>
+          <td>
+            <div class="key mono">self_service_max_claims_per_caller</div>
+            <div class="desc">Distinct audiences one non-admin may claim.</div>
+            <div class="env">env fallback: <code>MICROMEGAS_SELF_SERVICE_MAX_CLAIMS_PER_CALLER</code> · default: 25</div>
+          </td>
+          <td class="muted">not stored</td>
+          <td><span class="pill fallback">Env / default</span></td>
+          <td class="muted">—</td>
+          <td class="actions"><button class="btn outline small">Edit</button></td>
+        </tr>
+        <tr>
+          <td>
+            <div class="key mono">self_service_max_keys_per_caller</div>
+            <div class="desc">Live ingestion keys one non-admin may hold.</div>
+            <div class="env">env fallback: <code>MICROMEGAS_SELF_SERVICE_MAX_KEYS_PER_CALLER</code> · default: 100</div>
+          </td>
+          <td class="val"><code>20</code></td>
+          <td><span class="pill db">Database</span></td>
+          <td class="sec">other-admin@example.com<div class="muted" style="font-size:12px">2026-10-18 16:41</div></td>
+          <td class="actions"><button class="btn outline small">Edit</button> <button class="btn outline small">Reset</button></td>
+        </tr>
+        <tr>
+          <td>
+            <div class="key mono">self_service_max_grants_per_caller</div>
+            <div class="desc">Grant rows one non-admin may have created, excluding their own <code>user:&lt;email&gt;</code> rows.</div>
+            <div class="env">env fallback: <code>MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER</code> · default: 50</div>
+          </td>
+          <td class="muted">not stored</td>
+          <td><span class="pill fallback">Env / default</span></td>
+          <td class="muted">—</td>
+          <td class="actions"><button class="btn outline small">Edit</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mockup-note">
+    Mockup. "Env / default" means no row is stored; this page can't see each service's environment, so it shows the variable name and the built-in default rather than claiming an effective value.
+    The dialog below shows the list editor; a bool setting gets a single on/off switch and a count setting a numeric input with the same Save/Cancel footer.
+  </div>
+</div>
+
+<div class="overlay">
+  <div class="dialog">
+    <h2>Edit <span class="mono">public_view_sets</span></h2>
+    <div class="body">
+      <div>
+        <label>View sets</label>
+        <div class="chips">
+          <span class="chip">log_stats <span class="x">×</span></span>
+          <span class="chip">images <span class="x">×</span></span>
+          <input type="text" placeholder="Add a view set and press Enter">
+        </div>
+        <div class="hint">Every row of a listed view set becomes readable by any authenticated caller.</div>
+      </div>
+      <div class="current">Stored value: <code>["log_stats", "images"]</code> · changed by admin@example.com, 2026-10-21 09:14</div>
+    </div>
+    <div class="foot">
+      <button class="btn outline">Cancel</button>
+      <button class="btn">Save</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

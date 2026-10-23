@@ -194,5 +194,8 @@ pub mod config;
 #[cfg(feature = "server")]
 pub mod servers;
 
+#[cfg(feature = "server")]
+pub mod settings;
+
 #[cfg(feature = "client")]
 pub mod client;

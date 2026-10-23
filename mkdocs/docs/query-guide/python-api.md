@@ -957,7 +957,7 @@ Pass `--version` to print the installed package and interpreter version and exit
 Creates and deletes DB-backed audience grants (`audience_grants` table) via
 `analytics-web-srv`'s `/api/audience-grants` routes — never direct Postgres access. These two write
 routes are not admin-only: a non-admin caller with a matching hold on the pair can share it too,
-once `MICROMEGAS_SELF_SERVICE_MINT` is on (see
+once the `self_service_mint` setting is on (see
 [Authorization → the grant store](../admin/authorization.md#the-grant-store)).
 
 ```bash
@@ -1029,7 +1029,7 @@ Pass `--version` to print the installed package and interpreter version and exit
 Mints a personal `ingestion_api_keys` key for the caller and prints the OTLP exporter env vars
 needed to send that caller's own telemetry to the deployment. Named for what it does from the
 user's point of view ("set up telemetry"), not the server-side term ("ingestion"). Requires
-self-service mint to be enabled on the target deployment (`MICROMEGAS_SELF_SERVICE_MINT`; see
+self-service mint to be enabled on the target deployment (the `self_service_mint` setting, env fallback `MICROMEGAS_SELF_SERVICE_MINT`; see
 [Self-service mint](../admin/authorization.md#self-service-ingestion-key-mint))
 unless the caller is an admin.
 

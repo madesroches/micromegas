@@ -8,6 +8,7 @@ import {
   KeyRound,
   ShieldCheck,
   ShieldBan,
+  SlidersHorizontal,
   Users,
   UsersRound,
 } from 'lucide-react'
@@ -114,6 +115,15 @@ function cards(isAdmin: boolean): AdminCard[] {
       iconColor: 'text-teal-500',
       title: 'Groups',
       description: 'Manage local group membership, including the reserved admins group.',
+      adminOnly: true,
+    },
+    {
+      href: '/admin/settings',
+      icon: <SlidersHorizontal className="w-6 h-6" />,
+      iconBg: 'bg-slate-500/15',
+      iconColor: 'text-slate-400',
+      title: 'Settings',
+      description: 'Edit deployment-wide settings stored in the database, without a restart.',
       adminOnly: true,
     },
   ]

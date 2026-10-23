@@ -14,7 +14,7 @@
 //!
 //! **Gating, not admin-only.** `create_grant`/`delete_grant` are gated by `GrantGate`: an
 //! admin acts unconditionally (exactly the old `AdminUser` behavior); a non-admin is admitted
-//! only when `self_service_mint_enabled` is on (the same knob `MintGate` and `/my-audiences`
+//! only when the `self_service_mint` setting is on (the same setting `MintGate` and `/my-audiences`
 //! already gate on -- sharing an audience is the second half of the self-service feature that
 //! introduced it), and then further constrained inside each handler by a per-pair hold/ownership
 //! check that needs the parsed body/query (see `create_grant`/`delete_grant`'s own doc comments).
@@ -37,9 +37,11 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::policy::{caller_selectors, is_valid_audience, valid_selector};
 use micromegas::auth::types::AuthContext;
+use micromegas::settings::SettingsSource;
 use micromegas::tracing::prelude::*;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::sync::Arc;
 
 /// `valid_selector` places no charset/length bound on a `group:<id>` selector (a hierarchical
 /// IdP group name can be arbitrarily long), but the `selector` column is `VARCHAR(255)` -- this
@@ -54,23 +56,18 @@ const MAX_SELECTOR_BYTES: usize = 255;
 #[derive(Clone)]
 pub struct AudienceGrantsState {
     pub pool: Option<PgPool>,
-    /// Off-by-default self-service gate. Resolved once at startup from `MICROMEGAS_SELF_SERVICE_MINT`
-    /// (`web_server.rs`, the same knob resolved onto `IngestionKeysState`), default `false`.
-    /// Gates `GrantGate` (`create_grant`/`delete_grant`), `GET .../my-audiences`, and the
+    /// The self-service knobs, read per request through the settings cache. `self_service_mint`
+    /// gates `GrantGate` (`create_grant`/`delete_grant`), `GET .../my-audiences`, and the
     /// non-admin narrowing on `GET .../visible` -- all new non-admin surface introduced by the
     /// same self-service feature, so none of it must widen on upgrade any more than the mint
-    /// route itself does.
-    pub self_service_mint_enabled: bool,
-    /// `MICROMEGAS_SELF_SERVICE_MAX_GRANTS_PER_CALLER`, default 50 -- caps how many rows one
-    /// non-admin caller may have created in `audience_grants` (`created_by = <caller>`,
-    /// counted across every audience/axis/selector, not just the pair being shared into, but
-    /// excluding the caller's own `user:<email>` rows -- those are claim/self-access rows, not
-    /// shares), checked in `create_grant` before the insert. Mirrors `IngestionKeysState`'s
-    /// `max_claims_per_caller`/`max_keys_per_caller` bounds on the mint side of the same
-    /// `MICROMEGAS_SELF_SERVICE_MINT` knob: without it, a non-admin holding one grant on a pair
+    /// route itself does. `self_service_max_grants_per_caller` caps how many rows one non-admin
+    /// caller may have created in `audience_grants` (`created_by = <caller>`, counted across
+    /// every audience/axis/selector, not just the pair being shared into, but excluding the
+    /// caller's own `user:<email>` rows -- those are claim/self-access rows, not shares), checked
+    /// in `create_grant` before the insert. Without it, a non-admin holding one grant on a pair
     /// could plant unlimited `group:<arbitrary-id>` rows on it. Best-effort under concurrency,
-    /// not a hard ceiling -- same caveat as those two bounds. Skipped for an admin.
-    pub max_grants_per_caller: i64,
+    /// not a hard ceiling. Skipped for an admin.
+    pub settings: Arc<SettingsSource>,
 }
 
 /// JSON error body returned by every handler in this module. Same `{code, message}` shape as
@@ -117,6 +114,14 @@ pub enum AudienceGrantError {
     /// normally unreachable once routing is wired correctly; mirrors
     /// `ingestion_keys.rs::IngestionKeyError::Unauthenticated`.
     Unauthenticated(String),
+    /// The settings store could not be read -- a DB-outage symptom, not a denial.
+    Unavailable(String),
+}
+
+/// Logs the real failure and hands the client a fixed message.
+fn settings_unavailable(e: anyhow::Error) -> AudienceGrantError {
+    error!("settings store unavailable: {e:#}");
+    AudienceGrantError::Unavailable("settings store unavailable".to_string())
 }
 
 impl IntoResponse for AudienceGrantError {
@@ -174,6 +179,11 @@ impl IntoResponse for AudienceGrantError {
                 Json(ErrorResponse::new("UNAUTHENTICATED", msg)),
             )
                 .into_response(),
+            AudienceGrantError::Unavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse::new("UNAVAILABLE", msg)),
+            )
+                .into_response(),
         }
     }
 }
@@ -198,6 +208,7 @@ impl AuditOutcome for AudienceGrantError {
         match self {
             AudienceGrantError::Forbidden(msg) => ("denied", Some(msg.clone())),
             AudienceGrantError::Unauthenticated(msg) => ("denied", Some(msg.clone())),
+            AudienceGrantError::Unavailable(msg) => ("error", Some(msg.clone())),
             AudienceGrantError::NotFound => ("denied", Some("grant not found".to_string())),
             AudienceGrantError::GroupNotFound(msg) => ("denied", Some(msg.clone())),
             AudienceGrantError::BadRequest(msg) => ("denied", Some(msg.clone())),
@@ -320,12 +331,25 @@ impl<S: Send + Sync> FromRequestParts<S> for GrantGate {
                 return Err(AudienceGrantError::NotConfigured);
             }
         };
-        if !caller.is_admin() && !grants_state.self_service_mint_enabled {
-            MutationAudit::from_context(action, &caller, &client_ip)
-                .emit_gate_outcome("denied", "self-service grant management is disabled");
-            return Err(AudienceGrantError::Forbidden(
-                "self-service grant management is disabled".to_string(),
-            ));
+        // Admins bypass the knob, so they never touch the settings store and cannot 503 on an
+        // outage of it.
+        if !caller.is_admin() {
+            let self_service = match grants_state.settings.self_service().await {
+                Ok(self_service) => self_service,
+                Err(e) => {
+                    let err = settings_unavailable(e);
+                    MutationAudit::from_context(action, &caller, &client_ip)
+                        .emit_gate_outcome("error", "settings store unavailable");
+                    return Err(err);
+                }
+            };
+            if !self_service.mint_enabled {
+                MutationAudit::from_context(action, &caller, &client_ip)
+                    .emit_gate_outcome("denied", "self-service grant management is disabled");
+                return Err(AudienceGrantError::Forbidden(
+                    "self-service grant management is disabled".to_string(),
+                ));
+            }
         }
         Ok(GrantGate(caller))
     }
@@ -491,6 +515,11 @@ async fn create_grant_inner(
     let created_by = caller_identity(&caller);
 
     if !caller.is_admin() {
+        let self_service = state
+            .settings
+            .self_service()
+            .await
+            .map_err(settings_unavailable)?;
         if body.selector == "*" {
             return Err(AudienceGrantError::Forbidden(
                 "non-admin callers may not grant '*' (every authenticated principal) access"
@@ -518,8 +547,8 @@ async fn create_grant_inner(
                 body.axis, body.audience
             )));
         }
-        // Per-caller bound (mirrors `IngestionKeysState::max_keys_per_caller` on the mint side
-        // of this same knob): without it, a caller who holds one grant on a pair could plant
+        // Per-caller bound (mirrors the `self_service_max_keys_per_caller` bound on the mint side
+        // of this same setting): without it, a caller who holds one grant on a pair could plant
         // unlimited `group:<arbitrary-id>` rows on it -- the PK only blocks exact duplicates.
         // Best-effort under concurrency, not a hard ceiling -- same caveat as the mint bounds.
         //
@@ -544,10 +573,10 @@ async fn create_grant_inner(
                 .fetch_one(&pool)
                 .await?
         };
-        if grant_count >= state.max_grants_per_caller {
+        if grant_count >= self_service.max_grants_per_caller {
             return Err(AudienceGrantError::Forbidden(format!(
                 "you have created the maximum number of grants ({})",
-                state.max_grants_per_caller
+                self_service.max_grants_per_caller
             )));
         }
     }
@@ -805,7 +834,13 @@ async fn visible_grants(
         )
         .fetch_all(&pool)
         .await?
-    } else if state.self_service_mint_enabled {
+    } else if state
+        .settings
+        .self_service()
+        .await
+        .map_err(settings_unavailable)?
+        .mint_enabled
+    {
         // `"*"` stripped before binding -- the same `caller_holds_pair` convention. Left in, it
         // would match every pair carrying a `*` grant row and leak every sibling row on it to a
         // caller who holds nothing there directly.
@@ -929,7 +964,7 @@ struct MyAudiencesResponse {
 /// (authenticated purely with a Bearer header) that exposes any of them -- `/auth/me` reads its
 /// ID token only from the browser's `id_token` cookie, with no `Authorization: Bearer` fallback.
 ///
-/// Gated on the same off-by-default `self_service_mint_enabled` knob `MintGate`/`GrantGate`
+/// Gated on the same off-by-default `self_service_mint` setting `MintGate`/`GrantGate`
 /// enforce, for the same reason: this is new non-admin surface too, and must not widen on
 /// upgrade regardless of the knob. An admin caller is exempt, matching `MintGate`'s own
 /// `!caller.is_admin()` condition.
@@ -941,7 +976,14 @@ async fn my_audiences(
     Extension(state): Extension<AudienceGrantsState>,
     AuthenticatedUser(caller): AuthenticatedUser,
 ) -> Result<Json<MyAudiencesResponse>, AudienceGrantError> {
-    if !caller.is_admin() && !state.self_service_mint_enabled {
+    if !caller.is_admin()
+        && !state
+            .settings
+            .self_service()
+            .await
+            .map_err(settings_unavailable)?
+            .mint_enabled
+    {
         return Err(AudienceGrantError::Forbidden(
             "self-service minting is disabled".to_string(),
         ));
