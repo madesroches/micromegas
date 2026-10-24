@@ -1,4 +1,4 @@
-use micromegas_telemetry_sink::tracing_interop::TracingCaptureLayer;
+use micromegas_telemetry_sink::tracing_interop::{SpanFieldHook, TracingCaptureLayer};
 use micromegas_tracing::{
     dispatch::{
         flush_log_buffer, flush_thread_buffer, init_thread_stream, unregister_thread_stream,
@@ -17,6 +17,7 @@ use micromegas_tracing::{
 use micromegas_transit::{DynString, HeterogeneousQueue};
 use serial_test::serial;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt,
     sync::{Arc, Mutex},
@@ -59,6 +60,7 @@ fn event_fields_become_properties() {
     let subscriber = tracing_subscriber::registry().with(TracingCaptureLayer {
         max_level: LevelFilter::Trace,
         capture_spans: true,
+        span_field_hook: None,
     });
     tracing::subscriber::with_default(subscriber, || {
         let id = String::from("abc-123");
@@ -96,6 +98,7 @@ fn consecutive_events_do_not_share_fields() {
     let subscriber = tracing_subscriber::registry().with(TracingCaptureLayer {
         max_level: LevelFilter::Trace,
         capture_spans: true,
+        span_field_hook: None,
     });
     let large = "x".repeat(10_000);
     tracing::subscriber::with_default(subscriber, || {
@@ -186,6 +189,7 @@ fn target_and_level_fields_are_not_delivered_to_on_log() {
     let subscriber = tracing_subscriber::registry().with(TracingCaptureLayer {
         max_level: LevelFilter::Trace,
         capture_spans: true,
+        span_field_hook: None,
     });
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!(target = "x", level = "debug", user = "bob", "m");
@@ -264,6 +268,7 @@ fn layer(capture_spans: bool) -> TracingCaptureLayer {
     TracingCaptureLayer {
         max_level: LevelFilter::Trace,
         capture_spans,
+        span_field_hook: None,
     }
 }
 
@@ -360,6 +365,7 @@ fn children_of_a_level_filtered_span_attach_to_the_nearest_captured_ancestor() {
     let layer = TracingCaptureLayer {
         max_level: LevelFilter::Info,
         capture_spans: true,
+        span_field_hook: None,
     };
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
         let _top = tracing::info_span!("top").entered();
@@ -395,6 +401,7 @@ fn a_child_of_a_filtered_root_becomes_a_root() {
     let layer = TracingCaptureLayer {
         max_level: LevelFilter::Info,
         capture_spans: true,
+        span_field_hook: None,
     };
     tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
         let _hidden = tracing::debug_span!("hidden").entered();
@@ -521,4 +528,110 @@ fn a_debug_impl_creating_a_span_during_record_does_not_deadlock() {
     assert_eq!(ends.len(), 2);
     let outer = ends.iter().find(|s| s.name == "outer").unwrap();
     assert_eq!(outer.properties, props(&[("k", "formatted")]));
+}
+
+fn layer_with_hook(hook: SpanFieldHook) -> TracingCaptureLayer {
+    TracingCaptureLayer {
+        max_level: LevelFilter::Trace,
+        capture_spans: true,
+        span_field_hook: Some(hook),
+    }
+}
+
+#[test]
+#[serial]
+fn span_field_hook_drops_truncates_and_rewrites_values() {
+    let guard = init_in_memory_tracing();
+    init_thread_stream();
+    let hook: SpanFieldHook = Box::new(|metadata, name, value| {
+        assert_eq!(metadata.name(), "work");
+        match name {
+            "prompt" => None,
+            "args" => Some(Cow::Borrowed(&value[..4])),
+            "model" => Some(Cow::Owned(value.to_uppercase())),
+            _ => Some(Cow::Borrowed(value)),
+        }
+    });
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(layer_with_hook(hook)),
+        || {
+            let span = tracing::info_span!(
+                "work",
+                prompt = "tell me",
+                args = "abcdefgh",
+                model = "m1",
+                tokens = 3
+            );
+            drop(span);
+        },
+    );
+    flush_thread_buffer();
+
+    let (_, ends) = captured_async_spans(&guard);
+    assert_eq!(ends.len(), 1);
+    assert_eq!(
+        ends[0].properties,
+        props(&[("args", "abcd"), ("model", "M1"), ("tokens", "3")])
+    );
+}
+
+#[test]
+#[serial]
+fn span_field_hook_can_drop_a_field_on_a_later_record() {
+    let guard = init_in_memory_tracing();
+    init_thread_stream();
+    let hook: SpanFieldHook = Box::new(|_, _, value| {
+        if value == "secret" {
+            None
+        } else {
+            Some(Cow::Borrowed(value))
+        }
+    });
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(layer_with_hook(hook)),
+        || {
+            let first = tracing::info_span!("first", f = "a");
+            first.record("f", "secret");
+            drop(first);
+            let second = tracing::info_span!("second", f = "a");
+            second.record("f", "secret");
+            second.record("f", "b");
+            drop(second);
+        },
+    );
+    flush_thread_buffer();
+
+    let (_, ends) = captured_async_spans(&guard);
+    let by_name = |name: &str| ends.iter().find(|e| e.name == name).unwrap();
+    assert_eq!(by_name("first").properties, props(&[]));
+    assert_eq!(by_name("second").properties, props(&[("f", "b")]));
+}
+
+#[test]
+#[serial]
+fn span_field_hook_static_replacement_of_equal_length_is_stored() {
+    let guard = init_in_memory_tracing();
+    init_thread_stream();
+    let hook: SpanFieldHook = Box::new(|_, _, value| {
+        if value == "secret" || value == "123456" {
+            Some(Cow::Borrowed("******"))
+        } else {
+            Some(Cow::Borrowed(value))
+        }
+    });
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(layer_with_hook(hook)),
+        || {
+            let span = tracing::info_span!("work", text = "secret", number = 123456);
+            drop(span);
+        },
+    );
+    flush_thread_buffer();
+
+    let (_, ends) = captured_async_spans(&guard);
+    assert_eq!(ends.len(), 1);
+    assert_eq!(
+        ends[0].properties,
+        props(&[("number", "******"), ("text", "******")])
+    );
 }

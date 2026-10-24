@@ -91,6 +91,7 @@ fn event_emitted_by_sink_during_capture_is_not_dropped() {
         TracingCaptureLayer {
             max_level: LevelFilter::Trace,
             capture_spans: true,
+            span_field_hook: None,
         },
     ))
     .expect("no global tracing subscriber is installed yet");
