@@ -64,11 +64,11 @@ pub struct TracingCaptureLayer {
 Arguments are the callsite metadata, the field name and the value as text (the `Debug` form for
 non-string values, exactly what is stored today).
 
-`SpanFieldVisitor` gains `metadata: &'static Metadata<'static>` and `hook: Option<&SpanFieldHook>`.
+`SpanFieldVisitor` gains `metadata: &'static Metadata<'static>` and `hook: Option<&'a (dyn for<'v> Fn(&'static Metadata<'static>, &str, &'v str) -> Option<Cow<'v, str>> + Send + Sync)>` (unboxed, to satisfy clippy's `borrowed_box`).
 Its `set` path becomes, after the existing `log.*` skip:
 - no hook: store as today;
 - `None`: upsert `None` under that name;
-- `Some(Cow::Borrowed(s))` where `s` is the whole input: keep the value without copying again;
+- `Some(Cow::Borrowed(s))` where `s` is the whole input (same data pointer and same length as the input, checked with `std::ptr::eq` on the data pointers plus a length check; a length-only check would mistake a same-length static replacement for the input): keep the value without copying again;
 - any other `Some`: store the returned text.
 
 `record_str` calls the hook on the borrowed `&str` before copying, so a dropped value costs no
@@ -125,7 +125,7 @@ file: file.ptr,
 pointer stays valid for the process lifetime. Records are already deduplicated per block through
 `recorded_deps`, so the scan runs once per callsite per block.
 
-The `file` column keeps its type, so this is not a SQL break. Existing data is unchanged; only new
+The `filename` column keeps its type, so this is not a SQL break. Existing data is unchanged; only new
 blocks carry trimmed paths.
 
 ## Implementation Steps
@@ -137,7 +137,7 @@ blocks carry trimmed paths.
    `file` from the dependency's pointer.
 3. Add `rust/tracing/tests/source_path_tests.rs` and the extraction tests (see Testing Strategy).
 4. **Field hook.** In `rust/telemetry-sink/src/tracing_interop.rs`, add `SpanFieldHook` and the
-   `span_field_hook` field, extend `SpanFieldVisitor` with the metadata and hook, make it write
+   `span_field_hook` field, extend `SpanFieldVisitor` with the metadata and hook (filled with `self.span_field_hook.as_deref()`), make it write
    `Option<String>` values, filter out `None` in `on_new_span`, and apply removal in the
    `on_record` merge.
 5. Set `span_field_hook: None` in `install_tracing_interop` and in every struct literal in
@@ -221,6 +221,7 @@ analytics side would fail to resolve the string.
   hook also asserts it received the span's metadata (name `work`).
 - A separate hook that drops any value equal to "secret": create the span with `f = "a"`,
   `record("f", "secret")` → `f` absent, then `record("f", "b")` → `f = "b"`.
+- A hook returning an equal-length static literal replacement (`"secret"` → `"******"`) for a `&str` field and for a Debug-formatted integer field: the replacement is what is stored in both cases.
 - `span_field_hook: None` leaves the existing field tests unchanged (covered by the existing
   tests once they set the field).
 
