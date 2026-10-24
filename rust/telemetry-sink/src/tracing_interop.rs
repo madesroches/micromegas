@@ -141,11 +141,7 @@ struct SpanFieldVisitor<'a> {
     fields: &'a mut Vec<(&'static str, Option<String>)>,
 }
 
-fn upsert(
-    fields: &mut Vec<(&'static str, Option<String>)>,
-    name: &'static str,
-    value: Option<String>,
-) {
+fn upsert<V>(fields: &mut Vec<(&'static str, V)>, name: &'static str, value: V) {
     match fields.iter_mut().find(|(n, _)| *n == name) {
         Some(entry) => entry.1 = value,
         None => fields.push((name, value)),
@@ -166,13 +162,7 @@ impl Visit for SpanFieldVisitor<'_> {
         }
         let stored = match self.hook {
             None => Some(value.to_owned()),
-            Some(hook) => hook(self.metadata, field.name(), value).map(|returned| {
-                if is_whole_input(&returned, value) {
-                    value.to_owned()
-                } else {
-                    returned.into_owned()
-                }
-            }),
+            Some(hook) => hook(self.metadata, field.name(), value).map(Cow::into_owned),
         };
         upsert(self.fields, field.name(), stored);
     }
@@ -301,10 +291,7 @@ where
         if let Some(captured) = extensions.get_mut::<CapturedSpan>() {
             for (name, value) in recorded {
                 match value {
-                    Some(value) => match captured.fields.iter_mut().find(|(n, _)| *n == name) {
-                        Some(entry) => entry.1 = value,
-                        None => captured.fields.push((name, value)),
-                    },
+                    Some(value) => upsert(&mut captured.fields, name, value),
                     None => captured.fields.retain(|(n, _)| *n != name),
                 }
             }
