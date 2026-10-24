@@ -8,6 +8,7 @@ use crate::{
     property_set::{
         PropertyDepsQueue, PropertySetDependency, PropertySetId, StringDepsQueue, record_properties,
     },
+    source_path::trim_source_path,
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use rustc_hash::FxHashSet;
@@ -49,7 +50,8 @@ fn record_metric_event_dependencies(
         if recorded_deps.insert(target.ptr as u64) {
             deps.push(target);
         }
-        let file = Utf8StaticStringDependency::from(metric_desc.file);
+        let file = Utf8StaticStringDependency::from(trim_source_path(metric_desc.file));
+        let file_ptr = file.ptr;
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -58,7 +60,7 @@ fn record_metric_event_dependencies(
             name: metric_desc.name.as_ptr(),
             unit: metric_desc.unit.as_ptr(),
             target: metric_desc.target.as_ptr(),
-            file: metric_desc.file.as_ptr(),
+            file: file_ptr,
             line: metric_desc.line,
             lod: metric_desc.lod as u32,
         });

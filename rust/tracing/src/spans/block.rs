@@ -13,6 +13,7 @@ use crate::{
         DynProperty, PropertyDepsQueue, PropertySet, PropertySetDependency, PropertySetId,
         StringDepsQueue, record_properties,
     },
+    source_path::trim_source_path,
     string_id::{DynStringId, StringId},
 };
 use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
@@ -80,7 +81,9 @@ fn record_scope_event_dependencies(
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = Utf8StaticStringDependency::from(thread_span_desc.location.file);
+        let file =
+            Utf8StaticStringDependency::from(trim_source_path(thread_span_desc.location.file));
+        let file_ptr = file.ptr;
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -89,7 +92,7 @@ fn record_scope_event_dependencies(
             name: thread_span_desc.name.as_ptr(),
             target: thread_span_desc.location.target.as_ptr(),
             module_path: thread_span_desc.location.module_path.as_ptr(),
-            file: thread_span_desc.location.file.as_ptr(),
+            file: file_ptr,
             line: thread_span_desc.location.line,
             lod: thread_span_desc.location.lod as u32,
         });
@@ -111,7 +114,8 @@ fn record_span_location_dependencies(
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = Utf8StaticStringDependency::from(thread_span_location.file);
+        let file = Utf8StaticStringDependency::from(trim_source_path(thread_span_location.file));
+        let file_ptr = file.ptr;
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -119,7 +123,7 @@ fn record_span_location_dependencies(
             id: location_id,
             target: thread_span_location.target.as_ptr(),
             module_path: thread_span_location.module_path.as_ptr(),
-            file: thread_span_location.file.as_ptr(),
+            file: file_ptr,
             line: thread_span_location.line,
             lod: thread_span_location.lod as u32,
         });

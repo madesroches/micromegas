@@ -9,6 +9,7 @@ use micromegas_tracing::{
     spans::SpanLocation,
 };
 use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -92,6 +93,23 @@ thread_local! {
     static SCRATCH: RefCell<Scratch> = RefCell::default();
 }
 
+/// Decides what is stored for one span field value: `None` drops the field, `Some` keeps the
+/// returned value.
+///
+/// Arguments are the span's callsite metadata, the field name and the value as text (the `Debug`
+/// form for non-string values).
+pub type SpanFieldHook = Box<
+    dyn for<'v> Fn(&'static tracing::Metadata<'static>, &str, &'v str) -> Option<Cow<'v, str>>
+        + Send
+        + Sync,
+>;
+
+type SpanFieldHookRef<'a> = &'a (
+        dyn for<'v> Fn(&'static tracing::Metadata<'static>, &str, &'v str) -> Option<Cow<'v, str>>
+            + Send
+            + Sync
+    );
+
 /// A tracing layer compatible with `tracing_subscriber`.
 ///
 /// Setting-up this layer still requires the proper initialization of a `TelemetryGuard`.
@@ -102,6 +120,8 @@ pub struct TracingCaptureLayer {
     /// stream (e.g. runtime threads or a thread holding a `TracingThreadGuard`); spans on other
     /// threads are not recorded.
     pub capture_spans: bool,
+    /// Called for each span field value before it is stored.
+    pub span_field_hook: Option<SpanFieldHook>,
 }
 
 /// Per-span state kept in the registry between `on_new_span` and `on_close`.
@@ -114,33 +134,66 @@ struct CapturedSpan {
 }
 
 /// Records span fields into owned storage, because they must outlive the callback that saw them.
+/// A `None` value means the hook dropped the field, which a later record must be able to express.
 struct SpanFieldVisitor<'a> {
-    fields: &'a mut Vec<(&'static str, String)>,
+    metadata: &'static tracing::Metadata<'static>,
+    hook: Option<SpanFieldHookRef<'a>>,
+    fields: &'a mut Vec<(&'static str, Option<String>)>,
 }
 
-impl SpanFieldVisitor<'_> {
-    fn set(&mut self, field: &Field, value: String) {
-        if field.name().starts_with("log.") {
-            return;
-        }
-        upsert(self.fields, field.name(), value);
-    }
-}
-
-fn upsert(fields: &mut Vec<(&'static str, String)>, name: &'static str, value: String) {
+fn upsert(
+    fields: &mut Vec<(&'static str, Option<String>)>,
+    name: &'static str,
+    value: Option<String>,
+) {
     match fields.iter_mut().find(|(n, _)| *n == name) {
         Some(entry) => entry.1 = value,
         None => fields.push((name, value)),
     }
 }
 
+/// Whether the hook returned its input untouched, so that it need not be copied again. The data
+/// pointer is compared as well as the length, because a same-length static replacement is not
+/// the input; an owned return never shares the input's address.
+fn is_whole_input(returned: &str, input: &str) -> bool {
+    std::ptr::eq(returned.as_ptr(), input.as_ptr()) && returned.len() == input.len()
+}
+
 impl Visit for SpanFieldVisitor<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.set(field, value.to_owned());
+        if field.name().starts_with("log.") {
+            return;
+        }
+        let stored = match self.hook {
+            None => Some(value.to_owned()),
+            Some(hook) => hook(self.metadata, field.name(), value).map(|returned| {
+                if is_whole_input(&returned, value) {
+                    value.to_owned()
+                } else {
+                    returned.into_owned()
+                }
+            }),
+        };
+        upsert(self.fields, field.name(), stored);
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.set(field, format!("{value:?}"));
+        if field.name().starts_with("log.") {
+            return;
+        }
+        let formatted = format!("{value:?}");
+        let stored = match self.hook {
+            None => Some(formatted),
+            Some(hook) => match hook(self.metadata, field.name(), &formatted) {
+                None => None,
+                Some(returned) if is_whole_input(&returned, &formatted) => {
+                    drop(returned);
+                    Some(formatted)
+                }
+                Some(returned) => Some(returned.into_owned()),
+            },
+        };
+        upsert(self.fields, field.name(), stored);
     }
 }
 
@@ -199,10 +252,16 @@ where
             .unwrap_or((0, 0));
         let location = span_location(span.metadata());
         let name = span.name();
-        let mut fields = vec![];
+        let mut recorded = vec![];
         attrs.record(&mut SpanFieldVisitor {
-            fields: &mut fields,
+            metadata: attrs.metadata(),
+            hook: self.span_field_hook.as_deref(),
+            fields: &mut recorded,
         });
+        let fields = recorded
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+            .collect();
         // The registry borrow is released before dispatching, since a sink may emit spans too.
         drop(span);
 
@@ -234,12 +293,20 @@ where
         // span, whose `on_new_span` reads the extensions of its ancestors.
         let mut recorded = vec![];
         values.record(&mut SpanFieldVisitor {
+            metadata: span.metadata(),
+            hook: self.span_field_hook.as_deref(),
             fields: &mut recorded,
         });
         let mut extensions = span.extensions_mut();
         if let Some(captured) = extensions.get_mut::<CapturedSpan>() {
             for (name, value) in recorded {
-                upsert(&mut captured.fields, name, value);
+                match value {
+                    Some(value) => match captured.fields.iter_mut().find(|(n, _)| *n == name) {
+                        Some(entry) => entry.1 = value,
+                        None => captured.fields.push((name, value)),
+                    },
+                    None => captured.fields.retain(|(n, _)| *n != name),
+                }
             }
         }
     }
@@ -375,6 +442,7 @@ pub fn install_tracing_interop(interop_max_level_override: Option<LevelFilter>) 
         .with(TracingCaptureLayer {
             max_level,
             capture_spans: true,
+            span_field_hook: None,
         })
         .init();
     tracing::debug!("installed tracing interop");

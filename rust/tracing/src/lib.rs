@@ -200,6 +200,7 @@ pub mod metrics;
 pub mod panic_hook;
 pub mod process_info;
 pub mod property_value;
+pub mod source_path;
 pub mod spans;
 pub mod time;
 
