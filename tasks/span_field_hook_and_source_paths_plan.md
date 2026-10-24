@@ -67,7 +67,7 @@ non-string values, exactly what is stored today).
 `SpanFieldVisitor` gains `metadata: &'static Metadata<'static>` and `hook: Option<&SpanFieldHook>`.
 Its `set` path becomes, after the existing `log.*` skip:
 - no hook: store as today;
-- `None`: remove any entry already stored under that name, store nothing;
+- `None`: upsert `None` under that name;
 - `Some(Cow::Borrowed(s))` where `s` is the whole input: keep the value without copying again;
 - any other `Some`: store the returned text.
 
@@ -75,13 +75,14 @@ Its `set` path becomes, after the existing `log.*` skip:
 allocation. `record_debug` formats first, as today, then calls the hook.
 
 Because a later `Span::record` must be able to drop a field, the visitor needs to express removal.
-The scratch vec in `on_record` therefore becomes `Vec<(&'static str, Option<String>)>`, and the
-merge loop removes the entry on `None` and upserts on `Some`. In `on_new_span` the visitor writes
-straight into the field list, where removing an entry and never adding one have the same result.
+The visitor therefore always writes `Vec<(&'static str, Option<String>)>`. `on_new_span` keeps only
+the `Some` values (filter_map) before storing them in `CapturedSpan.fields`; the `on_record` merge
+loop removes the entry on `None` and upserts on `Some`.
 
 The hook runs exactly where `Debug` formatting already runs: inside the visitor, outside the
 extensions lock. So a hook that itself emits `tracing` events or spans is no worse than a `Debug`
-impl that does, which the reentrancy tests already cover.
+impl that does, which the existing test
+(`a_debug_impl_creating_a_span_during_record_does_not_deadlock`) covers for the `on_record` path.
 
 `install_tracing_interop` sets `span_field_hook: None`. A host that wants the hook builds the
 layer itself, as it already must to set `capture_spans: false`.
@@ -136,8 +137,9 @@ blocks carry trimmed paths.
    `file` from the dependency's pointer.
 3. Add `rust/tracing/tests/source_path_tests.rs` and the extraction tests (see Testing Strategy).
 4. **Field hook.** In `rust/telemetry-sink/src/tracing_interop.rs`, add `SpanFieldHook` and the
-   `span_field_hook` field, extend `SpanFieldVisitor` with the metadata and hook, switch the
-   `on_record` scratch vec to `Option<String>` values, and apply removal in both merge paths.
+   `span_field_hook` field, extend `SpanFieldVisitor` with the metadata and hook, make it write
+   `Option<String>` values, filter out `None` in `on_new_span`, and apply removal in the
+   `on_record` merge.
 5. Set `span_field_hook: None` in `install_tracing_interop` and in every struct literal in
    `telemetry-sink/tests/tracing_interop_tests.rs` and `tracing_interop_reentrancy_tests.rs` (the
    compiler lists them).
@@ -169,8 +171,6 @@ blocks carry trimmed paths.
   everywhere. Adding a field breaks each literal at compile time, which is the preferred way to
   surface a Rust API change, and avoids adding a builder for one optional value. `Box` is enough
   because the layer is not cloned.
-- **`Cow` return.** It lets keep and truncate (a prefix of the input) avoid an allocation, while a
-  rewrite can still return owned text.
 - **Git checkout paths keep `<repo>-<hash>/<rev>/`.** The issue asks to strip through `<rev>/` and
   keep the repo name. A suffix cannot do both, and allocating (or leaking) a rebuilt string per
   callsite would break the no-allocation, `&'static`-pointer property that the dependency scheme
@@ -179,9 +179,6 @@ blocks carry trimmed paths.
 - **Trim at block extraction, not in the macros.** One place per stream covers the micromegas
   macros, `tracing` interop spans and any future source, which is what the issue asks for, and the
   callsite statics stay untouched.
-- **Always on, no option.** As the issue asks; nobody needs the absolute home path in telemetry.
-
-## Decisions
 
 ## Documentation
 
@@ -210,18 +207,20 @@ All of it is unit-level, with no DB or service.
 - The result is a subslice: its end pointer equals the input's end pointer.
 
 In the same file, one extraction test per stream: build a `LogMsgQueue`, `MetricsMsgQueue` and
-`ThreadEventQueue` holding one event whose static metadata has an absolute registry `file`, call
-`extract`, and assert that the metadata record's `file` pointer equals the trimmed slice's pointer
-and that a `Utf8StaticStringDependency` with that pointer and the trimmed length was emitted. This
-pins the pointer agreement at the four call sites, which a mismatch would break silently: the
+`ThreadEventQueue` holding events whose static metadata has an absolute registry `file` (the thread
+queue gets two: a `BeginThreadSpanEvent` with a static `SpanMetadata` and a
+`BeginThreadNamedSpanEvent` with a static `SpanLocation`), call `extract`, and assert that each
+metadata record's `file` pointer (the `SpanRecord` and the `SpanLocationRecord` for the thread
+queue) equals the trimmed slice's pointer and that a `Utf8StaticStringDependency` with that pointer
+and the trimmed length was emitted. This pins the pointer agreement at the four call sites, which a mismatch would break silently: the
 analytics side would fail to resolve the string.
 
 `rust/telemetry-sink/tests/tracing_interop_tests.rs`, reusing `captured_async_spans`:
 - A hook that drops `prompt`, truncates `args` to 4 characters (borrowed) and uppercases `model`
   (owned): the end properties show `prompt` absent, `args` truncated and `model` rewritten. The
   hook also asserts it received the span's metadata (name `work`).
-- A later `span.record` of a dropped field removes a value stored at creation, and a later
-  `record` of a kept value restores the field.
+- A separate hook that drops any value equal to "secret": create the span with `f = "a"`,
+  `record("f", "secret")` → `f` absent, then `record("f", "b")` → `f = "b"`.
 - `span_field_hook: None` leaves the existing field tests unchanged (covered by the existing
   tests once they set the field).
 
