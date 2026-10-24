@@ -17,10 +17,10 @@ host can use the stock layer for spans instead of keeping its own span bridge.
 - `TracingCaptureLayer` (line 98) has two public fields, `max_level` and `capture_spans`, and is
   built with a struct literal (`install_tracing_interop`, line 375; the tests in
   `telemetry-sink/tests/tracing_interop_tests.rs` and `tracing_interop_reentrancy_tests.rs`).
-- `SpanFieldVisitor` (line 116) records every field except `log.*` into
+- `SpanFieldVisitor` (line 117) records every field except `log.*` into
   `Vec<(&'static str, String)>`, through `upsert`. `record_str` copies the value and
   `record_debug` formats it.
-- `on_new_span` (line 165) records `attrs` into a fresh vec and `on_record` (line 214) records
+- `on_new_span` (line 172) records `attrs` into a fresh vec and `on_record` (line 221) records
   into a scratch vec outside the extensions lock, then upserts it into `CapturedSpan.fields`.
   `on_close` turns the fields into `DynProperty` end-event properties.
 - Both callbacks can reach the callsite's `&'static Metadata<'static>` (`attrs.metadata()`,
@@ -162,15 +162,8 @@ blocks carry trimmed paths.
 
 ## Trade-offs
 
-- **Hook scope: span fields only.** The issue's gap is the span path (`on_new_span` /
-  `on_record`). Event fields are also rendered into the message text, so a hook there needs its
-  own design (rewrite the message too, or not). That is left out to keep this change to what the
-  issue asks; the field is named `span_field_hook` so that a later event hook does not change its
-  meaning.
-- **`Option<Box<dyn Fn>>` field vs a builder.** The layer is built with struct literals
-  everywhere. Adding a field breaks each literal at compile time, which is the preferred way to
-  surface a Rust API change, and avoids adding a builder for one optional value. `Box` is enough
-  because the layer is not cloned.
+- **Hook scope: span fields only**: event fields, which are also rendered into the message, are out of scope; the name `span_field_hook` leaves room for a later event hook.
+- **Public `Option<Box<dyn Fn>>` field, no builder**: struct literals break at compile time; `Box` because the layer is not cloned.
 - **Git checkout paths keep `<repo>-<hash>/<rev>/`.** The issue asks to strip through `<rev>/` and
   keep the repo name. A suffix cannot do both, and allocating (or leaking) a rebuilt string per
   callsite would break the no-allocation, `&'static`-pointer property that the dependency scheme
@@ -185,9 +178,10 @@ blocks carry trimmed paths.
 - `mkdocs/docs/when-to-use/index.md` (the `tracing` interop paragraph, line 252): one sentence
   saying that `TracingCaptureLayer::span_field_hook` can drop or rewrite span field values before
   they are stored, and that source file paths of crates outside the workspace are trimmed to a
-  relative form.
+  relative form; the trimming covers telemetry source locations only, so panic messages and
+  debuginfo still need `--remap-path-prefix` or Cargo's `trim-paths`.
 - `CHANGELOG.md` Unreleased: an entry for both changes, with **Minor breaking change:**
-  `TracingCaptureLayer` gains a public `span_field_hook` field.
+  `TracingCaptureLayer` gains a public `span_field_hook` field. The entry cites (#1725).
 
 ## Testing Strategy
 
@@ -212,8 +206,8 @@ queue gets two: a `BeginThreadSpanEvent` with a static `SpanMetadata` and a
 `BeginThreadNamedSpanEvent` with a static `SpanLocation`), call `extract`, and assert that each
 metadata record's `file` pointer (the `SpanRecord` and the `SpanLocationRecord` for the thread
 queue) equals the trimmed slice's pointer and that a `Utf8StaticStringDependency` with that pointer
-and the trimmed length was emitted. This pins the pointer agreement at the four call sites, which a mismatch would break silently: the
-analytics side would fail to resolve the string.
+and the trimmed length was emitted. This pins the pointer agreement at the four call sites, which a mismatch would make fail downstream:
+block parsing fails with "dependency not found".
 
 `rust/telemetry-sink/tests/tracing_interop_tests.rs`, reusing `captured_async_spans`:
 - A hook that drops `prompt`, truncates `args` to 4 characters (borrowed) and uppercases `model`
@@ -222,8 +216,6 @@ analytics side would fail to resolve the string.
 - A separate hook that drops any value equal to "secret": create the span with `f = "a"`,
   `record("f", "secret")` → `f` absent, then `record("f", "b")` → `f = "b"`.
 - A hook returning an equal-length static literal replacement (`"secret"` → `"******"`) for a `&str` field and for a Debug-formatted integer field: the replacement is what is stored in both cases.
-- `span_field_hook: None` leaves the existing field tests unchanged (covered by the existing
-  tests once they set the field).
 
 ## Open Questions
 
