@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["images_table_schema"],"struct":["ImagesRecordBuilder"]};

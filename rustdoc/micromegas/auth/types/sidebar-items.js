@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AuthType"],"struct":["AuthContext","GrpcRequestParts","HttpRequestParts","ProviderUnavailable"],"trait":["AuthProvider","RequestParts"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["main","serve_health_sidecar","wait_for_shutdown"],"static":["ALLOC","MICROMEGAS_MALLOC_CONF"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_column_reader","rows_to_record_batch"],"struct":["BlobColumnReader","Int32ColumnReader","Int64ColumnReader","PropertiesColumnReader","StringArrayColumnReader","StringColumnReader","TimestampColumnReader","UuidColumnReader"],"trait":["ColumnReader"]};
