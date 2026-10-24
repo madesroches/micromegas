@@ -45,4 +45,13 @@ ignore = [
     # defmt-macros; no maintained replacement and nothing to bump on our side.
     # Remove when the dependency drops it.
     "RUSTSEC-2026-0173",
+
+    # crypto-bigint 0.5.5 (RUSTSEC-2026-0387): constant-time timing variability.
+    # Fix is >=0.7.6, but it is pinned ^0.5 by elliptic-curve 0.13, which
+    # p256/p384 0.13 reach via jsonwebtoken 11.1.0 and openidconnect 4.0.1
+    # (both latest releases). We only verify ES256/ES384 signatures over
+    # public keys, so no secret-dependent arithmetic runs in production.
+    # Remove once jsonwebtoken/openidconnect move to RustCrypto curves built
+    # on crypto-bigint >=0.7.
+    "RUSTSEC-2026-0387",
 ]
