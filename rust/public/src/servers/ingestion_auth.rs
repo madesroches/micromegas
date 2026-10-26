@@ -29,7 +29,8 @@ pub(crate) const INSERT_PROCESS_PATH: &str = "/ingestion/insert_process";
 const KIND_INSERT_PROCESS: &str = "insert_process";
 const KIND_OTLP: &str = "otlp";
 
-/// A real `ProcessInfo` is a few KiB.
+/// Caps every body read done for inspection: the `insert_process` body (a real `ProcessInfo` is
+/// a few KiB) and the OTLP body prefix, both as sent and after decompression.
 const MAX_INSPECTED_BODY_BYTES: usize = 64 * 1024;
 const BODY_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const CBOR_RECURSION_LIMIT: usize = 16;
@@ -116,8 +117,9 @@ enum WireEncoding {
     Gzip,
 }
 
-/// Mirrors what `RequestDecompressionLayer` accepts, and nothing more: anything else is not
-/// worth guessing at on a path that runs before authentication.
+/// A deliberate superset of what `RequestDecompressionLayer` accepts (gzip and identity): it
+/// tolerates case, `x-gzip` and an empty value, since it only decides whether to inspect a body
+/// that has already been rejected. Anything else is not worth guessing at.
 fn wire_encoding(req: &Request) -> Option<WireEncoding> {
     let Some(value) = req.headers().get(axum::http::header::CONTENT_ENCODING) else {
         return Some(WireEncoding::Identity);
