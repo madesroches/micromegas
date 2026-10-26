@@ -101,7 +101,7 @@ describe('CellContainer', () => {
       const onCancel = vi.fn()
       const onRun = vi.fn()
       render(<CellContainer {...defaultProps} status="loading" onRun={onRun} onCancel={onCancel} />)
-      const stop = screen.getByTitle('Cancel')
+      const stop = screen.getByTitle('Stop')
       expect(stop).not.toBeDisabled()
       fireEvent.click(stop)
       expect(onCancel).toHaveBeenCalledTimes(1)
@@ -111,7 +111,7 @@ describe('CellContainer', () => {
     it('should render Run, not Stop, when not loading', () => {
       render(<CellContainer {...defaultProps} status="success" onRun={vi.fn()} onCancel={vi.fn()} />)
       expect(screen.getByTitle('Run cell')).toBeInTheDocument()
-      expect(screen.queryByTitle('Cancel')).not.toBeInTheDocument()
+      expect(screen.queryByTitle('Stop')).not.toBeInTheDocument()
     })
 
     it('should show custom status text when provided', () => {

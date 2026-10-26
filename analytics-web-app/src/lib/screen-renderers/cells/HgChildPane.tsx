@@ -162,7 +162,7 @@ export function HgChildPane({
                 e.stopPropagation()
                 onCancel?.()
               }}
-              title="Cancel"
+              title="Stop"
             >
               <Square className="w-3 h-3" />
             </button>

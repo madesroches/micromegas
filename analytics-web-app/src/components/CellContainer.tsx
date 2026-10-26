@@ -187,7 +187,7 @@ export function CellContainer({
             e.stopPropagation()
             onCancel?.()
           }}
-          title="Cancel"
+          title="Stop"
         >
           <Square className="w-3 h-3" />
         </Button>

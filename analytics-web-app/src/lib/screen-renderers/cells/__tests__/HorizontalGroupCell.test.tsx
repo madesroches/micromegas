@@ -324,7 +324,7 @@ describe('HorizontalGroupCell', () => {
           })}
         />
       )
-      fireEvent.click(screen.getByTitle('Cancel'))
+      fireEvent.click(screen.getByTitle('Stop'))
       expect(onCancel).toHaveBeenCalledTimes(1)
       expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
     })
