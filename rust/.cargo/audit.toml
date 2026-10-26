@@ -54,4 +54,24 @@ ignore = [
     # Remove once jsonwebtoken/openidconnect move to RustCrypto curves built
     # on crypto-bigint >=0.7.
     "RUSTSEC-2026-0387",
+
+    # zstd 0.13.3 / zstd-safe 7.x / zstd-sys 2.0 (RUSTSEC-2026-0391, 0395-0406, 0410):
+    # memory-safety advisories in the zstd bindings. Fixes need zstd >=0.14.3 /
+    # zstd-safe >=8.2.0, but datafusion 55.2.0 (plus arrow-ipc, parquet,
+    # compression-codecs and foyer-storage) pin zstd 0.13, so a lockfile bump cannot
+    # reach them. Remove once datafusion moves to zstd 0.14; tracked under #1731.
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0395",
+    "RUSTSEC-2026-0396",
+    "RUSTSEC-2026-0397",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0399",
+    "RUSTSEC-2026-0400",
+    "RUSTSEC-2026-0401",
+    "RUSTSEC-2026-0402",
+    "RUSTSEC-2026-0403",
+    "RUSTSEC-2026-0404",
+    "RUSTSEC-2026-0405",
+    "RUSTSEC-2026-0406",
+    "RUSTSEC-2026-0410",
 ]
