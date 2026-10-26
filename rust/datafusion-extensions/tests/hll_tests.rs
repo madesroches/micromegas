@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{
-    Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int64Array, RecordBatch,
-    StringArray, StringViewArray, UInt64Array,
+    Array, ArrayRef, BinaryArray, DictionaryArray, Float64Array, Int64Array, LargeBinaryArray,
+    RecordBatch, StringArray, StringViewArray, UInt64Array,
 };
 use datafusion::arrow::datatypes::{Field, Int32Type, Schema};
 use datafusion::datasource::MemTable;
@@ -183,16 +183,25 @@ async fn type_variants_agree() {
     let bin: ArrayRef = Arc::new(BinaryArray::from_iter_values(
         values.iter().map(|s| s.as_bytes()),
     ));
+    let large_bin: ArrayRef = Arc::new(LargeBinaryArray::from_iter_values(
+        values.iter().map(|s| s.as_bytes()),
+    ));
     register_table(
         &ctx,
         "t",
-        vec![("u", utf8), ("w", view), ("d", dict), ("b", bin)],
+        vec![
+            ("u", utf8),
+            ("w", view),
+            ("d", dict),
+            ("b", bin),
+            ("lb", large_bin),
+        ],
         1,
     );
     let u = sketch_bytes(&ctx, "SELECT make_hll(u) FROM t")
         .await
         .unwrap();
-    for col in ["w", "d", "b"] {
+    for col in ["w", "d", "b", "lb"] {
         let other = sketch_bytes(&ctx, &format!("SELECT make_hll({col}) FROM t"))
             .await
             .unwrap();

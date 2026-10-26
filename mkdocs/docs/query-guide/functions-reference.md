@@ -1247,7 +1247,7 @@ make_hll(value)
 
 **Parameters:**
 
-- `value`: strings (`Utf8`, `LargeUtf8`, `Utf8View`), signed or unsigned integers, `Float32`/`Float64` or `Binary` (dictionary-encoded columns of these types are also accepted). Nulls and empty strings or byte arrays are skipped.
+- `value`: strings (`Utf8`, `LargeUtf8`, `Utf8View`), signed or unsigned integers, `Float32`/`Float64` or `Binary`/`LargeBinary` (dictionary-encoded columns of these types are also accepted). Nulls and empty strings or byte arrays are skipped.
 
 **Returns:** `Binary` - serialized sketch, or NULL when the group had no value to count
 
@@ -1279,18 +1279,28 @@ hll_cardinality(sketch)
 
 **Example:**
 ```sql
--- Extract: one sketch per day (the query of a materialized view)
-SELECT date_trunc('day', time) AS day, make_hll(property_get(properties, 'user_id')) AS users
-FROM log_entries
-WHERE time >= '$begin' AND time < '$end'
-GROUP BY day;
+-- A materialized view holding one sketch per day and process
+CREATE MATERIALIZED VIEW daily_uniques WITH (
+  extract_query = $$
+    SELECT date_trunc('day', time) AS day, process_id,
+           make_hll(property_get(properties, 'user_id')) AS users
+      FROM log_entries
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+     GROUP BY day, process_id
+  $$,
+  count_src_query = $$
+    SELECT sum(nb_objects) AS count FROM blocks
+     WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+  $$,
+  merge_partitions_query = $$
+    SELECT day, process_id, merge_hll(users) AS users
+      FROM {source} GROUP BY day, process_id
+  $$,
+  update_group = 4000,
+  time_column  = 'day'
+);
 
--- Merge: combine the daily sketches (the merge query of the view)
-SELECT merge_hll(users) AS users
-FROM daily_uniques
-WHERE day >= '$begin' AND day < '$end';
-
--- Monthly active users from the daily sketches
+-- Monthly active users, as a separate query over the view
 SELECT hll_cardinality(merge_hll(users)) AS mau
 FROM daily_uniques
 WHERE day >= NOW() - INTERVAL '30 days';

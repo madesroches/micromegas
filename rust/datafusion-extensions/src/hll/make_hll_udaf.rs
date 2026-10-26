@@ -25,6 +25,7 @@ fn is_supported(data_type: &DataType) -> bool {
         | DataType::LargeUtf8
         | DataType::Utf8View
         | DataType::Binary
+        | DataType::LargeBinary
         | DataType::Int8
         | DataType::Int16
         | DataType::Int32
