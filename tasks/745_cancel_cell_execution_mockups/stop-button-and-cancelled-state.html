@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cancel cell execution — mockup</title>
+<style>
+  :root {
+    --app-bg: #0a0a0f; --panel-bg: #12121a; --card-bg: #1a1a2e;
+    --border-color: #2a2a3e; --text-primary: #e7e9ea; --text-secondary: #9ca3af;
+    --text-muted: #6b7280; --accent-link: #1565c0; --accent-link-text: #4d94e8;
+    --accent-error: #f87171; --selection-bg: rgba(21, 101, 192, 0.15);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 32px 64px; background: var(--app-bg); color: var(--text-primary);
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 14px;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  p.lead { color: var(--text-secondary); margin: 0 0 24px; max-width: 760px; line-height: 1.5; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 28px 0 8px; }
+  .note { font-size: 12px; color: var(--text-muted); margin: 6px 0 0; max-width: 760px; line-height: 1.5; }
+  .notebook { max-width: 860px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--app-bg); padding: 8px 0; }
+
+  .cell { border-left: 2px solid transparent; }
+  .cell.selected { border-left-color: var(--accent-link); }
+  .cell-header { display: flex; align-items: center; gap: 6px; padding: 2px 6px; min-height: 26px; }
+  .cell.selected .cell-header { background: var(--selection-bg); }
+  .badge { font-size: 10px; padding: 1px 4px; border-radius: 2px; background: var(--panel-bg); color: var(--text-secondary); text-transform: uppercase; font-weight: 500; }
+  .name { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+  .dot { font-size: 10px; color: var(--border-color); }
+  .status { font-size: 10px; color: var(--text-muted); }
+  .status.loading { color: var(--accent-link-text); }
+  .status.cancelled { color: var(--text-secondary); }
+  .spacer { flex: 1; }
+
+  .controls { display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+  .cell:hover .controls, .controls.pinned { opacity: 1; }
+  .btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 4px; color: var(--text-secondary); cursor: pointer; padding: 0; }
+  .btn:hover:not(:disabled) { background: var(--card-bg); color: var(--text-primary); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.stop { color: var(--accent-error); }
+  .btn svg { width: 12px; height: 12px; fill: currentColor; }
+  .btn svg.stroke { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .inline-spin { width: 12px; height: 12px; stroke: var(--accent-link-text); fill: none; stroke-width: 2; stroke-linecap: round; }
+
+  .cell-body { padding: 4px 8px 10px 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border-color); }
+  th { color: var(--text-muted); font-weight: 500; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .dim { opacity: .55; }
+  .placeholder { border: 1px dashed var(--border-color); border-radius: 6px; padding: 18px; text-align: center; color: var(--text-muted); background: var(--card-bg); font-size: 13px; }
+  .bar { height: 2px; background: var(--border-color); border-radius: 1px; overflow: hidden; margin: 0 8px 6px; }
+  .bar i { display: block; height: 100%; width: 35%; background: var(--accent-link); animation: slide 1.4s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+  .before { opacity: .85; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 9px; margin-left: 8px; vertical-align: middle; text-transform: none; letter-spacing: 0; }
+  .tag.today { background: rgba(248,113,113,.15); color: var(--accent-error); }
+  .tag.new { background: rgba(21,101,192,.25); color: var(--accent-link-text); }
+  .demo-controls { margin-top: 8px; }
+  .demo-controls button { background: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>Cancel a running cell</h1>
+<p class="lead">
+  A running cell's Run button turns into a Stop button (always visible while running, not hover-only).
+  Stopping aborts the whole run: the running cell shows <em>Cancelled</em> and keeps the data it had, cells that had not started stay idle.
+  Hover a header to see its controls; the first notebook below is interactive.
+</p>
+
+<!-- ───────── Interactive: running -> cancelled -> rerun ───────── -->
+<h2>Interactive demo <span class="tag new">proposed</span></h2>
+<div class="notebook" id="demo">
+  <div class="cell">
+    <div class="cell-header">
+      <span class="badge">Variable</span><span class="name">service</span>
+      <span class="spacer"></span><span class="status">3 rows</span>
+    </div>
+  </div>
+
+  <div class="cell" id="c1">
+    <div class="cell-header">
+      <span class="badge">Table</span><span class="name">errors_by_process</span>
+      <span class="dot">&middot;</span><span class="status" id="c1-status">1,204 rows in 180ms</span>
+      <span class="spacer"></span>
+      <div class="controls" id="c1-controls"></div>
+    </div>
+    <div class="cell-body" id="c1-body"></div>
+  </div>
+
+  <div class="cell" id="c2">
+    <div class="cell-header">
+      <span class="badge">Chart</span><span class="name">error_rate</span>
+      <span class="dot">&middot;</span><span class="status" id="c2-status">12,408 rows in 2.1s</span>
+      <span class="spacer"></span>
+      <div class="controls" id="c2-controls"></div>
+    </div>
+    <div class="cell-body" id="c2-body"></div>
+  </div>
+</div>
+<div class="demo-controls"><button id="restart">Re-run from top (simulate refresh)</button></div>
+<p class="note">
+  Refresh / "Run from here" / time-range change all start a run; the same Stop button cancels any of them.
+  The tab busy indicator clears and the auto-refresh timer resumes once cancelled.
+</p>
+
+<!-- ───────── Static: state comparison ───────── -->
+<h2>Today: running cell <span class="tag today">current</span></h2>
+<div class="notebook before">
+  <div class="cell">
+    <div class="cell-header">
+      <span class="badge">Table</span><span class="name">errors_by_process</span>
+      <span class="dot">&middot;</span><span class="status loading">Running...</span>
+      <span class="spacer"></span>
+      <div class="controls">
+        <button class="btn" disabled title="Run cell">
+          <svg class="stroke spin" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">The Run button is disabled and hidden until hover; nothing offers a way out. If the request is aborted by a later run, the cell is left in "Running..." with no state change.</p>
+
+<h2>Proposed: cancelled cell, downstream idle <span class="tag new">new</span></h2>
+<div class="notebook">
+  <div class="cell">
+    <div class="cell-header">
+      <span class="badge">Table</span><span class="name">errors_by_process</span>
+      <span class="dot">&middot;</span><span class="status cancelled">Cancelled</span>
+      <span class="spacer"></span>
+      <div class="controls"><button class="btn" title="Run cell"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg></button></div>
+    </div>
+    <div class="cell-body dim">
+      <table>
+        <tr><th>process</th><th>errors</th></tr>
+        <tr><td>game-server-03</td><td class="num">412</td></tr>
+        <tr><td>matchmaker</td><td class="num">96</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="cell">
+    <div class="cell-header">
+      <span class="badge">Chart</span><span class="name">error_rate</span>
+      <span class="spacer"></span>
+      <div class="controls"><button class="btn" title="Run cell"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg></button></div>
+    </div>
+    <div class="cell-body"><div class="placeholder">Not run</div></div>
+  </div>
+</div>
+<p class="note">
+  Previous results stay visible (dimmed) so the user doesn't lose context. "Cancelled" is neutral grey, not red: it is not a failure, and downstream cells are <em>idle</em>, not <em>blocked</em>.
+</p>
+
+<script>
+  const PLAY = '<svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>';
+  const STOP = '<svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>';
+
+  const tableHtml = `<table>
+      <tr><th>process</th><th>errors</th></tr>
+      <tr><td>game-server-03</td><td class="num">412</td></tr>
+      <tr><td>matchmaker</td><td class="num">96</td></tr>
+      <tr><td>lobby-01</td><td class="num">51</td></tr></table>`;
+  const chartHtml = `<svg viewBox="0 0 400 70" width="100%" height="70" preserveAspectRatio="none">
+      <polyline fill="none" stroke="#bf360c" stroke-width="1.5" points="0,55 40,48 80,52 120,30 160,38 200,20 240,34 280,26 320,40 360,18 400,28"/></svg>`;
+
+  const cells = {
+    c1: { statusEl: 'c1-status', ctl: 'c1-controls', body: 'c1-body', done: '1,204 rows in 180ms', html: tableHtml, state: 'success', prev: true },
+    c2: { statusEl: 'c2-status', ctl: 'c2-controls', body: 'c2-body', done: '12,408 rows in 2.1s', html: chartHtml, state: 'success', prev: true },
+  };
+  let timer = null;
+
+  function render(id) {
+    const c = cells[id];
+    const status = document.getElementById(c.statusEl);
+    const ctl = document.getElementById(c.ctl);
+    const body = document.getElementById(c.body);
+    status.className = 'status ' + (c.state === 'loading' ? 'loading' : c.state === 'cancelled' ? 'cancelled' : '');
+    status.textContent = c.state === 'loading' ? 'Running...' : c.state === 'cancelled' ? 'Cancelled' : c.state === 'idle' ? '' : c.done;
+    ctl.classList.toggle('pinned', c.state === 'loading');
+    ctl.innerHTML = c.state === 'loading'
+      ? `<button class="btn stop" title="Cancel" data-act="stop">${STOP}</button>`
+      : `<button class="btn" title="Run cell" data-act="run" data-cell="${id}">${PLAY}</button>`;
+    if (c.state === 'loading') {
+      body.innerHTML = '<div class="bar"><i></i></div>' + (c.prev ? '' : '');
+    } else if (c.state === 'idle' && !c.prev) {
+      body.innerHTML = '<div class="placeholder">Not run</div>';
+    } else {
+      body.innerHTML = `<div class="${c.state === 'cancelled' ? 'dim' : ''}">${c.html}</div>`;
+    }
+  }
+
+  function finish(id) { cells[id].state = 'success'; cells[id].prev = true; render(id); }
+
+  function runFrom(start) {
+    clearTimeout(timer);
+    const order = ['c1', 'c2'];
+    order.slice(start).forEach(id => { cells[id].state = 'idle'; render(id); });
+    const step = (i) => {
+      if (i >= order.length) return;
+      cells[order[i]].state = 'loading'; render(order[i]);
+      timer = setTimeout(() => { finish(order[i]); step(i + 1); }, 6000);
+    };
+    step(start);
+  }
+
+  function cancel() {
+    clearTimeout(timer);
+    for (const id in cells) if (cells[id].state === 'loading') { cells[id].state = 'cancelled'; render(id); }
+    // not-yet-started cells were reset to idle by runFrom and stay that way
+  }
+
+  document.getElementById('demo').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.act === 'stop') cancel();
+    if (b.dataset.act === 'run') runFrom(b.dataset.cell === 'c1' ? 0 : 1);
+  });
+  document.getElementById('restart').addEventListener('click', () => runFrom(0));
+
+  // Start mid-run so the Stop button is visible straight away. c2 begins with no prior data to show the "Not run" state.
+  cells.c2.prev = false;
+  render('c2');
+  cells.c1.state = 'loading'; render('c1');
+  timer = setTimeout(() => { finish('c1'); cells.c2.state = 'loading'; render('c2'); timer = setTimeout(() => finish('c2'), 6000); }, 6000);
+</script>
+</body>
+</html>
