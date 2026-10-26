@@ -112,10 +112,11 @@ async fn read_body_prefix(req: Request, content_encoding, cap: usize) -> Result<
   rejects on `Content-Length` > cap: here a prefix is enough, so large and chunked bodies are
   inspected too. A missing `Content-Length` is therefore not an error. The whole read runs under the
   existing `BODY_READ_TIMEOUT` (2 s).
-- `Content-Encoding: gzip` (case-insensitive) → `flate2::read::GzDecoder` (`flate2` becomes an optional workspace dependency of `micromegas`, enabled by the `server` feature; it is dev-only today) over the prefix, wrapped
+- `Content-Encoding` is matched case-insensitively, as `RequestDecompressionLayer` (gzip only) does: absent or
+  `identity` → plain body; `gzip` or `x-gzip` → `flate2::read::GzDecoder` (`flate2` becomes an optional workspace dependency of `micromegas`, enabled by the `server` feature; it is dev-only today) over the prefix, wrapped
   in `Read::take(MAX_INSPECTED_BODY_BYTES)` so the **decompressed** output is capped too (the gzip-bomb bound). A decoder error
   after some output (truncated stream) keeps the bytes produced so far. A decoder error before any
-  output counts as undecodable. Any other `Content-Encoding` value (`zstd`, `deflate`, …) is
+  output counts as undecodable. Any other `Content-Encoding` value (`zstd`, `deflate`, comma-separated lists, …) is
   logged as `reason = "unsupported_encoding"` without reading the body.
 - `Content-Type` selects `Encoding`, via `content_type_encoding` made `pub(crate)` in `otlp.rs`
   (an unknown type logs `reason = "unsupported_content_type"` and reads nothing).
@@ -182,7 +183,7 @@ different apps behind one IP:
 - `rust/public/Cargo.toml`
 - `rust/public/src/servers/ingestion_auth.rs`, `otlp.rs`, `ingestion.rs`
 - `rust/public/tests/ingestion_auth_tests.rs`
-- `mkdocs/docs/admin/authentication.md`, `CHANGELOG.md`
+- `mkdocs/docs/admin/authentication.md`, `mkdocs/docs/admin/ingestion.md`, `CHANGELOG.md`
 
 ## Decisions
 
@@ -201,6 +202,10 @@ different apps behind one IP:
 unverified caller claims. `CHANGELOG.md` Unreleased: new log line; **Minor breaking change**: the Rust type
 `RejectedProcessLogger` is renamed to `RejectedRequestLogger`.
 
+`mkdocs/docs/admin/ingestion.md` (the sentence saying rejected requests are logged and a rejected
+`insert_process` also logs the process): extend it to say a rejected OTLP request also logs the
+caller's claimed resource identity, with a pointer to `authentication.md`.
+
 ## Testing Strategy
 
 Unit tests, no DB:
@@ -216,7 +221,8 @@ Unit tests, no DB:
   protobuf, gzip JSON → one `claimed_*` line with the expected properties; truncated gzip stream
   still yields what was decoded; gzip bomb (small wire, huge expansion) is stopped at the cap and
   the test asserts bounded output; body > 64 KiB and chunked (no `Content-Length`) are inspected;
-  `Content-Encoding: zstd` and unknown `Content-Type` → `not inspected` line with the right
+  `Content-Encoding: identity` (plain body) and `x-gzip` (gzip body) are decoded like absent and `gzip`;
+  `Content-Encoding: zstd` (and a comma list such as `gzip, identity`) and unknown `Content-Type` → `not inspected` line with the right
   `reason`; undecodable body → the existing `[auth_failure]` line plus `not inspected`; two
   different services from the same IP both logged, the same one twice within a minute logged once;
   concurrency cap exhausted → `busy`; `Authorization` value never appears in any captured log
