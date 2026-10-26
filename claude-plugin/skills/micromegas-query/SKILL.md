@@ -401,6 +401,12 @@ High-frequency numeric metrics. Use `view_instance('measures', process_id)` for 
 - `count_from_histogram(h)` — total number of values
 - `sum_from_histogram(h)` — sum of all values
 
+### HyperLogLog functions (mergeable approximate distinct counts)
+- `make_hll(value)` — aggregate: builds a serialized sketch from strings, integers, floats or binary; NULL when no non-null, non-empty value was seen
+- `merge_hll(sketch)` — aggregate: unions sketches (e.g. daily sketches into a monthly one)
+- `hll_cardinality(sketch)` — estimated distinct count (UInt64, ~0.8% standard error); NULL for a NULL sketch
+- Distinct count over a period from daily sketches: `SELECT hll_cardinality(merge_hll(s)) FROM daily_uniques`
+
 ### Discovering UDFs
 For micromegas extension functions, use the **Key functions** section above or the
 [functions reference](https://micromegas.info/docs/query-guide/functions-reference/) rather than

@@ -1,6 +1,6 @@
 # micromegas-datafusion-extensions
 
-Apache DataFusion UDFs that also compile to wasm32: JSONB, histograms, properties, colors, binning and math, for the [Micromegas](https://github.com/madesroches/micromegas/) observability platform.
+Apache DataFusion UDFs that also compile to wasm32: JSONB, histograms, HyperLogLog sketches, properties, colors, binning and math, for the [Micromegas](https://github.com/madesroches/micromegas/) observability platform.
 
 This crate provides shared user-defined functions that work in both native and `wasm32-unknown-unknown` targets, used by `micromegas-analytics` (server-side) and `micromegas-datafusion-wasm` (browser-side).
 
@@ -22,6 +22,11 @@ This crate provides shared user-defined functions that work in both native and `
 - `sum_histograms` (UDAF) - merge histograms
 - `expand_histogram` (UDTF) - histogram to rows of (bin_center, count)
 - `quantile_from_histogram`, `variance_from_histogram`, `count_from_histogram`, `sum_from_histogram` - scalar accessors
+
+### HyperLogLog
+- `make_hll` (UDAF) - build a serialized HyperLogLog sketch from a column of values
+- `merge_hll` (UDAF) - union sketches
+- `hll_cardinality` - estimated distinct count of a sketch
 
 ### Properties
 - `property_get`, `properties_to_array`, `properties_length` - access Micromegas property lists

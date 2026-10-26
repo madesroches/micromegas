@@ -7,6 +7,8 @@ pub mod binning;
 pub mod color;
 /// Compute histograms from SQL
 pub mod histogram;
+/// HyperLogLog sketches for mergeable distinct counts
+pub mod hll;
 /// JSONB support
 pub mod jsonb;
 /// Scalar math UDFs (lerp, unlerp)
@@ -29,6 +31,10 @@ use histogram::{
     quantile::make_quantile_from_histogram_udf,
     sum_histograms_udaf::sum_histograms_udaf,
     variance::make_variance_from_histogram_udf,
+};
+use hll::{
+    cardinality::make_hll_cardinality_udf, make_hll_udaf::make_hll_udaf,
+    merge_hll_udaf::merge_hll_udaf,
 };
 use jsonb::{
     array_elements::JsonbArrayElementsTableFunction,
@@ -60,6 +66,10 @@ pub fn register_extension_udfs(ctx: &SessionContext) {
         "expand_histogram",
         Arc::new(ExpandHistogramTableFunction::new()),
     );
+
+    ctx.register_udaf(make_hll_udaf());
+    ctx.register_udaf(merge_hll_udaf());
+    ctx.register_udf(make_hll_cardinality_udf());
 
     ctx.register_udf(make_jsonb_parse_udf());
     ctx.register_udf(make_jsonb_format_json_udf());

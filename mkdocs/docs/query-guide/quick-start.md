@@ -210,6 +210,7 @@ count = client.query("SELECT COUNT(*) FROM log_entries;")
 - `view_instance('view_name', 'process_id')` - Process-scoped views
 - `property_get(properties, 'key')` - Extract property values
 - `make_histogram(start, end, bins, values)` - Create histograms with specified range
+- `make_hll(value)`, `merge_hll(sketch)`, `hll_cardinality(sketch)` - Mergeable approximate distinct counts
 
 ### Time Functions
 - `NOW()` - Current timestamp
