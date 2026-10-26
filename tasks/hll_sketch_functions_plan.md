@@ -32,7 +32,7 @@ serialized in the Apache DataSketches HLL format so they remain mergeable by Spa
 ### Dependency and format
 
 Add `datasketches = { version = "0.3", features = ["hll"] }` to the workspace `rust/Cargo.toml` and
-reference it from `rust/datafusion-extensions/Cargo.toml` (`hll` is a feature of `datasketches`). `rust/datafusion-wasm/Cargo.lock` is a separate lockfile and needs the new crate.
+reference it from `rust/datafusion-extensions/Cargo.toml` (`hll` is a feature of `datasketches`).
 Sketches are `DataType::Binary` values holding `HllSketch::serialize()` output, built as
 `HllType::Hll4` (smallest: ~8 KB at lg_k=14 when dense, far smaller in list/set mode for low
 cardinalities). The serialized form is DataSketches-compatible; the crate's
@@ -66,7 +66,7 @@ covered.
   empty strings/bytes are skipped. `state()` and `evaluate()` both emit
   `union.to_sketch(HllType::Hll4).serialize()` (single `Binary` scalar; `evaluate()` is NULL when
   the group saw no values, see Decisions); `merge_batch` deserializes each state and calls
-  `union.update`. `size()` accounts for the union.
+  `union.update`. `size()` is `size_of::<Self>()` plus an estimate from `LG_K` (about `2^LG_K` bytes), since `HllUnion` exposes no size accessor.
 
 ### `merge_hll(sketch)` — aggregate
 
@@ -108,7 +108,7 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
    (`src/lib.rs`).
 7. Unit tests (below).
 8. Docs: `mkdocs/docs/query-guide/functions-reference.md`, extension crate `README.md`,
-   `doc/how_to_query/README.md`, `claude-plugin/skills/micromegas-query/SKILL.md`, `CHANGELOG.md`.
+   `doc/how_to_query/README.md`, `mkdocs/docs/query-guide/quick-start.md` (function list), `claude-plugin/skills/micromegas-query/SKILL.md`, `CHANGELOG.md`.
 
 ## Files to Modify
 
@@ -120,6 +120,7 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
 - `rust/datafusion-extensions/README.md`
 - `mkdocs/docs/query-guide/functions-reference.md`
 - `doc/how_to_query/README.md`
+- `mkdocs/docs/query-guide/quick-start.md`
 - `claude-plugin/skills/micromegas-query/SKILL.md`
 - `CHANGELOG.md`
 
@@ -134,7 +135,9 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
   precisions.
 - AFK: empty strings/bytes are skipped (matches other DataSketches implementations).
 - AFK: `UInt64` values above `i64::MAX` are hashed via wrapping cast to `i64`.
-- DataFusion's `approx_distinct` HLL is not reused: it exposes no serialized mergeable state.
+- AFK: `datasketches` stays pinned at `0.3` (the version whose APIs this plan was verified
+  against); the implementer should confirm the workspace toolchain meets its MSRV (1.86) and
+  may move to a newer release only if every API used here is unchanged.
 
 ## Documentation
 
