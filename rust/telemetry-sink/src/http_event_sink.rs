@@ -33,14 +33,14 @@ type RetryStrategy = core::iter::Take<ExponentialBackoff>;
 /// Error type for ingestion client operations.
 /// Explicitly categorizes errors to control retry behavior.
 ///
-/// Logging strategy: Transient errors (5xx, network) use `debug!` to avoid
+/// Logging strategy: Transient errors (5xx, 429, network) use `debug!` to avoid
 /// polluting instrumented applications' logs with telemetry infrastructure noise.
-/// Permanent errors (4xx) use `warn!` since they indicate a bug in the client.
+/// Permanent errors (4xx except 429) use `warn!` since they indicate a bug in the client.
 #[derive(Clone, Debug)]
 enum IngestionClientError {
-    /// Transient error - should retry (network issues, 5xx responses)
+    /// Transient error - should retry (network issues, 5xx and 429 responses)
     Transient(String),
-    /// Permanent error - should NOT retry (4xx responses, malformed data)
+    /// Permanent error - should NOT retry (4xx responses except 429, malformed data)
     Permanent(String),
 }
 
@@ -60,6 +60,56 @@ impl IngestionClientError {
         match self {
             IngestionClientError::Transient(_) => RetryError::transient(self),
             IngestionClientError::Permanent(_) => RetryError::permanent(self),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum StatusClass {
+    Success,
+    Transient,
+    Permanent,
+}
+
+fn classify_status(status: u16) -> StatusClass {
+    match status {
+        200..=299 => StatusClass::Success,
+        // The proxy or load balancer is shedding load; backing off lets the
+        // payload through later instead of dropping it.
+        429 => StatusClass::Transient,
+        400..=499 => StatusClass::Permanent,
+        500..=599 => StatusClass::Transient,
+        _ => StatusClass::Permanent,
+    }
+}
+
+async fn response_to_result(
+    op: &str,
+    response: reqwest::Response,
+) -> Result<(), RetryError<IngestionClientError>> {
+    let status = response.status();
+    let class = classify_status(status.as_u16());
+    if class == StatusClass::Success {
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    match class {
+        StatusClass::Success => unreachable!(),
+        StatusClass::Transient => {
+            if status.as_u16() == 429 {
+                debug!("{op} rate limited ({status}): {body}");
+            } else {
+                debug!("{op} server error ({status}): {body}");
+            }
+            Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+        }
+        StatusClass::Permanent if (400..=499).contains(&status.as_u16()) => {
+            warn!("{op} client error ({status}): {body}");
+            Err(IngestionClientError::Permanent(body).into_retry())
+        }
+        StatusClass::Permanent => {
+            warn!("{op} unexpected status ({status}): {body}");
+            Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
         }
     }
 }
@@ -520,25 +570,7 @@ impl HttpEventSink {
                 IngestionClientError::Transient(format!("network error: {e}")).into_retry()
             })?;
 
-            let status = response.status();
-            match status.as_u16() {
-                200..=299 => Ok(()),
-                400..=499 => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_process client error ({status}): {body}");
-                    Err(IngestionClientError::Permanent(body).into_retry())
-                }
-                500..=599 => {
-                    let body = response.text().await.unwrap_or_default();
-                    debug!("insert_process server error ({status}): {body}");
-                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
-                }
-                _ => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_process unexpected status ({status}): {body}");
-                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
-                }
-            }
+            response_to_result("insert_process", response).await
         })
         .await
     }
@@ -572,25 +604,7 @@ impl HttpEventSink {
                 IngestionClientError::Transient(format!("network error: {e}")).into_retry()
             })?;
 
-            let status = response.status();
-            match status.as_u16() {
-                200..=299 => Ok(()),
-                400..=499 => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_stream client error ({status}): {body}");
-                    Err(IngestionClientError::Permanent(body).into_retry())
-                }
-                500..=599 => {
-                    let body = response.text().await.unwrap_or_default();
-                    debug!("insert_stream server error ({status}): {body}");
-                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
-                }
-                _ => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_stream unexpected status ({status}): {body}");
-                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
-                }
-            }
+            response_to_result("insert_stream", response).await
         })
         .await
     }
@@ -635,25 +649,7 @@ impl HttpEventSink {
                 IngestionClientError::Transient(format!("network error: {e}")).into_retry()
             })?;
 
-            let status = response.status();
-            match status.as_u16() {
-                200..=299 => Ok(()),
-                400..=499 => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_block client error ({status}): {body}");
-                    Err(IngestionClientError::Permanent(body).into_retry())
-                }
-                500..=599 => {
-                    let body = response.text().await.unwrap_or_default();
-                    debug!("insert_block server error ({status}): {body}");
-                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
-                }
-                _ => {
-                    let body = response.text().await.unwrap_or_default();
-                    warn!("insert_block unexpected status ({status}): {body}");
-                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
-                }
-            }
+            response_to_result("insert_block", response).await
         })
         .await
     }
@@ -992,5 +988,23 @@ impl EventSink for HttpEventSink {
         let in_flight = self.queue.in_flight_count.load(Ordering::Relaxed);
         debug_assert!(in_flight >= 0, "in_flight_count went negative: {in_flight}");
         queued > 0 || in_flight > 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_status_cases() {
+        for s in [200, 204] {
+            assert_eq!(classify_status(s), StatusClass::Success, "{s}");
+        }
+        for s in [429, 500, 503] {
+            assert_eq!(classify_status(s), StatusClass::Transient, "{s}");
+        }
+        for s in [400, 401, 404, 302] {
+            assert_eq!(classify_status(s), StatusClass::Permanent, "{s}");
+        }
     }
 }
