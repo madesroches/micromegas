@@ -53,8 +53,9 @@ configuration details and provider precedence, see
 [Authentication](authentication.md).
 
 Rejected requests are logged with the caller's client IP, method, path and
-`User-Agent`, and a rejected `insert_process` request also logs the process
-identity it claims; see
+`User-Agent`, a rejected `insert_process` request also logs the process
+identity it claims, and a rejected OTLP request also logs the resource identity
+(service, host, SDK) it claims; see
 [Authentication Failures](authentication.md#authentication-failures).
 
 ### Schema migration and admin seeding

@@ -1,5 +1,5 @@
 use super::ingestion_auth::{
-    INSERT_PROCESS_PATH, RejectedProcessLogger, ingestion_auth_middleware,
+    INSERT_PROCESS_PATH, RejectedRequestLogger, ingestion_auth_middleware,
 };
 use super::write_audience::resolve_write_audience;
 use axum::Extension;
@@ -186,7 +186,7 @@ pub async fn serve_ingestion(
     let auth_enabled = auth_provider.is_some();
     if let Some(provider) = auth_provider {
         info!("Ingestion: authentication enabled");
-        let logger = Arc::new(RejectedProcessLogger::new());
+        let logger = Arc::new(RejectedRequestLogger::new());
         protected_app = protected_app.layer(middleware::from_fn(move |req, next| {
             ingestion_auth_middleware(provider.clone(), logger.clone(), req, next)
         }));

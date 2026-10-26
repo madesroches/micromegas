@@ -119,6 +119,15 @@ pub fn attr_to_string(v: &AnyValue) -> String {
     }
 }
 
+/// Composes the `exe` name from `service.namespace` and `service.name`.
+pub fn exe_from_service(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{namespace}/{name}")
+    }
+}
+
 /// Lower-case + trim. Applied to free-form string fields where the SDK may render
 /// the same logical value with different casing.
 fn norm(s: &str) -> String {

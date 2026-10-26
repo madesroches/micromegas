@@ -445,12 +445,7 @@ impl ProcessFromResource {
         let svc_ns = crate::identity::attr(attrs, "service.namespace")
             .map(crate::identity::attr_to_string)
             .unwrap_or_default();
-        let exe = if svc_ns.is_empty() {
-            svc_name
-        } else {
-            format!("{svc_ns}/{svc_name}")
-        };
-        let exe = truncate_for_db(exe);
+        let exe = truncate_for_db(crate::identity::exe_from_service(&svc_ns, &svc_name));
 
         let username = truncate_for_db(crate::identity::process_owner_string(attrs));
         let computer = truncate_for_db(

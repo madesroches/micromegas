@@ -31,13 +31,18 @@ use micromegas_tracing::prelude::*;
 use prost::Message;
 use std::sync::Arc;
 
+const OTLP_LOGS_PATH: &str = "/ingestion/otlp/v1/logs";
+const OTLP_METRICS_PATH: &str = "/ingestion/otlp/v1/metrics";
+const OTLP_TRACES_PATH: &str = "/ingestion/otlp/v1/traces";
+pub(crate) const OTLP_PATHS: [&str; 3] = [OTLP_LOGS_PATH, OTLP_METRICS_PATH, OTLP_TRACES_PATH];
+
 const CONTENT_TYPE_PROTOBUF: &str = "application/x-protobuf";
 const CONTENT_TYPE_JSON: &str = "application/json";
 
 /// Examines the `Content-Type` header and maps it to an `Encoding`. The spec allows
 /// parameters (e.g. `application/json; charset=utf-8`), so we parse rather than
 /// string-compare. Returns `Err(OtlpHttpError::WrongContentType)` for unknown types.
-fn content_type_encoding(headers: &HeaderMap) -> Result<Encoding, OtlpHttpError> {
+pub(crate) fn content_type_encoding(headers: &HeaderMap) -> Result<Encoding, OtlpHttpError> {
     let Some(ct) = headers.get(header::CONTENT_TYPE) else {
         return Err(OtlpHttpError::WrongContentType);
     };
@@ -60,7 +65,7 @@ fn content_type_encoding(headers: &HeaderMap) -> Result<Encoding, OtlpHttpError>
 /// Internal error type covering both pre-handler validation failures (415) and
 /// post-handler `OtelError`s. Each variant maps to a single HTTP response shape
 /// (status code, optional `Retry-After`, `google.rpc.Status` body).
-enum OtlpHttpError {
+pub(crate) enum OtlpHttpError {
     WrongContentType,
     Otel(OtelError),
 }
@@ -196,8 +201,8 @@ async fn traces_handler(
 pub fn otlp_router() -> Router {
     apply_ingestion_body_limits(
         Router::new()
-            .route("/ingestion/otlp/v1/logs", post(logs_handler))
-            .route("/ingestion/otlp/v1/metrics", post(metrics_handler))
-            .route("/ingestion/otlp/v1/traces", post(traces_handler)),
+            .route(OTLP_LOGS_PATH, post(logs_handler))
+            .route(OTLP_METRICS_PATH, post(metrics_handler))
+            .route(OTLP_TRACES_PATH, post(traces_handler)),
     )
 }

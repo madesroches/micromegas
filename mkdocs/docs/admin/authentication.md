@@ -665,6 +665,25 @@ properties are never logged. `claimed_username` and `claimed_computer` are perso
 same kind stored in the `processes` table, so give the ingestion service's log stream the same
 access controls as process metadata.
 
+A rejected OTLP request (`/ingestion/otlp/v1/logs`, `metrics` or `traces`) logs the resource identity
+it claims, as `[auth_failure] rejected otlp caller claims`. The server reads at most the first 64 KiB
+of the body (and at most 64 KiB after gzip decompression) and takes the first OTLP `Resource` from
+it, in protobuf or JSON. The properties are `client_ip`, `path`, `content_type`, `content_encoding`,
+`content_length` and the `claimed_*` fields `claimed_exe` (`service.namespace/service.name`),
+`claimed_computer`, `claimed_sdk_language`, `claimed_sdk_name`, `claimed_sdk_version`,
+`claimed_service_version`, `claimed_service_instance_id`, `claimed_deployment_environment`,
+`claimed_k8s_namespace`, `claimed_k8s_pod`, `claimed_k8s_deployment`, `claimed_k8s_cluster`,
+`claimed_container`, `claimed_cloud_region`, `claimed_pid`, `claimed_runtime` and `claimed_username`.
+Only these attributes are read; command lines, environment variables and payload content never are.
+The values come from the unauthenticated caller and are not verified. The line is limited to one per
+client IP and claimed sender (executable, computer and instance id) per minute, so several
+applications behind one NAT address each appear. When nothing could be extracted, a
+`[auth_failure] otlp body not inspected` line with a `reason` is logged instead: `unsupported_encoding`
+(a `Content-Encoding` other than gzip or identity), `unsupported_content_type`, `read_error`,
+`read_timeout`, `undecodable` (a gzip stream that does not decode), `no_resource` (no usable
+resource attributes) or `busy` (too many bodies being inspected at once). `claimed_username` and
+`claimed_computer` carry the same access-control note as above.
+
 ### Token Refresh Failures
 
 **Symptom:** Browser opens on every CLI invocation

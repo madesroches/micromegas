@@ -9,20 +9,25 @@ use axum::http::{Request, StatusCode, header};
 use axum::middleware;
 use axum::routing::post;
 use bytes::Bytes;
-use micromegas::servers::ingestion_auth::{RejectedProcessLogger, ingestion_auth_middleware};
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use micromegas::servers::ingestion_auth::{RejectedRequestLogger, ingestion_auth_middleware};
 use micromegas::servers::tonic_auth_interceptor::check_auth;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
 use micromegas_auth::types::{AuthContext, AuthProvider, RequestParts};
 use micromegas_tracing::levels::{LevelFilter, set_max_level};
 use micromegas_tracing::process_info::ProcessInfo;
 use micromegas_tracing::test_utils::{CapturedLog, collect_logs, init_in_memory_tracing};
+use prost::Message;
 use serial_test::serial;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tower::ServiceExt;
 
 const INSERT_PROCESS: &str = "/ingestion/insert_process";
+const OTLP_LOGS: &str = "/ingestion/otlp/v1/logs";
 const VALID_KEY: &str = "valid-key";
 
 struct Harness {
@@ -31,10 +36,14 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with_logger(RejectedRequestLogger::new())
+}
+
+fn harness_with_logger(logger: RejectedRequestLogger) -> Harness {
     let keyring = parse_key_ring(&format!(r#"[{{"name": "t", "key": "{VALID_KEY}"}}]"#))
         .expect("parse keyring");
     let provider: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuthProvider::new(keyring));
-    let logger = Arc::new(RejectedProcessLogger::new());
+    let logger = Arc::new(logger);
     let reached = Arc::new(AtomicUsize::new(0));
     let handler = {
         let reached = reached.clone();
@@ -48,7 +57,10 @@ fn harness() -> Harness {
     };
     let app = Router::new()
         .route(INSERT_PROCESS, post(handler.clone()))
-        .route("/ingestion/insert_stream", post(handler))
+        .route("/ingestion/insert_stream", post(handler.clone()))
+        .route(OTLP_LOGS, post(handler.clone()))
+        .route("/ingestion/otlp/v1/metrics", post(handler.clone()))
+        .route("/ingestion/otlp/v1/traces", post(handler))
         .layer(middleware::from_fn(move |req, next| {
             ingestion_auth_middleware(provider.clone(), logger.clone(), req, next)
         }));
@@ -451,4 +463,369 @@ async fn check_auth_rejection_logs_client_ip_and_user_agent() {
     let lines = lines_for(&logs, "198.51.100.13", "authentication failed:");
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].property("user_agent"), Some("tonic/0.14"));
+}
+
+// OTLP routes
+
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+use opentelemetry_proto::tonic::logs::v1::ResourceLogs;
+use opentelemetry_proto::tonic::resource::v1::Resource;
+
+const PROTOBUF: &str = "application/x-protobuf";
+const JSON: &str = "application/json";
+
+fn string_kv(key: &str, value: &str) -> KeyValue {
+    KeyValue {
+        key: key.to_owned(),
+        value: Some(AnyValue {
+            value: Some(any_value::Value::StringValue(value.to_owned())),
+        }),
+        ..Default::default()
+    }
+}
+
+fn logs_request(attrs: Vec<KeyValue>) -> ExportLogsServiceRequest {
+    ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: attrs,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+    }
+}
+
+fn service_attrs(service: &str) -> Vec<KeyValue> {
+    vec![
+        string_kv("service.namespace", "shop"),
+        string_kv("service.name", service),
+        string_kv("host.name", "node-7"),
+        string_kv("telemetry.sdk.language", "python"),
+        string_kv("telemetry.sdk.version", "1.2.3"),
+        string_kv("process.command_line", "--token=cmdline-secret"),
+    ]
+}
+
+fn proto_body(attrs: Vec<KeyValue>) -> Vec<u8> {
+    logs_request(attrs).encode_to_vec()
+}
+
+fn json_body(attrs: Vec<KeyValue>) -> Vec<u8> {
+    serde_json::to_vec(&logs_request(attrs)).expect("encode json")
+}
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut enc = GzEncoder::new(vec![], Compression::default());
+    enc.write_all(bytes).expect("gzip write");
+    enc.finish().expect("gzip finish")
+}
+
+fn otlp_request(
+    ip: &str,
+    content_type: &str,
+    content_encoding: Option<&str>,
+    body: Body,
+    content_length: Option<usize>,
+) -> Request<Body> {
+    let mut req = rejected_request(OTLP_LOGS, ip, body, content_length);
+    req.headers_mut()
+        .insert(header::CONTENT_TYPE, content_type.parse().expect("header"));
+    if let Some(enc) = content_encoding {
+        req.headers_mut()
+            .insert(header::CONTENT_ENCODING, enc.parse().expect("header"));
+    }
+    req
+}
+
+fn otlp_bytes(ip: &str, ct: &str, ce: Option<&str>, bytes: Vec<u8>) -> Request<Body> {
+    let len = bytes.len();
+    otlp_request(ip, ct, ce, Body::from(bytes), Some(len))
+}
+
+fn assert_service_claims(line: &CapturedLog, service: &str) {
+    assert_eq!(
+        line.property("claimed_exe"),
+        Some(format!("shop/{service}").as_str())
+    );
+    assert_eq!(line.property("claimed_computer"), Some("node-7"));
+    assert_eq!(line.property("claimed_sdk_language"), Some("python"));
+    assert_eq!(line.property("claimed_sdk_version"), Some("1.2.3"));
+}
+
+fn assert_no_secrets(logs: &[CapturedLog]) {
+    for log in logs {
+        for (_, v) in &log.properties {
+            assert!(!v.contains("cmdline-secret"));
+            assert!(!v.contains("wrong-key"));
+        }
+        assert!(!log.msg.contains("secret"));
+    }
+}
+
+fn not_inspected_reason(logs: &[CapturedLog], ip: &str) -> Option<String> {
+    let lines = lines_for(logs, ip, "otlp body not inspected");
+    assert!(lines.len() <= 1, "{ip}");
+    lines
+        .first()
+        .and_then(|l| l.property("reason").map(str::to_owned))
+}
+
+#[tokio::test]
+#[serial]
+async fn rejected_otlp_logs_claims_for_every_encoding() {
+    let guard = enable_logs();
+    let h = harness();
+    let cases = [
+        (
+            "203.0.113.1",
+            PROTOBUF,
+            None,
+            proto_body(service_attrs("a")),
+        ),
+        ("203.0.113.2", JSON, None, json_body(service_attrs("a"))),
+        (
+            "203.0.113.3",
+            PROTOBUF,
+            Some("gzip"),
+            gzip(&proto_body(service_attrs("a"))),
+        ),
+        (
+            "203.0.113.4",
+            JSON,
+            Some("gzip"),
+            gzip(&json_body(service_attrs("a"))),
+        ),
+        (
+            "203.0.113.5",
+            PROTOBUF,
+            Some("identity"),
+            proto_body(service_attrs("a")),
+        ),
+        (
+            "203.0.113.6",
+            PROTOBUF,
+            Some("X-GZIP"),
+            gzip(&proto_body(service_attrs("a"))),
+        ),
+    ];
+    for (ip, ct, ce, body) in cases {
+        let status = send(&h, otlp_bytes(ip, ct, ce, body)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{ip}");
+    }
+    assert_eq!(h.reached.load(Ordering::SeqCst), 0);
+
+    let logs = collect_logs(&guard.sink);
+    for n in 1..=6 {
+        let ip = format!("203.0.113.{n}");
+        let ip = ip.as_str();
+        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
+        assert_eq!(lines.len(), 1, "{ip}");
+        assert_service_claims(lines[0], "a");
+        assert_eq!(lines[0].property("path"), Some(OTLP_LOGS));
+        // The generic line from `authenticate` is still there.
+        assert_eq!(lines_for(&logs, ip, "").len(), 2, "{ip}");
+    }
+    assert_no_secrets(&logs);
+}
+
+#[tokio::test]
+#[serial]
+async fn truncated_gzip_still_yields_decoded_claims() {
+    let guard = enable_logs();
+    let h = harness();
+    let mut wire = gzip(&proto_body(service_attrs("a")));
+    wire.truncate(wire.len() - 8);
+    send(&h, otlp_bytes("203.0.113.10", PROTOBUF, Some("gzip"), wire)).await;
+
+    let logs = collect_logs(&guard.sink);
+    let lines = lines_for(&logs, "203.0.113.10", "rejected otlp caller claims");
+    assert_eq!(lines.len(), 1);
+    assert_service_claims(lines[0], "a");
+}
+
+#[tokio::test]
+#[serial]
+async fn large_and_chunked_bodies_are_inspected() {
+    let guard = enable_logs();
+    let h = harness();
+    let mut attrs = service_attrs("a");
+    attrs.push(string_kv("padding", &"x".repeat(200 * 1024)));
+    let body = proto_body(attrs);
+    assert!(body.len() > 64 * 1024);
+
+    send(&h, otlp_bytes("203.0.113.11", PROTOBUF, None, body.clone())).await;
+    let chunks: Vec<Result<Bytes, std::io::Error>> = body
+        .chunks(8 * 1024)
+        .map(|c| Ok(Bytes::copy_from_slice(c)))
+        .collect();
+    let chunked = otlp_request(
+        "203.0.113.12",
+        PROTOBUF,
+        None,
+        Body::from_stream(futures::stream::iter(chunks)),
+        None,
+    );
+    send(&h, chunked).await;
+
+    let logs = collect_logs(&guard.sink);
+    for ip in ["203.0.113.11", "203.0.113.12"] {
+        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
+        assert_eq!(lines.len(), 1, "{ip}");
+        assert_service_claims(lines[0], "a");
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn unsupported_encodings_and_content_types_are_not_inspected() {
+    let guard = enable_logs();
+    let h = harness();
+    let body = proto_body(service_attrs("a"));
+    send(
+        &h,
+        otlp_bytes("203.0.113.20", PROTOBUF, Some("zstd"), body.clone()),
+    )
+    .await;
+    send(
+        &h,
+        otlp_bytes(
+            "203.0.113.21",
+            PROTOBUF,
+            Some("gzip, identity"),
+            body.clone(),
+        ),
+    )
+    .await;
+    send(&h, otlp_bytes("203.0.113.22", "text/plain", None, body)).await;
+    send(
+        &h,
+        otlp_bytes("203.0.113.23", PROTOBUF, None, b"garbage".to_vec()),
+    )
+    .await;
+    send(
+        &h,
+        otlp_bytes("203.0.113.24", PROTOBUF, Some("gzip"), b"not gzip".to_vec()),
+    )
+    .await;
+
+    let logs = collect_logs(&guard.sink);
+    let reason = |ip| not_inspected_reason(&logs, ip);
+    assert_eq!(
+        reason("203.0.113.20").as_deref(),
+        Some("unsupported_encoding")
+    );
+    assert_eq!(
+        reason("203.0.113.21").as_deref(),
+        Some("unsupported_encoding")
+    );
+    assert_eq!(
+        reason("203.0.113.22").as_deref(),
+        Some("unsupported_content_type")
+    );
+    assert_eq!(reason("203.0.113.23").as_deref(), Some("no_resource"));
+    assert_eq!(reason("203.0.113.24").as_deref(), Some("undecodable"));
+    let generic = lines_for(&logs, "203.0.113.24", "");
+    assert!(generic.iter().any(|l| l.property("path") == Some(OTLP_LOGS)
+        && l.msg.starts_with("[auth_failure] ")
+        && !l.msg.contains("not inspected")));
+    for ip in ["203.0.113.20", "203.0.113.21", "203.0.113.22"] {
+        assert!(lines_for(&logs, ip, "caller claims").is_empty());
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn dedup_is_per_sender_not_per_ip() {
+    let guard = enable_logs();
+    let h = harness();
+    let ip = "203.0.113.30";
+    for service in ["a", "b", "a"] {
+        send(
+            &h,
+            otlp_bytes(ip, PROTOBUF, None, proto_body(service_attrs(service))),
+        )
+        .await;
+    }
+
+    let logs = collect_logs(&guard.sink);
+    let lines = lines_for(&logs, ip, "rejected otlp caller claims");
+    assert_eq!(lines.len(), 2);
+    assert_service_claims(lines[0], "a");
+    assert_service_claims(lines[1], "b");
+}
+
+#[tokio::test]
+#[serial]
+async fn exhausted_inspection_budget_logs_busy() {
+    let guard = enable_logs();
+    let h = harness_with_logger(RejectedRequestLogger::with_max_concurrent_inspections(0));
+    let status = send(
+        &h,
+        otlp_bytes(
+            "203.0.113.40",
+            PROTOBUF,
+            None,
+            proto_body(service_attrs("a")),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let logs = collect_logs(&guard.sink);
+    assert_eq!(
+        not_inspected_reason(&logs, "203.0.113.40").as_deref(),
+        Some("busy")
+    );
+    assert!(lines_for(&logs, "203.0.113.40", "caller claims").is_empty());
+}
+
+#[tokio::test]
+#[serial]
+async fn otlp_claims_are_sanitized() {
+    let guard = enable_logs();
+    let h = harness();
+    let attrs = vec![string_kv(
+        "service.name",
+        "evil\n[auth_success] forged \u{202E}x",
+    )];
+    send(
+        &h,
+        otlp_bytes("203.0.113.50", PROTOBUF, None, proto_body(attrs)),
+    )
+    .await;
+
+    let logs = collect_logs(&guard.sink);
+    let lines = lines_for(&logs, "203.0.113.50", "rejected otlp caller claims");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0].property("claimed_exe"),
+        Some("evil?[auth_success] forged ?x")
+    );
+    assert!(logs.iter().all(|l| !l.msg.contains('\n')));
+}
+
+#[tokio::test]
+#[serial]
+async fn accepted_otlp_request_logs_nothing_extra_and_body_is_intact() {
+    let guard = enable_logs();
+    let h = harness();
+    let body = proto_body(service_attrs("a"));
+    let len = body.len();
+    let mut req = otlp_bytes("203.0.113.60", PROTOBUF, None, body);
+    req.headers_mut().insert(
+        header::AUTHORIZATION,
+        format!("Bearer {VALID_KEY}").parse().expect("header"),
+    );
+    let resp = h.app.clone().oneshot(req).await.expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let echoed = axum::body::to_bytes(resp.into_body(), 1024)
+        .await
+        .expect("body");
+    assert_eq!(echoed.as_ref(), len.to_string().as_bytes());
+    assert_eq!(h.reached.load(Ordering::SeqCst), 1);
+
+    let logs = collect_logs(&guard.sink);
+    assert!(lines_for(&logs, "203.0.113.60", "").is_empty());
 }
