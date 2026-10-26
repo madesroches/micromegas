@@ -55,18 +55,16 @@ write time and re-deriving at read time is valid; the on-wire bytes are identica
 - `with_exposed_provenance` vs strict `ptr::with_addr`: strict provenance can't work here
   because the pointer is rebuilt from an address stored in a byte buffer with no pointer to
   derive from, so the exposed-provenance model is the right fit.
-- Storing a real `*const T` in the buffer instead of `u64`: rejected, it would change the wire
-  layout shared with the analytics parser.
-- `StaticStringRef` is not touched here (see Current State); widening scope there means
-  changing a cross-language struct for no observable gain.
 
 ## Testing Strategy
-- Existing round-trip tests in `rust/tracing/tests` (`property_macro_tests.rs`,
-  `dyn_deps_tests.rs`) and `rust/analytics/tests/log_tests.rs`
-  already serialize and parse `TaggedLogString` / `LogStringEvent`; they must pass unchanged.
-- Add a no-DB unit test in `log_events.rs` that writes a `TaggedLogString` pointing at a
-  `static` `LogMetadata` and an interned `PropertySet`, reads it back, and asserts the
-  references are pointer-equal to the originals.
+- `rust/tracing/tests` (`property_macro_tests.rs`, `dyn_deps_tests.rs`) exercise
+  `read_value`; `rust/analytics/tests/log_tests.rs` only covers `write_value` and the wire
+  format (it parses via the transit parser and never calls `read_value`). All must pass
+  unchanged.
+- Add a no-DB unit test in a new `#[cfg(test)]` module in `log_events.rs`: build a `static`
+  `LogMetadata` (see `rust/analytics/tests/log_tests.rs` ~l.251), write a `TaggedLogString`,
+  call `read_value`, and assert `std::ptr::eq` on `desc` and equality of the `properties`
+  id, `time`, and `msg`.
 - `cargo clippy --workspace -- -D warnings` must pass with the `allow` removed.
 
 ## Manual Verification
