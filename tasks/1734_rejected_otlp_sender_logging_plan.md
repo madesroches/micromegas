@@ -155,7 +155,7 @@ different apps behind one IP:
   distinct sender per minute, so two apps behind one NAT both appear. The `insert_process`
   entries (`Some(process_id)`) and the "not inspected" entries (`None`) can't collide with it.
   The *not inspected* lines use the existing `(client_ip, None)` key.
-- **Cap concurrent inspections**: a `tokio::sync::Semaphore` (8 permits) around read+decode.
+- **Cap concurrent inspections**: a `tokio::sync::Semaphore` (8 permits by default; the logger also has a `with_max_concurrent_inspections(n)` constructor so tests can exhaust it) around read+decode.
   `try_acquire` failing logs nothing but `reason = "busy"` under the `(client_ip, None)` key. This bounds the
   total CPU and memory of the unauthenticated path (≤ 8 × 128 KiB buffers) no matter how many
   rejected requests arrive, which dedup alone doesn't (dedup runs after the parse because the key
@@ -193,6 +193,7 @@ different apps behind one IP:
 - Firehose and webhook routes are out of scope: they have separate auth and carry no OTLP Resource.
 - Decoding the whole body with a bigger cap is rejected: the Resource is at the front of the message, so more bytes only add exposure.
 - A per-IP rate limit is rejected: it would hide all but one app behind a shared NAT.
+- AFK: `busy` is tested via a `with_max_concurrent_inspections(n)` logger constructor (default 8), and the gzip-bomb bound via `#[cfg(test)]` unit tests in `ingestion_auth.rs` on `read_body_prefix`'s returned length.
 
 ## Documentation
 
@@ -219,13 +220,13 @@ Unit tests, no DB:
   `None`; control characters in a value survive extraction (sanitization is the logger's job).
 - `ingestion_auth` (the existing `ingestion_auth_tests.rs` harness with `RejectingProvider`, adding the OTLP routes): rejected OTLP request with plain protobuf, plain JSON, gzip
   protobuf, gzip JSON → one `claimed_*` line with the expected properties; truncated gzip stream
-  still yields what was decoded; gzip bomb (small wire, huge expansion) is stopped at the cap and
-  the test asserts bounded output; body > 64 KiB and chunked (no `Content-Length`) are inspected;
+  still yields what was decoded; gzip bomb (small wire, huge expansion) is stopped at the cap (asserted by `#[cfg(test)]`
+  unit tests inside `ingestion_auth.rs` on the returned byte length of the private `read_body_prefix`); body > 64 KiB and chunked (no `Content-Length`) are inspected;
   `Content-Encoding: identity` (plain body) and `x-gzip` (gzip body) are decoded like absent and `gzip`;
   `Content-Encoding: zstd` (and a comma list such as `gzip, identity`) and unknown `Content-Type` → `not inspected` line with the right
   `reason`; undecodable body → the existing `[auth_failure]` line plus `not inspected`; two
   different services from the same IP both logged, the same one twice within a minute logged once;
-  concurrency cap exhausted → `busy`; `Authorization` value never appears in any captured log
+  concurrency cap exhausted (logger built with `with_max_concurrent_inspections(0)`) → `busy`; `Authorization` value never appears in any captured log
   property; control characters/newlines in `service.name` are sanitized; an accepted request
   produces no extra line and the body reaches the handler untouched.
 
