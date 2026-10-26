@@ -1839,7 +1839,7 @@ describe('useCellExecution', () => {
 
       expect(result.current.cellStates['V'].status).toBe('cancelled')
       expect(setVariableValue).not.toHaveBeenCalled()
-      expect(engine.deregister_table).toHaveBeenCalledWith('V')
+      expect(engine.deregister_table).not.toHaveBeenCalled()
     })
 
     it('does not register a remote result in the engine after abort', async () => {
@@ -1895,33 +1895,33 @@ describe('useCellExecution', () => {
       }
     })
 
-    it('deregisters a runQueryAs table registered locally after abort', async () => {
-      const { getCellTypeMetadata } = await import('../cell-registry')
-      const meta = getCellTypeMetadata('table') as unknown as { execute: unknown }
-      const original = meta.execute
-      const gate = deferred<Uint8Array>()
-      meta.execute = async (_c: unknown, ctx: { runQueryAs: (s: string, t: string, ds: string) => Promise<unknown> }) => ({
-        data: [await ctx.runQueryAs('SELECT 1', 'extra', 'notebook')],
+    it('aborts the old query when the superseding run returns early as blocked', async () => {
+      const gate = deferred()
+      const signals: AbortSignal[] = []
+      gateStreams([gate], signals)
+      const { result } = setup([
+        tableCell('A'),
+        tableCell('B', { sql: 'SELECT $A.selected.id' }),
+      ])
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
       })
-      try {
-        const engine = createMockEngine({ execute_and_register: vi.fn().mockReturnValue(gate.promise) })
-        const { result } = setup([tableCell('A')], engine)
-        let pending!: Promise<boolean>
-        act(() => {
-          pending = result.current.executeCell(0)
-        })
-        await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
-        act(() => {
-          result.current.cancelExecution()
-        })
-        await act(async () => {
-          gate.resolve(new Uint8Array([1]))
-          await pending
-        })
-        expect(engine.deregister_table).toHaveBeenCalledWith('extra')
-      } finally {
-        meta.execute = original
-      }
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+
+      await act(async () => {
+        await result.current.executeFromCell(1)
+      })
+      expect(signals[0].aborted).toBe(true)
+      expect(result.current.cellStates['B'].status).toBe('blocked')
+
+      await act(async () => {
+        gate.resolve()
+        expect(await pending).toBe(false)
+      })
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['B'].status).toBe('blocked')
     })
 
     it('keeps the cell cancelled when a non-abort error arrives after cancel', async () => {

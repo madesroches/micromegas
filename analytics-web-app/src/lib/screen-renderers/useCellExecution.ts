@@ -283,7 +283,6 @@ export function useCellExecution({
               // Execute locally in WASM engine
               if (!engine) throw new Error('WASM engine not loaded')
               const ipcBytes = await engine.execute_and_register(sql, cell.name)
-              if (controller.signal.aborted) engine.deregister_table(cell.name)
               return tableFromIPC(ipcBytes)
             } else if (engine) {
               // Remote execution, but register result in WASM for downstream notebook cells
@@ -323,7 +322,6 @@ export function useCellExecution({
             if (isLocal) {
               if (!engine) throw new Error('WASM engine not loaded')
               const ipcBytes = await engine.execute_and_register(sql, tableName)
-              if (controller.signal.aborted) engine.deregister_table(tableName)
               return tableFromIPC(ipcBytes)
             } else if (engine) {
               const ipcBytes = await fetchQueryIPC(
@@ -392,6 +390,7 @@ export function useCellExecution({
       runGenerationRef.current++
       const name = cells[cellIndex]?.name
       markLoadingCancelled(name)
+      abortControllerRef.current?.abort()
       return runCell(cellIndex)
     },
     [cells, runCell, markLoadingCancelled]
@@ -408,6 +407,7 @@ export function useCellExecution({
     async (startIndex: number) => {
       const generation = ++runGenerationRef.current
       markLoadingCancelled()
+      abortControllerRef.current?.abort()
       // Reset WASM engine when re-executing from the top
       if (startIndex === 0 && engine) {
         engine.reset()
