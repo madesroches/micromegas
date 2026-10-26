@@ -31,10 +31,14 @@ serialized in the Apache DataSketches HLL format so they remain mergeable by Spa
 
 ### Dependency and format
 
-Add `datasketches` to the workspace `rust/Cargo.toml` and to
-`rust/datafusion-extensions/Cargo.toml`. Sketches are `DataType::Binary` values holding
-`HllSketch::serialize()` output, built as `HllType::Hll4` (smallest: ~8 KB at lg_k=14 when dense,
-far smaller in list/set mode for low cardinalities). The serialized form is DataSketches-compatible.
+Add `datasketches = { version = "0.3", features = ["hll"] }` to the workspace `rust/Cargo.toml` and
+reference it from `rust/datafusion-extensions/Cargo.toml` (the crate has `default = []`; `hll` is
+feature-gated). `rust/datafusion-wasm/Cargo.lock` is a separate lockfile and needs the new crate.
+Sketches are `DataType::Binary` values holding `HllSketch::serialize()` output, built as
+`HllType::Hll4` (smallest: ~8 KB at lg_k=14 when dense, far smaller in list/set mode for low
+cardinalities). The serialized form is DataSketches-compatible; the crate's
+`tests/hll_serialization_test.rs` has Java/C++ compatibility tests for Hll4/6/8, so Hll4 interop is
+covered.
 
 ### Precision
 
@@ -93,7 +97,9 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
 
 ## Implementation Steps
 
-1. Add `datasketches` to `rust/Cargo.toml` (workspace deps) and `rust/datafusion-extensions/Cargo.toml`.
+1. Add `datasketches = { version = "0.3", features = ["hll"] }` to `rust/Cargo.toml` (workspace deps)
+   and reference it from `rust/datafusion-extensions/Cargo.toml`; add HLL to that crate's
+   description/keywords; refresh `rust/datafusion-wasm/Cargo.lock` (separate lockfile).
 2. Create `rust/datafusion-extensions/src/hll/` with the shared helpers and `LG_K`.
 3. Implement the `make_hll` `AggregateUDFImpl` and accumulator.
 4. Implement the `merge_hll` UDAF reusing the shared accumulator.
@@ -101,30 +107,34 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
 6. Declare `pub mod hll;` and register the three functions in `register_extension_udfs`
    (`src/lib.rs`).
 7. Unit tests (below).
-8. Docs: `mkdocs/docs/query-guide/functions-reference.md`, extension crate `README.md`, `CHANGELOG.md`.
+8. Docs: `mkdocs/docs/query-guide/functions-reference.md`, extension crate `README.md`,
+   `doc/how_to_query/README.md`, `claude-plugin/skills/micromegas-query/SKILL.md`, `CHANGELOG.md`.
 
 ## Files to Modify
 
-- `rust/Cargo.toml`, `rust/datafusion-extensions/Cargo.toml`
+- `rust/Cargo.toml`, `rust/datafusion-extensions/Cargo.toml` (dependency, plus HLL in description/keywords)
+- `rust/datafusion-wasm/Cargo.lock`
 - `rust/datafusion-extensions/src/lib.rs`
+- `rust/datafusion-extensions/tests/hll_tests.rs` (new)
 - `rust/datafusion-extensions/src/hll/{mod,make_hll_udaf,merge_hll_udaf,cardinality}.rs` (new)
 - `rust/datafusion-extensions/README.md`
 - `mkdocs/docs/query-guide/functions-reference.md`
+- `doc/how_to_query/README.md`
+- `claude-plugin/skills/micromegas-query/SKILL.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
 
 - **Use `datasketches` crate vs. hand-rolled serializer.** The crate already implements the
   DataSketches HLL format, unions and bounds; writing our own risks subtle incompatibility.
-- **Reuse DataFusion's HLL.** Rejected: no serialized, mergeable state is exposed.
-- **Fixed `lg_k` vs. parameter.** Fixed keeps the signature simple; merge already handles mixed
-  precisions.
 
 ## Decisions
 
 - Empty input (no non-null values) yields NULL rather than an empty serialized sketch, consistent
   with other aggregates; `hll_cardinality(NULL)` is NULL, and `COALESCE(..., 0)` covers display.
 - Keyed hashing is deferred (see Design); documented rather than half-implemented.
+- `lg_k` is fixed at 14 and not a `make_hll` argument; merge handles mixed precisions.
+- DataFusion's `approx_distinct` HLL is not reused: it exposes no serialized mergeable state.
 
 ## Documentation
 
@@ -137,7 +147,7 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
 
 ## Testing Strategy
 
-No-DB unit tests in the extension crate:
+No-DB tests in `rust/datafusion-extensions/tests/hll_tests.rs`:
 - Accuracy: 100k distinct strings within ~3% (about 3.5 sigma of the 0.8% standard error); small
   exact-ish counts (list mode).
 - Merge equals sketch of the union: merge of sketches over two overlapping ranges ≈ sketch over
@@ -150,10 +160,7 @@ No-DB unit tests in the extension crate:
   `merge_batch` are exercised (in-memory tables, no external DB).
 - A `SessionContext` test of the materialized-view query shape: grouped `make_hll`, then
   `hll_cardinality(merge_hll(...))` over the grouped result.
-- wasm: `cargo check` of `rust/datafusion-wasm` for wasm32.
-
-## Open Questions
-
-- Does `Hll4` vs `Hll8` matter for Spark interop? Both deserialize in DataSketches; confirm the
-  Rust crate's `Hll4` output reads correctly with the Java reader if a sample is available.
-- Should `lg_k` become a `make_hll` argument in a follow-up if users need other precisions?
+- Binary and Utf8 hash agreement: `make_hll` over the same bytes as `Binary` and as `Utf8` yields
+  identical sketches.
+- Dictionary-encoded and Utf8View inputs produce the same estimate as plain Utf8.
+- wasm: covered by the CI wasm job (`./build/rust_ci.py wasm`).
