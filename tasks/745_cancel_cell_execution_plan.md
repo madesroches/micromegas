@@ -28,7 +28,7 @@ All paths under `analytics-web-app/src/` unless noted.
 
 ### State
 
-Add `'cancelled'` to `CellStatus`. It is distinct from `idle` ("not yet executed") and `error`, so the cell can show "Cancelled" (the feedback requirement) and so cancel is not mistaken for a failure. Making it a new union member makes the compiler flag only the exhaustive switch (`notebook-cell-view.ts`). The ternary chains in `CellContainer` (106-122) and `HgChildPane` (89-100), and the direct `'idle'`/`'loading'` comparisons in `MarkdownCell.tsx:184`, `__test-utils__/cell-registry-mock.ts:42` and `hooks/useFadeOnIdle.ts:19-24`, are not checked and must be updated by hand.
+Add `'cancelled'` to `CellStatus`. It is distinct from `idle` ("not yet executed") and `error`, so the cell can show "Cancelled" (the feedback requirement) and so cancel is not mistaken for a failure. The compiler flags none of the status consumers: the `switch` in `notebook-cell-view.ts` (~117) has no default and is not exhaustive over a return type, so an unhandled `cancelled` silently falls through to `idle`. It, the ternary chains in `CellContainer` (106-122) and `HgChildPane` (89-100), and the direct `'idle'`/`'loading'` comparisons in `MarkdownCell.tsx:184`, `__test-utils__/cell-registry-mock.ts:42` and `hooks/useFadeOnIdle.ts:19-24`, must all be updated by hand.
 
 A cancelled cell keeps the data it showed while loading (the loading transition already preserves previous data in `data`). Wherever `idle` with cached data is treated as showable, `cancelled` is treated the same. Cells that had not started stay `idle`, matching their meaning today.
 
@@ -39,15 +39,16 @@ A cancelled cell keeps the data it showed while loading (the loading transition 
    - increments `runGenerationRef` (stops the loop),
    - aborts `abortControllerRef.current`,
    - sets every cell currently `loading` to `{ ...prev[name], status: 'cancelled', fetchProgress: undefined }`, keeping the existing `data`.
-3. **Late results are discarded.** `executeCell` captures its own `controller` in a local, builds the `runQuery`/`runQueryAs` signals from that local (not a lazy read of `abortControllerRef.current`, which would hand a superseded cell's later queries the new run's signal), and, after `await meta.execute(...)`, returns `false` without touching state if `controller.signal.aborted`. This also covers WASM-local queries that cannot be interrupted: they run to completion but their result is dropped. `onExecutionComplete` is skipped in this path.
+3. **Late results are discarded.** `executeCell` captures its own `controller` in a local, builds the `runQuery`/`runQueryAs` signals from that local (not a lazy read of `abortControllerRef.current`, which would hand a superseded cell's later queries the new run's signal), and, after `await meta.execute(...)`, returns `false` without touching state if `controller.signal.aborted`. This also covers WASM-local queries that cannot be interrupted: they run to completion but their result is dropped. `onExecutionComplete` is skipped in this path. The same guard applies to the other late writers: the `catch` returns `false` with no state change when the local `controller.signal.aborted` (so a late non-abort error cannot overwrite `cancelled`), and both `onProgress` callbacks return early when the local `controller.signal.aborted` (so a late progress update cannot undo the `fetchProgress` reset or create a partial entry).
 4. **Abort is not a failure.** In `executeFromCell`, a `false` from `executeCell` only triggers the "mark downstream blocked" logic when the run generation is unchanged; otherwise the loop just breaks. The `AbortError` catch keeps returning `false` with no state change, since `cancelExecution` (or the superseding run) owns the state.
-No new React state is needed: `isExecuting` is already derived from `cellStates`, so the tab busy indicator and refresh-interval pause clear on cancel.
+5. **Direct runs supersede a loop.** A single-cell run (`onRun` -> `executeCellByName`) or a sort-check run (`useCellSortCheck`) calls `executeCell`, which aborts the previous controller; without a bump the in-flight loop cell returns `false` with an unchanged generation and the loop marks downstream cells `blocked`. Split the body into an internal `runCell(index)` (no generation change) that the loop calls, and make the exported `executeCell` a thin wrapper that increments `runGenerationRef` and then calls `runCell`. The loop captures its generation on entry, so its own `runCell` calls never invalidate it, while any direct `executeCell` does.
+No new React state is needed: `isExecuting` is already derived from `cellStates`, so the tab busy indicator clears on cancel and the refresh-interval pause ends.
 
 ### UI
 
 - `CellContainer` gets `onCancel?: () => void`. While `status === 'loading'` and `onCancel` is set, the Run button slot renders a Stop button (`Square` icon, title "Cancel"), enabled, and the controls are forced visible (not hover-only) so a running cell always shows how to stop it. Otherwise behavior is unchanged.
 - `statusLabel`/`statusColor` handle `cancelled` ("Cancelled", muted). The body treats it like `idle` with preserved data.
-- `HgChildPane` gets the same Stop affordance and `cancelled` label, wired from `NotebookRenderer`.
+- `HgChildPane` gets the same Stop affordance and `cancelled` label. It is rendered by `cells/HorizontalGroupCell.tsx` (~217-223, next to `onRun={() => onChildRun(child.name)}`), which takes a new `onCancel` prop passed through to `HgChildPane` and wired from `NotebookRenderer`.
 - `NotebookRenderer` passes `onCancel={cancelExecution}` everywhere it passes `onRun`. Cancel is whole-run, not per-cell: the shared controller and sequential loop mean the only coherent semantics is "stop the current run", and stopping a middle cell of a run while continuing the rest has no defined meaning here.
 - `notebook-cell-view.ts` maps `cancelled` to a non-error aggregate status.
 
@@ -63,7 +64,7 @@ No change planned. The abort already tears down the connection chain. If Manual 
 
 1. `notebook-types.ts`: add `'cancelled'` to `CellStatus`; fix every compiler error that follows (`notebook-cell-view.ts`), and grep for `'idle'`/`'loading'` comparisons and status ternaries (`CellContainer.tsx`, `HgChildPane.tsx`, `MarkdownCell.tsx`, `cell-registry-mock.ts`, `useFadeOnIdle.ts`) that the compiler does not flag.
 2. `useCellExecution.ts`: add `runGenerationRef`, local controller capture + post-await abort check, loop break on generation change, and `cancelExecution`; return it from the hook.
-3. `NotebookRenderer.tsx`: pass `cancelExecution` as `onCancel` to `CellContainer` and `HgChildPane` call sites.
+3. `NotebookRenderer.tsx` / `HorizontalGroupCell.tsx`: pass `cancelExecution` as `onCancel` to `CellContainer`, and to `HorizontalGroupCell`, which forwards it to `HgChildPane`.
 4. `CellContainer.tsx` / `HgChildPane.tsx`: Stop button, always-visible while loading, `Cancelled` label.
 5. Docs and `CHANGELOG.md` entry under Unreleased.
 
@@ -74,6 +75,7 @@ No change planned. The abort already tears down the connection chain. If Manual 
 - `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/notebook-cell-view.ts`
 - `analytics-web-app/src/lib/screen-renderers/cells/HgChildPane.tsx`
+- `analytics-web-app/src/lib/screen-renderers/cells/HorizontalGroupCell.tsx` (`onCancel` prop passed to `HgChildPane`)
 - `analytics-web-app/src/components/CellContainer.tsx`
 - `analytics-web-app/src/lib/screen-renderers/cells/MarkdownCell.tsx` (`showCached` treats `cancelled` like `idle`)
 - `analytics-web-app/src/lib/screen-renderers/__test-utils__/cell-registry-mock.ts` (same check)
@@ -87,6 +89,7 @@ No change planned. The abort already tears down the connection chain. If Manual 
 - Stop button appears on the running cell but cancels the whole run (shared controller); no toolbar Stop is added. A toolbar Stop is a possible follow-up (`isExecuting` flows ScreenPage -> Header -> RefreshIntervalPicker and would need extra prop plumbing).
 - Feedback is an in-cell "Cancelled" label, not a toast.
 - WASM-local queries are not made interruptible; their late results are discarded.
+- Auto-refresh will run the notebook again on its next tick after a cancel; pausing the timer is not part of this change.
 
 ## Documentation
 
@@ -102,6 +105,9 @@ Automated, all no-DB, in `useCellExecution.test.ts` (using the existing cell-reg
 - A cell whose `execute` resolves *after* cancel (simulating a WASM-local query) does not overwrite `cancelled`, and `onExecutionComplete` is not called.
 - A genuine failure still marks downstream cells `blocked` (regression guard for the generation check).
 - Starting a new `executeFromCell` while one is running stops the old loop.
+- A late non-abort error (execute rejects after cancel) keeps the cell `cancelled`.
+- A late progress update after cancel does not change a cancelled cell.
+- A direct `executeCell` superseding a running `executeFromCell` loop stops the loop without marking downstream cells `blocked`.
 - `CellContainer`: loading + `onCancel` renders an enabled Stop button that calls `onCancel`; not loading renders Run; `cancelled` shows the "Cancelled" label.
 
 ## Manual Verification
