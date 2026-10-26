@@ -41,10 +41,12 @@ write time and re-deriving at read time is valid; the on-wire bytes are identica
 1. Switch `TaggedLogString::write_value` / `read_value` in `rust/tracing/src/logs/log_events.rs`
    to the calls above; remove the `allow` attributes and the stale TODO.
 2. Add a `CHANGELOG.md` entry (internal soundness fix, no behavior change).
-3. Move this plan to `tasks/completed/` when done.
+3. Add the round-trip test to `rust/tracing/tests/log_events_tests.rs` (see Testing Strategy).
+4. Move this plan to `tasks/completed/` when done.
 
 ## Files to Modify
 - `rust/tracing/src/logs/log_events.rs`
+- `rust/tracing/tests/log_events_tests.rs`
 - `CHANGELOG.md`
 
 ## Decisions
@@ -61,13 +63,14 @@ write time and re-deriving at read time is valid; the on-wire bytes are identica
   `read_value`; `rust/analytics/tests/log_tests.rs` only covers `write_value` and the wire
   format (it parses via the transit parser and never calls `read_value`). All must pass
   unchanged.
-- Add a no-DB unit test in a new `#[cfg(test)]` module in `log_events.rs`: build a `static`
-  `LogMetadata` (see `rust/analytics/tests/log_tests.rs` ~l.251), write a `TaggedLogString`,
+- Add a no-DB test in `rust/tracing/tests/log_events_tests.rs` (this crate has no inline test
+  modules; `read_value` is a public unsafe trait method and `TaggedLogString` is exported via
+  `logs::*`): reuse the `static LogMetadata` that file already builds, write a `TaggedLogString`,
   call `read_value`, and assert `std::ptr::eq` on `desc` and equality of the `properties`
   id, `time`, and `msg`.
 - `cargo clippy --workspace -- -D warnings` must pass with the `allow` removed.
 
 ## Manual Verification
-Run `cargo +nightly miri test -p micromegas-tracing` on the new unit test if Miri is
+Run `cargo +nightly miri test -p micromegas-tracing` on the new test if Miri is
 installed. Not automated in CI because Miri needs a nightly toolchain and is slow; expected
 result: no provenance errors.
