@@ -18,6 +18,8 @@ Each cell has a status that reflects its current execution state:
 | **loading** | Currently executing |
 | **success** | Executed successfully — results available |
 | **error** | Execution failed — error message displayed |
+| **blocked** | Skipped because an earlier cell failed or is waiting for a selection |
+| **cancelled** | The run was stopped before this cell finished; previous results stay visible |
 
 After successful execution, the cell header shows execution stats: row count, data size, and elapsed time (e.g., "1,234 rows (2.3 MB) in 125ms"). During loading, live progress shows rows and bytes received so far.
 
@@ -27,6 +29,14 @@ After successful execution, the cell header shows execution stats: row count, da
 - **Run From Here**: executes the selected cell and all cells below it in sequence. This is the default when you want to refresh downstream results.
 
 Running from the first cell resets the WASM engine (clearing all registered tables) before starting, ensuring a clean slate.
+
+### Cancelling
+
+While a cell is running, its Run button becomes a Stop button. Clicking it aborts the in-flight query and stops the whole run, not just that cell: the running cell is marked **cancelled** (and keeps the results it showed before), and cells that had not started yet stay **idle** rather than being marked blocked. Run the cell again to retry.
+
+Queries against the local WASM engine cannot be interrupted. They finish in the background, but their results are discarded.
+
+If auto-refresh is enabled, the notebook runs again on the next refresh tick.
 
 ## Auto-Run
 

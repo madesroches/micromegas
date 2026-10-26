@@ -100,7 +100,7 @@ export function buildStatusText(
 
 /**
  * Compute the aggregate CellStatus for an HG group based on children states.
- * Priority: error > loading > blocked > success > idle
+ * Priority: error > loading > blocked > cancelled > success > idle
  */
 export function computeHgStatus(
   children: CellConfig[],
@@ -109,6 +109,7 @@ export function computeHgStatus(
   let hasLoading = false
   let hasError = false
   let hasBlocked = false
+  let hasCancelled = false
   let hasSuccess = false
 
   for (const child of children) {
@@ -124,6 +125,9 @@ export function computeHgStatus(
       case 'blocked':
         hasBlocked = true
         break
+      case 'cancelled':
+        hasCancelled = true
+        break
       case 'success':
         hasSuccess = true
         break
@@ -133,6 +137,7 @@ export function computeHgStatus(
   if (hasError) return 'error'
   if (hasLoading) return 'loading'
   if (hasBlocked) return 'blocked'
+  if (hasCancelled) return 'cancelled'
   if (hasSuccess) return 'success'
   return 'idle'
 }

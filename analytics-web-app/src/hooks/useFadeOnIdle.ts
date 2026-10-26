@@ -16,7 +16,7 @@ export function useFadeOnIdle(status: string): string {
     // see react-hooks/set-state-in-effect — this is a genuine timer-driven
     // state machine, not a plain prop mirror, so it stays an effect.
     const run = () => {
-      if (status === 'idle') return
+      if (status === 'idle' || status === 'cancelled') return
 
       setRevealed(true)
 

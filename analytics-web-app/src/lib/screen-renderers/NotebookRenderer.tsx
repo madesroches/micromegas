@@ -353,7 +353,7 @@ export function NotebookRenderer({
   const executionCells = useMemo(() => flattenCellsForExecution(cells), [cells])
 
   // Cell execution state management (uses flattened list)
-  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState, updateCellSelection, cellSelectionsRef } = useCellExecution({
+  const { cellStates, executeCell, executeFromCell, cancelExecution, migrateCellState, removeCellState, updateCellSelection, cellSelectionsRef } = useCellExecution({
     cells: executionCells,
     rawTimeRange,
     variableValuesRef,
@@ -579,6 +579,7 @@ export function NotebookRenderer({
                 }}
                 canRun={true}
                 onRun={firstChildName ? () => executeCellByName(firstChildName) : undefined}
+                onCancel={cancelExecution}
                 onRunFromHere={firstChildName ? () => executeFromCellByName(firstChildName) : undefined}
                 onInsertAbove={() => { setInsertAtIndex(index); setShowAddCellModal(true) }}
                 onInsertBelow={() => { setInsertAtIndex(index + 1); setShowAddCellModal(true) }}
@@ -604,6 +605,7 @@ export function NotebookRenderer({
                     setSelectedChildName(childName)
                   }}
                   onChildRun={(childName) => executeCellByName(childName)}
+                  onCancel={cancelExecution}
                   onVariableValueChange={(cellName, value) => {
                     setVariableValue(cellName, value)
                     const child = hgConfig.children.find((c) => c.name === cellName)
@@ -708,6 +710,7 @@ export function NotebookRenderer({
               setSelectedChildName(null)
             }}
             onRun={() => executeCellByName(cell.name)}
+            onCancel={cancelExecution}
             onRunFromHere={meta.execute ? () => executeFromCellByName(cell.name) : undefined}
             autoRunFromHere={meta.execute ? cell.autoRunFromHere : undefined}
             onToggleAutoRunFromHere={

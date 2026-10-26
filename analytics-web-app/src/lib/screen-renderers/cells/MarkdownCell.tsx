@@ -181,7 +181,7 @@ export function MarkdownCell({ content, data, status, options, variables, timeRa
   if (evaluated && !sameEvaluation(evaluated, cached)) {
     setCached(evaluated)
   }
-  const showCached = !evaluated && (status === 'loading' || status === 'idle') && data.length > 0
+  const showCached = !evaluated && (status === 'loading' || status === 'idle' || status === 'cancelled') && data.length > 0
   const { text: markdownContent, warnings: templateWarnings } = evaluated ?? (showCached ? cached : { text: '', warnings: [] })
 
   const colors = table && row ? resolveMarkdownColors(table, row) : { warnings: [] as string[] }

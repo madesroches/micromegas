@@ -27,6 +27,7 @@ vi.mock('lucide-react', () => ({
   ChevronRight: () => <span data-testid="chevron-right">▶</span>,
   Play: () => <span data-testid="play">▶</span>,
   RotateCcw: () => <span data-testid="rotate">↻</span>,
+  Square: () => <span data-testid="square">■</span>,
   MoreVertical: () => <span data-testid="more">⋮</span>,
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,

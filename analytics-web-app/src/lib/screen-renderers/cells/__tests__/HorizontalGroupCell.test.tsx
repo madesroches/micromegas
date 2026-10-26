@@ -8,6 +8,7 @@ vi.mock('lucide-react', () => ({
   GripVertical: () => <span data-testid="grip">⠿</span>,
   Play: () => <span data-testid="play">▶</span>,
   RotateCcw: () => <span data-testid="rotate">↻</span>,
+  Square: () => <span data-testid="square">■</span>,
   MoreVertical: () => <span data-testid="more">⋮</span>,
   Trash2: () => <span data-testid="trash">🗑</span>,
   ChevronLeft: () => <span data-testid="chevron-left">◀</span>,
@@ -309,6 +310,36 @@ describe('HorizontalGroupCell', () => {
       const runButton = screen.getByTitle('Run cell')
       fireEvent.click(runButton)
       expect(onChildRun).toHaveBeenCalledWith('runme')
+    })
+
+    it('loading child with onCancel renders a Stop button that calls it', () => {
+      const onCancel = vi.fn()
+      const children = [makeChild('busy', 'table')]
+      render(
+        <HorizontalGroupCell
+          {...createRendererProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children },
+            cellStates: { busy: { status: 'loading', data: [] } },
+            onCancel,
+          })}
+        />
+      )
+      fireEvent.click(screen.getByTitle('Cancel'))
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
+    })
+
+    it('shows Cancelled label for a cancelled child', () => {
+      const children = [makeChild('stopped', 'table')]
+      render(
+        <HorizontalGroupCell
+          {...createRendererProps({
+            config: { type: 'hg', name: 'g', layout: { height: 300 }, children },
+            cellStates: { stopped: { status: 'cancelled', data: [] } },
+          })}
+        />
+      )
+      expect(screen.getByText('Cancelled')).toBeInTheDocument()
     })
 
     it('run button is disabled during loading', () => {

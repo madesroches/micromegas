@@ -55,6 +55,7 @@ export interface HorizontalGroupCellProps {
   selectedChildName: string | null
   onChildSelect: (childName: string | null) => void
   onChildRun: (childName: string) => void
+  onCancel?: () => void
   onVariableValueChange: (cellName: string, value: VariableValue) => void
   onConfigChange: (config: HorizontalGroupCellConfig) => void
   onChildDragOut: (childName: string, position: 'before' | 'after') => void
@@ -87,6 +88,7 @@ export function HorizontalGroupCell({
   selectedChildName,
   onChildSelect,
   onChildRun,
+  onCancel,
   onVariableValueChange,
   onConfigChange,
   onChildDragOut,
@@ -221,6 +223,7 @@ export function HorizontalGroupCell({
                     isSelected={selectedChildName === child.name}
                     onSelect={() => onChildSelect(child.name)}
                     onRun={() => onChildRun(child.name)}
+                    onCancel={onCancel}
                     onDownloadCsv={
                       state.data.length > 0 && state.data[0].numRows > 0
                         ? () => {

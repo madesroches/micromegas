@@ -15,6 +15,7 @@ import {
   Pencil,
   Play,
   RotateCcw,
+  Square,
   MoreVertical,
   Trash2,
 } from 'lucide-react'
@@ -51,6 +52,7 @@ interface HgChildPaneProps {
   isSelected: boolean
   onSelect: () => void
   onRun: () => void
+  onCancel?: () => void
   onDownloadCsv?: () => void
   onDeleteChild: () => void
   dragHandleProps: Record<string, unknown>
@@ -64,7 +66,7 @@ interface HgChildPaneProps {
 export function HgChildPane({
   child, state, commonProps,
   isSelected,
-  onSelect, onRun, onDownloadCsv, onDeleteChild,
+  onSelect, onRun, onCancel, onDownloadCsv, onDeleteChild,
   dragHandleProps, isDragging, setNodeRef, style, showDivider, onChildRef,
 }: HgChildPaneProps) {
   const setNodeRefStable = useRef(setNodeRef)
@@ -84,6 +86,7 @@ export function HgChildPane({
   const canRun = !!meta.execute
 
   const statusText = buildStatusText(child, state)
+  const showStop = state.status === 'loading' && !!onCancel && canRun
 
   const statusColor =
     state.status === 'loading'
@@ -99,7 +102,9 @@ export function HgChildPane({
         ? 'Error'
         : state.status === 'blocked'
           ? 'Blocked'
-          : statusText || ''
+          : state.status === 'cancelled'
+            ? 'Cancelled'
+            : statusText || ''
 
   return (
     <div
@@ -149,8 +154,20 @@ export function HgChildPane({
           )}
         </div>
 
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/pane:opacity-100 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
-          {canRun && (
+        <div className={`flex items-center gap-0.5 shrink-0 transition-opacity ${showStop ? 'opacity-100' : 'opacity-0 group-hover/pane:opacity-100'}`} onDoubleClick={(e) => e.stopPropagation()}>
+          {showStop && (
+            <button
+              className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
+              onClick={(e) => {
+                e.stopPropagation()
+                onCancel?.()
+              }}
+              title="Cancel"
+            >
+              <Square className="w-3 h-3" />
+            </button>
+          )}
+          {!showStop && canRun && (
             <button
               className="p-0.5 text-theme-text-muted hover:text-theme-text-primary transition-colors"
               onClick={(e) => {

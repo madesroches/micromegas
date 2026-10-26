@@ -14,6 +14,7 @@ vi.mock('lucide-react', () => ({
   Download: () => <span data-testid="download">⬇</span>,
   Play: () => <span data-testid="play">▶</span>,
   RotateCcw: () => <span data-testid="rotate">↻</span>,
+  Square: () => <span data-testid="square">■</span>,
   MoreVertical: () => <span data-testid="more">⋮</span>,
   Trash2: () => <span data-testid="trash">🗑</span>,
   GripVertical: () => <span data-testid="grip">⠿</span>,
@@ -88,6 +89,29 @@ describe('CellContainer', () => {
     it('should show "Blocked" when status is blocked', () => {
       render(<CellContainer {...defaultProps} status="blocked" />)
       expect(screen.getByText('Blocked')).toBeInTheDocument()
+    })
+
+    it('should show "Cancelled" when status is cancelled', () => {
+      render(<CellContainer {...defaultProps} status="cancelled" />)
+      expect(screen.getByText('Cancelled')).toBeInTheDocument()
+      expect(screen.getByText('Cell content')).toBeInTheDocument()
+    })
+
+    it('should render an enabled Stop button that calls onCancel while loading', () => {
+      const onCancel = vi.fn()
+      const onRun = vi.fn()
+      render(<CellContainer {...defaultProps} status="loading" onRun={onRun} onCancel={onCancel} />)
+      const stop = screen.getByTitle('Cancel')
+      expect(stop).not.toBeDisabled()
+      fireEvent.click(stop)
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
+    })
+
+    it('should render Run, not Stop, when not loading', () => {
+      render(<CellContainer {...defaultProps} status="success" onRun={vi.fn()} onCancel={vi.fn()} />)
+      expect(screen.getByTitle('Run cell')).toBeInTheDocument()
+      expect(screen.queryByTitle('Cancel')).not.toBeInTheDocument()
     })
 
     it('should show custom status text when provided', () => {
