@@ -14,6 +14,7 @@ pub mod error;
 pub mod handler;
 pub mod identity;
 pub mod proto;
+pub mod rejected;
 
 pub use error::{OtelError, Signal};
 pub use handler::Encoding;
