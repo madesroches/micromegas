@@ -1,5 +1,9 @@
 use micromegas_tracing::levels::{Level, LevelFilter};
-use micromegas_tracing::logs::{FILTER_LEVEL_UNSET_VALUE, FilterState, LogMetadata};
+use micromegas_tracing::logs::{
+    FILTER_LEVEL_UNSET_VALUE, FilterState, LogMetadata, TaggedLogString,
+};
+use micromegas_tracing::property_set::{PropertySet, PropertySetId};
+use micromegas_transit::{DynString, InProcSerialize};
 use std::thread;
 
 #[test]
@@ -75,4 +79,31 @@ fn test_filter_levels() {
         FilterState::Set(LevelFilter::Info)
     );
     assert_eq!(METADATA.level_filter(1024), FilterState::Outdated);
+}
+
+#[test]
+fn test_tagged_log_string_round_trip() {
+    static METADATA: LogMetadata = LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "round trip",
+        target: module_path!(),
+        module_path: module_path!(),
+        file: file!(),
+        line: line!(),
+    };
+    let event = TaggedLogString {
+        desc: &METADATA,
+        properties: PropertySetId::interned(PropertySet::empty()),
+        time: 42,
+        msg: DynString("hello".into()),
+    };
+    let mut buffer = Vec::new();
+    event.write_value(&mut buffer);
+    // SAFETY: the buffer was just produced by write_value for the same type.
+    let read = unsafe { TaggedLogString::read_value(&buffer) };
+    assert!(std::ptr::eq(read.desc, event.desc));
+    assert_eq!(read.properties, event.properties);
+    assert_eq!(read.time, 42);
+    assert_eq!(read.msg.0, "hello");
 }

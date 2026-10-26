@@ -293,21 +293,24 @@ impl InProcSerialize for TaggedLogString {
     }
 
     fn write_value(&self, buffer: &mut Vec<u8>) {
-        write_any(buffer, &self.desc);
+        // Exposing the provenance is what allows read_value to rebuild a valid reference from the
+        // bare address stored in the buffer.
+        let desc_id = (self.desc as *const LogMetadata<'static>).expose_provenance() as u64;
+        write_any(buffer, &desc_id);
         write_any(buffer, &self.properties.0);
         write_any(buffer, &self.time);
         self.msg.write_value(buffer);
     }
 
-    #[allow(unknown_lints)]
-    #[allow(integer_to_ptr_transmutes)] // TODO: Fix pointer provenance properly (see tasks/pointer-provenance.md)
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let desc_id: u64 = read_consume_pod(&mut window);
         let properties_id: u64 = read_consume_pod(&mut window);
         let time: i64 = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
-            desc: unsafe { std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id) },
+            desc: unsafe {
+                &*std::ptr::with_exposed_provenance::<LogMetadata<'static>>(desc_id as usize)
+            },
             properties: PropertySetId(properties_id),
             time,
             msg,
