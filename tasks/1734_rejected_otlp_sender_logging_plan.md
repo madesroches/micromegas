@@ -25,7 +25,7 @@ credential has already been refused. The 401 response and the existing `[auth_fa
 - OTLP routes (`rust/public/src/servers/otlp.rs:196`) sit **inside** `protected_app`. Their gzip
   decompression layer, 20 MiB limit and 300 MiB decompressed cap
   (`rust/public/src/servers/ingestion_limits.rs`) run after auth, so on rejection the body is the
-  raw wire stream: possibly gzip, possibly up to 100 MiB, not yet bounded by the OTLP limits.
+  raw wire stream: possibly gzip, with no size limit applied yet (the 100 MiB limit layer sits inside auth too).
 - The identity logic for accepted requests is `ProcessFromResource::build`
   (`rust/otel-ingestion/src/block.rs:440`): `exe` = `service.namespace/service.name` (or just
   `service.name`), `computer` = `host.name`. Helpers: `identity::attr` and `identity::attr_to_string`
@@ -126,8 +126,8 @@ async fn read_body_prefix(req: Request, content_encoding, cap: usize) -> Result<
 
 `RejectedProcessLogger` becomes `RejectedRequestLogger` (a Rust-only rename, compiler-enumerated)
 and gains `log_rejected_otlp(req)`. The middleware's `match` arm selects the method by path:
-`INSERT_PROCESS_PATH` → `log_rejected`, `OTLP_PATHS` (the three `/ingestion/otlp/v1/{logs,metrics,traces}`
-routes; the Firehose and webhook routes carry their own auth and aren't touched) →
+`INSERT_PROCESS_PATH` → `log_rejected`, `OTLP_PATHS` (new array of the three `/ingestion/otlp/v1/{logs,metrics,traces}`
+path constants; the Firehose and webhook routes carry their own auth and aren't touched) →
 `log_rejected_otlp`. Everything else is unchanged.
 
 `log_rejected_otlp` emits a second line next to the existing `[auth_failure]` one:
@@ -149,7 +149,9 @@ Two guards, because a misconfigured exporter retries continuously and a NAT can 
 different apps behind one IP:
 
 - **Dedup on the identity, not the IP**: the moka cache key is `(client_ip, Some(identity_key))`
-  where `identity_key` is `"otlp\x1f{exe}\x1f{computer}\x1f{instance_id}"`. One line per
+  where `identity_key` is `"otlp\x1f{exe}\x1f{computer}\x1f{instance_id}"`, built from the same
+  values truncated to `MAX_CLAIM_CHARS` that are logged, so key size is bounded (the cache bounds entry
+  count, not bytes). One line per
   distinct sender per minute, so two apps behind one NAT both appear. The `insert_process`
   entries (`Some(process_id)`) and the "not inspected" entries (`None`) can't collide with it.
   The *not inspected* lines use the existing `(client_ip, None)` key.
@@ -159,19 +161,14 @@ different apps behind one IP:
   rejected requests arrive, which dedup alone doesn't (dedup runs after the parse because the key
   comes from the body).
 
-### Alternatives for the log shape
-
-The issue proposes adding properties to the existing `[auth_failure]` line. A separate line is chosen
-because the parse must run after `authenticate` has already logged (the existing line is emitted
-inside `authenticate`, before the request is handed back), the same split `insert_process` already has,
-and it lets the extra line be deduplicated without suppressing the per-request rejection line.
-
 ## Implementation Steps
 
 1. `otel-ingestion`: add `identity::exe_from_service`, switch `ProcessFromResource::build` to it.
 2. `otel-ingestion`: add `rejected.rs` with the protobuf walker, JSON visitor, allowlist and
    `ClaimedResource`; export from `lib.rs`; unit tests.
-3. `public/servers/otlp.rs`: make `content_type_encoding` and the OTLP path constants `pub(crate)`.
+3. `public/servers/otlp.rs`: add the three OTLP path constants and an `OTLP_PATHS` array (exported
+   `pub(crate)`), use the constants in `otlp_router` instead of inline literals, and make
+   `content_type_encoding` `pub(crate)`.
 4. `public/servers/ingestion_auth.rs`: add `read_body_prefix`, gzip handling, semaphore, rename
    `RejectedProcessLogger` → `RejectedRequestLogger`, add `log_rejected_otlp`, extend the middleware
    `match`.
@@ -197,14 +194,12 @@ and it lets the extra line be deduplicated without suppressing the per-request r
   concurrency cap bounds the cost instead.
 - **Log every Resource attribute**: most useful, but attributes can hold secrets (command lines,
   environment variables, custom keys); an allowlist is the same stance `insert_process` logging took.
-- **gzip only** for decompression: it's the only encoding the OTLP sub-router accepts
-  (`RequestDecompressionLayer::new().gzip(true)`), so anything else would be rejected by the
-  accepted path as well.
 
 ## Decisions
 
 - `claimed_username` and `claimed_computer` are personal data of the kind already stored in
   `processes`; they are logged here as for `insert_process`, and the docs repeat the access-control note.
+- The claims go on a separate log line rather than on the existing `[auth_failure]` line, which is emitted inside `authenticate` before the body can be read (same split as `insert_process`).
 - Firehose and webhook routes are out of scope: they have separate auth and carry no OTLP Resource.
 
 ## Documentation
