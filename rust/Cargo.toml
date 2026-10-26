@@ -51,6 +51,7 @@ colorous = "1.0"
 criterion = "0.5"
 ctrlc = "3.2.0"
 datafusion = "55.1"
+datasketches = { version = "0.5", features = ["hll"] }
 flate2 = "1.0"
 foyer = "0.22"
 foyer-common = "0.22"

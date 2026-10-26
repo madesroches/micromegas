@@ -20,9 +20,9 @@ serialized in the Apache DataSketches HLL format so they remain mergeable by Spa
 - Everything is registered in `register_extension_udfs` (`src/lib.rs`), which is shared by the
   server and `rust/datafusion-wasm`.
 - There is no distinct-count sketch today; `count(DISTINCT)` / `approx_distinct` need the raw data.
-- `datasketches` 0.3.0 (Apache DataSketches Rust, Apache-2.0, **no dependencies**, so wasm32-safe)
-  provides `hll::{HllSketch, HllUnion, HllType}` with `serialize()` / `deserialize()` in the
-  standard DataSketches binary format, plus `Coupon::from_hash` and `hash_value` wrappers.
+- `datasketches` 0.5.0 (Apache DataSketches Rust, Apache-2.0, **no dependencies**, so wasm32-safe)
+  provides `hll::{HllSketch, HllUnion, HllType}` (constructors return `Result`) with `serialize()` / `deserialize()` in the
+  standard DataSketches binary format, plus `Coupon::from_hash` and `hash::value` wrappers.
   It is not yet in `rust/Cargo.toml`.
 - DataFusion's internal HLL (`approx_distinct`) exposes only the estimate, not a mergeable
   serialized state, so it cannot be reused.
@@ -31,7 +31,7 @@ serialized in the Apache DataSketches HLL format so they remain mergeable by Spa
 
 ### Dependency and format
 
-Add `datasketches = { version = "0.3", features = ["hll"] }` to the workspace `rust/Cargo.toml` and
+Add `datasketches = { version = "0.5", features = ["hll"] }` to the workspace `rust/Cargo.toml` and
 reference it from `rust/datafusion-extensions/Cargo.toml` (`hll` is a feature of `datasketches`).
 Sketches are `DataType::Binary` values holding `HllSketch::serialize()` output, built as
 `HllType::Hll4` (smallest: ~8 KB at lg_k=14 when dense, far smaller in list/set mode for low
@@ -49,7 +49,7 @@ covered.
   `return_type` is `Binary`.
 - `HllSketch::update` hashes via std `Hash` (MurmurHash3; a plain `&str` appends 0xff and a
   `&[u8]` adds a length prefix), which does not match other DataSketches implementations. Each
-  value is therefore wrapped explicitly with `datasketches::hash_value` before `update_value`:
+  value is therefore wrapped explicitly with `datasketches::hash::value` before `update_value`:
 
   | DataType | Hashing |
   |---|---|
@@ -66,7 +66,7 @@ covered.
   empty strings/bytes are skipped. `state()` and `evaluate()` both emit
   `union.to_sketch(HllType::Hll4).serialize()` (single `Binary` scalar; `evaluate()` is NULL when
   the group saw no values, see Decisions); `merge_batch` deserializes each state and calls
-  `union.update`. `size()` is `size_of::<Self>()` plus an estimate from `LG_K` (about `2^LG_K` bytes), since `HllUnion` exposes no size accessor.
+  `union.update`. `size()` is `size_of::<Self>()` adjusted by `HllUnion::estimated_size()`.
 
 ### `merge_hll(sketch)` — aggregate
 
@@ -97,7 +97,7 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
 
 ## Implementation Steps
 
-1. Add `datasketches = { version = "0.3", features = ["hll"] }` to `rust/Cargo.toml` (workspace deps)
+1. Add `datasketches = { version = "0.5", features = ["hll"] }` to `rust/Cargo.toml` (workspace deps)
    and reference it from `rust/datafusion-extensions/Cargo.toml`; add HLL to that crate's
    description/keywords; refresh `rust/Cargo.lock` and `rust/datafusion-wasm/Cargo.lock` (separate lockfile).
 2. Create `rust/datafusion-extensions/src/hll/` with the shared helpers and `LG_K`.
@@ -135,9 +135,8 @@ and are available in `datafusion-wasm` automatically; verify the wasm build stil
   precisions.
 - AFK: empty strings/bytes are skipped (matches other DataSketches implementations).
 - AFK: `UInt64` values above `i64::MAX` are hashed via wrapping cast to `i64`.
-- AFK: `datasketches` stays pinned at `0.3` (the version whose APIs this plan was verified
-  against); the implementer should confirm the workspace toolchain meets its MSRV (1.86) and
-  may move to a newer release only if every API used here is unchanged.
+- `datasketches` is pinned at `0.5` (latest stable; MSRV 1.86 is met by the workspace
+  toolchain). The 0.6 release candidate is not used.
 
 ## Documentation
 

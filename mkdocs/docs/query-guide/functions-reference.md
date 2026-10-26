@@ -1225,6 +1225,77 @@ SELECT sum_from_histogram(duration_histogram) as total_duration
 FROM performance_histograms;
 ```
 
+#### HyperLogLog Functions
+
+Approximate distinct counts that can be pre-aggregated and merged later, for example daily unique users stored in a materialized view and combined into weekly or monthly counts after the raw identifiers have expired. They mirror `make_histogram` / `sum_histograms` / `count_from_histogram`.
+
+Sketches are `Binary` values serialized in the Apache DataSketches HLL format, so they can be merged by other DataSketches implementations such as Spark or Databricks. Precision is fixed at `lg_k = 14`, which gives a standard error of about 0.8%. Sketches built at another precision can still be merged; the result takes the lowest precision involved.
+
+**Limits and trade-offs:**
+
+- Intersections are not supported: inclusion-exclusion over sketches is inaccurate. Compute intersections from raw data before it expires, or materialize a sketch per cohort.
+- Hashing uses a fixed seed. A sketch of a small group can be probed for membership by someone who can guess identifiers, so materialize sketches only for groups large enough that this is not a concern.
+
+##### `make_hll(value)`
+
+Aggregate that builds a sketch from the values of a column.
+
+**Syntax:**
+```sql
+make_hll(value)
+```
+
+**Parameters:**
+
+- `value`: strings (`Utf8`, `LargeUtf8`, `Utf8View`), signed or unsigned integers, `Float32`/`Float64` or `Binary` (dictionary-encoded columns of these types are also accepted). Nulls and empty strings or byte arrays are skipped.
+
+**Returns:** `Binary` - serialized sketch, or NULL when the group had no value to count
+
+##### `merge_hll(sketch)`
+
+Aggregate that unions sketches. The result is the same as a sketch built over the union of the underlying values.
+
+**Syntax:**
+```sql
+merge_hll(sketch)
+```
+
+**Parameters:**
+
+- `sketch` (`Binary`): serialized sketch. NULL inputs are skipped; a payload that is not a valid sketch is an error.
+
+**Returns:** `Binary` - serialized sketch, or NULL when every input was NULL or empty
+
+##### `hll_cardinality(sketch)`
+
+Estimated number of distinct values in a sketch.
+
+**Syntax:**
+```sql
+hll_cardinality(sketch)
+```
+
+**Returns:** `UInt64`. NULL for a NULL sketch; use `COALESCE(..., 0)` for display.
+
+**Example:**
+```sql
+-- Extract: one sketch per day (the query of a materialized view)
+SELECT date_trunc('day', time) AS day, make_hll(property_get(properties, 'user_id')) AS users
+FROM log_entries
+WHERE time >= '$begin' AND time < '$end'
+GROUP BY day;
+
+-- Merge: combine the daily sketches (the merge query of the view)
+SELECT merge_hll(users) AS users
+FROM daily_uniques
+WHERE day >= '$begin' AND day < '$end';
+
+-- Monthly active users from the daily sketches
+SELECT hll_cardinality(merge_hll(users)) AS mau
+FROM daily_uniques
+WHERE day >= NOW() - INTERVAL '30 days';
+```
+
 #### Color Functions
 
 Color functions build packed RGBA `u32` values suitable for the map cell's `color` channel (and any other consumer that decodes colors in `0xRRGGBBAA` byte order). Component floats are in `[0.0, 1.0]`; out-of-range values are clamped at the byte boundary. Alpha is straight (not premultiplied), and operations act directly on sRGB-encoded 8-bit channels.

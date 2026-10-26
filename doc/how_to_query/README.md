@@ -685,6 +685,53 @@ FROM performance_data
 GROUP BY service_name
 ```
 
+### HyperLogLog Functions
+
+Approximate distinct counts that can be pre-aggregated and merged later. Sketches are `Binary` values in the Apache DataSketches HLL format (about 0.8% standard error).
+
+#### `make_hll`
+
+Aggregate that builds a sketch from the values of a column (strings, integers, floats, binary). Nulls and empty strings are skipped; the result is NULL when no value was seen.
+
+```sql
+make_hll(value)
+```
+
+**Returns:** `Binary` - Serialized sketch
+
+**Example:**
+```sql
+SELECT date_trunc('day', time) AS day, make_hll(user_id) AS users
+FROM events
+GROUP BY day
+```
+
+#### `merge_hll`
+
+Aggregate that unions sketches losslessly.
+
+```sql
+merge_hll(sketch)
+```
+
+**Returns:** `Binary` - Serialized sketch
+
+#### `hll_cardinality`
+
+Estimated distinct count of a sketch.
+
+```sql
+hll_cardinality(sketch)
+```
+
+**Returns:** `UInt64` - NULL for a NULL sketch
+
+**Example:**
+```sql
+SELECT hll_cardinality(merge_hll(users)) AS monthly_active
+FROM daily_uniques
+```
+
 ### JSON Functions
 
 Micromegas provides JSON support through integration with the [jsonb crate](https://docs.rs/jsonb/latest/jsonb/), offering efficient binary JSON storage and manipulation.
