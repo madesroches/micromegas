@@ -1,6 +1,6 @@
 # Identify the Sender of Rejected OTLP Requests Plan
 
-GitHub issue: #1734
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1734
 
 ## Overview
 
