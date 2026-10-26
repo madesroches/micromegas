@@ -1,6 +1,6 @@
 # Cancel Cell Execution Plan
 
-**Issue**: [#745](https://github.com/madesroches/micromegas/issues/745)
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/745
 
 ## Overview
 
