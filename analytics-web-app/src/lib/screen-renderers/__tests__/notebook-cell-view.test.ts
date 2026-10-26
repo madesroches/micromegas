@@ -8,6 +8,7 @@ import {
   safeTableByteLength,
   buildStatusText,
   buildHgStatusText,
+  computeHgStatus,
   buildCellRendererProps,
 } from '../notebook-cell-view'
 
@@ -217,6 +218,42 @@ describe('buildStatusText', () => {
 // =============================================================================
 // buildHgStatusText
 // =============================================================================
+
+describe('computeHgStatus', () => {
+  const children = [
+    { type: 'table', name: 'a', sql: 'SELECT 1', layout: { height: 300 } },
+    { type: 'table', name: 'b', sql: 'SELECT 1', layout: { height: 300 } },
+  ] as CellConfig[]
+
+  it('aggregates a cancelled child to cancelled', () => {
+    expect(computeHgStatus(children, { a: { status: 'cancelled', data: [] } })).toBe('cancelled')
+  })
+
+  it('aggregates all-cancelled to cancelled, not idle', () => {
+    expect(
+      computeHgStatus(children, {
+        a: { status: 'cancelled', data: [] },
+        b: { status: 'cancelled', data: [] },
+      }),
+    ).toBe('cancelled')
+  })
+
+  it('prefers cancelled over success', () => {
+    expect(
+      computeHgStatus(children, {
+        a: { status: 'cancelled', data: [] },
+        b: { status: 'success', data: [] },
+      }),
+    ).toBe('cancelled')
+  })
+
+  it('keeps error, loading and blocked ahead of cancelled', () => {
+    const cancelled = { status: 'cancelled' as const, data: [] }
+    expect(computeHgStatus(children, { a: cancelled, b: { status: 'error', data: [] } })).toBe('error')
+    expect(computeHgStatus(children, { a: cancelled, b: { status: 'loading', data: [] } })).toBe('loading')
+    expect(computeHgStatus(children, { a: cancelled, b: { status: 'blocked', data: [] } })).toBe('blocked')
+  })
+})
 
 describe('buildHgStatusText', () => {
   it('returns undefined for no children', () => {

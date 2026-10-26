@@ -103,7 +103,7 @@ export function deserializeVariableValue(str: string): VariableValue {
 // This avoids circular dependencies while keeping the types together
 export type CellType = 'table' | 'chart' | 'log' | 'markdown' | 'variable' | 'propertytimeline' | 'swimlane' | 'perfettoexport' | 'referencetable' | 'hg' | 'transposed' | 'flamegraph' | 'map' | 'image' | 'piechart' | 'stackedbar'
 
-export type CellStatus = 'idle' | 'loading' | 'success' | 'error' | 'blocked'
+export type CellStatus = 'idle' | 'loading' | 'success' | 'error' | 'blocked' | 'cancelled'
 
 export interface CellConfigBase {
   name: string

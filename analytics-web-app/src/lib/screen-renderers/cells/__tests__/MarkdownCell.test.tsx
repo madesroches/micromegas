@@ -302,6 +302,9 @@ describe('MarkdownCell', () => {
 
       rerender(<MarkdownCell {...createMockProps({ content: '$value', data: [table], status: 'idle' })} />)
       expect(screen.getByText('1')).toBeInTheDocument()
+
+      rerender(<MarkdownCell {...createMockProps({ content: '$value', data: [table], status: 'cancelled' })} />)
+      expect(screen.getByText('1')).toBeInTheDocument()
     })
 
     it('shows the cached resolved value for an upstream $cell[0].col macro while idle-with-data, instead of re-evaluating against a stripped cellResults', () => {

@@ -1707,4 +1707,381 @@ describe('useCellExecution', () => {
       expect(result.current.cellStates['NoEngine'].error).toContain('WASM engine not loaded')
     })
   })
+  describe('cancellation', () => {
+    function deferred<T = void>() {
+      let resolve!: (v: T) => void
+      let reject!: (e: unknown) => void
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+      return { promise, resolve, reject }
+    }
+
+    const tableCell = (name: string, extra: Record<string, unknown> = {}) =>
+      ({ type: 'table', name, sql: 'SELECT 1', layout: { height: 'auto' }, ...extra }) as CellConfig
+
+    function setup(cells: CellConfig[], engine?: NotebookQueryEngine) {
+      const variableValuesRef = createVariableValuesRef()
+      return renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue: vi.fn(),
+          refreshTrigger: 0,
+          engine: engine ?? null,
+        })
+      )
+    }
+
+    // Each call to the mocked streamQuery blocks on the next gate in the list.
+    function gateStreams(gates: ReturnType<typeof deferred>[], signals: AbortSignal[] = []) {
+      let call = 0
+      mockStreamQuery.mockImplementation(async function* (_params: unknown, signal: AbortSignal) {
+        signals.push(signal)
+        await gates[call++].promise
+        yield { type: 'done' }
+      })
+    }
+
+    it('aborts the in-flight signal and marks the cell cancelled, keeping previous data', async () => {
+      mockStreamQuery.mockImplementationOnce(() => createSuccessResults())
+      const gate = deferred()
+      const signals: AbortSignal[] = []
+      const { result } = setup([tableCell('A')])
+
+      await act(async () => {
+        await result.current.executeCell(0)
+      })
+      const previousData = result.current.cellStates['A'].data
+      expect(previousData.length).toBeGreaterThan(0)
+
+      gateStreams([gate], signals)
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+
+      act(() => {
+        result.current.cancelExecution()
+      })
+      expect(signals[0].aborted).toBe(true)
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['A'].data).toBe(previousData)
+
+      await act(async () => {
+        gate.resolve()
+        await pending
+      })
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+    })
+
+    it('stops the loop mid-run without marking later cells blocked', async () => {
+      const gate = deferred()
+      gateStreams([gate])
+      const { result } = setup([tableCell('A'), tableCell('B'), tableCell('C')])
+
+      let run!: Promise<void>
+      act(() => {
+        run = result.current.executeFromCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A']?.status).toBe('loading'))
+
+      act(() => {
+        result.current.cancelExecution()
+      })
+      await act(async () => {
+        gate.resolve()
+        await run
+      })
+
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['B']).toBeUndefined()
+      expect(result.current.cellStates['C']).toBeUndefined()
+      expect(mockStreamQuery).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not let a late result or onExecutionComplete overwrite cancelled', async () => {
+      const gate = deferred()
+      const engine = createMockEngine({
+        execute_and_register: vi.fn().mockReturnValue(gate.promise),
+      })
+      const setVariableValue = vi.fn()
+      const cells: CellConfig[] = [
+        { type: 'variable', name: 'V', variableType: 'combobox', sql: 'SELECT 1', dataSource: 'notebook', layout: { height: 'auto' } } as CellConfig,
+      ]
+      const variableValuesRef = createVariableValuesRef()
+      const { result } = renderHook(() =>
+        useCellExecution({
+          cells,
+          rawTimeRange: defaultRawTimeRange,
+          variableValuesRef,
+          setVariableValue,
+          refreshTrigger: 0,
+          engine,
+        })
+      )
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['V'].status).toBe('loading'))
+      act(() => {
+        result.current.cancelExecution()
+      })
+      await act(async () => {
+        gate.resolve(new Uint8Array([1]))
+        expect(await pending).toBe(false)
+      })
+
+      expect(result.current.cellStates['V'].status).toBe('cancelled')
+      expect(setVariableValue).not.toHaveBeenCalled()
+      expect(engine.deregister_table).not.toHaveBeenCalled()
+    })
+
+    it('does not register a remote result in the engine after abort', async () => {
+      const gate = deferred<Uint8Array>()
+      mockFetchQueryIPC.mockReturnValue(gate.promise)
+      const engine = createMockEngine()
+      const { result } = setup([tableCell('A')], engine)
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+      act(() => {
+        result.current.cancelExecution()
+      })
+      await act(async () => {
+        gate.resolve(new Uint8Array([1]))
+        await pending
+      })
+
+      expect(engine.register_table).not.toHaveBeenCalled()
+    })
+
+    it('does not register a runQueryAs result in the engine after abort', async () => {
+      // A cell type whose execute calls runQueryAs directly
+      const { getCellTypeMetadata } = await import('../cell-registry')
+      const meta = getCellTypeMetadata('table') as unknown as { execute: unknown }
+      const original = meta.execute
+      const gate = deferred<Uint8Array>()
+      mockFetchQueryIPC.mockReturnValue(gate.promise)
+      meta.execute = async (_c: unknown, ctx: { runQueryAs: (s: string, t: string) => Promise<unknown> }) => ({
+        data: [await ctx.runQueryAs('SELECT 1', 'extra')],
+      })
+      try {
+        const engine = createMockEngine()
+        const { result } = setup([tableCell('A')], engine)
+        let pending!: Promise<boolean>
+        act(() => {
+          pending = result.current.executeCell(0)
+        })
+        await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+        act(() => {
+          result.current.cancelExecution()
+        })
+        await act(async () => {
+          gate.resolve(new Uint8Array([1]))
+          await pending
+        })
+        expect(engine.register_table).not.toHaveBeenCalled()
+      } finally {
+        meta.execute = original
+      }
+    })
+
+    it('aborts the old query when the superseding run returns early as blocked', async () => {
+      const gate = deferred()
+      const signals: AbortSignal[] = []
+      gateStreams([gate], signals)
+      const { result } = setup([
+        tableCell('A'),
+        tableCell('B', { sql: 'SELECT $A.selected.id' }),
+      ])
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+
+      await act(async () => {
+        await result.current.executeFromCell(1)
+      })
+      expect(signals[0].aborted).toBe(true)
+      expect(result.current.cellStates['B'].status).toBe('blocked')
+
+      await act(async () => {
+        gate.resolve()
+        expect(await pending).toBe(false)
+      })
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['B'].status).toBe('blocked')
+    })
+
+    it('keeps the cell cancelled when a non-abort error arrives after cancel', async () => {
+      const gate = deferred()
+      mockStreamQuery.mockImplementation(async function* () {
+        await gate.promise
+        if (gate.promise) throw new Error('network down')
+        yield { type: 'done' }
+      })
+      const { result } = setup([tableCell('A')])
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+      act(() => {
+        result.current.cancelExecution()
+      })
+      await act(async () => {
+        gate.resolve()
+        await pending
+      })
+
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['A'].error).toBeUndefined()
+    })
+
+    it('ignores progress updates after cancel', async () => {
+      const gate = deferred<Uint8Array>()
+      let onProgress!: (p: { bytes: number; rows: number }) => void
+      mockFetchQueryIPC.mockImplementation((_params: unknown, _signal: unknown, cb: typeof onProgress) => {
+        onProgress = cb
+        return gate.promise
+      })
+      const { result } = setup([tableCell('A')], createMockEngine())
+
+      let pending!: Promise<boolean>
+      act(() => {
+        pending = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+      act(() => {
+        result.current.cancelExecution()
+      })
+      act(() => {
+        onProgress({ bytes: 10, rows: 1 })
+      })
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['A'].fetchProgress).toBeUndefined()
+
+      await act(async () => {
+        gate.resolve(new Uint8Array([1]))
+        await pending
+      })
+    })
+
+    it('still marks downstream cells blocked on a genuine failure', async () => {
+      mockStreamQuery.mockImplementationOnce(() => createThrowingGenerator('boom'))
+      const { result } = setup([tableCell('A'), tableCell('B')])
+
+      await act(async () => {
+        await result.current.executeFromCell(0)
+      })
+
+      expect(result.current.cellStates['A'].status).toBe('error')
+      expect(result.current.cellStates['B'].status).toBe('blocked')
+    })
+
+    it('still blocks downstream cells when a macro is unresolved', async () => {
+      mockStreamQuery.mockImplementation(() => createSuccessResults())
+      const { result } = setup([
+        tableCell('A'),
+        tableCell('B', { sql: 'SELECT $A.selected.id' }),
+        tableCell('C'),
+      ])
+
+      await act(async () => {
+        await result.current.executeFromCell(0)
+      })
+
+      expect(result.current.cellStates['B'].status).toBe('blocked')
+      expect(result.current.cellStates['C'].status).toBe('blocked')
+    })
+
+    it('stops the old loop when a new executeFromCell starts', async () => {
+      const gates = [deferred(), deferred(), deferred()]
+      gateStreams(gates)
+      const { result } = setup([tableCell('A'), tableCell('B')])
+
+      let first!: Promise<void>
+      let second!: Promise<void>
+      act(() => {
+        first = result.current.executeFromCell(0)
+      })
+      await waitFor(() => expect(mockStreamQuery).toHaveBeenCalledTimes(1))
+      act(() => {
+        second = result.current.executeFromCell(0)
+      })
+      await waitFor(() => expect(mockStreamQuery).toHaveBeenCalledTimes(2))
+
+      await act(async () => {
+        gates.forEach((g) => g.resolve())
+        await Promise.all([first, second])
+      })
+
+      // A ran twice (old loop's, new loop's); B only once, from the new loop
+      expect(mockStreamQuery).toHaveBeenCalledTimes(3)
+      expect(result.current.cellStates['B'].status).toBe('success')
+    })
+
+    it('a direct executeCell supersedes a running loop without blocking downstream', async () => {
+      const gates = [deferred(), deferred()]
+      gateStreams(gates)
+      const { result } = setup([tableCell('A'), tableCell('B'), tableCell('C')])
+
+      let loop!: Promise<void>
+      let direct!: Promise<boolean>
+      act(() => {
+        loop = result.current.executeFromCell(0)
+      })
+      await waitFor(() => expect(mockStreamQuery).toHaveBeenCalledTimes(1))
+      act(() => {
+        direct = result.current.executeCell(2)
+      })
+      await waitFor(() => expect(mockStreamQuery).toHaveBeenCalledTimes(2))
+
+      await act(async () => {
+        gates.forEach((g) => g.resolve())
+        await Promise.all([loop, direct])
+      })
+
+      expect(result.current.cellStates['A'].status).toBe('cancelled')
+      expect(result.current.cellStates['B']).toBeUndefined()
+      expect(result.current.cellStates['C'].status).toBe('success')
+    })
+
+    it('a direct executeCell during a pending cell leaves the pending cell cancelled', async () => {
+      const gates = [deferred(), deferred()]
+      gateStreams(gates)
+      const { result } = setup([tableCell('A'), tableCell('B')])
+
+      let a!: Promise<boolean>
+      let b!: Promise<boolean>
+      act(() => {
+        b = result.current.executeCell(1)
+      })
+      await waitFor(() => expect(result.current.cellStates['B'].status).toBe('loading'))
+      act(() => {
+        a = result.current.executeCell(0)
+      })
+      await waitFor(() => expect(result.current.cellStates['A'].status).toBe('loading'))
+      expect(result.current.cellStates['B'].status).toBe('cancelled')
+
+      await act(async () => {
+        gates.forEach((g) => g.resolve())
+        await Promise.all([a, b])
+      })
+      expect(result.current.cellStates['A'].status).toBe('success')
+      expect(result.current.cellStates['B'].status).toBe('cancelled')
+    })
+  })
 })

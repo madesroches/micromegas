@@ -1,6 +1,6 @@
 import { ReactNode, Ref, useRef, useEffect, HTMLAttributes, useCallback } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, Plus, RotateCcw, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Download, Pencil, Play, Plus, RotateCcw, Square, MoreVertical, Trash2, GripVertical, Zap } from 'lucide-react'
 import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -26,6 +26,8 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   onSelect?: () => void
   /** Run this cell */
   onRun?: () => void
+  /** Cancel the in-flight run (shown as a Stop button while loading) */
+  onCancel?: () => void
   /** Run from this cell (and all below) */
   onRunFromHere?: () => void
   /** Whether this cell auto-runs from here when upstream variables change */
@@ -73,6 +75,7 @@ export function CellContainer({
   isSelected = false,
   onSelect,
   onRun,
+  onCancel,
   onRunFromHere,
   autoRunFromHere,
   onToggleAutoRunFromHere,
@@ -103,6 +106,8 @@ export function CellContainer({
   const normalizedHeight = typeof height === 'number' ? height : 300
   const currentHeight = useRef(normalizedHeight)
 
+  const showStop = status === 'loading' && !!onCancel && canRun
+
   const statusColor =
     status === 'loading'
       ? 'text-accent-link'
@@ -119,7 +124,9 @@ export function CellContainer({
         ? 'Error'
         : status === 'blocked'
           ? 'Blocked'
-          : statusText || ''
+          : status === 'cancelled'
+            ? 'Cancelled'
+            : statusText || ''
 
   // Keep currentHeight in sync with prop
   useEffect(() => {
@@ -170,8 +177,22 @@ export function CellContainer({
   ) : null
 
   const hoverControls = (
-    <div className="flex items-center gap-1 opacity-0 group-hover/cell:opacity-100 shrink-0 transition-opacity" onDoubleClick={(e) => e.stopPropagation()}>
-      {onRun && canRun && (
+    <div className={`flex items-center gap-1 shrink-0 transition-opacity ${showStop ? 'opacity-100' : 'opacity-0 group-hover/cell:opacity-100'}`} onDoubleClick={(e) => e.stopPropagation()}>
+      {showStop && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={(e) => {
+            e.stopPropagation()
+            onCancel?.()
+          }}
+          title="Stop"
+        >
+          <Square className="w-3 h-3" />
+        </Button>
+      )}
+      {!showStop && onRun && canRun && (
         <Button
           variant="ghost"
           size="sm"

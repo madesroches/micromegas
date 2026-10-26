@@ -39,7 +39,7 @@ const createMockRenderer = (type: string) => {
     // exercise idle-blank / success-rendered / live-edit behavior without pulling
     // in the real renderer (and react-markdown) here.
     const showMarkdown =
-      status === 'success' || ((status === 'loading' || status === 'idle') && (data?.length ?? 0) > 0)
+      status === 'success' || ((status === 'loading' || status === 'idle' || status === 'cancelled') && (data?.length ?? 0) > 0)
     const text = type === 'markdown' ? (showMarkdown ? content ?? '' : '') : `Cell: ${name}`
     return React.createElement(
       'div',

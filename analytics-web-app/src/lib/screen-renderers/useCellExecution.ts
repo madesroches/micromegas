@@ -44,6 +44,8 @@ export interface UseCellExecutionResult {
   executeCell: (cellIndex: number) => Promise<boolean>
   /** Execute from a cell index through all cells below */
   executeFromCell: (startIndex: number) => Promise<void>
+  /** Abort the in-flight run and mark loading cells as cancelled */
+  cancelExecution: () => void
   /** Migrate cell state when a cell is renamed */
   migrateCellState: (oldName: string, newName: string) => void
   /** Remove cell state when a cell is deleted */
@@ -112,6 +114,7 @@ export function useCellExecution({
 }: UseCellExecutionParams): UseCellExecutionResult {
   const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
   const abortControllerRef = useRef<AbortController | null>(null)
+  const runGenerationRef = useRef(0)
   const cellResultsRef = useRef<Record<string, Table>>({})
   const cellSelectionsRef = useRef<Record<string, Record<string, unknown>>>({})
   // Ref for synchronous access during execution, so a mid-session auth refresh
@@ -130,8 +133,23 @@ export function useCellExecution({
     setCellStates((prev) => ({ ...prev, [name]: state }))
   }, [])
 
-  // Execute a single cell
-  const executeCell = useCallback(
+  // Cells whose fetch was aborted write no state themselves, so they would stay
+  // `loading` forever without this.
+  const markLoadingCancelled = useCallback((exceptName?: string) => {
+    setCellStates((prev) => {
+      let next: Record<string, CellState> | null = null
+      for (const [name, state] of Object.entries(prev)) {
+        if (state.status === 'loading' && name !== exceptName) {
+          next ??= { ...prev }
+          next[name] = { ...state, status: 'cancelled', fetchProgress: undefined }
+        }
+      }
+      return next ?? prev
+    })
+  }, [])
+
+  // Execute a single cell without touching the run generation (used by the sequential loop)
+  const runCell = useCallback(
     async (cellIndex: number): Promise<boolean> => {
       const cell = cells[cellIndex]
       if (!cell) return false
@@ -227,7 +245,15 @@ export function useCellExecution({
 
       // Create new abort controller for this execution
       abortControllerRef.current?.abort()
-      abortControllerRef.current = new AbortController()
+      const controller = new AbortController()
+      abortControllerRef.current = controller
+      const reportProgress = (progress: { bytes: number; rows: number }) => {
+        if (controller.signal.aborted) return
+        setCellStates((prev) => ({
+          ...prev,
+          [cell.name]: { ...prev[cell.name], fetchProgress: progress },
+        }))
+      }
 
       try {
         // Resolve the cell's effective time range (per-cell override, falling back to
@@ -270,19 +296,14 @@ export function useCellExecution({
                   notebook: notebookName,
                   cell: cell.name,
                 },
-                abortControllerRef.current!.signal,
-                (progress) => {
-                  setCellStates((prev) => ({
-                    ...prev,
-                    [cell.name]: { ...prev[cell.name], fetchProgress: progress },
-                  }))
-                },
+                controller.signal,
+                reportProgress,
               )
-              engine.register_table(cell.name, ipcBytes)
+              if (!controller.signal.aborted) engine.register_table(cell.name, ipcBytes)
               return tableFromIPC(ipcBytes)
             } else {
               // Remote execution without WASM engine
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+              return executeSql(sql, timeRange, controller.signal, {
                 dataSource: cellDataSource,
                 notebookName,
                 cellName: cell.name,
@@ -313,18 +334,13 @@ export function useCellExecution({
                   notebook: notebookName,
                   cell: cell.name,
                 },
-                abortControllerRef.current!.signal,
-                (progress) => {
-                  setCellStates((prev) => ({
-                    ...prev,
-                    [cell.name]: { ...prev[cell.name], fetchProgress: progress },
-                  }))
-                },
+                controller.signal,
+                reportProgress,
               )
-              engine.register_table(tableName, ipcBytes)
+              if (!controller.signal.aborted) engine.register_table(tableName, ipcBytes)
               return tableFromIPC(ipcBytes)
             } else {
-              return executeSql(sql, timeRange, abortControllerRef.current!.signal, {
+              return executeSql(sql, timeRange, controller.signal, {
                 dataSource: resolvedDs,
                 notebookName,
                 cellName: cell.name,
@@ -335,6 +351,9 @@ export function useCellExecution({
 
         // Delegate to cell's execute method
         const result = await meta.execute(cell, context)
+
+        // Local-engine queries ignore the signal, so their result can arrive after a cancel
+        if (controller.signal.aborted) return false
 
         // If result is null, nothing was executed (e.g., text variables)
         const elapsedMs = performance.now() - startTime
@@ -354,7 +373,7 @@ export function useCellExecution({
 
         return true
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
+        if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
           return false
         }
         const errorMessage = err instanceof Error ? err.message : String(err)
@@ -365,9 +384,30 @@ export function useCellExecution({
     [cells, rawTimeRange, variableValuesRef, viewerRef, setVariableValue, dataSource, engine, notebookName, completeCellExecution]
   )
 
+  // A direct run supersedes any in-flight sequential loop
+  const executeCell = useCallback(
+    async (cellIndex: number): Promise<boolean> => {
+      runGenerationRef.current++
+      const name = cells[cellIndex]?.name
+      markLoadingCancelled(name)
+      abortControllerRef.current?.abort()
+      return runCell(cellIndex)
+    },
+    [cells, runCell, markLoadingCancelled]
+  )
+
+  const cancelExecution = useCallback(() => {
+    runGenerationRef.current++
+    abortControllerRef.current?.abort()
+    markLoadingCancelled()
+  }, [markLoadingCancelled])
+
   // Execute from a cell index (that cell and all below)
   const executeFromCell = useCallback(
     async (startIndex: number) => {
+      const generation = ++runGenerationRef.current
+      markLoadingCancelled()
+      abortControllerRef.current?.abort()
       // Reset WASM engine when re-executing from the top
       if (startIndex === 0 && engine) {
         engine.reset()
@@ -396,7 +436,10 @@ export function useCellExecution({
         return next
       })
       for (let i = startIndex; i < cells.length; i++) {
-        const success = await executeCell(i)
+        if (runGenerationRef.current !== generation) break
+        const success = await runCell(i)
+        // Cancelled or superseded: an aborted cell is not a failure
+        if (runGenerationRef.current !== generation) break
         if (!success) {
           const failedMeta = getCellTypeMetadata(cells[i].type)
           // Only mark downstream cells as blocked and halt execution if this
@@ -420,7 +463,7 @@ export function useCellExecution({
         }
       }
     },
-    [cells, executeCell, engine]
+    [cells, runCell, engine, markLoadingCancelled]
   )
 
   // Execute all cells once the WASM engine is ready. Waiting for the engine
@@ -527,6 +570,7 @@ export function useCellExecution({
     cellStates,
     executeCell,
     executeFromCell,
+    cancelExecution,
     migrateCellState,
     removeCellState,
     updateCellSelection,

@@ -26,6 +26,18 @@ describe('useFadeOnIdle', () => {
     expect(result.current).toBe('fade-on-idle')
   })
 
+  it('does not start a fade-out timer for a cancelled status', () => {
+    const { result, rerender } = renderHook(({ status }) => useFadeOnIdle(status), {
+      initialProps: { status: 'loading' },
+    })
+
+    rerender({ status: 'cancelled' })
+    act(() => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(result.current).toBe('fade-on-idle revealed')
+  })
+
   it('reveals immediately when status changes away from idle', () => {
     const { result, rerender } = renderHook(({ status }) => useFadeOnIdle(status), {
       initialProps: { status: 'idle' },
