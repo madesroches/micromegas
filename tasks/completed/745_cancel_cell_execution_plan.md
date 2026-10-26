@@ -64,7 +64,7 @@ No change planned. The abort already tears down the connection chain. If Manual 
 
 ## Mockups
 
-- `tasks/745_cancel_cell_execution_mockups/stop-button-and-cancelled-state.html`: self-contained page with an interactive demo (Stop during a run -> Cancelled -> Run again) plus static before/after states. Single direction, since the change is a button swap and a status label; no layout alternatives were worth comparing.
+- `tasks/completed/745_cancel_cell_execution_mockups/stop-button-and-cancelled-state.html`: self-contained page with an interactive demo (Stop during a run -> Cancelled -> Run again) plus static before/after states. Single direction, since the change is a button swap and a status label; no layout alternatives were worth comparing.
 
 ## Implementation Steps
 
