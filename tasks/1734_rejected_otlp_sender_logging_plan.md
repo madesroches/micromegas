@@ -14,7 +14,7 @@ credential has already been refused. The 401 response and the existing `[auth_fa
 
 ## Current State
 
-- `ingestion_auth_middleware` (`rust/public/src/servers/ingestion_auth.rs:~205`) wraps `protected_app`
+- `ingestion_auth_middleware` (`rust/public/src/servers/ingestion_auth.rs:207`) wraps `protected_app`
   as the outermost layer (`rust/public/src/servers/ingestion.rs:~185`). On `AuthError::InvalidToken`
   for `INSERT_PROCESS_PATH` only, it hands the rejected request to
   `RejectedProcessLogger::log_rejected`, which does a bounded read (64 KiB cap, 2 s timeout,
@@ -112,15 +112,14 @@ async fn read_body_prefix(req: Request, content_encoding, cap: usize) -> Result<
   rejects on `Content-Length` > cap: here a prefix is enough, so large and chunked bodies are
   inspected too. A missing `Content-Length` is therefore not an error. The whole read runs under the
   existing `BODY_READ_TIMEOUT` (2 s).
-- `Content-Encoding: gzip` (case-insensitive) → `flate2::read::GzDecoder` over the prefix, wrapped
-  in `Read::take(MAX_INSPECTED_BODY_BYTES)` so the **decompressed** output is capped too (the
-  gzip-bomb bound; the wire prefix is cheap, the expansion is what needs a cap). A decoder error
+- `Content-Encoding: gzip` (case-insensitive) → `flate2::read::GzDecoder` (`flate2` becomes an optional workspace dependency of `micromegas`, enabled by the `server` feature; it is dev-only today) over the prefix, wrapped
+  in `Read::take(MAX_INSPECTED_BODY_BYTES)` so the **decompressed** output is capped too (the gzip-bomb bound). A decoder error
   after some output (truncated stream) keeps the bytes produced so far. A decoder error before any
   output counts as undecodable. Any other `Content-Encoding` value (`zstd`, `deflate`, …) is
   logged as `reason = "unsupported_encoding"` without reading the body.
 - `Content-Type` selects `Encoding`, via `content_type_encoding` made `pub(crate)` in `otlp.rs`
   (an unknown type logs `reason = "unsupported_content_type"` and reads nothing).
-- Decompression is synchronous CPU work on at most 64 KiB, so it runs inline; no `spawn_blocking`.
+- Decompression runs inline; no `spawn_blocking`.
 
 ### 3. Logging, dedup and concurrency
 
@@ -143,7 +142,7 @@ Header values go through `sanitize_for_log`. Only `Content-Type`, `Content-Encod
 is already on the `[auth_failure]` line and isn't repeated. When nothing could be extracted, a
 `[auth_failure] otlp body not inspected` line carries `reason` (`unsupported_encoding`,
 `unsupported_content_type`, `read_error`, `read_timeout`, `undecodable`, `no_resource`, `busy`) and
-the headers, via the shared `log_not_inspected` shape.
+the headers, via `log_not_inspected`, generalized to take the message and extra fields as parameters.
 
 Two guards, because a misconfigured exporter retries continuously and a NAT can hide many
 different apps behind one IP:
@@ -170,30 +169,20 @@ different apps behind one IP:
    `pub(crate)`), use the constants in `otlp_router` instead of inline literals, and make
    `content_type_encoding` `pub(crate)`.
 4. `public/servers/ingestion_auth.rs`: add `read_body_prefix`, gzip handling, semaphore, rename
-   `RejectedProcessLogger` → `RejectedRequestLogger`, add `log_rejected_otlp`, extend the middleware
-   `match`.
+   `RejectedProcessLogger` → `RejectedRequestLogger`, add `log_rejected_otlp`, generalize
+   `log_not_inspected` (message and extra fields as parameters), extend the middleware `match`.
+   In `rust/public/Cargo.toml`, make `flate2` an optional dependency (`flate2 = { workspace = true, optional = true }`)
+   and add `"dep:flate2"` to the `server` feature; keep the dev-dependency entry.
 5. `public/servers/ingestion.rs`: update the renamed type at the construction site.
 6. Tests (below), docs, `CHANGELOG.md`.
 
 ## Files to Modify
 
 - `rust/otel-ingestion/src/identity.rs`, `src/block.rs`, `src/lib.rs`, new `src/rejected.rs`
+- `rust/public/Cargo.toml`
 - `rust/public/src/servers/ingestion_auth.rs`, `otlp.rs`, `ingestion.rs`
 - `rust/public/tests/ingestion_auth_tests.rs`
 - `mkdocs/docs/admin/authentication.md`, `CHANGELOG.md`
-
-## Trade-offs
-
-- **Hand-rolled prefix walker vs. `Message::decode`**: `decode` rejects a truncated message, and a
-  cap is the whole point. The walker is ~60 lines over a fixed three-level shape; the attribute
-  values themselves are still decoded by prost's `KeyValue`.
-- **Decode the whole body with a bigger cap**: simpler, but the Resource is always at the front of
-  the message, so reading more only adds exposure for an unauthenticated caller.
-- **Rate limit per IP** (the issue's suggestion): rejected because it would hide all but one app
-  behind a shared NAT, which is the problem being fixed. Dedup by sender identity plus a global
-  concurrency cap bounds the cost instead.
-- **Log every Resource attribute**: most useful, but attributes can hold secrets (command lines,
-  environment variables, custom keys); an allowlist is the same stance `insert_process` logging took.
 
 ## Decisions
 
@@ -201,10 +190,12 @@ different apps behind one IP:
   `processes`; they are logged here as for `insert_process`, and the docs repeat the access-control note.
 - The claims go on a separate log line rather than on the existing `[auth_failure]` line, which is emitted inside `authenticate` before the body can be read (same split as `insert_process`).
 - Firehose and webhook routes are out of scope: they have separate auth and carry no OTLP Resource.
+- Decoding the whole body with a bigger cap is rejected: the Resource is at the front of the message, so more bytes only add exposure.
+- A per-IP rate limit is rejected: it would hide all but one app behind a shared NAT.
 
 ## Documentation
 
-`mkdocs/docs/admin/authentication.md` ("Finding the caller of a rejected request"): add the
+`mkdocs/docs/admin/authentication.md` (the "Finding the caller of a rejected request" paragraph): add the
 `[auth_failure] rejected otlp caller claims` line, its properties, the reasons for
 `otlp body not inspected`, the once-per-sender-per-minute limit, and the fact that values are
 unverified caller claims. `CHANGELOG.md` Unreleased: new log line; **Minor breaking change**: the Rust type
@@ -214,14 +205,14 @@ unverified caller claims. `CHANGELOG.md` Unreleased: new log line; **Minor break
 
 Unit tests, no DB:
 
-- `rejected.rs`: protobuf and JSON each for logs/metrics/traces; resource with every allowlisted
+- `rejected.rs`: full attribute matrix on one signal, protobuf and JSON; for the other signals and
+  encodings a single minimal body each to check the first-field layout; resource with every allowlisted
   attribute; namespace + name composition equals `ProcessFromResource::build`'s `exe`; absent
   `host.name`; scalar-only values (a `kvlist` value is skipped); non-allowlisted attribute (e.g.
   `process.command_line`) never appears; truncation at every byte offset of a sample body returns
   either `None` or a prefix-consistent subset and never panics; garbage input and empty input →
   `None`; control characters in a value survive extraction (sanitization is the logger's job).
-- `ingestion_auth` (extending the existing `ingestion_auth_tests.rs` harness, store seam with
-  a canned rejecting provider): rejected OTLP request with plain protobuf, plain JSON, gzip
+- `ingestion_auth` (the existing `ingestion_auth_tests.rs` harness with `RejectingProvider`, adding the OTLP routes): rejected OTLP request with plain protobuf, plain JSON, gzip
   protobuf, gzip JSON → one `claimed_*` line with the expected properties; truncated gzip stream
   still yields what was decoded; gzip bomb (small wire, huge expansion) is stopped at the cap and
   the test asserts bounded output; body > 64 KiB and chunked (no `Content-Length`) are inspected;
