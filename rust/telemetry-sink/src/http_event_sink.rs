@@ -96,7 +96,11 @@ async fn response_to_result(
     match class {
         StatusClass::Success => unreachable!(),
         StatusClass::Transient => {
-            debug!("{op} transient error ({status}): {body}");
+            if status.as_u16() == 429 {
+                debug!("{op} rate limited ({status}): {body}");
+            } else {
+                debug!("{op} server error ({status}): {body}");
+            }
             Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
         }
         StatusClass::Permanent if (400..=499).contains(&status.as_u16()) => {
