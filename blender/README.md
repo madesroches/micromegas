@@ -243,8 +243,8 @@ and the native autosave remains blocked.
 - The interval is the **Timer (Minutes)** preference (`auto_save_time`), and the
   **Auto Save Temporary Files** preference (`use_auto_save_temporary_files`) is
   honored. Both are read on every tick, so changes apply from the next save.
-- It only saves when the recorder is the one blocking Blender's timer, so on a
-  normal interval the (possibly very large) file is not written by both.
+- It only saves when the recorder is the one blocking Blender's timer, so the
+  (possibly very large) file is never written twice per interval.
 - If any other modal operator is running (a transform, a sculpt stroke, another
   add-on's modal, ...), it retries every 0.5 s instead of saving mid-operation,
   as Blender's own timer would.

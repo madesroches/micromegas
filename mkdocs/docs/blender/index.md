@@ -188,8 +188,8 @@ the modal check.
 - The interval is the **Timer (Minutes)** preference, and **Auto Save Temporary
   Files** is honored; both are read on every tick, so changes apply from the
   next save.
-- It saves only when the recorder is the one blocking Blender's timer, so on a
-  normal interval the file is not written by both.
+- It saves only when the recorder is the one blocking Blender's timer, so the
+  file is never written twice per interval.
 - While any other modal operator is running (a transform, a sculpt stroke,
   another add-on's modal, ...), it retries every 0.5 s rather than saving
   mid-operation, as Blender's own timer would.
