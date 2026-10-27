@@ -17,6 +17,7 @@ Blender process
         ├── handlers         (bpy.app.handlers + bpy.msgbus + periodic metrics)
         ├── recorder         (persistent modal operator — raw input events)
         ├── actions          (operator-history poller — semantic actions)
+        ├── autosave         (timer-driven autosave — the recorder's modal blocks Blender's own)
         └── binding          (ctypes → libmicromegas_capi)
                                        │
                          libmicromegas_capi.{so,dll}
@@ -172,6 +173,36 @@ silently dropping them. Two metrics track capture health:
   `blender.action_redo` (see above)
 - Render start / complete — cancel is logged at WARN
 
+### Autosave fallback
+
+Blender's autosave timer does not save while any modal operator is running: it
+postpones the save and retries every 10 ms. The recorder is a persistent modal
+operator, so without a workaround enabling the add-on silently stops
+**Auto Save Temporary Files** from writing anything, although the preference
+still looks on.
+
+The `autosave` module re-creates the trigger on a `bpy.app.timers` callback and
+calls `bpy.ops.wm.save_auto_save()`, which writes the same autosave file without
+the modal check.
+
+- The interval is the **Timer (Minutes)** preference, and **Auto Save Temporary
+  Files** is honored; both are read on every tick, so changes apply from the
+  next save.
+- It saves only when the recorder is the one blocking Blender's timer, so the
+  file is never written twice per interval.
+- While any other modal operator is running (a transform, a sculpt stroke,
+  another add-on's modal, ...), it retries every 0.5 s rather than saving
+  mid-operation, as Blender's own timer would.
+- It is not armed in `--background` mode.
+- A successful save is logged to `blender.autosave` at DEBUG and recorded in the
+  `blender.autosave_fallback_ms` metric; a failed save is logged at WARN.
+
+!!! warning "Requires Blender 5.2 or later"
+    `wm.save_auto_save` was added in Blender 5.2. On 4.2 – 5.1 the add-on still
+    loads, but the fallback stays inactive (an INFO log to `blender.autosave`
+    says so) and Blender's native autosave stays blocked while the add-on is
+    enabled.
+
 ### Python exceptions
 
 Unhandled exceptions that reach the embedded interpreter's top level are shipped
@@ -195,6 +226,7 @@ as ERROR-level logs to the `blender.exception` target with the full traceback
 | `blender.rss_mb` | mb | Process resident memory, sampled every ~30 s (Linux + Windows) |
 | `blender.object_count` | count | Objects in the active scene, sampled every ~30 s |
 | `blender.frame` | frame | Current frame number at frame-change |
+| `blender.autosave_fallback_ms` | ms | Time taken by each autosave written by the [autosave fallback](#autosave-fallback) |
 
 ### Crash capture (harvest on next launch)
 
