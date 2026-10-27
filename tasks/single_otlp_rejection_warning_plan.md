@@ -9,12 +9,14 @@ warning per rejected OTLP request that carries both the rejection reason and the
 identity, so no information is lost and log volume is halved.
 
 ## Current State
-- `rust/auth/src/axum.rs:59` `authenticate` logs the generic line via `warn_auth_rejection`
-  (`rust/auth/src/log_sanitize.rs:42`) as soon as the provider rejects, before the body is read.
+- `rust/auth/src/axum.rs` `authenticate` (starts line 56) logs the generic line via
+  `warn_auth_rejection` (`rust/auth/src/log_sanitize.rs:42`, also called by gRPC at
+  `rust/auth/src/tower.rs:160`) at ~line 82, as soon as the provider rejects, before the body is read.
 - `rust/public/src/servers/ingestion_auth.rs` `ingestion_auth_middleware` calls `authenticate`,
   then on `InvalidToken` hands the request to `RejectedRequestLogger::log_rejected_otlp`, which
   reads the body prefix and logs a second line (`rejected otlp caller claims`), or a
-  `body not inspected` line, throttled to one per client IP and claimed sender per minute.
+  `body not inspected` line. The claims line is throttled per (client IP, claimed sender) per minute;
+  the not-inspected line is throttled per client IP only (`is_fresh(client_ip, None)`).
 - The two lines alternate, so consecutive-only repeat collapsing in the log view never fires.
 - `insert_process` rejections have the same two-line shape. The issue scopes this to OTLP; they are
   left alone (see Decisions).
@@ -34,12 +36,24 @@ rejected request (the generic line is not throttled today, the claims line is).
    - the same base properties as `warn_auth_rejection` (`client_ip`, `method`, `path`,
      `user_agent`) with the sanitized provider reason as the message (`[auth_failure] <reason>`),
      so existing queries on that prefix keep working;
-   - plus the `claimed_*`, `content_*` properties when the sender is fresh in the per-minute
-     window; a repeat from the same sender within the window still logs the line, without the
-     claim properties, so every rejection stays visible and counted;
-   - plus an `inspection` property carrying the existing not-inspected reason
-     (`unsupported_encoding`, `busy`, `no_resource`, ...) when claims could not be extracted, which
-     replaces the separate `body not inspected` line for OTLP.
+   - `content_type`, `content_encoding`, `content_length` on every OTLP rejection line;
+   - `claimed_*` properties only when the sender is fresh in the per-minute window; a repeat from
+     the same sender within the window still logs the line, without the claim properties, so every
+     rejection stays visible and counted;
+   - an `inspection` property only when claims could not be extracted. All existing not-inspected
+     reasons (`unsupported_content_type`, `unsupported_encoding`, `busy`, `read_error`,
+     `read_timeout`, `undecodable`, `no_resource`) map to `inspection`; this replaces the separate
+     `body not inspected` line for OTLP.
+
+   Branch structure: one inner helper takes the base fields plus an optional claims struct or an
+   inspection reason. Tracing macros need a fixed field list per call site, so the helper has
+   separate `warn!` call sites per variant: base only, base+claims, base+inspection.
+
+   OTLP not-inspected lines are no longer throttled: every rejection logs one line (previously
+   throttled per client IP via `is_fresh(client_ip, None)`). `log_not_inspected` stays for
+   `insert_process`. The new rejection type and the sanitization helper must be `pub`
+   (`HttpRequestParts` is already `pub` in `rust/auth/src/types.rs`). The `warn_auth_rejection`
+   signature stays unchanged because the gRPC path (`rust/auth/src/tower.rs:160`) also calls it.
    Non-OTLP paths (and `insert_process`) keep using `authenticate` unchanged.
 3. Share the base-property sanitization between `warn_auth_rejection` and the new line (a helper
    in `log_sanitize.rs` returning the sanitized fields) rather than duplicating it.
@@ -51,8 +65,9 @@ rejected request (the generic line is not throttled today, the claims line is).
    `authenticate` wrap it.
 3. `rust/public/src/servers/ingestion_auth.rs`: use the quiet core for OTLP paths and fold the
    reason into the single OTLP warning as described; drop the separate OTLP not-inspected line.
-4. Update `rust/public/tests/ingestion_auth_tests.rs` (see Testing Strategy).
-5. Update `mkdocs/docs/admin/authentication.md` and `CHANGELOG.md`.
+4. Update `rust/public/tests/ingestion_auth_tests.rs` (affected tests listed in Testing Strategy).
+5. Update `mkdocs/docs/admin/authentication.md` (~669, ~681) and `CHANGELOG.md` (new entry supersedes
+   the `CHANGELOG.md:8` entry).
 
 ## Files to Modify
 - `rust/auth/src/log_sanitize.rs`
@@ -79,18 +94,26 @@ rejected request (the generic line is not throttled today, the claims line is).
 `mkdocs/docs/admin/authentication.md` (the "Finding the caller of a rejected request" section,
 ~lines 636-690): the OTLP paragraph describes the claims as a separate
 `rejected otlp caller claims` line and a separate `body not inspected` line. Rewrite it to say the
-claims and `inspection` reason are properties of the single rejection line. Add a `CHANGELOG.md`
-entry.
+claims and `inspection` reason are properties of the single rejection line. The stale lines are ~669 and ~681. Add a `CHANGELOG.md`
+entry that supersedes the existing entry at `CHANGELOG.md:8` describing the old two-line behavior.
 
 ## Testing Strategy
 All no-DB tests in `rust/public/tests/ingestion_auth_tests.rs`, which already drive the
 middleware with a rejecting provider and capture logs:
 - A rejected OTLP request produces exactly one warning for its client IP, carrying the provider
   reason as message and the `claimed_*` properties (replaces the current
-  `lines_for(..., "rejected otlp caller claims")` plus "two lines" assertions around lines 623-800).
+  `lines_for(..., "rejected otlp caller claims")` plus "two lines" assertions).
 - A second request from the same sender inside the throttle window still logs one line, without
   claim properties.
 - A request whose body can't be inspected logs one line with the `inspection` reason.
+- Affected tests in `rust/public/tests/ingestion_auth_tests.rs`, rewritten to match on the
+  `claimed_exe` and `inspection` properties and to expect one line per request:
+  `rejected_otlp_logs_claims_for_every_encoding`, `truncated_gzip_still_yields_decoded_claims`,
+  `large_and_chunked_bodies_are_inspected`, `unsupported_encodings_and_content_types_are_not_inspected`,
+  `dedup_is_per_sender_not_per_ip` (a,b,a becomes three lines, the repeat without claims),
+  `exhausted_inspection_budget_logs_busy`, `otlp_claims_are_sanitized`,
+  `accepted_otlp_request_logs_nothing_extra`, and any similar. The `not_inspected_reason` helper and
+  the `lines_for` matching on the old messages go away.
 - Unchanged: `insert_stream` and `insert_process` still behave as before; `auth` crate tests for
   `authenticate` and `warn_auth_rejection` keep passing.
 
