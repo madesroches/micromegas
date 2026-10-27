@@ -32,9 +32,6 @@ from . import binding as _b
 _lib: "_b.MicromegasLib | None" = None
 _handle = None
 
-# `wm.save_auto_save` was added in Blender 5.2.
-_MIN_BLENDER_VERSION: "tuple[int, int, int]" = (5, 2, 0)
-
 # Window.modal_operators reports operators by their C idname (CLASS_OT_name),
 # not by the dotted bl_idname ("micromegas.recorder").
 _RECORDER_OP_IDNAME: str = "MICROMEGAS_OT_recorder"
@@ -71,6 +68,13 @@ def _running_modal_idnames() -> "set[str]":
     return {op.bl_idname for win in windows for op in win.modal_operators}
 
 
+def _save_operator_available() -> bool:
+    # Probe the operator rather than the version: pre-release 5.2 builds report
+    # (5, 2, 0) before it landed. `bpy.ops.wm.<name>` resolves lazily for any
+    # name, but dir() only lists registered operators.
+    return "save_auto_save" in dir(bpy.ops.wm)
+
+
 def _save() -> None:
     start = time.perf_counter()
     result = bpy.ops.wm.save_auto_save()
@@ -104,21 +108,25 @@ def _autosave_timer() -> float:
 def register() -> None:
     if bpy.app.background:
         return  # no window manager timer to replace
-    if tuple(bpy.app.version) < _MIN_BLENDER_VERSION:
-        _log(
-            _b.LEVEL_INFO,
-            "blender.autosave",
-            "fallback autosave unavailable: needs Blender 5.2+, native autosave "
-            "stays blocked by the recorder",
-        )
-        return
     try:
+        if not _save_operator_available():
+            _log(
+                _b.LEVEL_INFO,
+                "blender.autosave",
+                "fallback autosave unavailable: wm.save_auto_save needs Blender "
+                "5.2+, native autosave stays blocked by the recorder",
+            )
+            return
         if not bpy.app.timers.is_registered(_autosave_timer):
             bpy.app.timers.register(
                 _autosave_timer, first_interval=_interval_s(), persistent=True
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _log(
+            _b.LEVEL_WARN,
+            "blender.autosave",
+            f"fallback autosave not armed: {exc!r}",
+        )
 
 
 def unregister() -> None:

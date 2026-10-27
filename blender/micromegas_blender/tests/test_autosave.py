@@ -25,8 +25,10 @@ def _autosave_logs(rec_lib, level=None):
 
 
 def test_recorder_idname_matches_what_modal_operators_reports():
-    # Window.modal_operators reports the C idname, which is the class name.
-    assert autosave._RECORDER_OP_IDNAME == recorder.MICROMEGAS_OT_recorder.__name__
+    # Blender derives the C idname from bl_idname ("module.name" ->
+    # "MODULE_OT_name"), not from the Python class name.
+    module, name = recorder.MICROMEGAS_OT_recorder.bl_idname.split(".")
+    assert autosave._RECORDER_OP_IDNAME == f"{module.upper()}_OT_{name}"
 
 
 # --- the tick -----------------------------------------------------------------
@@ -120,12 +122,27 @@ def test_register_twice_keeps_a_single_timer(wired_autosave):
     assert wired_autosave.fake.timers == {wired_autosave._autosave_timer: (120.0, True)}
 
 
-def test_register_is_inactive_before_blender_5_2(wired_autosave, fake_bpy, rec_lib):
-    fake_bpy.app.version = (5, 1, 0)
+def test_register_is_inactive_without_the_save_operator(
+    wired_autosave, fake_bpy, rec_lib, monkeypatch
+):
+    monkeypatch.setattr(fake_bpy.ops, "wm", types.SimpleNamespace())
     wired_autosave.register()
     assert not wired_autosave.fake.timers
     (note,) = _autosave_logs(rec_lib, _b.LEVEL_INFO)
     assert "5.2" in note
+
+
+def test_register_failure_is_logged_as_a_warning(
+    wired_autosave, fake_bpy, rec_lib, monkeypatch
+):
+    def _fail(*args, **kwargs):
+        raise RuntimeError("timers unavailable")
+
+    monkeypatch.setattr(fake_bpy.app.timers, "register", _fail)
+    wired_autosave.register()
+    assert not wired_autosave.fake.timers
+    (warning,) = _autosave_logs(rec_lib, _b.LEVEL_WARN)
+    assert "timers unavailable" in warning
 
 
 def test_register_is_inactive_in_background_mode(wired_autosave, fake_bpy):

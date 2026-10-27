@@ -207,7 +207,7 @@ def wired_handlers(rec_lib, fake_bpy):
 
 @pytest.fixture
 def wired_autosave(rec_lib, fake_bpy, monkeypatch):
-    """`autosave` wired to the recording lib, on a fake Blender 5.2 that has the
+    """`autosave` wired to the recording lib, on a fake Blender that has the
     preferences, window manager, timers and ``wm.save_auto_save`` it touches.
 
     The fake state is exposed on the returned module's ``fake`` attribute so a
@@ -237,10 +237,11 @@ def wired_autosave(rec_lib, fake_bpy, monkeypatch):
 
     fake_bpy.context.preferences.filepaths = fake.filepaths
     fake_bpy.context.window_manager = types.SimpleNamespace(windows=[fake.window])
-    fake_bpy.ops = types.SimpleNamespace(
-        wm=types.SimpleNamespace(save_auto_save=_save_auto_save)
+    monkeypatch.setattr(
+        fake_bpy,
+        "ops",
+        types.SimpleNamespace(wm=types.SimpleNamespace(save_auto_save=_save_auto_save)),
     )
-    monkeypatch.setattr(fake_bpy.app, "version", (5, 2, 0))
     monkeypatch.setattr(fake_bpy.app, "background", False)
     monkeypatch.setattr(
         fake_bpy.app,
