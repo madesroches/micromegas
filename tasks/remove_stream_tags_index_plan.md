@@ -28,6 +28,23 @@ Delete the v13 migration step and function and set the latest version back to 12
 index the retention queries are a sequential scan of `streams` once per pass, which is
 acceptable at the size of that table.
 
+### Measurements
+Retention queries (`LIMIT 1000`, 30-day cutoff, inside `BEGIN; ... ROLLBACK;`, warm cache) on a
+dev database at v13 with 6,466 streams, about 14.9M blocks and an 807 MB `streams` heap, with the
+index and with `enable_bitmapscan=off` (no `stream_tags`):
+
+| Query                                  | With index | Without index |
+|----------------------------------------|-----------:|--------------:|
+| Exclude pass, exclude=cpu              |      44 ms |         14 ms |
+| Include pass, include=cpu, exclude=log |     994 ms |        957 ms |
+| Include pass, include=trace, exclude=log |  1,039 ms |      1,009 ms |
+
+The planner chose the index in only one of the three cases, where it found the 59 matching
+streams in 0.015 ms; the query still took about 1 s because the time is in the blocks scan and
+the 1000 per-row `blocks_block_id_unique` lookups (about 0.9 ms each). The exclude pass never
+touches the index. Caveat: the `streams` table here is small; this says nothing about a much
+larger one. Cold-cache runs were discarded as misleading.
+
 ### Databases already at v13 (dev only)
 `migrate_db` on a v13 database with a v12 binary finds `13 != 12`, `execute_migration` matches no
 step, and the final `assert_eq!` panics. That is the right outcome for a real downgrade, so no
