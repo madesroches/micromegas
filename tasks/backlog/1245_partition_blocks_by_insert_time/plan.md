@@ -37,6 +37,12 @@ well-suited because the dominant Postgres read of `blocks`, the global `BlocksVi
 hourly partitions prune cleanly. Heavy event-time / `process_id` / `stream_id` analytics run on
 DataFusion/parquet, not on this table.
 
+## Note: per-tag retention overrides
+
+Per-stream-tag payload retention overrides may still need a row-level deletion path, because a
+partition covers a time window across all streams. No tag index exists on `streams`; if that path
+is needed, whether it warrants an index is decided then, with a measured cost.
+
 ## Current State
 
 ### Schema (`rust/ingestion/src/sql_telemetry_db.rs:70-91`)
