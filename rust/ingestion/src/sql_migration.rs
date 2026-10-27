@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 13;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 12;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -60,12 +60,6 @@ pub async fn warn_if_data_lake_schema_stale(pool: &sqlx::Pool<sqlx::Postgres>) {
         warn!(
             "data lake schema is v{version}: the `settings` table does not exist yet, so the \
              settings store cannot load"
-        );
-    }
-    if version < 13 {
-        warn!(
-            "data lake schema is v{version}, behind the latest v{LATEST_DATA_LAKE_SCHEMA_VERSION}; \
-             the `stream_tags` index on `streams` is missing, which only slows down payload deletion"
         );
     }
 }
@@ -470,17 +464,6 @@ pub async fn upgrade_data_lake_schema_v12(
     Ok(())
 }
 
-/// Upgrades the data lake schema to version 13.
-/// The `stream_tags` GIN index itself is built before this runs, outside a transaction.
-pub async fn upgrade_data_lake_schema_v13(
-    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> Result<()> {
-    tr.execute("UPDATE migration SET version=13;")
-        .await
-        .with_context(|| "updating data lake schema version to 13")?;
-    Ok(())
-}
-
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -640,26 +623,6 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v12");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v12(&mut tr).await?;
-        current_version = read_data_lake_schema_version(&mut tr).await;
-        tr.commit().await?;
-    }
-    if 12 == current_version {
-        info!("upgrading data_lake_schema to v13");
-        // CREATE INDEX CONCURRENTLY cannot run inside a transaction; it lets ingestion keep
-        // writing to `streams` while the index builds.
-        sqlx::query(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS stream_tags ON streams USING GIN (tags);",
-        )
-        .execute(&pool)
-        .await
-        .with_context(|| "creating index stream_tags on streams(tags)")?;
-        if !check_index_is_valid(&pool, "stream_tags").await? {
-            anyhow::bail!(
-                "invalid index stream_tags detected and dropped. The migration will be retried on next startup."
-            );
-        }
-        let mut tr = pool.begin().await?;
-        upgrade_data_lake_schema_v13(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

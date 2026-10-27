@@ -13,7 +13,8 @@ default horizon (with `MICROMEGAS_RETENTION_DAYS` and the flag as its fallback),
 `retention_by_stream_tag`, a map from stream tag to a horizon in days or `"forever"`. The hourly
 maintenance task reads both on every pass. It runs one block-deletion pass for the default horizon
 that skips overridden streams, and one pass for each distinct override horizon. A GIN index on
-`streams.tags` lets the override passes find their streams without scanning `streams`.
+`streams.tags` lets the override passes find their streams without scanning `streams`
+(dropped before release; see the note at the index section).
 
 ## Current State
 
@@ -190,6 +191,11 @@ Two new registry entries, grouped under the `retention_` prefix:
   setting when no value is stored, and tag overrides can change it per stream.
 
 ### Index: data-lake migration v13 (`rust/ingestion/src/sql_migration.rs`)
+
+> Note: this index and schema v13 were removed before release (see
+> `tasks/remove_stream_tags_index_plan.md`). The migration blocked startup while the index built,
+> and the retention queries only scan a small table once per pass. The section below is kept as
+> the original design.
 
 Follow the v3 shape. Outside a transaction, run
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS stream_tags ON streams USING GIN (tags);`, then
