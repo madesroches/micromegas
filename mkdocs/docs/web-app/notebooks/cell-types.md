@@ -260,7 +260,7 @@ SQL query results formatted as log entries with level-based coloring.
 | `pageSize` | number | Entries per page (default: 100; selectable from 50 / 100 / 250 / 500 / 1000) |
 | `wrapText` | boolean | Wrap long column values instead of truncating them (default: on) |
 | `columnWidths` | object | Pinned pixel widths per column name, set by dragging column dividers |
-| `collapseRepeats` | boolean | Collapse consecutive rows that are identical except for `time` into one line with a `×N` badge (default: on) |
+| `collapseRepeats` | boolean | Collapse rows that are identical except for `time`, within a window of nearby rows, into one line with a `×N` badge (default: on) |
 | `collapseIgnoreColumns` | string[] | Extra columns (e.g. a request id) to ignore when deciding whether rows are identical, set from the cell editor |
 
 **Expected columns:**
@@ -274,7 +274,7 @@ The renderer auto-classifies columns by name:
 
 Additional columns are sized to their content (up to the page width) — hover to see the full value in a tooltip. Columns are resizable by dragging the column header dividers. Each row has a one-click copy icon to copy the full row as tab-delimited text.
 
-**Collapsing repeated lines:** consecutive rows that are identical on every column except `time` (and any columns listed in `collapseIgnoreColumns`) render as a single line with a trailing `×N` badge, showing the earlier and later timestamp in the run on hover. Click the badge to expand the run and see every row; click again to collapse it. Pagination counts these collapsed lines, not raw rows. Turn this off with the "Collapse repeats" footer toggle.
+**Collapsing repeated lines:** rows that are identical on every column except `time` (and any columns listed in `collapseIgnoreColumns`) render as a single line with a trailing `×N` badge, even when other messages are interleaved between them. A row joins a group only if it is within 200 rows of the group's latest member, so occurrences that are far apart stay separate. The line shown is the group's most recent occurrence by `time`, and hovering the badge shows the first and last timestamps in the group. Click the badge to expand the group and see every row; click again to collapse it. Pagination counts these collapsed lines, not raw rows. Turn this off with the "Collapse repeats" footer toggle.
 
 - Results registered in the [local WASM query engine](execution.md#local-wasm-query-engine) under the cell name for downstream queries
 
