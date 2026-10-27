@@ -44,11 +44,11 @@ Algorithm (single pass, O(rows × compared columns) expected):
 3. The group's `anchor` is its most recent occurrence: the member with the greatest `time` value when a `time`-kind column exists, else the last member. Ordering by value, not position, because the result may be `ORDER BY time ASC` or `DESC`.
 4. Output groups sorted by `anchor` row index, so the list stays roughly in the query's time order.
 
-Keying on formatted strings rather than pairwise `logValuesEqual` is what makes a map lookup possible. It does change equality for primitives: `null` vs `''` must still differ, so the key must encode null distinctly (e.g. `null` in the JSON array vs `""`), and numbers/bigints must not collide with their string form (`JSON.stringify` of the raw primitive, formatted string only for object-valued columns — mirroring the current rule). Bigints need a `String(v) + 'n'`-style replacer since `JSON.stringify` throws on them.
+Keying on formatted strings rather than pairwise `logValuesEqual` is what makes a map lookup possible. It does change equality for primitives: `null` vs `''` must still differ, so the key must encode null distinctly (e.g. `null` in the JSON array vs `""`), and numbers/bigints must not collide with their string form (`JSON.stringify` of the raw primitive, formatted string only for object-valued columns — mirroring the current rule). Bigints need a `String(v) + 'n'`-style replacer since `JSON.stringify` throws on them. `undefined` must be encoded distinctly from `null` (`JSON.stringify` would turn `undefined`/`NaN` into `null`, so encode them explicitly). Anchor ordering uses the first `time`-kind column, ranking null/unparseable times earliest.
 
 ### Window
 
-A fixed row-count window, `COLLAPSE_WINDOW_ROWS = 200`, as a module constant in `log-utils.tsx`. Row count rather than time because the cell has no guaranteed time column and row distance is cheap and deterministic. It is not user-configurable until someone reports needing it.
+A fixed row-count window, `COLLAPSE_WINDOW_ROWS = 200`, as a module constant in `log-utils.tsx`.
 
 ### Rendering (`LogCell.tsx`)
 
@@ -56,7 +56,7 @@ A fixed row-count window, `COLLAPSE_WINDOW_ROWS = 200`, as a module constant in 
 - Collapsed line shows `×N` badge; the badge title already lists earlier → later timestamps — compute min/max over **all** `rows` rather than the two endpoints, since members are no longer bracketed by `start`/`end - 1`. This satisfies "first and last timestamps for each group".
 - Expanded: members other than the anchor render directly after the anchor in ascending row order with the existing tint.
 - `expandedGroups` keyed by `anchor`. The reset-on-`groups`-change pattern is unchanged.
-- `displayedRows`: `expandedGroups.has(g.anchor) ? g.rows : [g.anchor]`.
+- `displayedRows`: `expandedGroups.has(g.anchor) ? g.rows : [g.anchor]`. It only needs the set of visible rows (width measurement is order-insensitive), so it need not match the expanded render order.
 - Pagination still counts groups; a group still never straddles a page.
 - Footer toggle, editor ignore-list, and option names are unchanged. The toggle label "Collapse repeats" stays accurate.
 
@@ -81,19 +81,18 @@ A fixed row-count window, `COLLAPSE_WINDOW_ROWS = 200`, as a module constant in 
 
 ## Trade-offs
 
-- **Row-count window vs time window**: row count works without a time column and costs nothing; a time window would need a parsed timestamp per row and a decision for unsorted data.
-- **Key map vs pairwise comparison against open groups**: pairwise is O(rows × open groups); a map keeps it linear.
 - **Anchor by time vs by row position**: position would anchor at the oldest occurrence for `ORDER BY time DESC` results, contradicting "most recent occurrence".
 - **Strict chronological order between groups is lost** (accepted in the issue); anchoring keeps it approximately ordered.
 
 ## Decisions
 
 - Window is a fixed 200-row constant, not an option; revisit if users report needing control.
+- AFK: keep 200 rows as the default window (most conservative: twice the default page, small enough not to merge distant unrelated occurrences).
 - The `collapseRepeats` / `collapseIgnoreColumns` option names and the UI are unchanged, so saved notebooks keep working; the behavior change (non-adjacent rows now merge) applies to every existing notebook with collapse on (the default).
 
 ## Documentation
 
-- `mkdocs/docs/web-app/notebooks/cell-types.md` (Log section): replace "consecutive identical rows" wording with the keyed-within-a-window description, mention the window size, the anchor at the most recent occurrence, and that the `×N` tooltip shows first/last timestamps.
+- `mkdocs/docs/web-app/notebooks/cell-types.md` (Log section): update the `collapseRepeats` options-table row (`:263`, "consecutive rows that are identical") and replace the "consecutive identical rows" prose (`:277`) with the keyed-within-a-window description, mention the window size, the anchor at the most recent occurrence, and that the `×N` tooltip shows first/last timestamps.
 - `CHANGELOG.md` Unreleased: "Log cell collapse repeats groups by message within a window instead of by adjacency" (#1738).
 
 ## Testing Strategy
@@ -106,7 +105,7 @@ No-DB Vitest unit tests; no live-DB tests (no witnessed bug beyond the issue's b
 - Same key with a gap larger than `COLLAPSE_WINDOW_ROWS` → two groups; gap exactly at the limit → one group.
 - Anchor is the latest-by-time member for both ASC and DESC fixtures; with no time column it is the last row.
 - Ignored column (`request_id`) merges rows only when ignored; all columns ignored → singletons.
-- `null` vs `''` differ; bigint column values don't throw and group correctly; object-valued column groups by formatted value; a value containing the key separator can't collide with a different tuple.
+- `null` vs `''` differ; `undefined` vs `null` differ; bigint column values don't throw and group correctly; object-valued column groups by formatted value; a value containing the key separator can't collide with a different tuple.
 - Empty table → `[]`; single row → one group.
 
 `LogCell.test.tsx`:
@@ -115,7 +114,3 @@ No-DB Vitest unit tests; no live-DB tests (no witnessed bug beyond the issue's b
 - Pagination counts groups; existing toggle/editor tests keep passing.
 
 `yarn lint`, `yarn type-check`, `yarn test` from `analytics-web-app/`.
-
-## Open Questions
-
-- Is 200 rows the right default window? (A guess against the default 100-line page; easy to change.)
