@@ -203,3 +203,57 @@ def wired_handlers(rec_lib, fake_bpy):
     handlers.set_context(rec_lib, object())
     yield handlers
     handlers.set_context(None, None)
+
+
+@pytest.fixture
+def wired_autosave(rec_lib, fake_bpy, monkeypatch):
+    """`autosave` wired to the recording lib, on a fake Blender 5.2 that has the
+    preferences, window manager, timers and ``wm.save_auto_save`` it touches.
+
+    The fake state is exposed on the returned module's ``fake`` attribute so a
+    test can change preferences / running modals and read back the saves.
+    """
+    from micromegas_blender import autosave
+
+    fake = types.SimpleNamespace(
+        filepaths=types.SimpleNamespace(
+            auto_save_time=2, use_auto_save_temporary_files=True
+        ),
+        window=types.SimpleNamespace(modal_operators=[]),
+        save_result={"FINISHED"},
+        save_error=None,
+        saves=0,
+        timers={},
+    )
+
+    def _save_auto_save():
+        fake.saves += 1
+        if fake.save_error is not None:
+            raise fake.save_error
+        return fake.save_result
+
+    def _timer_register(fn, first_interval=0.0, persistent=False):
+        fake.timers[fn] = (first_interval, persistent)
+
+    fake_bpy.context.preferences.filepaths = fake.filepaths
+    fake_bpy.context.window_manager = types.SimpleNamespace(windows=[fake.window])
+    fake_bpy.ops = types.SimpleNamespace(
+        wm=types.SimpleNamespace(save_auto_save=_save_auto_save)
+    )
+    monkeypatch.setattr(fake_bpy.app, "version", (5, 2, 0))
+    monkeypatch.setattr(fake_bpy.app, "background", False)
+    monkeypatch.setattr(
+        fake_bpy.app,
+        "timers",
+        types.SimpleNamespace(
+            is_registered=lambda fn: fn in fake.timers,
+            register=_timer_register,
+            unregister=lambda fn: fake.timers.pop(fn, None),
+        ),
+    )
+
+    autosave.set_context(rec_lib, object())
+    autosave.fake = fake
+    yield autosave
+    autosave.set_context(None, None)
+    del autosave.fake

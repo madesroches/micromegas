@@ -16,6 +16,7 @@ Blender process
 │   └── micromegas_blender (add-on)
 │       ├── modal recorder   — raw key/mouse/scroll input events
 │       ├── actions poller    — semantic operator history (what was clicked)
+│       ├── autosave fallback — keeps Blender's autosave running despite the modal recorder
 │       ├── bpy.app.handlers — load/save, undo/redo, render, frame, metrics
 │       ├── bpy.msgbus       — active-object property edits
 │       └── ctypes binding
@@ -82,6 +83,7 @@ blender/
     ├── binding.py
     ├── handlers.py
     ├── recorder.py
+    ├── autosave.py
     ├── crash_harvester.py
     └── lib/
         ├── libmicromegas_capi.so   ← Linux
@@ -224,6 +226,31 @@ Lifecycle (`bpy.app.handlers` + `bpy.msgbus`): file load/save, undo/redo (the
 redo-panel edit, see above), render start/complete/cancel, frame change,
 active-object type changes.
 
+### Autosave fallback
+
+The recorder is a persistent modal operator, and Blender's own autosave timer
+does not save while any modal operator is running (it retries every 10 ms
+instead). Without a workaround, enabling the add-on silently stops "Auto Save
+Temporary Files" from writing anything, even though the preference still
+looks on.
+
+`autosave.py` re-creates the trigger on a `bpy.app.timers` callback and calls
+`bpy.ops.wm.save_auto_save()`, which writes the same autosave file without the
+modal check. **Requires Blender 5.2+**, where that operator was added; on older
+versions the fallback stays inactive (an INFO log to `blender.autosave` says so)
+and the native autosave remains blocked.
+
+- The interval is the **Timer (Minutes)** preference (`auto_save_time`), and the
+  **Auto Save Temporary Files** preference (`use_auto_save_temporary_files`) is
+  honored. Both are read on every tick, so changes apply from the next save.
+- It only saves when the recorder is the one blocking Blender's timer, so the
+  (possibly very large) file is never written twice per interval.
+- If another add-on's modal operator is running, it retries every 0.5 s instead
+  of saving mid-operation, as Blender's own timer would.
+- Not armed in `--background` mode.
+- `blender.autosave_fallback_ms` (metric) — time the save took; a successful save
+  also logs to `blender.autosave` at DEBUG, and a failed one at WARN.
+
 ### Python exceptions
 
 Exceptions reaching the interpreter top level are shipped as `ERROR` logs to
@@ -241,6 +268,7 @@ backstop; the add-on's own callbacks guard themselves.
 | `blender.rss_mb` | mb | Resident memory, sampled every ~30 s (Linux + Windows) |
 | `blender.object_count` | count | Objects in active scene, sampled every ~30 s |
 | `blender.frame` | frame | frame_change_post |
+| `blender.autosave_fallback_ms` | ms | Duration of each autosave written by the [autosave fallback](#autosave-fallback) |
 
 ### Crash reports (on next launch)
 
@@ -297,5 +325,6 @@ micromegas-query "SELECT time, level, target, msg FROM log_entries \
 | `native library not found` in console | `lib/` directory missing or wrong filename; rebuild and copy the `.so`/`.dll` |
 | `telemetry init failed` | `MICROMEGAS_TELEMETRY_URL` is unset or the server is unreachable at startup |
 | No rows in the server after a session | Server URL incorrect, or events are still buffered — wait 30 s for the periodic flush or restart Blender to trigger `mm_shutdown` |
+| No autosave files appear in the temp directory while the add-on is enabled (Blender < 5.2) | The recorder's modal operator blocks Blender's autosave timer, and the [autosave fallback](#autosave-fallback) needs Blender 5.2+. Upgrade, or disable the add-on |
 | Add-on inactive after disabling then re-enabling it in the same session | The native telemetry layer initializes once per process and cannot be reinitialized; restart Blender. Turn on **Keep Alive (Dev Only)** in the add-on preferences *before* disabling to avoid it next time — enabling it after the fact does not bring the session back |
 | Add-on not listed after install | Zip wrapped the files in an extra parent directory; the zip must contain `blender_manifest.toml` and `__init__.py` at its root (not inside a `micromegas_blender/` folder) |

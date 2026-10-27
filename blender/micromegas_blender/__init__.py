@@ -432,18 +432,21 @@ def _wire_up(lib, handle) -> None:
     session instead of losing it — see register()'s except branch.
     """
     # Wire the sub-modules with the active lib + handle.
-    from . import actions, crash_harvester, handlers, recorder
+    from . import actions, autosave, crash_harvester, handlers, recorder
 
     crash_harvester.set_context(lib, handle)
     handlers.set_context(lib, handle)
     recorder.set_context(lib, handle)
     actions.set_context(lib, handle)
+    autosave.set_context(lib, handle)
 
     crash_harvester.register_startup_harvest()
     handlers.register()
     recorder.set_event_callback(actions.drain_operators)
     recorder.register()
     actions.register()
+    # The recorder's persistent modal blocks Blender's own autosave timer.
+    autosave.register()
 
     # Backstop for exceptions that reach the interpreter top level. Blender
     # swallows most operator/timer/handler exceptions before they get here, so
@@ -510,6 +513,13 @@ def _teardown_wiring() -> None:
 
     try:
         bpy.app.timers.unregister(_periodic_flush)
+    except Exception:
+        pass
+
+    try:
+        from . import autosave
+
+        autosave.unregister()
     except Exception:
         pass
 
