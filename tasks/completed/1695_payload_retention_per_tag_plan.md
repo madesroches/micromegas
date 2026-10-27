@@ -128,7 +128,7 @@ LIMIT  $2
 The default pass keeps today's handling of blocks with no `streams` row and of streams with
 `NULL` tags (`NULL && x` is `NULL`, so `NOT EXISTS` holds and the block is deleted), and with an
 empty `$3` it is equivalent to today's query. The override pass reaches its streams through the
-new GIN index and their blocks through `block_stream_id`.
+new GIN index and their blocks through `block_stream_id`. (The index was removed before release.)
 
 **`delete_old_data(lake, retention: &PayloadRetention)`** runs every pass from
 `block_delete_passes(now)` through `delete_expired_blocks`, then `delete_empty_streams`,
@@ -193,7 +193,7 @@ Two new registry entries, grouped under the `retention_` prefix:
 ### Index: data-lake migration v13 (`rust/ingestion/src/sql_migration.rs`)
 
 > Note: this index and schema v13 were removed before release (see
-> `tasks/remove_stream_tags_index_plan.md`). The migration blocked startup while the index built,
+> `tasks/completed/remove_stream_tags_index_plan.md`). The migration blocked startup while the index built,
 > and the retention queries only scan a small table once per pass. The section below is kept as
 > the original design.
 
@@ -249,7 +249,7 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
    `RetentionHorizon`, `PayloadRetention`, `BlockDeletePass` and `block_delete_passes` /
    `default_cutoff`. Make `delete_expired_blocks(_batch)` take a `&BlockDeletePass`, and
    `delete_old_data` take `&PayloadRetention`. Add `rust/analytics/tests/payload_retention_tests.rs`.
-2. **Index**: add the v13 step and `upgrade_data_lake_schema_v13` to `sql_migration.rs`.
+2. **Index**: add the v13 step and `upgrade_data_lake_schema_v13` to `sql_migration.rs`. (Removed before release.)
 3. **Settings** (`rust/public/src/settings.rs`): add the two kinds, `parse_tag_horizons`, the two
    specs, `env_var: Option`, the new `DbOverrides` / `EnvFallbacks` fields and `payload_retention()`.
    Update the `EnvFallbacks { .. }` / `DbOverrides { .. }` literals in `rust/public/tests/`
@@ -355,7 +355,7 @@ zero-rows sentence on `version < 9`, and add a clause that a schema older than v
 - `tasks/backlog/1245_partition_blocks_by_insert_time/rollback.md:128`: change "restore
   `delete_expired_blocks`" to restore the tag-aware `BlockDeletePass`-based passes.
 - `CHANGELOG.md` (Unreleased): the feature (#1695) and data-lake schema v13 (GIN index on
-  `streams.tags`). **Minor breaking change:** `delete_old_data` takes a `&PayloadRetention`,
+  `streams.tags`; removed before release, no schema v13). **Minor breaking change:** `delete_old_data` takes a `&PayloadRetention`,
   `delete_expired_blocks(_batch)` take a `&BlockDeletePass`, `daemon` takes an
   `Arc<SettingsSource>` instead of `retention_days`, `SettingSpec::env_var` is an `Option`, and
   `EnvFallbacks` / `DbOverrides` gain retention fields. `--retention-days` now only accepts
@@ -407,7 +407,7 @@ wrong blocks would be silent, so this check runs before merge.
 
 1. `python3 local_test_env/ai_scripts/start_services_with_oidc.py`, plus `analytics-web-srv` as in
    the #1592 plan. Confirm `/tmp/ingestion.log` shows the migration reaching v13, and that
-   `psql "$MICROMEGAS_SQL_CONNECTION_STRING" -c "\d streams"` lists `stream_tags` as a `gin` index.
+   `psql "$MICROMEGAS_SQL_CONNECTION_STRING" -c "\d streams"` lists `stream_tags` as a `gin` index. (Removed before release: no v13 or index.)
 2. Let the services run a few minutes so they ingest their own telemetry (streams tagged `log`,
    `metrics`, `cpu`).
 3. On **Admin → Settings**, set `retention_by_stream_tag` to `{"log": "forever", "metrics": 120}`
@@ -426,7 +426,7 @@ wrong blocks would be silent, so this check runs before merge.
 7. Set `retention_by_stream_tag` to `{"metrics": 30}`, wait for the next pass, and confirm that
    the back-dated `log` and `metrics` blocks are now deleted.
 8. Run `SET enable_seqscan = off;`, then `EXPLAIN` the override-pass query with `s.tags && ARRAY['metrics']` and confirm it uses
-   `stream_tags`.
+   `stream_tags`. (Removed before release.)
 9. Store an invalid value directly
    (`UPDATE settings SET value = '{"x": 0}' WHERE key = 'retention_by_stream_tag';`), restart the
    maintenance daemon, and confirm the next pass logs the settings error, deletes nothing, and still materializes views.
