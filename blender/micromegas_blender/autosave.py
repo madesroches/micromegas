@@ -36,7 +36,7 @@ _handle = None
 # not by the dotted bl_idname ("micromegas.recorder").
 _RECORDER_OP_IDNAME: str = "MICROMEGAS_OT_recorder"
 
-# How soon to look again while another add-on's modal operator is running.
+# How soon to look again while any other modal operator is running.
 _BLOCKED_RETRY_S: float = 0.5
 
 # Interval used only if the preferences cannot be read.
