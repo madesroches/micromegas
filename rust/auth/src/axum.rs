@@ -57,6 +57,36 @@ pub async fn authenticate(
     auth_provider: &dyn AuthProvider,
     req: &mut Request,
 ) -> Result<(), AuthError> {
+    match authenticate_quiet(auth_provider, req).await {
+        Ok(()) => Ok(()),
+        Err(QuietAuthError::Rejected(rejection)) => {
+            warn_auth_rejection("[auth_failure]", &rejection.parts, &rejection.error);
+            Err(AuthError::InvalidToken)
+        }
+        Err(QuietAuthError::Unavailable) => Err(AuthError::Unavailable),
+    }
+}
+
+/// A provider rejection with the request details needed to log it later.
+pub struct AuthRejection {
+    pub parts: HttpRequestParts,
+    pub error: anyhow::Error,
+}
+
+/// Failure of [`authenticate_quiet`].
+pub enum QuietAuthError {
+    /// The credential was rejected; the caller decides how to log it.
+    Rejected(Box<AuthRejection>),
+    /// See [`AuthError::Unavailable`].
+    Unavailable,
+}
+
+/// Same as [`authenticate`] but hands a rejection back instead of logging it, so a caller can
+/// fold extra detail into a single warning.
+pub async fn authenticate_quiet(
+    auth_provider: &dyn AuthProvider,
+    req: &mut Request,
+) -> Result<(), QuietAuthError> {
     // Resolved before building `HttpRequestParts`: axum's `ConnectInfo<SocketAddr>` extension is
     // already on `req` for every service that enables it, same as `get_client_ip`'s existing
     // HTTP callers rely on.
@@ -71,18 +101,22 @@ pub async fn authenticate(
     };
 
     // Validate request using auth provider
-    let auth_ctx = auth_provider
+    let auth_ctx = match auth_provider
         .validate_request(&parts as &dyn RequestParts)
         .await
-        .map_err(|e| {
-            if e.downcast_ref::<ProviderUnavailable>().is_some() {
-                debug!("[auth_failure] {e}");
-                AuthError::Unavailable
-            } else {
-                warn_auth_rejection("[auth_failure]", &parts, &e);
-                AuthError::InvalidToken
-            }
-        })?;
+    {
+        Ok(ctx) => ctx,
+        Err(e) if e.downcast_ref::<ProviderUnavailable>().is_some() => {
+            debug!("[auth_failure] {e}");
+            return Err(QuietAuthError::Unavailable);
+        }
+        Err(error) => {
+            return Err(QuietAuthError::Rejected(Box::new(AuthRejection {
+                parts,
+                error,
+            })));
+        }
+    };
 
     // Log successful authentication (trace level to avoid noise on every request)
     trace!(

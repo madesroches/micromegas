@@ -35,26 +35,42 @@ pub fn sanitize_for_log(value: &str, max_chars: usize) -> String {
     out
 }
 
+/// The sanitized properties shared by every authentication-rejection line.
+pub struct RejectionFields {
+    pub client_ip: String,
+    pub method: String,
+    pub path: String,
+    pub user_agent: String,
+    pub reason: String,
+}
+
+impl RejectionFields {
+    /// Only the request path (never the query string) and the `user-agent` header are read, so a
+    /// credential has no way into the line.
+    pub fn new(parts: &dyn RequestParts, err: &anyhow::Error) -> Self {
+        Self {
+            client_ip: parts
+                .client_ip()
+                .map(|ip| ip.to_string())
+                .unwrap_or_default(),
+            method: sanitize_for_log(parts.method().unwrap_or_default(), 16),
+            path: sanitize_for_log(parts.uri().unwrap_or_default(), 256),
+            user_agent: sanitize_for_log(parts.get_header("user-agent").unwrap_or_default(), 256),
+            reason: sanitize_for_log(&format!("{err}"), 1024),
+        }
+    }
+}
+
 /// Logs an authentication rejection with the caller's network details as properties.
-///
-/// Only the request path (never the query string) and the `user-agent` header are read, so a
-/// credential has no way into the line.
 pub fn warn_auth_rejection(prefix: &'static str, parts: &dyn RequestParts, err: &anyhow::Error) {
-    let client_ip = parts
-        .client_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_default();
-    let method = sanitize_for_log(parts.method().unwrap_or_default(), 16);
-    let path = sanitize_for_log(parts.uri().unwrap_or_default(), 256);
-    let user_agent = sanitize_for_log(parts.get_header("user-agent").unwrap_or_default(), 256);
-    let reason = sanitize_for_log(&format!("{err}"), 1024);
+    let f = RejectionFields::new(parts, err);
     warn!(
-        client_ip = %client_ip,
-        method = %method,
-        path = %path,
-        user_agent = %user_agent,
+        client_ip = %f.client_ip,
+        method = %f.method,
+        path = %f.path,
+        user_agent = %f.user_agent,
         "{} {}",
         prefix,
-        reason
+        f.reason
     );
 }

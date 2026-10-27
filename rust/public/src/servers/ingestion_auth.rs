@@ -10,9 +10,11 @@ use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use futures::StreamExt;
-use micromegas_auth::axum::{AuthError, authenticate};
+use micromegas_auth::axum::{
+    AuthError, AuthRejection, QuietAuthError, authenticate, authenticate_quiet,
+};
 use micromegas_auth::client_ip::resolve_client_ip;
-use micromegas_auth::log_sanitize::sanitize_for_log;
+use micromegas_auth::log_sanitize::{RejectionFields, sanitize_for_log};
 use micromegas_auth::types::AuthProvider;
 use micromegas_otel_ingestion::rejected::claimed_resource_from_prefix;
 use micromegas_tracing::prelude::*;
@@ -27,7 +29,6 @@ use tokio::sync::Semaphore;
 
 pub(crate) const INSERT_PROCESS_PATH: &str = "/ingestion/insert_process";
 const KIND_INSERT_PROCESS: &str = "insert_process";
-const KIND_OTLP: &str = "otlp";
 
 /// Caps every body read done for inspection: the `insert_process` body (a real `ProcessInfo` is
 /// a few KiB) and the OTLP body prefix, both as sent and after decompression.
@@ -281,84 +282,61 @@ impl RejectedRequestLogger {
         self.log_claims(client_ip, &claimed);
     }
 
-    /// Consumes a rejected OTLP request and logs the resource identity its body claims.
-    pub async fn log_rejected_otlp(&self, req: Request) {
+    /// Consumes a rejected OTLP request and logs its single rejection line: the provider reason,
+    /// plus the resource identity the body claims or why it could not be read.
+    pub async fn log_rejected_otlp(&self, req: Request, rejection: &AuthRejection) {
         let client_ip = resolve_client_ip(req.headers(), req.extensions());
         let headers = LoggedHeaders::from_request(&req);
-        let Ok(encoding) = content_type_encoding(req.headers()) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "unsupported_content_type", &headers);
-            return;
-        };
-        let Some(wire) = wire_encoding(&req) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "unsupported_encoding", &headers);
-            return;
-        };
-        let path = sanitize_for_log(req.uri().path(), 256);
-        let Ok(_permit) = self.inspections.try_acquire() else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "busy", &headers);
-            return;
-        };
-        let prefix = match read_body_prefix(req.into_body(), wire, MAX_INSPECTED_BODY_BYTES).await {
-            Ok(prefix) => prefix,
-            Err(e) => {
-                self.log_not_inspected(client_ip, KIND_OTLP, e.reason(), &headers);
-                return;
+        let base = RejectionFields::new(&rejection.parts, &rejection.error);
+        match self.inspect_otlp(req).await {
+            Ok((claims, identity_key)) => {
+                // One set of claims per distinct sender, so several apps behind one NAT address
+                // all show up; a repeat still logs the rejection, without the claims.
+                if self.is_fresh(client_ip, Some(identity_key)) {
+                    warn_otlp_with_claims(&base, &headers, &claims);
+                } else {
+                    warn_otlp_base(&base, &headers);
+                }
             }
-        };
-        let Some(claimed) = claimed_resource_from_prefix(&prefix, encoding) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "no_resource", &headers);
-            return;
-        };
-        let clean = |name: &str| sanitize_for_log(claimed.get(name), MAX_CLAIM_CHARS);
-        let exe = clean("claimed_exe");
-        let computer = clean("claimed_computer");
-        let instance_id = clean("claimed_service_instance_id");
-        // One line per distinct sender, so several apps behind one NAT address all show up.
-        // Built from the truncated values so the key size is bounded.
-        let identity_key = format!("otlp\x1f{exe}\x1f{computer}\x1f{instance_id}");
-        if !self.is_fresh(client_ip, Some(identity_key)) {
-            return;
+            Err(reason) => warn_otlp_not_inspected(&base, &headers, reason),
         }
-        let ip = ip_or_empty(client_ip);
-        let sdk_language = clean("claimed_sdk_language");
-        let sdk_name = clean("claimed_sdk_name");
-        let sdk_version = clean("claimed_sdk_version");
-        let service_version = clean("claimed_service_version");
-        let deployment_environment = clean("claimed_deployment_environment");
-        let k8s_namespace = clean("claimed_k8s_namespace");
-        let k8s_pod = clean("claimed_k8s_pod");
-        let k8s_deployment = clean("claimed_k8s_deployment");
-        let k8s_cluster = clean("claimed_k8s_cluster");
-        let container = clean("claimed_container");
-        let cloud_region = clean("claimed_cloud_region");
-        let pid = clean("claimed_pid");
-        let runtime = clean("claimed_runtime");
-        let username = clean("claimed_username");
-        warn!(
-            client_ip = %ip,
-            path = %path,
-            content_type = %headers.content_type,
-            content_encoding = %headers.content_encoding,
-            content_length = %headers.content_length,
-            claimed_exe = %exe,
-            claimed_computer = %computer,
-            claimed_sdk_language = %sdk_language,
-            claimed_sdk_name = %sdk_name,
-            claimed_sdk_version = %sdk_version,
-            claimed_service_version = %service_version,
-            claimed_service_instance_id = %instance_id,
-            claimed_deployment_environment = %deployment_environment,
-            claimed_k8s_namespace = %k8s_namespace,
-            claimed_k8s_pod = %k8s_pod,
-            claimed_k8s_deployment = %k8s_deployment,
-            claimed_k8s_cluster = %k8s_cluster,
-            claimed_container = %container,
-            claimed_cloud_region = %cloud_region,
-            claimed_pid = %pid,
-            claimed_runtime = %runtime,
-            claimed_username = %username,
-            "[auth_failure] rejected otlp caller claims"
+    }
+
+    async fn inspect_otlp(&self, req: Request) -> Result<(OtlpClaims, String), &'static str> {
+        let encoding =
+            content_type_encoding(req.headers()).map_err(|_| "unsupported_content_type")?;
+        let wire = wire_encoding(&req).ok_or("unsupported_encoding")?;
+        let _permit = self.inspections.try_acquire().map_err(|_| "busy")?;
+        let prefix = read_body_prefix(req.into_body(), wire, MAX_INSPECTED_BODY_BYTES)
+            .await
+            .map_err(|e| e.reason())?;
+        let claimed = claimed_resource_from_prefix(&prefix, encoding).ok_or("no_resource")?;
+        let clean = |name: &str| sanitize_for_log(claimed.get(name), MAX_CLAIM_CHARS);
+        let claims = OtlpClaims {
+            exe: clean("claimed_exe"),
+            computer: clean("claimed_computer"),
+            instance_id: clean("claimed_service_instance_id"),
+            sdk_language: clean("claimed_sdk_language"),
+            sdk_name: clean("claimed_sdk_name"),
+            sdk_version: clean("claimed_sdk_version"),
+            service_version: clean("claimed_service_version"),
+            deployment_environment: clean("claimed_deployment_environment"),
+            k8s_namespace: clean("claimed_k8s_namespace"),
+            k8s_pod: clean("claimed_k8s_pod"),
+            k8s_deployment: clean("claimed_k8s_deployment"),
+            k8s_cluster: clean("claimed_k8s_cluster"),
+            container: clean("claimed_container"),
+            cloud_region: clean("claimed_cloud_region"),
+            pid: clean("claimed_pid"),
+            runtime: clean("claimed_runtime"),
+            username: clean("claimed_username"),
+        };
+        // Built from the truncated values so the key size is bounded.
+        let identity_key = format!(
+            "otlp\x1f{}\x1f{}\x1f{}",
+            claims.exe, claims.computer, claims.instance_id
         );
+        Ok((claims, identity_key))
     }
 
     fn log_claims(&self, client_ip: Option<IpAddr>, claimed: &ClaimedProcessInfo) {
@@ -403,6 +381,88 @@ impl RejectedRequestLogger {
     }
 }
 
+/// Sanitized resource identity claimed by a rejected OTLP request.
+struct OtlpClaims {
+    exe: String,
+    computer: String,
+    instance_id: String,
+    sdk_language: String,
+    sdk_name: String,
+    sdk_version: String,
+    service_version: String,
+    deployment_environment: String,
+    k8s_namespace: String,
+    k8s_pod: String,
+    k8s_deployment: String,
+    k8s_cluster: String,
+    container: String,
+    cloud_region: String,
+    pid: String,
+    runtime: String,
+    username: String,
+}
+
+// Tracing macros need a fixed field list per call site, hence one function per variant.
+fn warn_otlp_base(base: &RejectionFields, headers: &LoggedHeaders) {
+    warn!(
+        client_ip = %base.client_ip,
+        method = %base.method,
+        path = %base.path,
+        user_agent = %base.user_agent,
+        content_type = %headers.content_type,
+        content_encoding = %headers.content_encoding,
+        content_length = %headers.content_length,
+        "[auth_failure] {}",
+        base.reason
+    );
+}
+
+fn warn_otlp_not_inspected(base: &RejectionFields, headers: &LoggedHeaders, inspection: &str) {
+    warn!(
+        client_ip = %base.client_ip,
+        method = %base.method,
+        path = %base.path,
+        user_agent = %base.user_agent,
+        content_type = %headers.content_type,
+        content_encoding = %headers.content_encoding,
+        content_length = %headers.content_length,
+        inspection = %inspection,
+        "[auth_failure] {}",
+        base.reason
+    );
+}
+
+fn warn_otlp_with_claims(base: &RejectionFields, headers: &LoggedHeaders, c: &OtlpClaims) {
+    warn!(
+        client_ip = %base.client_ip,
+        method = %base.method,
+        path = %base.path,
+        user_agent = %base.user_agent,
+        content_type = %headers.content_type,
+        content_encoding = %headers.content_encoding,
+        content_length = %headers.content_length,
+        claimed_exe = %c.exe,
+        claimed_computer = %c.computer,
+        claimed_sdk_language = %c.sdk_language,
+        claimed_sdk_name = %c.sdk_name,
+        claimed_sdk_version = %c.sdk_version,
+        claimed_service_version = %c.service_version,
+        claimed_service_instance_id = %c.instance_id,
+        claimed_deployment_environment = %c.deployment_environment,
+        claimed_k8s_namespace = %c.k8s_namespace,
+        claimed_k8s_pod = %c.k8s_pod,
+        claimed_k8s_deployment = %c.k8s_deployment,
+        claimed_k8s_cluster = %c.k8s_cluster,
+        claimed_container = %c.container,
+        claimed_cloud_region = %c.cloud_region,
+        claimed_pid = %c.pid,
+        claimed_runtime = %c.runtime,
+        claimed_username = %c.username,
+        "[auth_failure] {}",
+        base.reason
+    );
+}
+
 fn ip_or_empty(ip: Option<IpAddr>) -> String {
     ip.map(|ip| ip.to_string()).unwrap_or_default()
 }
@@ -415,14 +475,22 @@ pub async fn ingestion_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
+    let path = req.uri().path().to_owned();
+    if OTLP_PATHS.contains(&path.as_str()) {
+        return match authenticate_quiet(provider.as_ref(), &mut req).await {
+            Ok(()) => Ok(next.run(req).await),
+            Err(QuietAuthError::Rejected(rejection)) => {
+                logger.log_rejected_otlp(req, &rejection).await;
+                Err(AuthError::InvalidToken)
+            }
+            Err(QuietAuthError::Unavailable) => Err(AuthError::Unavailable),
+        };
+    }
     match authenticate(provider.as_ref(), &mut req).await {
         Ok(()) => Ok(next.run(req).await),
         Err(AuthError::InvalidToken) => {
-            let path = req.uri().path().to_owned();
             if path == INSERT_PROCESS_PATH {
                 logger.log_rejected(req).await;
-            } else if OTLP_PATHS.contains(&path.as_str()) {
-                logger.log_rejected_otlp(req).await;
             }
             Err(AuthError::InvalidToken)
         }

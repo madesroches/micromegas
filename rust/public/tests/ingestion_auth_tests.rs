@@ -564,12 +564,17 @@ fn assert_no_secrets(logs: &[CapturedLog]) {
     }
 }
 
-fn not_inspected_reason(logs: &[CapturedLog], ip: &str) -> Option<String> {
-    let lines = lines_for(logs, ip, "otlp body not inspected");
-    assert!(lines.len() <= 1, "{ip}");
-    lines
-        .first()
-        .and_then(|l| l.property("reason").map(str::to_owned))
+fn single_line<'a>(logs: &'a [CapturedLog], ip: &str) -> &'a CapturedLog {
+    let lines = lines_for(logs, ip, "");
+    assert_eq!(lines.len(), 1, "{ip}");
+    assert!(lines[0].msg.starts_with("[auth_failure] "), "{ip}");
+    lines[0]
+}
+
+fn inspection(logs: &[CapturedLog], ip: &str) -> Option<String> {
+    single_line(logs, ip)
+        .property("inspection")
+        .map(str::to_owned)
 }
 
 #[tokio::test]
@@ -620,12 +625,12 @@ async fn rejected_otlp_logs_claims_for_every_encoding() {
     for n in 1..=6 {
         let ip = format!("203.0.113.{n}");
         let ip = ip.as_str();
-        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-        assert_eq!(lines.len(), 1, "{ip}");
-        assert_service_claims(lines[0], "a");
-        assert_eq!(lines[0].property("path"), Some(OTLP_LOGS));
-        // The generic line from `authenticate` is still there.
-        assert_eq!(lines_for(&logs, ip, "").len(), 2, "{ip}");
+        let line = single_line(&logs, ip);
+        assert_service_claims(line, "a");
+        assert_eq!(line.property("path"), Some(OTLP_LOGS));
+        assert_eq!(line.property("inspection"), None);
+        assert!(line.property("content_type").is_some());
+        assert!(line.property("content_length").is_some());
     }
     assert_no_secrets(&logs);
 }
@@ -640,9 +645,7 @@ async fn truncated_gzip_still_yields_decoded_claims() {
     send(&h, otlp_bytes("203.0.113.10", PROTOBUF, Some("gzip"), wire)).await;
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "203.0.113.10", "rejected otlp caller claims");
-    assert_eq!(lines.len(), 1);
-    assert_service_claims(lines[0], "a");
+    assert_service_claims(single_line(&logs, "203.0.113.10"), "a");
 }
 
 #[tokio::test]
@@ -671,9 +674,7 @@ async fn large_and_chunked_bodies_are_inspected() {
 
     let logs = collect_logs(&guard.sink);
     for ip in ["203.0.113.11", "203.0.113.12"] {
-        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-        assert_eq!(lines.len(), 1, "{ip}");
-        assert_service_claims(lines[0], "a");
+        assert_service_claims(single_line(&logs, ip), "a");
     }
 }
 
@@ -711,7 +712,7 @@ async fn unsupported_encodings_and_content_types_are_not_inspected() {
     .await;
 
     let logs = collect_logs(&guard.sink);
-    let reason = |ip| not_inspected_reason(&logs, ip);
+    let reason = |ip| inspection(&logs, ip);
     assert_eq!(
         reason("203.0.113.20").as_deref(),
         Some("unsupported_encoding")
@@ -726,12 +727,12 @@ async fn unsupported_encodings_and_content_types_are_not_inspected() {
     );
     assert_eq!(reason("203.0.113.23").as_deref(), Some("no_resource"));
     assert_eq!(reason("203.0.113.24").as_deref(), Some("undecodable"));
-    let generic = lines_for(&logs, "203.0.113.24", "");
-    assert!(generic.iter().any(|l| l.property("path") == Some(OTLP_LOGS)
-        && l.msg.starts_with("[auth_failure] ")
-        && !l.msg.contains("not inspected")));
+    assert_eq!(
+        single_line(&logs, "203.0.113.24").property("path"),
+        Some(OTLP_LOGS)
+    );
     for ip in ["203.0.113.20", "203.0.113.21", "203.0.113.22"] {
-        assert!(lines_for(&logs, ip, "caller claims").is_empty());
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
     }
 }
 
@@ -750,10 +751,14 @@ async fn dedup_is_per_sender_not_per_ip() {
     }
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-    assert_eq!(lines.len(), 2);
+    let lines = lines_for(&logs, ip, "");
+    assert_eq!(lines.len(), 3);
     assert_service_claims(lines[0], "a");
     assert_service_claims(lines[1], "b");
+    // The repeat is still logged, without the claims.
+    assert_eq!(lines[2].property("claimed_exe"), None);
+    assert_eq!(lines[2].property("inspection"), None);
+    assert_eq!(lines[2].property("path"), Some(OTLP_LOGS));
 }
 
 #[tokio::test]
@@ -774,11 +779,11 @@ async fn exhausted_inspection_budget_logs_busy() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
+    assert_eq!(inspection(&logs, "203.0.113.40").as_deref(), Some("busy"));
     assert_eq!(
-        not_inspected_reason(&logs, "203.0.113.40").as_deref(),
-        Some("busy")
+        single_line(&logs, "203.0.113.40").property("claimed_exe"),
+        None
     );
-    assert!(lines_for(&logs, "203.0.113.40", "caller claims").is_empty());
 }
 
 #[tokio::test]
@@ -797,10 +802,8 @@ async fn otlp_claims_are_sanitized() {
     .await;
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "203.0.113.50", "rejected otlp caller claims");
-    assert_eq!(lines.len(), 1);
     assert_eq!(
-        lines[0].property("claimed_exe"),
+        single_line(&logs, "203.0.113.50").property("claimed_exe"),
         Some("evil?[auth_success] forged ?x")
     );
     assert!(logs.iter().all(|l| !l.msg.contains('\n')));
