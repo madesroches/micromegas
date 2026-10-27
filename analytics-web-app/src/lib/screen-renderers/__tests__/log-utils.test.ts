@@ -402,15 +402,15 @@ describe('groupRepeatedRows', () => {
     groupRepeatedRows(table, classifyLogColumns(table.schema.fields), ignore)
 
   it('groups rows differing only in time; a differing msg is a separate group', () => {
-    expect(run(rowsOf(['same', 'same', 'different']))).toEqual([g([0, 1], 1), g([2], 2)])
+    expect(run(rowsOf(['same', 'same', 'different']))).toMatchObject([g([0, 1], 1), g([2], 2)])
   })
 
   it('merges interleaved messages: A,B,A,B,A,B gives two groups of 3 ordered by anchor', () => {
-    expect(run(rowsOf(['A', 'B', 'A', 'B', 'A', 'B']))).toEqual([g([0, 2, 4], 4), g([1, 3, 5], 5)])
+    expect(run(rowsOf(['A', 'B', 'A', 'B', 'A', 'B']))).toMatchObject([g([0, 2, 4], 4), g([1, 3, 5], 5)])
   })
 
   it('groups A,B,A as A over rows [0,2] and B alone', () => {
-    expect(run(rowsOf(['A', 'B', 'A']))).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(run(rowsOf(['A', 'B', 'A']))).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('merges at exactly the window limit and splits beyond it', () => {
@@ -422,7 +422,7 @@ describe('groupRepeatedRows', () => {
       'A',
     ]
     const atLimit = run(rowsOf(fill(COLLAPSE_WINDOW_ROWS - 1)))
-    expect(atLimit.find((x) => x.rows.length > 1)?.rows).toEqual([0, COLLAPSE_WINDOW_ROWS])
+    expect(atLimit.find((x) => x.rows.length > 1)?.rows).toMatchObject([0, COLLAPSE_WINDOW_ROWS])
     const beyond = run(rowsOf(fill(COLLAPSE_WINDOW_ROWS)))
     expect(beyond.every((x) => x.rows.length === 1)).toBe(true)
   })
@@ -434,19 +434,25 @@ describe('groupRepeatedRows', () => {
       for (let j = 0; j < 150; j++) msgs.push(`x${i}_${j}`)
     }
     const merged = run(rowsOf(msgs)).find((x) => x.rows.length > 1)
-    expect(merged?.rows).toEqual([0, 151, 302])
+    expect(merged?.rows).toMatchObject([0, 151, 302])
   })
 
   it('anchors at the latest-by-time member for ascending and descending results', () => {
-    expect(run(rowsOf(['A', 'A', 'A'], [1, 2, 3]))).toEqual([g([0, 1, 2], 2)])
-    expect(run(rowsOf(['A', 'A', 'A'], [3, 2, 1]))).toEqual([g([0, 1, 2], 0)])
+    expect(run(rowsOf(['A', 'A', 'A'], [1, 2, 3]))).toMatchObject([g([0, 1, 2], 2)])
+    expect(run(rowsOf(['A', 'A', 'A'], [3, 2, 1]))).toMatchObject([g([0, 1, 2], 0)])
+  })
+
+  it('records earliest and latest time by value regardless of row order', () => {
+    const [grp] = run(rowsOf(['A', 'A', 'A'], [2, 3, 1]))
+    expect(grp.firstTime).toBe(1)
+    expect(grp.lastTime).toBe(3)
   })
 
   it('anchors at the last row when there is no time column', () => {
     const table = new Table({
       msg: vectorFromArray(['A', 'B', 'A'], new Utf8()),
     })
-    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(run(table, new Set())).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('groups rows differing only in an ignored column, but not when that column is compared', () => {
@@ -454,21 +460,21 @@ describe('groupRepeatedRows', () => {
       { time: 1, level: 4, target: 't', msg: 'same', request_id: 'a' },
       { time: 2, level: 4, target: 't', msg: 'same', request_id: 'b' },
     ])
-    expect(run(table, new Set(['time', 'request_id']))).toEqual([g([0, 1], 1)])
-    expect(run(table)).toEqual([g([0], 0), g([1], 1)])
+    expect(run(table, new Set(['time', 'request_id']))).toMatchObject([g([0, 1], 1)])
+    expect(run(table)).toMatchObject([g([0], 0), g([1], 1)])
   })
 
   it('falls back to singleton groups when every column is ignored', () => {
     const table = rowsOf(['same', 'same'])
     const ignore = new Set(classifyLogColumns(table.schema.fields).map((c) => c.name))
-    expect(run(table, ignore)).toEqual(singletonGroups(2))
+    expect(run(table, ignore)).toMatchObject(singletonGroups(2))
   })
 
   it('treats null equal to null, but not equal to an empty string', () => {
     const table = new Table({
       msg: vectorFromArray([null, '', null], new Utf8()),
     })
-    expect(run(table, new Set())).toEqual(
+    expect(run(table, new Set())).toMatchObject(
       [g([0, 2], 2), g([1], 1)].sort((a, b) => a.anchor - b.anchor),
     )
   })
@@ -480,7 +486,7 @@ describe('groupRepeatedRows', () => {
       numRows: 3,
       getChild: () => ({ get: (i: number) => values[i] }),
     }
-    expect(groupRepeatedRows(table, cols, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(groupRepeatedRows(table, cols, new Set())).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('groups bigint values without throwing, and keeps them apart from the same digits as a string', () => {
@@ -490,7 +496,7 @@ describe('groupRepeatedRows', () => {
       numRows: 3,
       getChild: () => ({ get: (i: number) => values[i] }),
     }
-    expect(groupRepeatedRows(table, cols, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(groupRepeatedRows(table, cols, new Set())).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('cannot collide a value containing the separator with a different tuple', () => {
@@ -498,7 +504,7 @@ describe('groupRepeatedRows', () => {
       a: vectorFromArray(['x","sy', 'x'], new Utf8()),
       b: vectorFromArray(['z', 'y","sz'], new Utf8()),
     })
-    expect(run(table, new Set())).toEqual([g([0], 0), g([1], 1)])
+    expect(run(table, new Set())).toMatchObject([g([0], 0), g([1], 1)])
   })
 
   it('treats an object-valued column (list) as equal when its formatted value matches', () => {
@@ -513,7 +519,7 @@ describe('groupRepeatedRows', () => {
         tagsType,
       ),
     })
-    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(run(table, new Set())).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('treats an object-valued column (struct) as equal when its formatted value matches', () => {
@@ -528,15 +534,15 @@ describe('groupRepeatedRows', () => {
         structType,
       ),
     })
-    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+    expect(run(table, new Set())).toMatchObject([g([1], 1), g([0, 2], 2)])
   })
 
   it('returns [] for an empty table', () => {
-    expect(run(buildLogTable([]))).toEqual([])
+    expect(run(buildLogTable([]))).toMatchObject([])
   })
 
   it('returns one group for a single row', () => {
-    expect(run(rowsOf(['only']))).toEqual([g([0], 0)])
+    expect(run(rowsOf(['only']))).toMatchObject([g([0], 0)])
   })
 })
 
@@ -546,20 +552,20 @@ describe('groupRepeatedRows', () => {
 
 describe('range', () => {
   it('returns [start, end) as an array', () => {
-    expect(range(2, 5)).toEqual([2, 3, 4])
+    expect(range(2, 5)).toMatchObject([2, 3, 4])
   })
 
   it('returns an empty array when start === end', () => {
-    expect(range(3, 3)).toEqual([])
+    expect(range(3, 3)).toMatchObject([])
   })
 })
 
 describe('singletonGroups', () => {
   it('returns one group per row', () => {
-    expect(singletonGroups(3)).toEqual([g([0], 0), g([1], 1), g([2], 2)])
+    expect(singletonGroups(3)).toMatchObject([g([0], 0), g([1], 1), g([2], 2)])
   })
 
   it('returns [] for zero rows', () => {
-    expect(singletonGroups(0)).toEqual([])
+    expect(singletonGroups(0)).toMatchObject([])
   })
 })

@@ -284,6 +284,9 @@ export interface LogRowGroup {
   rows: number[]
   /** The member that represents the group on screen. */
   anchor: number
+  /** Raw time values of the earliest/latest members by value; unset without a time column. */
+  firstTime?: unknown
+  lastTime?: unknown
 }
 
 /** `[start, end)` as an array of indices. */
@@ -357,24 +360,44 @@ export function groupRepeatedRows(
     rows: number[]
     anchor: number
     anchorTime: number
+    firstTime?: unknown
+    firstMs: number
+    lastTime?: unknown
   }
   const all: OpenGroup[] = []
   const open = new Map<string, OpenGroup>()
   for (let i = 0; i < numRows; i++) {
     const key = JSON.stringify(vectors.map(({ col, vec }) => logKeyPart(col, vec?.get(i))))
     const t = timeOf(i)
+    const rawTime = timeVec?.get(i)
     const g = open.get(key)
     if (g && i - g.rows[g.rows.length - 1] <= COLLAPSE_WINDOW_ROWS) {
       g.rows.push(i)
+      // By value, not position: members are not contiguous and row order flips
+      // between ORDER BY time ASC and DESC.
+      if (t < g.firstMs) {
+        g.firstMs = t
+        g.firstTime = rawTime
+      }
       if (t >= g.anchorTime) {
         g.anchor = i
         g.anchorTime = t
+        g.lastTime = rawTime
       }
     } else {
-      const fresh = { rows: [i], anchor: i, anchorTime: t }
+      const fresh = {
+        rows: [i],
+        anchor: i,
+        anchorTime: t,
+        firstTime: rawTime,
+        firstMs: t,
+        lastTime: rawTime,
+      }
       all.push(fresh)
       open.set(key, fresh)
     }
   }
-  return all.map(({ rows, anchor }) => ({ rows, anchor })).sort((a, b) => a.anchor - b.anchor)
+  return all
+    .map(({ rows, anchor, firstTime, lastTime }) => ({ rows, anchor, firstTime, lastTime }))
+    .sort((a, b) => a.anchor - b.anchor)
 }

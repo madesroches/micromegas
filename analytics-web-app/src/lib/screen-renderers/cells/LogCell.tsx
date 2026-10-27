@@ -21,7 +21,6 @@ import {
   singletonGroups,
   type LogRowGroup,
 } from '../log-utils'
-import { timestampToDate } from '@/lib/arrow-utils'
 import { LogDivider } from '../LogDivider'
 import { ScrollText, Copy, Check, WrapText, ChevronsDownUp } from 'lucide-react'
 
@@ -313,27 +312,9 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const buildBadgeTitle = useCallback(
     (group: LogRowGroup, count: number) => {
       if (!timeCol) return `${count} identical rows`
-      let earlier: unknown
-      let later: unknown
-      let earlierMs = Infinity
-      let laterMs = -Infinity
-      // Ordered by value, not row position — members are not contiguous and
-      // row order flips between ORDER BY time ASC and DESC.
-      for (const rowIdx of group.rows) {
-        const v = table!.get(rowIdx)?.[timeCol.name]
-        const ms = timestampToDate(v)?.getTime() ?? 0
-        if (ms < earlierMs) {
-          earlierMs = ms
-          earlier = v
-        }
-        if (ms > laterMs) {
-          laterMs = ms
-          later = v
-        }
-      }
-      return `${count} identical rows, ${formatLocalTime(earlier)} → ${formatLocalTime(later)}`
+      return `${count} identical rows, ${formatLocalTime(group.firstTime)} → ${formatLocalTime(group.lastTime)}`
     },
-    [table, timeCol],
+    [timeCol],
   )
 
   const renderRow = useCallback(
