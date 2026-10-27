@@ -14,7 +14,7 @@ use flate2::write::GzEncoder;
 use micromegas::servers::ingestion_auth::{RejectedRequestLogger, ingestion_auth_middleware};
 use micromegas::servers::tonic_auth_interceptor::check_auth;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-use micromegas_auth::types::{AuthContext, AuthProvider, RequestParts};
+use micromegas_auth::types::{AuthContext, AuthProvider, ProviderUnavailable, RequestParts};
 use micromegas_tracing::levels::{LevelFilter, set_max_level};
 use micromegas_tracing::process_info::ProcessInfo;
 use micromegas_tracing::test_utils::{CapturedLog, collect_logs, init_in_memory_tracing};
@@ -29,6 +29,7 @@ use tower::ServiceExt;
 const INSERT_PROCESS: &str = "/ingestion/insert_process";
 const OTLP_LOGS: &str = "/ingestion/otlp/v1/logs";
 const VALID_KEY: &str = "valid-key";
+const TEST_USER_AGENT: &str = "otel-test/1.0";
 
 struct Harness {
     app: Router,
@@ -42,7 +43,13 @@ fn harness() -> Harness {
 fn harness_with_logger(logger: RejectedRequestLogger) -> Harness {
     let keyring = parse_key_ring(&format!(r#"[{{"name": "t", "key": "{VALID_KEY}"}}]"#))
         .expect("parse keyring");
-    let provider: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuthProvider::new(keyring));
+    harness_with_provider(Arc::new(ApiKeyAuthProvider::new(keyring)), logger)
+}
+
+fn harness_with_provider(
+    provider: Arc<dyn AuthProvider>,
+    logger: RejectedRequestLogger,
+) -> Harness {
     let logger = Arc::new(logger);
     let reached = Arc::new(AtomicUsize::new(0));
     let handler = {
@@ -120,7 +127,8 @@ fn rejected_request(
         .method("POST")
         .uri(uri)
         .header(header::AUTHORIZATION, "Bearer wrong-key")
-        .header("x-forwarded-for", ip);
+        .header("x-forwarded-for", ip)
+        .header(header::USER_AGENT, TEST_USER_AGENT);
     if let Some(len) = content_length {
         builder = builder.header(header::CONTENT_LENGTH, len);
     }
@@ -571,6 +579,12 @@ fn single_line<'a>(logs: &'a [CapturedLog], ip: &str) -> &'a CapturedLog {
     lines[0]
 }
 
+fn assert_rejection_context(line: &CapturedLog) {
+    assert_eq!(line.msg, "[auth_failure] invalid API token");
+    assert_eq!(line.property("method"), Some("POST"));
+    assert_eq!(line.property("user_agent"), Some(TEST_USER_AGENT));
+}
+
 fn inspection(logs: &[CapturedLog], ip: &str) -> Option<String> {
     single_line(logs, ip)
         .property("inspection")
@@ -627,12 +641,43 @@ async fn rejected_otlp_logs_claims_for_every_encoding() {
         let ip = ip.as_str();
         let line = single_line(&logs, ip);
         assert_service_claims(line, "a");
+        assert_rejection_context(line);
         assert_eq!(line.property("path"), Some(OTLP_LOGS));
         assert_eq!(line.property("inspection"), None);
         assert!(line.property("content_type").is_some());
         assert!(line.property("content_length").is_some());
     }
     assert_no_secrets(&logs);
+}
+
+struct UnavailableProvider;
+
+#[async_trait::async_trait]
+impl AuthProvider for UnavailableProvider {
+    fn name(&self) -> &'static str {
+        "unavailable"
+    }
+
+    async fn validate_request(&self, _parts: &dyn RequestParts) -> anyhow::Result<AuthContext> {
+        Err(ProviderUnavailable(anyhow::anyhow!("key store unreachable")).into())
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn unavailable_provider_on_otlp_returns_503_without_warning() {
+    let guard = enable_logs();
+    let h = harness_with_provider(Arc::new(UnavailableProvider), RejectedRequestLogger::new());
+    let ip = "203.0.113.40";
+    let status = send(
+        &h,
+        otlp_bytes(ip, PROTOBUF, None, proto_body(service_attrs("a"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(h.reached.load(Ordering::SeqCst), 0);
+    let logs = collect_logs(&guard.sink);
+    assert!(lines_for(&logs, ip, "[auth_failure]").is_empty());
 }
 
 #[tokio::test]
@@ -734,6 +779,9 @@ async fn unsupported_encodings_and_content_types_are_not_inspected() {
     for ip in ["203.0.113.20", "203.0.113.21", "203.0.113.22"] {
         assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
     }
+    for n in 20..=24 {
+        assert_rejection_context(single_line(&logs, &format!("203.0.113.{n}")));
+    }
 }
 
 #[tokio::test]
@@ -758,6 +806,7 @@ async fn dedup_is_per_sender_not_per_ip() {
     // The repeat is still logged, without the claims.
     assert_eq!(lines[2].property("claimed_exe"), None);
     assert_eq!(lines[2].property("inspection"), None);
+    assert_rejection_context(lines[2]);
     assert_eq!(lines[2].property("path"), Some(OTLP_LOGS));
 }
 

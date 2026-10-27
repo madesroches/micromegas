@@ -28,7 +28,6 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 pub(crate) const INSERT_PROCESS_PATH: &str = "/ingestion/insert_process";
-const KIND_INSERT_PROCESS: &str = "insert_process";
 
 /// Caps every body read done for inspection: the `insert_process` body (a real `ProcessInfo` is
 /// a few KiB) and the OTLP body prefix, both as sent and after decompression.
@@ -202,13 +201,7 @@ impl RejectedRequestLogger {
             .is_fresh()
     }
 
-    fn log_not_inspected(
-        &self,
-        client_ip: Option<IpAddr>,
-        kind: &str,
-        reason: &str,
-        headers: &LoggedHeaders,
-    ) {
+    fn log_not_inspected(&self, client_ip: Option<IpAddr>, reason: &str, headers: &LoggedHeaders) {
         if !self.is_fresh(client_ip, None) {
             return;
         }
@@ -219,8 +212,7 @@ impl RejectedRequestLogger {
             content_type = %headers.content_type,
             content_encoding = %headers.content_encoding,
             content_length = %headers.content_length,
-            "[auth_failure] {} body not inspected",
-            kind
+            "[auth_failure] insert_process body not inspected"
         );
     }
 
@@ -234,16 +226,11 @@ impl RejectedRequestLogger {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
         let Some(declared) = declared else {
-            self.log_not_inspected(
-                client_ip,
-                KIND_INSERT_PROCESS,
-                "missing_content_length",
-                &headers,
-            );
+            self.log_not_inspected(client_ip, "missing_content_length", &headers);
             return;
         };
         if declared > MAX_INSPECTED_BODY_BYTES {
-            self.log_not_inspected(client_ip, KIND_INSERT_PROCESS, "oversize", &headers);
+            self.log_not_inspected(client_ip, "oversize", &headers);
             return;
         }
         let body = req.into_body();
@@ -253,16 +240,11 @@ impl RejectedRequestLogger {
             {
                 Ok(Ok(bytes)) => bytes,
                 Ok(Err(_)) => {
-                    self.log_not_inspected(client_ip, KIND_INSERT_PROCESS, "read_error", &headers);
+                    self.log_not_inspected(client_ip, "read_error", &headers);
                     return;
                 }
                 Err(_) => {
-                    self.log_not_inspected(
-                        client_ip,
-                        KIND_INSERT_PROCESS,
-                        "read_timeout",
-                        &headers,
-                    );
+                    self.log_not_inspected(client_ip, "read_timeout", &headers);
                     return;
                 }
             };
