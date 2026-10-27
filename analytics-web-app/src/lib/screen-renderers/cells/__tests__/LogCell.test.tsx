@@ -118,9 +118,7 @@ describe('LogCell — collapse repeats', () => {
     expect(screen.queryByLabelText(/Show \d+ repeated rows/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Collapse repeats/ }))
-    expect(onOptionsChange).toHaveBeenCalledWith(
-      expect.objectContaining({ collapseRepeats: true }),
-    )
+    expect(onOptionsChange).toHaveBeenCalledWith(expect.objectContaining({ collapseRepeats: true }))
   })
 
   it('groups rows that differ only in an ignored column', () => {
@@ -153,7 +151,9 @@ describe('LogCell — collapse repeats', () => {
       <LogCell
         {...createMockProps({
           data: [table],
-          options: { collapseIgnoreColumns: ['concat(log_entries.msg,log_entries.target)'] },
+          options: {
+            collapseIgnoreColumns: ['concat(log_entries.msg,log_entries.target)'],
+          },
         })}
       />,
     )
@@ -179,9 +179,7 @@ describe('LogCell — collapse repeats', () => {
     ])
     const { unmount } = render(<LogCell {...createMockProps({ data: [ascTable] })} />)
     const ascTitle = screen.getByLabelText('Show 3 repeated rows').getAttribute('title')
-    expect(ascTitle).toBe(
-      `3 identical rows, ${formatLocalTime(1000)} → ${formatLocalTime(3000)}`,
-    )
+    expect(ascTitle).toBe(`3 identical rows, ${formatLocalTime(1000)} → ${formatLocalTime(3000)}`)
     unmount()
 
     const descTable = buildLogTable([
@@ -191,9 +189,59 @@ describe('LogCell — collapse repeats', () => {
     ])
     render(<LogCell {...createMockProps({ data: [descTable] })} />)
     const descTitle = screen.getByLabelText('Show 3 repeated rows').getAttribute('title')
-    expect(descTitle).toBe(
-      `3 identical rows, ${formatLocalTime(1000)} → ${formatLocalTime(3000)}`,
+    expect(descTitle).toBe(`3 identical rows, ${formatLocalTime(1000)} → ${formatLocalTime(3000)}`)
+  })
+})
+
+describe('LogCell — non-adjacent repeats', () => {
+  const interleaved = () =>
+    buildLogTable([
+      { time: 1000, msg: 'A' },
+      { time: 2000, msg: 'B' },
+      { time: 3000, msg: 'A' },
+      { time: 4000, msg: 'B' },
+    ])
+
+  it('collapses interleaved messages into two lines with x2 badges, expanding in row order', () => {
+    render(<LogCell {...createMockProps({ data: [interleaved()] })} />)
+    expect(screen.getAllByLabelText('Copy row')).toHaveLength(2)
+    const badges = screen.getAllByLabelText('Show 2 repeated rows')
+    expect(badges).toHaveLength(2)
+
+    fireEvent.click(badges[0])
+    expect(screen.getAllByLabelText('Copy row')).toHaveLength(3)
+    const times = Array.from(document.querySelectorAll('span')).map((e) => e.textContent)
+    expect(times.indexOf(formatLocalTime(1000))).toBeGreaterThan(
+      times.indexOf(formatLocalTime(3000)),
     )
+  })
+
+  it('badge title spans the earliest to latest timestamp across non-adjacent members', () => {
+    render(<LogCell {...createMockProps({ data: [interleaved()] })} />)
+    const titles = screen
+      .getAllByLabelText('Show 2 repeated rows')
+      .map((b) => b.getAttribute('title'))
+    expect(titles).toContain(
+      `2 identical rows, ${formatLocalTime(1000)} → ${formatLocalTime(3000)}`,
+    )
+    expect(titles).toContain(
+      `2 identical rows, ${formatLocalTime(2000)} → ${formatLocalTime(4000)}`,
+    )
+  })
+
+  it('paginates over groups: 120 interleaved rows of two messages need no pagination bar', () => {
+    const rows: LogRowInput[] = []
+    for (let i = 0; i < 120; i++) rows.push({ time: i, msg: i % 2 ? 'B' : 'A' })
+    render(
+      <LogCell
+        {...createMockProps({
+          data: [buildLogTable(rows)],
+          options: { pageSize: 50 },
+        })}
+      />,
+    )
+    expect(screen.getAllByLabelText('Copy row')).toHaveLength(2)
+    expect(screen.queryByTitle('First page')).not.toBeInTheDocument()
   })
 })
 
@@ -223,7 +271,9 @@ describe('LogCellEditor — ignore-columns chips', () => {
     fireEvent.click(screen.getByRole('button', { name: 'request_id' }))
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        options: expect.objectContaining({ collapseIgnoreColumns: ['request_id'] }),
+        options: expect.objectContaining({
+          collapseIgnoreColumns: ['request_id'],
+        }),
       }),
     )
   })

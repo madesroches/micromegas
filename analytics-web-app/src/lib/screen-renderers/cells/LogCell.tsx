@@ -17,9 +17,8 @@ import {
   computeFlexWidths,
   formatRowForCopy,
   formatLocalTime,
-  groupConsecutiveRows,
+  groupRepeatedRows,
   singletonGroups,
-  range,
   type LogRowGroup,
 } from '../log-utils'
 import { timestampToDate } from '@/lib/arrow-utils'
@@ -72,9 +71,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
 
   const groups = useMemo(
     () =>
-      collapseRepeats
-        ? groupConsecutiveRows(table, columns, ignoreSet)
-        : singletonGroups(numRows),
+      collapseRepeats ? groupRepeatedRows(table, columns, ignoreSet) : singletonGroups(numRows),
     [table, columns, ignoreSet, collapseRepeats, numRows],
   )
 
@@ -111,18 +108,17 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     setExpandedGroups(new Set())
   }
 
-  const handleToggleGroup = useCallback((start: number) => {
+  const handleToggleGroup = useCallback((anchor: number) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev)
-      if (next.has(start)) next.delete(start)
-      else next.add(start)
+      if (next.has(anchor)) next.delete(anchor)
+      else next.add(anchor)
       return next
     })
   }, [])
 
   const displayedRows = useMemo(
-    () =>
-      pageGroups.flatMap((g) => (expandedGroups.has(g.start) ? range(g.start, g.end) : [g.start])),
+    () => pageGroups.flatMap((g) => (expandedGroups.has(g.anchor) ? g.rows : [g.anchor])),
     [pageGroups, expandedGroups],
   )
 
@@ -160,7 +156,8 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   })
 
   // Sync from outside (notebook reload) — guard by JSON equality to avoid clobbering drags
-  const pinnedWidthsFromOptions = (options?.columnWidths as Record<string, number> | undefined) ?? {}
+  const pinnedWidthsFromOptions =
+    (options?.columnWidths as Record<string, number> | undefined) ?? {}
   const serializedWidthsFromOptions = JSON.stringify(pinnedWidthsFromOptions)
   const lastSyncedRef = useRef<string>(serializedWidthsFromOptions)
   useEffect(() => {
@@ -196,8 +193,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
       const prev = dragListenersRef.current
       if (prev.onMouseMove) document.removeEventListener('mousemove', prev.onMouseMove)
       if (prev.onMouseUp) document.removeEventListener('mouseup', prev.onMouseUp)
-      const effectiveWidth =
-        livePinnedWidthsRef.current[col] ?? autoWidths[col] ?? MIN_COL_WIDTH_PX
+      const effectiveWidth = livePinnedWidthsRef.current[col] ?? autoWidths[col] ?? MIN_COL_WIDTH_PX
       dragRef.current = { col, startX: e.clientX, startWidth: effectiveWidth }
 
       const onMouseMove = (me: MouseEvent) => {
@@ -263,8 +259,7 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const effectiveWidths = useMemo(() => {
     const result: Record<string, number> = {}
     for (const col of columns) {
-      result[col.name] =
-        livePinnedWidths[col.name] ?? autoWidths[col.name] ?? MIN_COL_WIDTH_PX
+      result[col.name] = livePinnedWidths[col.name] ?? autoWidths[col.name] ?? MIN_COL_WIDTH_PX
     }
     return result
   }, [columns, livePinnedWidths, autoWidths])
@@ -292,25 +287,22 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     }
   }, [])
 
-  const handleCopyRow = useCallback(
-    async (rowIdx: number, text: string, e: React.MouseEvent) => {
-      e.stopPropagation()
-      try {
-        await navigator.clipboard.writeText(text)
-      } catch {
-        const ta = document.createElement('textarea')
-        ta.value = text
-        document.body.appendChild(ta)
-        ta.select()
-        document.execCommand('copy')
-        document.body.removeChild(ta)
-      }
-      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
-      setCopiedRowIdx(rowIdx)
-      copyTimerRef.current = setTimeout(() => setCopiedRowIdx(null), 1500)
-    },
-    [],
-  )
+  const handleCopyRow = useCallback(async (rowIdx: number, text: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    setCopiedRowIdx(rowIdx)
+    copyTimerRef.current = setTimeout(() => setCopiedRowIdx(null), 1500)
+  }, [])
 
   // -------------------------------------------------------------------------
   // Repeat badge
@@ -321,13 +313,24 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
   const buildBadgeTitle = useCallback(
     (group: LogRowGroup, count: number) => {
       if (!timeCol) return `${count} identical rows`
-      const a = table!.get(group.start)?.[timeCol.name]
-      const b = table!.get(group.end - 1)?.[timeCol.name]
-      const aMs = timestampToDate(a)?.getTime() ?? 0
-      const bMs = timestampToDate(b)?.getTime() ?? 0
-      // Ordered by value, not row position — row order (and therefore which
-      // of start/end-1 is earlier) flips between ORDER BY time ASC and DESC.
-      const [earlier, later] = aMs <= bMs ? [a, b] : [b, a]
+      let earlier: unknown
+      let later: unknown
+      let earlierMs = Infinity
+      let laterMs = -Infinity
+      // Ordered by value, not row position — members are not contiguous and
+      // row order flips between ORDER BY time ASC and DESC.
+      for (const rowIdx of group.rows) {
+        const v = table!.get(rowIdx)?.[timeCol.name]
+        const ms = timestampToDate(v)?.getTime() ?? 0
+        if (ms < earlierMs) {
+          earlierMs = ms
+          earlier = v
+        }
+        if (ms > laterMs) {
+          laterMs = ms
+          later = v
+        }
+      }
       return `${count} identical rows, ${formatLocalTime(earlier)} → ${formatLocalTime(later)}`
     },
     [table, timeCol],
@@ -348,9 +351,11 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
             aria-label="Copy row"
             tabIndex={-1}
           >
-            {copiedRowIdx === rowIdx
-              ? <Check size={10} className="text-green-500" />
-              : <Copy size={10} />}
+            {copiedRowIdx === rowIdx ? (
+              <Check size={10} className="text-green-500" />
+            ) : (
+              <Copy size={10} />
+            )}
           </button>
           {columns.map((col, colIdx) => {
             const isLast = colIdx === columns.length - 1
@@ -419,23 +424,25 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
     <div className="flex flex-col h-full font-mono text-[12px]">
       <div className="flex-1 overflow-auto min-h-0">
         {pageGroups.map((g, i) => {
-          const count = g.end - g.start
-          const isExpanded = expandedGroups.has(g.start)
+          const count = g.rows.length
+          const isExpanded = expandedGroups.has(g.anchor)
           const badge =
             count > 1 ? (
               <RepeatBadge
                 count={count}
                 expanded={isExpanded}
                 title={buildBadgeTitle(g, count)}
-                onClick={() => handleToggleGroup(g.start)}
+                onClick={() => handleToggleGroup(g.anchor)}
               />
             ) : undefined
-          const repRow = renderRow(g.start, i, false, badge)
+          const repRow = renderRow(g.anchor, i, false, badge)
           if (!isExpanded || count <= 1) return repRow
           return (
-            <React.Fragment key={g.start}>
+            <React.Fragment key={g.anchor}>
               {repRow}
-              {range(g.start + 1, g.end).map((rowIdx) => renderRow(rowIdx, i, true))}
+              {g.rows
+                .filter((rowIdx) => rowIdx !== g.anchor)
+                .map((rowIdx) => renderRow(rowIdx, i, true))}
             </React.Fragment>
           )
         })}
@@ -454,7 +461,9 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           <button
             onClick={handleCollapseRepeatsToggle}
             className={`text-[10px] px-2 py-0.5 transition-colors flex items-center gap-1 ${
-              collapseRepeats ? 'text-accent-link' : 'text-theme-text-muted hover:text-theme-text-secondary'
+              collapseRepeats
+                ? 'text-accent-link'
+                : 'text-theme-text-muted hover:text-theme-text-secondary'
             }`}
             aria-pressed={collapseRepeats}
           >
@@ -464,7 +473,9 @@ export function LogCell({ data, status, options, onOptionsChange }: CellRenderer
           <button
             onClick={handleWrapTextToggle}
             className={`text-[10px] px-2 py-0.5 transition-colors flex items-center gap-1 ${
-              wrapText ? 'text-accent-link' : 'text-theme-text-muted hover:text-theme-text-secondary'
+              wrapText
+                ? 'text-accent-link'
+                : 'text-theme-text-muted hover:text-theme-text-secondary'
             }`}
             aria-pressed={wrapText}
           >
@@ -517,13 +528,17 @@ function LogCellEditor({
   availableColumns,
 }: CellEditorProps) {
   const logConfig = config as QueryCellConfig
-  const collapseIgnoreColumns = (logConfig.options?.collapseIgnoreColumns as string[] | undefined) ?? []
+  const collapseIgnoreColumns =
+    (logConfig.options?.collapseIgnoreColumns as string[] | undefined) ?? []
 
   const handleIgnoreToggle = (name: string) => {
     const next = collapseIgnoreColumns.includes(name)
       ? collapseIgnoreColumns.filter((n) => n !== name)
       : [...collapseIgnoreColumns, name]
-    onChange({ ...logConfig, options: { ...logConfig.options, collapseIgnoreColumns: next } })
+    onChange({
+      ...logConfig,
+      options: { ...logConfig.options, collapseIgnoreColumns: next },
+    })
   }
 
   return (
@@ -573,7 +588,12 @@ function LogCellEditor({
           </div>
         )}
       </div>
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} cellResults={cellResults} cellSelections={cellSelections} />
+      <AvailableVariablesPanel
+        variables={variables}
+        timeRange={timeRange}
+        cellResults={cellResults}
+        cellSelections={cellSelections}
+      />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
@@ -601,8 +621,17 @@ export const logMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.log,
   }),
 
-  execute: async (config: CellConfig, { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange, cellResults, cellSelections)
+  execute: async (
+    config: CellConfig,
+    { variables, cellResults, cellSelections, timeRange, runQuery }: CellExecutionContext,
+  ) => {
+    const sql = substituteMacros(
+      (config as QueryCellConfig).sql,
+      variables,
+      timeRange,
+      cellResults,
+      cellSelections,
+    )
     const data = await runQuery(sql)
     return { data: [data] }
   },

@@ -1,4 +1,14 @@
-import { Field, Int32, List, Struct, Table, Timestamp, TimeUnit, Utf8, vectorFromArray } from 'apache-arrow'
+import {
+  Field,
+  Int32,
+  List,
+  Struct,
+  Table,
+  Timestamp,
+  TimeUnit,
+  Utf8,
+  vectorFromArray,
+} from 'apache-arrow'
 import {
   LEVEL_NAMES,
   formatLocalTime,
@@ -8,7 +18,8 @@ import {
   formatLogValue,
   formatRowForCopy,
   computeFlexWidths,
-  groupConsecutiveRows,
+  groupRepeatedRows,
+  COLLAPSE_WINDOW_ROWS,
   range,
   singletonGroups,
   type LogColumn,
@@ -141,7 +152,12 @@ function mockField(name: string, typeId = 'utf8'): { name: string; type: { typeI
 
 describe('classifyLogColumns', () => {
   it('preserves schema order and classifies known columns', () => {
-    const fields = [mockField('msg'), mockField('time', 'timestamp'), mockField('level'), mockField('target')]
+    const fields = [
+      mockField('msg'),
+      mockField('time', 'timestamp'),
+      mockField('level'),
+      mockField('target'),
+    ]
 
     const columns = classifyLogColumns(fields as never)
 
@@ -203,7 +219,11 @@ describe('classifyLogColumns', () => {
 
 describe('formatLogValue', () => {
   it('formats a time value via formatLocalTime', () => {
-    const col: LogColumn = { name: 'time', kind: 'time', type: new Timestamp(TimeUnit.MILLISECOND, null) }
+    const col: LogColumn = {
+      name: 'time',
+      kind: 'time',
+      type: new Timestamp(TimeUnit.MILLISECOND, null),
+    }
     expect(formatLogValue(col, '2024-01-15T10:30:45Z')).toMatch(
       /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{9}$/,
     )
@@ -236,14 +256,23 @@ describe('formatLogValue', () => {
 
 describe('formatRowForCopy', () => {
   const columns: LogColumn[] = [
-    { name: 'time', kind: 'time', type: new Timestamp(TimeUnit.MILLISECOND, null) },
+    {
+      name: 'time',
+      kind: 'time',
+      type: new Timestamp(TimeUnit.MILLISECOND, null),
+    },
     { name: 'level', kind: 'level', type: new Int32() },
     { name: 'target', kind: 'target', type: new Utf8() },
     { name: 'msg', kind: 'generic', type: new Utf8() },
   ]
 
   it('formats one tab-delimited value per column, in column order', () => {
-    const row = { time: '2024-01-15T10:30:45Z', level: 4, target: 'my::mod', msg: 'hello' }
+    const row = {
+      time: '2024-01-15T10:30:45Z',
+      level: 4,
+      target: 'my::mod',
+      msg: 'hello',
+    }
     const parts = formatRowForCopy(columns, row).split('\t')
     expect(parts).toHaveLength(4)
     expect(parts[1]).toBe('INFO')
@@ -252,7 +281,12 @@ describe('formatRowForCopy', () => {
   })
 
   it('replaces embedded tabs and newlines with a space so the copy stays tab-delimited', () => {
-    const row = { time: '2024-01-15T10:30:45Z', level: 4, target: 'my::mod', msg: 'line1\nline2\twith-tab' }
+    const row = {
+      time: '2024-01-15T10:30:45Z',
+      level: 4,
+      target: 'my::mod',
+      msg: 'line1\nline2\twith-tab',
+    }
     const result = formatRowForCopy(columns, row)
     expect(result.endsWith('line1 line2 with-tab')).toBe(true)
     expect(result).not.toMatch(/[\n\r]/)
@@ -296,7 +330,13 @@ describe('computeFlexWidths', () => {
   })
 
   it('a time column always measures the fixed 29-char format (209px)', () => {
-    const columns: LogColumn[] = [{ name: 'time', kind: 'time', type: new Timestamp(TimeUnit.MILLISECOND, null) }]
+    const columns: LogColumn[] = [
+      {
+        name: 'time',
+        kind: 'time',
+        type: new Timestamp(TimeUnit.MILLISECOND, null),
+      },
+    ]
     const table = makeFlexTable([{ time: '2024-01-15T10:30:45Z' }])
     expect(computeFlexWidths(table, columns, [0]).time).toBe(209)
   })
@@ -309,11 +349,17 @@ describe('computeFlexWidths', () => {
 })
 
 // =============================================================================
-// groupConsecutiveRows
+// groupRepeatedRows
 // =============================================================================
 
 function buildLogTable(
-  rows: { time: number; level: number; target: string; msg: string; request_id?: string }[],
+  rows: {
+    time: number
+    level: number
+    target: string
+    msg: string
+    request_id?: string
+  }[],
 ): Table {
   return new Table({
     time: vectorFromArray(
@@ -339,34 +385,68 @@ function buildLogTable(
   })
 }
 
-describe('groupConsecutiveRows', () => {
-  it('groups rows differing only in time; a differing msg breaks the run', () => {
-    const table = buildLogTable([
-      { time: 1, level: 4, target: 't', msg: 'same' },
-      { time: 2, level: 4, target: 't', msg: 'same' },
-      { time: 3, level: 4, target: 't', msg: 'different' },
-    ])
-    const columns = classifyLogColumns(table.schema.fields)
-    const groups = groupConsecutiveRows(table, columns, new Set(['time']))
-    expect(groups).toEqual([
-      { start: 0, end: 2 },
-      { start: 2, end: 3 },
-    ])
+const g = (rows: number[], anchor: number) => ({ rows, anchor })
+
+describe('groupRepeatedRows', () => {
+  const timeIgnored = new Set(['time'])
+  const rowsOf = (msgs: string[], times?: number[]) =>
+    buildLogTable(
+      msgs.map((msg, i) => ({
+        time: times ? times[i] : i + 1,
+        level: 4,
+        target: 't',
+        msg,
+      })),
+    )
+  const run = (table: Table, ignore: ReadonlySet<string> = timeIgnored) =>
+    groupRepeatedRows(table, classifyLogColumns(table.schema.fields), ignore)
+
+  it('groups rows differing only in time; a differing msg is a separate group', () => {
+    expect(run(rowsOf(['same', 'same', 'different']))).toEqual([g([0, 1], 1), g([2], 2)])
   })
 
-  it('keeps non-consecutive duplicates (A, B, A) as three separate groups', () => {
-    const table = buildLogTable([
-      { time: 1, level: 4, target: 't', msg: 'A' },
-      { time: 2, level: 4, target: 't', msg: 'B' },
-      { time: 3, level: 4, target: 't', msg: 'A' },
-    ])
-    const columns = classifyLogColumns(table.schema.fields)
-    const groups = groupConsecutiveRows(table, columns, new Set(['time']))
-    expect(groups).toEqual([
-      { start: 0, end: 1 },
-      { start: 1, end: 2 },
-      { start: 2, end: 3 },
-    ])
+  it('merges interleaved messages: A,B,A,B,A,B gives two groups of 3 ordered by anchor', () => {
+    expect(run(rowsOf(['A', 'B', 'A', 'B', 'A', 'B']))).toEqual([g([0, 2, 4], 4), g([1, 3, 5], 5)])
+  })
+
+  it('groups A,B,A as A over rows [0,2] and B alone', () => {
+    expect(run(rowsOf(['A', 'B', 'A']))).toEqual([g([1], 1), g([0, 2], 2)])
+  })
+
+  it('merges at exactly the window limit and splits beyond it', () => {
+    const fill = (gap: number) => [
+      'A',
+      ...Array(gap)
+        .fill(null)
+        .map((_, i) => `x${i}`),
+      'A',
+    ]
+    const atLimit = run(rowsOf(fill(COLLAPSE_WINDOW_ROWS - 1)))
+    expect(atLimit.find((x) => x.rows.length > 1)?.rows).toEqual([0, COLLAPSE_WINDOW_ROWS])
+    const beyond = run(rowsOf(fill(COLLAPSE_WINDOW_ROWS)))
+    expect(beyond.every((x) => x.rows.length === 1)).toBe(true)
+  })
+
+  it('measures the window from the latest member, so a long run keeps merging', () => {
+    const msgs: string[] = []
+    for (let i = 0; i < 3; i++) {
+      msgs.push('A')
+      for (let j = 0; j < 150; j++) msgs.push(`x${i}_${j}`)
+    }
+    const merged = run(rowsOf(msgs)).find((x) => x.rows.length > 1)
+    expect(merged?.rows).toEqual([0, 151, 302])
+  })
+
+  it('anchors at the latest-by-time member for ascending and descending results', () => {
+    expect(run(rowsOf(['A', 'A', 'A'], [1, 2, 3]))).toEqual([g([0, 1, 2], 2)])
+    expect(run(rowsOf(['A', 'A', 'A'], [3, 2, 1]))).toEqual([g([0, 1, 2], 0)])
+  })
+
+  it('anchors at the last row when there is no time column', () => {
+    const table = new Table({
+      msg: vectorFromArray(['A', 'B', 'A'], new Utf8()),
+    })
+    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
   })
 
   it('groups rows differing only in an ignored column, but not when that column is compared', () => {
@@ -374,36 +454,51 @@ describe('groupConsecutiveRows', () => {
       { time: 1, level: 4, target: 't', msg: 'same', request_id: 'a' },
       { time: 2, level: 4, target: 't', msg: 'same', request_id: 'b' },
     ])
-    const columns = classifyLogColumns(table.schema.fields)
-
-    const grouped = groupConsecutiveRows(table, columns, new Set(['time', 'request_id']))
-    expect(grouped).toEqual([{ start: 0, end: 2 }])
-
-    const notGrouped = groupConsecutiveRows(table, columns, new Set(['time']))
-    expect(notGrouped).toEqual([
-      { start: 0, end: 1 },
-      { start: 1, end: 2 },
-    ])
+    expect(run(table, new Set(['time', 'request_id']))).toEqual([g([0, 1], 1)])
+    expect(run(table)).toEqual([g([0], 0), g([1], 1)])
   })
 
   it('falls back to singleton groups when every column is ignored', () => {
-    const table = buildLogTable([
-      { time: 1, level: 4, target: 't', msg: 'same' },
-      { time: 2, level: 4, target: 't', msg: 'same' },
-    ])
-    const columns = classifyLogColumns(table.schema.fields)
-    const ignore = new Set(columns.map((c) => c.name))
-    expect(groupConsecutiveRows(table, columns, ignore)).toEqual(singletonGroups(2))
+    const table = rowsOf(['same', 'same'])
+    const ignore = new Set(classifyLogColumns(table.schema.fields).map((c) => c.name))
+    expect(run(table, ignore)).toEqual(singletonGroups(2))
   })
 
   it('treats null equal to null, but not equal to an empty string', () => {
-    const table = new Table({ msg: vectorFromArray([null, null, ''], new Utf8()) })
-    const columns = classifyLogColumns(table.schema.fields)
-    const groups = groupConsecutiveRows(table, columns, new Set())
-    expect(groups).toEqual([
-      { start: 0, end: 2 },
-      { start: 2, end: 3 },
-    ])
+    const table = new Table({
+      msg: vectorFromArray([null, '', null], new Utf8()),
+    })
+    expect(run(table, new Set())).toEqual(
+      [g([0, 2], 2), g([1], 1)].sort((a, b) => a.anchor - b.anchor),
+    )
+  })
+
+  it('does not confuse undefined with null', () => {
+    const cols: LogColumn[] = [{ name: 'msg', kind: 'generic', type: new Utf8() }]
+    const values = [undefined, null, undefined]
+    const table = {
+      numRows: 3,
+      getChild: () => ({ get: (i: number) => values[i] }),
+    }
+    expect(groupRepeatedRows(table, cols, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+  })
+
+  it('groups bigint values without throwing, and keeps them apart from the same digits as a string', () => {
+    const cols: LogColumn[] = [{ name: 'v', kind: 'generic', type: new Utf8() }]
+    const values: unknown[] = [10n, '10', 10n]
+    const table = {
+      numRows: 3,
+      getChild: () => ({ get: (i: number) => values[i] }),
+    }
+    expect(groupRepeatedRows(table, cols, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
+  })
+
+  it('cannot collide a value containing the separator with a different tuple', () => {
+    const table = new Table({
+      a: vectorFromArray(['x","sy', 'x'], new Utf8()),
+      b: vectorFromArray(['z', 'y","sz'], new Utf8()),
+    })
+    expect(run(table, new Set())).toEqual([g([0], 0), g([1], 1)])
   })
 
   it('treats an object-valued column (list) as equal when its formatted value matches', () => {
@@ -412,18 +507,13 @@ describe('groupConsecutiveRows', () => {
       tags: vectorFromArray(
         [
           ['a', 'b'],
-          ['a', 'b'],
           ['a', 'c'],
+          ['a', 'b'],
         ],
         tagsType,
       ),
     })
-    const columns = classifyLogColumns(table.schema.fields)
-    const groups = groupConsecutiveRows(table, columns, new Set())
-    expect(groups).toEqual([
-      { start: 0, end: 2 },
-      { start: 2, end: 3 },
-    ])
+    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
   })
 
   it('treats an object-valued column (struct) as equal when its formatted value matches', () => {
@@ -432,30 +522,21 @@ describe('groupConsecutiveRows', () => {
       s: vectorFromArray(
         [
           { a: 1, b: 'x' },
-          { a: 1, b: 'x' },
           { a: 2, b: 'y' },
+          { a: 1, b: 'x' },
         ],
         structType,
       ),
     })
-    const columns = classifyLogColumns(table.schema.fields)
-    const groups = groupConsecutiveRows(table, columns, new Set())
-    expect(groups).toEqual([
-      { start: 0, end: 2 },
-      { start: 2, end: 3 },
-    ])
+    expect(run(table, new Set())).toEqual([g([1], 1), g([0, 2], 2)])
   })
 
   it('returns [] for an empty table', () => {
-    const table = buildLogTable([])
-    const columns = classifyLogColumns(table.schema.fields)
-    expect(groupConsecutiveRows(table, columns, new Set(['time']))).toEqual([])
+    expect(run(buildLogTable([]))).toEqual([])
   })
 
   it('returns one group for a single row', () => {
-    const table = buildLogTable([{ time: 1, level: 4, target: 't', msg: 'only' }])
-    const columns = classifyLogColumns(table.schema.fields)
-    expect(groupConsecutiveRows(table, columns, new Set(['time']))).toEqual([{ start: 0, end: 1 }])
+    expect(run(rowsOf(['only']))).toEqual([g([0], 0)])
   })
 })
 
@@ -475,11 +556,7 @@ describe('range', () => {
 
 describe('singletonGroups', () => {
   it('returns one group per row', () => {
-    expect(singletonGroups(3)).toEqual([
-      { start: 0, end: 1 },
-      { start: 1, end: 2 },
-      { start: 2, end: 3 },
-    ])
+    expect(singletonGroups(3)).toEqual([g([0], 0), g([1], 1), g([2], 2)])
   })
 
   it('returns [] for zero rows', () => {

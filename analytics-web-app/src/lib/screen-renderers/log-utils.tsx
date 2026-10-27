@@ -151,8 +151,17 @@ export function renderLogColumn(
   // width: it grows into any free space and shrinks down to MIN_FLEX_WIDTH_PX when
   // space is tight. Only when that minimum plus the other columns can't fit does
   // the row scroll horizontally — no hardcoded width ceiling is involved.
-  const growStyle = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: MIN_FLEX_WIDTH_PX }
-  const widthStyle = isLast ? growStyle : w != null ? { width: w, minWidth: w, maxWidth: w } : undefined
+  const growStyle = {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: MIN_FLEX_WIDTH_PX,
+  }
+  const widthStyle = isLast
+    ? growStyle
+    : w != null
+      ? { width: w, minWidth: w, maxWidth: w }
+      : undefined
   const wrapClasses = textCellClasses(opts?.wrap)
   switch (col.kind) {
     case 'time':
@@ -192,7 +201,12 @@ export function renderLogColumn(
       return (
         <span
           className={`text-theme-text-primary ${trailingMargin} ${wrapClasses}`}
-          style={widthStyle ?? { minWidth: MIN_FLEX_WIDTH_PX, maxWidth: MAX_FLEX_WIDTH_PX }}
+          style={
+            widthStyle ?? {
+              minWidth: MIN_FLEX_WIDTH_PX,
+              maxWidth: MAX_FLEX_WIDTH_PX,
+            }
+          }
           title={formatted}
         >
           {formatted}
@@ -203,17 +217,25 @@ export function renderLogColumn(
 }
 
 export function formatRowForCopy(columns: LogColumn[], row: Record<string, unknown>): string {
-  return columns
-    .map((col) => formatLogValue(col, row[col.name]))
-    // Replace embedded tabs/newlines so a multi-line or tab-containing value
-    // (e.g. a stack trace in `msg`) doesn't inject phantom rows/columns when
-    // pasted into the tab-delimited output.
-    .map((value) => value.replace(/[\t\r\n]+/g, ' '))
-    .join('\t')
+  return (
+    columns
+      .map((col) => formatLogValue(col, row[col.name]))
+      // Replace embedded tabs/newlines so a multi-line or tab-containing value
+      // (e.g. a stack trace in `msg`) doesn't inject phantom rows/columns when
+      // pasted into the tab-delimited output.
+      .map((value) => value.replace(/[\t\r\n]+/g, ' '))
+      .join('\t')
+  )
 }
 
 export function computeFlexWidths(
-  table: { numRows: number; get(i: number): Record<string, unknown> | null | undefined } | null | undefined,
+  table:
+    | {
+        numRows: number
+        get(i: number): Record<string, unknown> | null | undefined
+      }
+    | null
+    | undefined,
   columns: LogColumn[],
   rows: number[],
 ): Record<string, number> {
@@ -250,12 +272,18 @@ export function computeFlexWidths(
 }
 
 // =============================================================================
-// Grouping consecutive repeated rows
+// Grouping repeated rows
 // =============================================================================
 
+/** A row joins an open group only if it is at most this many raw rows after the
+ *  group's latest member, so a message recurring far away stays a separate line. */
+export const COLLAPSE_WINDOW_ROWS = 200
+
 export interface LogRowGroup {
-  start: number
-  end: number
+  /** Raw row indices in ascending order, length >= 1. */
+  rows: number[]
+  /** The member that represents the group on screen. */
+  anchor: number
 }
 
 /** `[start, end)` as an array of indices. */
@@ -268,18 +296,28 @@ export function range(start: number, end: number): number[] {
 /** One group per row — the no-collapsing case. */
 export function singletonGroups(n: number): LogRowGroup[] {
   const groups: LogRowGroup[] = []
-  for (let i = 0; i < n; i++) groups.push({ start: i, end: i + 1 })
+  for (let i = 0; i < n; i++) groups.push({ rows: [i], anchor: i })
   return groups
 }
 
-/** `===` covers strings/numbers/bigints/booleans/null directly. A formatted-string
- *  fallback only kicks in for non-primitives (Arrow struct/list/`Uint8Array`/Date),
- *  where "identical" means "renders identically" — which is what the user sees. */
-function logValuesEqual(col: LogColumn, a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  const isPrimitive = (v: unknown) => v === null || v === undefined || typeof v !== 'object'
-  if (isPrimitive(a) || isPrimitive(b)) return false
-  return formatLogValue(col, a) === formatLogValue(col, b)
+/** Tagged so that null, undefined, '' , 1 and 1n all stay distinct. Non-primitives
+ *  (Arrow struct/list/`Uint8Array`/Date) key on their formatted value, since
+ *  "identical" there means "renders identically". */
+function logKeyPart(col: LogColumn, v: unknown): string {
+  if (v === undefined) return 'u'
+  if (v === null) return 'z'
+  switch (typeof v) {
+    case 'string':
+      return 's' + v
+    case 'number':
+      return 'n' + String(v)
+    case 'bigint':
+      return 'b' + String(v)
+    case 'boolean':
+      return v ? 'o1' : 'o0'
+    default:
+      return 'f' + formatLogValue(col, v)
+  }
 }
 
 interface LogGroupableTable {
@@ -288,12 +326,14 @@ interface LogGroupableTable {
 }
 
 /**
- * Splits `table`'s rows into maximal runs of consecutive rows equal on every
- * column not in `ignore`. Reads through `table.getChild(col.name)` for compared
- * columns only, so it never builds a row proxy: O(rows × compared columns)
- * with an early exit on the first mismatching column.
+ * Groups rows that are equal on every column not in `ignore` and lie within
+ * `COLLAPSE_WINDOW_ROWS` rows of the group's latest member, whether or not they
+ * are adjacent. Each group is anchored at its latest occurrence by time (by
+ * value, since the result may be ordered ascending or descending), and groups
+ * are returned ordered by anchor row. Reads through `table.getChild(col.name)`
+ * for compared columns only, so it never builds a row proxy.
  */
-export function groupConsecutiveRows(
+export function groupRepeatedRows(
   table: LogGroupableTable | null | undefined,
   columns: LogColumn[],
   ignore: ReadonlySet<string>,
@@ -304,19 +344,37 @@ export function groupConsecutiveRows(
   // If every column is ignored, any two rows would compare equal — fall back
   // to one row per group instead of collapsing the whole result into one line.
   if (compared.length === 0) return singletonGroups(numRows)
-  const vectors = compared.map((col) => ({ col, vec: table.getChild(col.name) }))
-  const groups: LogRowGroup[] = []
-  let start = 0
-  for (let i = 1; i < numRows; i++) {
-    const matchesGroupStart = vectors.every(({ col, vec }) =>
-      logValuesEqual(col, vec?.get(start), vec?.get(i)),
-    )
-    if (!matchesGroupStart) {
-      groups.push({ start, end: i })
-      start = i
+  const vectors = compared.map((col) => ({
+    col,
+    vec: table.getChild(col.name),
+  }))
+  const timeCol = columns.find((col) => col.kind === 'time')
+  const timeVec = timeCol ? table.getChild(timeCol.name) : null
+  const timeOf = (i: number): number =>
+    timeVec ? (timestampToDate(timeVec.get(i))?.getTime() ?? -Infinity) : 0
+
+  interface OpenGroup {
+    rows: number[]
+    anchor: number
+    anchorTime: number
+  }
+  const all: OpenGroup[] = []
+  const open = new Map<string, OpenGroup>()
+  for (let i = 0; i < numRows; i++) {
+    const key = JSON.stringify(vectors.map(({ col, vec }) => logKeyPart(col, vec?.get(i))))
+    const t = timeOf(i)
+    const g = open.get(key)
+    if (g && i - g.rows[g.rows.length - 1] <= COLLAPSE_WINDOW_ROWS) {
+      g.rows.push(i)
+      if (t >= g.anchorTime) {
+        g.anchor = i
+        g.anchorTime = t
+      }
+    } else {
+      const fresh = { rows: [i], anchor: i, anchorTime: t }
+      all.push(fresh)
+      open.set(key, fresh)
     }
   }
-  groups.push({ start, end: numRows })
-  return groups
+  return all.map(({ rows, anchor }) => ({ rows, anchor })).sort((a, b) => a.anchor - b.anchor)
 }
-
