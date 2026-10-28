@@ -54,9 +54,10 @@ paths: a key never becomes admin, and a key never mints.
   Under the bootstrap wildcard-admin state, every caller is an admin, keys included. That is
   unchanged here. `is_admin()` travels as the `x-auth-is-admin` header (`rust/auth/src/tower.rs:146`)
   and at flight-sql gates `bulk_ingest` (`flight_sql_service_impl.rs:1524`), view DDL
-  (`view_ddl.rs:50`), unfiltered grant visibility (`GrantVisibility::All`), and the
-  `lakehouse_admin` audience-guard bypass (`lakehouse/query.rs:127,162`). That is why the `admins`
-  barrier matters.
+  (`view_ddl.rs:50`), unfiltered grant visibility (`GrantVisibility::All`), registration of the
+  mutating lakehouse UDTFs (`retire_partitions`, `materialize_partitions`, …), and visibility of
+  `list_partitions`' global rows to an audience-scoped caller (`lakehouse/query.rs:127,162,205`).
+  Audience-scoped reads are otherwise unaffected. That is why the `admins` barrier matters.
 - **Mint.** `AudienceMintPolicy` (`policy.rs:541`) is reached only from `mint_key` in
   `analytics-web-srv`, which accepts OIDC logins only (`rust/analytics-web-srv/src/auth/state.rs:76`).
   So an analytics key cannot reach mint today, but only because of how routes are wired.
@@ -296,7 +297,7 @@ produced.
   open question).
 - Under the bootstrap `('admins', '*')` state, analytics keys stay admin like every caller. It is
   a warned state that reopens `bulk_ingest` to keys; `is_admin()` also gates view DDL, unfiltered
-  grant visibility and the audience-guard bypass.
+  grant visibility, the mutating lakehouse UDTFs and global-partition visibility.
 
 ## Migration
 
