@@ -230,15 +230,24 @@ produced.
    - `groups.rs`: the barrier parameter on `walk_upward`, the new `closure` signature, and
      module/field docs covering `key:`.
    - `membership.rs`: pass `ctx.analytics_key_id`.
+   - Selector-list error strings and doc comments naming three kinds or citing the CHECKs:
+     `policy.rs:115-120,260-263,284,294-297,310`, `groups.rs:46-50,76,116-119,131-134`,
+     `db_audience_grants.rs:49-52`, `db_api_key.rs:493-494`.
    - `db_api_key.rs:479-500`: set `analytics_key_id`, and replace the stale `memberships` comment.
 2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` drops
-   both selector-shape CHECKs (`DROP CONSTRAINT IF EXISTS`, as above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm.
+   both selector-shape CHECKs (`DROP CONSTRAINT IF EXISTS`, as above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm. In
+   `rust/ingestion/tests/sql_migration_test.rs`, update
+   `v7_creates_audience_grants_table_with_constraints` (`:313-322`, asserts the CHECK rejects
+   `'not-a-selector'`; assert the insert succeeds at v13 or drop it) and its doc comment
+   (`:219-221`); there is no group_members CHECK assertion in that file.
 3. **Routes** (`rust/analytics-web-srv/src/`): the new `key_selector.rs` helper. In `groups.rs`:
    the `admins` refusal, the canonicalize and `ensure_live_key` calls, delete canonicalization, and
    the `members` listing join. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
-   delete canonicalization, and the join on `visible_grants` (`VisibleGrantRow`).
-4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings, and
-   `members` output in `groups.py`.
+   delete canonicalization, and the join on `visible_grants` (`VisibleGrantRow`). Update the
+   selector-list error strings and docs at `groups.rs:471`, `audience_grants.rs:259,470`, and the
+   now-false "already passed its own CHECK constraints… unreachable" comment in `ingestion_keys.rs:383-385`.
+4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings (including the
+   `groups.py:87` docstring), and `members` output in `groups.py`.
 5. **Web app**: the API types, plus the new kind in the `GroupsPage.tsx` and
    `AudienceAccessPage.tsx` dialogs, and chip rendering.
 6. **Docs and CHANGELOG** (see below).
@@ -246,9 +255,9 @@ produced.
 ## Files to Modify
 
 - `rust/auth/src/types.rs`, `policy.rs`, `groups.rs`, `membership.rs`, `db_api_key.rs`,
-  `api_key.rs`, `oidc.rs`
-- `rust/ingestion/src/sql_migration.rs`
-- `rust/analytics-web-srv/src/groups.rs`, `audience_grants.rs`, `web_server.rs`, `lib.rs` (or
+  `db_audience_grants.rs`, `api_key.rs`, `oidc.rs`
+- `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/tests/sql_migration_test.rs`
+- `rust/analytics-web-srv/src/groups.rs`, `audience_grants.rs`, `ingestion_keys.rs`, `web_server.rs`, `lib.rs` (or
   `main.rs` module list), new `key_selector.rs`
 - Test constructors of `AuthContext` under `rust/auth/tests/`, `rust/public/tests/`,
   `rust/analytics-web-srv/tests/`
@@ -257,7 +266,8 @@ produced.
 - `analytics-web-app/src/lib/groups-api.ts`, `audience-grants-api.ts`,
   `src/routes/GroupsPage.tsx`, `AudienceAccessPage.tsx`, and their `__tests__`
 - `mkdocs/docs/admin/groups.md`, `authorization.md`, `api-keys.md`, `web-app.md` (Audience
-  Access and Groups), `functions-reference.md`, `control-plane-audit-log.md`
+  Access and Groups), `functions-reference.md`, `control-plane-audit-log.md`,
+  `mkdocs/docs/query-guide/python-api.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -310,18 +320,24 @@ build (safe because that v13 changed nothing else).
 ## Documentation
 
 - `mkdocs/docs/admin/groups.md`: add the selector table row `key:<key_id>` (never in `admins`),
-  the note that selector shape is validated in code (no DB CHECK), the `admins` barrier rule, the 400/404 responses, the `key_name`/`key_revoked`
+  the note that selector shape is validated in code (no DB CHECK; delete the
+  `group_members_selector_shape` line from the schema block at ~line 25), the `admins` barrier rule, the 400/404 responses, the `key_name`/`key_revoked`
   listing fields, and the issue's three-command example.
 - `mkdocs/docs/admin/authorization.md`: add `key:<key_id>` to the selector vocabulary (read axis
   only). In the paragraph on callers with no identity (around line 94), say that an analytics key
   matches `*`, its own `key:` grants, and its groups' `group:` grants. Keys never mint and never
   become admin through membership. In the self-service section, say that sharing with a key
-  follows the same hold rule.
+  follows the same hold rule. Delete the `audience_grants_selector_shape` line from the schema
+  block (~318-319) and reword ~328-329 ("CHECK constraints are re-validated in Rust") to say selector
+  shape is validated in code only.
 - `mkdocs/docs/admin/api-keys.md`: replace the "per-key `read_audiences` grant" text (lines ~67
   and ~183) with the two paths. Add a short "Granting a key read access" section. Note revocation
   latency and that rows left behind by revoked keys stay until removed.
 - `mkdocs/docs/admin/web-app.md` (Audience Access, and the Groups Add-member kind toggle at
-  ~lines 127-129, "everyone / user / group"): the new `key` kind.
+  ~lines 127-129, "everyone / user / group"): the new `key` kind; also the non-admin Share
+  sentence at ~line 247 ("`user:<id>` or `group:<id>` selector only").
+- `mkdocs/docs/query-guide/python-api.md`: add `key:<key_id>` to the selector lists for grants
+  create (~971) and groups add (~1010).
 - `mkdocs/docs/admin/functions-reference.md`: add `key:<key_id>` to the selector values (~line
   444), fix the "API-key caller with no selectors sees zero rows" statement (~457-458), and update
   the per-key `read_audiences` text (~477-479).
