@@ -185,7 +185,8 @@ could not create the row anyway (and key ids are random UUIDv4s).
   `max_grants_per_caller`. They may still delete only rows they created. So a person can share
   with a key exactly what they could already share with another person.
 - **`DELETE`** on both routes takes the member/selector as a query param (`?member=`;
-  `?audience=&axis=&selector=`) and canonicalizes it with the pure step. It does not check
+  `?audience=&axis=&selector=`) and canonicalizes it with the pure step in the outer handler, before `MutationAudit` is built, as on
+  create. It does not check
   existence, so a member or grant row left behind by a revoked key can still be removed.
 - **Listings** (`GET /api/groups/{name}/members`, and `GET /api/audience-grants/visible`, which
   the Audience Access page reads; row type `VisibleGrantRow`): append `key_name: Option<String>` and `key_revoked: bool`, filled by
@@ -245,8 +246,8 @@ produced.
    - `membership.rs`: pass `ctx.analytics_key_id`.
    - Selector-list error strings and doc comments naming three kinds or citing the CHECKs:
      `policy.rs:115-120,260-263,284,294-297,310`, `groups.rs:46-50,76,116-119,131-134`,
-     `db_audience_grants.rs:49-52`, `db_api_key.rs:493-494`.
-   - `read_scope.rs:66-67` (`rust/analytics/src/lakehouse/`): the `grant_selectors` doc lists `key:<id>`.
+     `db_audience_grants.rs:49-52`.
+   - `read_scope.rs:65-67` (`rust/analytics/src/lakehouse/`): the `grant_selectors` doc lists `key:<id>`.
    - `db_api_key.rs:479-500`: set `analytics_key_id`, and replace the stale `memberships` comment.
 2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` drops
    both selector-shape CHECKs (`DROP CONSTRAINT IF EXISTS`, as above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm. In
@@ -256,17 +257,21 @@ produced.
    (`:219-221`); there is no group_members CHECK assertion in that file.
 3. **Routes** (`rust/analytics-web-srv/src/`): the new `key_selector.rs` helper. In `groups.rs`:
    the `admins` refusal, the canonicalize and `ensure_live_key` calls, delete canonicalization, and
-   the `members` listing join. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
+   the `members` listing join, plus `add_member`'s `MemberRow`. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
    delete canonicalization, and the join in all three `visible_grants` branches (`VisibleGrantRow`, whose doc comment claiming
-   the `list_audience_grants()` column order is reworded), plus `add_member`'s `MemberRow`. Update the
+   the `list_audience_grants()` column order is reworded). Update the
    selector-list error strings and docs at `groups.rs:471`, `audience_grants.rs:259,470`, and the
    now-false "already passed its own CHECK constraints… unreachable" comment in `ingestion_keys.rs:383-385`.
 4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings (including the
    `groups.py:87` docstring), and `members` output in `groups.py`. In `python/micromegas/micromegas/web_client.py`, the selector
    lists in the `create_audience_grant` (:268-269) and `add_group_member` (:359) docs gain `key:<key_id>`,
-   and the 404 description (:362-363) covers the key-not-found-or-revoked case.
+   and the 404 description (:362-363) covers the key-not-found-or-revoked case. Also update the
+   `list_group_members` docstring (:346-348) to list `key_name`/`key_revoked`, and the selector-kind
+   lists in the `delete_audience_grant` (:286-288) and `remove_group_member` (:382-386) docstrings to include `key:`.
 5. **Web app**: the API types (the `/visible` row type only, not the grant create response), `validateSelector` and `decodeGrant`, plus the new kind in the `GroupsPage.tsx` and
-   `AudienceAccessPage.tsx` dialogs, and chip rendering.
+   `AudienceAccessPage.tsx` dialogs, and chip rendering. Reword the `AudienceAccessPage.tsx:771-772`
+   help text (audience with no read grants is "unreadable except through a per-key `read_audiences`
+   list") to mention `key:` grants and group membership.
 6. **Docs and CHANGELOG** (see below).
 
 ## Files to Modify
