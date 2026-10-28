@@ -1,8 +1,9 @@
 //! Authentication layer for the ingestion routes.
 //!
-//! Wraps [`micromegas_auth::axum::authenticate`] so a rejected `insert_process` request, the
-//! first call any client makes, or an OTLP export, can have the identity it claims logged next
-//! to the caller's network details. The 401 response is identical to the one `auth_middleware` returns.
+//! Wraps [`micromegas_auth::axum::authenticate_quiet`] so a rejected `insert_process` request, the
+//! first call any client makes, or an OTLP export, is logged as one line carrying both the
+//! rejection reason and the identity its body claims. The 401 response is identical to the one
+//! `auth_middleware` returns.
 
 use super::otlp::{OTLP_PATHS, content_type_encoding};
 use axum::body::{Body, to_bytes};
@@ -10,24 +11,27 @@ use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use futures::StreamExt;
-use micromegas_auth::axum::{AuthError, authenticate};
-use micromegas_auth::client_ip::resolve_client_ip;
-use micromegas_auth::log_sanitize::sanitize_for_log;
+use micromegas_auth::axum::{
+    AuthError, AuthRejection, QuietAuthError, authenticate, authenticate_quiet,
+};
+use micromegas_auth::log_sanitize::{RejectionFields, sanitize_for_log};
 use micromegas_auth::types::AuthProvider;
 use micromegas_otel_ingestion::rejected::claimed_resource_from_prefix;
+use micromegas_tracing::dispatch;
+use micromegas_tracing::logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata, LogMsgForm};
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::property_set::PropertySet;
 use moka::sync::Cache;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
 pub(crate) const INSERT_PROCESS_PATH: &str = "/ingestion/insert_process";
-const KIND_INSERT_PROCESS: &str = "insert_process";
-const KIND_OTLP: &str = "otlp";
 
 /// Caps every body read done for inspection: the `insert_process` body (a real `ProcessInfo` is
 /// a few KiB) and the OTLP body prefix, both as sent and after decompression.
@@ -53,22 +57,22 @@ struct ClaimedProcessInfo {
     properties: HashMap<String, String>,
 }
 
-/// Build-identity properties worth logging. `command-line` and `exe_args` are left out because
-/// they can carry secrets passed on the command line.
-const LOGGED_PROPERTY_KEYS: [&str; 7] = [
-    "platform-name",
-    "build-version",
-    "engine-version",
-    "build-config",
-    "build-target",
-    "branch-name",
-    "commit",
+/// Build-identity properties worth logging, with their log property names. `command-line` and
+/// `exe_args` are left out because they can carry secrets passed on the command line.
+const LOGGED_PROPERTIES: [(&str, &str); 7] = [
+    ("platform-name", "claimed_platform_name"),
+    ("build-version", "claimed_build_version"),
+    ("engine-version", "claimed_engine_version"),
+    ("build-config", "claimed_build_config"),
+    ("build-target", "claimed_build_target"),
+    ("branch-name", "claimed_branch_name"),
+    ("commit", "claimed_commit"),
 ];
 
-/// Reads and logs the claims of rejected `insert_process` and OTLP requests, at most once per
-/// client IP and claimed identity per minute.
+/// Logs every rejected `insert_process` and OTLP request, with the claims of its body attached at
+/// most once per client IP and claimed sender per minute.
 pub struct RejectedRequestLogger {
-    recent: Cache<(Option<IpAddr>, Option<String>), ()>,
+    recent: Cache<(Option<IpAddr>, String), ()>,
     inspections: Semaphore,
 }
 
@@ -194,239 +198,205 @@ impl RejectedRequestLogger {
         }
     }
 
-    fn is_fresh(&self, client_ip: Option<IpAddr>, process_id: Option<String>) -> bool {
+    /// `sender` is built from truncated claims, so the key size is bounded.
+    fn is_fresh(&self, client_ip: Option<IpAddr>, sender: String) -> bool {
         self.recent
-            .entry((client_ip, process_id))
+            .entry((client_ip, sender))
             .or_insert(())
             .is_fresh()
     }
 
-    fn log_not_inspected(
-        &self,
-        client_ip: Option<IpAddr>,
-        kind: &str,
-        reason: &str,
-        headers: &LoggedHeaders,
-    ) {
-        if !self.is_fresh(client_ip, None) {
-            return;
-        }
-        let ip = ip_or_empty(client_ip);
-        warn!(
-            client_ip = %ip,
-            reason = %reason,
-            content_type = %headers.content_type,
-            content_encoding = %headers.content_encoding,
-            content_length = %headers.content_length,
-            "[auth_failure] {} body not inspected",
-            kind
-        );
+    /// Consumes a rejected `insert_process` or OTLP request and logs its single rejection line:
+    /// the provider reason, plus the identity the body claims or why it could not be read.
+    pub async fn log_rejected(&self, req: Request, rejection: &AuthRejection) {
+        let headers = LoggedHeaders::from_request(&req);
+        let inspected = if req.uri().path() == INSERT_PROCESS_PATH {
+            self.inspect_insert_process(req).await
+        } else {
+            self.inspect_otlp(req).await
+        };
+        let inspection = match inspected {
+            // One set of claims per distinct sender, so several apps behind one NAT address all
+            // show up; a repeat still logs the rejection, without the claims.
+            Ok(claims) => {
+                if self.is_fresh(rejection.parts.client_ip, claims.sender) {
+                    Inspection::Claims(claims.properties)
+                } else {
+                    Inspection::Repeat
+                }
+            }
+            Err(reason) => Inspection::NotInspected(reason),
+        };
+        let base = RejectionFields::new(&rejection.parts, &rejection.error);
+        warn_rejection(&base, &headers, &inspection);
     }
 
-    /// Consumes the rejected request and logs what its body claims about the caller.
-    pub async fn log_rejected(&self, req: Request) {
-        let client_ip = resolve_client_ip(req.headers(), req.extensions());
-        let headers = LoggedHeaders::from_request(&req);
+    async fn inspect_insert_process(&self, req: Request) -> Result<Claims, &'static str> {
         let declared = req
             .headers()
             .get(axum::http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok());
-        let Some(declared) = declared else {
-            self.log_not_inspected(
-                client_ip,
-                KIND_INSERT_PROCESS,
-                "missing_content_length",
-                &headers,
-            );
-            return;
-        };
+            .and_then(|v| v.parse::<usize>().ok())
+            .ok_or("missing_content_length")?;
         if declared > MAX_INSPECTED_BODY_BYTES {
-            self.log_not_inspected(client_ip, KIND_INSERT_PROCESS, "oversize", &headers);
-            return;
+            return Err("oversize");
         }
-        let body = req.into_body();
-        let bytes =
-            match tokio::time::timeout(BODY_READ_TIMEOUT, to_bytes(body, MAX_INSPECTED_BODY_BYTES))
-                .await
-            {
-                Ok(Ok(bytes)) => bytes,
-                Ok(Err(_)) => {
-                    self.log_not_inspected(client_ip, KIND_INSERT_PROCESS, "read_error", &headers);
-                    return;
-                }
-                Err(_) => {
-                    self.log_not_inspected(
-                        client_ip,
-                        KIND_INSERT_PROCESS,
-                        "read_timeout",
-                        &headers,
-                    );
-                    return;
-                }
-            };
-        let claimed: ClaimedProcessInfo = match ciborium::de::from_reader_with_recursion_limit(
-            &bytes[..],
-            CBOR_RECURSION_LIMIT,
-        ) {
-            Ok(claimed) => claimed,
-            Err(_) => {
-                if self.is_fresh(client_ip, None) {
-                    let ip = ip_or_empty(client_ip);
-                    warn!(client_ip = %ip, "[auth_failure] insert_process body unparseable");
-                }
-                return;
-            }
+        let _permit = self.inspections.try_acquire().map_err(|_| "busy")?;
+        let read = to_bytes(req.into_body(), MAX_INSPECTED_BODY_BYTES);
+        let bytes = match tokio::time::timeout(BODY_READ_TIMEOUT, read).await {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(_)) => return Err(PrefixError::Read.reason()),
+            Err(_) => return Err(PrefixError::Timeout.reason()),
         };
-        self.log_claims(client_ip, &claimed);
+        let claimed: ClaimedProcessInfo =
+            ciborium::de::from_reader_with_recursion_limit(&bytes[..], CBOR_RECURSION_LIMIT)
+                .map_err(|_| PrefixError::Undecodable.reason())?;
+        Ok(claimed.claims())
     }
 
-    /// Consumes a rejected OTLP request and logs the resource identity its body claims.
-    pub async fn log_rejected_otlp(&self, req: Request) {
-        let client_ip = resolve_client_ip(req.headers(), req.extensions());
-        let headers = LoggedHeaders::from_request(&req);
-        let Ok(encoding) = content_type_encoding(req.headers()) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "unsupported_content_type", &headers);
-            return;
-        };
-        let Some(wire) = wire_encoding(&req) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "unsupported_encoding", &headers);
-            return;
-        };
-        let path = sanitize_for_log(req.uri().path(), 256);
-        let Ok(_permit) = self.inspections.try_acquire() else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "busy", &headers);
-            return;
-        };
-        let prefix = match read_body_prefix(req.into_body(), wire, MAX_INSPECTED_BODY_BYTES).await {
-            Ok(prefix) => prefix,
-            Err(e) => {
-                self.log_not_inspected(client_ip, KIND_OTLP, e.reason(), &headers);
-                return;
-            }
-        };
-        let Some(claimed) = claimed_resource_from_prefix(&prefix, encoding) else {
-            self.log_not_inspected(client_ip, KIND_OTLP, "no_resource", &headers);
-            return;
-        };
-        let clean = |name: &str| sanitize_for_log(claimed.get(name), MAX_CLAIM_CHARS);
-        let exe = clean("claimed_exe");
-        let computer = clean("claimed_computer");
-        let instance_id = clean("claimed_service_instance_id");
-        // One line per distinct sender, so several apps behind one NAT address all show up.
-        // Built from the truncated values so the key size is bounded.
-        let identity_key = format!("otlp\x1f{exe}\x1f{computer}\x1f{instance_id}");
-        if !self.is_fresh(client_ip, Some(identity_key)) {
-            return;
-        }
-        let ip = ip_or_empty(client_ip);
-        let sdk_language = clean("claimed_sdk_language");
-        let sdk_name = clean("claimed_sdk_name");
-        let sdk_version = clean("claimed_sdk_version");
-        let service_version = clean("claimed_service_version");
-        let deployment_environment = clean("claimed_deployment_environment");
-        let k8s_namespace = clean("claimed_k8s_namespace");
-        let k8s_pod = clean("claimed_k8s_pod");
-        let k8s_deployment = clean("claimed_k8s_deployment");
-        let k8s_cluster = clean("claimed_k8s_cluster");
-        let container = clean("claimed_container");
-        let cloud_region = clean("claimed_cloud_region");
-        let pid = clean("claimed_pid");
-        let runtime = clean("claimed_runtime");
-        let username = clean("claimed_username");
-        warn!(
-            client_ip = %ip,
-            path = %path,
-            content_type = %headers.content_type,
-            content_encoding = %headers.content_encoding,
-            content_length = %headers.content_length,
-            claimed_exe = %exe,
-            claimed_computer = %computer,
-            claimed_sdk_language = %sdk_language,
-            claimed_sdk_name = %sdk_name,
-            claimed_sdk_version = %sdk_version,
-            claimed_service_version = %service_version,
-            claimed_service_instance_id = %instance_id,
-            claimed_deployment_environment = %deployment_environment,
-            claimed_k8s_namespace = %k8s_namespace,
-            claimed_k8s_pod = %k8s_pod,
-            claimed_k8s_deployment = %k8s_deployment,
-            claimed_k8s_cluster = %k8s_cluster,
-            claimed_container = %container,
-            claimed_cloud_region = %cloud_region,
-            claimed_pid = %pid,
-            claimed_runtime = %runtime,
-            claimed_username = %username,
-            "[auth_failure] rejected otlp caller claims"
+    async fn inspect_otlp(&self, req: Request) -> Result<Claims, &'static str> {
+        let encoding =
+            content_type_encoding(req.headers()).map_err(|_| "unsupported_content_type")?;
+        let wire = wire_encoding(&req).ok_or("unsupported_encoding")?;
+        let _permit = self.inspections.try_acquire().map_err(|_| "busy")?;
+        let prefix = read_body_prefix(req.into_body(), wire, MAX_INSPECTED_BODY_BYTES)
+            .await
+            .map_err(|e| e.reason())?;
+        let claimed = claimed_resource_from_prefix(&prefix, encoding).ok_or("no_resource")?;
+        let clean = |name: &str| clean_claim(claimed.get(name));
+        let sender = format!(
+            "otlp\x1f{}\x1f{}\x1f{}",
+            clean("claimed_exe"),
+            clean("claimed_computer"),
+            clean("claimed_service_instance_id")
         );
-    }
-
-    fn log_claims(&self, client_ip: Option<IpAddr>, claimed: &ClaimedProcessInfo) {
-        let clean = |v: Option<&str>| sanitize_for_log(v.unwrap_or_default(), MAX_CLAIM_CHARS);
-        let process_id = clean(claimed.process_id.as_deref());
-        // `Some` even when absent so this key never collides with the `None` key of the
-        // "not inspected" lines.
-        if !self.is_fresh(client_ip, Some(process_id.clone())) {
-            return;
-        }
-        let property = |key: &str| clean(claimed.properties.get(key).map(String::as_str));
-        let ip = ip_or_empty(client_ip);
-        let exe = clean(claimed.exe.as_deref());
-        let username = clean(claimed.username.as_deref());
-        let computer = clean(claimed.computer.as_deref());
-        let parent_process_id = clean(claimed.parent_process_id.as_deref());
-        let start_time = clean(claimed.start_time.as_deref());
-        let platform_name = property(LOGGED_PROPERTY_KEYS[0]);
-        let build_version = property(LOGGED_PROPERTY_KEYS[1]);
-        let engine_version = property(LOGGED_PROPERTY_KEYS[2]);
-        let build_config = property(LOGGED_PROPERTY_KEYS[3]);
-        let build_target = property(LOGGED_PROPERTY_KEYS[4]);
-        let branch_name = property(LOGGED_PROPERTY_KEYS[5]);
-        let commit = property(LOGGED_PROPERTY_KEYS[6]);
-        warn!(
-            client_ip = %ip,
-            claimed_process_id = %process_id,
-            claimed_exe = %exe,
-            claimed_username = %username,
-            claimed_computer = %computer,
-            claimed_parent_process_id = %parent_process_id,
-            claimed_start_time = %start_time,
-            claimed_platform_name = %platform_name,
-            claimed_build_version = %build_version,
-            claimed_engine_version = %engine_version,
-            claimed_build_config = %build_config,
-            claimed_build_target = %build_target,
-            claimed_branch_name = %branch_name,
-            claimed_commit = %commit,
-            "[auth_failure] rejected insert_process caller claims"
+        let properties = claim_properties(
+            claimed
+                .properties()
+                .iter()
+                .map(|(name, value)| (*name, value.as_str())),
         );
+        Ok(Claims { sender, properties })
     }
 }
 
-fn ip_or_empty(ip: Option<IpAddr>) -> String {
-    ip.map(|ip| ip.to_string()).unwrap_or_default()
+impl ClaimedProcessInfo {
+    fn claims(&self) -> Claims {
+        fn field(value: &Option<String>) -> &str {
+            value.as_deref().unwrap_or_default()
+        }
+        let fields = [
+            ("claimed_process_id", field(&self.process_id)),
+            ("claimed_exe", field(&self.exe)),
+            ("claimed_username", field(&self.username)),
+            ("claimed_computer", field(&self.computer)),
+            ("claimed_parent_process_id", field(&self.parent_process_id)),
+            ("claimed_start_time", field(&self.start_time)),
+        ];
+        let build = LOGGED_PROPERTIES.iter().map(|(key, name)| {
+            let value = self.properties.get(*key).map(String::as_str);
+            (*name, value.unwrap_or_default())
+        });
+        Claims {
+            sender: format!("insert_process\x1f{}", clean_claim(field(&self.process_id))),
+            properties: claim_properties(fields.into_iter().chain(build)),
+        }
+    }
 }
 
-/// Like [`micromegas_auth::axum::auth_middleware`], and additionally logs the claims of a
-/// rejected `insert_process` or OTLP request through `logger`.
+/// Sanitized identity a rejected request claims.
+struct Claims {
+    /// Tells apart the senders behind one client IP.
+    sender: String,
+    /// `claimed_*` log properties; the ones the caller left empty are omitted.
+    properties: Vec<(&'static str, String)>,
+}
+
+enum Inspection {
+    Claims(Vec<(&'static str, String)>),
+    /// The sender's claims were already logged within the last minute.
+    Repeat,
+    NotInspected(&'static str),
+}
+
+fn clean_claim(value: &str) -> String {
+    sanitize_for_log(value, MAX_CLAIM_CHARS)
+}
+
+fn claim_properties<'a>(
+    claims: impl IntoIterator<Item = (&'static str, &'a str)>,
+) -> Vec<(&'static str, String)> {
+    claims
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(name, value)| (name, clean_claim(value)))
+        .collect()
+}
+
+/// Logged from a runtime property list rather than `warn!`, whose fields are fixed per call
+/// site: which claims are present depends on the route and on what the caller sent.
+fn warn_rejection(base: &RejectionFields, headers: &LoggedHeaders, inspection: &Inspection) {
+    static DESC: LogMetadata = LogMetadata {
+        level: Level::Warn,
+        level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "[auth_failure] {}",
+        target: module_path!(),
+        module_path: module_path!(),
+        file: file!(),
+        line: line!(),
+    };
+    if Level::Warn > STATIC_MAX_LEVEL || Level::Warn > max_level() {
+        return;
+    }
+    let mut properties = vec![
+        DynProperty::new("client_ip", &base.client_ip),
+        DynProperty::new("method", &base.method),
+        DynProperty::new("path", &base.path),
+        DynProperty::new("user_agent", &base.user_agent),
+        DynProperty::new("content_type", &headers.content_type),
+        DynProperty::new("content_encoding", &headers.content_encoding),
+        DynProperty::new("content_length", &headers.content_length),
+    ];
+    match inspection {
+        Inspection::Claims(claims) => properties.extend(
+            claims
+                .iter()
+                .map(|(name, value)| DynProperty::new(name, value)),
+        ),
+        Inspection::Repeat => {}
+        Inspection::NotInspected(reason) => {
+            properties.push(DynProperty::new("inspection", reason));
+        }
+    }
+    dispatch::log_dyn_tagged(
+        &DESC,
+        PropertySet::empty(),
+        &properties,
+        LogMsgForm::Formatted,
+        format_args!("[auth_failure] {}", base.reason),
+    );
+}
+
+/// Like [`micromegas_auth::axum::auth_middleware`], except that a rejected `insert_process` or
+/// OTLP request is logged through `logger`, as one line that includes what its body claims.
 pub async fn ingestion_auth_middleware(
     provider: Arc<dyn AuthProvider>,
     logger: Arc<RejectedRequestLogger>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    match authenticate(provider.as_ref(), &mut req).await {
+    let path = req.uri().path();
+    if path != INSERT_PROCESS_PATH && !OTLP_PATHS.contains(&path) {
+        authenticate(provider.as_ref(), &mut req).await?;
+        return Ok(next.run(req).await);
+    }
+    match authenticate_quiet(provider.as_ref(), &mut req).await {
         Ok(()) => Ok(next.run(req).await),
-        Err(AuthError::InvalidToken) => {
-            let path = req.uri().path().to_owned();
-            if path == INSERT_PROCESS_PATH {
-                logger.log_rejected(req).await;
-            } else if OTLP_PATHS.contains(&path.as_str()) {
-                logger.log_rejected_otlp(req).await;
-            }
+        Err(QuietAuthError::Rejected(rejection)) => {
+            logger.log_rejected(req, &rejection).await;
             Err(AuthError::InvalidToken)
         }
-        Err(e) => Err(e),
+        Err(QuietAuthError::Unavailable) => Err(AuthError::Unavailable),
     }
 }
 

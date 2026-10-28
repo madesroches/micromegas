@@ -1,4 +1,4 @@
-// Tests for `micromegas::servers::ingestion_auth` (the rejected `insert_process` claims logger)
+// Tests for `micromegas::servers::ingestion_auth` (the rejected `insert_process` and OTLP logger)
 // and the caller details logged by `tonic_auth_interceptor::check_auth`, on a real `Router` and
 // an in-memory log sink. Tests are `#[serial]` because they share the global tracing dispatch,
 // and select their log lines by a per-test `X-Forwarded-For` address.
@@ -14,7 +14,7 @@ use flate2::write::GzEncoder;
 use micromegas::servers::ingestion_auth::{RejectedRequestLogger, ingestion_auth_middleware};
 use micromegas::servers::tonic_auth_interceptor::check_auth;
 use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-use micromegas_auth::types::{AuthContext, AuthProvider, RequestParts};
+use micromegas_auth::types::{AuthContext, AuthProvider, ProviderUnavailable, RequestParts};
 use micromegas_tracing::levels::{LevelFilter, set_max_level};
 use micromegas_tracing::process_info::ProcessInfo;
 use micromegas_tracing::test_utils::{CapturedLog, collect_logs, init_in_memory_tracing};
@@ -29,6 +29,7 @@ use tower::ServiceExt;
 const INSERT_PROCESS: &str = "/ingestion/insert_process";
 const OTLP_LOGS: &str = "/ingestion/otlp/v1/logs";
 const VALID_KEY: &str = "valid-key";
+const TEST_USER_AGENT: &str = "otel-test/1.0";
 
 struct Harness {
     app: Router,
@@ -42,7 +43,13 @@ fn harness() -> Harness {
 fn harness_with_logger(logger: RejectedRequestLogger) -> Harness {
     let keyring = parse_key_ring(&format!(r#"[{{"name": "t", "key": "{VALID_KEY}"}}]"#))
         .expect("parse keyring");
-    let provider: Arc<dyn AuthProvider> = Arc::new(ApiKeyAuthProvider::new(keyring));
+    harness_with_provider(Arc::new(ApiKeyAuthProvider::new(keyring)), logger)
+}
+
+fn harness_with_provider(
+    provider: Arc<dyn AuthProvider>,
+    logger: RejectedRequestLogger,
+) -> Harness {
     let logger = Arc::new(logger);
     let reached = Arc::new(AtomicUsize::new(0));
     let handler = {
@@ -120,7 +127,8 @@ fn rejected_request(
         .method("POST")
         .uri(uri)
         .header(header::AUTHORIZATION, "Bearer wrong-key")
-        .header("x-forwarded-for", ip);
+        .header("x-forwarded-for", ip)
+        .header(header::USER_AGENT, TEST_USER_AGENT);
     if let Some(len) = content_length {
         builder = builder.header(header::CONTENT_LENGTH, len);
     }
@@ -154,13 +162,10 @@ async fn valid_process_info_logs_every_claim_and_no_command_line() {
     assert_eq!(h.reached.load(Ordering::SeqCst), 0);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(
-        &logs,
-        "198.51.100.1",
-        "rejected insert_process caller claims",
-    );
-    assert_eq!(lines.len(), 1);
-    let line = lines[0];
+    let line = single_line(&logs, "198.51.100.1");
+    assert_rejection_context(line);
+    assert_eq!(line.property("path"), Some(INSERT_PROCESS));
+    assert_eq!(line.property("inspection"), None);
     assert_eq!(
         line.property("claimed_process_id"),
         Some(id.to_string().as_str())
@@ -202,17 +207,12 @@ async fn log_injection_payloads_are_sanitized_and_bounded() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.2", "");
-    let claims: Vec<_> = lines
-        .iter()
-        .filter(|l| l.msg.contains("caller claims"))
-        .collect();
-    assert_eq!(claims.len(), 1);
+    let line = single_line(&logs, "198.51.100.2");
     assert_eq!(
-        claims[0].property("claimed_exe"),
+        line.property("claimed_exe"),
         Some("evil?[auth_success] forged ?line")
     );
-    let username = claims[0].property("claimed_username").unwrap();
+    let username = line.property("claimed_username").unwrap();
     assert_eq!(username.chars().count(), 128);
     assert!(username.ends_with('…'));
     assert!(logs.iter().all(|l| !l.msg.contains('\n')));
@@ -242,9 +242,11 @@ async fn missing_content_length_is_not_inspected_and_body_is_not_read() {
     assert!(!polled.load(Ordering::SeqCst));
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.3", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("missing_content_length"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.3").as_deref(),
+        Some("missing_content_length")
+    );
+    assert_rejection_context(single_line(&logs, "198.51.100.3"));
 }
 
 #[tokio::test]
@@ -261,10 +263,9 @@ async fn oversized_content_length_is_not_inspected() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.4", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("oversize"));
-    assert_eq!(lines[0].property("content_length"), Some("65537"));
+    let line = single_line(&logs, "198.51.100.4");
+    assert_eq!(line.property("inspection"), Some("oversize"));
+    assert_eq!(line.property("content_length"), Some("65537"));
 }
 
 #[tokio::test]
@@ -285,9 +286,10 @@ async fn body_stream_error_logs_read_error() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.5", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("read_error"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.5").as_deref(),
+        Some("read_error")
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -305,14 +307,15 @@ async fn stalled_body_logs_read_timeout() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.6", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("read_timeout"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.6").as_deref(),
+        Some("read_timeout")
+    );
 }
 
 #[tokio::test]
 #[serial]
-async fn undecodable_bodies_log_one_unparseable_line() {
+async fn undecodable_insert_process_bodies_are_not_inspected() {
     let guard = enable_logs();
     let h = harness();
     let full = cbor(&process_info(uuid::Uuid::new_v4()));
@@ -332,8 +335,12 @@ async fn undecodable_bodies_log_one_unparseable_line() {
 
     let logs = collect_logs(&guard.sink);
     for ip in ["198.51.100.7", "198.51.100.8"] {
-        assert_eq!(lines_for(&logs, ip, "body unparseable").len(), 1, "{ip}");
-        assert!(lines_for(&logs, ip, "caller claims").is_empty());
+        assert_eq!(
+            inspection(&logs, ip).as_deref(),
+            Some("undecodable"),
+            "{ip}"
+        );
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
     }
 }
 
@@ -352,7 +359,18 @@ async fn repeated_caller_is_rate_limited_per_process_id() {
     }
 
     let logs = collect_logs(&guard.sink);
-    assert_eq!(lines_for(&logs, "198.51.100.9", "caller claims").len(), 2);
+    let lines = lines_for(&logs, "198.51.100.9", "");
+    assert_eq!(lines.len(), 3);
+    // The repeat is still logged, without the claims.
+    assert!(lines[0].property("claimed_process_id").is_some());
+    assert_eq!(lines[1].property("claimed_process_id"), None);
+    assert_eq!(lines[1].property("inspection"), None);
+    assert_rejection_context(lines[1]);
+    assert!(lines[2].property("claimed_process_id").is_some());
+    assert_ne!(
+        lines[0].property("claimed_process_id"),
+        lines[2].property("claimed_process_id")
+    );
 }
 
 #[tokio::test]
@@ -375,12 +393,11 @@ async fn partial_body_fills_present_fields_only() {
     );
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.10", "caller claims");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("claimed_process_id"), Some("not-a-uuid"));
-    assert_eq!(lines[0].property("claimed_exe"), Some("game"));
-    assert_eq!(lines[0].property("claimed_username"), Some(""));
-    assert_eq!(lines[0].property("claimed_commit"), Some(""));
+    let line = single_line(&logs, "198.51.100.10");
+    assert_eq!(line.property("claimed_process_id"), Some("not-a-uuid"));
+    assert_eq!(line.property("claimed_exe"), Some("game"));
+    assert_eq!(line.property("claimed_username"), None);
+    assert_eq!(line.property("claimed_commit"), None);
 }
 
 #[tokio::test]
@@ -408,7 +425,7 @@ async fn authenticated_insert_process_reaches_handler_with_body_intact() {
 
     let logs = collect_logs(&guard.sink);
     assert!(lines_for(&logs, "198.51.100.11", "").is_empty());
-    assert!(logs.iter().all(|l| !l.msg.contains("caller claims")));
+    assert!(logs.iter().all(|l| !l.msg.starts_with("[auth_failure]")));
 }
 
 #[tokio::test]
@@ -564,12 +581,23 @@ fn assert_no_secrets(logs: &[CapturedLog]) {
     }
 }
 
-fn not_inspected_reason(logs: &[CapturedLog], ip: &str) -> Option<String> {
-    let lines = lines_for(logs, ip, "otlp body not inspected");
-    assert!(lines.len() <= 1, "{ip}");
-    lines
-        .first()
-        .and_then(|l| l.property("reason").map(str::to_owned))
+fn single_line<'a>(logs: &'a [CapturedLog], ip: &str) -> &'a CapturedLog {
+    let lines = lines_for(logs, ip, "");
+    assert_eq!(lines.len(), 1, "{ip}");
+    assert!(lines[0].msg.starts_with("[auth_failure] "), "{ip}");
+    lines[0]
+}
+
+fn assert_rejection_context(line: &CapturedLog) {
+    assert_eq!(line.msg, "[auth_failure] invalid API token");
+    assert_eq!(line.property("method"), Some("POST"));
+    assert_eq!(line.property("user_agent"), Some(TEST_USER_AGENT));
+}
+
+fn inspection(logs: &[CapturedLog], ip: &str) -> Option<String> {
+    single_line(logs, ip)
+        .property("inspection")
+        .map(str::to_owned)
 }
 
 #[tokio::test]
@@ -620,14 +648,45 @@ async fn rejected_otlp_logs_claims_for_every_encoding() {
     for n in 1..=6 {
         let ip = format!("203.0.113.{n}");
         let ip = ip.as_str();
-        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-        assert_eq!(lines.len(), 1, "{ip}");
-        assert_service_claims(lines[0], "a");
-        assert_eq!(lines[0].property("path"), Some(OTLP_LOGS));
-        // The generic line from `authenticate` is still there.
-        assert_eq!(lines_for(&logs, ip, "").len(), 2, "{ip}");
+        let line = single_line(&logs, ip);
+        assert_service_claims(line, "a");
+        assert_rejection_context(line);
+        assert_eq!(line.property("path"), Some(OTLP_LOGS));
+        assert_eq!(line.property("inspection"), None);
+        assert!(line.property("content_type").is_some());
+        assert!(line.property("content_length").is_some());
     }
     assert_no_secrets(&logs);
+}
+
+struct UnavailableProvider;
+
+#[async_trait::async_trait]
+impl AuthProvider for UnavailableProvider {
+    fn name(&self) -> &'static str {
+        "unavailable"
+    }
+
+    async fn validate_request(&self, _parts: &dyn RequestParts) -> anyhow::Result<AuthContext> {
+        Err(ProviderUnavailable(anyhow::anyhow!("key store unreachable")).into())
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn unavailable_provider_on_otlp_returns_503_without_warning() {
+    let guard = enable_logs();
+    let h = harness_with_provider(Arc::new(UnavailableProvider), RejectedRequestLogger::new());
+    let ip = "203.0.113.40";
+    let status = send(
+        &h,
+        otlp_bytes(ip, PROTOBUF, None, proto_body(service_attrs("a"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(h.reached.load(Ordering::SeqCst), 0);
+    let logs = collect_logs(&guard.sink);
+    assert!(lines_for(&logs, ip, "[auth_failure]").is_empty());
 }
 
 #[tokio::test]
@@ -640,9 +699,7 @@ async fn truncated_gzip_still_yields_decoded_claims() {
     send(&h, otlp_bytes("203.0.113.10", PROTOBUF, Some("gzip"), wire)).await;
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "203.0.113.10", "rejected otlp caller claims");
-    assert_eq!(lines.len(), 1);
-    assert_service_claims(lines[0], "a");
+    assert_service_claims(single_line(&logs, "203.0.113.10"), "a");
 }
 
 #[tokio::test]
@@ -671,9 +728,7 @@ async fn large_and_chunked_bodies_are_inspected() {
 
     let logs = collect_logs(&guard.sink);
     for ip in ["203.0.113.11", "203.0.113.12"] {
-        let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-        assert_eq!(lines.len(), 1, "{ip}");
-        assert_service_claims(lines[0], "a");
+        assert_service_claims(single_line(&logs, ip), "a");
     }
 }
 
@@ -711,7 +766,7 @@ async fn unsupported_encodings_and_content_types_are_not_inspected() {
     .await;
 
     let logs = collect_logs(&guard.sink);
-    let reason = |ip| not_inspected_reason(&logs, ip);
+    let reason = |ip| inspection(&logs, ip);
     assert_eq!(
         reason("203.0.113.20").as_deref(),
         Some("unsupported_encoding")
@@ -726,12 +781,15 @@ async fn unsupported_encodings_and_content_types_are_not_inspected() {
     );
     assert_eq!(reason("203.0.113.23").as_deref(), Some("no_resource"));
     assert_eq!(reason("203.0.113.24").as_deref(), Some("undecodable"));
-    let generic = lines_for(&logs, "203.0.113.24", "");
-    assert!(generic.iter().any(|l| l.property("path") == Some(OTLP_LOGS)
-        && l.msg.starts_with("[auth_failure] ")
-        && !l.msg.contains("not inspected")));
+    assert_eq!(
+        single_line(&logs, "203.0.113.24").property("path"),
+        Some(OTLP_LOGS)
+    );
     for ip in ["203.0.113.20", "203.0.113.21", "203.0.113.22"] {
-        assert!(lines_for(&logs, ip, "caller claims").is_empty());
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
+    }
+    for n in 20..=24 {
+        assert_rejection_context(single_line(&logs, &format!("203.0.113.{n}")));
     }
 }
 
@@ -750,10 +808,15 @@ async fn dedup_is_per_sender_not_per_ip() {
     }
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, ip, "rejected otlp caller claims");
-    assert_eq!(lines.len(), 2);
+    let lines = lines_for(&logs, ip, "");
+    assert_eq!(lines.len(), 3);
     assert_service_claims(lines[0], "a");
     assert_service_claims(lines[1], "b");
+    // The repeat is still logged, without the claims.
+    assert_eq!(lines[2].property("claimed_exe"), None);
+    assert_eq!(lines[2].property("inspection"), None);
+    assert_rejection_context(lines[2]);
+    assert_eq!(lines[2].property("path"), Some(OTLP_LOGS));
 }
 
 #[tokio::test]
@@ -761,24 +824,22 @@ async fn dedup_is_per_sender_not_per_ip() {
 async fn exhausted_inspection_budget_logs_busy() {
     let guard = enable_logs();
     let h = harness_with_logger(RejectedRequestLogger::with_max_concurrent_inspections(0));
-    let status = send(
-        &h,
-        otlp_bytes(
-            "203.0.113.40",
-            PROTOBUF,
-            None,
-            proto_body(service_attrs("a")),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let otlp = otlp_bytes(
+        "203.0.113.40",
+        PROTOBUF,
+        None,
+        proto_body(service_attrs("a")),
+    );
+    let insert_process = bytes_request("203.0.113.41", cbor(&process_info(uuid::Uuid::new_v4())));
+    for req in [otlp, insert_process] {
+        assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
+    }
 
     let logs = collect_logs(&guard.sink);
-    assert_eq!(
-        not_inspected_reason(&logs, "203.0.113.40").as_deref(),
-        Some("busy")
-    );
-    assert!(lines_for(&logs, "203.0.113.40", "caller claims").is_empty());
+    for ip in ["203.0.113.40", "203.0.113.41"] {
+        assert_eq!(inspection(&logs, ip).as_deref(), Some("busy"), "{ip}");
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
+    }
 }
 
 #[tokio::test]
@@ -797,10 +858,8 @@ async fn otlp_claims_are_sanitized() {
     .await;
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "203.0.113.50", "rejected otlp caller claims");
-    assert_eq!(lines.len(), 1);
     assert_eq!(
-        lines[0].property("claimed_exe"),
+        single_line(&logs, "203.0.113.50").property("claimed_exe"),
         Some("evil?[auth_success] forged ?x")
     );
     assert!(logs.iter().all(|l| !l.msg.contains('\n')));
