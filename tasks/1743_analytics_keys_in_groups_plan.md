@@ -52,8 +52,11 @@ paths: a key never becomes admin, and a key never mints.
   delete rows they created (`created_by`). `*` is admin-only.
 - **Admin.** `is_admin()` is `memberships.contains("admins")` (`rust/auth/src/types.rs:84`).
   Under the bootstrap wildcard-admin state, every caller is an admin, keys included. That is
-  unchanged here. `is_admin()` has no effect at flight-sql beyond a log field
-  (`rust/public/src/servers/tonic_auth_interceptor.rs:43`).
+  unchanged here. `is_admin()` travels as the `x-auth-is-admin` header (`rust/auth/src/tower.rs:146`)
+  and at flight-sql gates `bulk_ingest` (`flight_sql_service_impl.rs:1524`), view DDL
+  (`view_ddl.rs:50`), unfiltered grant visibility (`GrantVisibility::All`), and the
+  `lakehouse_admin` audience-guard bypass (`lakehouse/query.rs:127,162`). That is why the `admins`
+  barrier matters.
 - **Mint.** `AudienceMintPolicy` (`policy.rs:541`) is reached only from `mint_key` in
   `analytics-web-srv`, which accepts OIDC logins only (`rust/analytics-web-srv/src/auth/state.rs:76`).
   So an analytics key cannot reach mint today, but only because of how routes are wired.
@@ -160,32 +163,35 @@ FK.
 
 ### 6. Routes
 
-Both routes share one helper, `canonicalize_key_selector(pool_or_tx, selector)`, in a small
-module (`rust/analytics-web-srv/src/key_selector.rs`). It does three things:
-- accepts any `Uuid::parse_str` spelling after `key:`,
-- rewrites it to `key_selector(uuid)` before the insert and the audit record,
-- returns **404** (`"analytics API key … not found or revoked"`) unless
-  `analytics_api_keys` has a row for it with `revoked_at IS NULL`. That catches typos, and it
-  catches ingestion key ids, which live in the other table.
+Both routes share a small module (`rust/analytics-web-srv/src/key_selector.rs`) with two steps:
+- `canonicalize_key_selector(selector)` is pure. It accepts any `Uuid::parse_str` spelling after
+  `key:` and rewrites it to `key_selector(uuid)`. It runs in the outer handler, before the shape
+  check (`valid_selector` / `validate_selector`) and before `MutationAudit` is built, so the audit
+  record carries the canonical id.
+- `ensure_live_key(tx, selector)` runs inside the existing transaction after authorization. It
+  returns **404** (`"analytics API key … not found or revoked"`) unless `analytics_api_keys` has a
+  row for it with `revoked_at IS NULL`. That catches typos, and it catches ingestion key ids,
+  which live in the other table.
 
 A concurrent revoke after the check does no harm: a revoked key does not authenticate. The
 lookup runs only after authorization, so the existence answer is not exposed to callers who
 could not create the row anyway (and key ids are random UUIDv4s).
 
 - **`POST /api/groups/{name}/members`** (admin-only, unchanged gate): a `key:` member into
-  `admins` returns **400** (`"API keys cannot be members of admins"`), then the helper runs inside
+  `admins` returns **400** (`"API keys cannot be members of admins"`), then `ensure_live_key` runs inside
   the existing transaction. Nesting `group:G` into `admins` when `G` contains a key stays
   allowed: the barrier makes it inert for the key, and humans in `G` still become admin.
 - **`POST /api/audience-grants`** (admin, or a non-admin through self-service): `key:` with
-  `axis = mint` returns **400**, then the helper runs. Everything else is the existing flow. A
+  `axis = mint` returns **400**, then `ensure_live_key` runs. Everything else is the existing flow. A
   non-admin is still subject to the self-service setting, `caller_holds_pair` (the caller must
   hold `(audience, read)` through their own `user:`/`group:` selector, never `*`), and
   `max_grants_per_caller`. They may still delete only rows they created. So a person can share
   with a key exactly what they could already share with another person.
-- **`DELETE`** on both routes canonicalizes `key:` the same way. It does not check existence, so
-  a member or grant row left behind by a revoked key can still be removed.
-- **Listings** (`GET /api/groups/{name}/members`, and the audience-grants list the Audience
-  Access page reads): append `key_name: Option<String>` and `key_revoked: bool`, filled by
+- **`DELETE`** on both routes takes the member/selector as a query param (`?member=`;
+  `?audience=&axis=&selector=`) and canonicalizes it with the pure step. It does not check
+  existence, so a member or grant row left behind by a revoked key can still be removed.
+- **Listings** (`GET /api/groups/{name}/members`, and `GET /api/audience-grants/visible`, which
+  the Audience Access page reads; row type `VisibleGrantRow`): append `key_name: Option<String>` and `key_revoked: bool`, filled by
   `LEFT JOIN analytics_api_keys k ON <col> = 'key:' || k.key_id::text`. These are HTTP JSON
   APIs, not the SQL layer, and the change is additive anyway.
 
@@ -195,8 +201,10 @@ revoked.
 
 ### 7. CLI and web app
 
-- `micromegas-groups` and `micromegas-grants`: the help strings list `key:<key_id>`. Listing
-  commands print `key_name` and a `revoked` tag when they are present. No new commands.
+- `micromegas-groups` and `micromegas-grants`: the help strings list `key:<key_id>`.
+  `micromegas-groups members` prints `key_name` and a `revoked` tag when they are present.
+  `micromegas-grants` has no listing command (listing is `list_audience_grants()` through
+  `micromegas-query`), so only its create/delete selector help strings change. No new commands.
 - `groups-api.ts` / `audience-grants-api.ts`: row types gain `key_name: string | null` and
   `key_revoked: boolean`.
 - `GroupsPage.tsx` `AddMemberDialog`: a fourth kind, `key`, hidden when the group is `admins`.
@@ -229,11 +237,11 @@ produced.
 2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` replaces
    both CHECKs. Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm.
 3. **Routes** (`rust/analytics-web-srv/src/`): the new `key_selector.rs` helper. In `groups.rs`:
-   the `admins` refusal, the helper call, delete canonicalization, and the listing join. In
-   `audience_grants.rs`: the mint-axis refusal, the helper call, delete canonicalization, and the
-   listing join.
-4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings and listing
-   output.
+   the `admins` refusal, the canonicalize and `ensure_live_key` calls, delete canonicalization, and
+   the `members` listing join. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
+   delete canonicalization, and the join on `visible_grants` (`VisibleGrantRow`).
+4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings, and
+   `members` output in `groups.py`.
 5. **Web app**: the API types, plus the new kind in the `GroupsPage.tsx` and
    `AudienceAccessPage.tsx` dialogs, and chip rendering.
 6. **Docs and CHANGELOG** (see below).
@@ -252,7 +260,7 @@ produced.
 - `analytics-web-app/src/lib/groups-api.ts`, `audience-grants-api.ts`,
   `src/routes/GroupsPage.tsx`, `AudienceAccessPage.tsx`, and their `__tests__`
 - `mkdocs/docs/admin/groups.md`, `authorization.md`, `api-keys.md`, `web-app.md` (Audience
-  Access)
+  Access and Groups), `functions-reference.md`, `control-plane-audit-log.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -286,13 +294,18 @@ produced.
   names are labels, not secrets).
 - Analytics keys keep getting the `*` path's groups, as they do today (resolves the issue's second
   open question).
+- Under the bootstrap `('admins', '*')` state, analytics keys stay admin like every caller. It is
+  a warned state that reopens `bulk_ingest` to keys; `is_admin()` also gates view DDL, unfiltered
+  grant visibility and the audience-guard bypass.
 
 ## Migration
 
 v13 replaces two CHECK constraints on small tables (a validating scan each). **Version-number
 reuse:** a dev database that ran the removed `stream_tags` v13 and was *not* rolled back would
 now pass the startup `assert_eq!` and silently skip this migration. The CHANGELOG entry repeats
-#1736's rollback note: at version 13 with a `stream_tags` index present, roll back to 12 first.
+a rollback note: at version 13 with a `stream_tags` index present, run
+`DROP INDEX IF EXISTS stream_tags; UPDATE migration SET version = 12;` before deploying the new
+build (safe because that v13 changed nothing else).
 
 ## Documentation
 
@@ -307,7 +320,13 @@ now pass the startup `assert_eq!` and silently skip this migration. The CHANGELO
 - `mkdocs/docs/admin/api-keys.md`: replace the "per-key `read_audiences` grant" text (lines ~67
   and ~183) with the two paths. Add a short "Granting a key read access" section. Note revocation
   latency and that rows left behind by revoked keys stay until removed.
-- `mkdocs/docs/admin/web-app.md` (Audience Access): the new `key` kind.
+- `mkdocs/docs/admin/web-app.md` (Audience Access, and the Groups Add-member kind toggle at
+  ~lines 127-129, "everyone / user / group"): the new `key` kind.
+- `mkdocs/docs/admin/functions-reference.md`: add `key:<key_id>` to the selector values (~line
+  444), fix the "API-key caller with no selectors sees zero rows" statement (~457-458), and update
+  the per-key `read_audiences` text (~477-479).
+- `mkdocs/docs/admin/control-plane-audit-log.md` (~line 139): add `key:<key_id>` to the selector
+  vocabulary.
 - `CHANGELOG.md` (Unreleased): the feature, schema v13, and the **Minor breaking change**:
   `AuthContext` gains `analytics_key_id` and `GroupGraph::closure` gains a `key_id` parameter.
 
@@ -338,8 +357,9 @@ No-DB unit tests (crate `tests/` folders):
 - `rust/auth/src/db_api_key.rs` in-file tests (the pre-populated-cache pattern): an
   analytics-table row yields `analytics_key_id == Some(key_id)`; an ingestion row yields `None`.
 - `rust/analytics-web-srv`: no-DB tests for the pre-query validation, where the existing route
-  harness reaches it before the pool: a malformed `key:` (400), `key:` into `admins` (400), `key:`
-  on the mint axis (400), and canonicalization of an uppercase UUID. The key-existence 404, the
+  harness reaches it before the pool: a malformed `key:` (400), `key:` into `admins` (400), and `key:`
+  on the mint axis (400). Canonicalization of an uppercase UUID is a pure-function unit test of
+  `canonicalize_key_selector`, not a route test (the route reaches the existence query). The key-existence 404, the
   listing joins, and the self-service hold check against `key:` rows need a real DB. Per
   `CLAUDE.md` those are manual verification, not new live-DB tests.
 - Migration: no new live-DB test. The existing `#[ignore]` migration tests exercise v13 when they
@@ -347,7 +367,8 @@ No-DB unit tests (crate `tests/` folders):
 - Web app: `GroupsPage.test.tsx` covers the `key` kind (absent for `admins`, posts `key:<id>`)
   and the chip with name and revoked tag. `AudienceAccessPage.test.tsx` covers the `key` kind
   (absent on the mint axis; a select for admins, a text input for non-admins) and the chip.
-- Python: no new tests. The listing formatting is trivial and the CLIs have no unit tests.
+- Python: one test in `python/micromegas/tests/cli/test_groups.py`, following the existing
+  FakeClient + capsys pattern, asserting that `members` prints `key_name` and the revoked tag.
 
 ## Manual Verification
 
@@ -378,6 +399,3 @@ stack, and a breakage would be obvious on the first run.
 1. **Drop `read_audiences`?** Recommendation: yes, as a separate follow-up that deletes the field,
    its `AudienceReadPolicy` fold, and the Stage 4b section. Direct `key:` read grants now cover
    exactly what it was planned for, and they can be edited.
-2. **Wildcard-admin state and keys.** Under `('admins', '*')`, analytics keys are admin today, as
-   is every caller. Recommendation: leave as is. It is a warned bootstrap state, and `is_admin()`
-   has no effect at flight-sql beyond a log field.
