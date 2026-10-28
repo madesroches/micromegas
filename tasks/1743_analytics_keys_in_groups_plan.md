@@ -205,9 +205,11 @@ revoked.
   `micromegas-grants` has no listing command (listing is `list_audience_grants()` through
   `micromegas-query`), so only its create/delete selector help strings change. No new commands.
 - `groups-api.ts` / `audience-grants-api.ts`: row types gain `key_name: string | null` and
-  `key_revoked: boolean`. In `audience-grants-api.ts`, `validateSelector` gains a canonical
-  `key:<uuid>` arm (test in `lib/__tests__/audience-grants-api.test.ts`), and `decodeGrant` and
-  `AudienceGrant` gain `keyName`/`keyRevoked`.
+  `key_revoked: boolean`. In `audience-grants-api.ts`, only the `/visible` row gains these
+  (the `POST` create response, `GrantResponse`, does not), so `AudienceGrantResponse` is split
+  into a create-response type and a visible-row type extending it. `validateSelector` gains a
+  canonical `key:<uuid>` arm (test in `lib/__tests__/audience-grants-api.test.ts`), and
+  `decodeGrant` (visible rows only) and `AudienceGrant` gain `keyName`/`keyRevoked`.
 - `GroupsPage.tsx` `AddMemberDialog`: a fourth kind, `key`, hidden when the group is `admins`.
   It shows a `<select>` of live analytics keys (name plus short id) from the existing
   `analytics-api-keys-api.ts` list call. That page is admin-only, so the list call is allowed.
@@ -253,7 +255,7 @@ produced.
    now-false "already passed its own CHECK constraints… unreachable" comment in `ingestion_keys.rs:383-385`.
 4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings (including the
    `groups.py:87` docstring), and `members` output in `groups.py`.
-5. **Web app**: the API types, `validateSelector` and `decodeGrant`, plus the new kind in the `GroupsPage.tsx` and
+5. **Web app**: the API types (the `/visible` row type only, not the grant create response), `validateSelector` and `decodeGrant`, plus the new kind in the `GroupsPage.tsx` and
    `AudienceAccessPage.tsx` dialogs, and chip rendering.
 6. **Docs and CHANGELOG** (see below).
 
