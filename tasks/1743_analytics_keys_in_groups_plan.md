@@ -214,10 +214,12 @@ revoked.
 - `GroupsPage.tsx` `AddMemberDialog`: a fourth kind, `key`, hidden when the group is `admins`.
   It shows a `<select>` of live analytics keys (name plus short id) from the existing
   `analytics-api-keys-api.ts` list call, `listAnalyticsApiKeys(false, 0, MAX_ANALYTICS_API_KEYS_LIST_LIMIT)`,
-  paged until a short page comes back as `AnalyticsApiKeysPage` does. That page is admin-only, so
-  the list call is allowed.
+  looped (a small helper shared with the `AudienceAccessPage` dialog) until a page returns fewer
+  than `MAX_ANALYTICS_API_KEYS_LIST_LIMIT`, advancing `offset` each time. That page is admin-only,
+  so the list call is allowed.
 - `AudienceAccessPage.tsx` grant dialog: a fourth `SelectorKind`, `key`, offered only for the
-  `read` axis. Admins get the same key `<select>`. Non-admins can't list keys, so they get a text
+  `read` axis, including in Share mode, whose fixed-axis kind list (user/group) gains `key` when
+  the axis is read. Admins get the same key `<select>`. Non-admins can't list keys, so they get a text
   input for the key id, which the key's operator gives them. `GrantDialog` gains an `isAdmin` prop
   (passed from the page, since admins also reach the dialog through Share), and switching the axis
   to mint resets `selectorKind` away from `key`.
@@ -398,7 +400,8 @@ No-DB unit tests (crate `tests/` folders):
   are run.
 - Web app: `GroupsPage.test.tsx` covers the `key` kind (absent for `admins`, posts `key:<id>`)
   and the chip with name and revoked tag. `AudienceAccessPage.test.tsx` covers the `key` kind
-  (absent on the mint axis; a select for admins, a text input for non-admins) and the chip.
+  (absent on the mint axis; a select for admins, a text input for non-admins; offered in Share
+  mode on the read axis) and the chip.
 - Python: one test in `python/micromegas/tests/cli/test_groups.py`, following the existing
   FakeClient + capsys pattern, asserting that `members` prints `key_name` and the revoked tag.
 
