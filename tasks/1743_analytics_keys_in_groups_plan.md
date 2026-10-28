@@ -189,8 +189,10 @@ could not create the row anyway (and key ids are random UUIDv4s).
   existence, so a member or grant row left behind by a revoked key can still be removed.
 - **Listings** (`GET /api/groups/{name}/members`, and `GET /api/audience-grants/visible`, which
   the Audience Access page reads; row type `VisibleGrantRow`): append `key_name: Option<String>` and `key_revoked: bool`, filled by
-  `LEFT JOIN analytics_api_keys k ON <col> = 'key:' || k.key_id::text`. These are HTTP JSON
-  APIs, not the SQL layer, and the change is additive anyway.
+  `LEFT JOIN analytics_api_keys k ON <col> = 'key:' || k.key_id::text`. The join goes into all
+  three `visible_grants` branches (admin, knob-on held-pair, knob-off own-rows). `add_member`
+  fills `key_name`/`key_revoked` in its `MemberRow` response too (have `ensure_live_key` return
+  the name). These are HTTP JSON APIs, not the SQL layer, and the change is additive anyway.
 
 Revoking a key does **not** cascade-delete its member or grant rows. They are the record of what
 the key could read, they are inert once the key is revoked, and the listings flag them as
@@ -203,7 +205,9 @@ revoked.
   `micromegas-grants` has no listing command (listing is `list_audience_grants()` through
   `micromegas-query`), so only its create/delete selector help strings change. No new commands.
 - `groups-api.ts` / `audience-grants-api.ts`: row types gain `key_name: string | null` and
-  `key_revoked: boolean`.
+  `key_revoked: boolean`. In `audience-grants-api.ts`, `validateSelector` gains a canonical
+  `key:<uuid>` arm (test in `lib/__tests__/audience-grants-api.test.ts`), and `decodeGrant` and
+  `AudienceGrant` gain `keyName`/`keyRevoked`.
 - `GroupsPage.tsx` `AddMemberDialog`: a fourth kind, `key`, hidden when the group is `admins`.
   It shows a `<select>` of live analytics keys (name plus short id) from the existing
   `analytics-api-keys-api.ts` list call. That page is admin-only, so the list call is allowed.
@@ -243,12 +247,13 @@ produced.
 3. **Routes** (`rust/analytics-web-srv/src/`): the new `key_selector.rs` helper. In `groups.rs`:
    the `admins` refusal, the canonicalize and `ensure_live_key` calls, delete canonicalization, and
    the `members` listing join. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
-   delete canonicalization, and the join on `visible_grants` (`VisibleGrantRow`). Update the
+   delete canonicalization, and the join in all three `visible_grants` branches (`VisibleGrantRow`, whose doc comment claiming
+   the `list_audience_grants()` column order is reworded), plus `add_member`'s `MemberRow`. Update the
    selector-list error strings and docs at `groups.rs:471`, `audience_grants.rs:259,470`, and the
    now-false "already passed its own CHECK constraints… unreachable" comment in `ingestion_keys.rs:383-385`.
 4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings (including the
    `groups.py:87` docstring), and `members` output in `groups.py`.
-5. **Web app**: the API types, plus the new kind in the `GroupsPage.tsx` and
+5. **Web app**: the API types, `validateSelector` and `decodeGrant`, plus the new kind in the `GroupsPage.tsx` and
    `AudienceAccessPage.tsx` dialogs, and chip rendering.
 6. **Docs and CHANGELOG** (see below).
 
@@ -304,6 +309,7 @@ produced.
 - Analytics keys keep getting the `*` path's groups, as they do today (resolves the issue's second
   open question).
 - Selector-shape CHECK constraints are dropped; selector shape is validated in code only.
+- `read_audiences` is left untouched; removing it is a separate follow-up.
 - Under the bootstrap `('admins', '*')` state, analytics keys stay admin like every caller. It is
   a warned state that reopens `bulk_ingest` to keys; `is_admin()` also gates view DDL, unfiltered
   grant visibility, the mutating lakehouse UDTFs and global-partition visibility.
@@ -409,9 +415,3 @@ stack, and a breakage would be obvious on the first run.
    `public` (held only through `*`) → 403. U can delete the row they created.
 6. Revoke K1. Within 60 s K1 is rejected, and both pages show its chips tagged "revoked"; the
    rows can still be removed.
-
-## Open Questions
-
-1. **Drop `read_audiences`?** Recommendation: yes, as a separate follow-up that deletes the field,
-   its `AudienceReadPolicy` fold, and the Stage 4b section. Direct `key:` read grants now cover
-   exactly what it was planned for, and they can be edited.
