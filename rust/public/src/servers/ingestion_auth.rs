@@ -267,7 +267,7 @@ impl RejectedRequestLogger {
     /// Consumes a rejected OTLP request and logs its single rejection line: the provider reason,
     /// plus the resource identity the body claims or why it could not be read.
     pub async fn log_rejected_otlp(&self, req: Request, rejection: &AuthRejection) {
-        let client_ip = resolve_client_ip(req.headers(), req.extensions());
+        let client_ip = rejection.parts.client_ip;
         let headers = LoggedHeaders::from_request(&req);
         let base = RejectionFields::new(&rejection.parts, &rejection.error);
         match self.inspect_otlp(req).await {
