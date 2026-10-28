@@ -27,9 +27,9 @@ paths: a key never becomes admin, and a key never mints.
   `AudienceGrants::from_rows`, and the grant route's `validate_selector`,
   `rust/analytics-web-srv/src/audience_grants.rs:256`) and by `group_members`
   (`GroupGraph::from_rows`, `rust/auth/src/groups.rs:72`; `add_member_inner`,
-  `rust/analytics-web-srv/src/groups.rs:469`). The DB mirrors it with two CHECKs:
+  `rust/analytics-web-srv/src/groups.rs:469`). The DB also mirrors it with two CHECKs:
   `audience_grants_selector_shape` (schema v7, `rust/ingestion/src/sql_migration.rs:237`) and
-  `group_members_selector_shape` (v10, `:367`).
+  `group_members_selector_shape` (v10, `:367`); this plan drops both.
 - **Matching.** `selector_matches` (`policy.rs:130`) drives `AudienceReadPolicy::resolve` and
   `AudienceMintPolicy`. `caller_selectors` (`policy.rs:121`) feeds flight-sql's
   `grant_selectors` (which `list_audience_grants()` visibility uses,
@@ -90,7 +90,7 @@ and both admin routes accept `key:` with no further changes.
 
 **Read axis only.** A `key:` selector on the `mint` axis is rejected in `AudienceGrants::parse`
 and `from_rows`, in the same way they reject other malformed rows. The route rejects it with
-400, and the DB rejects it by CHECK. The mint guard (§4) would make such a row inert anyway.
+400. The mint guard (§4) would make such a row inert anyway.
 Refusing it outright keeps the grant table from implying an authority the key does not have.
 
 `selector_matches` gains
@@ -122,7 +122,7 @@ closure  = sorted(base ∪ key_part)
 The barrier group is never inserted and never traversed. Implement this as an `Option<&str>`
 barrier parameter on the existing `walk_upward` rather than a second copy of the loop. The
 barrier covers three cases:
-- a direct `('admins', 'key:…')` row that got past the CHECK,
+- a direct `('admins', 'key:…')` row written by direct SQL (no DB CHECK backstops it),
 - a key that reaches `admins` through nesting (`key → G → admins`),
 - every group above `admins` that is reachable only through it.
 
@@ -147,16 +147,12 @@ already flow into it through `group:` selectors, and direct grants flow in throu
 
 ### 5. Database (schema v13)
 
-Replace both CHECKs:
+Drop both selector-shape CHECKs; selector shape is validated in code only (`valid_selector`,
+route validation, `AudienceGrants::from_rows`, `GroupGraph::from_rows`):
 
 ```sql
--- KEY = '^key:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-audience_grants_selector_shape:
-  CHECK (selector = '*' OR selector ~ '^(user|group):.+$'
-         OR (selector ~ KEY AND axis = 'read'))
-group_members_selector_shape:
-  CHECK (member = '*' OR member ~ '^(user|group):.+$'
-         OR (member ~ KEY AND group_name <> 'admins'))
+ALTER TABLE audience_grants DROP CONSTRAINT IF EXISTS audience_grants_selector_shape;
+ALTER TABLE group_members DROP CONSTRAINT IF EXISTS group_members_selector_shape;
 ```
 
 There is no FK to `analytics_api_keys`. That matches `group:X`, which is a string too, not an
@@ -235,8 +231,8 @@ produced.
      module/field docs covering `key:`.
    - `membership.rs`: pass `ctx.analytics_key_id`.
    - `db_api_key.rs:479-500`: set `analytics_key_id`, and replace the stale `memberships` comment.
-2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` replaces
-   both CHECKs. Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm.
+2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` drops
+   both selector-shape CHECKs (`DROP CONSTRAINT IF EXISTS`, as above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm.
 3. **Routes** (`rust/analytics-web-srv/src/`): the new `key_selector.rs` helper. In `groups.rs`:
    the `admins` refusal, the canonicalize and `ensure_live_key` calls, delete canonicalization, and
    the `members` listing join. In `audience_grants.rs`: the mint-axis refusal, the same two calls,
@@ -280,6 +276,8 @@ produced.
   `bound_audience`, and `allow_delegation` call sites for no behavioral gain.
 - **Mint guard in the policy vs. relying on route wiring.** One early return makes "keys never
   mint" independent of which services accept keys in the future.
+- **Selector shape in code only.** Shape is enforced in code, so new selector kinds need no
+  migration, at the cost of no DB backstop against direct SQL writes.
 - **No revoke cascade.** Deleting rows on revoke would erase the record of what a key could read
   and couple `analytics_keys.rs` to two other tables.
 
@@ -295,13 +293,14 @@ produced.
   names are labels, not secrets).
 - Analytics keys keep getting the `*` path's groups, as they do today (resolves the issue's second
   open question).
+- Selector-shape CHECK constraints are dropped; selector shape is validated in code only.
 - Under the bootstrap `('admins', '*')` state, analytics keys stay admin like every caller. It is
   a warned state that reopens `bulk_ingest` to keys; `is_admin()` also gates view DDL, unfiltered
   grant visibility, the mutating lakehouse UDTFs and global-partition visibility.
 
 ## Migration
 
-v13 replaces two CHECK constraints on small tables (a validating scan each). **Version-number
+v13 drops two CHECK constraints on small tables (no validating scan). **Version-number
 reuse:** a dev database that ran the removed `stream_tags` v13 and was *not* rolled back would
 now pass the startup `assert_eq!` and silently skip this migration. The CHANGELOG entry repeats
 a rollback note: at version 13 with a `stream_tags` index present, run
@@ -311,7 +310,7 @@ build (safe because that v13 changed nothing else).
 ## Documentation
 
 - `mkdocs/docs/admin/groups.md`: add the selector table row `key:<key_id>` (never in `admins`),
-  the updated CHECK, the `admins` barrier rule, the 400/404 responses, the `key_name`/`key_revoked`
+  the note that selector shape is validated in code (no DB CHECK), the `admins` barrier rule, the 400/404 responses, the `key_name`/`key_revoked`
   listing fields, and the issue's three-command example.
 - `mkdocs/docs/admin/authorization.md`: add `key:<key_id>` to the selector vocabulary (read axis
   only). In the paragraph on callers with no identity (around line 94), say that an analytics key
@@ -328,7 +327,7 @@ build (safe because that v13 changed nothing else).
   the per-key `read_audiences` text (~477-479).
 - `mkdocs/docs/admin/control-plane-audit-log.md` (~line 139): add `key:<key_id>` to the selector
   vocabulary.
-- `CHANGELOG.md` (Unreleased): the feature, schema v13, and the **Minor breaking change**:
+- `CHANGELOG.md` (Unreleased): the feature, schema v13 (drops the two selector-shape CHECKs), and the **Minor breaking change**:
   `AuthContext` gains `analytics_key_id` and `GroupGraph::closure` gains a `key_id` parameter.
 
 ## Testing Strategy
