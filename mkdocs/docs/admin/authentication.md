@@ -652,39 +652,49 @@ SELECT time, msg, properties FROM log_entries WHERE msg LIKE '%auth_failure]%' O
 
 The credential is never logged, and caller-supplied text is sanitized and length-bounded.
 
-A rejected `/ingestion/insert_process` request also logs the process identity its body claims, as
-`[auth_failure] rejected insert_process caller claims`. The properties are `client_ip` and the
-`claimed_*` fields: `claimed_process_id`, `claimed_exe`, `claimed_username`, `claimed_computer`,
-`claimed_parent_process_id`, `claimed_start_time` and the build properties (`claimed_platform_name`,
-`claimed_build_version`, `claimed_engine_version`, `claimed_build_config`, `claimed_build_target`,
-`claimed_branch_name`, `claimed_commit`). These values come from the unauthenticated caller and are
-not verified. The line is limited to one per client IP and process id per minute. When the body is
-not read (no `Content-Length`, over 64 KiB, or unreadable within 2 seconds) or does not decode, a
-`[auth_failure] insert_process body ...` line with a `reason` is logged instead. The command line
-properties are never logged. `claimed_username` and `claimed_computer` are personal data of the
-same kind stored in the `processes` table, so give the ingestion service's log stream the same
-access controls as process metadata.
+A rejected `/ingestion/insert_process` or OTLP request (`/ingestion/otlp/v1/logs`, `metrics` or
+`traces`) still logs a single `[auth_failure] <reason>` line, and that line also carries the
+identity the request body claims. Besides `client_ip`, `method`, `path` and `user_agent`, its
+properties are `content_type`, `content_encoding`, `content_length` and the `claimed_*` fields
+below. Claims the caller left empty are omitted. The values come from the unauthenticated caller
+and are not verified.
 
-A rejected OTLP request (`/ingestion/otlp/v1/logs`, `metrics` or `traces`) logs one
-`[auth_failure] <reason>` line that also carries the resource identity its body claims. The server
-reads at most the first 64 KiB of the body (and at most 64 KiB after gzip decompression) and takes
-the first OTLP `Resource` from it, in protobuf or JSON. Besides `client_ip`, `method`, `path` and
-`user_agent`, the properties are `content_type`, `content_encoding`, `content_length` and the
-`claimed_*` fields `claimed_exe` (`service.namespace/service.name`), `claimed_computer`,
-`claimed_sdk_language`, `claimed_sdk_name`, `claimed_sdk_version`, `claimed_service_version`,
-`claimed_service_instance_id`, `claimed_deployment_environment`, `claimed_k8s_namespace`,
-`claimed_k8s_pod`, `claimed_k8s_deployment`, `claimed_k8s_cluster`, `claimed_container`,
-`claimed_cloud_region`, `claimed_pid`, `claimed_runtime` and `claimed_username`.
-Only these attributes are read; command lines, environment variables and payload content never are.
-The values come from the unauthenticated caller and are not verified. The `claimed_*` properties are
-attached once per client IP and claimed sender (executable, computer and instance id) per minute, so
-several applications behind one NAT address each appear; a repeat from the same sender within the
-minute is still logged, without them. When nothing could be extracted, an `inspection` property
-gives the reason instead: `unsupported_encoding` (a `Content-Encoding` other than gzip or
-identity), `unsupported_content_type`, `read_error`, `read_timeout`, `undecodable` (a gzip stream
-that does not decode), `no_resource` (no usable resource attributes) or `busy` (too many bodies
-being inspected at once). `claimed_username` and `claimed_computer` carry the same access-control
-note as above.
+- **`insert_process`:** `claimed_process_id`, `claimed_exe`, `claimed_username`,
+  `claimed_computer`, `claimed_parent_process_id`, `claimed_start_time` and the build properties
+  (`claimed_platform_name`, `claimed_build_version`, `claimed_engine_version`,
+  `claimed_build_config`, `claimed_build_target`, `claimed_branch_name`, `claimed_commit`). The
+  body is read only when it has a `Content-Length` of at most 64 KiB. The `command-line` and
+  `exe_args` properties are never logged.
+- **OTLP:** the server reads at most the first 64 KiB of the body (and at most 64 KiB after gzip
+  decompression) and takes the first OTLP `Resource` from it, in protobuf or JSON:
+  `claimed_exe` (`service.namespace/service.name`), `claimed_computer`, `claimed_sdk_language`,
+  `claimed_sdk_name`, `claimed_sdk_version`, `claimed_service_version`,
+  `claimed_service_instance_id`, `claimed_deployment_environment`, `claimed_k8s_namespace`,
+  `claimed_k8s_pod`, `claimed_k8s_deployment`, `claimed_k8s_cluster`, `claimed_container`,
+  `claimed_cloud_region`, `claimed_pid`, `claimed_runtime` and `claimed_username`. Only these
+  attributes are read; command lines, environment variables and payload content never are.
+
+The `claimed_*` properties are attached once per client IP and claimed sender per minute (the
+process id for `insert_process`; executable, computer and instance id for OTLP), so several
+applications behind one NAT address each appear; a repeat from the same sender within the minute is
+still logged, without them. When nothing could be extracted, an `inspection` property gives the
+reason instead:
+
+| `inspection` | Meaning |
+|---|---|
+| `missing_content_length` | `insert_process` without a `Content-Length` header |
+| `oversize` | `insert_process` with a `Content-Length` over 64 KiB |
+| `unsupported_content_type` | OTLP with a content type other than protobuf or JSON |
+| `unsupported_encoding` | OTLP with a `Content-Encoding` other than gzip or identity |
+| `read_error` | The body stream failed |
+| `read_timeout` | The body did not arrive within 2 seconds |
+| `undecodable` | The body (or its gzip stream) does not decode |
+| `no_resource` | OTLP body without usable resource attributes |
+| `busy` | Too many bodies being inspected at once |
+
+`claimed_username` and `claimed_computer` are personal data of the same kind stored in the
+`processes` table, so give the ingestion service's log stream the same access controls as process
+metadata.
 
 ### Token Refresh Failures
 

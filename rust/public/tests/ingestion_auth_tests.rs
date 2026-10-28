@@ -1,4 +1,4 @@
-// Tests for `micromegas::servers::ingestion_auth` (the rejected `insert_process` claims logger)
+// Tests for `micromegas::servers::ingestion_auth` (the rejected `insert_process` and OTLP logger)
 // and the caller details logged by `tonic_auth_interceptor::check_auth`, on a real `Router` and
 // an in-memory log sink. Tests are `#[serial]` because they share the global tracing dispatch,
 // and select their log lines by a per-test `X-Forwarded-For` address.
@@ -162,13 +162,10 @@ async fn valid_process_info_logs_every_claim_and_no_command_line() {
     assert_eq!(h.reached.load(Ordering::SeqCst), 0);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(
-        &logs,
-        "198.51.100.1",
-        "rejected insert_process caller claims",
-    );
-    assert_eq!(lines.len(), 1);
-    let line = lines[0];
+    let line = single_line(&logs, "198.51.100.1");
+    assert_rejection_context(line);
+    assert_eq!(line.property("path"), Some(INSERT_PROCESS));
+    assert_eq!(line.property("inspection"), None);
     assert_eq!(
         line.property("claimed_process_id"),
         Some(id.to_string().as_str())
@@ -210,17 +207,12 @@ async fn log_injection_payloads_are_sanitized_and_bounded() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.2", "");
-    let claims: Vec<_> = lines
-        .iter()
-        .filter(|l| l.msg.contains("caller claims"))
-        .collect();
-    assert_eq!(claims.len(), 1);
+    let line = single_line(&logs, "198.51.100.2");
     assert_eq!(
-        claims[0].property("claimed_exe"),
+        line.property("claimed_exe"),
         Some("evil?[auth_success] forged ?line")
     );
-    let username = claims[0].property("claimed_username").unwrap();
+    let username = line.property("claimed_username").unwrap();
     assert_eq!(username.chars().count(), 128);
     assert!(username.ends_with('…'));
     assert!(logs.iter().all(|l| !l.msg.contains('\n')));
@@ -250,9 +242,11 @@ async fn missing_content_length_is_not_inspected_and_body_is_not_read() {
     assert!(!polled.load(Ordering::SeqCst));
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.3", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("missing_content_length"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.3").as_deref(),
+        Some("missing_content_length")
+    );
+    assert_rejection_context(single_line(&logs, "198.51.100.3"));
 }
 
 #[tokio::test]
@@ -269,10 +263,9 @@ async fn oversized_content_length_is_not_inspected() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.4", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("oversize"));
-    assert_eq!(lines[0].property("content_length"), Some("65537"));
+    let line = single_line(&logs, "198.51.100.4");
+    assert_eq!(line.property("inspection"), Some("oversize"));
+    assert_eq!(line.property("content_length"), Some("65537"));
 }
 
 #[tokio::test]
@@ -293,9 +286,10 @@ async fn body_stream_error_logs_read_error() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.5", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("read_error"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.5").as_deref(),
+        Some("read_error")
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -313,14 +307,15 @@ async fn stalled_body_logs_read_timeout() {
     assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.6", "body not inspected");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("reason"), Some("read_timeout"));
+    assert_eq!(
+        inspection(&logs, "198.51.100.6").as_deref(),
+        Some("read_timeout")
+    );
 }
 
 #[tokio::test]
 #[serial]
-async fn undecodable_bodies_log_one_unparseable_line() {
+async fn undecodable_insert_process_bodies_are_not_inspected() {
     let guard = enable_logs();
     let h = harness();
     let full = cbor(&process_info(uuid::Uuid::new_v4()));
@@ -340,8 +335,12 @@ async fn undecodable_bodies_log_one_unparseable_line() {
 
     let logs = collect_logs(&guard.sink);
     for ip in ["198.51.100.7", "198.51.100.8"] {
-        assert_eq!(lines_for(&logs, ip, "body unparseable").len(), 1, "{ip}");
-        assert!(lines_for(&logs, ip, "caller claims").is_empty());
+        assert_eq!(
+            inspection(&logs, ip).as_deref(),
+            Some("undecodable"),
+            "{ip}"
+        );
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
     }
 }
 
@@ -360,7 +359,18 @@ async fn repeated_caller_is_rate_limited_per_process_id() {
     }
 
     let logs = collect_logs(&guard.sink);
-    assert_eq!(lines_for(&logs, "198.51.100.9", "caller claims").len(), 2);
+    let lines = lines_for(&logs, "198.51.100.9", "");
+    assert_eq!(lines.len(), 3);
+    // The repeat is still logged, without the claims.
+    assert!(lines[0].property("claimed_process_id").is_some());
+    assert_eq!(lines[1].property("claimed_process_id"), None);
+    assert_eq!(lines[1].property("inspection"), None);
+    assert_rejection_context(lines[1]);
+    assert!(lines[2].property("claimed_process_id").is_some());
+    assert_ne!(
+        lines[0].property("claimed_process_id"),
+        lines[2].property("claimed_process_id")
+    );
 }
 
 #[tokio::test]
@@ -383,12 +393,11 @@ async fn partial_body_fills_present_fields_only() {
     );
 
     let logs = collect_logs(&guard.sink);
-    let lines = lines_for(&logs, "198.51.100.10", "caller claims");
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].property("claimed_process_id"), Some("not-a-uuid"));
-    assert_eq!(lines[0].property("claimed_exe"), Some("game"));
-    assert_eq!(lines[0].property("claimed_username"), Some(""));
-    assert_eq!(lines[0].property("claimed_commit"), Some(""));
+    let line = single_line(&logs, "198.51.100.10");
+    assert_eq!(line.property("claimed_process_id"), Some("not-a-uuid"));
+    assert_eq!(line.property("claimed_exe"), Some("game"));
+    assert_eq!(line.property("claimed_username"), None);
+    assert_eq!(line.property("claimed_commit"), None);
 }
 
 #[tokio::test]
@@ -416,7 +425,7 @@ async fn authenticated_insert_process_reaches_handler_with_body_intact() {
 
     let logs = collect_logs(&guard.sink);
     assert!(lines_for(&logs, "198.51.100.11", "").is_empty());
-    assert!(logs.iter().all(|l| !l.msg.contains("caller claims")));
+    assert!(logs.iter().all(|l| !l.msg.starts_with("[auth_failure]")));
 }
 
 #[tokio::test]
@@ -815,24 +824,22 @@ async fn dedup_is_per_sender_not_per_ip() {
 async fn exhausted_inspection_budget_logs_busy() {
     let guard = enable_logs();
     let h = harness_with_logger(RejectedRequestLogger::with_max_concurrent_inspections(0));
-    let status = send(
-        &h,
-        otlp_bytes(
-            "203.0.113.40",
-            PROTOBUF,
-            None,
-            proto_body(service_attrs("a")),
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let otlp = otlp_bytes(
+        "203.0.113.40",
+        PROTOBUF,
+        None,
+        proto_body(service_attrs("a")),
+    );
+    let insert_process = bytes_request("203.0.113.41", cbor(&process_info(uuid::Uuid::new_v4())));
+    for req in [otlp, insert_process] {
+        assert_eq!(send(&h, req).await, StatusCode::UNAUTHORIZED);
+    }
 
     let logs = collect_logs(&guard.sink);
-    assert_eq!(inspection(&logs, "203.0.113.40").as_deref(), Some("busy"));
-    assert_eq!(
-        single_line(&logs, "203.0.113.40").property("claimed_exe"),
-        None
-    );
+    for ip in ["203.0.113.40", "203.0.113.41"] {
+        assert_eq!(inspection(&logs, ip).as_deref(), Some("busy"), "{ip}");
+        assert_eq!(single_line(&logs, ip).property("claimed_exe"), None);
+    }
 }
 
 #[tokio::test]

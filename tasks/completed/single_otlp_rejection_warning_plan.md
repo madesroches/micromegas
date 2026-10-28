@@ -89,6 +89,14 @@ rejected request (the generic line is not throttled today, the claims line is).
 ## Decisions
 - `insert_process` rejections keep their two lines; the issue is about OTLP and changing them is
   a separate, equally small follow-up.
+  - **Superseded during review:** the follow-up was folded into this branch so both routes share
+    one shape. `insert_process` rejections also log one `[auth_failure] <reason>` line with
+    `claimed_*` or `inspection` (`unparseable` became `undecodable`), unthrottled when not
+    inspected, and their body reads share the inspection semaphore (`busy`). Both routes emit the
+    line from one `warn_rejection` built on `dispatch::log_dyn_tagged` with a runtime property
+    list, replacing the per-variant `warn!` call sites and the `OtlpClaims` struct; claims the
+    caller left empty are omitted instead of logged as `""`. `log_rejected_otlp` merged into
+    `log_rejected(req, &AuthRejection)`.
 
 ## Documentation
 `mkdocs/docs/admin/authentication.md` (the "Finding the caller of a rejected request" section,
