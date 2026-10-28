@@ -208,14 +208,19 @@ revoked.
   `key_revoked: boolean`. In `audience-grants-api.ts`, only the `/visible` row gains these
   (the `POST` create response, `GrantResponse`, does not), so `AudienceGrantResponse` is split
   into a create-response type and a visible-row type extending it. `validateSelector` gains a
-  canonical `key:<uuid>` arm (test in `lib/__tests__/audience-grants-api.test.ts`), and
+  canonical `key:<uuid>` arm (for kind `key` the dialog trims and lowercases the id input before
+  building and validating the selector, matching the server's canonicalization; test in `lib/__tests__/audience-grants-api.test.ts`), and
   `decodeGrant` (visible rows only) and `AudienceGrant` gain `keyName`/`keyRevoked`.
 - `GroupsPage.tsx` `AddMemberDialog`: a fourth kind, `key`, hidden when the group is `admins`.
   It shows a `<select>` of live analytics keys (name plus short id) from the existing
-  `analytics-api-keys-api.ts` list call. That page is admin-only, so the list call is allowed.
+  `analytics-api-keys-api.ts` list call, `listAnalyticsApiKeys(false, 0, MAX_ANALYTICS_API_KEYS_LIST_LIMIT)`,
+  paged until a short page comes back as `AnalyticsApiKeysPage` does. That page is admin-only, so
+  the list call is allowed.
 - `AudienceAccessPage.tsx` grant dialog: a fourth `SelectorKind`, `key`, offered only for the
   `read` axis. Admins get the same key `<select>`. Non-admins can't list keys, so they get a text
-  input for the key id, which the key's operator gives them.
+  input for the key id, which the key's operator gives them. `GrantDialog` gains an `isAdmin` prop
+  (passed from the page, since admins also reach the dialog through Share), and switching the axis
+  to mint resets `selectorKind` away from `key`.
 - Both pages render a `key:` chip as `key_name` (with the id in a `title` tooltip), plus a
   "revoked" tag when `key_revoked`.
 
@@ -239,6 +244,7 @@ produced.
    - Selector-list error strings and doc comments naming three kinds or citing the CHECKs:
      `policy.rs:115-120,260-263,284,294-297,310`, `groups.rs:46-50,76,116-119,131-134`,
      `db_audience_grants.rs:49-52`, `db_api_key.rs:493-494`.
+   - `read_scope.rs:66-67` (`rust/analytics/src/lakehouse/`): the `grant_selectors` doc lists `key:<id>`.
    - `db_api_key.rs:479-500`: set `analytics_key_id`, and replace the stale `memberships` comment.
 2. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v13` drops
    both selector-shape CHECKs (`DROP CONSTRAINT IF EXISTS`, as above). Bump `LATEST_DATA_LAKE_SCHEMA_VERSION` to 13 and add the dispatch arm. In
@@ -254,7 +260,9 @@ produced.
    selector-list error strings and docs at `groups.rs:471`, `audience_grants.rs:259,470`, and the
    now-false "already passed its own CHECK constraints… unreachable" comment in `ingestion_keys.rs:383-385`.
 4. **CLI** (`python/micromegas/micromegas/cli/groups.py`, `grants.py`): help strings (including the
-   `groups.py:87` docstring), and `members` output in `groups.py`.
+   `groups.py:87` docstring), and `members` output in `groups.py`. In `python/micromegas/micromegas/web_client.py`, the selector
+   lists in the `create_audience_grant` (:268-269) and `add_group_member` (:359) docs gain `key:<key_id>`,
+   and the 404 description (:362-363) covers the key-not-found-or-revoked case.
 5. **Web app**: the API types (the `/visible` row type only, not the grant create response), `validateSelector` and `decodeGrant`, plus the new kind in the `GroupsPage.tsx` and
    `AudienceAccessPage.tsx` dialogs, and chip rendering.
 6. **Docs and CHANGELOG** (see below).
@@ -269,7 +277,8 @@ produced.
 - Test constructors of `AuthContext` under `rust/auth/tests/`, `rust/public/tests/`,
   `rust/analytics-web-srv/tests/`
 - `rust/auth/tests/groups_tests.rs`, `membership_tests.rs`, `policy_tests.rs`
-- `python/micromegas/micromegas/cli/groups.py`, `grants.py`
+- `python/micromegas/micromegas/cli/groups.py`, `grants.py`, `web_client.py`
+- `rust/analytics/src/lakehouse/read_scope.rs`
 - `analytics-web-app/src/lib/groups-api.ts`, `audience-grants-api.ts`,
   `src/routes/GroupsPage.tsx`, `AudienceAccessPage.tsx`, and their `__tests__`
 - `mkdocs/docs/admin/groups.md`, `authorization.md`, `api-keys.md`, `web-app.md` (Audience
@@ -313,8 +322,7 @@ produced.
 - Selector-shape CHECK constraints are dropped; selector shape is validated in code only.
 - `read_audiences` is left untouched; removing it is a separate follow-up.
 - Under the bootstrap `('admins', '*')` state, analytics keys stay admin like every caller. It is
-  a warned state that reopens `bulk_ingest` to keys; `is_admin()` also gates view DDL, unfiltered
-  grant visibility, the mutating lakehouse UDTFs and global-partition visibility.
+  a warned state that reopens `bulk_ingest` to keys.
 
 ## Migration
 
