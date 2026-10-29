@@ -25,9 +25,9 @@
     "brace-expansion": "^5.0.12",
     "browserslist": "^4.28.7",
     "diff": "^8.0.3",
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "eslint/ajv": "6.14.0",
-    "fast-uri": "^3.1.8",
+    "fast-uri": "^3.1.9",
     "flatted": "^3.4.2",
     "immutable": "^5.1.8",
     "js-cookie": "^3.0.7",
@@ -42,11 +42,12 @@
     "protocol-buffers-schema": "^3.6.1",
     "qs": "^6.16.0",
     "react-router": "patch:react-router@npm%3A8.3.0#~/.yarn/patches/react-router-npm-8.3.0-258476627b.patch",
-    "serialize-javascript": "^7.0.5",
+    "serialize-javascript": "^7.1.3",
     "tar": "^7.5.21",
-    "undici": ">=8.10.2",
+    "undici": ">=8.12.2",
     "uuid": "^14.0.0",
     "websocket-driver": "^0.7.5",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "zod": "^4.6.6"
   }
 }
