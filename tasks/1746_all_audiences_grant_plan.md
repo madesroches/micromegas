@@ -493,21 +493,29 @@ No-DB unit tests:
 These need the real Postgres schema, the grant snapshot, and the flight-sql stack. A failure
 would be obvious on the first run.
 
-1. `python3 local_test_env/ai_scripts/start_services.py --monolith` against a v13 database.
+1. Start the monolith with OIDC configured and ingestion auth on: set `MICROMEGAS_OIDC_CONFIG`
+   (as in `local_test_env/ai_scripts/start_services_with_oidc.py`), then run
+   `micromegas-monolith --roles all --ingestion-listen-addr 127.0.0.1:9000` directly from `rust/`
+   with no `--disable-auth` and no `--disable-ingestion-auth`, against a v13 database.
+   (`start_services.py --monolith` passes `--disable-auth`, under which every query runs as
+   `ReadScope::All` and no grant behavior is visible; with OIDC it passes
+   `--disable-ingestion-auth`, so ingestion keys would not stamp an audience.)
    `/tmp/monolith.log` reports data lake schema 14. `\d audience_grants` and `\d groups` show no
    CHECK constraints.
-2. As an admin, mint analytics key K and note its `key_id`. With no grants for K,
-   `micromegas-query` using K returns only `public` rows.
+2. As an admin, mint analytics key K and note its `key_id`. Save K to a file and point a
+   `~/.micromegas/config.json` profile's `api_key_file` at it. With no grants for K,
+   `micromegas-query --profile <that profile>` returns only `public` rows.
 3. `micromegas-grants --url http://127.0.0.1:3000 create '*' read key:<K>` → created.
    `create '*' mint key:<K>` → 400. `create '*' read '*'` → 400. As a non-admin with
    self-service on, `create '*' read user:<me>` → 403.
-4. Mint an ingestion key into a new audience `fresh-aud`, and ingest a process into it. Within
-   the cache TTL, K reads `fresh-aud` rows (`SELECT DISTINCT audience FROM processes`), with no
-   further grant. `list_partitions()` with K still hides `'global'` rows.
+4. Run `micromegas-setup-telemetry --audience fresh-aud` to mint an ingestion key into a new
+   audience, and ingest a process with it. Within the auth cache TTL (default 60 s), K reads
+   `fresh-aud` rows (`SELECT DISTINCT audience FROM processes`), with no further grant.
+   `list_partitions()` with K still hides `'global'` rows.
 5. Open `/audiences`: the **All audiences** card is listed first, showing K's chip. In the Add
    dialog, typing `team alpha` shows the inline charset error, `*` with mint shows the read-only
    error, and `*` with read and a key enables **Add grant**.
-6. `micromegas-grants … delete '*' read key:<K>`. Within 60 s, K no longer reads `fresh-aud`.
+6. `micromegas-grants … delete '*' read key:<K>`. Within the auth cache TTL (default 60 s), K no longer reads `fresh-aud`.
 7. Resilience: with `psql`, insert `('team alpha', 'read', 'user:x', now(), 'psql')` and
    `('public', 'xyz', '*', now(), 'psql')` into `audience_grants`. Within one TTL, the log
    shows one `warn!` per row naming it. `public` is still readable, and creating and deleting a
