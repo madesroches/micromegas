@@ -165,7 +165,7 @@ ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_name;
 `upgrade_data_lake_schema_v14`, a dispatch arm, and `LATEST_DATA_LAKE_SCHEMA_VERSION = 14`. The
 axis constraint was declared inline without a name, and Postgres names that deterministically
 `audience_grants_axis_check`. The v14 doc comment says so. After v14, the only constraints left on `audience_grants`, `groups`,
-and `group_members` are structural ones: primary keys, `NOT NULL`, `VARCHAR(255)` lengths, and
+and `group_members` are structural ones: primary keys, `NOT NULL`, column lengths (`VARCHAR(255)`, and `VARCHAR(4)` for `axis`), and
 the `group_members.group_name → groups(name)` foreign key.
 
 **Code validation coverage**, checked write path by write path. Direct SQL is the only writer
@@ -178,7 +178,7 @@ these checks don't cover, and §7 handles that:
 | `groups.name` | `create_group`: `validate_group_name` (`groups.rs:297`). v10: literal `'admins'`, and the legacy backfill checks `is_valid_group_name` (`sql_migration.rs:398`). There is no rename route. | `GroupGraph::from_rows` (snapshot loader, and the route graph reads). |
 | `group_members.group_name` | Bounded by the FK to `groups(name)`, which stays. | `GroupGraph::from_rows`. |
 
-Lengths stay enforced twice: the `VARCHAR(255)` column types remain, and the Rust predicates cap
+Lengths stay enforced twice: the column types remain, and the Rust predicates cap
 at 255 bytes (`is_valid_audience`, `is_valid_group_name`, `MAX_SELECTOR_BYTES`).
 
 Display paths read rows raw and need no validation: `/visible`, `list_audience_grants()`,
@@ -307,13 +307,15 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
    `ReadScope` as two-valued.
 3. **Bridge** (`rust/public/src/servers/flight_sql_service_impl.rs`): the `match` in
    `caller_context`. Fix test doubles in `rust/public/tests/read_policy_threading_tests.rs`
-   reported by the compiler.
+   reported by the compiler, and add the `Every` bridge test (Testing Strategy).
 4. **Migration** (`rust/ingestion/src/sql_migration.rs`): `upgrade_data_lake_schema_v14` (§3),
    the dispatch arm, and `LATEST_DATA_LAKE_SCHEMA_VERSION = 14`. In
    `rust/ingestion/tests/sql_migration_test.rs`, `v7_creates_audience_grants_table_with_constraints`
    migrates to latest and then expects the audience CHECK to reject `'group:everyone'` (~line 307)
-   and the axis CHECK to reject `'write'` (~line 294). Both inserts now succeed. Flip those
-   assertions to "accepted at v14" and update the doc comment. Check the v10 groups tests for a
+   and the axis CHECK to reject `'write'` (~line 294). The audience insert now succeeds. `axis` is
+   `VARCHAR(4)`, so `'write'` would still fail on length: switch that insert to a 4-character
+   unknown axis (`'xyz'`), which now succeeds. Flip both assertions to "accepted at v14" and
+   update the doc comment. Check the v10 groups tests for a
    `groups_name` rejection assertion too.
 4b. **Resilient parsing** (§7): `Parsed<T>`, `report_skipped`, and `count_skipped_rows` in
    `rust/auth/src/db_snapshot.rs`; the `from_rows` changes in `policy.rs` and `groups.rs`; the
@@ -336,7 +338,7 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 - Tests: `rust/auth/tests/policy_tests.rs`, `groups_tests.rs`, `db_audience_grants_tests.rs`, `rust/analytics/tests/audience_guard_tests.rs`,
   `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs`,
   `rust/analytics-web-srv/tests/audience_grants_tests.rs`,
-  `rust/public/tests/read_policy_threading_tests.rs` (compile fixes)
+  `rust/public/tests/read_policy_threading_tests.rs` (compile fixes, plus the `Every` bridge test)
 - `analytics-web-app/src/lib/audience-grants-api.ts`, `src/routes/AudienceAccessPage.tsx`,
   `src/lib/__tests__/audience-grants-api.test.ts`, `src/routes/__tests__/AudienceAccessPage.test.tsx`
 - `python/micromegas/micromegas/cli/grants.py`, `python/micromegas/micromegas/web_client.py`
@@ -363,7 +365,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   variant makes the compiler list every match site.
 - **Drop the CHECKs vs. relax them.** Relaxing `audience_grants_audience_name` to allow `*` on
   read only would mean one more migration now, and another for each future vocabulary change
-  (prefix patterns, a new axis). After v14 the grant and group vocabulary lives in code only.
+  (prefix patterns, a new axis of 4 characters or fewer; a longer axis name would need
+  `axis` widened). After v14 the grant and group vocabulary lives in code only.
   With §7 in place, a bad direct-SQL row costs one inert row, not an outage.
 - **Skip bad rows vs. fail the load.** Failing the load was meant as fail-closed, but in effect it
   turns one bad row into a total outage on cold start, or into a silently frozen last-good
@@ -398,13 +401,15 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   admin only, never with the `*` selector. Add an example
   `micromegas-grants … create '*' read key:<key_id>`. In the grant store schema block (~322),
   delete the `audience_grants_audience_name` line and the inline axis `CHECK`, and say that the
-  audience, axis, and selector are validated in code only. In "Caching and outages" (~401), say
-  that a malformed row is skipped with a warning and the
+  audience, axis, and selector are validated in code only. In "Caching and outages" (~401), rewrite
+  the passage (~330-334) saying a malformed row written directly "fails the whole snapshot load
+  loudly" to say that a malformed row is skipped with a warning and the
   `audience_grant_skipped_row_count` metric, and no longer fails the snapshot. In the query-time filtering section, add
   one sentence that a caller holding a `*` read grant is filtered to "any stamped audience"
   (global partition rows still need admin).
-- `mkdocs/docs/admin/groups.md`: delete the `groups_name` CHECK from the schema block, and add
-  the same skip-and-warn note (`group_skipped_row_count`).
+- `mkdocs/docs/admin/groups.md`: delete the `groups_name` CHECK from the schema block, and rewrite
+  the passage (~39-42) saying a bad row "fails the snapshot load loudly" to describe
+  skip-and-warn (`group_skipped_row_count`).
 - `mkdocs/docs/admin/api-keys.md`, "Granting a key read access" (~244): add the `*` option for a
   key that must read everything, with the caveat that it covers audiences created later.
 - `mkdocs/docs/admin/web-app.md`, Audience Access (~212): the **All audiences** card, and the
@@ -430,7 +435,9 @@ No-DB unit tests:
   - `parse`: `*` on read accepted; `*` on mint rejects the document.
   - `from_rows` skipping: a batch with one valid row and one each of bad audience, `*` on mint,
     `key:` on mint, and bad selector returns the valid grant in `value` and four entries in
-    `skipped`. The valid grant still resolves for its caller.
+    `skipped`. The valid grant still resolves for its caller. The existing `from_rows` rejection
+    tests (`policy_tests.rs` ~:582, :593) are rewritten to assert on `skipped` instead of
+    `expect_err`/`unwrap_err`.
   - `AudienceReadPolicy::resolve` returns `Every` for a caller matching a `*`-audience read
     selector (`user:`, `group:` via memberships, `key:`), from the static map and from
     `from_rows`. A caller matching nothing there gets `Listed` with exactly its literal grants.
@@ -440,7 +447,16 @@ No-DB unit tests:
 - `rust/auth/tests/groups_tests.rs`: `GroupGraph::from_rows` with a bad group name, a member row
   under that name, and a bad member selector, next to valid rows. All three are skipped, and the
   closure from the valid rows is unchanged. A skipped `('admins', <bad>)` member never puts
-  `admins` in a closure.
+  `admins` in a closure. The existing rejection tests (~:147, :154) are rewritten to assert on
+  `skipped`.
+- `rust/auth/tests/db_audience_grants_tests.rs`: the `#[ignore]` test
+  `live_malformed_row_fails_the_whole_snapshot_load` is inverted: with `'not a valid audience'`
+  seeded, `source.current()` succeeds, the malformed row is absent, and a valid row still
+  resolves.
+- `rust/public/tests/read_policy_threading_tests.rs` (offline): a stub `ReadPolicy` returning
+  `ReadableAudiences::Every`, asserting the `processes` EXPLAIN (as in `explain_processes`)
+  contains the `IS NOT NULL` audience predicate, so the bridge mapping stays filtered and never
+  becomes `All`.
 - The loaders' axis skip and `report_skipped` are thin glue over the above, so they are
   covered through `from_rows`. An unrecognized axis is folded into the triples' parse (move the
   axis `match` into a pure helper that `db_audience_grants_tests.rs` calls directly).
@@ -486,7 +502,7 @@ would be obvious on the first run.
    error, and `*` with read and a key enables **Add grant**.
 6. `micromegas-grants … delete '*' read key:<K>`. Within 60 s, K no longer reads `fresh-aud`.
 7. Resilience: with `psql`, insert `('team alpha', 'read', 'user:x', now(), 'psql')` and
-   `('public', 'write', '*', now(), 'psql')` into `audience_grants`. Within one TTL, the log
+   `('public', 'xyz', '*', now(), 'psql')` into `audience_grants`. Within one TTL, the log
    shows one `warn!` per row naming it. `public` is still readable, and creating and deleting a
    grant still takes effect. Delete the two rows; the warnings stop. This is manual because only
    the real refresh loop shows the end-to-end log-and-keep-serving behavior. The parse logic
