@@ -34,6 +34,8 @@ interface RawMember {
   member: string
   created_at: string
   created_by: string
+  key_name?: string | null
+  key_revoked?: boolean
 }
 
 function jsonResponse(status: number, body: unknown) {
@@ -53,6 +55,21 @@ function installFetchMock(opts: {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? 'GET'
+
+    if (url.includes('/analytics-api-keys')) {
+      return jsonResponse(200, [
+        {
+          key_id: '0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+          name: 'reporter',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+          last_used_at: null,
+          revoked_at: null,
+          revoked_by: null,
+          allowed_cidrs: [],
+        },
+      ])
+    }
 
     const membersMatch = url.match(/\/api\/groups\/([^/?]+)\/members(\?.*)?$/)
     if (membersMatch) {
@@ -282,5 +299,76 @@ describe('GroupsPage', () => {
         expect.objectContaining({ method: 'DELETE' })
       )
     )
+  })
+
+  const eng = {
+    name: 'eng',
+    description: null,
+    member_count: 0,
+    created_at: '2026-08-14T00:00:00Z',
+    created_by: 'admin@example.com',
+  }
+
+  it('offers the key kind and posts key:<id>', async () => {
+    const fetchMock = installFetchMock({ groups: [eng], membersByGroup: { eng: [] } })
+    renderPage()
+
+    fireEvent.click(await screen.findByText('eng'))
+    fireEvent.click(await screen.findByText('Add member'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'key' }))
+    await within(dialog).findByText('reporter (0b9f5d0e)')
+    fireEvent.change(within(dialog).getByRole('combobox'), {
+      target: { value: '0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11' },
+    })
+    fireEvent.click(within(dialog).getByText('Add member', { selector: 'button' }))
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/groups/eng/members'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ member: 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11' }),
+        })
+      )
+    )
+  })
+
+  it('does not offer the key kind for admins', async () => {
+    installFetchMock({
+      groups: [{ ...eng, name: 'admins' }],
+      membersByGroup: { admins: [] },
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByText('admins'))
+    fireEvent.click(await screen.findByText('Add member'))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: 'user' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'key' })).not.toBeInTheDocument()
+  })
+
+  it('renders a key member as its name with a revoked tag', async () => {
+    installFetchMock({
+      groups: [eng],
+      membersByGroup: {
+        eng: [
+          {
+            group_name: 'eng',
+            member: 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+            created_at: '2026-08-14T00:00:00Z',
+            created_by: 'admin@example.com',
+            key_name: 'reporter',
+            key_revoked: true,
+          },
+        ],
+      },
+    })
+    renderPage()
+
+    fireEvent.click(await screen.findByText('eng'))
+    const name = await screen.findByText('reporter')
+    expect(name).toHaveAttribute('title', 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11')
+    expect(screen.getByText('revoked')).toBeInTheDocument()
   })
 })

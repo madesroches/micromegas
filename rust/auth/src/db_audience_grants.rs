@@ -47,8 +47,8 @@ impl SnapshotLoader for AudienceGrantsLoader {
     const NAME: &'static str = "audience grant store";
 
     /// Queries the whole table and builds an `AudienceGrants` via
-    /// [`AudienceGrants::from_rows`]. The one place a malformed row (one that slipped past the
-    /// table's own `CHECK` constraints, e.g. via a direct `psql` session) surfaces as a load
+    /// [`AudienceGrants::from_rows`]. The one place a malformed row (the table carries no
+    /// selector-shape `CHECK`, so e.g. a direct `psql` write) surfaces as a load
     /// failure rather than a silently-inert or silently-unreadable grant.
     async fn fetch(pool: &PgPool) -> Result<AudienceGrants> {
         let rows = sqlx::query("SELECT audience, axis, selector FROM audience_grants")

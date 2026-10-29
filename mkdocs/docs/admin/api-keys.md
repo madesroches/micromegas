@@ -63,8 +63,8 @@ CREATE TABLE ingestion_api_keys (
 );
 CREATE UNIQUE INDEX ingestion_api_keys_key_hash ON ingestion_api_keys(key_hash);
 
--- analytics_api_keys: identical shape apart from `audience` -- its read-side
--- mirror is a per-key `read_audiences` grant, not a column on this table
+-- analytics_api_keys: identical shape apart from `audience` -- its read access
+-- comes from `key:<key_id>` selectors in groups and grants, not a column on this table
 CREATE TABLE analytics_api_keys (
   key_id       UUID PRIMARY KEY,
   key_hash     BYTEA NOT NULL,
@@ -180,8 +180,9 @@ reaches production.
 Every `ingestion_api_keys` row carries a single, **immutable** write
 audience — the value every process, stream, and block that key ingests is
 stamped with. `analytics_api_keys` has no such column: its read-side
-equivalent is a per-key `read_audiences` grant, in the opposite direction
-(which audiences a caller may *read*, not which one it *writes*).
+equivalent runs in the opposite direction (which audiences a caller may
+*read*, not which one it *writes*) and is expressed with `key:<key_id>`
+selectors, described in [Granting a key read access](#granting-a-key-read-access).
 
 An audience is an opaque label, not a principal encoding — `public`,
 `team-alpha`, `payments-svc`, `alice-laptop`. Who may read or mint into it is
@@ -239,6 +240,34 @@ were never granted.
 (`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`, default 60s; see [Cache and audit
 env vars](#cache-and-audit-env-vars)) — since the audience is immutable, that
 caching is free.
+
+### Granting a key read access {#granting-a-key-read-access}
+
+An analytics key matches `*` grants only, until it is named explicitly. There
+are two paths, both keyed on the key's `key_id`:
+
+- **Through a group** (admin): add the key to a local group and grant the group
+  the audience.
+  ```
+  micromegas-groups --url URL create usage-reports
+  micromegas-groups --url URL add usage-reports key:<key_id>
+  micromegas-grants --url URL create secret read group:usage-reports
+  ```
+- **Directly**: `micromegas-grants --url URL create secret read key:<key_id>`.
+  An admin can do this, and so can anyone who holds `read` on the audience
+  themselves when self-service sharing is on (the Audience Access page offers
+  a key field in Share; non-admins type the key id the key's operator gives
+  them).
+
+A key never mints (a `key:` selector on the `mint` axis is refused) and never
+becomes admin through a group. Both routes refuse a `key:` selector that names
+no live analytics key (404).
+
+Removing the group member or grant, or revoking the key, takes effect within
+`MICROMEGAS_AUTH_CACHE_TTL_SECONDS` (default 60s). Revoking a key does not
+delete the member or grant rows naming it: they stay inert as the record of
+what it could read, are tagged "revoked" in the Groups and Audience Access
+pages, and stay until removed.
 
 ### Minting an analytics key over HTTP
 

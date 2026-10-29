@@ -51,6 +51,7 @@ fn ctx_with_bound_audience(audience: &str) -> AuthContext {
         allow_delegation: false,
         bound_audience: Some(audience.to_string()),
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: Arc::from([]),
     }
 }
@@ -66,6 +67,7 @@ fn ctx_without_bound_audience() -> AuthContext {
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: Arc::from([]),
     }
 }

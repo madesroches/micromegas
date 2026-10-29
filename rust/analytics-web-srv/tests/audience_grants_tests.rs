@@ -90,6 +90,7 @@ fn auth_context_for(user: &ValidatedUser, groups: Vec<String>) -> AuthContext {
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: memberships.into(),
     }
 }
@@ -295,6 +296,44 @@ async fn create_grant_400_for_overlong_selector() {
     );
     let response = app
         .oneshot(post_request("/api/audience-grants", &body))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_grant_400_for_malformed_key_selector() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            settings: test_settings(false, 25, 100, 50),
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            r#"{"audience": "team-alpha", "axis": "read", "selector": "key:nope"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_grant_400_for_key_selector_on_mint_axis() {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            settings: test_settings(false, 25, 100, 50),
+        },
+        admin_user(),
+    );
+    let response = app
+        .oneshot(post_request(
+            "/api/audience-grants",
+            r#"{"audience": "team-alpha", "axis": "mint", "selector": "key:0B9F5D0E-5C1A-4A52-9A6E-6F1D7B0C1A11"}"#,
+        ))
         .await
         .expect("call service");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);

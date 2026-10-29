@@ -265,8 +265,9 @@ class WebClient:
         """Create (or report the pre-existing) audience grant row via
         `POST /api/audience-grants`.
 
-        `axis` is `"read"` or `"mint"`; `selector` is `"*"`, `"user:<id>"`, or
-        `"group:<id>"` -- the server re-validates both. Returns
+        `axis` is `"read"` or `"mint"`; `selector` is `"*"`, `"user:<id>"`,
+        `"group:<id>"`, or `"key:<key_id>"` (an analytics API key; read axis
+        only, 404 if no live key has that id) -- the server re-validates both. Returns
         `{"audience", "axis", "selector", "created_at", "created_by"}`; the
         response reports the pre-existing row's own fields when the grant
         already existed (the server answers `200` in that case, `201` for a
@@ -286,7 +287,9 @@ class WebClient:
         """Delete one audience grant row via `DELETE /api/audience-grants`,
         keyed by its natural `(audience, axis, selector)` triple passed as
         query parameters -- a `group:<id>` selector isn't restricted enough in
-        charset to be a safe raw path segment. Raises `RuntimeError` (via
+        charset to be a safe raw path segment. `selector` is any of the kinds
+        `create_audience_grant` accepts, including `"key:<key_id>"`; a grant
+        left behind by a revoked key can still be deleted. Raises `RuntimeError` (via
         `_check_response`) with a 404 if no such row exists.
         """
         resp = self.session.delete(
@@ -345,7 +348,9 @@ class WebClient:
     def list_group_members(self, name):
         """List a group's direct members via `GET /api/groups/{name}/members`
         (admin-only). Returns a list of
-        `{"group_name", "member", "created_at", "created_by"}`.
+        `{"group_name", "member", "created_at", "created_by", "key_name",
+        "key_revoked"}`; `key_name` is set (and `key_revoked` says whether the
+        key was revoked) when `member` is a `key:<key_id>` selector.
         """
         resp = self.session.get(
             self._api_url(f"groups/{requests.utils.quote(name, safe='')}/members"),
@@ -356,12 +361,14 @@ class WebClient:
         return resp.json()
 
     def add_group_member(self, name, member):
-        """Add `member` (`"*"`, `"user:<id>"`, or `"group:<id>"`) to a group
-        via `POST /api/groups/{name}/members` (admin-only).
+        """Add `member` (`"*"`, `"user:<id>"`, `"group:<id>"`, or
+        `"key:<key_id>"`) to a group via `POST /api/groups/{name}/members`
+        (admin-only).
 
-        Raises `RuntimeError` if `member` is malformed (400), if a
-        `group:<id>` member names a group that doesn't exist (404), or if
-        adding it would create a cycle (409). Returns the created (or
+        Raises `RuntimeError` if `member` is malformed (400), if a `key:`
+        member is added to `admins` (400), if a `group:<id>` member names a
+        group that doesn't exist or a `key:<key_id>` member names no live
+        analytics API key (404), or if adding it would create a cycle (409). Returns the created (or
         pre-existing) `{"group_name", "member", "created_at", "created_by"}`
         row -- the server answers `200` when the row already existed, `201`
         for a fresh create; `WebClient` doesn't surface the status code
@@ -379,8 +386,9 @@ class WebClient:
     def remove_group_member(self, name, member):
         """Remove `member` from a group via
         `DELETE /api/groups/{name}/members`, with `member` passed as a query
-        parameter -- a `group:<id>` member isn't restricted enough in charset
-        to be a safe raw path segment. Raises `RuntimeError` on an unknown
+        parameter (`"*"`, `"user:<id>"`, `"group:<id>"`, or `"key:<key_id>"`)
+        -- a `group:<id>` member isn't restricted enough in charset to be a
+        safe raw path segment. Raises `RuntimeError` on an unknown
         member (404) or if removing it would leave no principal -- no `*`
         and no `user:<id>`, directly or via group nesting -- still able to
         reach `admins` (409, the only lockout protection).

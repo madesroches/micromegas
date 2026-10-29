@@ -2,6 +2,7 @@
 
 use micromegas_auth::groups::{ADMINS_GROUP, DbGroupsConfig, GroupGraph};
 use serial_test::serial;
+use uuid::Uuid;
 
 fn graph(groups: &[&str], members: &[(&str, &str)]) -> GroupGraph {
     GroupGraph::from_rows(
@@ -14,15 +15,24 @@ fn graph(groups: &[&str], members: &[(&str, &str)]) -> GroupGraph {
 #[test]
 fn closure_direct_user_member() {
     let g = graph(&["a"], &[("a", "user:alice@example.com")]);
-    assert_eq!(g.closure(Some("alice@example.com")), vec!["a".to_string()]);
-    assert_eq!(g.closure(Some("bob@example.com")), Vec::<String>::new());
+    assert_eq!(
+        g.closure(Some("alice@example.com"), None),
+        vec!["a".to_string()]
+    );
+    assert_eq!(
+        g.closure(Some("bob@example.com"), None),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
 fn closure_via_wildcard() {
     let g = graph(&["a"], &[("a", "*")]);
-    assert_eq!(g.closure(Some("anyone@example.com")), vec!["a".to_string()]);
-    assert_eq!(g.closure(None), vec!["a".to_string()]);
+    assert_eq!(
+        g.closure(Some("anyone@example.com"), None),
+        vec!["a".to_string()]
+    );
+    assert_eq!(g.closure(None, None), vec!["a".to_string()]);
 }
 
 /// A three-level chain: `alice ∈ a`, `group:a ∈ b`, `group:b ∈ c`. Alice's closure resolves `{a,
@@ -40,13 +50,16 @@ fn closure_three_level_chain_and_edge_direction() {
         ],
     );
     assert_eq!(
-        g.closure(Some("alice@example.com")),
+        g.closure(Some("alice@example.com"), None),
         vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
 
     // A direct member of `c` alone does not also resolve `a`/`b` -- the walk goes upward only.
     let g2 = graph(&["c"], &[("c", "user:carol@example.com")]);
-    assert_eq!(g2.closure(Some("carol@example.com")), vec!["c".to_string()]);
+    assert_eq!(
+        g2.closure(Some("carol@example.com"), None),
+        vec!["c".to_string()]
+    );
 }
 
 /// A diamond: `alice ∈ a`, `group:a ∈ b`, `group:a ∈ c`, `group:b ∈ d`, `group:c ∈ d` -- `d` is
@@ -64,7 +77,7 @@ fn closure_diamond_dedupes() {
         ],
     );
     assert_eq!(
-        g.closure(Some("alice@example.com")),
+        g.closure(Some("alice@example.com"), None),
         vec![
             "a".to_string(),
             "b".to_string(),
@@ -87,7 +100,7 @@ fn closure_cycle_terminates() {
         ],
     );
     assert_eq!(
-        g.closure(Some("alice@example.com")),
+        g.closure(Some("alice@example.com"), None),
         vec!["a".to_string(), "b".to_string()]
     );
 }
@@ -195,4 +208,70 @@ fn groups_config_from_env_reads_the_flat_unprefixed_var_regardless_of_prefix() {
         120
     );
     assert_eq!(DbGroupsConfig::from_env_with_prefix("").cache_ttl_secs, 120);
+}
+
+const KEY_K: &str = "0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11";
+const KEY_OTHER: &str = "7c1e2f3a-1b2c-4d3e-8f4a-5b6c7d8e9f00";
+
+fn key(id: &str) -> Option<Uuid> {
+    Some(Uuid::parse_str(id).expect("uuid"))
+}
+
+#[test]
+fn closure_seeds_from_the_key_and_walks_upward() {
+    let member = format!("key:{KEY_K}");
+    let g = graph(
+        &["a", "b", "everyone"],
+        &[("a", &member), ("b", "group:a"), ("everyone", "*")],
+    );
+    assert_eq!(
+        g.closure(None, key(KEY_K)),
+        vec!["a".to_string(), "b".to_string(), "everyone".to_string()]
+    );
+    assert_eq!(g.closure(None, None), vec!["everyone".to_string()]);
+    assert_eq!(
+        g.closure(None, key(KEY_OTHER)),
+        vec!["everyone".to_string()]
+    );
+}
+
+#[test]
+fn key_walk_never_reaches_admins() {
+    let member = format!("key:{KEY_K}");
+    let g = graph(
+        &[ADMINS_GROUP, "g", "above"],
+        &[
+            (ADMINS_GROUP, &member),
+            (ADMINS_GROUP, "group:g"),
+            ("g", &member),
+            ("g", "user:h@example.com"),
+            ("above", "group:admins"),
+        ],
+    );
+    assert_eq!(g.closure(None, key(KEY_K)), vec!["g".to_string()]);
+    // A human in `g` still reaches admins and what is above it.
+    assert_eq!(
+        g.closure(Some("h@example.com"), None),
+        vec![
+            ADMINS_GROUP.to_string(),
+            "above".to_string(),
+            "g".to_string()
+        ]
+    );
+}
+
+#[test]
+fn wildcard_admin_still_applies_to_a_key() {
+    let g = graph(&[ADMINS_GROUP], &[(ADMINS_GROUP, "*")]);
+    assert_eq!(g.closure(None, key(KEY_K)), vec![ADMINS_GROUP.to_string()]);
+}
+
+#[test]
+fn any_principal_reaches_ignores_key_paths() {
+    let member = format!("key:{KEY_K}");
+    let g = graph(
+        &[ADMINS_GROUP, "g"],
+        &[(ADMINS_GROUP, &member), ("g", &member)],
+    );
+    assert!(!g.any_principal_reaches(ADMINS_GROUP));
 }

@@ -494,8 +494,10 @@ impl AuthProvider for DbApiKeyAuthProvider {
                     // for analytics keys -- `read_audiences` populates that side instead.
                     bound_audience: row.audience.clone(),
                     read_audiences: vec![],
-                    // API keys carry no email for a `user:` member to match, so only a
-                    // wildcard-admin group could ever make one admin.
+                    analytics_key_id: matches!(self.table, ApiKeyTable::Analytics)
+                        .then_some(row.key_id),
+                    // Placeholder: `MembershipProvider` overwrites it. A key has no email, so it
+                    // is seeded from `*` and from its own `key:<id>` (barred from `admins`).
                     memberships: Arc::from([]),
                 })
             }
@@ -615,6 +617,44 @@ mod tests {
             )
             .await;
         provider
+    }
+
+    async fn analytics_key_id_for(table: ApiKeyTable, token: &str) -> Option<uuid::Uuid> {
+        let key_id = uuid::Uuid::new_v4();
+        let provider = DbApiKeyAuthProvider::new(unreachable_pool(), table, test_config());
+        provider
+            .valid
+            .insert(
+                hash_key(token),
+                Arc::new(KeyRow {
+                    key_id,
+                    name: "id-test-key".to_string(),
+                    audience: Some(PUBLIC_AUDIENCE.to_string()),
+                    allowlist: IpAllowlist::parse(&[]).expect("empty allowlist"),
+                }),
+            )
+            .await;
+        let ctx = provider
+            .validate_request(&bearer_parts(token, None) as &dyn RequestParts)
+            .await
+            .expect("cached key authenticates");
+        assert!(ctx.analytics_key_id.is_none_or(|id| id == key_id));
+        ctx.analytics_key_id
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn only_analytics_keys_carry_a_key_id() {
+        assert!(
+            analytics_key_id_for(ApiKeyTable::Analytics, "mmk_id_analytics")
+                .await
+                .is_some()
+        );
+        assert!(
+            analytics_key_id_for(ApiKeyTable::Ingestion, "mmk_id_ingestion")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

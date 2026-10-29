@@ -555,6 +555,7 @@ impl OidcAuthProvider {
                     // read_audiences grant -- those are key-provider fields.
                     bound_audience: None,
                     read_audiences: vec![],
+                    analytics_key_id: None,
                     // Filled by `MembershipProvider`, not here -- see `AuthContext.memberships`'s
                     // doc comment.
                     memberships: Arc::from([]),

@@ -27,6 +27,7 @@
 //! this route for the page's own display.
 
 use crate::auth::{AuthenticatedUser, Unauthenticated};
+use crate::key_selector::{canonicalize_key_selector, ensure_live_key, key_not_found_message};
 use crate::mutation_audit::{AuditOutcome, ClientIp, MutationAudit, action};
 use axum::extract::{Extension, FromRequestParts, Query};
 use axum::http::request::Parts;
@@ -98,6 +99,9 @@ pub enum AudienceGrantError {
     /// after authorization succeeds (see `create_grant`'s own doc comment), so this is never a
     /// group-name existence oracle for a caller with no authority on the pair.
     GroupNotFound(String),
+    /// `create_grant`'s `key:<id>` selector names no live analytics API key. Checked after
+    /// authorization, like `GroupNotFound`.
+    KeyNotFound(String),
     /// A DB error.
     Database(sqlx::Error),
     /// `state.pool == None` -- the telemetry-DB pool was never configured
@@ -137,7 +141,7 @@ impl IntoResponse for AudienceGrantError {
                 Json(ErrorResponse::new("NOT_FOUND", "grant not found")),
             )
                 .into_response(),
-            AudienceGrantError::GroupNotFound(msg) => (
+            AudienceGrantError::GroupNotFound(msg) | AudienceGrantError::KeyNotFound(msg) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new("NOT_FOUND", msg)),
             )
@@ -211,6 +215,7 @@ impl AuditOutcome for AudienceGrantError {
             AudienceGrantError::Unavailable(msg) => ("error", Some(msg.clone())),
             AudienceGrantError::NotFound => ("denied", Some("grant not found".to_string())),
             AudienceGrantError::GroupNotFound(msg) => ("denied", Some(msg.clone())),
+            AudienceGrantError::KeyNotFound(msg) => ("denied", Some(msg.clone())),
             AudienceGrantError::BadRequest(msg) => ("denied", Some(msg.clone())),
             // The raw `sqlx::Error` text must not reach the record -- it can carry
             // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
@@ -256,7 +261,8 @@ fn validate_axis(axis: &str) -> Result<(), AudienceGrantError> {
 fn validate_selector(selector: &str) -> Result<(), AudienceGrantError> {
     if !valid_selector(selector) {
         return Err(AudienceGrantError::BadRequest(format!(
-            "invalid selector {selector:?}: must be '*', 'user:<id>', or 'group:<id>'"
+            "invalid selector {selector:?}: must be '*', 'user:<id>', 'group:<id>', or \
+             'key:<key_id>'"
         )));
     }
     if selector.len() > MAX_SELECTOR_BYTES {
@@ -467,7 +473,7 @@ async fn caller_holds_pair(
 /// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, four further checks
 /// that need the parsed body and so live here rather than in the gate:
 ///
-/// 1. `selector` must be `user:…`/`group:…` -- `*` is refused with 403, since a caller who can
+/// 1. `selector` must be `user:…`/`group:…`/`key:…` -- `*` is refused with 403, since a caller who can
 ///    read an audience must not be able to open it to every authenticated principal.
 /// 2. `(axis, selector)` must not be the caller's own `mint`/`user:<email>` claim marker -- that
 ///    row is what `try_claim_and_mint` (`ingestion_keys.rs`) writes for a real claim, and letting
@@ -486,8 +492,9 @@ async fn create_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
     client_ip: ClientIp,
-    Json(body): Json<CreateGrantRequest>,
+    Json(mut body): Json<CreateGrantRequest>,
 ) -> Result<(StatusCode, Json<GrantResponse>), AudienceGrantError> {
+    body.selector = canonicalize_key_selector(&body.selector);
     let audit = MutationAudit::from_context(action::CREATE_GRANT, &caller, &client_ip).grant(
         &body.audience,
         &body.axis,
@@ -512,6 +519,11 @@ async fn create_grant_inner(
     validate_audience(&body.audience)?;
     validate_axis(&body.axis)?;
     validate_selector(&body.selector)?;
+    if body.axis == "mint" && body.selector.starts_with("key:") {
+        return Err(AudienceGrantError::BadRequest(
+            "API keys cannot be granted the mint axis".to_string(),
+        ));
+    }
     let created_by = caller_identity(&caller);
 
     if !caller.is_admin() {
@@ -609,6 +621,14 @@ async fn create_grant_inner(
         }
     }
 
+    if body.selector.starts_with("key:")
+        && ensure_live_key(&mut tx, &body.selector).await?.is_none()
+    {
+        return Err(AudienceGrantError::KeyNotFound(key_not_found_message(
+            &body.selector,
+        )));
+    }
+
     let row = insert_or_get(
         &mut tx,
         &body.audience,
@@ -639,9 +659,9 @@ async fn create_grant_inner(
     ))
 }
 
-/// Row shape shared by `GET .../visible` and (via `micromegas-query`) the SQL table function's
-/// column order -- kept as its own type since `GET .../visible` is a distinct route with its own
-/// visibility rule, not the same handler.
+/// Row shape of `GET .../visible`, which is its own route with its own visibility rule. The
+/// trailing key columns are an HTTP-only addition -- the `list_audience_grants()` SQL table
+/// function does not carry them.
 #[derive(Serialize, sqlx::FromRow)]
 struct VisibleGrantRow {
     audience: String,
@@ -649,7 +669,12 @@ struct VisibleGrantRow {
     selector: String,
     created_at: DateTime<Utc>,
     created_by: String,
+    /// Set when `selector` is a `key:` selector naming a known analytics key.
+    key_name: Option<String>,
+    key_revoked: bool,
 }
+
+const KEY_JOIN: &str = "LEFT JOIN analytics_api_keys k ON g.selector = 'key:' || k.key_id::text";
 
 #[derive(Deserialize)]
 struct DeleteGrantQuery {
@@ -683,8 +708,9 @@ async fn delete_grant(
     Extension(state): Extension<AudienceGrantsState>,
     GrantGate(caller): GrantGate,
     client_ip: ClientIp,
-    Query(query): Query<DeleteGrantQuery>,
+    Query(mut query): Query<DeleteGrantQuery>,
 ) -> Result<StatusCode, AudienceGrantError> {
+    query.selector = canonicalize_key_selector(&query.selector);
     let audit = MutationAudit::from_context(action::DELETE_GRANT, &caller, &client_ip).grant(
         &query.audience,
         &query.axis,
@@ -827,11 +853,13 @@ async fn visible_grants(
 ) -> Result<Json<Vec<VisibleGrantRow>>, AudienceGrantError> {
     let pool = require_pool(&state)?;
     let rows = if caller.is_admin() {
-        sqlx::query_as::<_, VisibleGrantRow>(
-            "SELECT audience, axis, selector, created_at, created_by
-             FROM audience_grants
-             ORDER BY audience, axis, selector",
-        )
+        sqlx::query_as::<_, VisibleGrantRow>(&format!(
+            "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by,
+                    k.name AS key_name, (k.revoked_at IS NOT NULL) AS key_revoked
+             FROM audience_grants g
+             {KEY_JOIN}
+             ORDER BY g.audience, g.axis, g.selector"
+        ))
         .fetch_all(&pool)
         .await?
     } else if state
@@ -848,15 +876,17 @@ async fn visible_grants(
             .into_iter()
             .filter(|s| s != "*")
             .collect();
-        sqlx::query_as::<_, VisibleGrantRow>(
-            "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by
+        sqlx::query_as::<_, VisibleGrantRow>(&format!(
+            "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by,
+                    k.name AS key_name, (k.revoked_at IS NOT NULL) AS key_revoked
              FROM audience_grants g
+             {KEY_JOIN}
              WHERE EXISTS (
                SELECT 1 FROM audience_grants h
                WHERE h.audience = g.audience AND h.axis = g.axis AND h.selector = ANY($1)
              )
-             ORDER BY g.audience, g.axis, g.selector",
-        )
+             ORDER BY g.audience, g.axis, g.selector"
+        ))
         .bind(&identity_selectors)
         .fetch_all(&pool)
         .await?
@@ -867,12 +897,14 @@ async fn visible_grants(
             .into_iter()
             .filter(|s| s != "*")
             .collect();
-        sqlx::query_as::<_, VisibleGrantRow>(
-            "SELECT audience, axis, selector, created_at, created_by
-             FROM audience_grants
-             WHERE selector = ANY($1)
-             ORDER BY audience, axis, selector",
-        )
+        sqlx::query_as::<_, VisibleGrantRow>(&format!(
+            "SELECT g.audience, g.axis, g.selector, g.created_at, g.created_by,
+                    k.name AS key_name, (k.revoked_at IS NOT NULL) AS key_revoked
+             FROM audience_grants g
+             {KEY_JOIN}
+             WHERE g.selector = ANY($1)
+             ORDER BY g.audience, g.axis, g.selector"
+        ))
         .bind(&identity_selectors)
         .fetch_all(&pool)
         .await?

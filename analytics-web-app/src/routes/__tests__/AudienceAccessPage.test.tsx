@@ -32,6 +32,8 @@ interface RawGrant {
   selector: string
   created_at: string
   created_by: string
+  key_name?: string | null
+  key_revoked?: boolean
 }
 
 interface MockOptions {
@@ -67,6 +69,20 @@ function installFetchMock(options: MockOptions) {
     const url = String(input)
     const method = init?.method ?? 'GET'
 
+    if (url.includes('/analytics-api-keys')) {
+      return jsonResponse(200, [
+        {
+          key_id: '0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+          name: 'reporter',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+          last_used_at: null,
+          revoked_at: null,
+          revoked_by: null,
+          allowed_cidrs: [],
+        },
+      ])
+    }
     if (url.includes('/audience-grants/visible')) {
       return jsonResponse(200, grants)
     }
@@ -367,6 +383,83 @@ describe('AudienceAccessPage — admin', () => {
 
     await waitFor(() => expect(screen.getByText('team-alpha')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /Mint into this audience/i })).toBeInTheDocument()
+  })
+})
+
+describe('AudienceAccessPage — key selector', () => {
+  const heldRead = {
+    audience: 'team-alpha',
+    axis: 'read' as const,
+    selector: 'user:reader@example.com',
+    created_at: '2026-08-14T00:00:00Z',
+    created_by: 'reader@example.com',
+  }
+
+  it('admin: offers key on read as a select, and not on the mint axis', async () => {
+    installFetchMock({ grants: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No audience grants yet/)).toBeInTheDocument())
+    fireEvent.click(screen.getAllByRole('button', { name: /Add grant/i })[0])
+    const heading = await screen.findByRole('heading', { name: 'Add audience grant' })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'key' }))
+    await within(dialogRoot).findByText('reporter (0b9f5d0e)')
+    expect(within(dialogRoot).getByRole('combobox')).toBeInTheDocument()
+
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'mint' }))
+    expect(within(dialogRoot).queryByRole('button', { name: 'key' })).not.toBeInTheDocument()
+    // The selected key kind was reset away from `key`.
+    expect(within(dialogRoot).queryByRole('combobox')).not.toBeInTheDocument()
+  })
+
+  it('non-admin: Share on the read axis offers key as a text input that lowercases the id', async () => {
+    authState.user = { sub: 'reader', email: 'reader@example.com', is_admin: false }
+    const fetchMock = installFetchMock({
+      grants: [heldRead],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:read'],
+      },
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Share read access/i }))
+    const heading = await screen.findByRole('heading', { name: /Share read access/i })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'key' }))
+    expect(within(dialogRoot).queryByRole('combobox')).not.toBeInTheDocument()
+    fireEvent.change(within(dialogRoot).getByPlaceholderText(/key id/i), {
+      target: { value: ' 0B9F5D0E-5C1A-4A52-9A6E-6F1D7B0C1A11 ' },
+    })
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'Share' }))
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        (c) => String(c[0]).endsWith('/audience-grants') && (c[1] as RequestInit)?.method === 'POST'
+      )
+      expect(JSON.parse((call![1] as RequestInit).body as string).selector).toBe(
+        'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11'
+      )
+    })
+  })
+
+  it('renders a key chip as its name with a revoked tag', async () => {
+    installFetchMock({
+      grants: [
+        {
+          ...heldRead,
+          selector: 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+          key_name: 'reporter',
+          key_revoked: true,
+        },
+      ],
+    })
+    renderPage()
+    const name = await screen.findByText('reporter')
+    expect(name).toHaveAttribute('title', 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11')
+    expect(screen.getByText('revoked')).toBeInTheDocument()
   })
 })
 

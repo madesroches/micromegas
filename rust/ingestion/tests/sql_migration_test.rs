@@ -216,9 +216,10 @@ async fn v6_backfills_existing_rows_and_rejects_invalid_audiences() {
 }
 
 /// The v6 -> v7 step: `execute_migration` against a v6 database creates
-/// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)` and its two `CHECK`
-/// constraints, both mirroring `AudienceGrants::from_rows`'s Rust-side validation
-/// (`rust/auth/src/policy.rs`) on the SQL side.
+/// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)` and its audience-name
+/// `CHECK`, mirroring `AudienceGrants::from_rows`'s Rust-side validation
+/// (`rust/auth/src/policy.rs`). Selector shape is validated in code only, so the table accepts
+/// any selector string once fully migrated.
 const SCHEMA_V7: &str = "mm_1489_sql_migration_test_schema";
 
 #[ignore]
@@ -311,16 +312,14 @@ async fn v7_creates_audience_grants_table_with_constraints() {
             return Err("expected the audience-name CHECK to reject 'group:everyone'".to_string());
         }
 
-        // The selector-shape CHECK mirrors `valid_selector`.
-        let bad_selector = sqlx::query(
+        // No selector-shape CHECK remains after v13.
+        sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
              VALUES ('team-alpha', 'read', 'not-a-selector', now(), 'test')",
         )
         .execute(&pool)
-        .await;
-        if bad_selector.is_ok() {
-            return Err("expected the selector-shape CHECK to reject 'not-a-selector'".to_string());
-        }
+        .await
+        .map_err(|e| format!("expected no selector-shape CHECK at v13: {e}"))?;
 
         Ok(())
     }

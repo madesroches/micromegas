@@ -7,6 +7,8 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
+import { LiveKeySelect } from '@/components/LiveKeySelect'
+import { normalizeKeyId } from '@/lib/audience-grants-api'
 import {
   GROUP_NAME_PATTERN,
   GroupsError,
@@ -137,7 +139,7 @@ function NewGroupDialog({ open, onClose, onCreated }: NewGroupDialogProps) {
 // Add member dialog -- kind toggle mirrors AudienceAccessPage's GrantDialog.
 // ---------------------------------------------------------------------------
 
-type MemberKind = 'everyone' | 'user' | 'group'
+type MemberKind = 'everyone' | 'user' | 'group' | 'key'
 
 interface AddMemberDialogProps {
   open: boolean
@@ -166,7 +168,10 @@ function AddMemberDialog({ open, groupName, otherGroups, onClose, onAdded }: Add
 
   if (!open) return null
 
-  const member = kind === 'everyone' ? '*' : `${kind}:${idInput}`
+  const member =
+    kind === 'everyone' ? '*' : kind === 'key' ? `key:${normalizeKeyId(idInput)}` : `${kind}:${idInput}`
+  const kinds: MemberKind[] =
+    groupName === 'admins' ? ['everyone', 'user', 'group'] : ['everyone', 'user', 'group', 'key']
   const canSubmit = !isSubmitting && (kind === 'everyone' || idInput.length > 0)
 
   const handleSubmit = async () => {
@@ -216,7 +221,7 @@ function AddMemberDialog({ open, groupName, otherGroups, onClose, onAdded }: Add
               Kind
             </label>
             <div className="inline-flex rounded-md border border-theme-border overflow-hidden">
-              {(['everyone', 'user', 'group'] as MemberKind[]).map((k) => (
+              {kinds.map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -269,6 +274,17 @@ function AddMemberDialog({ open, groupName, otherGroups, onClose, onAdded }: Add
               </select>
               <p className="mt-1 text-xs text-theme-text-muted">
                 Every member of the selected group becomes a member of `{groupName}`.
+              </p>
+            </div>
+          )}
+          {kind === 'key' && (
+            <div>
+              <label className="block text-sm font-medium text-theme-text-secondary mb-1">
+                Analytics API key
+              </label>
+              <LiveKeySelect value={idInput} onChange={setIdInput} />
+              <p className="mt-1 text-xs text-theme-text-muted">
+                The key gains the group's grants. API keys never become admin.
               </p>
             </div>
           )}
@@ -631,9 +647,21 @@ function GroupsPageContent() {
                                   >
                                     {m.member}
                                   </button>
+                                ) : m.key_name !== null ? (
+                                  <span
+                                    className="font-mono text-theme-text-primary"
+                                    title={m.member}
+                                  >
+                                    {m.key_name}
+                                  </span>
                                 ) : (
                                   <span className="font-mono text-theme-text-primary">
                                     {m.member}
+                                  </span>
+                                )}
+                                {m.key_revoked && (
+                                  <span className="px-1 rounded-sm bg-red-500/20 text-red-400">
+                                    revoked
                                   </span>
                                 )}
                                 {isStar && (

@@ -152,6 +152,7 @@ impl AuthProvider for ApiKeyAuthProvider {
                         // Env-configured keys carry no Stage 4/4b grant.
                         bound_audience: None,
                         read_audiences: vec![],
+                        analytics_key_id: None,
                         // API keys carry no email for a `user:` member to match, so only a
                         // `MembershipProvider` wrapping this provider over a wildcard-admin group
                         // could ever make one admin -- see the migration v10 module doc comment.

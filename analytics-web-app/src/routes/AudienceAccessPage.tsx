@@ -8,6 +8,7 @@ import { AppLink } from '@/components/AppLink'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
+import { LiveKeySelect } from '@/components/LiveKeySelect'
 import { MintIngestionKeyDialog } from '@/components/MintIngestionKeyDialog'
 import { useAuth } from '@/lib/auth'
 import {
@@ -16,6 +17,7 @@ import {
   createAudienceGrant,
   deleteAudienceGrant,
   fetchVisibleGrants,
+  normalizeKeyId,
   validateSelector,
   type AudienceGrant,
   type GrantAxis,
@@ -114,7 +116,7 @@ function formatDate(date: Date | null): string {
 // GrantDialog -- "Add grant" (admin, from the header) and "Share" (anyone, from a card row).
 // ---------------------------------------------------------------------------
 
-type SelectorKind = 'everyone' | 'user' | 'group'
+type SelectorKind = 'everyone' | 'user' | 'group' | 'key'
 
 interface GrantDialogProps {
   /** `null` closes the dialog. `'add'` is the admin header action (audience/axis editable);
@@ -125,6 +127,8 @@ interface GrantDialogProps {
   isSubmitting: boolean
   error: string | null
   alreadyExistedNote: string | null
+  /** Admins pick a key from a list; non-admins cannot list keys and type the id instead. */
+  isAdmin: boolean
 }
 
 function GrantDialog({
@@ -134,6 +138,7 @@ function GrantDialog({
   isSubmitting,
   error,
   alreadyExistedNote,
+  isAdmin,
 }: GrantDialogProps) {
   const isAdd = target === 'add'
   const fixedAudience = isAdd || target === null ? null : target.audience
@@ -161,7 +166,16 @@ function GrantDialog({
 
   const audience = fixedAudience ?? audienceInput
   const axis = fixedAxis ?? axisInput
-  const selector = selectorKind === 'everyone' ? '*' : `${selectorKind}:${idInput}`
+  const selector =
+    selectorKind === 'everyone'
+      ? '*'
+      : selectorKind === 'key'
+        ? `key:${normalizeKeyId(idInput)}`
+        : `${selectorKind}:${idInput}`
+  const kinds: SelectorKind[] = (
+    isAdd ? ['everyone', 'user', 'group'] : ['user', 'group']
+  ) as SelectorKind[]
+  if (axis === 'read') kinds.push('key')
 
   const audienceValid = isAdd ? AUDIENCE_PATTERN.test(audienceInput) : true
   const selectorError = validateSelector(selector)
@@ -230,7 +244,13 @@ function GrantDialog({
                   <button
                     key={a}
                     type="button"
-                    onClick={() => setAxisInput(a)}
+                    onClick={() => {
+                      setAxisInput(a)
+                      if (a === 'mint' && selectorKind === 'key') {
+                        setSelectorKind('user')
+                        setIdInput('')
+                      }
+                    }}
                     className={`px-3 py-1.5 text-sm capitalize ${
                       axisInput === a
                         ? 'bg-accent-link text-white'
@@ -258,15 +278,14 @@ function GrantDialog({
               Selector
             </label>
             <div className="inline-flex rounded-md border border-theme-border overflow-hidden mb-2">
-              {(
-                isAdd
-                  ? (['everyone', 'user', 'group'] as SelectorKind[])
-                  : (['user', 'group'] as SelectorKind[])
-              ).map((kind) => (
+              {kinds.map((kind) => (
                 <button
                   key={kind}
                   type="button"
-                  onClick={() => setSelectorKind(kind)}
+                  onClick={() => {
+                    setSelectorKind(kind)
+                    setIdInput('')
+                  }}
                   className={`px-3 py-1.5 text-sm capitalize ${
                     selectorKind === kind
                       ? 'bg-accent-link text-white'
@@ -277,11 +296,20 @@ function GrantDialog({
                 </button>
               ))}
             </div>
-            {selectorKind !== 'everyone' && (
+            {selectorKind === 'key' && isAdmin && (
+              <LiveKeySelect value={idInput} onChange={setIdInput} />
+            )}
+            {selectorKind !== 'everyone' && !(selectorKind === 'key' && isAdmin) && (
               <input
                 type="text"
                 className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm font-mono text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
-                placeholder={selectorKind === 'user' ? 'alice@example.com' : 'eng'}
+                placeholder={
+                  selectorKind === 'user'
+                    ? 'alice@example.com'
+                    : selectorKind === 'key'
+                      ? 'key id from the key operator'
+                      : 'eng'
+                }
                 value={idInput}
                 onChange={(e) => setIdInput(e.target.value)}
               />
@@ -664,6 +692,7 @@ function AudienceAccessPageContent() {
             isSubmitting={isSharing}
             error={shareError}
             alreadyExistedNote={alreadyExistedNote}
+            isAdmin={isAdmin}
           />
 
           <ConfirmDialog
@@ -768,8 +797,9 @@ function AudienceAccessPageContent() {
                               </>
                             ) : (
                               <>
-                                No read grants — this audience is unreadable except through a
-                                per-key <code>read_audiences</code> list, not shown here.
+                                No read grants — this audience is unreadable until it is
+                                granted to a user, a group, or an analytics API key
+                                (<code>key:</code>, directly or through group membership).
                               </>
                             )}
                           </div>
@@ -817,9 +847,17 @@ function AudienceAccessPageContent() {
                                   }`}
                                 >
                                   <div className="flex items-center gap-1.5">
-                                    <span className="font-mono text-theme-text-primary">
-                                      {row.selector}
+                                    <span
+                                      className="font-mono text-theme-text-primary"
+                                      title={row.selector}
+                                    >
+                                      {row.keyName ?? row.selector}
                                     </span>
+                                    {row.keyRevoked && (
+                                      <span className="px-1 rounded-sm bg-red-500/20 text-red-400">
+                                        revoked
+                                      </span>
+                                    )}
                                     {isStar && (
                                       <span className="text-red-400">
                                         any authenticated principal

@@ -78,13 +78,18 @@ def cmd_members(args):
         print("No members.")
         return
     for m in members:
+        key_tag = ""
+        if m.get("key_name"):
+            revoked = " revoked" if m.get("key_revoked") else ""
+            key_tag = f" [key_name={m['key_name']}{revoked}]"
         print(
-            f"{m['member']} (created_by={m['created_by']}, created_at={m['created_at']})"
+            f"{m['member']}{key_tag} "
+            f"(created_by={m['created_by']}, created_at={m['created_at']})"
         )
 
 
 def cmd_add(args):
-    """Add a member ('*', 'user:<id>', or 'group:<id>') to a group."""
+    """Add a member ('*', 'user:<id>', 'group:<id>', or 'key:<key_id>') to a group."""
     client = make_client(args)
     result = client.add_group_member(args.name, args.member)
     print(f"{result['group_name']} += {result['member']}")
@@ -132,12 +137,18 @@ def main():
 
     p_add = subparsers.add_parser("add", help="Add a member to a group")
     p_add.add_argument("name", help="Group name")
-    p_add.add_argument("member", help="'*', 'user:<id>', or 'group:<id>'")
+    p_add.add_argument(
+        "member",
+        help="'*', 'user:<id>', 'group:<id>', or 'key:<key_id>' (never in admins)",
+    )
     p_add.set_defaults(func=cmd_add)
 
     p_remove = subparsers.add_parser("remove", help="Remove a member from a group")
     p_remove.add_argument("name", help="Group name")
-    p_remove.add_argument("member", help="'*', 'user:<id>', or 'group:<id>'")
+    p_remove.add_argument(
+        "member",
+        help="'*', 'user:<id>', 'group:<id>', or 'key:<key_id>' (never in admins)",
+    )
     p_remove.set_defaults(func=cmd_remove)
 
     args = parser.parse_args()

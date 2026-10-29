@@ -42,5 +42,15 @@ export const AnalyticsApiKeyError = api.ErrorClass
 
 export const listAnalyticsApiKeys = api.list
 export const mintAnalyticsApiKey = api.mint
+/** Every live (non-revoked) analytics key, paged until a short page comes back. */
+export async function listAllLiveAnalyticsApiKeys(): Promise<AnalyticsApiKeyListEntry[]> {
+  const all: AnalyticsApiKeyListEntry[] = []
+  for (let offset = 0; ; offset += MAX_ANALYTICS_API_KEYS_LIST_LIMIT) {
+    const page = await api.list(false, offset, MAX_ANALYTICS_API_KEYS_LIST_LIMIT)
+    all.push(...page)
+    if (page.length < MAX_ANALYTICS_API_KEYS_LIST_LIMIT) return all
+  }
+}
+
 export const revokeAnalyticsApiKey = api.revoke
 export const setAnalyticsApiKeyAllowlist = api.setAllowlist

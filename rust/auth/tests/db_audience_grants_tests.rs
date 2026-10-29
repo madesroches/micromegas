@@ -36,6 +36,7 @@ fn caller(email: Option<&str>, groups: Vec<String>) -> AuthContext {
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: groups.into(),
     }
 }

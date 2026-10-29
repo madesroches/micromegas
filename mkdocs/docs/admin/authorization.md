@@ -73,6 +73,7 @@ implies the other.
 | `*` | any authenticated principal |
 | `user:<email>` | the caller's `email` claim |
 | `group:<g>` | members of local group `g`, transitively (see [Groups](groups.md)) |
+| `key:<key_id>` | the analytics API key with that `key_id` (canonical lowercase hyphenated UUID). `read` axis only |
 
 - **No self-audience rule.** A caller is never granted an audience for being
   named like one — an API key named `team-alpha` does not read `team-alpha`. A
@@ -92,7 +93,11 @@ with `('public', 'read', '*')` inserted, which is the whole of why it is
 universally readable; delete the row and it stops being.
 
 A caller with no identity of its own — an API key, or an OIDC token with no
-`email` claim — matches that `*` selector like any other principal.
+`email` claim — matches that `*` selector like any other principal. An
+analytics API key additionally matches its own `key:<key_id>` grants and the
+`group:` grants of every group it is a member of (see
+[Groups](groups.md#analytics-api-keys-as-members)). Keys never mint and never
+become admin through membership.
 `MICROMEGAS_DEFAULT_AUDIENCE`'s default of `public` is the write-side half: it
 is what puts such a caller's data under that same label.
 
@@ -314,9 +319,7 @@ CREATE TABLE audience_grants (
   created_at TIMESTAMPTZ NOT NULL,
   created_by VARCHAR(255) NOT NULL,
   PRIMARY KEY (audience, axis, selector),
-  CONSTRAINT audience_grants_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$'),
-  CONSTRAINT audience_grants_selector_shape
-      CHECK (selector = '*' OR selector ~ '^(user|group):.+$')
+  CONSTRAINT audience_grants_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$')
 );
 ```
 
@@ -325,8 +328,10 @@ whole-table snapshot; it is the sole source `AudienceReadPolicy`/
 `AudienceMintPolicy` resolve the `read`/`mint` axes from at request time.
 `analytics-web-srv` is the write surface only; it caches nothing.
 
-The table's `CHECK` constraints are re-validated in Rust on every load, so a row
-that bypassed them fails the whole snapshot load loudly.
+Selector shape has no database constraint: it is validated in code only, by the
+routes on write and again on every snapshot load, so a malformed row written
+directly fails the whole snapshot load loudly. The audience-name `CHECK` is
+re-validated in Rust the same way.
 
 ### Routes
 
@@ -356,11 +361,14 @@ is grant *administration*: creating/deleting a row in the store, not exercising 
 grants. A non-admin is admitted only with
 the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`) on, then constrained per call:
 
-- **Create**: `selector` must be `user:`/`group:`, never `*` — a caller who can
+- **Create**: `selector` must be `user:`/`group:`/`key:`, never `*` — a caller who can
   read an audience must not be able to open it to every principal. The caller
   must **hold** `(audience, axis)` via an identity selector. Delegation is per
   axis: a `read` grant shares `read`, a `mint` grant shares `mint`, neither
   confers the other. A `group:X` naming a nonexistent group is refused with 404.
+  Sharing with an analytics key (`key:<key_id>`, `read` axis only; 400 on
+  `mint`) follows the same hold rule, and a key id that names no live
+  analytics key is refused with 404.
 - **Delete**: the row must be the caller's own `user:<email>` row ("remove my
   access", never offered for `group:`/`*`), or one they created — except their
   own `mint`/`user:<email>` row, which is the claim marker

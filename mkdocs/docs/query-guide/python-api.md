@@ -968,7 +968,7 @@ micromegas-grants --url https://analytics.example.com delete team-alpha read gro
 `--url` always points at `analytics-web-srv`'s base URL. Two subcommands:
 
 - `create <audience> <axis> <selector>` — creates (or reports the pre-existing) grant row.
-  `<axis>` is `read` or `mint`; `<selector>` is `*`, `user:<id>`, or `group:<id>`.
+  `<axis>` is `read` or `mint`; `<selector>` is `*`, `user:<id>`, `group:<id>`, or `key:<key_id>` (read axis only).
 - `delete <audience> <axis> <selector>` — deletes one grant row, keyed by its natural triple.
 
 **There is no `list` subcommand.** Listing goes through the caller-scoped
@@ -1007,7 +1007,7 @@ micromegas-groups --url https://analytics.example.com delete eng
 - `delete <name>` — deletes a group (fails, 409, on `admins` or while still referenced by a
   nested membership or an audience grant).
 - `members <name>` — a group's direct members.
-- `add <name> <member>` — adds `*`, `user:<id>`, or `group:<id>` to a group.
+- `add <name> <member>` — adds `*`, `user:<id>`, `group:<id>`, or `key:<key_id>` (an analytics API key; never into `admins`) to a group.
 - `remove <name> <member>` — removes a member from a group.
 
 There is no `bootstrap` convenience command. Taking over admin access from a wildcard-seeded

@@ -363,6 +363,7 @@ impl AuthProvider for GroupsAuthProvider {
             allow_delegation: false,
             bound_audience: None,
             read_audiences: vec![],
+            analytics_key_id: None,
             memberships: self.memberships.clone().into(),
         })
     }

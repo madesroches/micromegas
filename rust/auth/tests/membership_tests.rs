@@ -21,6 +21,7 @@ fn ctx(email: Option<&str>) -> AuthContext {
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: Arc::from([]),
     }
 }
@@ -123,4 +124,42 @@ async fn store_provider_unavailable_propagates_as_provider_unavailable() {
         err.downcast_ref::<ProviderUnavailable>().is_some(),
         "expected ProviderUnavailable, got: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn wrapper_passes_the_key_id_and_never_makes_a_key_admin() {
+    let key_id = uuid::Uuid::parse_str("0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11").expect("uuid");
+    let graph = GroupGraph::from_rows(
+        vec![
+            ADMINS_GROUP.to_string(),
+            "g".to_string(),
+            "everyone".to_string(),
+        ],
+        vec![
+            ("g".to_string(), format!("key:{key_id}")),
+            (ADMINS_GROUP.to_string(), "group:g".to_string()),
+            ("everyone".to_string(), "*".to_string()),
+        ],
+    )
+    .expect("valid rows");
+    let run = |key: Option<uuid::Uuid>| {
+        let graph = graph.clone();
+        async move {
+            let mut c = ctx(None);
+            c.analytics_key_id = key;
+            let inner = Arc::new(FakeInner {
+                result: std::sync::Mutex::new(Some(Ok(c))),
+            });
+            let groups: Arc<dyn GroupSnapshot> = Arc::new(FakeGroupSnapshot::Ok(graph));
+            MembershipProvider::new(inner, groups)
+                .validate_request(&parts() as &dyn RequestParts)
+                .await
+                .expect("validate_request")
+        }
+    };
+    let with_key = run(Some(key_id)).await;
+    assert_eq!(with_key.memberships.as_ref(), &["everyone", "g"]);
+    assert!(!with_key.is_admin());
+    let without = run(None).await;
+    assert_eq!(without.memberships.as_ref(), &["everyone"]);
 }

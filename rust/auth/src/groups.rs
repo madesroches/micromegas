@@ -4,16 +4,17 @@
 //! in-memory closure resolver over a loaded snapshot.
 //!
 //! A `group_members.member` row is a selector in exactly the vocabulary
-//! `audience_grants.selector` uses (`*`, `user:<email>`, `group:<name>`), so nesting is the
+//! `audience_grants.selector` uses (`*`, `user:<email>`, `group:<name>`, `key:<key_id>`), so nesting is the
 //! `group:` arm of the same predicate rather than a special case -- see [`crate::groups::GroupGraph::closure`].
 
 use crate::db_api_key::resolve_u64;
 use crate::db_snapshot::{SnapshotLoader, SnapshotSource};
-use crate::policy::valid_selector;
+use crate::policy::{key_selector, valid_selector};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use uuid::Uuid;
 
 /// The reserved group whose membership is admin-ness -- `AuthContext::is_admin` is exactly
 /// "does this caller's closure contain this name".
@@ -37,17 +38,17 @@ pub fn is_valid_group_name(name: &str) -> bool {
 pub struct GroupGraph {
     /// Every group name, whether or not it has any members.
     groups: BTreeSet<String>,
-    /// member selector (`*`, `user:<email>`, or `group:<name>`) -> the groups it is a *direct*
+    /// member selector (`*`, `user:<email>`, `group:<name>`, or `key:<key_id>`) -> the groups it is a *direct*
     /// member of.
     members_of: BTreeMap<String, Vec<String>>,
 }
 
 impl GroupGraph {
     /// Builds a graph from `(name)` rows out of `groups` and `(group_name, member)` rows out of
-    /// `group_members`. Re-runs the name charset and [`valid_selector`] checks the way
-    /// `AudienceGrants::from_rows` does, so a row that slipped past the tables' own `CHECK`
-    /// constraints (e.g. via a direct `psql` session) fails the snapshot load rather than
-    /// reaching a decision.
+    /// `group_members`. Runs the name charset and [`valid_selector`] checks the way
+    /// `AudienceGrants::from_rows` does -- the tables carry no selector-shape CHECK, so this is
+    /// where a malformed row (e.g. from a direct `psql` session) fails the snapshot load
+    /// rather than reaching a decision.
     pub fn from_rows(
         groups: impl IntoIterator<Item = String>,
         members: impl IntoIterator<Item = (String, String)>,
@@ -73,7 +74,7 @@ impl GroupGraph {
             if !valid_selector(&member) {
                 return Err(anyhow!(
                     "invalid group_members row: selector {member:?} for group {group_name:?} \
-                     must be '*', 'user:<id>', or 'group:<id>'"
+                     must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
                 ));
             }
             members_of.entry(member).or_default().push(group_name);
@@ -96,13 +97,21 @@ impl GroupGraph {
 
     /// Breadth-first walk upward, starting from `initial` and repeatedly following
     /// `members_of["group:g"]` for each newly reached group `g`. The visited set is what
-    /// tolerates a cycle at read time.
-    fn walk_upward(&self, initial: BTreeSet<String>) -> BTreeSet<String> {
+    /// tolerates a cycle at read time. A `barrier` group is never inserted nor traversed, so
+    /// nothing reachable only through it is either.
+    fn walk_upward(&self, initial: BTreeSet<String>, barrier: Option<&str>) -> BTreeSet<String> {
+        let mut initial = initial;
+        if let Some(b) = barrier {
+            initial.remove(b);
+        }
         let mut visited = initial.clone();
         let mut queue: VecDeque<String> = initial.into_iter().collect();
         while let Some(g) = queue.pop_front() {
             if let Some(next) = self.members_of.get(&format!("group:{g}")) {
                 for ng in next {
+                    if barrier == Some(ng.as_str()) {
+                        continue;
+                    }
                     if visited.insert(ng.clone()) {
                         queue.push_back(ng.clone());
                     }
@@ -114,9 +123,12 @@ impl GroupGraph {
 
     /// The caller's resolved, transitive group membership: a breadth-first walk **upward** from
     /// the caller, seeded at the groups listed under the selectors `*` and `user:<email>` (when
-    /// `email` is `Some`). Returned sorted, deduplicated. Sync and infallible: the graph is an
-    /// already-loaded snapshot.
-    pub fn closure(&self, email: Option<&str>) -> Vec<String> {
+    /// `email` is `Some`), unioned with the walk from `key:<key_id>` (when `key_id` is `Some`).
+    /// The key walk never reaches [`ADMINS_GROUP`] -- a key is never made admin by membership,
+    /// whether listed directly, nested, or via a group above `admins`. The `*` walk is not
+    /// barred, so a bootstrap `('admins', '*')` row still makes every caller admin. Returned
+    /// sorted, deduplicated. Sync and infallible: the graph is an already-loaded snapshot.
+    pub fn closure(&self, email: Option<&str>, key_id: Option<Uuid>) -> Vec<String> {
         let mut initial = BTreeSet::new();
         if let Some(gs) = self.members_of.get("*") {
             initial.extend(gs.iter().cloned());
@@ -126,14 +138,20 @@ impl GroupGraph {
         {
             initial.extend(gs.iter().cloned());
         }
-        self.walk_upward(initial).into_iter().collect()
+        let mut result = self.walk_upward(initial, None);
+        if let Some(key_id) = key_id
+            && let Some(gs) = self.members_of.get(&key_selector(key_id))
+        {
+            result.extend(self.walk_upward(gs.iter().cloned().collect(), Some(ADMINS_GROUP)));
+        }
+        result.into_iter().collect()
     }
 
     /// `true` when the wildcard selector `*` reaches [`ADMINS_GROUP`] -- directly (`('admins',
     /// '*')`) or through nesting. Reuses the same upward walk as [`Self::closure`], seeded at `*`
     /// alone (no caller email).
     pub fn has_wildcard_admin(&self) -> bool {
-        self.closure(None).iter().any(|g| g == ADMINS_GROUP)
+        self.closure(None, None).iter().any(|g| g == ADMINS_GROUP)
     }
 
     /// `true` when `target` is reachable from *some* principal -- the wildcard `*` selector or
@@ -149,7 +167,7 @@ impl GroupGraph {
                 initial.extend(groups.iter().cloned());
             }
         }
-        self.walk_upward(initial).iter().any(|g| g == target)
+        self.walk_upward(initial, None).iter().any(|g| g == target)
     }
 
     /// Whether adding `group:nested` as a member of `group` would create a cycle: `nested ==
@@ -159,7 +177,7 @@ impl GroupGraph {
         if nested == group {
             return true;
         }
-        self.walk_upward(BTreeSet::from([group.to_string()]))
+        self.walk_upward(BTreeSet::from([group.to_string()]), None)
             .contains(nested)
     }
 }

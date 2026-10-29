@@ -68,6 +68,11 @@ pub struct AuthContext {
     /// into `AudienceReadPolicy::resolve`'s union but never into `AudienceMintPolicy`'s mintable
     /// set (a read grant confers no mint authority).
     pub read_audiences: Vec<String>,
+    /// The `analytics_api_keys.key_id` this request authenticated with. `Some` only for an
+    /// analytics API key; `None` for ingestion keys, OIDC, static keys, and the disabled-auth and
+    /// maintenance contexts. `subject` carries the key's name, which is neither unique nor
+    /// stable, so `key:<id>` selectors and the mint guard rest on this instead.
+    pub analytics_key_id: Option<uuid::Uuid>,
     /// The caller's resolved, transitive local-group membership -- filled by
     /// [`crate::membership::MembershipProvider`] from a [`crate::groups::GroupGraph`] snapshot,
     /// **after** the inner provider authenticates the request. Empty until a

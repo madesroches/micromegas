@@ -21,8 +21,7 @@ CREATE TABLE group_members (
   member      VARCHAR(255) NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL,
   created_by  VARCHAR(255) NOT NULL,
-  PRIMARY KEY (group_name, member),
-  CONSTRAINT group_members_selector_shape CHECK (member = '*' OR member ~ '^(user|group):.+$')
+  PRIMARY KEY (group_name, member)
 );
 ```
 
@@ -35,6 +34,12 @@ a member of `group_name`*. `member` is a selector in exactly the vocabulary
 | `*` | any authenticated principal |
 | `user:<email>` | the caller's OIDC `email` claim |
 | `group:<name>` | every (transitive) member of the named group |
+| `key:<key_id>` | the analytics API key with that `key_id` (canonical lowercase hyphenated UUID); never a member of `admins` |
+
+Selector shape is validated in code only (the admin routes, and again when a
+snapshot loads), with no database `CHECK`, so a malformed row written by a
+direct `psql` session fails the snapshot load loudly rather than being
+silently inert.
 
 A `group:X` member is a selector string, not a foreign key: a group name
 that doesn't exist matches nobody and is inert, the same as a dangling
@@ -102,6 +107,35 @@ below), not a misconfiguration to hide. Whenever `admins` still holds `*`:
   `warn!` once at boot: *"every authenticated caller is an admin; add a
   `user:` member to `admins` and remove `*`"*.
 
+## Analytics API keys as members
+
+An analytics API key has no email, so a `user:` member can never name it. A
+`key:<key_id>` member puts the key into a group, and that group's `group:`
+audience grants then apply to the key. The key stays dedicated,
+CIDR-restricted, and revocable, and it never becomes an admin, whatever
+the membership:
+
+- the admin route refuses a `key:` member of `admins` (400);
+- the closure walk from a key never inserts or traverses `admins`, so a key
+  nested under `admins` through another group, or a row written directly
+  into `group_members`, still does not make the key admin. Humans in the
+  same groups are unaffected. The `*` path is unchanged, so the bootstrap
+  `('admins', '*')` row still makes every caller admin, keys included.
+
+An analytics key also gets the groups listed under `*`, as before. Keys never
+mint, regardless of group grants.
+
+```
+micromegas-groups --url URL create usage-reports
+micromegas-groups --url URL add usage-reports key:<key_id>
+micromegas-grants --url URL create secret read group:usage-reports
+```
+
+Removing the member (or revoking the key) takes effect within
+`MICROMEGAS_AUTH_CACHE_TTL_SECONDS`. Revoking a key does not delete its member
+rows: they stay as the record of what the key could read, inert, and are
+listed with `key_revoked: true` until removed.
+
 ## Routes
 
 All routes are admin-gated (`AdminUser`) and live on `analytics-web-srv`.
@@ -111,9 +145,9 @@ All routes are admin-gated (`AdminUser`) and live on `analytics-web-srv`.
 | `GET` | `{base_path}/api/groups` | `[{"name","description","member_count","created_at","created_by"}]` |
 | `POST` | `{base_path}/api/groups` | `{"name","description"?}` → 201; 400 on charset; 409 if it exists |
 | `DELETE` | `{base_path}/api/groups/{name}` | 204; 409 for `admins`; 409 while referenced by a `group_members.member = 'group:<name>'` or `audience_grants.selector = 'group:<name>'` row (the response names the referrers) |
-| `GET` | `{base_path}/api/groups/{name}/members` | `[{"group_name","member","created_at","created_by"}]` |
-| `POST` | `{base_path}/api/groups/{name}/members` | `{"member"}` → 201 (created) / 200 (already existed); 400 on a malformed selector or over the 255-byte bound; for `group:X`, 404 if `X` doesn't exist, 409 if it would create a cycle |
-| `DELETE` | `{base_path}/api/groups/{name}/members?member=` | 204; 404 unknown; 409 when no principal would still reach `admins` afterward, directly or via nesting |
+| `GET` | `{base_path}/api/groups/{name}/members` | `[{"group_name","member","created_at","created_by","key_name","key_revoked"}]`; `key_name` is set when `member` is a `key:` selector naming a known key, and `key_revoked` says whether it was revoked |
+| `POST` | `{base_path}/api/groups/{name}/members` | `{"member"}` → 201 (created) / 200 (already existed); 400 on a malformed selector or over the 255-byte bound; for `group:X`, 404 if `X` doesn't exist, 409 if it would create a cycle; for `key:K`, 400 into `admins` (`API keys cannot be members of admins`), 404 unless `K` is a live (not revoked) analytics key. Any `Uuid` spelling after `key:` is accepted and stored in canonical form |
+| `DELETE` | `{base_path}/api/groups/{name}/members?member=` | 204; 404 unknown (a `key:` member is not checked against the key table, so rows left by a revoked key can be removed); 409 when no principal would still reach `admins` afterward, directly or via nesting |
 
 `member` is passed as a query parameter on `DELETE`, not a path segment — a
 `group:<id>` value isn't restricted enough in charset to be a safe raw path

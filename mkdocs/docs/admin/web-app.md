@@ -126,8 +126,10 @@ old bookmark, a link an admin pasted, or the natural place to look for "Ingestio
 `admins` group — see [Groups](groups.md) for the full model, the routes, and the CLI. The page
 shows every group with its member count; selecting one shows its members as chips (`*`
 highlighted, `group:` chips linking to the nested group) with a remove control and an **Add
-member** dialog whose kind toggle (everyone / user / group) mirrors the Audience Access page's
-own grant dialog.
+member** dialog whose kind toggle (everyone / user / group / key) mirrors the Audience Access
+page's own grant dialog. The `key` kind (hidden for `admins`) picks a live analytics API key from
+a list; a `key:` chip shows the key's name, with its id as a tooltip, and a "revoked" tag once the
+key is revoked.
 
 ## Settings
 
@@ -244,9 +246,11 @@ explanatory panel instead of the normal list, with no Add grant / Share / Mint /
 - **See** every grant on each `(audience, axis)` pair they hold a matching grant on — including
   other principals' rows on that same pair, which is what lets them answer "who else can see
   this."
-- **Share** a pair they hold, with a `user:<id>` or `group:<id>` selector only — never `*`, and
-  never a pair held only through a `*` row (the page never offers a control that would always
-  fail server-side).
+- **Share** a pair they hold, with a `user:<id>`, `group:<id>`, or (on the `read` axis)
+  `key:<key_id>` selector only — never `*`, and never a pair held only through a `*` row (the page
+  never offers a control that would always fail server-side). A non-admin can't list API keys, so
+  the `key` kind is a text field for the key id the key's operator gives them; admins get a list
+  of live keys. `key:` chips show the key's name and a "revoked" tag once it is revoked.
 - **Remove their own** direct `user:<their email>` row, or **revoke** any row they themselves
   created.
 - **Mint** an ingestion key into an existing mintable audience, or claim a brand-new one — the
