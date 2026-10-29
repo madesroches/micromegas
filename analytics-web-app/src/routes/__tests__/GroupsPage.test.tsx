@@ -75,7 +75,11 @@ function installFetchMock(opts: {
     if (membersMatch) {
       const name = decodeURIComponent(membersMatch[1])
       if (method === 'GET') {
-        return jsonResponse(200, opts.membersByGroup[name] ?? [])
+        // The server always sends both key fields, null/false for non-key members.
+        return jsonResponse(
+          200,
+          (opts.membersByGroup[name] ?? []).map((m) => ({ key_name: null, key_revoked: false, ...m }))
+        )
       }
       if (method === 'POST') {
         const body: unknown = init?.body ? JSON.parse(init.body as string) : {}
