@@ -369,9 +369,11 @@ class WebClient:
         member is added to `admins` (400), if a `group:<id>` member names a
         group that doesn't exist or a `key:<key_id>` member names no live
         analytics API key (404), or if adding it would create a cycle (409). Returns the created (or
-        pre-existing) `{"group_name", "member", "created_at", "created_by"}`
-        row -- the server answers `200` when the row already existed, `201`
-        for a fresh create; `WebClient` doesn't surface the status code
+        pre-existing) `{"group_name", "member", "created_at", "created_by",
+        "key_name", "key_revoked"}` row (`key_name` is set, and `key_revoked`
+        says whether the key was revoked, when `member` is a `key:<key_id>`
+        selector) -- the server answers `200` when the row already existed,
+        `201` for a fresh create; `WebClient` doesn't surface the status code
         itself, only the body.
         """
         resp = self.session.post(
