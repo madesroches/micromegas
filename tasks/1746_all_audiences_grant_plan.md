@@ -6,7 +6,7 @@ selector, `tasks/completed/1743_analytics_keys_in_groups_plan.md`).
 ## Overview
 
 Two parts. First, a UI bug: in the Add audience grant dialog, typing `*` as the audience leaves
-**Grant** disabled with no explanation. The audience field only shows a static hint, and the
+**Add grant** disabled with no explanation. The audience field only shows a static hint, and the
 computed `selectorError` is never rendered. Second, the feature the reporter was probably after:
 a grant whose audience is `*`, meaning every audience, including ones created after the grant.
 It is allowed on the `read` axis only, only admins can create it, and it cannot be combined with
@@ -52,10 +52,10 @@ load, so one bad row written by direct SQL no longer takes the grant store down 
     `global_rows_visible` (`:463`), and `authorize_view_instance`, all short-circuiting on `All`.
   - `list_partitions` (`list_partitions_table_function.rs:143`) and `make_session_context`
     (`query.rs:334`) compare against `All` only.
-- **Grant route.** `create_grant_inner` (`rust/analytics-web-srv/src/audience_grants.rs:394`)
+- **Grant route.** `create_grant_inner` (`rust/analytics-web-srv/src/audience_grants.rs:513`)
   runs `validate_audience`/`validate_axis`/`validate_selector`, then the `key:`-on-mint refusal,
   then the non-admin checks (selector `*` → 403, own mint claim marker, `caller_holds_pair`,
-  `max_grants_per_caller`). `delete_grant_inner` (`:605`) runs the same `validate_audience`.
+  `max_grants_per_caller`). `delete_grant_inner` (`:724`) runs only `validate_axis`.
   `caller_holds_pair` and the `/visible` and `list_audience_grants()` held-pair queries all
   compare `audience` literally.
 - **Web app.** `GrantDialog` (`analytics-web-app/src/routes/AudienceAccessPage.tsx:134`):
@@ -137,7 +137,7 @@ the membership test changes from "audience in list" to "has an audience". Per co
 |---|---|
 | `OwnershipRewrite::analyze` | Not short-circuited (`!= All`), so the rule is built and every branch runs as for `Audiences`. |
 | `resolved_predicate` | `resolved_audience IS NOT NULL`. A process with no `processes` row still has no match, as today. |
-| `audience_column_predicate` | `audience IS NOT NULL` on the (cast) column. |
+| `audience_column_predicate` | `audience IS NOT NULL` on the (cast) column. Simplified away by DataFusion on views whose `audience` is non-nullable. |
 | `is_readable` | `Audience(_)` → true, `Unknown` → false, `Ambiguous` → non-empty and every owner readable. |
 | `authorize` / `readable_ids` / `authorize_view_instance` | Unchanged code: they resolve ownership and call `is_readable`. |
 | `global_rows_visible` | Same arm as `Audiences` (public view set or lakehouse admin). |
@@ -173,7 +173,7 @@ these checks don't cover, and §7 handles that:
 
 | Column | Writers and their check | Readers and their check |
 |---|---|---|
-| `audience_grants.audience` | `create_grant` / `delete_grant`: `validate_audience` (`audience_grants.rs:243`), becoming `is_valid_grant_audience` plus the `*` rules in §4. Lazy claim in `try_claim_and_mint` (`ingestion_keys.rs:734`): the audience comes from `resolve_audience` (`:267`, `is_valid_audience`), called first in `mint_key` (`:428`); the same transaction also inserts into `ingestion_api_keys`, whose stamped-audience CHECK stays. v9 seed: literal `'public'`. | `AudienceGrants::from_rows` (snapshot loader and `authorize_mint`). |
+| `audience_grants.audience` | `create_grant`: `validate_audience` (`audience_grants.rs:243`; delete does not call it), becoming `is_valid_grant_audience` plus the `*` rules in §4. Lazy claim in `try_claim_and_mint` (`ingestion_keys.rs:734`): the audience comes from `resolve_audience` (`:267`, `is_valid_audience`), called first in `mint_key` (`:428`); the same transaction also inserts into `ingestion_api_keys`, whose stamped-audience CHECK stays. v9 seed: literal `'public'`. | `AudienceGrants::from_rows` (snapshot loader and `authorize_mint`). |
 | `audience_grants.axis` | `create_grant` / `delete_grant`: `validate_axis` (`:252`). Lazy claim: literal `"mint"` / `"read"`. v9 seed: literals. | Snapshot loader's axis `match` (`db_audience_grants.rs:63`). `authorize_mint` filters `axis = 'mint'` in SQL, so it never sees another axis. |
 | `groups.name` | `create_group`: `validate_group_name` (`groups.rs:297`). v10: literal `'admins'`, and the legacy backfill checks `is_valid_group_name` (`sql_migration.rs:398`). There is no rename route. | `GroupGraph::from_rows` (snapshot loader, and the route graph reads). |
 | `group_members.group_name` | Bounded by the FK to `groups(name)`, which stays. | `GroupGraph::from_rows`. |
@@ -182,13 +182,14 @@ Lengths stay enforced twice: the column types remain, and the Rust predicates ca
 at 255 bytes (`is_valid_audience`, `is_valid_group_name`, `MAX_SELECTOR_BYTES`).
 
 Display paths read rows raw and need no validation: `/visible`, `list_audience_grants()`,
-`/my-audiences` (`held_pairs` can now contain `*:read`; the UI handles it in §5), and the group
+`/my-audiences` (`held_pairs` can now contain `*:read`; only `canShareRow` reads it, see §5), and the group
 listings.
 
 ### 4. Route (`rust/analytics-web-srv/src/audience_grants.rs`)
 
-- `validate_audience` uses `is_valid_grant_audience`, and its message names both forms. This
-  covers create and delete, so a `*` row can be removed like any other.
+- `validate_audience` uses `is_valid_grant_audience`, and its message names both forms. It
+  gates create only; `delete_grant_inner` needs no change, so a `*` row can be removed like any
+  other.
 - `create_grant_inner`, after the existing `key:`-on-mint refusal, when
   `body.audience == ALL_AUDIENCES`:
   - `axis = mint` → **400** `"the '*' audience (all audiences) is allowed on the read axis only"`;
@@ -197,7 +198,7 @@ listings.
   - non-admin → **403** `"only admins may create grants on the '*' audience"`. This is the first
     check in the `!caller.is_admin()` branch, before `caller_holds_pair`, so the 403 does not
     depend on what the caller holds.
-- Delete is unchanged beyond validation. A non-admin may still remove their own `user:` row or a
+- Delete is unchanged. A non-admin may still remove their own `user:` row or a
   row they created (they can only have the latter if an admin made them `created_by`, which does
   not happen in practice).
 - The audit log records the triple as-is (`MutationAudit::grant`). No change.
@@ -229,8 +230,9 @@ selector is `*`.
 - `selectorError` is rendered below the selector preview when `idInput !== ''`, so the dialog
   does not open with an error showing.
 - When the audience is `*`, the `everyone` kind is removed from `kinds`, and switching to `*`
-  while `everyone` is selected resets the kind to `user`. This mirrors the existing
-  `key`-on-mint reset.
+  while `everyone` is selected resets the kind to `user`. The reset runs in the audience
+  input's `onChange` (add mode defaults the kind to `everyone`); the existing `key`-on-mint reset
+  lives in the axis `onClick`.
 
 Page:
 - The `*` card's header reads **All audiences** with the literal `*` in a `title` tooltip and a
@@ -285,7 +287,7 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   503 arm goes away, because a malformed mint selector no longer blocks valid ones on the same
   audience.
 - `groups.rs:580` (cycle check on add) and `:736` (`admins` lockout guard on remove) use `.value`,
-  and their 500 arms go away. Both stay sound on a graph with skipped edges. A skipped edge is
+  `warn!` on non-empty `skipped` as `authorize_mint` does, and their 500 arms go away. Both stay sound on a graph with skipped edges. A skipped edge is
   inert in resolution, so a cycle through it can't loop. The lockout guard only gets more
   conservative: it can refuse a removal that only a skipped row would have justified, but it can
   never allow one it shouldn't.
@@ -293,20 +295,29 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   document should fail fast on a typo.
 - The comments that call these arms "unreachable short of a direct SQL write" and the
   "fails the snapshot load" doc comments (`db_audience_grants.rs:50`, `groups.rs:46-51`,
-  `policy.rs` `from_rows`, `ingestion_keys.rs:382-385`) are rewritten to describe skipping.
+  `policy.rs` `from_rows`, `ingestion_keys.rs:382-385`, `policy.rs:327-328` "the one place both
+  paths fail closed on a malformed row", the `GroupsError::Internal` doc at
+  `analytics-web-srv/src/groups.rs:75-76`, and `sql_migration.rs:222` / `sql_migration_test.rs:220`
+  on the dropped CHECKs) are rewritten to describe skipping.
 
 ## Implementation Steps
 
 1. **Auth** (`rust/auth/src/policy.rs`): `ALL_AUDIENCES`, `is_valid_grant_audience`, the
    `all_audiences_read` field and its handling in `parse`, `from_rows`, and `merge`, the
-   `ReadableAudiences` enum, the `Every` branch in `AudienceReadPolicy::resolve`, and doc
+   `ReadableAudiences` enum (`new` is replaced by constructing `Listed(..)`; `into_inner` call
+   sites, ~20 in `policy_tests.rs`, 3 in `db_audience_grants_tests.rs`, and
+   `read_policy_threading_tests.rs:332`, `policy.rs:533`, move to matching), the `Every` branch in `AudienceReadPolicy::resolve`, and doc
    comments (module doc, `ReadPolicy` "can never return all" wording: `Every` is still not
-   `All`; the resolve formula block). Update `db_audience_grants.rs`'s fetch doc if it names the
+   `All`; the resolve formula block, the `ReadPolicy` "maximally permissive still has to enumerate the
+   audiences" passage at ~`:418-422`, and the `ReadableAudiences::new` citation at `:427`). Update `db_audience_grants.rs`'s fetch doc if it names the
    audience rule.
 2. **Analytics** (`rust/analytics/src/lakehouse/`): `ReadScope::EveryAudience` in
    `read_scope.rs`; `is_readable` and `global_rows_visible` in `audience_guard.rs`; the shared
-   membership-predicate helper in `ownership_rewrite.rs`. Fix the module docs that describe
-   `ReadScope` as two-valued.
+   membership-predicate helper in `ownership_rewrite.rs`. Fix the stale docs that describe
+   `ReadScope` as two-valued or `IN`-only: `read_scope.rs:5-6` and the enum doc (`:22-27`),
+   `audience_guard.rs:29-31`, the `ownership_rewrite.rs` branch table (`:56`) and the
+   `resolved_predicate`/`audience_column_predicate` docs (`:209-237`), and
+   `list_partitions_table_function.rs:182`, `:211`.
 3. **Bridge** (`rust/public/src/servers/flight_sql_service_impl.rs`): the `match` in
    `caller_context`. Fix test doubles in `rust/public/tests/read_policy_threading_tests.rs`
    reported by the compiler, and add the `Every` bridge test (Testing Strategy).
@@ -317,8 +328,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
    and the axis CHECK to reject `'write'` (~line 294). The audience insert now succeeds. `axis` is
    `VARCHAR(4)`, so `'write'` would still fail on length: switch that insert to a 4-character
    unknown axis (`'xyz'`), which now succeeds. Flip both assertions to "accepted at v14" and
-   update the doc comment. Check the v10 groups tests for a
-   `groups_name` rejection assertion too.
+   update the doc comment. The v7 test's "v13" wording (`sql_migration_test.rs:315`, `:322`)
+   becomes v14.
 4b. **Resilient parsing** (§7): `Parsed<T>` and `report_skipped` in
    `rust/auth/src/db_snapshot.rs`; the `from_rows` changes in `policy.rs` and `groups.rs`; the
    loaders in `db_audience_grants.rs` (including the axis-`match` helper) and `groups.rs`; the per-loader skipped-row `imetric!`; and the three route call sites in
@@ -337,7 +348,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 - `rust/public/src/servers/flight_sql_service_impl.rs`
 - `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/tests/sql_migration_test.rs`
 - `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`, `groups.rs`
-- Tests: `rust/auth/tests/policy_tests.rs`, `groups_tests.rs`, `db_audience_grants_tests.rs`, `rust/analytics/tests/audience_guard_tests.rs`,
+- Tests: `rust/auth/tests/policy_tests.rs`, `groups_tests.rs`, `db_audience_grants_tests.rs`,
+  `membership_tests.rs` (`.expect` on `from_rows` at `:73`, `:132`), `rust/analytics/tests/audience_guard_tests.rs`,
   `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs`,
   `rust/analytics-web-srv/tests/audience_grants_tests.rs`,
   `rust/public/tests/read_policy_threading_tests.rs` (compile fixes, plus the `Every` bridge test)
@@ -403,10 +415,13 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   admin only, never with the `*` selector. Add an example
   `micromegas-grants … create '*' read key:<key_id>`. In the grant store schema block (~322),
   delete the `audience_grants_audience_name` line and the inline axis `CHECK`, and say that the
-  audience, axis, and selector are validated in code only. In "Caching and outages" (~401), rewrite
-  the passage (~330-334) saying a malformed row written directly "fails the whole snapshot load
-  loudly" to say that a malformed row is skipped with a warning and the
-  `audience_grant_skipped_row_count` metric, and no longer fails the snapshot. In the query-time filtering section, add
+  audience, axis, and selector are validated in code only. In "The grant store" (~331-334), rewrite
+  the passage saying a malformed row written directly "fails the whole snapshot load
+  loudly", and the following sentence that the audience-name `CHECK` "is re-validated in Rust the
+  same way" (false after v14), to say that a malformed row is skipped with a warning and the
+  `audience_grant_skipped_row_count` metric, and no longer fails the snapshot. Reword `:11-12` and `:171`, which name
+  `ReadScope::Audiences` as the only authenticated/narrowing scope, to include `EveryAudience`.
+  In the query-time filtering section, add
   one sentence that a caller holding a `*` read grant is filtered to "any stamped audience"
   (global partition rows still need admin).
 - `mkdocs/docs/admin/authorization.md`, "Write gate" **Create** bullet (~362-370): add the `*`
@@ -414,7 +429,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   the `*` audience → 403 (checked before `caller_holds_pair`).
 - `mkdocs/docs/admin/groups.md`: delete the `groups_name` CHECK from the schema block, and rewrite
   the passage (~39-42) saying a bad row "fails the snapshot load loudly" to describe
-  skip-and-warn (`group_skipped_row_count`).
+  skip-and-warn (`group_skipped_row_count`). Reword the charset sentence (~:50) that says
+  `groups.name` shares `audience_grants`' charset: grant audiences additionally accept `*`.
 - `mkdocs/docs/admin/api-keys.md`, "Granting a key read access" (~244): add the `*` option for a
   key that must read everything, with the caveat that it covers audiences created later.
 - `mkdocs/docs/admin/web-app.md`, Audience Access (~212): the **All audiences** card, and the
@@ -423,7 +439,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   may be `*`. Also extend the `list_partitions` scope note (~71-78), which only covers a
   `ReadScope::Audiences` session, to callers holding a `*` read grant: `'global'` rows stay hidden
   unless the view set is public or the caller is admin.
-- `mkdocs/docs/query-guide/python-api.md`: the grants create/delete audience argument.
+- `mkdocs/docs/query-guide/python-api.md`: the `micromegas-grants` CLI section (~955-980), where
+  the create/delete examples take an audience argument; add the `*` form.
 - `CHANGELOG.md` (Unreleased): the dialog fix, the `*` audience feature, schema
   v14 (drops `audience_grants_audience_name`, the `audience_grants` axis CHECK, and
   `groups_name`), malformed grant and group rows being skipped with a warning and a metric
@@ -443,7 +460,8 @@ No-DB unit tests:
   - `from_rows` skipping: a batch with one valid row and one each of bad audience, `*` on mint,
     `key:` on mint, and bad selector returns the valid grant in `value` and four entries in
     `skipped`. The valid grant still resolves for its caller. The existing `from_rows` rejection
-    tests (`policy_tests.rs` ~:582, :593) are rewritten to assert on `skipped` instead of
+    tests (`policy_tests.rs` ~:582, :593, and `key_selector_is_read_axis_only_in_the_grant_map`
+    ~:896-902, which asserts `from_rows(...).is_ok()/.is_err()`) are rewritten to assert on `skipped` instead of
     `expect_err`/`unwrap_err`.
   - `AudienceReadPolicy::resolve` returns `Every` for a caller matching a `*`-audience read
     selector (`user:`, `group:` via memberships, `key:`), from the static map and from
@@ -472,7 +490,9 @@ No-DB unit tests:
   true), and `global_rows_visible` under `EveryAudience` false for a non-admin and a non-public
   view set.
 - `rust/analytics/tests/ownership_rewrite_public_view_set_tests.rs` (offline plan shape): under
-  `EveryAudience`, an audience-column view gets an `IS NOT NULL` filter (no `IN` list), a
+  `EveryAudience`, `streams` (nullable `audience`) gets an `IS NOT NULL` filter (no `IN` list;
+  on views with a non-nullable `audience` such as `blocks`, `log_entries`, `measures`, DataFusion's
+  simplifier correctly removes the filter, so don't assert it there), a
   semi-join view keeps its `process_id IN (subquery)` with `resolved_audience IS NOT NULL`, and a
   public view set still gets no predicate. These matter because a wrong branch here silently
   leaks or drops rows.
@@ -482,7 +502,7 @@ No-DB unit tests:
   and an invalid audience still → 400 with the new message.
 - Web app: `audience-grants-api.test.ts` covers `validateGrantAudience`'s cases.
   `AudienceAccessPage.test.tsx` covers: invalid audience text shows the inline error and keeps
-  Grant disabled; `*` on read with a key selector enables Grant; `*` hides the `everyone` kind;
+  Add grant disabled; `*` on read with a key selector enables Add grant; `*` hides the `everyone` kind;
   `*` on mint shows the mint error; a malformed `key:`/`user:` id shows `selectorError`; the `*`
   card renders as "All audiences" and has no Share button for a non-admin.
 - Migration: no new live-DB test (no bug in the wild). The existing `#[ignore]` migration tests
@@ -493,10 +513,11 @@ No-DB unit tests:
 These need the real Postgres schema, the grant snapshot, and the flight-sql stack. A failure
 would be obvious on the first run.
 
-1. Start the monolith with OIDC configured and ingestion auth on: set `MICROMEGAS_OIDC_CONFIG`
-   (as in `local_test_env/ai_scripts/start_services_with_oidc.py`), then run
-   `micromegas-monolith --roles all --ingestion-listen-addr 127.0.0.1:9000` directly from `rust/`
-   with no `--disable-auth` and no `--disable-ingestion-auth`, against a v13 database.
+1. Start the monolith with OIDC configured and ingestion auth on: export
+   `MICROMEGAS_OIDC_CONFIG` (as in `local_test_env/ai_scripts/start_services_with_oidc.py`, which
+   requires it already set), `MICROMEGAS_STATE_SECRET`, and `MICROMEGAS_AUTH_REDIRECT_URI`, then
+   run `micromegas-monolith --roles all --ingestion-listen-addr 127.0.0.1:9000 --frontend-dir
+   ../analytics-web-app/dist > /tmp/monolith.log 2>&1` directly from `rust/` with no `--disable-auth` and no `--disable-ingestion-auth`, against a v13 database.
    (`start_services.py --monolith` passes `--disable-auth`, under which every query runs as
    `ReadScope::All` and no grant behavior is visible; with OIDC it passes
    `--disable-ingestion-auth`, so ingestion keys would not stamp an audience.)
@@ -508,7 +529,7 @@ would be obvious on the first run.
 3. `micromegas-grants --url http://127.0.0.1:3000 create '*' read key:<K>` → created.
    `create '*' mint key:<K>` → 400. `create '*' read '*'` → 400. As a non-admin with
    self-service on, `create '*' read user:<me>` → 403.
-4. Run `micromegas-setup-telemetry --audience fresh-aud` to mint an ingestion key into a new
+4. Run `micromegas-setup-telemetry --url http://127.0.0.1:3000 --name <name> --audience fresh-aud` to mint an ingestion key into a new
    audience, and ingest a process with it. Within the auth cache TTL (default 60 s), K reads
    `fresh-aud` rows (`SELECT DISTINCT audience FROM processes`), with no further grant.
    `list_partitions()` with K still hides `'global'` rows.
