@@ -276,11 +276,9 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   query failures stay `Err`: they mean the DB or schema is broken, not that one row is bad.
 - Logging: each loader's `fetch` calls one shared helper,
   `db_snapshot::report_skipped(name, &skipped)`. It emits `warn!` per skipped row, naming the
-  store and the reason, plus a count metric. To get the metric's literal name in, it is a new
-  `SnapshotLoader` method next to `count_refresh_error`:
-  `count_skipped_rows(n)` → `audience_grant_skipped_row_count` / `group_skipped_row_count`.
-  `SettingsLoader` (`rust/public/src/settings.rs:328-352`) also implements `SnapshotLoader`, so it
-  gets an explicit `count_skipped_rows` that is never called (its parse stays fail-whole).
+  store and the reason. It only logs. Each `fetch` also emits its own literal-named metric next to
+  the call (`imetric!` needs a static name): `audience_grant_skipped_row_count` /
+  `group_skipped_row_count`.
   This repeats once per refresh (one TTL) for as long as the row exists. That is the intended
   signal: an operator has to fix or delete the row.
 - `authorize_mint` (`ingestion_keys.rs:378`): uses `.value`, and `warn!`s any skipped rows. Its
@@ -321,10 +319,9 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
    unknown axis (`'xyz'`), which now succeeds. Flip both assertions to "accepted at v14" and
    update the doc comment. Check the v10 groups tests for a
    `groups_name` rejection assertion too.
-4b. **Resilient parsing** (§7): `Parsed<T>`, `report_skipped`, and `count_skipped_rows` in
+4b. **Resilient parsing** (§7): `Parsed<T>` and `report_skipped` in
    `rust/auth/src/db_snapshot.rs`; the `from_rows` changes in `policy.rs` and `groups.rs`; the
-   loaders in `db_audience_grants.rs` (including the axis-`match` helper) and `groups.rs`; the
-   no-op `count_skipped_rows` in `SettingsLoader` (`rust/public/src/settings.rs`); and the three route call sites in
+   loaders in `db_audience_grants.rs` (including the axis-`match` helper) and `groups.rs`; the per-loader skipped-row `imetric!`; and the three route call sites in
    `rust/analytics-web-srv/src/ingestion_keys.rs` and `groups.rs`.
 5. **Route** (`rust/analytics-web-srv/src/audience_grants.rs`): `validate_audience`, the three
    `*`-audience checks, and the `create_grant` doc comment's list of non-admin checks.
@@ -337,7 +334,7 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 
 - `rust/auth/src/policy.rs`, `db_audience_grants.rs`, `groups.rs`, `db_snapshot.rs`
 - `rust/analytics/src/lakehouse/read_scope.rs`, `audience_guard.rs`, `ownership_rewrite.rs`
-- `rust/public/src/servers/flight_sql_service_impl.rs`, `rust/public/src/settings.rs`
+- `rust/public/src/servers/flight_sql_service_impl.rs`
 - `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/tests/sql_migration_test.rs`
 - `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`, `groups.rs`
 - Tests: `rust/auth/tests/policy_tests.rs`, `groups_tests.rs`, `db_audience_grants_tests.rs`, `rust/analytics/tests/audience_guard_tests.rs`,
@@ -412,6 +409,9 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   `audience_grant_skipped_row_count` metric, and no longer fails the snapshot. In the query-time filtering section, add
   one sentence that a caller holding a `*` read grant is filtered to "any stamped audience"
   (global partition rows still need admin).
+- `mkdocs/docs/admin/authorization.md`, "Write gate" **Create** bullet (~362-370): add the `*`
+  audience rules: `*` on the mint axis → 400, `(*, read, *)` → 400, and a non-admin creating on
+  the `*` audience → 403 (checked before `caller_holds_pair`).
 - `mkdocs/docs/admin/groups.md`: delete the `groups_name` CHECK from the schema block, and rewrite
   the passage (~39-42) saying a bad row "fails the snapshot load loudly" to describe
   skip-and-warn (`group_skipped_row_count`).
@@ -420,7 +420,9 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 - `mkdocs/docs/admin/web-app.md`, Audience Access (~212): the **All audiences** card, and the
   Add dialog accepting `*` on read.
 - `mkdocs/docs/admin/functions-reference.md` (`list_audience_grants()`): the `audience` column
-  may be `*`.
+  may be `*`. Also extend the `list_partitions` scope note (~71-78), which only covers a
+  `ReadScope::Audiences` session, to callers holding a `*` read grant: `'global'` rows stay hidden
+  unless the view set is public or the caller is admin.
 - `mkdocs/docs/query-guide/python-api.md`: the grants create/delete audience argument.
 - `CHANGELOG.md` (Unreleased): the dialog fix, the `*` audience feature, schema
   v14 (drops `audience_grants_audience_name`, the `audience_grants` axis CHECK, and
@@ -428,7 +430,7 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   instead of failing the snapshot, and a
   **Minor breaking change**: `ReadableAudiences` becomes an enum (`into_inner` removed),
   `ReadScope` gains `EveryAudience`, `AudienceGrants::from_rows` and `GroupGraph::from_rows`
-  return `Parsed<_>` instead of `Result`, and `SnapshotLoader` gains `count_skipped_rows`.
+  return `Parsed<_>` instead of `Result`.
 
 ## Testing Strategy
 
