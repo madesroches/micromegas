@@ -253,8 +253,8 @@ fn key_walk_never_reaches_admins() {
     assert_eq!(
         g.closure(Some("h@example.com"), None),
         vec![
-            ADMINS_GROUP.to_string(),
             "above".to_string(),
+            ADMINS_GROUP.to_string(),
             "g".to_string()
         ]
     );
