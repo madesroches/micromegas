@@ -270,13 +270,17 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   The checks themselves don't change; a failed check now means `continue` instead of `return
   Err`. In `GroupGraph::from_rows`, a skipped group name also makes its member rows fail the same
   name check, so no edge points at a group that isn't in the set.
-- `AudienceGrantsLoader::fetch`: an unrecognized axis becomes a skipped row too. `try_get` and
+- `AudienceGrantsLoader::fetch`: an unrecognized axis becomes a skipped row too. The inline axis
+  `match` (`db_audience_grants.rs:63-72`) is extracted into a pure helper that returns the skipped
+  reason, so it is testable without a DB. `try_get` and
   query failures stay `Err`: they mean the DB or schema is broken, not that one row is bad.
 - Logging: each loader's `fetch` calls one shared helper,
   `db_snapshot::report_skipped(name, &skipped)`. It emits `warn!` per skipped row, naming the
   store and the reason, plus a count metric. To get the metric's literal name in, it is a new
   `SnapshotLoader` method next to `count_refresh_error`:
   `count_skipped_rows(n)` → `audience_grant_skipped_row_count` / `group_skipped_row_count`.
+  `SettingsLoader` (`rust/public/src/settings.rs:328-352`) also implements `SnapshotLoader`, so it
+  gets an explicit `count_skipped_rows` that is never called (its parse stays fail-whole).
   This repeats once per refresh (one TTL) for as long as the row exists. That is the intended
   signal: an operator has to fix or delete the row.
 - `authorize_mint` (`ingestion_keys.rs:378`): uses `.value`, and `warn!`s any skipped rows. Its
@@ -319,7 +323,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
    `groups_name` rejection assertion too.
 4b. **Resilient parsing** (§7): `Parsed<T>`, `report_skipped`, and `count_skipped_rows` in
    `rust/auth/src/db_snapshot.rs`; the `from_rows` changes in `policy.rs` and `groups.rs`; the
-   loaders in `db_audience_grants.rs` and `groups.rs`; and the three route call sites in
+   loaders in `db_audience_grants.rs` (including the axis-`match` helper) and `groups.rs`; the
+   no-op `count_skipped_rows` in `SettingsLoader` (`rust/public/src/settings.rs`); and the three route call sites in
    `rust/analytics-web-srv/src/ingestion_keys.rs` and `groups.rs`.
 5. **Route** (`rust/analytics-web-srv/src/audience_grants.rs`): `validate_audience`, the three
    `*`-audience checks, and the `create_grant` doc comment's list of non-admin checks.
@@ -332,7 +337,7 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 
 - `rust/auth/src/policy.rs`, `db_audience_grants.rs`, `groups.rs`, `db_snapshot.rs`
 - `rust/analytics/src/lakehouse/read_scope.rs`, `audience_guard.rs`, `ownership_rewrite.rs`
-- `rust/public/src/servers/flight_sql_service_impl.rs`
+- `rust/public/src/servers/flight_sql_service_impl.rs`, `rust/public/src/settings.rs`
 - `rust/ingestion/src/sql_migration.rs`, `rust/ingestion/tests/sql_migration_test.rs`
 - `rust/analytics-web-srv/src/audience_grants.rs`, `ingestion_keys.rs`, `groups.rs`
 - Tests: `rust/auth/tests/policy_tests.rs`, `groups_tests.rs`, `db_audience_grants_tests.rs`, `rust/analytics/tests/audience_guard_tests.rs`,
@@ -457,9 +462,9 @@ No-DB unit tests:
   `ReadableAudiences::Every`, asserting the `processes` EXPLAIN (as in `explain_processes`)
   contains the `IS NOT NULL` audience predicate, so the bridge mapping stays filtered and never
   becomes `All`.
-- The loaders' axis skip and `report_skipped` are thin glue over the above, so they are
-  covered through `from_rows`. An unrecognized axis is folded into the triples' parse (move the
-  axis `match` into a pure helper that `db_audience_grants_tests.rs` calls directly).
+- `report_skipped` is thin glue over the above, so it is covered through `from_rows`. The
+  unrecognized-axis skip is tested directly in `db_audience_grants_tests.rs` through the pure
+  axis helper.
 - `rust/analytics/tests/audience_guard_tests.rs`: the `is_readable` truth table for
   `EveryAudience` (`Audience` → true, `Unknown` → false, `Ambiguous` empty → false, all-known →
   true), and `global_rows_visible` under `EveryAudience` false for a non-admin and a non-public
