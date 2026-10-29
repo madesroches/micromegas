@@ -25,6 +25,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// The conventional shared audience. Not a built-in read grant -- every-principal readability
 /// comes from the seeded `('public', 'read', '*')` row (schema v9), an ordinary grant like any
@@ -96,9 +97,11 @@ pub fn default_audience_from_env(prefix: &str) -> Result<String> {
 }
 
 /// A principal selector on either axis of an [`AudienceGrants`] entry: `*` (any authenticated
-/// principal), `user:<email>` (matches `AuthContext.email`), or `group:<g>` (matches any entry in
-/// `AuthContext.memberships` -- the caller's resolved, transitive local-group closure). Validated
-/// at parse time; `resolve`/`resolve_audience` never see an unrecognized shape.
+/// principal), `user:<email>` (matches `AuthContext.email`), `group:<g>` (matches any entry in
+/// `AuthContext.memberships` -- the caller's resolved, transitive local-group closure), or
+/// `key:<uuid>` in canonical form (matches `AuthContext.analytics_key_id`). Validated at parse
+/// time; `resolve`/`resolve_audience` never see an unrecognized shape. This is the only place
+/// selector shape is enforced: the tables carry no CHECK for it.
 ///
 /// `pub` -- `analytics-web-srv`'s admin grant-write route (a separate crate) needs to run this
 /// exact same selector-shape check `parse`/`from_rows` run, not a re-implementation of it.
@@ -110,18 +113,36 @@ pub fn valid_selector(selector: &str) -> bool {
         || selector
             .strip_prefix("group:")
             .is_some_and(|rest| !rest.is_empty())
+        || parse_key_selector(selector).is_some()
+}
+
+/// The `key:<key_id>` selector naming an analytics API key.
+pub fn key_selector(key_id: Uuid) -> String {
+    format!("key:{key_id}")
+}
+
+/// The key id of a `key:<uuid>` selector, only when the uuid is in canonical (lowercase,
+/// hyphenated) form. Matching is an exact string compare, so any other spelling would be a
+/// selector that never matches.
+pub fn parse_key_selector(selector: &str) -> Option<Uuid> {
+    let rest = selector.strip_prefix("key:")?;
+    let id = Uuid::parse_str(rest).ok()?;
+    (id.to_string() == rest).then_some(id)
 }
 
 /// The grant selectors `caller` matches: a leading `"*"` (every caller matches it), then
-/// `"user:<email>"` when `caller.email` is `Some`, then one `"group:<g>"` per entry in
-/// `caller.memberships`. `pub` -- shared by three consumers: `flight_sql_service_impl.rs`'s
-/// `CallerContext::grant_selectors`, `analytics-web-srv`'s `my_audiences` handler, and the
+/// `"user:<email>"` when `caller.email` is `Some`, then `"key:<id>"` when `caller.analytics_key_id`
+/// is `Some`, then one `"group:<g>"` per entry in `caller.memberships`. `pub` -- shared by three
+/// consumers: `flight_sql_service_impl.rs`'s `CallerContext::grant_selectors`, `analytics-web-srv`'s `my_audiences` handler, and the
 /// audience-grant write policy's per-pair hold check (which must strip the leading `"*"` before
 /// binding the result -- a `*` grant is not something a caller individually holds).
 pub fn caller_selectors(caller: &AuthContext) -> Vec<String> {
     let mut selectors = vec!["*".to_string()];
     if let Some(email) = &caller.email {
         selectors.push(format!("user:{email}"));
+    }
+    if let Some(key_id) = caller.analytics_key_id {
+        selectors.push(key_selector(key_id));
     }
     selectors.extend(caller.memberships.iter().map(|g| format!("group:{g}")));
     selectors
@@ -136,6 +157,11 @@ fn selector_matches(selector: &str, caller: &AuthContext) -> bool {
     }
     if let Some(group) = selector.strip_prefix("group:") {
         return caller.memberships.iter().any(|g| g == group);
+    }
+    if selector.starts_with("key:") {
+        return caller
+            .analytics_key_id
+            .is_some_and(|k| key_selector(k) == selector);
     }
     // Unreachable given `valid_selector` gates every selector at parse time; false rather than
     // panicking keeps this fail-closed if that invariant is ever violated.
@@ -259,9 +285,9 @@ impl AudienceGrants {
     /// this crate fails startup on a typo rather than shipping inert: every key must satisfy
     /// [`is_valid_audience`] (`{"group:everyone": [...]}`, the value operators are migrating
     /// *from*, can never match a stamped audience once the charset excludes `:`), and every
-    /// selector on either axis must be `*`, `user:<non-empty>`, or `group:<non-empty>` (an
-    /// unprefixed or mis-prefixed selector matches no identity axis and would otherwise be a
-    /// silently-inert entry).
+    /// selector on either axis must be `*`, `user:<non-empty>`, `group:<non-empty>`, or a
+    /// canonical `key:<uuid>` (an unprefixed or mis-prefixed selector matches no identity axis and
+    /// would otherwise be a silently-inert entry). A `key:` selector is read-axis only.
     pub fn parse(raw: &str) -> Result<Self> {
         let raw: RawAudienceGrants =
             serde_json::from_str(raw).map_err(|e| anyhow!("invalid audience grant map: {e}"))?;
@@ -281,9 +307,15 @@ impl AudienceGrants {
                 if !valid_selector(selector) {
                     return Err(anyhow!(
                         "invalid audience grant map: selector {selector:?} for audience \
-                         {audience:?} must be '*', 'user:<id>', or 'group:<id>'"
+                         {audience:?} must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
                     ));
                 }
+            }
+            if let Some(selector) = mint.iter().find(|s| s.starts_with("key:")) {
+                return Err(anyhow!(
+                    "invalid audience grant map: selector {selector:?} for audience \
+                     {audience:?} is not allowed on the mint axis -- API keys never mint"
+                ));
             }
             entries.insert(audience, GrantEntry { read, mint });
         }
@@ -292,9 +324,8 @@ impl AudienceGrants {
 
     /// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
     /// analogue of [`Self::parse`]. Runs the *same* [`is_valid_audience`]/[`valid_selector`]
-    /// checks `parse` runs, so a row that slipped past `audience_grants`'s own `CHECK`
-    /// constraints (e.g. via a direct `psql` session) still can't reach a policy decision: this
-    /// is the one place both the JSON path and the DB path fail closed on a malformed row.
+    /// checks `parse` runs, so a row written by a direct `psql` session still can't reach a policy
+    /// decision: this is the one place both the JSON path and the DB path fail closed on a malformed row.
     pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Result<Self> {
         let mut entries: BTreeMap<String, GrantEntry> = BTreeMap::new();
         for (audience, axis, selector) in rows {
@@ -307,7 +338,13 @@ impl AudienceGrants {
             if !valid_selector(&selector) {
                 return Err(anyhow!(
                     "invalid audience grant row: selector {selector:?} for audience \
-                     {audience:?} must be '*', 'user:<id>', or 'group:<id>'"
+                     {audience:?} must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
+                ));
+            }
+            if axis == GrantAxis::Mint && selector.starts_with("key:") {
+                return Err(anyhow!(
+                    "invalid audience grant row: selector {selector:?} for audience \
+                     {audience:?} is not allowed on the mint axis -- API keys never mint"
                 ));
             }
             let entry = entries.entry(audience).or_default();
@@ -423,6 +460,7 @@ pub trait MintPolicy: Send + Sync + Debug {
 /// { a : "*"            ∈ grants[a].read }
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
 ///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.memberships }
+///   ∪ { a : "key:<id>"     ∈ grants[a].read }                  if caller is an analytics key
 ///   ∪ { a : selector       ∈ store.readers(a) matches caller } if a store is attached
 ///   ∪ caller.read_audiences                                    // per-key direct grant
 /// ```
@@ -544,6 +582,10 @@ impl MintPolicy for AudienceMintPolicy {
         caller: &AuthContext,
         requested: Option<&str>,
     ) -> Result<String> {
+        // Holds by construction rather than by which services happen to accept analytics keys.
+        if caller.analytics_key_id.is_some() {
+            return Err(anyhow!("analytics API keys cannot mint"));
+        }
         let Some(aud) = requested else {
             return Err(anyhow!("no audience requested and none can be defaulted"));
         };

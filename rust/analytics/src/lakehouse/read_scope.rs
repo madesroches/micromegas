@@ -63,7 +63,7 @@ pub struct CallerContext {
     /// type would be written at every construction site and read nowhere.
     pub identity: Option<String>,
     /// The grant selectors this caller matches -- `"*"`, `"user:<email>"` when an email is present,
-    /// and one `"group:<g>"` per claimed group -- precomputed by `rust/public` from the
+    /// `"key:<id>"` for an analytics API key, and one `"group:<g>"` per claimed group -- precomputed by `rust/public` from the
     /// `AuthContext` (`micromegas_auth::policy::caller_selectors`), so `micromegas-analytics` never
     /// needs the auth crate. Empty for internal and maintenance callers and for a request with no
     /// `AuthContext` at all (`--disable-auth`). Consumed by `list_audience_grants()`

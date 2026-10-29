@@ -136,7 +136,7 @@ be truncated rather than genuine data, and an equality filter on such a value ca
 | `client_ip` | string | always | The rightmost `X-Forwarded-For` entry, falling back to `X-Real-IP` and then the socket address -- the same resolution [`flightsql_query_audit`'s `client_ip`](../query-guide/query-audit-log.md#fields) uses. `unknown` if none is available |
 | `audience` | string | grant/claim actions only | The audience named by the request |
 | `axis` | string | grant actions only | `read` or `mint`. Absent on `claim_audience`, since a claim always writes both axes |
-| `selector` | string | grant/claim actions only | The `*`/`user:<id>`/`group:<id>` selector named by the request |
+| `selector` | string | grant/claim actions only | The `*`/`user:<id>`/`group:<id>`/`key:<key_id>` selector named by the request (a `key:` id is recorded in canonical form) |
 | `group` | string | group actions only | The group name named by the request |
 | `member` | string | `add_member`/`remove_member` only | The member selector named by the request |
 | `created` | bool | `create_grant`/`add_member`, on `allowed` only | `false` when the row already existed (idempotent create), `true` when this call created it |

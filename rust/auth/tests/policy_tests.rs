@@ -10,10 +10,12 @@ use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::groups::ADMINS_GROUP;
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE,
-    ReadPolicy, caller_selectors, default_audience_from_env, is_valid_audience, valid_selector,
+    ReadPolicy, caller_selectors, default_audience_from_env, is_valid_audience, key_selector,
+    parse_key_selector, valid_selector,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
+use uuid::Uuid;
 
 /// Builds an `AuthContext` with sane defaults, overridden by the fields tests care about.
 /// `groups` becomes `memberships`; `is_admin` additionally appends `ADMINS_GROUP` to it, so
@@ -38,6 +40,7 @@ fn caller(
         allow_delegation: false,
         bound_audience: None,
         read_audiences,
+        analytics_key_id: None,
         memberships: memberships.into(),
     }
 }
@@ -844,5 +847,97 @@ fn resolve_prefixed_var_prefixed_wins_when_set() {
     assert_eq!(
         resolve_prefixed_var(RPV_PREFIX, RPV_SUFFIX),
         RPV_PREFIXED_VAR
+    );
+}
+
+// ---------------------------------------------------------------------------
+// key: selectors
+// ---------------------------------------------------------------------------
+
+const KEY_A: &str = "0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11";
+const KEY_B: &str = "7c1e2f3a-1b2c-4d3e-8f4a-5b6c7d8e9f00";
+
+fn key_caller(key: Option<&str>, groups: Vec<String>) -> AuthContext {
+    let mut ctx = caller(None, groups, vec![], false);
+    ctx.auth_type = AuthType::ApiKey;
+    ctx.analytics_key_id = key.map(|k| Uuid::parse_str(k).expect("uuid"));
+    ctx
+}
+
+#[test]
+fn key_selector_accepts_only_the_canonical_form() {
+    assert!(valid_selector(&format!("key:{KEY_A}")));
+    assert_eq!(
+        parse_key_selector(&format!("key:{KEY_A}")),
+        Some(Uuid::parse_str(KEY_A).expect("uuid"))
+    );
+    assert_eq!(
+        key_selector(Uuid::parse_str(KEY_A).expect("uuid")),
+        format!("key:{KEY_A}")
+    );
+    for bad in [
+        format!("key:{}", KEY_A.to_uppercase()),
+        format!("key:{{{KEY_A}}}"),
+        format!("key:{}", KEY_A.replace('-', "")),
+        "key:".to_string(),
+        "key:not-a-uuid".to_string(),
+        format!("key: {KEY_A}"),
+    ] {
+        assert!(!valid_selector(&bad), "{bad} must be rejected");
+        assert!(parse_key_selector(&bad).is_none(), "{bad} must be rejected");
+    }
+}
+
+#[test]
+fn key_selector_is_read_axis_only_in_the_grant_map() {
+    assert!(AudienceGrants::parse(&format!(r#"{{"a": ["key:{KEY_A}"]}}"#)).is_ok());
+    assert!(AudienceGrants::parse(&format!(r#"{{"a": {{"mint": ["key:{KEY_A}"]}}}}"#)).is_err());
+    assert!(
+        AudienceGrants::from_rows([("a".to_string(), GrantAxis::Read, format!("key:{KEY_A}"))])
+            .is_ok()
+    );
+    assert!(
+        AudienceGrants::from_rows([("a".to_string(), GrantAxis::Mint, format!("key:{KEY_A}"))])
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn read_policy_key_selector_matches_only_that_analytics_key() {
+    let policy = AudienceReadPolicy::new(grants(&format!(r#"{{"secret": ["key:{KEY_A}"]}}"#)));
+    let readable = |ctx: AuthContext| {
+        let policy = policy.clone();
+        async move {
+            sorted(policy.resolve(&ctx).await.expect("resolve").into_inner())
+                .contains(&"secret".to_string())
+        }
+    };
+    assert!(readable(key_caller(Some(KEY_A), vec![])).await);
+    assert!(!readable(key_caller(Some(KEY_B), vec![])).await);
+    assert!(!readable(key_caller(None, vec![])).await);
+}
+
+#[test]
+fn caller_selectors_includes_the_key_only_for_analytics_keys() {
+    assert_eq!(
+        caller_selectors(&key_caller(Some(KEY_A), vec!["g".to_string()])),
+        vec![
+            "*".to_string(),
+            format!("key:{KEY_A}"),
+            "group:g".to_string()
+        ]
+    );
+    assert_eq!(caller_selectors(&key_caller(None, vec![])), vec!["*"]);
+}
+
+#[tokio::test]
+async fn mint_policy_analytics_key_never_mints() {
+    let json = r#"{"A": {"read": ["group:g"], "mint": ["group:g"]}}"#;
+    let ctx = key_caller(Some(KEY_A), vec!["g".to_string()]);
+    let mint = AudienceMintPolicy::new(grants(json));
+    assert!(mint.resolve_audience(&ctx, Some("A")).await.is_err());
+    let read = AudienceReadPolicy::new(grants(json));
+    assert!(
+        sorted(read.resolve(&ctx).await.expect("resolve").into_inner()).contains(&"A".to_string())
     );
 }

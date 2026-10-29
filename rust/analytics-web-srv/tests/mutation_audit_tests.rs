@@ -358,6 +358,7 @@ fn auth_context_for(user: &ValidatedUser) -> AuthContext {
         allow_delegation: false,
         bound_audience: None,
         read_audiences: vec![],
+        analytics_key_id: None,
         memberships: memberships.into(),
     }
 }

@@ -380,9 +380,10 @@ async fn authorize_mint(
             .into_iter()
             .map(|selector| (audience.to_string(), GrantAxis::Mint, selector)),
     )
-    // Every row read back out of `audience_grants` already passed its own `CHECK` constraints on
-    // write, so this arm is unreachable in practice; kept as a real status code rather than
-    // `.unwrap()`, for the same fail-closed reason `MintGate` gives its own `.ok_or(...)`.
+    // Every row the grant routes write already passed `valid_selector`, so this arm is
+    // unreachable short of a direct SQL write (the table carries no selector-shape CHECK); kept as
+    // a real status code rather than `.unwrap()`, for the same fail-closed reason `MintGate`
+    // gives its own `.ok_or(...)`.
     .map_err(|e| {
         error!("ingestion_keys: audience grant row parse failed: {e}");
         IngestionKeyError::Unavailable("audience grant store unavailable".to_string())

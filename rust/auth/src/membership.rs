@@ -27,7 +27,7 @@ impl GroupSnapshot for DbGroupsSource {
 }
 
 /// Wraps `inner`, filling `AuthContext.memberships` with `groups.current()`'s closure over
-/// `ctx.email` after `inner` authenticates the request.
+/// `ctx.email` and `ctx.analytics_key_id` after `inner` authenticates the request.
 pub struct MembershipProvider {
     inner: Arc<dyn AuthProvider>,
     groups: Arc<dyn GroupSnapshot>,
@@ -51,7 +51,9 @@ impl AuthProvider for MembershipProvider {
         // `ProviderUnavailable` propagates unchanged: a group-store outage denies the request
         // the same way an inner-provider store outage does.
         let graph = self.groups.current().await?;
-        ctx.memberships = graph.closure(ctx.email.as_deref()).into();
+        ctx.memberships = graph
+            .closure(ctx.email.as_deref(), ctx.analytics_key_id)
+            .into();
         Ok(ctx)
     }
 }

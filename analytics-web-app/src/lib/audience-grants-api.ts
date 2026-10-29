@@ -16,15 +16,24 @@ export interface AudienceGrant {
   selector: string
   createdAt: Date | null // defensive, matching QueryDenyRule.createdAt
   createdBy: string
+  /** Set when `selector` is a `key:` selector naming a known analytics key. */
+  keyName: string | null
+  keyRevoked: boolean
 }
 
-/** Server's raw JSON for one grant row, as `POST`/`GET .../visible` return it. */
+/** Server's raw JSON for the row `POST` returns. */
 export interface AudienceGrantResponse {
   audience: string
   axis: GrantAxis
   selector: string
   created_at: string
   created_by: string
+}
+
+/** Server's raw JSON for one `GET .../visible` row. */
+export interface VisibleGrantResponse extends AudienceGrantResponse {
+  key_name: string | null
+  key_revoked: boolean
 }
 
 export class AudienceGrantError extends Error {
@@ -66,13 +75,15 @@ function parseDate(value: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-function decodeGrant(row: AudienceGrantResponse): AudienceGrant {
+function decodeGrant(row: VisibleGrantResponse): AudienceGrant {
   return {
     audience: row.audience,
     axis: row.axis,
     selector: row.selector,
     createdAt: parseDate(row.created_at),
     createdBy: row.created_by,
+    keyName: row.key_name ?? null,
+    keyRevoked: row.key_revoked ?? false,
   }
 }
 
@@ -82,7 +93,7 @@ function decodeGrant(row: AudienceGrantResponse): AudienceGrant {
  *  surfaces as {@link AudienceGrantError}. */
 export async function fetchVisibleGrants(): Promise<AudienceGrant[]> {
   const response = await authenticatedFetch(`${getApiBase()}/audience-grants/visible`)
-  const rows = await handleResponse<AudienceGrantResponse[]>(response)
+  const rows = await handleResponse<VisibleGrantResponse[]>(response)
   return rows.map(decodeGrant)
 }
 
@@ -156,14 +167,25 @@ export const AUDIENCE_PATTERN = /^[A-Za-z0-9_-]{1,255}$/
  *  since a `group:<id>` selector may contain multi-byte characters. */
 export const MAX_SELECTOR_BYTES = 255
 
-/** `null` when `selector` is a valid `*`/`user:<id>`/`group:<id>` selector within the byte
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** Canonical form of a key id as typed: the server only matches lowercase hyphenated ids. */
+export function normalizeKeyId(input: string): string {
+  return input.trim().toLowerCase()
+}
+
+/** `null` when `selector` is a valid `*`/`user:<id>`/`group:<id>`/`key:<uuid>` selector within the byte
  *  bound; otherwise a human-readable reason, suitable for inline dialog validation text. */
 export function validateSelector(selector: string): string | null {
   const isStar = selector === '*'
   const userId = selector.startsWith('user:') ? selector.slice('user:'.length) : null
   const groupId = selector.startsWith('group:') ? selector.slice('group:'.length) : null
-  if (!isStar && userId === null && groupId === null) {
-    return "must be '*', 'user:<id>', or 'group:<id>'"
+  const keyId = selector.startsWith('key:') ? selector.slice('key:'.length) : null
+  if (!isStar && userId === null && groupId === null && keyId === null) {
+    return "must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
+  }
+  if (keyId !== null && !CANONICAL_UUID.test(keyId)) {
+    return 'the key id must be a lowercase hyphenated UUID'
   }
   if ((userId !== null && userId === '') || (groupId !== null && groupId === '')) {
     return 'the id after the prefix must not be empty'

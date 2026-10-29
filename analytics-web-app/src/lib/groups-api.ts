@@ -18,6 +18,9 @@ export interface GroupMember {
   member: string
   created_at: string
   created_by: string
+  /** Set when `member` is a `key:` selector naming a known analytics key. */
+  key_name: string | null
+  key_revoked: boolean
 }
 
 export class GroupsError extends Error {

@@ -87,14 +87,20 @@ def main():
     p_create = subparsers.add_parser("create", help="Create an audience grant")
     p_create.add_argument("audience", help="Audience name ([A-Za-z0-9_-]{1,255})")
     p_create.add_argument("axis", choices=["read", "mint"], help="Grant axis")
-    p_create.add_argument("selector", help="'*', 'user:<id>', or 'group:<id>'")
+    p_create.add_argument(
+        "selector",
+        help="'*', 'user:<id>', 'group:<id>', or 'key:<key_id>' (read axis only)",
+    )
     p_create.set_defaults(func=cmd_create)
 
     # delete
     p_delete = subparsers.add_parser("delete", help="Delete an audience grant")
     p_delete.add_argument("audience", help="Audience name")
     p_delete.add_argument("axis", choices=["read", "mint"], help="Grant axis")
-    p_delete.add_argument("selector", help="'*', 'user:<id>', or 'group:<id>'")
+    p_delete.add_argument(
+        "selector",
+        help="'*', 'user:<id>', 'group:<id>', or 'key:<key_id>' (read axis only)",
+    )
     p_delete.set_defaults(func=cmd_delete)
 
     args = parser.parse_args()

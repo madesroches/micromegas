@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 12;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 13;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -464,6 +464,27 @@ pub async fn upgrade_data_lake_schema_v12(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 13.
+/// Drops the selector-shape CHECKs on `audience_grants` and `group_members`: the selector
+/// vocabulary (`valid_selector`) now grows without a migration each time, and shape is validated
+/// in code only.
+pub async fn upgrade_data_lake_schema_v13(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "ALTER TABLE audience_grants DROP CONSTRAINT IF EXISTS audience_grants_selector_shape;",
+    )
+    .await
+    .with_context(|| "dropping audience_grants_selector_shape")?;
+    tr.execute("ALTER TABLE group_members DROP CONSTRAINT IF EXISTS group_members_selector_shape;")
+        .await
+        .with_context(|| "dropping group_members_selector_shape")?;
+    tr.execute("UPDATE migration SET version=13;")
+        .await
+        .with_context(|| "updating data lake schema version to 13")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -623,6 +644,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v12");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v12(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 12 == current_version {
+        info!("upgrading data_lake_schema to v13");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v13(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

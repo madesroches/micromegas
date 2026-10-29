@@ -136,6 +136,36 @@ def test_cmd_members_calls_list_group_members(monkeypatch, capsys):
     assert "user:alice@example.com" in capsys.readouterr().out
 
 
+def test_cmd_members_prints_key_name_and_revoked_tag(monkeypatch, capsys):
+    class KeyClient:
+        def list_group_members(self, name):
+            base = {
+                "group_name": name,
+                "created_at": "2026-08-19T00:00:00Z",
+                "created_by": "admin@example.com",
+            }
+            return [
+                {
+                    **base,
+                    "member": "key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11",
+                    "key_name": "reports-bot",
+                    "key_revoked": False,
+                },
+                {
+                    **base,
+                    "member": "key:7c1e2f3a-1b2c-4d3e-8f4a-5b6c7d8e9f00",
+                    "key_name": "old-bot",
+                    "key_revoked": True,
+                },
+            ]
+
+    monkeypatch.setattr(groups, "make_client", lambda args: KeyClient())
+    groups.cmd_members(argparse.Namespace(name="usage-reports"))
+    lines = capsys.readouterr().out.splitlines()
+    assert "key_name=reports-bot" in lines[0] and "revoked" not in lines[0]
+    assert "key_name=old-bot revoked" in lines[1]
+
+
 def test_cmd_members_reports_no_members(monkeypatch, capsys):
     class EmptyClient:
         def list_group_members(self, name):

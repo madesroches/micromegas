@@ -81,6 +81,7 @@ impl AuthProvider for BoundAudienceProvider {
             allow_delegation: false,
             bound_audience: Some(self.audience.to_string()),
             read_audiences: vec![],
+            analytics_key_id: None,
             memberships: Arc::from([]),
         })
     }

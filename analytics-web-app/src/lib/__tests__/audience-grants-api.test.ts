@@ -9,6 +9,7 @@ import {
   deleteAudienceGrant,
   fetchMyAudiences,
   fetchVisibleGrants,
+  normalizeKeyId,
   validateSelector,
 } from '../audience-grants-api'
 
@@ -38,6 +39,17 @@ describe('audience-grants-api', () => {
           selector: 'group:eng',
           created_at: '2026-08-14T00:00:00Z',
           created_by: 'admin@example.com',
+          key_name: null,
+          key_revoked: false,
+        },
+        {
+          audience: 'team-alpha',
+          axis: 'read',
+          selector: 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+          key_name: 'reporter',
+          key_revoked: true,
         },
       ],
     })
@@ -50,6 +62,17 @@ describe('audience-grants-api', () => {
         selector: 'group:eng',
         createdAt: new Date('2026-08-14T00:00:00Z'),
         createdBy: 'admin@example.com',
+        keyName: null,
+        keyRevoked: false,
+      },
+      {
+        audience: 'team-alpha',
+        axis: 'read',
+        selector: 'key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11',
+        createdAt: new Date('2026-08-14T00:00:00Z'),
+        createdBy: 'admin@example.com',
+        keyName: 'reporter',
+        keyRevoked: true,
       },
     ])
   })
@@ -183,6 +206,20 @@ describe('audience-grants-api', () => {
       expect(validateSelector('*')).toBeNull()
       expect(validateSelector('user:alice@example.com')).toBeNull()
       expect(validateSelector('group:eng')).toBeNull()
+    })
+
+    it('accepts only a canonical key:<uuid>', () => {
+      expect(validateSelector('key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11')).toBeNull()
+      expect(validateSelector('key:0B9F5D0E-5C1A-4A52-9A6E-6F1D7B0C1A11')).not.toBeNull()
+      expect(validateSelector('key:0b9f5d0e5c1a4a529a6e6f1d7b0c1a11')).not.toBeNull()
+      expect(validateSelector('key:')).not.toBeNull()
+      expect(validateSelector('key:nope')).not.toBeNull()
+    })
+
+    it('normalizeKeyId trims and lowercases', () => {
+      expect(normalizeKeyId('  0B9F5D0E-5C1A-4A52-9A6E-6F1D7B0C1A11 ')).toBe(
+        '0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11'
+      )
     })
 
     it('rejects an unrecognized prefix', () => {

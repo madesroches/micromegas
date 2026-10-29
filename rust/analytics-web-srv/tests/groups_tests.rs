@@ -191,6 +191,32 @@ async fn add_member_400_for_overlong_selector() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn add_member_400_for_malformed_key_selector() {
+    let app = build_handler_router_with_user(state_with_pool(), admin_user());
+    let response = app
+        .oneshot(post_request(
+            "/api/groups/eng/members",
+            r#"{"member": "key:not-a-uuid"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn add_member_400_for_key_into_admins() {
+    let app = build_handler_router_with_user(state_with_pool(), admin_user());
+    let response = app
+        .oneshot(post_request(
+            "/api/groups/admins/members",
+            r#"{"member": "key:0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11"}"#,
+        ))
+        .await
+        .expect("call service");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 // ---------------------------------------------------------------------------
 // The `admins` lockout guard: deleting the group itself is refused by a pure name check, before
 // any query runs.

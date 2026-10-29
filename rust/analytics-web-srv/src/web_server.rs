@@ -486,6 +486,7 @@ pub fn build_protected_routes(
                 allow_delegation: false,
                 bound_audience: None,
                 read_audiences: vec![],
+                analytics_key_id: None,
                 memberships: Arc::from([ADMINS_GROUP.to_string()]),
             }))
     }

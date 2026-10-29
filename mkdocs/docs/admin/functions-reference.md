@@ -442,7 +442,7 @@ SELECT * FROM list_audience_grants() WHERE audience = 'team-alpha' ORDER BY axis
 |---|---|---|
 | `audience` | String | The audience name the row grants against |
 | `axis` | String | `read` or `mint` |
-| `selector` | String | `*`, `user:<id>`, or `group:<id>` |
+| `selector` | String | `*`, `user:<id>`, `group:<id>`, or `key:<key_id>` |
 | `created_at` | Timestamp | When the grant row was created |
 | `created_by` | String | The identity of the caller who created it |
 
@@ -455,8 +455,9 @@ deliberately wider than "rows whose selector matches me": if a caller may read `
 they may see who else may, which is exactly the "who can see this audience" question this
 function (and the web app's Audience Access page) exists to answer — and it is the same set that
 caller may modify via the `POST`/`DELETE /api/audience-grants` routes. Only a non-admin caller
-with an empty selector set (no email, no memberships — e.g. a real API-key-shaped caller with
-neither, or `CallerContext::internal()`) sees zero rows; a maintenance caller and a
+with an empty selector set (no email, no memberships, and not an analytics API key — e.g.
+`CallerContext::internal()`) sees zero rows; an analytics API key's selectors are its own
+`key:<key_id>` plus its groups; a maintenance caller and a
 `--disable-auth` request's absent-`AuthContext` convention both treat the caller as admin
 instead, so neither one bites.
 
@@ -475,7 +476,8 @@ for this one function.
 
 **Does not show every source of effective read access.** The DB table is one of two
 sources `AudienceReadPolicy` unions to decide what a caller may actually read; a per-key
-`read_audiences` list also applies, and it does not appear here for any caller. `public`
+`read_audiences` list also applies (it is not populated by any shipped key provider), and it does
+not appear here for any caller. `public`
 is different: it has no built-in read grant of its own — it reads only through an ordinary
 DB row, the seeded `('public', 'read', '*')` grant — so that row *is* in this table, and
 does appear here, but only for an admin caller (`GrantVisibility::All`).

@@ -9,6 +9,7 @@
 //! this module's routing or handler shapes.
 
 use crate::auth::{AdminRequired, AdminUser, ValidatedUser};
+use crate::key_selector::{canonicalize_key_selector, ensure_live_key, key_not_found_message};
 use crate::mutation_audit::{AuditOutcome, ClientIp, MutationAudit, action};
 use axum::extract::{Extension, FromRequestParts, MatchedPath, Path, Query};
 use axum::http::request::Parts;
@@ -63,6 +64,8 @@ pub enum GroupsError {
     /// of both rendering as the same generic "group not found". The message names the missing
     /// nested group.
     NestedGroupNotFound(String),
+    /// `add_member`'s `key:<id>` member names no live analytics API key.
+    KeyNotFound(String),
     /// `409` -- the group already exists, is `admins` (undeletable), is still referenced, would
     /// create a cycle, or would leave `admins` unreachable by any principal. The message names
     /// which.
@@ -87,7 +90,7 @@ impl IntoResponse for GroupsError {
                 Json(ErrorResponse::new("NOT_FOUND", "group not found")),
             )
                 .into_response(),
-            GroupsError::NestedGroupNotFound(msg) => (
+            GroupsError::NestedGroupNotFound(msg) | GroupsError::KeyNotFound(msg) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new("NOT_FOUND", msg)),
             )
@@ -140,6 +143,7 @@ impl AuditOutcome for GroupsError {
             GroupsError::BadRequest(msg) => ("denied", Some(msg.clone())),
             GroupsError::NotFound => ("denied", Some("group not found".to_string())),
             GroupsError::NestedGroupNotFound(msg) => ("denied", Some(msg.clone())),
+            GroupsError::KeyNotFound(msg) => ("denied", Some(msg.clone())),
             GroupsError::Conflict(msg) => ("denied", Some(msg.clone())),
             // The raw `sqlx::Error` text must not reach the record -- it can carry
             // SQL/connection detail -- so this uses the same fixed string `IntoResponse` already
@@ -400,6 +404,9 @@ struct MemberRow {
     member: String,
     created_at: DateTime<Utc>,
     created_by: String,
+    /// Set when `member` is a `key:` selector naming a known analytics key.
+    key_name: Option<String>,
+    key_revoked: bool,
 }
 
 /// `GET {base_path}/api/groups/{name}/members`.
@@ -417,8 +424,11 @@ async fn list_members(
         return Err(GroupsError::NotFound);
     }
     let rows = sqlx::query_as::<_, MemberRow>(
-        "SELECT group_name, member, created_at, created_by
-         FROM group_members WHERE group_name = $1 ORDER BY member",
+        "SELECT m.group_name, m.member, m.created_at, m.created_by,
+                k.name AS key_name, (k.revoked_at IS NOT NULL) AS key_revoked
+         FROM group_members m
+         LEFT JOIN analytics_api_keys k ON m.member = 'key:' || k.key_id::text
+         WHERE m.group_name = $1 ORDER BY m.member",
     )
     .bind(&name)
     .fetch_all(&pool)
@@ -432,7 +442,8 @@ struct AddMemberRequest {
 }
 
 /// `POST {base_path}/api/groups/{name}/members` -- validates `valid_selector` + 255 bytes; for
-/// `group:X`, `404` if `X` does not exist and `409` if `nesting_would_cycle`; `201` created /
+/// `group:X`, `404` if `X` does not exist and `409` if `nesting_would_cycle`; for `key:K`, `400`
+/// into `admins` and `404` unless `K` is a live analytics key; `201` created /
 /// `200` already existed, via the same CTE `insert_or_get` UPSERT pattern `audience_grants.rs`
 /// uses (see that module's `insert_or_get` doc comment).
 async fn add_member(
@@ -440,8 +451,9 @@ async fn add_member(
     GroupAdminGate(user): GroupAdminGate,
     client_ip: ClientIp,
     Path(name): Path<String>,
-    Json(body): Json<AddMemberRequest>,
+    Json(mut body): Json<AddMemberRequest>,
 ) -> Result<(StatusCode, Json<MemberRow>), GroupsError> {
+    body.member = canonicalize_key_selector(&body.member);
     let audit = MutationAudit::new(
         action::ADD_MEMBER,
         caller_identity(&user),
@@ -468,9 +480,14 @@ async fn add_member_inner(
     let pool = require_pool(&state)?;
     if !valid_selector(&body.member) {
         return Err(GroupsError::BadRequest(format!(
-            "invalid member {:?}: must be '*', 'user:<id>', or 'group:<id>'",
+            "invalid member {:?}: must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'",
             body.member
         )));
+    }
+    if name == ADMINS_GROUP && body.member.starts_with("key:") {
+        return Err(GroupsError::BadRequest(
+            "API keys cannot be members of admins".to_string(),
+        ));
     }
     if body.member.len() > MAX_MEMBER_BYTES {
         return Err(GroupsError::BadRequest(format!(
@@ -521,6 +538,19 @@ async fn add_member_inner(
     if !group_exists {
         return Err(GroupsError::NotFound);
     }
+
+    let key_name = if body.member.starts_with("key:") {
+        match ensure_live_key(&mut tx, &body.member).await? {
+            Some(key_name) => Some(key_name),
+            None => {
+                return Err(GroupsError::KeyNotFound(key_not_found_message(
+                    &body.member,
+                )));
+            }
+        }
+    } else {
+        None
+    };
 
     if let Some(nested) = nested {
         let nested_exists: bool =
@@ -594,6 +624,8 @@ async fn add_member_inner(
                     member: row.member,
                     created_at: row.created_at,
                     created_by: row.created_by,
+                    key_name,
+                    key_revoked: false,
                 }),
             ));
         }
@@ -622,7 +654,8 @@ struct RemoveMemberQuery {
     member: String,
 }
 
-/// `DELETE {base_path}/api/groups/{name}/members?member=` -- `204`; `404` unknown; `409` when
+/// `DELETE {base_path}/api/groups/{name}/members?member=` -- `204`; `404` unknown (a `key:`
+/// member is not checked for existence, so a row left by a revoked key can still be removed); `409` when
 /// removing this member would leave [`ADMINS_GROUP`] unreachable by any principal, direct or
 /// nested (the only lockout protection: losing that reachability would leave admin reachable only
 /// through `psql`).
@@ -631,8 +664,9 @@ async fn remove_member(
     GroupAdminGate(user): GroupAdminGate,
     client_ip: ClientIp,
     Path(name): Path<String>,
-    Query(query): Query<RemoveMemberQuery>,
+    Query(mut query): Query<RemoveMemberQuery>,
 ) -> Result<StatusCode, GroupsError> {
+    query.member = canonicalize_key_selector(&query.member);
     let audit = MutationAudit::new(
         action::REMOVE_MEMBER,
         caller_identity(&user),
