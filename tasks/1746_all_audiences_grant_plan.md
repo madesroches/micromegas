@@ -198,9 +198,6 @@ listings.
   - non-admin → **403** `"only admins may create grants on the '*' audience"`. This is the first
     check in the `!caller.is_admin()` branch, before `caller_holds_pair`, so the 403 does not
     depend on what the caller holds.
-- Delete is unchanged. A non-admin may still remove their own `user:` row or a
-  row they created (they can only have the latter if an admin made them `created_by`, which does
-  not happen in practice).
 - The audit log records the triple as-is (`MutationAudit::grant`). No change.
 - `caller_holds_pair`, `/visible`, `/my-audiences`, and `list_audience_grants()` compare
   `audience` literally. So a `*` grant shows up as its own `(*, read)` pair, and holding it does
@@ -225,8 +222,10 @@ selector is `*`.
 - `audienceValid` becomes `audienceInput !== '' && validateGrantAudience(...) === null`.
 - The audience field renders the error inline (red text, replacing the static hint) when it is
   non-null. When the input is `*` and valid, the hint reads "All audiences, current and future —
-  read only." When the input is `*` and the axis is mint, the mint error is shown. The issue's
-  "point at the everyone selector" case is covered by the selector-`*` message.
+  read only." When the input is `*` and the axis is mint, the mint error is shown. The
+  "point at the everyone selector" case is covered by hiding the `everyone` kind while the audience is
+  `*`; the selector-`*` message stays as a fallback in `validateGrantAudience` (covered by
+  `audience-grants-api.test.ts`).
 - `selectorError` is rendered below the selector preview when `idInput !== ''`, so the dialog
   does not open with an error showing.
 - When the audience is `*`, the `everyone` kind is removed from `kinds`, and switching to `*`
@@ -280,7 +279,8 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
   `db_snapshot::report_skipped(name, &skipped)`. It emits `warn!` per skipped row, naming the
   store and the reason. It only logs. Each `fetch` also emits its own literal-named metric next to
   the call (`imetric!` needs a static name): `audience_grant_skipped_row_count` /
-  `group_skipped_row_count`.
+  `group_skipped_row_count`. The metric carries `skipped.len()` on every refresh, 0 included, and
+  `report_skipped` is called only when `skipped` is non-empty (the maintenance.rs data-integrity pattern).
   This repeats once per refresh (one TTL) for as long as the row exists. That is the intended
   signal: an operator has to fix or delete the row.
 - `authorize_mint` (`ingestion_keys.rs:378`): uses `.value`, and `warn!`s any skipped rows. Its
@@ -304,9 +304,10 @@ do, so skipping a malformed row is fail-closed for that row and keeps everyone e
 
 1. **Auth** (`rust/auth/src/policy.rs`): `ALL_AUDIENCES`, `is_valid_grant_audience`, the
    `all_audiences_read` field and its handling in `parse`, `from_rows`, and `merge`, the
-   `ReadableAudiences` enum (`new` is replaced by constructing `Listed(..)`; `into_inner` call
+   `ReadableAudiences` enum (`new` is replaced by constructing `Listed(..)`, including
+   `read_policy_threading_tests.rs:332` and `policy.rs:533`; `into_inner` call
    sites, ~20 in `policy_tests.rs`, 3 in `db_audience_grants_tests.rs`, and
-   `read_policy_threading_tests.rs:332`, `policy.rs:533`, move to matching), the `Every` branch in `AudienceReadPolicy::resolve`, and doc
+   `read_policy_threading_tests.rs:179` and `:234`, move to matching), the `Every` branch in `AudienceReadPolicy::resolve`, and doc
    comments (module doc, `ReadPolicy` "can never return all" wording: `Every` is still not
    `All`; the resolve formula block, the `ReadPolicy` "maximally permissive still has to enumerate the
    audiences" passage at ~`:418-422`, and the `ReadableAudiences::new` citation at `:427`). Update `db_audience_grants.rs`'s fetch doc if it names the
