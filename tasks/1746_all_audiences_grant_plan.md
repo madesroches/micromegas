@@ -515,9 +515,12 @@ would be obvious on the first run.
 
 1. Start the monolith with OIDC configured and ingestion auth on: export
    `MICROMEGAS_OIDC_CONFIG` (as in `local_test_env/ai_scripts/start_services_with_oidc.py`, which
-   requires it already set), `MICROMEGAS_STATE_SECRET`, and `MICROMEGAS_AUTH_REDIRECT_URI`, then
-   run `micromegas-monolith --roles all --ingestion-listen-addr 127.0.0.1:9000 --frontend-dir
-   ../analytics-web-app/dist > /tmp/monolith.log 2>&1` directly from `rust/` with no `--disable-auth` and no `--disable-ingestion-auth`, against a v13 database.
+   requires it already set), `MICROMEGAS_STATE_SECRET`, `MICROMEGAS_AUTH_REDIRECT_URI`,
+   `MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:3000`, and `MICROMEGAS_APP_SQL_CONNECTION_STRING`
+   (`postgres://$MICROMEGAS_DB_USERNAME:$MICROMEGAS_DB_PASSWD@127.0.0.1:$MICROMEGAS_DB_PORT/micromegas_app`,
+   as `start_services.py` builds it; the web server exits at startup without the last two), then
+   run `cargo run --bin micromegas-monolith -- --roles all --ingestion-listen-addr 127.0.0.1:9000
+   --frontend-dir ../analytics-web-app/dist > /tmp/monolith.log 2>&1` from `rust/` with no `--disable-auth` and no `--disable-ingestion-auth`, against a v13 database.
    (`start_services.py --monolith` passes `--disable-auth`, under which every query runs as
    `ReadScope::All` and no grant behavior is visible; with OIDC it passes
    `--disable-ingestion-auth`, so ingestion keys would not stamp an audience.)
@@ -529,7 +532,8 @@ would be obvious on the first run.
 3. `micromegas-grants --url http://127.0.0.1:3000 create '*' read key:<K>` → created.
    `create '*' mint key:<K>` → 400. `create '*' read '*'` → 400. As a non-admin with
    self-service on, `create '*' read user:<me>` → 403.
-4. Run `micromegas-setup-telemetry --url http://127.0.0.1:3000 --name <name> --audience fresh-aud` to mint an ingestion key into a new
+4. Run `micromegas-setup-telemetry --url http://127.0.0.1:3000 --otlp-endpoint
+   http://127.0.0.1:9000/ingestion/otlp --name <name> --audience fresh-aud` to mint an ingestion key into a new
    audience, and ingest a process with it. Within the auth cache TTL (default 60 s), K reads
    `fresh-aud` rows (`SELECT DISTINCT audience FROM processes`), with no further grant.
    `list_partitions()` with K still hides `'global'` rows.
