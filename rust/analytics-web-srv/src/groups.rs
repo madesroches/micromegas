@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use micromegas::auth::db_snapshot::report_skipped;
 use micromegas::auth::groups::{ADMINS_GROUP, GroupGraph, is_valid_group_name};
 use micromegas::auth::policy::valid_selector;
 use micromegas::tracing::prelude::*;
@@ -72,8 +73,7 @@ pub enum GroupsError {
     Conflict(String),
     Database(sqlx::Error),
     NotConfigured,
-    /// A non-DB internal error -- e.g. `GroupGraph::from_rows` rejecting a snapshot read
-    /// in-transaction.
+    /// A non-DB internal error.
     Internal(String),
 }
 
@@ -577,8 +577,9 @@ async fn add_member_inner(
             sqlx::query_as("SELECT group_name, member FROM group_members")
                 .fetch_all(&mut *tx)
                 .await?;
-        let graph = GroupGraph::from_rows(group_names, member_rows)
-            .map_err(|e| GroupsError::Internal(format!("querying the group graph: {e:#}")))?;
+        let parsed = GroupGraph::from_rows(group_names, member_rows);
+        report_skipped("group store", &parsed.skipped);
+        let graph = parsed.value;
         if graph.nesting_would_cycle(&name, nested) {
             return Err(GroupsError::Conflict(format!(
                 "adding {:?} as a member of {name:?} would create a cycle",
@@ -733,9 +734,9 @@ async fn remove_member_inner(
     let post_removal_members = member_rows
         .into_iter()
         .filter(|(group_name, member)| !(*group_name == name && *member == query.member));
-    let graph = GroupGraph::from_rows(group_names, post_removal_members).map_err(|e| {
-        GroupsError::Internal(format!("building the post-removal group graph: {e:#}"))
-    })?;
+    let parsed = GroupGraph::from_rows(group_names, post_removal_members);
+    report_skipped("group store", &parsed.skipped);
+    let graph = parsed.value;
     if !graph.any_principal_reaches(ADMINS_GROUP) {
         return Err(GroupsError::Conflict(
             "removing this member would leave admins reachable only through direct database \

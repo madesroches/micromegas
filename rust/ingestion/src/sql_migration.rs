@@ -5,7 +5,7 @@ use sqlx::Executor;
 use sqlx::Row;
 
 /// The latest schema version for the data lake.
-pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 13;
+pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 14;
 
 /// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
@@ -218,10 +218,10 @@ pub async fn upgrade_data_lake_schema_v6(
 /// key, so there is no surrogate `grant_id` the way `ingestion_api_keys.key_id` has one (a grant
 /// carries no secret to keep unlinkable from its own identity). No `revoked_at`/`revoked_by`
 /// either -- grants are hard-`DELETE`d, since a removed grant has no ongoing artifact whose
-/// provenance a caller might later need. The two `CHECK` constraints mirror the same validation
-/// `AudienceGrants::from_rows` (`rust/auth/src/policy.rs`) re-runs independently in Rust, so a row
-/// inserted by any means other than the admin API (a manual `psql` fix, a future migration) still
-/// can't produce an unparseable or unreadable grant silently.
+/// provenance a caller might later need. The shape `CHECK` constraints declared here (audience
+/// name and axis) were dropped in v14: `AudienceGrants::from_rows` (`rust/auth/src/policy.rs`)
+/// validates in Rust and skips a malformed row, so a row inserted by any means other than the
+/// admin API (a manual `psql` fix, a future migration) is inert rather than a hazard.
 pub async fn upgrade_data_lake_schema_v7(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<()> {
@@ -485,6 +485,31 @@ pub async fn upgrade_data_lake_schema_v13(
     Ok(())
 }
 
+/// Upgrades the data lake schema to version 14.
+/// Drops the last grant/group shape CHECKs: `audience_grants_audience_name` (a grant audience may
+/// now be `*`), the `audience_grants` axis CHECK (declared inline in v7, so Postgres auto-named
+/// it `audience_grants_axis_check`), and `groups_name`. Grant and group vocabulary is validated in
+/// code only; a malformed row written by direct SQL is skipped by the snapshot loaders.
+pub async fn upgrade_data_lake_schema_v14(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    tr.execute(
+        "ALTER TABLE audience_grants DROP CONSTRAINT IF EXISTS audience_grants_audience_name;",
+    )
+    .await
+    .with_context(|| "dropping audience_grants_audience_name")?;
+    tr.execute("ALTER TABLE audience_grants DROP CONSTRAINT IF EXISTS audience_grants_axis_check;")
+        .await
+        .with_context(|| "dropping audience_grants_axis_check")?;
+    tr.execute("ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_name;")
+        .await
+        .with_context(|| "dropping groups_name")?;
+    tr.execute("UPDATE migration SET version=14;")
+        .await
+        .with_context(|| "updating data lake schema version to 14")?;
+    Ok(())
+}
+
 /// Checks whether a specific index is valid in `pg_index`.
 /// If the index is invalid, drops it and returns `Ok(false)`.
 /// If valid, returns `Ok(true)`.
@@ -651,6 +676,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         info!("upgrading data_lake_schema to v13");
         let mut tr = pool.begin().await?;
         upgrade_data_lake_schema_v13(&mut tr).await?;
+        current_version = read_data_lake_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 13 == current_version {
+        info!("upgrading data_lake_schema to v14");
+        let mut tr = pool.begin().await?;
+        upgrade_data_lake_schema_v14(&mut tr).await?;
         current_version = read_data_lake_schema_version(&mut tr).await;
         tr.commit().await?;
     }

@@ -377,6 +377,49 @@ async fn streams_plans_with_a_direct_audience_filter_no_join() {
 }
 
 #[tokio::test]
+async fn every_audience_streams_plans_an_is_not_null_filter_not_an_in_list() {
+    let plan = optimized_plan(
+        ReadScope::EveryAudience,
+        IsolationConfig::default(),
+        "SELECT * FROM streams",
+    )
+    .await
+    .expect("streams must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("IS NOT NULL") && !plan_text.contains(" IN ("),
+        "streams under EveryAudience must filter on `audience IS NOT NULL`, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn every_audience_semi_join_view_keeps_its_subquery_with_is_not_null() {
+    let plan = optimized_plan(
+        ReadScope::EveryAudience,
+        IsolationConfig::default(),
+        "SELECT * FROM test_process_id_only",
+    )
+    .await
+    .expect("a process_id-only view must plan");
+    let plan_text = format!("{plan}");
+    assert!(
+        plan_text.contains("LeftSemi Join") && plan_text.contains("IS NOT NULL"),
+        "expected the semi-join with resolved_audience IS NOT NULL, got:\n{plan_text}"
+    );
+}
+
+#[tokio::test]
+async fn every_audience_public_view_set_gets_no_predicate() {
+    let config = IsolationConfig {
+        public_view_sets: vec!["blocks".to_string()],
+    };
+    let plan = optimized_plan(ReadScope::EveryAudience, config, "SELECT * FROM blocks")
+        .await
+        .expect("a public view set must plan");
+    assert!(!format!("{plan}").contains("Filter"));
+}
+
+#[tokio::test]
 async fn unhandled_view_set_fails_analysis_loudly() {
     let config = IsolationConfig::default();
     let err = optimized_plan(scope(&["user:a"]), config, "SELECT * FROM test_no_branch")

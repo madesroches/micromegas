@@ -53,7 +53,7 @@
 //!
 //! | View set | Branch |
 //! |---|---|
-//! | `processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats`, and any DDL-defined view carrying an `audience` column | `column filter`: direct `audience IN (...)` filter on the view's own column -- no join |
+//! | `processes`, `streams`, `blocks`, `log_entries`, `measures`, `log_stats`, and any DDL-defined view carrying an `audience` column | `column filter`: direct `audience IN (...)` filter on the view's own column (`audience IS NOT NULL` under `EveryAudience`) -- no join |
 //! | `net_spans`, `otel_spans`, `images`, `async_events`, `thread_spans`, scanned as a guarded, non-`'global'` `view_instance(...)` | `skip`: no predicate at all -- `MaterializedView::instance_is_audience_guarded()` reports `AudienceGuard::authorize_view_instance` already denies an unauthorized caller before any row is read, so the subquery predicates below would be redundant |
 //! | `net_spans`, `otel_spans`, `images`, not a guarded instance | `semi-join`: `process_id IN (subquery)` against `per_process_audience` (outer `process_id` cast to `Utf8`: it is `Dictionary(Int32, Utf8)` in these, and nothing coerces an uncorrelated `IN` subquery's join keys once `DecorrelatePredicateSubquery` turns it into a `LeftSemi` join -- the analyzer's own `TypeCoercion` has already run by the time this rule executes) |
 //! | `async_events`, not a guarded instance | no `process_id` column either -- `async_events EXISTS`: literal-valued `EXISTS`, keyed on `get_view_instance_id()` (the process_id string, canonicalized -- see `canonical_view_instance_id`) |
@@ -196,50 +196,43 @@ impl OwnershipRewrite {
         .build()
     }
 
-    /// The caller's audience set. Only ever called after `analyze()` has short-circuited on
-    /// `ReadScope::All`, so the `All` arm here is unreachable in practice; it degrades to "no
-    /// audiences" rather than panicking if that invariant is ever violated.
-    fn audiences(&self) -> &[String] {
+    /// The membership test on `column`: `column IN (audiences)`, `column IS NOT NULL` for
+    /// `EveryAudience`, or `lit(false)` for an empty list -- the fail-closed reading of "caller
+    /// has no audiences" rather than emitting `IN ()` and leaving its behavior to DataFusion.
+    /// An empty list is reachable in production: `public` has no built-in read grant, so a
+    /// caller matching no grant at all resolves to the empty set. Only called after `analyze()` has short-circuited on `ReadScope::All`, so the `All` arm
+    /// degrades to `lit(false)` rather than panicking if that invariant is ever violated.
+    fn membership_predicate(&self, column: Expr) -> Expr {
         match &self.read_scope {
-            ReadScope::All => &[],
-            ReadScope::Audiences(a) => a,
+            ReadScope::All => lit(false),
+            ReadScope::EveryAudience => column.is_not_null(),
+            ReadScope::Audiences(audiences) if audiences.is_empty() => lit(false),
+            ReadScope::Audiences(audiences) => column.in_list(
+                audiences
+                    .iter()
+                    .map(|a| lit(ScalarValue::Utf8(Some(a.clone()))))
+                    .collect(),
+                false,
+            ),
         }
     }
 
-    /// `resolved_audience IN (audiences)`, or `lit(false)` when `audiences` is empty -- the
-    /// fail-closed reading of "caller has no audiences" rather than emitting `IN ()` and leaving
-    /// its behavior to DataFusion (`ReadScope::Audiences` can legitimately resolve to an empty
-    /// set -- `public` has no built-in read grant, so a caller matching no grant at all,
-    /// including the seeded `('public', 'read', '*')` row, resolves to the empty set, and that
-    /// empty set is now reachable in production, not just in tests). No `coalesce` here: the column is
-    /// non-null by construction, because the extraction sites already coalesced a
+    /// `resolved_audience` membership (see [`Self::membership_predicate`]). No `coalesce` here:
+    /// the column is non-null by construction, because the extraction sites already coalesced a
     /// never-stamped process's missing property to the deployment default before it was
     /// materialized.
     fn resolved_predicate(&self) -> Expr {
-        let audiences = self.audiences();
-        if audiences.is_empty() {
-            return lit(false);
-        }
-        col("resolved_audience").in_list(
-            audiences
-                .iter()
-                .map(|a| lit(ScalarValue::Utf8(Some(a.clone()))))
-                .collect(),
-            false,
-        )
+        self.membership_predicate(col("resolved_audience"))
     }
 
-    /// The column-filter branch: `audience IN (caller audiences)`; `false` for an empty set
-    /// (fail-closed, as [`Self::resolved_predicate`] already does). The column is declared `NOT NULL` on
+    /// The column-filter branch: `audience IN (caller audiences)`, `audience IS NOT NULL` under
+    /// `EveryAudience`; `false` for an empty set (fail-closed, as [`Self::resolved_predicate`]
+    /// already does). The column is declared `NOT NULL` on
     /// `blocks`/`log_entries`/`measures` and non-null by construction (though declared nullable)
     /// on `processes`/`streams`/`log_stats`, so there is no unstamped case either way -- a
     /// DDL-defined view's `audience` column is a documented author obligation to keep non-`NULL`
     /// the same way (see `view_definition.rs`).
     fn audience_column_predicate(&self, table_name: &TableReference, field: &Field) -> Expr {
-        let audiences = self.audiences();
-        if audiences.is_empty() {
-            return lit(false);
-        }
         let raw = Expr::Column(Column::new(Some(table_name.clone()), "audience"));
         // This rule runs after DataFusion's own TypeCoercion pass, so the Dictionary(Int32, Utf8)
         // column every audience-carrying view carries must be cast to compare against Utf8
@@ -254,13 +247,7 @@ impl OwnershipRewrite {
         } else {
             cast(raw, DataType::Utf8)
         };
-        lhs.in_list(
-            audiences
-                .iter()
-                .map(|a| lit(ScalarValue::Utf8(Some(a.clone()))))
-                .collect(),
-            false,
-        )
+        self.membership_predicate(lhs)
     }
 
     /// The semi-join branch's shared `IN`-subquery plan: `per_process_audience` filtered by

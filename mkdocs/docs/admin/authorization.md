@@ -9,7 +9,8 @@ map** says which principals may read from, and mint keys into, each audience.
 Queries are filtered to the caller's own audiences.
 
 Filtering activates whenever authentication does: an authenticated session gets
-`ReadScope::Audiences`, a `--disable-auth` one keeps `ReadScope::All` and reads
+`ReadScope::Audiences` (or `ReadScope::EveryAudience` when it holds a `*`-audience read
+grant), a `--disable-auth` one keeps `ReadScope::All` and reads
 everything. There is no separate switch — what an identity-less caller sees is
 shaped by `MICROMEGAS_DEFAULT_AUDIENCE` and the grant map.
 
@@ -67,6 +68,19 @@ Audience names are `[A-Za-z0-9_-]{1,255}`, case-sensitive, with no
 normalization. The two axes are independent: `read` grants visibility, `mint`
 grants authority to issue an ingestion key bound to the audience. Neither
 implies the other.
+
+A grant's audience may also be `*`, meaning **every audience,
+including ones created after the grant**. It is `read` axis only, admin only to
+create, and never combined with the `*` selector. It lets an analytics key (or a
+user or group) read the whole lake without being admin and without one grant per
+audience:
+
+```bash
+micromegas-grants --url https://analytics.example.com create '*' read key:<key_id>
+```
+
+Quote the `*` so the shell does not expand it. A caller holding it is filtered to
+"any stamped audience"; `'global'` partition rows still need admin.
 
 | Selector | Matches |
 |---|---|
@@ -168,7 +182,10 @@ no streams and retention has elapsed.
 
 ## Query-time audience filtering {#query-time-audience-filtering}
 
-Two layers narrow reads under a `ReadScope::Audiences` session.
+Two layers narrow reads under a `ReadScope::Audiences` (or `ReadScope::EveryAudience`) session.
+Under `EveryAudience`, a caller holding a `*` read grant is filtered to "any stamped audience":
+the membership test becomes `audience IS NOT NULL` instead of `audience IN (...)`, and
+`'global'` partition rows still need admin or a public view set.
 
 **Row-level** (`OwnershipRewrite`) injects an audience predicate into every
 `MaterializedView`-backed plan, so a caller sees only rows whose own `audience`
@@ -314,12 +331,11 @@ redeploy:
 ```sql
 CREATE TABLE audience_grants (
   audience   VARCHAR(255) NOT NULL,
-  axis       VARCHAR(4) NOT NULL CHECK (axis IN ('read', 'mint')),
+  axis       VARCHAR(4) NOT NULL,
   selector   VARCHAR(255) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   created_by VARCHAR(255) NOT NULL,
-  PRIMARY KEY (audience, axis, selector),
-  CONSTRAINT audience_grants_audience_name CHECK (audience ~ '^[A-Za-z0-9_-]+$')
+  PRIMARY KEY (audience, axis, selector)
 );
 ```
 
@@ -328,10 +344,11 @@ whole-table snapshot; it is the sole source `AudienceReadPolicy`/
 `AudienceMintPolicy` resolve the `read`/`mint` axes from at request time.
 `analytics-web-srv` is the write surface only; it caches nothing.
 
-Selector shape has no database constraint: it is validated in code only, by the
-routes on write and again on every snapshot load, so a malformed row written
-directly fails the whole snapshot load loudly. The audience-name `CHECK` is
-re-validated in Rust the same way.
+The audience, axis, and selector have no database constraint: they are validated
+in code only, by the routes on write and again on every snapshot load. A
+malformed row written directly is skipped with a warning and counted in the
+`audience_grant_skipped_row_count` metric; it no longer fails the snapshot, so
+one bad row cannot take reads down. Delete or fix the row to stop the warnings.
 
 ### Routes
 
@@ -361,7 +378,9 @@ is grant *administration*: creating/deleting a row in the store, not exercising 
 grants. A non-admin is admitted only with
 the `self_service_mint` setting (env fallback `MICROMEGAS_SELF_SERVICE_MINT`) on, then constrained per call:
 
-- **Create**: `selector` must be `user:`/`group:`/`key:`, never `*` — a caller who can
+- **Create**: the `*` audience (all audiences) is refused with 400 on the `mint` axis and
+  with the `*` selector (`(*, read, *)` would let every principal read every audience), and
+  with 403 for a non-admin, checked before `caller_holds_pair`. Otherwise `selector` must be `user:`/`group:`/`key:`, never `*` — a caller who can
   read an audience must not be able to open it to every principal. The caller
   must **hold** `(audience, axis)` via an identity selector. Delegation is per
   axis: a `read` grant shares `read`, a `mint` grant shares `mint`, neither

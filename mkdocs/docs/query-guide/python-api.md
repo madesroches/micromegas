@@ -963,11 +963,13 @@ once the `self_service_mint` setting is on (see
 ```bash
 micromegas-grants --url https://analytics.example.com create team-alpha read group:eng
 micromegas-grants --url https://analytics.example.com delete team-alpha read group:eng
+# every audience, current and future (read axis, admin only); quote the *
+micromegas-grants --url https://analytics.example.com create '*' read key:<key_id>
 ```
 
 `--url` always points at `analytics-web-srv`'s base URL. Two subcommands:
 
-- `create <audience> <axis> <selector>` — creates (or reports the pre-existing) grant row.
+- `create <audience> <axis> <selector>` — `<audience>` is an audience name, or `'*'` for all audiences (read axis, admin only); creates (or reports the pre-existing) grant row.
   `<axis>` is `read` or `mint`; `<selector>` is `*`, `user:<id>`, `group:<id>`, or `key:<key_id>` (read axis only).
 - `delete <audience> <axis> <selector>` — deletes one grant row, keyed by its natural triple.
 

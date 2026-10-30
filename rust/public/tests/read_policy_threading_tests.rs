@@ -311,6 +311,17 @@ impl ReadPolicy for FailingReadPolicy {
     }
 }
 
+/// A `ReadPolicy` resolving every caller to `ReadableAudiences::Every`.
+#[derive(Debug)]
+struct EveryReadPolicy;
+
+#[async_trait]
+impl ReadPolicy for EveryReadPolicy {
+    async fn resolve(&self, _caller: &AuthContext) -> Result<ReadableAudiences> {
+        Ok(ReadableAudiences::Every)
+    }
+}
+
 /// Records every `AuthContext` it was called with, alongside the `ReadableAudiences` it
 /// returned -- a deterministic function of the caller's `subject` (not a fixed constant), so
 /// that comparing the resolved scope across two calls is a meaningful assertion rather than a
@@ -329,7 +340,8 @@ impl RecordingReadPolicy {
 #[async_trait]
 impl ReadPolicy for RecordingReadPolicy {
     async fn resolve(&self, caller: &AuthContext) -> Result<ReadableAudiences> {
-        let resolved = ReadableAudiences::new(Arc::from([format!("subject:{}", caller.subject)]));
+        let resolved =
+            ReadableAudiences::Listed(Arc::from([format!("subject:{}", caller.subject)]));
         self.calls
             .lock()
             .expect("lock")
@@ -439,6 +451,30 @@ async fn explain_processes(addr: SocketAddr) -> String {
     datafusion::arrow::util::pretty::pretty_format_batches(&batches)
         .expect("format")
         .to_string()
+}
+
+/// `ReadableAudiences::Every` maps to a filtered scope, never `ReadScope::All`: the `processes`
+/// plan carries an `audience IS NOT NULL` predicate.
+#[tokio::test]
+async fn every_audience_resolution_stays_filtered() {
+    let empty_env = EnvFallbacks {
+        isolation: Arc::new(IsolationConfig::default()),
+        self_service: SelfServiceSettings::default(),
+        retention_days: 90,
+    };
+    let plan = explain_processes(
+        start_server(
+            Some(api_key_provider("test", "secret")),
+            Arc::new(EveryReadPolicy),
+            SettingsSource::with_overrides(empty_env, DbOverrides::default()),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        plan.contains("IS NOT NULL") && plan.contains("audience"),
+        "expected an audience IS NOT NULL filter in the plan:\n{plan}"
+    );
 }
 
 /// The `Some(auth_ctx)` arm must evaluate the request with the stored isolation config, not the

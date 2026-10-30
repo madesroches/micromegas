@@ -218,6 +218,12 @@ access, revoke a share they created, and mint an ingestion key into an audience 
 into. Admins see the whole store and keep every power they have today (any selector including
 `*`; delete any row); a non-admin sees a scoped, fewer-controls version of the same page.
 
+A grant on the `*` audience (every audience, read axis only) shows as a card labeled
+**All audiences**, listed first, with a note that it applies to audiences created later. The Add
+dialog accepts `*` as the audience on the read axis (admin only), rejects it on mint, hides the
+`everyone` selector for it, and shows an inline error for an audience outside
+`[A-Za-z0-9_-]` instead of silently disabling **Add grant**.
+
 Reachable from a new **Audience access** item in the header user menu (everyone) and from an
 **Audience Access** card on the [Admin hub](#admin-hub) page (also every authenticated user).
 

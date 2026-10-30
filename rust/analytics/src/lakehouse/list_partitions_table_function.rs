@@ -179,7 +179,7 @@ impl TableProvider for ListPartitionsTableProvider {
         // (`make_empty_record_batch`), which doesn't match this provider's 15-column schema and
         // fails once `MemoryStream` projects it. Build the empty batch directly from this
         // provider's own schema instead -- this is the normal state of both a fresh deployment
-        // with no partitions materialized yet, and a `ReadScope::Audiences` caller with no
+        // with no partitions materialized yet, and a restricted-scope caller with no
         // readable partitions. Note `filter_rows` already stops as soon as `limit` matching rows
         // have been kept (see its doc comment), so `rows.len() <= limit.unwrap_or(usize::MAX)`
         // always holds here -- no further truncation needed.
@@ -208,7 +208,7 @@ impl ListPartitionsTableProvider {
     /// at most a handful of audience-resolution round trips instead of one unbounded batch.
     const RESOLVE_CHUNK_ROWS: usize = 1_000;
 
-    /// Row filtering for a `ReadScope::Audiences` caller: a `view_instance_id` that
+    /// Row filtering for a restricted (`Audiences` or `EveryAudience`) caller: a `view_instance_id` that
     /// parses as a `Uuid` is kept iff it resolves (as `IdKind::ProcessOrStream`) to a readable
     /// audience; the literal `'global'` is kept iff `AudienceGuard::global_rows_visible` says so
     /// for that row's `view_set_name`; anything else is dropped (fail-closed -- nothing produces

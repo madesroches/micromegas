@@ -3,7 +3,8 @@
 //!
 //! **No enforcement lands with this module itself.** This module fixes the *shape* of
 //! authorization -- every caller of these traits must deny on `Err`, and `ReadPolicy` cannot
-//! express "grant everything" at all -- while the resolved `ReadableAudiences`/`ReadScope` is
+//! express `ReadScope::All` at all (its widest answer, `ReadableAudiences::Every`, is still
+//! row-filtered) -- while the resolved `ReadableAudiences`/`ReadScope` is
 //! consumed downstream by `OwnershipRewrite` (the row-level filter) and the call-level guard's UDTF/UDF guards. See
 //! `rust/analytics/src/lakehouse/read_scope.rs`.
 //!
@@ -13,6 +14,7 @@
 //! reasoning.
 
 use crate::db_audience_grants::DbAudienceGrantsSource;
+use crate::db_snapshot::Parsed;
 use crate::env::resolve_prefixed_var;
 use crate::types::AuthContext;
 use anyhow::{Result, anyhow};
@@ -50,6 +52,15 @@ pub fn is_valid_audience(aud: &str) -> bool {
         && aud
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The grant audience meaning every audience, current and future. Read axis only.
+pub const ALL_AUDIENCES: &str = "*";
+
+/// `true` if `aud` is a valid audience in a *grant*: [`ALL_AUDIENCES`] or a valid audience name.
+/// `*` is never a valid stamped audience ([`is_valid_audience`] rejects it).
+pub fn is_valid_grant_audience(aud: &str) -> bool {
+    aud == ALL_AUDIENCES || is_valid_audience(aud)
 }
 
 /// Resolves `{prefix}_DEFAULT_AUDIENCE` (falling back to `MICROMEGAS_DEFAULT_AUDIENCE`) --
@@ -267,6 +278,9 @@ impl<'de> Deserialize<'de> for RawAudienceGrants {
 #[derive(Debug, Clone, Default)]
 pub struct AudienceGrants {
     entries: BTreeMap<String, GrantEntry>,
+    /// Selectors on the `('*', read)` pair -- kept apart from `entries` so `readers()` never
+    /// yields `*` as if it were a real audience name.
+    all_audiences_read: Vec<String>,
 }
 
 impl AudienceGrants {
@@ -283,7 +297,7 @@ impl AudienceGrants {
     ///
     /// Validates both axes of the map, not just its JSON shape -- same reason every other knob in
     /// this crate fails startup on a typo rather than shipping inert: every key must satisfy
-    /// [`is_valid_audience`] (`{"group:everyone": [...]}`, the value operators are migrating
+    /// [`is_valid_grant_audience`] (`{"group:everyone": [...]}`, the value operators are migrating
     /// *from*, can never match a stamped audience once the charset excludes `:`), and every
     /// selector on either axis must be `*`, `user:<non-empty>`, `group:<non-empty>`, or a
     /// canonical `key:<uuid>` (an unprefixed or mis-prefixed selector matches no identity axis and
@@ -292,11 +306,12 @@ impl AudienceGrants {
         let raw: RawAudienceGrants =
             serde_json::from_str(raw).map_err(|e| anyhow!("invalid audience grant map: {e}"))?;
         let mut entries = BTreeMap::new();
+        let mut all_audiences_read = Vec::new();
         for (audience, value) in raw.0 {
-            if !is_valid_audience(&audience) {
+            if !is_valid_grant_audience(&audience) {
                 return Err(anyhow!(
                     "invalid audience grant map: {audience:?} is not a valid audience name -- \
-                     must match [A-Za-z0-9_-]{{1,255}}"
+                     must match [A-Za-z0-9_-]{{1,255}} or be '*'"
                 ));
             }
             let (read, mint) = match value {
@@ -317,35 +332,63 @@ impl AudienceGrants {
                      {audience:?} is not allowed on the mint axis -- API keys never mint"
                 ));
             }
+            if audience == ALL_AUDIENCES {
+                if !mint.is_empty() {
+                    return Err(anyhow!(
+                        "invalid audience grant map: the '*' audience is allowed on the read axis \
+                         only"
+                    ));
+                }
+                all_audiences_read = read;
+                continue;
+            }
             entries.insert(audience, GrantEntry { read, mint });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            all_audiences_read,
+        })
     }
 
     /// Builds an `AudienceGrants` from `(audience, axis, selector)` triples -- the DB-store
-    /// analogue of [`Self::parse`]. Runs the *same* [`is_valid_audience`]/[`valid_selector`]
-    /// checks `parse` runs, so a row written by a direct `psql` session still can't reach a policy
-    /// decision: this is the one place both the JSON path and the DB path fail closed on a malformed row.
-    pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Result<Self> {
+    /// analogue of [`Self::parse`]. Runs the *same* [`is_valid_grant_audience`]/[`valid_selector`]
+    /// checks `parse` runs, but skips a malformed row (reported in [`Parsed::skipped`]) instead of
+    /// failing the batch: rows only grant, so dropping one is fail-closed for that row and keeps
+    /// every other grant working.
+    pub fn from_rows(rows: impl IntoIterator<Item = (String, GrantAxis, String)>) -> Parsed<Self> {
         let mut entries: BTreeMap<String, GrantEntry> = BTreeMap::new();
+        let mut all_audiences_read = Vec::new();
+        let mut skipped = Vec::new();
         for (audience, axis, selector) in rows {
-            if !is_valid_audience(&audience) {
-                return Err(anyhow!(
-                    "invalid audience grant row: {audience:?} is not a valid audience name -- \
-                     must match [A-Za-z0-9_-]{{1,255}}"
-                ));
+            let axis_name = match axis {
+                GrantAxis::Read => "read",
+                GrantAxis::Mint => "mint",
+            };
+            let row = format!("audience_grants row ({audience:?}, {axis_name}, {selector})");
+            if !is_valid_grant_audience(&audience) {
+                skipped.push(format!("{row}: invalid audience name"));
+                continue;
             }
             if !valid_selector(&selector) {
-                return Err(anyhow!(
-                    "invalid audience grant row: selector {selector:?} for audience \
-                     {audience:?} must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
-                ));
+                skipped.push(format!("{row}: invalid selector"));
+                continue;
             }
             if axis == GrantAxis::Mint && selector.starts_with("key:") {
-                return Err(anyhow!(
-                    "invalid audience grant row: selector {selector:?} for audience \
-                     {audience:?} is not allowed on the mint axis -- API keys never mint"
+                skipped.push(format!(
+                    "{row}: key selectors are not allowed on the mint axis"
                 ));
+                continue;
+            }
+            if audience == ALL_AUDIENCES {
+                match axis {
+                    GrantAxis::Read => all_audiences_read.push(selector),
+                    GrantAxis::Mint => {
+                        skipped.push(format!(
+                            "{row}: the '*' audience is allowed on the read axis only"
+                        ));
+                    }
+                }
+                continue;
             }
             let entry = entries.entry(audience).or_default();
             match axis {
@@ -353,7 +396,13 @@ impl AudienceGrants {
                 GrantAxis::Mint => entry.mint.push(selector),
             }
         }
-        Ok(Self { entries })
+        Parsed {
+            value: Self {
+                entries,
+                all_audiences_read,
+            },
+            skipped,
+        }
     }
 
     /// Unions each audience's `read`/`mint` selector lists across `self` and `other`: a selector
@@ -373,7 +422,12 @@ impl AudienceGrants {
             entry.read.extend(other_entry.read.iter().cloned());
             entry.mint.extend(other_entry.mint.iter().cloned());
         }
-        Self { entries }
+        let mut all_audiences_read = self.all_audiences_read.clone();
+        all_audiences_read.extend(other.all_audiences_read.iter().cloned());
+        Self {
+            entries,
+            all_audiences_read,
+        }
     }
 
     fn readers(&self) -> impl Iterator<Item = (&String, &[String])> {
@@ -388,33 +442,26 @@ impl AudienceGrants {
     }
 }
 
-/// A policy's resolved set of audiences a caller may read.
+/// What a policy resolved a caller may read.
 ///
-/// Newtype over `Arc<[String]>`, not a bare `Vec<String>`/`Arc<[String]>` -- so a policy's
-/// result can never be confused with any other string list on a security path.
+/// An enum, not a bare string list, so a policy's result can never be confused with any other
+/// string list on a security path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadableAudiences(Arc<[String]>);
-
-impl ReadableAudiences {
-    /// Wraps an already-computed audience set.
-    pub fn new(audiences: Arc<[String]>) -> Self {
-        Self(audiences)
-    }
-
-    /// Unwraps the audience set. This is the one cross-crate conversion point: the
-    /// `rust/public` bridge calls this to build
-    /// `micromegas_analytics::lakehouse::read_scope::ReadScope::Audiences`.
-    pub fn into_inner(self) -> Arc<[String]> {
-        self.0
-    }
+pub enum ReadableAudiences {
+    /// Exactly these audiences.
+    Listed(Arc<[String]>),
+    /// Every audience, including ones created later (a `*`-audience read grant). Still
+    /// row-filtered downstream: only rows that carry an audience are readable.
+    Every,
 }
 
 /// Resolves the set of audiences an authenticated caller may read.
 ///
 /// `resolve` can **never** return "all" -- `ReadScope::All` is deliberately not a policy output.
 /// It is the marker only internal (non-request) callers pass, which is what keeps "who granted
-/// themselves `All`?" a greppable question with a small, auditable answer set. A policy that
-/// wants to be maximally permissive still has to enumerate the audiences that make it so.
+/// themselves `All`?" a greppable question with a small, auditable answer set. The most
+/// permissive result is [`ReadableAudiences::Every`], which is not `All`: it keeps the row-level
+/// filter and the call-level guard, and only widens the membership test to "carries an audience".
 ///
 /// `async` and fallible because grants can be resolved from a store -- nested groups, plus
 /// group→audience grants -- which cannot live behind a sync, infallible signature.
@@ -424,7 +471,7 @@ impl ReadableAudiences {
 /// attached it still cannot fail.
 ///
 /// **Every caller must deny on `Err`.** An `Err` here means "the policy could not be evaluated" --
-/// never soften it into `ReadableAudiences::new(Arc::from([]))` (that would read as a legitimate,
+/// never soften it into `ReadableAudiences::Listed(Arc::from([]))` (that would read as a legitimate,
 /// audited fail-closed decision) and never into `ReadScope::All` (a silent fail-open bypass).
 #[async_trait]
 pub trait ReadPolicy: Send + Sync + Debug {
@@ -457,6 +504,8 @@ pub trait MintPolicy: Send + Sync + Debug {
 /// snapshot -- with no identity derivation anywhere. Resolves the readable set:
 ///
 /// ```text
+/// Every                                  if some selector in grants["*"].read matches the caller
+/// else
 /// { a : "*"            ∈ grants[a].read }
 ///   ∪ { a : "user:<email>" ∈ grants[a].read }                  if email present
 ///   ∪ { a : "group:<g>"    ∈ grants[a].read for some g ∈ caller.memberships }
@@ -510,6 +559,21 @@ impl ReadPolicy for AudienceReadPolicy {
             Some(store) => Some(store.current().await?),
             None => None,
         };
+        // A `*`-audience read grant short-circuits the per-audience loop.
+        if self
+            .grants
+            .all_audiences_read
+            .iter()
+            .any(|s| selector_matches(s, caller))
+            || store_grants.as_ref().is_some_and(|grants| {
+                grants
+                    .all_audiences_read
+                    .iter()
+                    .any(|s| selector_matches(s, caller))
+            })
+        {
+            return Ok(ReadableAudiences::Every);
+        }
         let mut set = BTreeSet::new();
         // The static map and the store snapshot are checked as two separate sources -- a
         // selector present in either grants access -- rather than merged into one map, so
@@ -530,7 +594,7 @@ impl ReadPolicy for AudienceReadPolicy {
             set.insert(audience.clone());
         }
         let audiences: Arc<[String]> = set.into_iter().collect::<Vec<_>>().into();
-        Ok(ReadableAudiences::new(audiences))
+        Ok(ReadableAudiences::Listed(audiences))
     }
 }
 

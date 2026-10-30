@@ -10,6 +10,7 @@ import {
   fetchMyAudiences,
   fetchVisibleGrants,
   normalizeKeyId,
+  validateGrantAudience,
   validateSelector,
 } from '../audience-grants-api'
 
@@ -241,6 +242,31 @@ describe('audience-grants-api', () => {
       // Multi-byte characters must be counted by UTF-8 byte length, not `.length`.
       const multiByte = `user:${'é'.repeat(MAX_SELECTOR_BYTES - 'user:'.length)}`
       expect(validateSelector(multiByte)).not.toBeNull()
+    })
+  })
+
+  describe('validateGrantAudience', () => {
+    it('shows no error for an empty audience', () => {
+      expect(validateGrantAudience('', 'read', '*')).toBeNull()
+    })
+
+    it('accepts a plain name and the * audience on read', () => {
+      expect(validateGrantAudience('team-alpha', 'mint', '*')).toBeNull()
+      expect(validateGrantAudience('*', 'read', 'user:a@example.com')).toBeNull()
+    })
+
+    it('rejects a name outside the charset, including partial wildcards', () => {
+      expect(validateGrantAudience('team alpha', 'read', '*')).not.toBeNull()
+      expect(validateGrantAudience('team-*', 'read', 'user:a')).not.toBeNull()
+      expect(validateGrantAudience('**', 'read', 'user:a')).not.toBeNull()
+    })
+
+    it('rejects * on the mint axis', () => {
+      expect(validateGrantAudience('*', 'mint', 'user:a')).toMatch(/read-axis only/)
+    })
+
+    it('rejects the * audience with the * selector', () => {
+      expect(validateGrantAudience('*', 'read', '*')).toMatch(/everyone selector/)
     })
   })
 })

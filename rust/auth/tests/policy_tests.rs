@@ -10,12 +10,26 @@ use micromegas_auth::env::resolve_prefixed_var;
 use micromegas_auth::groups::ADMINS_GROUP;
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE,
-    ReadPolicy, caller_selectors, default_audience_from_env, is_valid_audience, key_selector,
-    parse_key_selector, valid_selector,
+    ReadPolicy, ReadableAudiences, caller_selectors, default_audience_from_env, is_valid_audience,
+    is_valid_grant_audience, key_selector, parse_key_selector, valid_selector,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
 use uuid::Uuid;
+
+/// Test shorthand: the listed audiences of a resolution, panicking on `Every`.
+trait IntoListed {
+    fn into_listed(self) -> std::sync::Arc<[String]>;
+}
+
+impl IntoListed for ReadableAudiences {
+    fn into_listed(self) -> std::sync::Arc<[String]> {
+        match self {
+            ReadableAudiences::Listed(a) => a,
+            ReadableAudiences::Every => panic!("expected Listed, got Every"),
+        }
+    }
+}
 
 /// Builds an `AuthContext` with sane defaults, overridden by the fields tests care about.
 /// `groups` becomes `memberships`; `is_admin` additionally appends `ADMINS_GROUP` to it, so
@@ -102,7 +116,11 @@ async fn read_policy_public_is_present_when_granted() {
     let policy = AudienceReadPolicy::new(grants(r#"{"public": ["*"]}"#));
     let ctx = caller(None, vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(resolved.into_inner().contains(&PUBLIC_AUDIENCE.to_string()));
+    assert!(
+        resolved
+            .into_listed()
+            .contains(&PUBLIC_AUDIENCE.to_string())
+    );
 }
 
 #[tokio::test]
@@ -110,7 +128,7 @@ async fn read_policy_group_selector_matches_a_claim_value() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
     let ctx = caller(None, vec!["eng".to_string()], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 /// A `group:` selector matches a membership, and is not confused with a `user:` selector of the
@@ -121,7 +139,7 @@ async fn read_policy_group_selector_does_not_match_a_same_named_email() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
     let ctx = caller(Some("eng"), vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(!sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(!sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 #[tokio::test]
@@ -129,7 +147,7 @@ async fn read_policy_user_selector_matches_the_email() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["user:alice@example.com"]}"#));
     let ctx = caller(Some("alice@example.com"), vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 #[tokio::test]
@@ -137,7 +155,7 @@ async fn read_policy_star_selector_grants_everyone() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["*"]}"#));
     let ctx = caller(None, vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 #[tokio::test]
@@ -145,7 +163,7 @@ async fn read_policy_audience_with_no_matching_selector_is_absent() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
     let ctx = caller(None, vec!["sales".to_string()], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert!(!sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(!sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 /// There is no self-audience rule: a caller is granted no audience merely for being named like
@@ -158,7 +176,7 @@ async fn read_policy_no_self_audience_rule() {
     ctx.subject = "team-alpha".to_string();
     let resolved = policy.resolve(&ctx).await.expect("resolve");
     assert!(
-        !sorted(resolved.into_inner()).contains(&"team-alpha".to_string()),
+        !sorted(resolved.into_listed()).contains(&"team-alpha".to_string()),
         "a caller must not read an audience merely for being named like it"
     );
 }
@@ -171,7 +189,7 @@ async fn read_policy_grantless_caller_resolves_to_the_empty_set() {
     let policy = AudienceReadPolicy::new(grants(r#"{"team-alpha": ["group:eng"]}"#));
     let ctx = caller(None, vec![], vec![], false);
     let resolved = policy.resolve(&ctx).await.expect("resolve");
-    assert_eq!(sorted(resolved.into_inner()), Vec::<String>::new());
+    assert_eq!(sorted(resolved.into_listed()), Vec::<String>::new());
 }
 
 /// `read_audiences` (Stage 4b's per-key direct grant) still folds into the read axis independently
@@ -188,7 +206,7 @@ async fn read_policy_read_audiences_folds_into_the_read_axis() {
     );
     let resolved = policy.resolve(&ctx).await.expect("resolve");
     assert_eq!(
-        sorted(resolved.into_inner()),
+        sorted(resolved.into_listed()),
         vec!["team-a".to_string(), "team-b".to_string(),]
     );
 }
@@ -201,11 +219,11 @@ async fn read_policy_editing_a_grant_changes_visibility_with_no_data_change() {
 
     let before = AudienceReadPolicy::new(AudienceGrants::empty());
     let resolved = before.resolve(&bob).await.expect("resolve");
-    assert!(!sorted(resolved.into_inner()).contains(&"alice-laptop".to_string()));
+    assert!(!sorted(resolved.into_listed()).contains(&"alice-laptop".to_string()));
 
     let after = AudienceReadPolicy::new(grants(r#"{"alice-laptop": ["group:leads"]}"#));
     let resolved = after.resolve(&bob).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"alice-laptop".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"alice-laptop".to_string()));
 }
 
 // ---------------------------------------------------------------------------
@@ -563,12 +581,12 @@ async fn from_rows_builds_read_and_mint_lists_from_axis() {
             "user:alice@example.com".to_string(),
         ),
     ])
-    .expect("valid rows");
+    .value;
 
     let read_policy = AudienceReadPolicy::new(grants.clone());
     let reader = caller(None, vec!["eng".to_string()], vec![], false);
     let resolved = read_policy.resolve(&reader).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 
     let mint_policy = AudienceMintPolicy::new(grants);
     let minter = caller(Some("alice@example.com"), vec![], vec![], false);
@@ -579,25 +597,59 @@ async fn from_rows_builds_read_and_mint_lists_from_axis() {
 }
 
 #[test]
-fn from_rows_rejects_an_invalid_audience() {
-    let err = AudienceGrants::from_rows([(
+fn from_rows_skips_an_invalid_audience() {
+    let parsed = AudienceGrants::from_rows([(
         "group:everyone".to_string(),
         GrantAxis::Read,
         "*".to_string(),
-    )])
-    .expect_err("group:everyone is not a valid audience name");
-    assert!(err.to_string().contains("group:everyone"));
+    )]);
+    assert_eq!(parsed.skipped.len(), 1);
+    assert!(parsed.skipped[0].contains("group:everyone"));
 }
 
 #[test]
-fn from_rows_rejects_an_invalid_selector() {
-    let err = AudienceGrants::from_rows([(
+fn from_rows_skips_an_invalid_selector() {
+    let parsed = AudienceGrants::from_rows([(
         "team-alpha".to_string(),
         GrantAxis::Read,
         "not-a-selector".to_string(),
-    )])
-    .expect_err("expected an invalid selector to be rejected");
-    assert!(err.to_string().contains("not-a-selector"));
+    )]);
+    assert_eq!(parsed.skipped.len(), 1);
+    assert!(parsed.skipped[0].contains("not-a-selector"));
+}
+
+#[tokio::test]
+async fn from_rows_skips_bad_rows_and_keeps_the_valid_one() {
+    let parsed = AudienceGrants::from_rows([
+        (
+            "team-alpha".to_string(),
+            GrantAxis::Read,
+            "group:eng".to_string(),
+        ),
+        (
+            "team alpha".to_string(),
+            GrantAxis::Read,
+            "user:a@x".to_string(),
+        ),
+        ("*".to_string(), GrantAxis::Mint, "user:a@x".to_string()),
+        (
+            "team-beta".to_string(),
+            GrantAxis::Mint,
+            format!("key:{KEY_A}"),
+        ),
+        (
+            "team-gamma".to_string(),
+            GrantAxis::Read,
+            "bogus".to_string(),
+        ),
+    ]);
+    assert_eq!(parsed.skipped.len(), 4);
+    let policy = AudienceReadPolicy::new(parsed.value);
+    let eng = caller(None, vec!["eng".to_string()], vec![], false);
+    assert_eq!(
+        sorted(policy.resolve(&eng).await.expect("resolve").into_listed()),
+        vec!["team-alpha".to_string()]
+    );
 }
 
 /// `AudienceGrants::merge` as a standalone utility -- **not** a test of
@@ -621,7 +673,7 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
             "user:carol@example.com".to_string(),
         ),
     ])
-    .expect("valid rows");
+    .value;
 
     let merged = static_grants.merge(&store_grants);
     let policy = AudienceReadPolicy::new(merged);
@@ -632,16 +684,22 @@ async fn merge_unions_disjoint_and_overlapping_audiences() {
             .resolve(&eng_caller)
             .await
             .expect("resolve")
-            .into_inner(),
+            .into_listed(),
     );
     assert!(resolved.contains(&"team-alpha".to_string()));
 
     let anyone = caller(None, vec![], vec![], false);
-    let resolved = sorted(policy.resolve(&anyone).await.expect("resolve").into_inner());
+    let resolved = sorted(
+        policy
+            .resolve(&anyone)
+            .await
+            .expect("resolve")
+            .into_listed(),
+    );
     assert!(resolved.contains(&"team-beta".to_string()));
 
     let carol = caller(Some("carol@example.com"), vec![], vec![], false);
-    let resolved = sorted(policy.resolve(&carol).await.expect("resolve").into_inner());
+    let resolved = sorted(policy.resolve(&carol).await.expect("resolve").into_listed());
     assert!(resolved.contains(&"team-gamma".to_string()));
 }
 
@@ -658,13 +716,13 @@ async fn merge_tolerates_an_identical_selector_in_both_sources() {
         GrantAxis::Read,
         "group:eng".to_string(),
     )])
-    .expect("valid rows");
+    .value;
 
     let merged = static_grants.merge(&store_grants);
     let policy = AudienceReadPolicy::new(merged);
     let eng_caller = caller(None, vec!["eng".to_string()], vec![], false);
     let resolved = policy.resolve(&eng_caller).await.expect("resolve");
-    assert!(sorted(resolved.into_inner()).contains(&"team-alpha".to_string()));
+    assert!(sorted(resolved.into_listed()).contains(&"team-alpha".to_string()));
 }
 
 // `AudienceReadPolicy::with_store`/`AudienceMintPolicy::with_store`: store-outage/merge
@@ -894,11 +952,14 @@ fn key_selector_is_read_axis_only_in_the_grant_map() {
     assert!(AudienceGrants::parse(&format!(r#"{{"a": {{"mint": ["key:{KEY_A}"]}}}}"#)).is_err());
     assert!(
         AudienceGrants::from_rows([("a".to_string(), GrantAxis::Read, format!("key:{KEY_A}"))])
-            .is_ok()
+            .skipped
+            .is_empty()
     );
-    assert!(
+    assert_eq!(
         AudienceGrants::from_rows([("a".to_string(), GrantAxis::Mint, format!("key:{KEY_A}"))])
-            .is_err()
+            .skipped
+            .len(),
+        1
     );
 }
 
@@ -908,7 +969,7 @@ async fn read_policy_key_selector_matches_only_that_analytics_key() {
     let readable = |ctx: AuthContext| {
         let policy = policy.clone();
         async move {
-            sorted(policy.resolve(&ctx).await.expect("resolve").into_inner())
+            sorted(policy.resolve(&ctx).await.expect("resolve").into_listed())
                 .contains(&"secret".to_string())
         }
     };
@@ -938,6 +999,96 @@ async fn mint_policy_analytics_key_never_mints() {
     assert!(mint.resolve_audience(&ctx, Some("A")).await.is_err());
     let read = AudienceReadPolicy::new(grants(json));
     assert!(
-        sorted(read.resolve(&ctx).await.expect("resolve").into_inner()).contains(&"A".to_string())
+        sorted(read.resolve(&ctx).await.expect("resolve").into_listed()).contains(&"A".to_string())
     );
+}
+
+// ---------------------------------------------------------------------------
+// The `*` (all audiences) grant audience
+// ---------------------------------------------------------------------------
+
+#[test]
+fn grant_audience_accepts_star_but_stamped_audience_does_not() {
+    for ok in ["*", "team-alpha", "public"] {
+        assert!(is_valid_grant_audience(ok), "{ok}");
+    }
+    for bad in ["**", "team-*", "", "a b"] {
+        assert!(!is_valid_grant_audience(bad), "{bad:?}");
+    }
+    assert!(!is_valid_audience("*"));
+}
+
+#[test]
+fn parse_accepts_star_audience_on_read_only() {
+    assert!(AudienceGrants::parse(r#"{"*": ["user:a@x"]}"#).is_ok());
+    assert!(AudienceGrants::parse(r#"{"*": {"mint": ["user:a@x"]}}"#).is_err());
+}
+
+#[tokio::test]
+async fn read_policy_star_audience_resolves_to_every() {
+    let key_json = format!(r#"{{"*": ["key:{KEY_A}"], "other": ["user:z@x"]}}"#);
+    for (json, ctx) in [
+        (
+            r#"{"*": ["user:a@x"]}"#.to_string(),
+            caller(Some("a@x"), vec![], vec![], false),
+        ),
+        (
+            r#"{"*": ["group:eng"]}"#.to_string(),
+            caller(None, vec!["eng".to_string()], vec![], false),
+        ),
+        (key_json, key_caller(Some(KEY_A), vec![])),
+    ] {
+        let policy = AudienceReadPolicy::new(grants(&json));
+        assert_eq!(
+            policy.resolve(&ctx).await.expect("resolve"),
+            ReadableAudiences::Every
+        );
+    }
+}
+
+#[tokio::test]
+async fn read_policy_star_audience_from_rows_and_non_match() {
+    let parsed = AudienceGrants::from_rows([
+        ("*".to_string(), GrantAxis::Read, "user:a@x".to_string()),
+        (
+            "team-alpha".to_string(),
+            GrantAxis::Read,
+            "user:b@x".to_string(),
+        ),
+    ]);
+    assert!(parsed.skipped.is_empty());
+    let policy = AudienceReadPolicy::new(parsed.value);
+    let a = caller(Some("a@x"), vec![], vec![], false);
+    assert_eq!(
+        policy.resolve(&a).await.expect("resolve"),
+        ReadableAudiences::Every
+    );
+    let b = caller(Some("b@x"), vec![], vec![], false);
+    assert_eq!(
+        policy.resolve(&b).await.expect("resolve"),
+        ReadableAudiences::Listed(vec!["team-alpha".to_string()].into())
+    );
+}
+
+#[tokio::test]
+async fn read_policy_star_audience_with_star_selector_matches_everyone() {
+    let policy = AudienceReadPolicy::new(grants(r#"{"*": ["*"]}"#));
+    let anyone = caller(None, vec![], vec![], false);
+    assert_eq!(
+        policy.resolve(&anyone).await.expect("resolve"),
+        ReadableAudiences::Every
+    );
+}
+
+#[tokio::test]
+async fn mint_policy_star_read_grant_confers_no_mint() {
+    let policy = AudienceMintPolicy::new(grants(r#"{"*": ["user:a@x"]}"#));
+    let a = caller(Some("a@x"), vec![], vec![], false);
+    assert!(
+        policy
+            .resolve_audience(&a, Some("team-alpha"))
+            .await
+            .is_err()
+    );
+    assert!(policy.resolve_audience(&a, Some("*")).await.is_err());
 }

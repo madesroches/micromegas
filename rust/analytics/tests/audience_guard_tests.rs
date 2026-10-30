@@ -88,6 +88,22 @@ fn audience(name: &str) -> OwnerAudience {
 // --- `is_readable` truth table -----------------------------------------------------------
 
 #[test]
+fn every_audience_readable_truth_table() {
+    let scope = ReadScope::EveryAudience;
+    assert!(is_readable(&scope, &audience("anything")));
+    assert!(!is_readable(&scope, &OwnerAudience::Unknown));
+    assert!(!is_readable(&scope, &OwnerAudience::Ambiguous(vec![])));
+    assert!(is_readable(
+        &scope,
+        &OwnerAudience::Ambiguous(vec![audience("a"), audience("b")])
+    ));
+    assert!(!is_readable(
+        &scope,
+        &OwnerAudience::Ambiguous(vec![audience("a"), OwnerAudience::Unknown])
+    ));
+}
+
+#[test]
 fn all_passes_everything_including_unknown() {
     assert!(is_readable(&ReadScope::All, &OwnerAudience::Unknown));
     assert!(is_readable(&ReadScope::All, &audience("team-alpha")));
@@ -237,6 +253,14 @@ async fn global_rows_visible_via_lakehouse_admin() {
         !non_admin_guard.global_rows_visible("log_entries"),
         "a non-admin caller whose view set isn't public must still be hidden from 'global' rows"
     );
+}
+
+#[tokio::test]
+async fn global_rows_under_every_audience_need_admin_or_public_view_set() {
+    let guard = AudienceGuard::new(ReadScope::EveryAudience, false, vec![], unroutable_index());
+    assert!(!guard.global_rows_visible("log_entries"));
+    let admin = AudienceGuard::new(ReadScope::EveryAudience, true, vec![], unroutable_index());
+    assert!(admin.global_rows_visible("log_entries"));
 }
 
 #[tokio::test]

@@ -34,6 +34,7 @@ use axum::routing::{delete, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use micromegas::auth::db_api_key::{generate_key, hash_key};
+use micromegas::auth::db_snapshot::report_skipped;
 use micromegas::auth::ip_allowlist::IpAllowlist;
 use micromegas::auth::policy::{
     AudienceGrants, AudienceMintPolicy, GrantAxis, MintPolicy, PUBLIC_AUDIENCE, is_valid_audience,
@@ -375,19 +376,15 @@ async fn authorize_mint(
         IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
     })?;
 
-    let grants = AudienceGrants::from_rows(
+    // A malformed row (only reachable through a direct SQL write) is skipped with a warning, so
+    // it can't block the valid mint selectors on the same audience.
+    let parsed = AudienceGrants::from_rows(
         mint_selectors
             .into_iter()
             .map(|selector| (audience.to_string(), GrantAxis::Mint, selector)),
-    )
-    // Every row the grant routes write already passed `valid_selector`, so this arm is
-    // unreachable short of a direct SQL write (the table carries no selector-shape CHECK); kept as
-    // a real status code rather than `.unwrap()`, for the same fail-closed reason `MintGate`
-    // gives its own `.ok_or(...)`.
-    .map_err(|e| {
-        error!("ingestion_keys: audience grant row parse failed: {e}");
-        IngestionKeyError::Unavailable("audience grant store unavailable".to_string())
-    })?;
+    );
+    report_skipped("audience grant store", &parsed.skipped);
+    let grants = parsed.value;
 
     // `store: None` (the `new` default) -- a mint policy here never attaches a
     // `DbAudienceGrantsSource`.

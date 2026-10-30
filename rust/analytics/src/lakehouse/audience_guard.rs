@@ -27,8 +27,8 @@
 //! ## Fail-closed
 //!
 //! [`crate::lakehouse::audience_guard::is_readable`] is the whole authorization rule, pure and offline-testable: `ReadScope::All`
-//! passes everything; `ReadScope::Audiences` denies [`crate::lakehouse::audience_guard::OwnerAudience::Unknown`] unconditionally
-//! and matches [`crate::lakehouse::audience_guard::OwnerAudience::Audience`] byte-exactly. There is no unstamped state any more: a
+//! passes everything; `ReadScope::Audiences` and `ReadScope::EveryAudience` deny [`crate::lakehouse::audience_guard::OwnerAudience::Unknown`] unconditionally
+//! and match [`crate::lakehouse::audience_guard::OwnerAudience::Audience`] byte-exactly against the list (`EveryAudience` accepts any). There is no unstamped state any more: a
 //! process/stream/block registered through the HTTP ingestion path always carries a real,
 //! non-NULL `audience` column (a credential with no bound audience is stamped with the resolved
 //! deployment default explicitly); only a legacy, pre-v8 row keeps a NULL column, and
@@ -317,9 +317,12 @@ fn not_found_err<T>(fname: &str, id: &str) -> datafusion::error::Result<T> {
 pub fn is_readable(scope: &ReadScope, owner: &OwnerAudience) -> bool {
     match scope {
         ReadScope::All => true,
-        ReadScope::Audiences(auds) => match owner {
+        ReadScope::Audiences(_) | ReadScope::EveryAudience => match owner {
             OwnerAudience::Unknown => false,
-            OwnerAudience::Audience(a) => auds.iter().any(|x| x.as_str() == &**a),
+            OwnerAudience::Audience(a) => match scope {
+                ReadScope::Audiences(auds) => auds.iter().any(|x| x.as_str() == &**a),
+                _ => true,
+            },
             OwnerAudience::Ambiguous(owners) => {
                 !owners.is_empty() && owners.iter().all(|owner| is_readable(scope, owner))
             }
@@ -463,7 +466,7 @@ impl AudienceGuard {
     pub fn global_rows_visible(&self, view_set_name: &str) -> bool {
         match &self.read_scope {
             ReadScope::All => true,
-            ReadScope::Audiences(_) => {
+            ReadScope::Audiences(_) | ReadScope::EveryAudience => {
                 self.is_public_view_set(view_set_name) || self.lakehouse_admin
             }
         }

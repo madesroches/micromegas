@@ -9,7 +9,7 @@ fn graph(groups: &[&str], members: &[(&str, &str)]) -> GroupGraph {
         groups.iter().map(|g| g.to_string()),
         members.iter().map(|(g, m)| (g.to_string(), m.to_string())),
     )
-    .expect("valid rows")
+    .value
 }
 
 #[test]
@@ -144,20 +144,33 @@ fn nesting_would_cycle_allows_a_non_cyclic_nesting() {
 }
 
 #[test]
-fn from_rows_rejects_a_bad_group_name() {
-    let err = GroupGraph::from_rows(vec!["not a valid name".to_string()], vec![])
-        .expect_err("expected a bad group name to be rejected");
-    assert!(err.to_string().contains("not a valid name"));
-}
-
-#[test]
-fn from_rows_rejects_a_bad_selector() {
-    let err = GroupGraph::from_rows(
-        vec!["a".to_string()],
-        vec![("a".to_string(), "not-a-selector".to_string())],
-    )
-    .expect_err("expected a bad selector to be rejected");
-    assert!(err.to_string().contains("not-a-selector"));
+fn from_rows_skips_bad_rows_and_keeps_the_valid_ones() {
+    let parsed = GroupGraph::from_rows(
+        vec![
+            "a".to_string(),
+            "admins".to_string(),
+            "not a valid name".to_string(),
+        ],
+        vec![
+            ("a".to_string(), "user:alice@example.com".to_string()),
+            (
+                "not a valid name".to_string(),
+                "user:alice@example.com".to_string(),
+            ),
+            ("a".to_string(), "not-a-selector".to_string()),
+            (ADMINS_GROUP.to_string(), "bogus".to_string()),
+        ],
+    );
+    assert_eq!(parsed.skipped.len(), 4);
+    assert!(parsed.skipped[0].contains("not a valid name"));
+    assert!(parsed.skipped.iter().any(|s| s.contains("not-a-selector")));
+    assert!(!parsed.value.contains_group("not a valid name"));
+    assert_eq!(
+        parsed.value.closure(Some("alice@example.com"), None),
+        vec!["a".to_string()]
+    );
+    assert!(!parsed.value.has_wildcard_admin());
+    assert!(!parsed.value.any_principal_reaches(ADMINS_GROUP));
 }
 
 // ---------------------------------------------------------------------------

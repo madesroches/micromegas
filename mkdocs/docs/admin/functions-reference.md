@@ -70,7 +70,8 @@ SELECT * FROM list_partitions();
 
 !!! note "Audience-filtered for a restricted caller"
     Under a `ReadScope::Audiences` session (auth enabled), rows are filtered to the caller's own
-    audiences: a `view_instance_id` row is kept only if its owning process/stream resolves to a
+    audiences (a caller holding a `*` read grant is filtered to any stamped audience, and `'global'`
+    rows stay hidden for it unless the view set is public or the caller is admin): a `view_instance_id` row is kept only if its owning process/stream resolves to a
     readable audience, and a `'global'` row (a multi-audience partition, no single audience to
     check) is kept only when its view set is in the `public_view_sets` setting (env fallback `MICROMEGAS_PUBLIC_VIEW_SETS`), the caller passes
     the lakehouse admin gate (the same boolean gating `retire_partitions`/`regenerate_partitions`
@@ -440,7 +441,7 @@ SELECT * FROM list_audience_grants() WHERE audience = 'team-alpha' ORDER BY axis
 
 | Column | Type | Description |
 |---|---|---|
-| `audience` | String | The audience name the row grants against |
+| `audience` | String | The audience name the row grants against, or `*` for every audience |
 | `axis` | String | `read` or `mint` |
 | `selector` | String | `*`, `user:<id>`, `group:<id>`, or `key:<key_id>` |
 | `created_at` | Timestamp | When the grant row was created |

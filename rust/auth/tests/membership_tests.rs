@@ -74,7 +74,7 @@ fn admins_wildcard_graph() -> GroupGraph {
         vec![ADMINS_GROUP.to_string()],
         vec![(ADMINS_GROUP.to_string(), "*".to_string())],
     )
-    .expect("valid rows")
+    .value
 }
 
 #[tokio::test]
@@ -141,7 +141,7 @@ async fn wrapper_passes_the_key_id_and_never_makes_a_key_admin() {
             ("everyone".to_string(), "*".to_string()),
         ],
     )
-    .expect("valid rows");
+    .value;
     let run = |key: Option<uuid::Uuid>| {
         let graph = graph.clone();
         async move {
