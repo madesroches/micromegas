@@ -10,9 +10,9 @@
 //! wrapping) live in [`crate::db_snapshot`], shared with [`crate::groups::DbGroupsSource`].
 
 use crate::db_api_key::resolve_u64;
-use crate::db_snapshot::{SnapshotLoader, SnapshotSource};
+use crate::db_snapshot::{SnapshotLoader, SnapshotSource, report_skipped};
 use crate::policy::{AudienceGrants, GrantAxis};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 
@@ -37,6 +37,21 @@ impl DbAudienceGrantsConfig {
     }
 }
 
+/// Maps the `axis` column to a [`GrantAxis`], or the reason the row is skipped.
+pub fn parse_axis(
+    audience: &str,
+    axis: &str,
+    selector: &str,
+) -> std::result::Result<GrantAxis, String> {
+    match axis {
+        "read" => Ok(GrantAxis::Read),
+        "mint" => Ok(GrantAxis::Mint),
+        other => Err(format!(
+            "audience_grants row ({audience:?}, {other}, {selector}): unrecognized axis"
+        )),
+    }
+}
+
 /// [`SnapshotLoader`] for the `audience_grants` table.
 #[derive(Debug)]
 pub struct AudienceGrantsLoader;
@@ -47,32 +62,36 @@ impl SnapshotLoader for AudienceGrantsLoader {
     const NAME: &'static str = "audience grant store";
 
     /// Queries the whole table and builds an `AudienceGrants` via
-    /// [`AudienceGrants::from_rows`]. The one place a malformed row (the table carries no
-    /// selector-shape `CHECK`, so e.g. a direct `psql` write) surfaces as a load
-    /// failure rather than a silently-inert or silently-unreadable grant.
+    /// [`AudienceGrants::from_rows`]. A malformed row (the table carries no shape `CHECK`, so e.g.
+    /// a direct `psql` write) is skipped with a warning and the
+    /// `audience_grant_skipped_row_count` metric rather than failing the load.
     async fn fetch(pool: &PgPool) -> Result<AudienceGrants> {
         let rows = sqlx::query("SELECT audience, axis, selector FROM audience_grants")
             .fetch_all(pool)
             .await
             .context("querying audience_grants")?;
         let mut triples = Vec::with_capacity(rows.len());
+        let mut skipped = Vec::new();
         for row in rows {
             let audience: String = row.try_get("audience").context("reading audience")?;
             let axis: String = row.try_get("axis").context("reading axis")?;
             let selector: String = row.try_get("selector").context("reading selector")?;
-            let axis = match axis.as_str() {
-                "read" => GrantAxis::Read,
-                "mint" => GrantAxis::Mint,
-                other => {
-                    return Err(anyhow!(
-                        "audience_grants row for {audience:?}/{selector:?} has unrecognized \
-                         axis {other:?}"
-                    ));
-                }
-            };
-            triples.push((audience, axis, selector));
+            match parse_axis(&audience, &axis, &selector) {
+                Ok(axis) => triples.push((audience, axis, selector)),
+                Err(reason) => skipped.push(reason),
+            }
         }
-        AudienceGrants::from_rows(triples)
+        let mut parsed = AudienceGrants::from_rows(triples);
+        skipped.append(&mut parsed.skipped);
+        micromegas_tracing::imetric!(
+            "audience_grant_skipped_row_count",
+            "count",
+            skipped.len() as u64
+        );
+        if !skipped.is_empty() {
+            report_skipped(Self::NAME, &skipped);
+        }
+        Ok(parsed.value)
     }
 
     fn count_refresh_error() {

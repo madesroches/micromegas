@@ -3,7 +3,7 @@
 //! `ReadScope` is the query planner's authorization input -- what a `ReadPolicy`
 //! (`micromegas-auth`) resolves down to. `micromegas-analytics` does not depend on
 //! `micromegas-auth`: that edge would pull in the whole OIDC/JWT dependency tree behind one enum,
-//! so `ReadScope` carries resolved audiences only -- no group vocabulary, no policy trait, nothing
+//! so `ReadScope` carries resolved audiences only (or the "every audience" marker) -- no group vocabulary, no policy trait, nothing
 //! that requires a store. The `rust/public` bridge is the only place a `ReadableAudiences` (from
 //! `micromegas-auth`) becomes a `ReadScope`.
 //!
@@ -20,7 +20,8 @@
 
 use std::sync::Arc;
 
-/// The authorization scope a query planner may read under.
+/// The authorization scope a query planner may read under: unrestricted (`All`, internal only),
+/// a listed set of audiences, or every audience (`EveryAudience`).
 ///
 /// `All` is deliberately not something a `ReadPolicy` can produce (see
 /// `micromegas_auth::policy::ReadPolicy`'s doc comment) -- it is the marker internal
@@ -35,6 +36,10 @@ pub enum ReadScope {
     /// Restricted to the given set of audiences -- opaque labels (e.g. `"public"`,
     /// `"team-alpha"`), as resolved by a `ReadPolicy`.
     Audiences(Arc<[String]>),
+    /// Any row carrying an audience. A request scope like `Audiences`, never `All`: the same
+    /// row-level filter and call-level guard apply, and only the membership test changes from
+    /// "audience in list" to "has an audience". Covers audiences created after the grant.
+    EveryAudience,
 }
 
 /// Bundles the orthogonal authorization inputs `make_session_context` and friends need --

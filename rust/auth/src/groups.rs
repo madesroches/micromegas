@@ -8,9 +8,9 @@
 //! `group:` arm of the same predicate rather than a special case -- see [`crate::groups::GroupGraph::closure`].
 
 use crate::db_api_key::resolve_u64;
-use crate::db_snapshot::{SnapshotLoader, SnapshotSource};
+use crate::db_snapshot::{Parsed, SnapshotLoader, SnapshotSource, report_skipped};
 use crate::policy::{key_selector, valid_selector};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -46,43 +46,46 @@ pub struct GroupGraph {
 impl GroupGraph {
     /// Builds a graph from `(name)` rows out of `groups` and `(group_name, member)` rows out of
     /// `group_members`. Runs the name charset and [`valid_selector`] checks the way
-    /// `AudienceGrants::from_rows` does -- the tables carry no selector-shape CHECK, so this is
-    /// where a malformed row (e.g. from a direct `psql` session) fails the snapshot load
-    /// rather than reaching a decision.
+    /// `AudienceGrants::from_rows` does -- the tables carry no shape CHECK, so this is where a
+    /// malformed row (e.g. from a direct `psql` session) is skipped, with the reason in
+    /// [`Parsed::skipped`], rather than reaching a decision or failing the load. A skipped group
+    /// name also fails the same check on its member rows, so no edge points at a missing group.
     pub fn from_rows(
         groups: impl IntoIterator<Item = String>,
         members: impl IntoIterator<Item = (String, String)>,
-    ) -> Result<Self> {
+    ) -> Parsed<Self> {
+        let mut skipped = Vec::new();
         let mut group_set = BTreeSet::new();
         for name in groups {
             if !is_valid_group_name(&name) {
-                return Err(anyhow!(
-                    "invalid group row: {name:?} is not a valid group name -- must match \
-                     [A-Za-z0-9_-]{{1,255}}"
-                ));
+                skipped.push(format!("groups row ({name:?}): invalid group name"));
+                continue;
             }
             group_set.insert(name);
         }
         let mut members_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (group_name, member) in members {
             if !is_valid_group_name(&group_name) {
-                return Err(anyhow!(
-                    "invalid group_members row: {group_name:?} is not a valid group name -- \
-                     must match [A-Za-z0-9_-]{{1,255}}"
+                skipped.push(format!(
+                    "group_members row ({group_name:?}, {member}): invalid group name"
                 ));
+                continue;
             }
             if !valid_selector(&member) {
-                return Err(anyhow!(
-                    "invalid group_members row: selector {member:?} for group {group_name:?} \
-                     must be '*', 'user:<id>', 'group:<id>', or 'key:<key_id>'"
+                skipped.push(format!(
+                    "group_members row ({group_name:?}, {member}): invalid member selector"
                 ));
+                continue;
             }
             members_of.entry(member).or_default().push(group_name);
         }
-        Ok(Self {
-            groups: group_set,
-            members_of,
-        })
+        Parsed {
+            value: Self {
+                groups: group_set,
+                members_of,
+            },
+            skipped,
+        }
     }
 
     /// Every known group name, sorted.
@@ -243,7 +246,16 @@ impl SnapshotLoader for GroupsLoader {
         tx.commit()
             .await
             .context("committing group store read transaction")?;
-        GroupGraph::from_rows(names, members)
+        let parsed = GroupGraph::from_rows(names, members);
+        micromegas_tracing::imetric!(
+            "group_skipped_row_count",
+            "count",
+            parsed.skipped.len() as u64
+        );
+        if !parsed.skipped.is_empty() {
+            report_skipped(Self::NAME, &parsed.skipped);
+        }
+        Ok(parsed.value)
     }
 
     fn count_refresh_error() {

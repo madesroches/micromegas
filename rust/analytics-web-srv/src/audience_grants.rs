@@ -36,7 +36,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use micromegas::auth::policy::{caller_selectors, is_valid_audience, valid_selector};
+use micromegas::auth::policy::{
+    ALL_AUDIENCES, caller_selectors, is_valid_grant_audience, valid_selector,
+};
 use micromegas::auth::types::AuthContext;
 use micromegas::settings::SettingsSource;
 use micromegas::tracing::prelude::*;
@@ -241,9 +243,10 @@ fn require_pool(state: &AudienceGrantsState) -> Result<PgPool, AudienceGrantErro
 }
 
 fn validate_audience(audience: &str) -> Result<(), AudienceGrantError> {
-    if !is_valid_audience(audience) {
+    if !is_valid_grant_audience(audience) {
         return Err(AudienceGrantError::BadRequest(format!(
-            "invalid audience {audience:?}: must match [A-Za-z0-9_-]{{1,255}}"
+            "invalid audience {audience:?}: must match [A-Za-z0-9_-]{{1,255}}, or be '*' (all \
+             audiences)"
         )));
     }
     Ok(())
@@ -470,9 +473,11 @@ async fn caller_holds_pair(
 /// `POST {base_path}/api/audience-grants` -- creates (or reports the pre-existing) grant row.
 /// `201` when this call created it, `200` when it already existed.
 ///
-/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, four further checks
+/// Gated by [`GrantGate`] (the knob check) plus, for a non-admin caller, further checks
 /// that need the parsed body and so live here rather than in the gate:
 ///
+/// 0. The `*` audience (all audiences) is refused with 403 outright -- only an admin creates one.
+///    (For every caller it is read-axis only and never combined with the `*` selector, both 400.)
 /// 1. `selector` must be `user:…`/`group:…`/`key:…` -- `*` is refused with 403, since a caller who can
 ///    read an audience must not be able to open it to every authenticated principal.
 /// 2. `(axis, selector)` must not be the caller's own `mint`/`user:<email>` claim marker -- that
@@ -524,6 +529,20 @@ async fn create_grant_inner(
             "API keys cannot be granted the mint axis".to_string(),
         ));
     }
+    if body.audience == ALL_AUDIENCES {
+        if body.axis == "mint" {
+            return Err(AudienceGrantError::BadRequest(
+                "the '*' audience (all audiences) is allowed on the read axis only".to_string(),
+            ));
+        }
+        if body.selector == "*" {
+            return Err(AudienceGrantError::BadRequest(
+                "a '*' audience with a '*' selector would let every principal read every \
+                 audience; grant the audiences individually or use public view sets"
+                    .to_string(),
+            ));
+        }
+    }
     let created_by = caller_identity(&caller);
 
     if !caller.is_admin() {
@@ -532,6 +551,11 @@ async fn create_grant_inner(
             .self_service()
             .await
             .map_err(settings_unavailable)?;
+        if body.audience == ALL_AUDIENCES {
+            return Err(AudienceGrantError::Forbidden(
+                "only admins may create grants on the '*' audience".to_string(),
+            ));
+        }
         if body.selector == "*" {
             return Err(AudienceGrantError::Forbidden(
                 "non-admin callers may not grant '*' (every authenticated principal) access"

@@ -12,8 +12,7 @@ CREATE TABLE groups (
   name        VARCHAR(255) PRIMARY KEY,
   description TEXT,
   created_at  TIMESTAMPTZ NOT NULL,
-  created_by  VARCHAR(255) NOT NULL,
-  CONSTRAINT groups_name CHECK (name ~ '^[A-Za-z0-9_-]+$')
+  created_by  VARCHAR(255) NOT NULL
 );
 
 CREATE TABLE group_members (
@@ -36,10 +35,10 @@ a member of `group_name`*. `member` is a selector in exactly the vocabulary
 | `group:<name>` | every (transitive) member of the named group |
 | `key:<key_id>` | the analytics API key with that `key_id` (canonical lowercase hyphenated UUID); never a member of `admins` |
 
-Selector shape is validated in code only (the admin routes, and again when a
-snapshot loads), with no database `CHECK`, so a malformed row written by a
-direct `psql` session fails the snapshot load loudly rather than being
-silently inert.
+Group names and selector shape are validated in code only (the admin routes, and
+again when a snapshot loads), with no database `CHECK`. A malformed row written
+by a direct `psql` session is skipped with a warning and counted in the
+`group_skipped_row_count` metric, rather than failing the snapshot.
 
 A `group:X` member is a selector string, not a foreign key: a group name
 that doesn't exist matches nobody and is inert, the same as a dangling
@@ -47,8 +46,8 @@ that doesn't exist matches nobody and is inert, the same as a dangling
 group that doesn't exist (404); a row inserted by other means (a direct
 `psql` session) is tolerated, just inert.
 
-`groups.name` shares `audience_grants`' `[A-Za-z0-9_-]{1,255}` charset, so a
-group name is URL-safe and a distinct kind of thing from an email. Hard
+`groups.name` uses the `[A-Za-z0-9_-]{1,255}` charset audience names use (grant
+audiences additionally accept `*`), so a group name is URL-safe and a distinct kind of thing from an email. Hard
 `DELETE`, no `revoked_*` columns — a removed membership leaves no ongoing
 artifact, same reasoning as `audience_grants`.
 

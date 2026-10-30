@@ -58,7 +58,7 @@ use micromegas_analytics::lakehouse::write_partition::{RetireMatch, retire_parti
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
-use micromegas_auth::policy::{ReadPolicy, caller_selectors};
+use micromegas_auth::policy::{ReadPolicy, ReadableAudiences, caller_selectors};
 use micromegas_auth::types::{AuthContext, ProviderUnavailable};
 use micromegas_auth::user_attribution::{is_admin, validate_and_resolve_user_attribution_grpc};
 use micromegas_ingestion::remote_data_lake::acquire_lock;
@@ -623,7 +623,10 @@ impl FlightSqlServiceImpl {
                                 Status::internal(format!("settings load failed: {e:#}"))
                             }
                         })?);
-                    ReadScope::Audiences(audiences.into_inner())
+                    match audiences {
+                        ReadableAudiences::Listed(a) => ReadScope::Audiences(a),
+                        ReadableAudiences::Every => ReadScope::EveryAudience,
+                    }
                 }
                 Err(e) => {
                     return Err(if e.downcast_ref::<ProviderUnavailable>().is_some() {

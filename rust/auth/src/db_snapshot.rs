@@ -17,6 +17,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
+/// The result of parsing a batch of rows where a malformed row is dropped rather than failing the
+/// whole batch. Rows only ever *grant*, so dropping one can only narrow what someone can do.
+#[derive(Debug, Clone)]
+pub struct Parsed<T> {
+    pub value: T,
+    /// One human-readable reason per skipped row, e.g. "audience_grants row ('team alpha',
+    /// read, user:a@x): invalid audience name".
+    pub skipped: Vec<String>,
+}
+
+/// Logs one `warn!` per skipped row, naming the store. Callers emit their own literal-named
+/// metric (`imetric!` needs a static name) and call this only when `skipped` is non-empty.
+pub fn report_skipped(name: &str, skipped: &[String]) {
+    for reason in skipped {
+        micromegas_tracing::warn!("{name}: skipping malformed row: {reason}");
+    }
+}
+
 /// What a [`SnapshotSource`] needs from a specific store: how to fetch a fresh snapshot from the
 /// pool, and the name/metric to report on a refresh failure.
 #[async_trait]

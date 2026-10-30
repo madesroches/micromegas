@@ -259,6 +259,10 @@ are two paths, both keyed on the key's `key_id`:
   a key field in Share; non-admins type the key id the key's operator gives
   them).
 
+- **Everything** (admin): `micromegas-grants --url URL create '*' read key:<key_id>`
+  lets the key read every audience, including audiences created later. Only an admin
+  can create a `*`-audience grant.
+
 A key never mints (a `key:` selector on the `mint` axis is refused) and never
 becomes admin through a group. Both routes refuse a `key:` selector that names
 no live analytics key (404).

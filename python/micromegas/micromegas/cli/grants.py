@@ -12,6 +12,9 @@ just a thin wrapper over two HTTP calls (`create`/`delete`).
 `micromegas-query --all "SELECT * FROM list_audience_grants()"` instead,
 which as a bonus gives a non-admin caller their own scoped view and an admin
 `WHERE`/`ORDER BY` to work with.
+
+Quote the all-audiences audience so the shell does not expand it:
+`micromegas-grants create '*' read key:<key_id>`.
 """
 
 import argparse
@@ -85,7 +88,11 @@ def main():
 
     # create
     p_create = subparsers.add_parser("create", help="Create an audience grant")
-    p_create.add_argument("audience", help="Audience name ([A-Za-z0-9_-]{1,255})")
+    p_create.add_argument(
+        "audience",
+        help="Audience name ([A-Za-z0-9_-]{1,255}), or '*' for all audiences "
+        "(read axis, admin only)",
+    )
     p_create.add_argument("axis", choices=["read", "mint"], help="Grant axis")
     p_create.add_argument(
         "selector",
@@ -95,7 +102,7 @@ def main():
 
     # delete
     p_delete = subparsers.add_parser("delete", help="Delete an audience grant")
-    p_delete.add_argument("audience", help="Audience name")
+    p_delete.add_argument("audience", help="Audience name, or '*'")
     p_delete.add_argument("axis", choices=["read", "mint"], help="Grant axis")
     p_delete.add_argument(
         "selector",

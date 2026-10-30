@@ -12,12 +12,13 @@ import { LiveKeySelect } from '@/components/LiveKeySelect'
 import { MintIngestionKeyDialog } from '@/components/MintIngestionKeyDialog'
 import { useAuth } from '@/lib/auth'
 import {
-  AUDIENCE_PATTERN,
+  ALL_AUDIENCES,
   AudienceGrantError,
   createAudienceGrant,
   deleteAudienceGrant,
   fetchVisibleGrants,
   normalizeKeyId,
+  validateGrantAudience,
   validateSelector,
   type AudienceGrant,
   type GrantAxis,
@@ -103,7 +104,12 @@ function groupGrants(grants: AudienceGrant[]): AudienceGroup[] {
       .sort((a, b) => selectorSortKey(a.selector).localeCompare(selectorSortKey(b.selector)))
     groups.push({ audience, read, mint, count: rows.length })
   }
-  groups.sort((a, b) => a.audience.localeCompare(b.audience))
+  // The all-audiences card sorts first.
+  groups.sort((a, b) => {
+    if (a.audience === ALL_AUDIENCES) return b.audience === ALL_AUDIENCES ? 0 : -1
+    if (b.audience === ALL_AUDIENCES) return 1
+    return a.audience.localeCompare(b.audience)
+  })
   return groups
 }
 
@@ -172,12 +178,14 @@ function GrantDialog({
       : selectorKind === 'key'
         ? `key:${normalizeKeyId(idInput)}`
         : `${selectorKind}:${idInput}`
+  // The everyone selector is not allowed with the all-audiences audience.
   const kinds: SelectorKind[] = (
-    isAdd ? ['everyone', 'user', 'group'] : ['user', 'group']
+    isAdd && audience !== ALL_AUDIENCES ? ['everyone', 'user', 'group'] : ['user', 'group']
   ) as SelectorKind[]
   if (axis === 'read') kinds.push('key')
 
-  const audienceValid = isAdd ? AUDIENCE_PATTERN.test(audienceInput) : true
+  const audienceError = isAdd ? validateGrantAudience(audienceInput, axis, selector) : null
+  const audienceValid = isAdd ? audienceInput !== '' && audienceError === null : true
   const selectorError = validateSelector(selector)
 
   const canSubmit = !isSubmitting && audienceValid && selectorError === null
@@ -220,12 +228,27 @@ function GrantDialog({
                 className="w-full bg-app-bg border border-theme-border rounded-md px-3 py-2 text-sm font-mono text-theme-text-primary placeholder:text-theme-text-muted outline-hidden focus:border-accent-link"
                 placeholder="team-alpha"
                 value={audienceInput}
-                onChange={(e) => setAudienceInput(e.target.value)}
+                onChange={(e) => {
+                  setAudienceInput(e.target.value)
+                  if (e.target.value === ALL_AUDIENCES && selectorKind === 'everyone') {
+                    setSelectorKind('user')
+                    setIdInput('')
+                  }
+                }}
                 autoFocus
               />
-              <p className="mt-1 text-xs text-theme-text-muted">
-                Must match <code>[A-Za-z0-9_-]</code>, up to 255 characters.
-              </p>
+              {audienceError ? (
+                <p className="mt-1 text-xs text-accent-error">{audienceError}</p>
+              ) : audienceInput === ALL_AUDIENCES ? (
+                <p className="mt-1 text-xs text-theme-text-muted">
+                  All audiences, current and future — read only.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-theme-text-muted">
+                  Must match <code>[A-Za-z0-9_-]</code>, up to 255 characters, or be{' '}
+                  <code>*</code> for all audiences.
+                </p>
+              )}
             </div>
           ) : (
             <div>
@@ -315,6 +338,9 @@ function GrantDialog({
               />
             )}
             <p className="mt-2 text-xs font-mono text-theme-text-secondary">{selector}</p>
+            {idInput !== '' && selectorError && (
+              <p className="mt-1 text-xs text-accent-error">{selectorError}</p>
+            )}
             <p className="mt-1 text-xs text-theme-text-muted">
               Matched against the caller's OIDC <code>email</code> / <code>groups</code> claim.
               There is no user directory here — enter the claim value verbatim.
@@ -450,6 +476,8 @@ function AudienceAccessPageContent() {
 
   const canShareRow = (audience: string, axis: GrantAxis): boolean => {
     if (isAdmin) return true
+    // Only an admin creates an all-audiences grant; the server would 403 anyway.
+    if (audience === ALL_AUDIENCES) return false
     if (selfServiceOff) return false
     return heldPairs.has(`${audience}:${axis}`)
   }
@@ -766,12 +794,27 @@ function AudienceAccessPageContent() {
               {groups.map((group) => (
                 <div
                   key={group.audience}
-                  className="border border-theme-border rounded-lg overflow-hidden"
+                  className={`border rounded-lg overflow-hidden ${
+                    group.audience === ALL_AUDIENCES
+                      ? 'border-red-500/50'
+                      : 'border-theme-border'
+                  }`}
                 >
                   <div className="px-4 py-2.5 bg-app-panel flex items-center justify-between">
-                    <span className="font-mono text-sm text-theme-text-primary">
-                      {group.audience}
-                    </span>
+                    {group.audience === ALL_AUDIENCES ? (
+                      <span className="text-sm text-theme-text-primary">
+                        <span className="font-medium" title={ALL_AUDIENCES}>
+                          All audiences
+                        </span>
+                        <span className="ml-2 text-xs text-theme-text-muted">
+                          applies to every audience, including ones created later
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="font-mono text-sm text-theme-text-primary">
+                        {group.audience}
+                      </span>
+                    )}
                     <span className="text-xs text-theme-text-muted">{group.count} grants</span>
                   </div>
                   <div className="p-4 space-y-4">
@@ -785,6 +828,8 @@ function AudienceAccessPageContent() {
                         // nothing for this row rather than a misleading empty-state sentence.
                         if (trueRows.length > 0) return null
                         if (!isAdmin) return null
+                        // Mint is impossible on the all-audiences card.
+                        if (group.audience === ALL_AUDIENCES) return null
                         return (
                           <div key={axis} className="text-sm text-theme-text-muted">
                             <span className="inline-block px-2 py-0.5 rounded-sm bg-app-card text-xs uppercase mr-2">

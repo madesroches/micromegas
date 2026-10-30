@@ -12,6 +12,7 @@ mod test_utils;
 use micromegas_auth::db_audience_grants::{DbAudienceGrantsConfig, DbAudienceGrantsSource};
 use micromegas_auth::policy::{
     AudienceGrants, AudienceMintPolicy, AudienceReadPolicy, MintPolicy, ReadPolicy,
+    ReadableAudiences,
 };
 use micromegas_auth::types::{AuthContext, AuthType};
 use serial_test::serial;
@@ -20,6 +21,20 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use test_utils::unreachable_pool;
+
+/// Test shorthand: the listed audiences of a resolution, panicking on `Every`.
+trait IntoListed {
+    fn into_listed(self) -> std::sync::Arc<[String]>;
+}
+
+impl IntoListed for ReadableAudiences {
+    fn into_listed(self) -> std::sync::Arc<[String]> {
+        match self {
+            ReadableAudiences::Listed(a) => a,
+            ReadableAudiences::Every => panic!("expected Listed, got Every"),
+        }
+    }
+}
 
 fn ttl(secs: u64) -> Duration {
     Duration::from_secs(secs)
@@ -255,7 +270,7 @@ async fn live_first_load_reflects_seeded_rows() {
             .resolve(&ctx)
             .await
             .map_err(|e| format!("resolve should succeed: {e:#}"))?
-            .into_inner();
+            .into_listed();
         if !resolved.contains(&"team-alpha".to_string()) {
             return Err(format!(
                 "expected team-alpha in resolved set, got {resolved:?}"
@@ -314,7 +329,7 @@ async fn live_refresh_failure_after_success_serves_stale_snapshot() {
             .resolve(&ctx)
             .await
             .map_err(|e| format!("resolve over the stale snapshot should still succeed: {e:#}"))?
-            .into_inner();
+            .into_listed();
         if !resolved.contains(&"team-alpha".to_string()) {
             return Err(format!(
                 "expected the stale snapshot to still grant team-alpha, got {resolved:?}"
@@ -371,27 +386,37 @@ async fn live_cold_start_failure_against_missing_table_is_err() {
 }
 
 /// A row that slipped past the table's own shape (no `CHECK` constraints in this throwaway
-/// table, standing in for a hand-edited row via a direct `psql` session) fails the whole
-/// snapshot load loudly, per `AudienceGrants::from_rows`'s re-validation.
+/// table, standing in for a hand-edited row via a direct `psql` session) is skipped, not fatal:
+/// the load succeeds, the malformed row is absent, and a valid row still resolves.
 #[ignore]
 #[tokio::test]
-async fn live_malformed_row_fails_the_whole_snapshot_load() {
+async fn live_malformed_row_is_skipped_and_valid_rows_still_resolve() {
     let schema = "mm_1489_grants_test_malformed_row";
     let (setup_pool, pool, _conn) = throwaway_pool(schema).await;
 
     let test_result: Result<(), String> = async {
         sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
-             VALUES ('not a valid audience', 'read', '*', now(), 'test')",
+             VALUES ('not a valid audience', 'read', '*', now(), 'test'),
+                    ('team-alpha', 'read', '*', now(), 'test')",
         )
         .execute(&pool)
         .await
-        .map_err(|e| format!("seeding a malformed row: {e:#}"))?;
+        .map_err(|e| format!("seeding rows: {e:#}"))?;
 
-        let source = DbAudienceGrantsSource::new(pool.clone(), ttl(60));
-        let result = source.current().await;
-        if result.is_ok() {
-            return Err("expected a malformed row to fail the whole load".to_string());
+        let source = Arc::new(DbAudienceGrantsSource::new(pool.clone(), ttl(60)));
+        source
+            .current()
+            .await
+            .map_err(|e| format!("expected the load to succeed: {e:#}"))?;
+        let policy = AudienceReadPolicy::new(AudienceGrants::empty()).with_store(source);
+        let resolved = policy
+            .resolve(&caller(None, vec![]))
+            .await
+            .map_err(|e| format!("resolve should succeed: {e:#}"))?
+            .into_listed();
+        if resolved.to_vec() != vec!["team-alpha".to_string()] {
+            return Err(format!("expected only team-alpha, got {resolved:?}"));
         }
         Ok(())
     }
@@ -400,6 +425,16 @@ async fn live_malformed_row_fails_the_whole_snapshot_load() {
     pool.close().await;
     drop_schema(&setup_pool, schema).await;
     test_result.expect("test assertions");
+}
+
+#[test]
+fn unrecognized_axis_is_skipped_with_a_reason() {
+    use micromegas_auth::db_audience_grants::parse_axis;
+    use micromegas_auth::policy::GrantAxis;
+    assert_eq!(parse_axis("a", "read", "*"), Ok(GrantAxis::Read));
+    assert_eq!(parse_axis("a", "mint", "*"), Ok(GrantAxis::Mint));
+    let reason = parse_axis("a", "xyz", "user:x").expect_err("unknown axis");
+    assert!(reason.contains("xyz"));
 }
 
 /// End to end: a grant written straight to the table (standing in for the admin route, which
@@ -467,7 +502,7 @@ async fn live_read_policy_with_store_grants_a_store_granted_selector() {
             .resolve(&ctx)
             .await
             .map_err(|e| format!("expected the store-granted read to resolve: {e:#}"))?
-            .into_inner();
+            .into_listed();
         if !resolved.contains(&"team-alpha".to_string()) {
             return Err(format!(
                 "expected team-alpha (store-granted) in resolved set, got {resolved:?}"

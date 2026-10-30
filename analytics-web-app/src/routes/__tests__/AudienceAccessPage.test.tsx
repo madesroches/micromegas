@@ -386,6 +386,118 @@ describe('AudienceAccessPage — admin', () => {
   })
 })
 
+describe('AudienceAccessPage — all-audiences grant', () => {
+  async function openAddDialog() {
+    installFetchMock({ grants: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No audience grants yet/)).toBeInTheDocument())
+    fireEvent.click(screen.getAllByRole('button', { name: /Add grant/i })[0])
+    const audienceInput = await screen.findByPlaceholderText('team-alpha')
+    const heading = screen.getByRole('heading', { name: 'Add audience grant' })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+    return { audienceInput, dialogRoot }
+  }
+
+  it('shows an inline charset error and keeps Add grant disabled', async () => {
+    const { audienceInput, dialogRoot } = await openAddDialog()
+    fireEvent.change(audienceInput, { target: { value: 'team alpha' } })
+    expect(within(dialogRoot).getByText(/must be '\*'/)).toBeInTheDocument()
+    expect(within(dialogRoot).getByRole('button', { name: 'Add grant' })).toBeDisabled()
+  })
+
+  it('enables Add grant for * on read with a key selector, and hides everyone', async () => {
+    const { audienceInput, dialogRoot } = await openAddDialog()
+    fireEvent.change(audienceInput, { target: { value: '*' } })
+    expect(within(dialogRoot).queryByRole('button', { name: 'everyone' })).not.toBeInTheDocument()
+    expect(within(dialogRoot).getByText(/All audiences, current and future/)).toBeInTheDocument()
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'key' }))
+    await within(dialogRoot).findByText('reporter (0b9f5d0e)')
+    fireEvent.change(within(dialogRoot).getByRole('combobox'), {
+      target: { value: '0b9f5d0e-5c1a-4a52-9a6e-6f1d7b0c1a11' },
+    })
+    expect(within(dialogRoot).getByRole('button', { name: 'Add grant' })).toBeEnabled()
+  })
+
+  it('shows the read-only error for * on the mint axis', async () => {
+    const { audienceInput, dialogRoot } = await openAddDialog()
+    fireEvent.change(audienceInput, { target: { value: '*' } })
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'mint' }))
+    expect(within(dialogRoot).getByText(/read-axis only/)).toBeInTheDocument()
+    expect(within(dialogRoot).getByRole('button', { name: 'Add grant' })).toBeDisabled()
+  })
+
+  it('does not show a selector error before the user has typed an id', async () => {
+    const { audienceInput, dialogRoot } = await openAddDialog()
+    fireEvent.change(audienceInput, { target: { value: 'team-alpha' } })
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'group' }))
+    expect(within(dialogRoot).queryByText(/must not be empty/)).not.toBeInTheDocument()
+    const input = within(dialogRoot).getByPlaceholderText('eng')
+    fireEvent.change(input, { target: { value: 'x' } })
+    fireEvent.change(input, { target: { value: '' } })
+    // Back to empty: no error shown before the user has typed anything.
+    expect(within(dialogRoot).queryByText(/must not be empty/)).not.toBeInTheDocument()
+    expect(within(dialogRoot).getByRole('button', { name: 'Add grant' })).toBeDisabled()
+  })
+
+  it('shows selectorError for a malformed key id typed into the Share dialog', async () => {
+    authState.user = { sub: 'reader', email: 'reader@example.com', is_admin: false }
+    installFetchMock({
+      grants: [
+        {
+          audience: 'team-alpha',
+          axis: 'read',
+          selector: 'user:reader@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'reader@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['team-alpha:read'],
+      },
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Share read access/i }))
+    const heading = await screen.findByRole('heading', { name: /Share read access/i })
+    const dialogRoot = heading.closest('div.relative') as HTMLElement
+    fireEvent.click(within(dialogRoot).getByRole('button', { name: 'key' }))
+    fireEvent.change(within(dialogRoot).getByPlaceholderText(/key id/i), {
+      target: { value: 'nope' },
+    })
+    expect(within(dialogRoot).getByText(/lowercase hyphenated UUID/)).toBeInTheDocument()
+    expect(within(dialogRoot).getByRole('button', { name: 'Share' })).toBeDisabled()
+  })
+
+  it('renders the * card as All audiences, with no Share button for a non-admin', async () => {
+    authState.user = { sub: 'reader', email: 'reader@example.com', is_admin: false }
+    installFetchMock({
+      grants: [
+        {
+          audience: '*',
+          axis: 'read',
+          selector: 'user:reader@example.com',
+          created_at: '2026-08-14T00:00:00Z',
+          created_by: 'admin@example.com',
+        },
+      ],
+      myAudiences: {
+        is_admin: false,
+        audiences: [],
+        mint_prefix: 'reader-',
+        email: 'reader@example.com',
+        held_pairs: ['*:read'],
+      },
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByText('All audiences')).toBeInTheDocument())
+    expect(screen.getByText('All audiences')).toHaveAttribute('title', '*')
+    expect(screen.queryByRole('button', { name: /Share read access/i })).not.toBeInTheDocument()
+  })
+})
+
 describe('AudienceAccessPage — key selector', () => {
   const heldRead = {
     audience: 'team-alpha',

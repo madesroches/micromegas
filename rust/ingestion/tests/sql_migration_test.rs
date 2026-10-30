@@ -216,10 +216,10 @@ async fn v6_backfills_existing_rows_and_rejects_invalid_audiences() {
 }
 
 /// The v6 -> v7 step: `execute_migration` against a v6 database creates
-/// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)` and its audience-name
-/// `CHECK`, mirroring `AudienceGrants::from_rows`'s Rust-side validation
-/// (`rust/auth/src/policy.rs`). Selector shape is validated in code only, so the table accepts
-/// any selector string once fully migrated.
+/// `audience_grants` with its `PRIMARY KEY (audience, axis, selector)`. Once fully migrated (v14)
+/// the audience-name, axis, and selector-shape CHECKs are all gone and
+/// `AudienceGrants::from_rows` (`rust/auth/src/policy.rs`) validates in code only, so the table
+/// accepts any audience, 4-character axis, and selector string.
 const SCHEMA_V7: &str = "mm_1489_sql_migration_test_schema";
 
 #[ignore]
@@ -288,29 +288,23 @@ async fn v7_creates_audience_grants_table_with_constraints() {
             return Err("expected the primary key to reject a duplicate row".to_string());
         }
 
-        // `axis` must be 'read' or 'mint'.
-        let bad_axis = sqlx::query(
+        // The axis CHECK is gone at v14 (the 4-character value fits the VARCHAR(4) column).
+        sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
-             VALUES ('team-alpha', 'write', '*', now(), 'test')",
+             VALUES ('team-alpha', 'xyz', '*', now(), 'test')",
         )
         .execute(&pool)
-        .await;
-        if bad_axis.is_ok() {
-            return Err("expected the axis CHECK to reject 'write'".to_string());
-        }
+        .await
+        .map_err(|e| format!("expected no axis CHECK at v14: {e}"))?;
 
-        // The audience-name CHECK mirrors `is_valid_audience`'s charset -- assert agreement on a
-        // representative value, not the full accept/reject table (which
-        // `rust/auth/tests/policy_tests.rs`'s `is_valid_audience_*` tests already pin).
-        let bad_audience = sqlx::query(
+        // The audience-name CHECK is gone at v14: grant audiences are validated in code only.
+        sqlx::query(
             "INSERT INTO audience_grants (audience, axis, selector, created_at, created_by)
              VALUES ('group:everyone', 'read', '*', now(), 'test')",
         )
         .execute(&pool)
-        .await;
-        if bad_audience.is_ok() {
-            return Err("expected the audience-name CHECK to reject 'group:everyone'".to_string());
-        }
+        .await
+        .map_err(|e| format!("expected no audience-name CHECK at v14: {e}"))?;
 
         // No selector-shape CHECK remains after v13.
         sqlx::query(
@@ -319,7 +313,7 @@ async fn v7_creates_audience_grants_table_with_constraints() {
         )
         .execute(&pool)
         .await
-        .map_err(|e| format!("expected no selector-shape CHECK at v13: {e}"))?;
+        .map_err(|e| format!("expected no selector-shape CHECK at v14: {e}"))?;
 
         Ok(())
     }

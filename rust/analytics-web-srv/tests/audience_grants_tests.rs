@@ -339,6 +339,60 @@ async fn create_grant_400_for_key_selector_on_mint_axis() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+async fn star_audience_status(user: ValidatedUser, body: &str) -> StatusCode {
+    let app = build_handler_router_with_user(
+        AudienceGrantsState {
+            pool: Some(lazy_pool()),
+            settings: test_settings(true, 25, 100, 50),
+        },
+        user,
+    );
+    app.oneshot(post_request("/api/audience-grants", body))
+        .await
+        .expect("call service")
+        .status()
+}
+
+#[tokio::test]
+async fn create_grant_400_for_star_audience_on_mint_axis() {
+    let status = star_audience_status(
+        admin_user(),
+        r#"{"audience": "*", "axis": "mint", "selector": "user:a@example.com"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_grant_400_for_star_audience_with_star_selector() {
+    let status = star_audience_status(
+        admin_user(),
+        r#"{"audience": "*", "axis": "read", "selector": "*"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_grant_403_for_non_admin_star_audience() {
+    let status = star_audience_status(
+        non_admin_user(),
+        r#"{"audience": "*", "axis": "read", "selector": "user:a@example.com"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn create_grant_400_for_partially_star_audience() {
+    let status = star_audience_status(
+        admin_user(),
+        r#"{"audience": "team-*", "axis": "read", "selector": "user:a@example.com"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 // ---------------------------------------------------------------------------
 // /my-audiences. The knob-off-non-admin case is rejected by
 // `my_audiences`'s own gate check before `require_pool`/any DB access, so it needs no live DB,

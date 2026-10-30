@@ -267,7 +267,9 @@ class WebClient:
 
         `axis` is `"read"` or `"mint"`; `selector` is `"*"`, `"user:<id>"`,
         `"group:<id>"`, or `"key:<key_id>"` (an analytics API key; read axis
-        only, 404 if no live key has that id) -- the server re-validates both. Returns
+        only, 404 if no live key has that id) -- the server re-validates both.
+        `audience` is an audience name, or `"*"` for all audiences (read axis
+        only, admin only, never with the `"*"` selector). Returns
         `{"audience", "axis", "selector", "created_at", "created_by"}`; the
         response reports the pre-existing row's own fields when the grant
         already existed (the server answers `200` in that case, `201` for a
@@ -286,7 +288,7 @@ class WebClient:
     def delete_audience_grant(self, audience, axis, selector):
         """Delete one audience grant row via `DELETE /api/audience-grants`,
         keyed by its natural `(audience, axis, selector)` triple passed as
-        query parameters -- a `group:<id>` selector isn't restricted enough in
+        query parameters (`audience` may be `"*"`) -- a `group:<id>` selector isn't restricted enough in
         charset to be a safe raw path segment. `selector` is any of the kinds
         `create_audience_grant` accepts, including `"key:<key_id>"`; a grant
         left behind by a revoked key can still be deleted. Raises `RuntimeError` (via

@@ -163,6 +163,27 @@ export async function fetchMyAudiences(): Promise<MyAudiences> {
 
 export const AUDIENCE_PATTERN = /^[A-Za-z0-9_-]{1,255}$/
 
+/** The grant audience meaning every audience, current and future. Read axis only. */
+export const ALL_AUDIENCES = '*'
+
+/** `null` when (audience, axis, selector) is a creatable grant shape; otherwise a reason. An
+ *  empty audience is `null` too, so no error shows before the user has typed anything. */
+export function validateGrantAudience(
+  audience: string,
+  axis: GrantAxis,
+  selector: string
+): string | null {
+  if (audience === '') return null
+  if (audience !== ALL_AUDIENCES && !AUDIENCE_PATTERN.test(audience)) {
+    return "must be '*' (all audiences) or match [A-Za-z0-9_-], up to 255 characters"
+  }
+  if (audience === ALL_AUDIENCES) {
+    if (axis === 'mint') return "'*' (all audiences) is read-axis only"
+    if (selector === '*') return "'*' audience with the everyone selector is not allowed"
+  }
+  return null
+}
+
 /** A BYTE bound (the `selector` column is `VARCHAR(255)`) -- use `TextEncoder`, not `.length`,
  *  since a `group:<id>` selector may contain multi-byte characters. */
 export const MAX_SELECTOR_BYTES = 255
