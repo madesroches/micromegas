@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["aggregate_scan_metrics"],"struct":["QueryAuditRecord","ScanMetrics"]};

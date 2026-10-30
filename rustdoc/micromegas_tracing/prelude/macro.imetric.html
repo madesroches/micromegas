@@ -1,0 +1,128 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Records a integer metric. Use `imetric_dyn!` when the name or unit is built at run time."><title>imetric in micromegas_tracing::prelude - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="micromegas_tracing" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.0 (b940084d7 2026-09-28)" data-channel="1.99.0" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc macro"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">imetric</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../micromegas_tracing/index.html">micromegas_<wbr>tracing</a><span class="version">0.33.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">imetric</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In micromegas_<wbr>tracing::<wbr>prelude</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">micromegas_tracing</a>::<wbr><a href="index.html">prelude</a></div><h1>Macro <span class="macro">imetric</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/micromegas_tracing/macros.rs.html#566-577">Source</a> </span></div><pre class="rust item-decl"><code>macro_rules! imetric {
+    (target: $target:expr, $name:expr, $unit:expr, $($rest:tt)+) =&gt; { ... };
+    ($name:expr, $unit:expr, $($rest:tt)+) =&gt; { ... };
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Records a integer metric. Use <a href="../macro.imetric_dyn.html" title="macro micromegas_tracing::imetric_dyn"><code>imetric_dyn!</code></a> when the name or unit is built at run time.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::imetric;
+
+<span class="macro">imetric!</span>(<span class="string">"Frame Time"</span>, <span class="string">"ticks"</span>, <span class="number">1000</span>);</code></pre></div>
+<p>Properties go between the unit and the value, as <code>key = value</code> pairs. A key is an
+identifier or a string literal. Literal values are interned once per callsite, unless a <code>..set</code>
+is spread without a <code>static</code> value, in which case the literals are copied into the block
+(the spread set’s own values are not); any other value is attached to the measure and copied
+into the current block. A
+bare value must implement <a href="../property_value/trait.PropertyValue.html" title="trait micromegas_tracing::property_value::PropertyValue"><code>PropertyValue</code></a> (strings
+do); use <code>%value</code> (<code>Display</code>) or <code>?value</code> (<code>Debug</code>) for the rest, at the cost of one <code>String</code>
+allocation.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>correlation_id = String::from(<span class="string">"c0ffee"</span>);
+<span class="kw">let </span>rows = <span class="number">3</span>;
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, correlation_id = correlation_id, region = <span class="string">"eu"</span>, rows = %rows, <span class="number">3</span>);
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, <span class="string">"http.method" </span>= <span class="string">"GET"</span>, <span class="number">3</span>);</code></pre></div>
+<p>In a call with properties, a <code>{key}</code> placeholder whose name is a property key refers to that
+property’s value (evaluated once), not to a local of the same name; every other placeholder
+keeps its usual meaning. When every placeholder is a plain <code>{key}</code> over a <code>%</code>, bare, <code>static</code>,
+or string, char, bool or integer literal property, or a <code>{key:?}</code> over a <code>?</code> property, and
+the call has no other format arguments, the process doesn’t format the message at all: it
+stores the format string with the properties, and analytics renders it. That is the cheapest
+way to put a property in the message, and it is smaller in the block. A placeholder with a
+spec (<code>{key:&gt;8}</code>), a <code>{key}</code> over a <code>?</code> property, a float or negated literal, a positional
+argument, or a name that isn’t a property is formatted in the process as before.
+Property names are case-insensitive, so a placeholder matching two keys is a compile error,
+and a placeholder only binds a key spelled exactly like it.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>(user, rows) = (<span class="string">"alice"</span>, <span class="number">3</span>);
+<span class="macro">info!</span>(user = user, rows = %rows, <span class="string">"{user} fetched {rows} rows"</span>);</code></pre></div>
+<p>A placeholder that matches two keys is ambiguous, so it doesn’t compile:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>(a, b) = (<span class="string">"1"</span>, <span class="string">"2"</span>);
+<span class="macro">info!</span>(user = %a, User = %b, <span class="string">"{user}"</span>);</code></pre></div>
+<p>A literal or <code>static</code> property is recorded once per callsite and never formatted per call, so
+it can’t take a format spec or <code>{key:?}</code>; bind the value to a differently named local and
+format that instead:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>x: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="string">"x"</span>;
+<span class="macro">info!</span>(l = <span class="kw">static </span>x, <span class="string">"{l:?}"</span>);</code></pre></div>
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="macro">info!</span>(n = <span class="number">1</span>, <span class="string">"{n:&gt;8}"</span>);</code></pre></div>
+<p>A precomputed <code>&amp;'static PropertySet</code> is spread with <code>..set</code>. It must come last in the
+property list, and <code>key = value</code> pairs override its entries:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>micromegas_tracing::property_set::{Property, PropertySet};
+
+<span class="kw">let </span>set = PropertySet::find_or_create(<span class="macro">vec!</span>[Property::new(<span class="string">"region"</span>, <span class="string">"eu"</span>)]);
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, ..set, <span class="number">3</span>);
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, correlation_id = <span class="string">"c0ffee"</span>, ..set, <span class="number">3</span>);</code></pre></div>
+<p><code>target: "name"</code> replaces the module path as the target of the metric:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="macro">imetric!</span>(target: <span class="string">"my_crate::cache"</span>, <span class="string">"hits"</span>, <span class="string">"count"</span>, kind = <span class="string">"disk"</span>, <span class="number">1</span>);</code></pre></div>
+<p><code>key = static expr</code> takes a <code>&amp;'static str</code> chosen at runtime, from a small closed set (a
+label or an enum variant name, for example). Each distinct tuple of static values is interned
+once per callsite and then looked up, a few nanoseconds more than a <code>..set</code> spread and far
+cheaper than a dynamic value. Every distinct value is kept forever, so the cardinality
+contract of <code>PropertySet</code> applies: never use it for ids. It mixes freely with literals,
+dynamic values and a trailing <code>..set</code>. Among literals and static values the last one wins
+(case-insensitive), a dynamic value beats both, and any pair overrides a <code>..set</code> entry. With
+<code>..set</code> and a static value in the same call, literals and static values are interned over the
+set, so dynamic values beat them whatever the order.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>label: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="string">"alpha"</span>;
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, prefix = <span class="kw">static </span>label, tier = <span class="string">"ram"</span>, <span class="number">3</span>);
+<span class="macro">fmetric!</span>(<span class="string">"fetch_ms"</span>, <span class="string">"ms"</span>, prefix = <span class="kw">static </span>label, <span class="number">1.5</span>);</code></pre></div>
+<p>The value must be <code>'static</code>; a borrowed string is a compile error:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>s = String::from(<span class="string">"alpha"</span>);
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, prefix = <span class="kw">static </span>s.as_str(), <span class="number">3</span>);</code></pre></div>
+<p><code>static</code> doesn’t combine with <code>%</code> or <code>?</code>:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, prefix = <span class="kw">static </span>%<span class="string">"x"</span>, <span class="number">3</span>);</code></pre></div>
+<p><code>target</code>, <code>name</code> and <code>unit</code> are reserved keys, because analytics treats them as column
+overrides. They can still be set through a <code>..set</code> spread:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, unit = <span class="string">"rows"</span>, <span class="number">3</span>);</code></pre></div>
+<p>A literal value goes through <code>concat!</code>, so <code>1_000</code> is recorded as “1000” and <code>0x10</code> as “16”,
+while a float keeps its spelling (<code>0.50</code> stays “0.50”); <code>%value</code> uses <code>Display</code> instead.</p>
+<p>A bare integer needs <code>%</code>:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>n = <span class="number">3_u32</span>;
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, rows = n, <span class="number">3</span>);</code></pre></div>
+<p>A bare negated expression has no <code>PropertyValue</code> impl either:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">let </span>n = <span class="number">3_i32</span>;
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, delta = -n, <span class="number">3</span>);</code></pre></div>
+<p><code>..set</code> can’t be followed by other entries, and appears at most once:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>micromegas_tracing::property_set::PropertySet;
+
+<span class="kw">let </span>set = PropertySet::empty();
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, ..set, kind = <span class="string">"a"</span>, <span class="number">3</span>);</code></pre></div>
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>micromegas_tracing::prelude::<span class="kw-2">*</span>;
+<span class="kw">use </span>micromegas_tracing::property_set::PropertySet;
+
+<span class="kw">let </span>set = PropertySet::empty();
+<span class="macro">imetric!</span>(<span class="string">"rows_fetched"</span>, <span class="string">"count"</span>, ..set, ..set, <span class="number">3</span>);</code></pre></div></div></details></section></div></main></body></html>

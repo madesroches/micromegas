@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_jsonb_object_keys_udf"],"struct":["JsonbObjectKeys"]};

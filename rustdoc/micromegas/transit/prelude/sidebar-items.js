@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"derive":["TransitReflect"],"enum":["InProcSize"],"fn":["read_any","write_any"],"macro":["declare_queue_struct"],"struct":["QueueIterator"],"trait":["HeterogeneousQueue","InProcSerialize","Reflect"]};
