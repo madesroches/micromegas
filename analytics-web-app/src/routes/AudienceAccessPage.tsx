@@ -190,7 +190,12 @@ function GrantDialog({
 
   const canSubmit = !isSubmitting && audienceValid && selectorError === null
 
-  const title = isAdd ? 'Add audience grant' : `Share ${axis} access to \`${audience}\``
+  const audienceLabel = audience === ALL_AUDIENCES ? 'All audiences' : audience
+  const title = isAdd
+    ? 'Add audience grant'
+    : audience === ALL_AUDIENCES
+      ? `Share ${axis} access to all audiences`
+      : `Share ${axis} access to \`${audience}\``
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -253,7 +258,7 @@ function GrantDialog({
           ) : (
             <div>
               <div className="text-sm font-medium text-theme-text-secondary mb-1">Audience</div>
-              <div className="font-mono text-sm text-theme-text-primary">{audience}</div>
+              <div className="font-mono text-sm text-theme-text-primary">{audienceLabel}</div>
             </div>
           )}
 

@@ -65,7 +65,11 @@ micromegas-grants --url https://analytics.example.com create team-alpha read gro
 ```
 
 Audience names are `[A-Za-z0-9_-]{1,255}`, case-sensitive, with no
-normalization. A grant's audience may also be `*`, meaning **every audience,
+normalization. The two axes are independent: `read` grants visibility, `mint`
+grants authority to issue an ingestion key bound to the audience. Neither
+implies the other.
+
+A grant's audience may also be `*`, meaning **every audience,
 including ones created after the grant**. It is `read` axis only, admin only to
 create, and never combined with the `*` selector. It lets an analytics key (or a
 user or group) read the whole lake without being admin and without one grant per
@@ -76,9 +80,7 @@ micromegas-grants --url https://analytics.example.com create '*' read key:<key_i
 ```
 
 Quote the `*` so the shell does not expand it. A caller holding it is filtered to
-"any stamped audience"; `'global'` partition rows still need admin. The two axes are independent: `read` grants visibility, `mint`
-grants authority to issue an ingestion key bound to the audience. Neither
-implies the other.
+"any stamped audience"; `'global'` partition rows still need admin.
 
 | Selector | Matches |
 |---|---|

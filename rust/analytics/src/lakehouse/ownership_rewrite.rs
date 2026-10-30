@@ -199,7 +199,8 @@ impl OwnershipRewrite {
     /// The membership test on `column`: `column IN (audiences)`, `column IS NOT NULL` for
     /// `EveryAudience`, or `lit(false)` for an empty list -- the fail-closed reading of "caller
     /// has no audiences" rather than emitting `IN ()` and leaving its behavior to DataFusion.
-    /// Only called after `analyze()` has short-circuited on `ReadScope::All`, so the `All` arm
+    /// An empty list is reachable in production: `public` has no built-in read grant, so a
+    /// caller matching no grant at all resolves to the empty set. Only called after `analyze()` has short-circuited on `ReadScope::All`, so the `All` arm
     /// degrades to `lit(false)` rather than panicking if that invariant is ever violated.
     fn membership_predicate(&self, column: Expr) -> Expr {
         match &self.read_scope {
@@ -216,11 +217,8 @@ impl OwnershipRewrite {
         }
     }
 
-    /// `resolved_audience` membership (see [`Self::membership_predicate`]). (`ReadScope::Audiences` can legitimately resolve to an empty
-    /// set -- `public` has no built-in read grant, so a caller matching no grant at all,
-    /// including the seeded `('public', 'read', '*')` row, resolves to the empty set, and that
-    /// empty set is now reachable in production, not just in tests). No `coalesce` here: the column is
-    /// non-null by construction, because the extraction sites already coalesced a
+    /// `resolved_audience` membership (see [`Self::membership_predicate`]). No `coalesce` here:
+    /// the column is non-null by construction, because the extraction sites already coalesced a
     /// never-stamped process's missing property to the deployment default before it was
     /// materialized.
     fn resolved_predicate(&self) -> Expr {
