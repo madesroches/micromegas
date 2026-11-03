@@ -225,7 +225,7 @@ step to run in production before anything is queued.
 The gate goes right after `create_physical_plan` and before `execute_stream`:
 
 ```
-create_physical_plan ─► estimate_scan_cost(plan, lakehouse.metadata_cache(), opaque_leaf_cost)
+create_physical_plan ─► estimate_scan_cost(plan, self.lakehouse.metadata_cache(), opaque_leaf_cost)
                      ─► scheduler.admit(identity_key, estimate.bytes).await   // may wait
                      ─► execute_stream ─► CompletionTrackedStream (owns permit via audit_state)
 ```
