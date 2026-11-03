@@ -18,9 +18,9 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
 
 - **Query path**: `FlightSqlServiceImpl::execute_query`
   (`rust/public/src/servers/flight_sql_service_impl.rs:672`) runs these steps in order: resolve
-  attribution, deny-list check (`:798`), caller context, view-DDL intercept, scoped runtime,
+  attribution, deny-list check (`:807`), caller context, view-DDL intercept, scoped runtime,
   `make_session_context`, `ctx.sql` (logical planning, `:902`), optional limit,
-  `df.create_physical_plan()` (`:930`), `execute_stream` (`:947`). The result is wrapped in a
+  `df.create_physical_plan()` (`:931`), `execute_stream` (`:948`). The result is wrapped in a
   `CompletionTrackedStream` that owns `QueryAuditState` and emits the audit record when the
   stream drains, fails, or is dropped.
 - **JIT materialization runs during physical planning.** `MaterializedView::scan`
@@ -60,19 +60,6 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
 
 ## Design
 
-### 0. Scan statistics: not a prerequisite (TL;DR)
-
-Populating DataFusion statistics on our scans would not give the admission estimate what it needs:
-the projected `total_byte_size` stays the unprojected total for any schema with a string column
-(see Current State). The estimator therefore walks the plan itself (§1) either way. Filling
-`num_rows`/`total_byte_size` from partition metadata as `Inexact` is still worth doing on its own,
-because without statistics `JoinSelection` always builds the hash table on whichever side is written
-first. That is a separate follow-up; plan-time footer statistics belong with #1234.
-
-To keep #1234 cheap, the estimator does all its footer lookups through one helper
-(`cached_footer(path)`). If #1234 swaps `MetadataCache` for DataFusion's `FileMetadataCache`,
-only that helper changes.
-
 ### 1. Scan-cost estimator (`micromegas_analytics::lakehouse::scan_cost`)
 
 ```rust
@@ -94,6 +81,10 @@ pub async fn estimate_scan_cost(
     opaque_leaf_cost: u64,
 ) -> ScanCostEstimate
 ```
+
+To keep #1234 cheap, the estimator does all its footer lookups through one helper
+(`cached_footer(path)`). If #1234 swaps `MetadataCache` for DataFusion's `FileMetadataCache`,
+only that helper changes.
 
 The estimator walks the plan tree:
 
@@ -155,6 +146,7 @@ struct Waiter { cost: u64, arrival: u64, grant: oneshot::Sender<()> }
 
 impl AdmissionScheduler {
     pub async fn admit(self: &Arc<Self>, identity: Arc<str>, cost: u64) -> AdmissionPermit;
+    pub fn queued_count(&self) -> u64;   // backs the `admission_queued_queries` gauge
 }
 pub struct AdmissionPermit { /* identity, charged cost, Arc<scheduler>; Drop releases */ }
 ```
@@ -172,8 +164,8 @@ Rules:
   under its cap (`in_flight + cost <= identity_cap`), the query fits
   (`in_flight_total + cost <= budget`), and `head_blocked` is false. Otherwise a small query
   from an idle identity would pass a blocked head. Because a single identity never holds more
-  than `identity_cap`, a newcomer whose query fits in `budget - identity_cap` always takes this
-  path.
+  than `identity_cap`, a newcomer whose query fits in `budget - identity_cap` takes this path,
+  unless another identity's eligible head is blocked on the budget.
 - **Otherwise** enqueue a `Waiter` that holds a `oneshot::Sender`, then wait.
 - **Dispatch** runs on every enqueue and every permit release:
   1. Among identities whose head is eligible (under their cap), pick the one with the smallest
@@ -188,9 +180,9 @@ Rules:
   Picking the identity with the least in-flight work is max-min fairness. Light users see almost
   no wait, and a flood from one identity is served at the pace its own share allows.
 - **Cancellation:** tonic drops the `do_get` future when the client goes away, and the `Waiter`
-  is then removed from its queue by a drop guard around the wait. If a grant raced the drop
-  (the sender fired but the permit was never taken), the guard releases the granted cost and
-  re-runs dispatch. This guard is the one subtle piece of the scheduler and has its own tests.
+  is then removed from its queue by a drop guard around the wait, which re-runs dispatch after every
+  removal so a stale `head_blocked` cannot stall the queues behind it. If a grant raced the drop
+  (the sender fired but the permit was never taken), the guard also releases the granted cost. This guard is the one subtle piece of the scheduler and has its own tests.
   The wait's drop guard at the `execute_query` call site holds `&mut QueryAuditState` (or owns
   it across the await and hands it back on grant) and records the wait-start `Instant`. When the
   future is dropped before a permit is granted, it sets `queue_wait_ms` and then calls
@@ -219,9 +211,8 @@ create_physical_plan ─► estimate_scan_cost(plan, self.lakehouse.metadata_cac
   `coalesce_partitions.rs:241`). Scanning therefore starts as soon as `execute_stream` returns,
   before the client pulls a single batch.
 - **Identity key:** `attr.service_account` when present, otherwise `attr.user_id`. An OIDC user
-  maps to `user_id`. A non-delegating key has `user_id` = the key's subject and no
-  `service_account`. A delegating key has `service_account` set, and all the users it acts for
-  share that account's queue.
+  maps to `user_id`. A delegating key acting for a user has `service_account` set, and all the users it acts for
+  share that account's queue; without delegation headers it keys on its subject via `user_id`.
 - **Permit ownership:** the permit is stored on `QueryAuditState` as an
   `Option<AdmissionPermit>`. The audit state already travels into `CompletionTrackedStream` and
   is dropped on every terminal path, including the early `audit_state.fail(...)` returns, so the
@@ -276,7 +267,8 @@ The per-query knobs stay in MB, where their defaults are whole numbers.
 `None` (disabled), and a value that is unparseable, non-finite or negative is an error that fails
 startup in `build_and_serve`, so a typo such as `4GB` cannot silently run estimate-only. GB
 converts to bytes as `(gb * 2^30).round()`, and a result above `u64::MAX` also fails startup. The two cost knobs are read with `resolve_u64_env`
-(`rust/public/src/settings.rs`) with their defaults. The per-identity maximum is parsed the same way as
+(`rust/public/src/settings.rs`) with their defaults; `MIN_COST_MB` and `OPAQUE_LEAF_COST_MB` convert
+to bytes by `* 2^20`, and a typo falls back to the default with a warning. The per-identity maximum is parsed the same way as
 the budget (unset falls back to `budget * 4 / 5`, unparseable fails startup), since its default
 depends on the budget. `build_and_serve` fails fast at startup with a clear error when
 `budget == 0`, `identity_cap > budget`, or `min_cost > identity_cap`, because
@@ -326,7 +318,8 @@ enabled anywhere.
 - `rust/public/src/servers/query_audit.rs`: new `QueryAuditRecord` fields
 - `rust/public/tests/query_audit_tests.rs`: serialization of new fields
 - `rust/public/tests/read_policy_threading_tests.rs`: the two `FlightSqlServiceImpl::new` calls
-  take the new arguments; `start_server` gains a scheduler parameter for the cancel test
+  take the new arguments; `start_server` gains a scheduler parameter for the cancel test, and all
+  13 `start_server` call sites pass `None`
 - `rust/public/src/servers/flight_sql_server.rs`: config and scheduler construction from env
 - `mkdocs/docs/query-guide/query-audit-log.md`: the five fields in the `## Fields` table
 - `mkdocs/docs/admin/flight-sql.md` (env table plus an Admission section),
@@ -374,7 +367,9 @@ enabled anywhere.
 
 - `mkdocs/docs/query-guide/query-audit-log.md`: the five new fields in the `## Fields` table. Add a calibration query
   comparing `partition_bytes`, `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
-  `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account.
+  `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account. The existing `execution_ms`/`setup_ms`/`total_ms` descriptions
+  (~`:176-178`, `:188-192`) are updated to say `execution_ms`/`setup_ms` exclude queue wait and
+  `total_ms` includes it.
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the four
   `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, a note that the budget and fairness apply per replica (sized against each replica's own memory pool), and guidance for sizing the budget from the calibration query.
 - `CHANGELOG.md` (new `## Unreleased` heading): estimate fields, and admission scheduler (off by default), with a **Minor breaking change** clause.
@@ -400,7 +395,10 @@ All coverage is no-DB unit tests.
   - `PerFile` and `Concatenated` scan shapes give the same estimate as `Unordered` over the same
     files. The fixtures must set `sort_order` (so `PerFile` certifies instead of degrading to
     `Unordered`) and non-overlapping bounds (so `Concatenated` doesn't error), reusing the
-    helpers in `rust/analytics/tests/per_file_scan_ordering_tests.rs`.
+    helpers (`make_partition`, `make_empty_partition`, `make_reader_factory`) from
+    `rust/analytics/tests/per_file_scan_ordering_tests.rs`, which move to
+    `rust/analytics/tests/common/` with a `file_size` parameter (currently hardcoded to 1024) and an
+    injectable cache.
   - Run the plan through the physical optimizer with `target_partitions > 1` and a file at least
     `repartition_file_min_size`: the file is split into byte ranges but counted once.
 - **`query_admission_tests.rs`** (tokio, paused time where useful):
@@ -417,13 +415,14 @@ All coverage is no-DB unit tests.
   - Lone identity: one identity's in-flight cost never exceeds `identity_cap`, even when it has
     more waiters.
   - Room for a newcomer: while identity A sits at its cap with waiters, B's query that fits in
-    `budget - identity_cap` is admitted on the fast path with zero wait.
+    `budget - identity_cap` is admitted on the fast path with zero wait (no other identity's head is blocked).
   - Cap-blocked waiters do not set `head_blocked`, so they never hold back other identities.
   - `identity_cap == budget`: a lone identity can fill the whole budget.
   - `min_cost` floor applied.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
   - Cancellation racing a grant releases the granted cost, so the budget does not leak.
-  - Idle identities are removed from the map.
+  - Idle identities are removed from the map. The map-size and per-identity in-flight assertions live
+    in a `#[cfg(test)]` module inside `query_admission.rs`, since `State` is private to external test crates.
 - **Config validation** (pure function over the parsed values): `budget == 0`,
   `identity_cap > budget`, and `min_cost > identity_cap` are errors; an unset maximum defaults to
   `budget * 4 / 5`; `min_cost <= identity_cap` passes. Budget parsing: unset is `None`,
@@ -432,13 +431,13 @@ All coverage is no-DB unit tests.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
   `rust/public/tests/read_policy_threading_tests.rs`, which gains an
   `Option<Arc<AdmissionScheduler>>` parameter; `#[serial]`, with `init_in_memory_tracing` /
-  `InMemorySink` capturing audit lines as in `auth_observability_tests.rs`). Budget = `min_cost`.
+  `InMemorySink` capturing audit lines as in `auth_observability_tests.rs`). `identity_cap = budget = min_cost`.
   The held query must outlast the test: `SELECT * FROM generate_series(1, 100000000)`, read for
   one batch and then left undrained. A `SELECT 1` would finish sending within the HTTP/2
   flow-control window and release its permit at once, so nothing would queue. Start a second
   `do_get`, wait until `AdmissionScheduler::queued_count()` (the accessor behind the
   `admission_queued_queries` gauge) reports 1, then cancel it. Assert exactly one `incomplete` audit record with
-  `queue_wait_ms` set. Drop the held stream and assert a third query is admitted, so no budget
+  `queue_wait_ms` set, polling `InMemorySink` until the record appears. Drop the held stream and assert a third query is admitted, so no budget
   leaks.
 - **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`, asserted on byte
   offsets in the raw JSON string (offset of `"sql_hash"` < offset of `"estimated_scan_bytes"`),
@@ -453,7 +452,8 @@ time anyone ran the steps below.
 1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_GB=0.0625` (64 MB).
 2. From Python, fire 20 concurrent `SELECT * FROM log_entries` with one identity's attribution
    headers, and 1 concurrent query with a second identity. Under `--disable-auth`, identities
-   are set through the `x-user-id` (and `x-user-email`) headers (`start_services.py` already
+   are set through the `x-user-id` (and `x-user-email`) headers, passed per identity through the Python client's `headers=`
+   constructor argument since `make_call_headers` never sends `x-user-id` (`start_services.py` already
    sets `MICROMEGAS_TELEMETRY_URL`).
 3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 25" --begin 5m`.
    Expected: the second identity's query fits in the room left by the default per-identity maximum (about 12 MB)
