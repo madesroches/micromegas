@@ -5,7 +5,7 @@
 `flight-sql-srv` runs every query the moment it arrives, so one identity can fill the DataFusion
 memory pool on its own. A shared service account behind dashboards that auto-refresh is the
 usual case. This plan adds an admission scheduler that **never rejects**. Each identity gets its
-own FIFO queue. A global budget caps how much work runs at once, and when capacity frees up the
+own FIFO queue. A per-process budget caps how much work runs at once, and when capacity frees up the
 scheduler admits the next query from the identity that currently has the least work in flight.
 A refresh storm from one identity then waits in its own queue, while a lone notebook query from
 anyone else goes straight to the front. A query's "cost" is the number of parquet bytes its
@@ -145,9 +145,7 @@ The estimator walks the plan tree:
     projection, as in `count(*)`, costs 0 here.
   - *Not cached*: use `file_size × projected_leaf_columns / total_leaf_columns`, where the leaf
     counts come from the arrow schema's leaf count (or the root count when no footer is
-    available). Precision is `FileSizeShare`. The plan **does not load footers**: that would add
-    object-store I/O before the gate, and a query waiting in the queue should not have touched
-    storage yet.
+    available). Precision is `FileSizeShare`. The plan **does not load footers** (see Trade-offs).
 - **`EmptyExec` / `PlaceholderRowExec`:** 0.
 - **Any other leaf, i.e. no children (opaque table functions, ...):** add
   `opaque_leaf_cost` and mark the precision `Opaque`. Letting these leaves report their own
@@ -165,7 +163,7 @@ unit-tested in isolation.
 
 ```rust
 pub struct AdmissionConfig {
-    pub budget: u64,          // global cost units allowed in flight
+    pub budget: u64,          // per-process cost units allowed in flight
     pub min_cost: u64,        // floor per query so 0-byte queries still occupy a slot
 }
 
@@ -209,11 +207,15 @@ Rules:
   is then removed from its queue by a drop guard around the wait. If a grant raced the drop
   (the sender fired but the permit was never taken), the guard releases the granted cost and
   re-runs dispatch. This guard is the one subtle piece of the scheduler and has its own tests.
+  The wait's drop guard at the `execute_query` call site also emits an `"incomplete"` audit
+  record carrying `queue_wait_ms` when the future is dropped before a permit is granted, reusing
+  the existing incomplete status and record path.
 - **Permit lifetime:** the permit is held until the result stream completes, fails, or is
   dropped. That is the same lifetime the audit record already tracks.
 
-**Disabled mode:** when no budget is configured, `admit` returns immediately and does not touch
-the mutex. The estimate is still computed and recorded (see §4), which allows the calibration
+**Disabled mode:** `FlightSqlServiceImpl` holds an `Option<Arc<AdmissionScheduler>>`, where
+`None` (no budget configured) means disabled: no `admit` call, permit `None`, and
+`admission_cost`/`queue_wait_ms` absent. The estimate is still computed and recorded (see §4), which allows the calibration
 step to run in production before anything is queued.
 
 ### 3. Wiring in `execute_query`
@@ -234,7 +236,7 @@ create_physical_plan ─► estimate_scan_cost(plan, lakehouse.metadata_cache(),
 - **Identity key:** `attr.service_account` when present, otherwise `attr.user_id`. An OIDC user
   maps to `user_id`. A non-delegating key has `user_id` = the key's subject and no
   `service_account`. A delegating key has `service_account` set, and all the users it acts for
-  share that account's queue (see the identity granularity open question).
+  share that account's queue.
 - **Permit ownership:** the permit is stored on `QueryAuditState` as an
   `Option<AdmissionPermit>`. The audit state already travels into `CompletionTrackedStream` and
   is dropped on every terminal path, including the early `audit_state.fail(...)` returns, so the
@@ -266,7 +268,7 @@ path), `admission_in_flight_cost` and `admission_queued_queries` (gauges sampled
 
 The settings follow the existing env-var convention for `flight-sql-srv` and the monolith:
 
-- `MICROMEGAS_ADMISSION_BUDGET_MB`: global in-flight scan-cost budget. Unset means disabled
+- `MICROMEGAS_ADMISSION_BUDGET_MB`: per-process in-flight scan-cost budget. Unset means disabled
   (estimate-only).
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
@@ -347,6 +349,7 @@ enabled anywhere.
   cap (user call).
 - Scan statistics are not a prerequisite. Populating them from partition metadata (`Inexact`) is
   its own follow-up issue, and plan-time footer statistics stay with #1234 (§0).
+- Queue key excludes `client`: it is client-asserted and would let a caller multiply its share.
 
 ## Documentation
 
@@ -354,7 +357,7 @@ enabled anywhere.
   comparing `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
   `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account.
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the three
-  `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, and guidance for sizing the budget from the calibration query.
+  `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, a note that the budget and fairness apply per replica (sized against each replica's own memory pool), and guidance for sizing the budget from the calibration query.
 - `CHANGELOG.md` (new `## Unreleased` heading): estimate fields, and admission scheduler (off by default), with a **Minor breaking change** clause.
 
 ## Testing Strategy
@@ -392,9 +395,7 @@ All coverage is no-DB unit tests.
   - Cost clamp: a query whose cost exceeds the budget runs alone.
   - `min_cost` floor applied.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
-  - Cancellation racing a grant releases the granted cost, so the budget does not leak. This is
-    a concurrency path, so it gets an automated test rather than a manual check.
-  - Disabled mode never waits.
+  - Cancellation racing a grant releases the granted cost, so the budget does not leak.
   - Idle identities are removed from the map.
 - **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`, asserted on byte
   offsets in the raw JSON string (offset of `"sql_hash"` < offset of `"estimated_scan_bytes"`),
@@ -416,11 +417,9 @@ time anyone ran the steps below.
    identity's tail, the first identity's waits grow down its queue, and every query has status
    `ok`.
 4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries complete (no leaked
-   budget). The cancelled query emits no audit record.
+   budget). The cancelled query emits one `incomplete` audit record with a non-zero `queue_wait_ms`.
 
 ## Open Questions
 
-1. **Identity granularity:** should the key also include `client` (web / python / grafana), so
-   that one person's notebook and the same person's dashboard don't share a queue?
-2. **Per-identity weights:** does a shared dashboard service account need a larger share (a
+1. **Per-identity weights:** does a shared dashboard service account need a larger share (a
    weight in the least-in-flight comparison), or is equal share per identity the intended QoS?
