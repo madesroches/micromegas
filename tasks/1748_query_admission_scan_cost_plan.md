@@ -80,6 +80,7 @@ pub enum CostPrecision { Footer, FileSizeShare, Opaque }
 
 pub struct ScanCostEstimate {
     pub bytes: u64,                 // estimated compressed bytes the scans will request
+    pub partition_bytes: u64,       // Σ file_size over the distinct files scanned: exact, unprojected
     pub files: u64,
     pub footer_files: u64,          // files estimated from a cached footer
     pub opaque_nodes: u64,          // leaves we could not see into
@@ -239,8 +240,12 @@ create_physical_plan ─► estimate_scan_cost(plan, self.lakehouse.metadata_cac
 
 Audit record (`QueryAuditRecord`): append these JSON fields **last**:
 `estimated_scan_bytes`, `estimate_precision` (`"footer" | "file_size_share" | "opaque"`),
-`admission_cost` (the charged cost, absent when admission is disabled), and `queue_wait_ms`.
-All four are `Option<...>` with `skip_serializing_if`, absent when the estimate or gate did not
+`partition_bytes`, `admission_cost` (the charged cost, absent when admission is disabled), and
+`queue_wait_ms`. `partition_bytes` is the total size of the files the plan reads, from the
+partition list, so it is exact whatever the footer cache holds. Compared with
+`estimated_scan_bytes` it shows what column projection saves, compared with `bytes_scanned` what
+row-group pruning saves, and on footer-precise queries it checks the `FileSizeShare` fallback.
+All five are `Option<...>` with `skip_serializing_if`, absent when the estimate or gate did not
 run (denied, view-DDL, planning errors). The struct literals in `query_audit_tests.rs` need
 updating.
 Per-identity attribution of queuing lives here, because the audit record has no cardinality
@@ -286,7 +291,7 @@ size. A pool-derived default is a possible follow-up once calibration data exist
 **Phase 1: estimate only (no behavior change)**
 
 1. Add `rust/analytics/src/lakehouse/scan_cost.rs` (§1) and register it in `lakehouse/mod.rs`.
-2. Add the `estimated_scan_bytes` / `estimate_precision` fields to `QueryAuditState` and
+2. Add the `estimated_scan_bytes` / `estimate_precision` / `partition_bytes` fields to `QueryAuditState` and
    `QueryAuditRecord` (`query_audit.rs`), appended last. `QueryAuditState`, its `emit()` mapping
    to `QueryAuditRecord`, and its initializer live in `flight_sql_service_impl.rs`; only
    `QueryAuditRecord` is in `query_audit.rs`.
@@ -323,7 +328,7 @@ enabled anywhere.
 - `rust/public/tests/read_policy_threading_tests.rs`: the two `FlightSqlServiceImpl::new` calls
   take the new arguments; `start_server` gains a scheduler parameter for the cancel test
 - `rust/public/src/servers/flight_sql_server.rs`: config and scheduler construction from env
-- `mkdocs/docs/query-guide/query-audit-log.md`: the four fields in the `## Fields` table
+- `mkdocs/docs/query-guide/query-audit-log.md`: the five fields in the `## Fields` table
 - `mkdocs/docs/admin/flight-sql.md` (env table plus an Admission section),
   `mkdocs/docs/admin/monolith.md` (env table)
 - `CHANGELOG.md`
@@ -363,8 +368,8 @@ enabled anywhere.
 
 ## Documentation
 
-- `mkdocs/docs/query-guide/query-audit-log.md`: the four new fields in the `## Fields` table. Add a calibration query
-  comparing `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
+- `mkdocs/docs/query-guide/query-audit-log.md`: the five new fields in the `## Fields` table. Add a calibration query
+  comparing `partition_bytes`, `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
   `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account.
 - `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the four
   `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, a note that the budget and fairness apply per replica (sized against each replica's own memory pool), and guidance for sizing the budget from the calibration query.
@@ -382,6 +387,8 @@ All coverage is no-DB unit tests.
   - Empty projection (`count(*)`-shaped): 0.
   - Uncached file: `file_size × projected/total`, precision `FileSizeShare`.
   - Mix of cached and uncached files: sums correctly, and the worst precision wins.
+  - `partition_bytes` equals Σ `file_size` of the distinct files regardless of projection and
+    cache state, and counts a byte-range-split file once.
   - All-empty partitions (`EmptyExec`): 0, precision `Footer` (the fold's starting value).
   - Join of two scans: both are summed.
   - Opaque leaf (a stub `ExecutionPlan` with no children): adds `opaque_leaf_cost`, precision
