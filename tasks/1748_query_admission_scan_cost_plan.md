@@ -254,19 +254,22 @@ path), `admission_in_flight_cost` and `admission_queued_queries` (gauges sampled
 
 The settings follow the existing env-var convention for `flight-sql-srv` and the monolith:
 
-- `MICROMEGAS_ADMISSION_BUDGET_MB`: per-process in-flight scan-cost budget. Unset means disabled
-  (estimate-only).
+- `MICROMEGAS_ADMISSION_BUDGET_GB`: per-process in-flight scan-cost budget, decimals allowed
+  (e.g. `0.5`). Unset means disabled (estimate-only).
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
-- `MICROMEGAS_ADMISSION_RESERVE_MB` (default: 20% of the budget): the slice of the budget no
+- `MICROMEGAS_ADMISSION_RESERVE_GB` (default: 20% of the budget), decimals allowed: the slice of the budget no
   single identity may take. Size it to a typical query from another caller, so that query starts
   at once on a busy service. 0 lets one identity use the whole budget.
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
-`MICROMEGAS_ADMISSION_BUDGET_MB` is parsed like `parse_max_temp_directory_mb`
-(`rust/analytics/src/lakehouse/runtime.rs`, `Result<Option<u64>>`): unset is `None` (disabled)
-and an unparseable value is an error that fails startup in `build_and_serve`, so a typo such as
-`64MB` cannot silently run estimate-only. MB converts to bytes with `checked_mul`, and overflow
-also fails startup. The two cost knobs are read with `resolve_u64_env`
+The budget and the reserve are in GB, because realistic values are several GB of scan in flight.
+The per-query knobs stay in MB, where their defaults are whole numbers.
+
+`MICROMEGAS_ADMISSION_BUDGET_GB` follows the shape of `parse_max_temp_directory_mb`
+(`rust/analytics/src/lakehouse/runtime.rs`, `Result<Option<…>>`), but parses an `f64`: unset is
+`None` (disabled), and a value that is unparseable, non-finite or negative is an error that fails
+startup in `build_and_serve`, so a typo such as `4GB` cannot silently run estimate-only. GB
+converts to bytes as `(gb * 2^30).round()`, and a result above `u64::MAX` also fails startup. The two cost knobs are read with `resolve_u64_env`
 (`rust/public/src/settings.rs`) with their defaults. The reserve is parsed the same way as the
 budget (unset falls back to `budget / 5`, unparseable fails startup), since its default depends on
 the budget. `build_and_serve` fails fast at startup with a clear error when
@@ -353,7 +356,7 @@ enabled anywhere.
 - Queue key excludes `client`: it is client-asserted and would let a caller multiply its share.
 - All identities have equal weight; per-identity weights (e.g. a larger share for a shared
   dashboard account) are tracked in #1753 (user call).
-- A single identity may use the whole budget minus a reserve (in MB, like the budget; default 20%
+- A single identity may use the whole budget minus a reserve (in GB, like the budget; default 20%
   of it), so other callers can
   always start a query on an otherwise busy service (user call).
 
@@ -412,7 +415,8 @@ All coverage is no-DB unit tests.
 - **Config validation** (pure function over the parsed values): `budget == 0`,
   `reserve >= budget`, and `min_cost > identity_cap` are errors; an unset reserve defaults to
   `budget / 5`; `min_cost <= identity_cap` passes. Budget parsing: unset is `None`,
-  unparseable (`64MB`) is an error, and a value whose byte conversion overflows is an error.
+  unparseable (`4GB`), negative or non-finite (`NaN`, `inf`) is an error, a value whose byte
+  conversion exceeds `u64::MAX` is an error, and `0.5` converts to 512 MiB.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
   `rust/public/tests/read_policy_threading_tests.rs`, which gains an
   `Option<Arc<AdmissionScheduler>>` parameter; `#[serial]`, with `init_in_memory_tracing` /
@@ -434,7 +438,7 @@ The end-to-end wiring (env → scheduler → `execute_query` → permit release 
 across the real gRPC handler. If it broke, queries would visibly hang or never queue the next
 time anyone ran the steps below.
 
-1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_MB=64`.
+1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_GB=0.0625` (64 MB).
 2. From Python, fire 20 concurrent `SELECT * FROM log_entries` with one identity's attribution
    headers, and 1 concurrent query with a second identity. Under `--disable-auth`, identities
    are set through the `x-user-id` (and `x-user-email`) headers (`start_services.py` already
