@@ -58,45 +58,14 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
 
 ## Design
 
-### 0. Should scan statistics be fixed first? (research)
+### 0. Scan statistics: not a prerequisite (TL;DR)
 
-Our `FileScanConfig`s carry no `num_rows`/`total_byte_size`, so every DataFusion rule that reads
-statistics sees `Absent`. In DataFusion 55.2 the affected rules are:
-
-- **`JoinSelection`** (`join_selection.rs:88`, `:118`). `should_swap_join_order` compares
-  `total_byte_size`, then `num_rows`, and returns `false` when either side is `Absent`. So the
-  hash-join build side is always whichever side the user wrote on the left. Writing
-  `log_entries JOIN processes` builds the hash table over the log entries.
-  `supports_collect_by_thresholds` also returns `false`, so a small dimension side is never
-  chosen for `CollectLeft`.
-- **`AggregateStatistics`**: answers `count(*)` / `min` / `max` from `Exact` statistics. It is
-  inert today, and it should stay inert (see S1 below).
-- Filter-selectivity and aggregate cardinality estimates propagate whatever the leaves report.
-
-There are two ways to populate the statistics:
-
-- **S1: from partition metadata, no I/O.** `Partition::num_rows` comes from the footer at write
-  time (`write_partition.rs:820`), so it is exact per file, and `file_size` is known. Set
-  per-file and per-scan `num_rows` = Σ `num_rows` and `total_byte_size` = Σ `file_size`, both
-  **`Inexact`**. `Inexact` is enough for `JoinSelection` (`get_value()` accepts it), and it keeps
-  `AggregateStatistics` from answering a query out of metadata. That rule could silently diverge
-  from the scanned rows if a partition row were ever wrong, which would be a correctness risk
-  for little gain. The cost is a dozen lines in `partitioned_execution_plan.rs`, and it may
-  change join plans, which needs before/after `EXPLAIN` on representative joins.
-- **S2: full column statistics from footers at plan time** (min/max/null counts, per-column
-  `byte_size`). This needs footer reads during planning, the same I/O this plan deliberately
-  keeps out of the pre-gate path. It belongs with #1234: adopting DataFusion's
-  `CachedParquetFileReaderFactory` / `FileMetadataCache` is where plan-time footer access gets
-  a first-class, cached home.
-
-**Conclusion: don't block #1748 on either.** Neither gives the admission estimate what it needs.
-DataFusion's projection keeps the *unprojected* `total_byte_size` whenever a projected column has
-no primitive width (`Statistics::calculate_total_byte_size`, datafusion-common `stats.rs:433`),
-and it ignores per-column `byte_size` even when present. Every view has string or dictionary
-columns, so `SELECT time FROM log_entries` would still be costed as the whole file. The projected
-estimate needs the estimator's own walk (§1) in every case. S1 is still worth doing on its own
-merits (hash-join build side) as a separate small change, to be filed as its own follow-up issue. It is
-independent of this plan and can land before or after it.
+Populating DataFusion statistics on our scans would not give the admission estimate what it needs:
+the projected `total_byte_size` stays the unprojected total for any schema with a string column
+(see Current State). The estimator therefore walks the plan itself (§1) either way. Filling
+`num_rows`/`total_byte_size` from partition metadata as `Inexact` is still worth doing on its own,
+because without statistics `JoinSelection` always builds the hash table on whichever side is written
+first. That is a separate follow-up; plan-time footer statistics belong with #1234.
 
 To keep #1234 cheap, the estimator does all its footer lookups through one helper
 (`cached_footer(path)`). If #1234 swaps `MetadataCache` for DataFusion's `FileMetadataCache`,
@@ -299,8 +268,8 @@ size. A pool-derived default is a possible follow-up once calibration data exist
    `QueryAuditRecord` (`query_audit.rs`), appended last. `QueryAuditState`, its `emit()` mapping
    to `QueryAuditRecord`, and its initializer live in `flight_sql_service_impl.rs`; only
    `QueryAuditRecord` is in `query_audit.rs`.
-3. In `FlightSqlServerBuilder::build_and_serve` (`flight_sql_server.rs`, the only construction
-   site, shared by flight-sql-srv and the monolith), read the env config and pass it to
+3. In `FlightSqlServerBuilder::build_and_serve` (`flight_sql_server.rs`, the only production
+   construction site, shared by flight-sql-srv and the monolith), read the env config and pass it to
    `FlightSqlServiceImpl::new`. In `execute_query`, call the estimator after
    `create_physical_plan`, store the result on `audit_state`, and use the opaque-leaf default
    from that config.
@@ -329,6 +298,8 @@ enabled anywhere.
 - `rust/public/src/servers/flight_sql_service_impl.rs`: estimate, gate, permit
 - `rust/public/src/servers/query_audit.rs`: new `QueryAuditRecord` fields
 - `rust/public/tests/query_audit_tests.rs`: serialization of new fields
+- `rust/public/tests/read_policy_threading_tests.rs`: the two `FlightSqlServiceImpl::new` calls
+  take the new arguments; `start_server` gains a scheduler parameter for the cancel test
 - `rust/public/src/servers/flight_sql_server.rs`: config and scheduler construction from env
 - `mkdocs/docs/query-guide/query-audit-log.md`: the four fields in the `## Fields` table
 - `mkdocs/docs/admin/flight-sql.md` (env table plus an Admission section),
@@ -337,9 +308,6 @@ enabled anywhere.
 
 ## Trade-offs
 
-- **Our own plan walk vs. reading DataFusion `Statistics`.** Reading `partition_statistics(None)`
-  would lose the projection for every schema with a string column. See §0 for the full analysis,
-  and for why populating the statistics is a separate change.
 - **Footers: cached only vs. loaded at plan time.** Loading uncached footers during planning
   would make every estimate `Footer`-precise and would warm the cache that execution needs
   anyway. It would also put object-store I/O, proportional to the partition count, in front of
@@ -363,7 +331,7 @@ enabled anywhere.
 - No rejection path: queries wait for their turn; there is no bounded wait and no queue-depth
   cap (user call).
 - Scan statistics are not a prerequisite. Populating them from partition metadata (`Inexact`) is
-  its own follow-up issue, and plan-time footer statistics stay with #1234 (§0).
+  its own follow-up issue, and plan-time footer statistics stay with #1234.
 - Queue key excludes `client`: it is client-asserted and would let a caller multiply its share.
 
 ## Documentation
@@ -416,10 +384,16 @@ All coverage is no-DB unit tests.
   `min_cost > budget` are errors; `min_cost <= budget` passes. Budget parsing: unset is `None`,
   unparseable (`64MB`) is an error, and a value whose byte conversion overflows is an error.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
-  `rust/public/tests/read_policy_threading_tests.rs`): budget = `min_cost`, one result stream
-  held undrained, a second queued `do_get` cancelled, then a third asserted admitted, so no
-  budget leaks. Also check that an incomplete audit record is emitted if the harness can observe
-  it; otherwise only the admission of the third.
+  `rust/public/tests/read_policy_threading_tests.rs`, which gains an
+  `Option<Arc<AdmissionScheduler>>` parameter; `#[serial]`, with `init_in_memory_tracing` /
+  `InMemorySink` capturing audit lines as in `auth_observability_tests.rs`). Budget = `min_cost`.
+  The held query must outlast the test: `SELECT * FROM generate_series(1, 100000000)`, read for
+  one batch and then left undrained. A `SELECT 1` would finish sending within the HTTP/2
+  flow-control window and release its permit at once, so nothing would queue. Start a second
+  `do_get`, wait until `AdmissionScheduler::queued_count()` (the accessor behind the
+  `admission_queued_queries` gauge) reports 1, then cancel it. Assert exactly one `incomplete` audit record with
+  `queue_wait_ms` set. Drop the held stream and assert a third query is admitted, so no budget
+  leaks.
 - **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`, asserted on byte
   offsets in the raw JSON string (offset of `"sql_hash"` < offset of `"estimated_scan_bytes"`),
   not on a parsed `serde_json::Value`; `admission_cost` is absent when admission is disabled.
