@@ -50,7 +50,9 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
 - **Opaque leaf nodes:** only `PerfettoTraceExecutionPlan`, the `process_spans` exec plan and
   `TaskLogExecPlan` do their work inside `execute`, so their scan cost cannot be seen at plan
   time. `parse_block` and the `list_*` system-table UDTFs do their work at plan time, in
-  `scan`/`call`, and return a `DataSourceExec(MemorySourceConfig)` that is already materialized.
+  `scan`/`call`, as do `jsonb_each`, `jsonb_array_elements` and `expand_histogram`, which run a
+  plan-time scan of their subquery argument (`create_physical_plan` + `collect` inside `scan`).
+  All of them return a `DataSourceExec(MemorySourceConfig)` that is already materialized.
   Static CSV/JSON `ListingTable`s produce non-parquet `FileScanConfig`s.
 
 ## Design
@@ -202,11 +204,13 @@ create_physical_plan ─► estimate_scan_cost(plan, self.lakehouse.metadata_cac
 - **The gate must precede `execute_stream`, not just the first poll.** For a plan with more than
   one output partition, `execute_stream` wraps it in `CoalescePartitionsExec`, whose `execute`
   spawns one tokio task per input partition right away (datafusion-physical-plan 55.2
-  `coalesce_partitions.rs:241`). Scanning therefore starts as soon as `execute_stream` returns,
+  `coalesce_partitions.rs:243-246`). Scanning therefore starts as soon as `execute_stream` returns,
   before the client pulls a single batch.
 - **Identity key:** `attr.service_account` when present, otherwise `attr.user_id`. An OIDC user
   maps to `user_id`. A delegating key acting for a user has `service_account` set, and all the users it acts for
   share that account's queue; without delegation headers it keys on its subject via `user_id`.
+  Under `--disable-auth` the key comes from the client-asserted `x-user-id` header, and callers
+  without it share the `"unknown"` queue.
 - **Permit ownership:** the permit is stored on `QueryAuditState` as an
   `Option<AdmissionPermit>`. The audit state already travels into `CompletionTrackedStream` and
   is dropped on every terminal path, including the early `audit_state.fail(...)` returns, so the
@@ -327,8 +331,9 @@ enabled anywhere.
   so the cache is warm for the traffic that matters, and the `FileSizeShare` fallback is
   adequate for a queue-ordering signal.
 - **Gate after physical planning vs. before planning.** Before planning there is no cost to
-  weigh, only a count. After planning, JIT materialization has already run, unqueued. We accept
-  that. JIT is bounded per partition, already serialized per view instance, and paid once per
+  weigh, only a count. After planning, JIT materialization and the subquery scans run by
+  `jsonb_each`, `jsonb_array_elements` and `expand_histogram` have already run, unqueued and
+  charged 0. We accept that. JIT is bounded per partition, already serialized per view instance, and paid once per
   range, whereas repeated dashboard scans are the dominant load. Estimating and admitting JIT work
   is tracked in #1750.
 - **Least-in-flight with no skipping vs. deficit round robin / skip-to-fit.** Skip-to-fit uses
@@ -440,9 +445,11 @@ All coverage is no-DB unit tests.
 
 ## Manual Verification
 
-The end-to-end wiring (env → scheduler → `execute_query` → permit release on stream drop) runs
-across the real gRPC handler. If it broke, queries would visibly hang or never queue the next
-time anyone ran the steps below.
+The steps below check the wiring the unit tests cannot: env → `build_and_serve` → live scheduler,
+estimates computed against real data, and identity keying from `x-user-id`. If the env were not
+read, the scheduler would stay `None` and queries would run unqueued, with `admission_cost` and
+`queue_wait_ms` silently missing. The scheduler → `execute_query` → permit path is covered by the
+automated cancel test.
 
 1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_GB=0.0625` (64 MB).
 2. From Python, fire 20 concurrent `SELECT * FROM log_entries` with one identity's attribution
@@ -454,4 +461,4 @@ time anyone ran the steps below.
    Expected: the second identity's query has an empty projection, so it is charged `min_cost` (8 MB), which fits in the room left by the default per-identity maximum (about 12 MB)
    and starts with a
    `queue_wait_ms` near 0, the first identity's waits grow down its queue, and every query has
-   status `ok`.
+   status `ok`. `admission_cost` is present on every audit record.
