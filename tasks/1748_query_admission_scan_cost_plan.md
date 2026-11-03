@@ -265,7 +265,7 @@ Per-identity attribution of queuing lives here, because the audit record has no 
 limit.
 
 Metrics (`imetric!`, with no per-identity tags, because identities are unbounded cardinality):
-`admission_queue_wait` (ms), `admission_queued` (count, only for queries that missed the fast
+`admission_queue_wait` (ticks, from the tick delta captured around `admit`), `admission_queued` (count, only for queries that missed the fast
 path), `admission_in_flight_cost` and `admission_queued_queries` (gauges sampled on dispatch).
 
 ### 5. Configuration
@@ -277,9 +277,12 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
-The vars are read with the existing `resolve_u64_env` helper (`rust/public/src/settings.rs`;
-`fn resolve_u64_env(var: &str, default: u64) -> u64`), after checking that the budget var is set
-(unset means disabled). `build_and_serve` fails fast at startup with a clear error when
+`MICROMEGAS_ADMISSION_BUDGET_MB` is parsed like `parse_max_temp_directory_mb`
+(`rust/analytics/src/lakehouse/runtime.rs`, `Result<Option<u64>>`): unset is `None` (disabled)
+and an unparseable value is an error that fails startup in `build_and_serve`, so a typo such as
+`64MB` cannot silently run estimate-only. MB converts to bytes with `checked_mul`, and overflow
+also fails startup. The two cost knobs are read with `resolve_u64_env`
+(`rust/public/src/settings.rs`) with their defaults. `build_and_serve` fails fast at startup with a clear error when
 `budget == 0` or `min_cost > budget`, because `clamp(estimate, min_cost, budget)` panics when
 `min_cost > budget`. The check is a pure function over the parsed values.
 
@@ -410,7 +413,8 @@ All coverage is no-DB unit tests.
   - Cancellation racing a grant releases the granted cost, so the budget does not leak.
   - Idle identities are removed from the map.
 - **Config validation** (pure function over the parsed values): `budget == 0` and
-  `min_cost > budget` are errors; `min_cost <= budget` passes.
+  `min_cost > budget` are errors; `min_cost <= budget` passes. Budget parsing: unset is `None`,
+  unparseable (`64MB`) is an error, and a value whose byte conversion overflows is an error.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
   `rust/public/tests/read_policy_threading_tests.rs`): budget = `min_cost`, one result stream
   held undrained, a second queued `do_get` cancelled, then a third asserted admitted, so no
