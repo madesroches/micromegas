@@ -7,7 +7,9 @@ memory pool on its own. A shared service account behind dashboards that auto-ref
 usual case. This plan adds an admission scheduler that **never rejects**. Each identity gets its
 own FIFO queue. A per-process budget caps how much work runs at once, and when capacity frees up the
 scheduler admits the next query from the identity that currently has the least work in flight.
-A refresh storm from one identity then waits in its own queue, while a lone notebook query from
+All identities weigh the same. When the service is quiet, one identity can use most of the
+budget, but never the last slice of it: a reserve stays free so that a query from anyone else
+starts immediately. A refresh storm from one identity then waits in its own queue, while a lone notebook query from
 anyone else goes straight to the front. A query's "cost" is the number of parquet bytes its
 physical plan will scan. We compute that ourselves from the plan's scan nodes, because
 DataFusion's own statistics are `Absent` for our scans (see Current State).
@@ -135,13 +137,16 @@ unit-tested in isolation.
 pub struct AdmissionConfig {
     pub budget: u64,          // per-process cost units allowed in flight
     pub min_cost: u64,        // floor per query so 0-byte queries still occupy a slot
+    pub reserve: u64,         // budget slice no single identity may take
 }
+// identity_cap = budget - reserve: the most one identity may hold in flight
 
 pub struct AdmissionScheduler { state: Mutex<State>, config: AdmissionConfig }
 
 struct State {
     in_flight_total: u64,
     queued_total: u64,       // waiters across all identities
+    head_blocked: bool,      // set by dispatch when an eligible head is waiting on the budget
     next_arrival: u64,       // counter stamped on each Waiter
     per_identity: HashMap<Arc<str>, IdentityState>,  // removed when idle and empty
 }
@@ -156,20 +161,28 @@ pub struct AdmissionPermit { /* identity, charged cost, Arc<scheduler>; Drop rel
 
 Rules:
 
-- **Charged cost** = `clamp(estimate, min_cost, budget)`. Clamping to `budget` lets a query
-  bigger than the whole budget still run, alone, instead of waiting forever. That is what
+- **Charged cost** = `clamp(estimate, min_cost, identity_cap)`. Clamping to `identity_cap` lets
+  a query bigger than the whole budget still run instead of waiting forever. That is what
   "never reject" requires.
-- **Fast path:** if no identity has a waiter (`queued_total == 0`) and
-  `in_flight_total + cost <= budget`, admit at once with zero wait. Otherwise a small query
-  from an idle identity would pass a blocked head.
+- **Per-identity cap:** an identity's head is *eligible* only while
+  `identity.in_flight + cost <= identity_cap`. A lone identity can therefore fill the budget up to
+  the reserve, and its remaining queries wait for its own completions. Those waiters are blocked
+  by their own cap, not by the budget, so they never block other identities.
+- **Fast path:** admit at once with zero wait when the caller's queue is empty, the caller is
+  under its cap (`in_flight + cost <= identity_cap`), the query fits
+  (`in_flight_total + cost <= budget`), and `head_blocked` is false. Otherwise a small query
+  from an idle identity would pass a blocked head. Because a single identity never holds the
+  reserve, a newcomer whose query fits in the reserve always takes this path.
 - **Otherwise** enqueue a `Waiter` that holds a `oneshot::Sender`, then wait.
 - **Dispatch** runs on every enqueue and every permit release:
-  1. Among identities with a non-empty queue, pick the one with the smallest `in_flight`. Break
-     ties by the smallest head-of-queue `arrival`.
+  1. Among identities whose head is eligible (under their cap), pick the one with the smallest
+     `in_flight`. Break ties by the smallest head-of-queue `arrival`. If there is none, clear
+     `head_blocked` and stop.
   2. If its head fits (`in_flight_total + cost <= budget`), grant it and repeat.
-  3. If it does not fit, **stop**. Do not let a smaller query from another identity jump past
-     it. Without this rule, a large query could starve behind a steady stream of small ones.
-     Charged cost is at most `budget`, so the head always fits once enough in-flight work drains.
+  3. If it does not fit, set `head_blocked` and **stop**. Do not let a smaller query from another
+     identity jump past it. Without this rule, a large query could starve behind a steady stream
+     of small ones. Charged cost is at most `identity_cap`, so the head always fits once enough
+     in-flight work drains.
 
   Picking the identity with the least in-flight work is max-min fairness. Light users see almost
   no wait, and a flood from one identity is served at the pace its own share allows.
@@ -244,6 +257,8 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 - `MICROMEGAS_ADMISSION_BUDGET_MB`: per-process in-flight scan-cost budget. Unset means disabled
   (estimate-only).
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
+- `MICROMEGAS_ADMISSION_RESERVE_PERCENT` (default 20): the share of the budget no single identity
+  may take; `reserve = budget × percent / 100`. 0 lets one identity use the whole budget.
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
 `MICROMEGAS_ADMISSION_BUDGET_MB` is parsed like `parse_max_temp_directory_mb`
@@ -252,8 +267,8 @@ and an unparseable value is an error that fails startup in `build_and_serve`, so
 `64MB` cannot silently run estimate-only. MB converts to bytes with `checked_mul`, and overflow
 also fails startup. The two cost knobs are read with `resolve_u64_env`
 (`rust/public/src/settings.rs`) with their defaults. `build_and_serve` fails fast at startup with a clear error when
-`budget == 0` or `min_cost > budget`, because `clamp(estimate, min_cost, budget)` panics when
-`min_cost > budget`. The check is a pure function over the parsed values.
+`budget == 0`, the reserve percent is 100 or more, or `min_cost > identity_cap`, because
+`clamp(estimate, min_cost, identity_cap)` panics when `min_cost > identity_cap`. The check is a pure function over the parsed values.
 
 The budget is in **scan bytes**, not memory bytes. Operators size it from the calibration query
 in the docs, which compares `estimated_scan_bytes` with `peak_memory_bytes` and with the pool
@@ -333,13 +348,17 @@ enabled anywhere.
 - Scan statistics are not a prerequisite. Populating them from partition metadata (`Inexact`) is
   its own follow-up issue, and plan-time footer statistics stay with #1234.
 - Queue key excludes `client`: it is client-asserted and would let a caller multiply its share.
+- All identities have equal weight; per-identity weights (e.g. a larger share for a shared
+  dashboard account) are tracked in #1753 (user call).
+- A single identity may use the whole budget minus a reserve (default 20%), so other callers can
+  always start a query on an otherwise busy service (user call).
 
 ## Documentation
 
 - `mkdocs/docs/query-guide/query-audit-log.md`: the four new fields in the `## Fields` table. Add a calibration query
   comparing `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
   `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account.
-- `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the three
+- `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the four
   `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, a note that the budget and fairness apply per replica (sized against each replica's own memory pool), and guidance for sizing the budget from the calibration query.
 - `CHANGELOG.md` (new `## Unreleased` heading): estimate fields, and admission scheduler (off by default), with a **Minor breaking change** clause.
 
@@ -375,13 +394,19 @@ All coverage is no-DB unit tests.
     is not starved.
   - Fast path with a blocked head: a fresh identity's small query arrives while a large head is
     blocked, and it waits behind the head.
-  - Cost clamp: a query whose cost exceeds the budget runs alone.
+  - Cost clamp: a query whose cost exceeds the budget is charged `identity_cap` and runs.
+  - Lone identity: with 20% reserve, one identity's in-flight cost never exceeds 80% of the budget
+    even when it has more waiters.
+  - Reserve for a newcomer: while identity A sits at its cap with waiters, B's query that fits in
+    the reserve is admitted on the fast path with zero wait.
+  - Cap-blocked waiters do not set `head_blocked`, so they never hold back other identities.
+  - Reserve 0: a lone identity can fill the whole budget.
   - `min_cost` floor applied.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
   - Cancellation racing a grant releases the granted cost, so the budget does not leak.
   - Idle identities are removed from the map.
-- **Config validation** (pure function over the parsed values): `budget == 0` and
-  `min_cost > budget` are errors; `min_cost <= budget` passes. Budget parsing: unset is `None`,
+- **Config validation** (pure function over the parsed values): `budget == 0`, a reserve percent
+  of 100 or more, and `min_cost > identity_cap` are errors; `min_cost <= identity_cap` passes. Budget parsing: unset is `None`,
   unparseable (`64MB`) is an error, and a value whose byte conversion overflows is an error.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
   `rust/public/tests/read_policy_threading_tests.rs`, which gains an
@@ -410,13 +435,8 @@ time anyone ran the steps below.
    are set through the `x-user-id` (and `x-user-email`) headers (`start_services.py` already
    sets `MICROMEGAS_TELEMETRY_URL`).
 3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 25" --begin 5m`.
-   Expected: the second identity waits for at most about one release, far less than the first
-   identity's tail, the first identity's waits grow down its queue, and every query has status
-   `ok`.
+   Expected: the second identity's query fits in the 20% reserve and starts with a
+   `queue_wait_ms` near 0, the first identity's waits grow down its queue, and every query has
+   status `ok`.
 4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries complete (no leaked
    budget). The cancelled query emits one `incomplete` audit record with a non-zero `queue_wait_ms`.
-
-## Open Questions
-
-1. **Per-identity weights:** does a shared dashboard service account need a larger share (a
-   weight in the least-in-flight comparison), or is equal share per identity the intended QoS?
