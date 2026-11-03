@@ -257,8 +257,9 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 - `MICROMEGAS_ADMISSION_BUDGET_MB`: per-process in-flight scan-cost budget. Unset means disabled
   (estimate-only).
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
-- `MICROMEGAS_ADMISSION_RESERVE_PERCENT` (default 20): the share of the budget no single identity
-  may take; `reserve = budget × percent / 100`. 0 lets one identity use the whole budget.
+- `MICROMEGAS_ADMISSION_RESERVE_MB` (default: 20% of the budget): the slice of the budget no
+  single identity may take. Size it to a typical query from another caller, so that query starts
+  at once on a busy service. 0 lets one identity use the whole budget.
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
 `MICROMEGAS_ADMISSION_BUDGET_MB` is parsed like `parse_max_temp_directory_mb`
@@ -266,8 +267,10 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 and an unparseable value is an error that fails startup in `build_and_serve`, so a typo such as
 `64MB` cannot silently run estimate-only. MB converts to bytes with `checked_mul`, and overflow
 also fails startup. The two cost knobs are read with `resolve_u64_env`
-(`rust/public/src/settings.rs`) with their defaults. `build_and_serve` fails fast at startup with a clear error when
-`budget == 0`, the reserve percent is 100 or more, or `min_cost > identity_cap`, because
+(`rust/public/src/settings.rs`) with their defaults. The reserve is parsed the same way as the
+budget (unset falls back to `budget / 5`, unparseable fails startup), since its default depends on
+the budget. `build_and_serve` fails fast at startup with a clear error when
+`budget == 0`, `reserve >= budget`, or `min_cost > identity_cap`, because
 `clamp(estimate, min_cost, identity_cap)` panics when `min_cost > identity_cap`. The check is a pure function over the parsed values.
 
 The budget is in **scan bytes**, not memory bytes. Operators size it from the calibration query
@@ -350,7 +353,8 @@ enabled anywhere.
 - Queue key excludes `client`: it is client-asserted and would let a caller multiply its share.
 - All identities have equal weight; per-identity weights (e.g. a larger share for a shared
   dashboard account) are tracked in #1753 (user call).
-- A single identity may use the whole budget minus a reserve (default 20%), so other callers can
+- A single identity may use the whole budget minus a reserve (in MB, like the budget; default 20%
+  of it), so other callers can
   always start a query on an otherwise busy service (user call).
 
 ## Documentation
@@ -395,8 +399,8 @@ All coverage is no-DB unit tests.
   - Fast path with a blocked head: a fresh identity's small query arrives while a large head is
     blocked, and it waits behind the head.
   - Cost clamp: a query whose cost exceeds the budget is charged `identity_cap` and runs.
-  - Lone identity: with 20% reserve, one identity's in-flight cost never exceeds 80% of the budget
-    even when it has more waiters.
+  - Lone identity: one identity's in-flight cost never exceeds `budget - reserve`, even when it has
+    more waiters.
   - Reserve for a newcomer: while identity A sits at its cap with waiters, B's query that fits in
     the reserve is admitted on the fast path with zero wait.
   - Cap-blocked waiters do not set `head_blocked`, so they never hold back other identities.
@@ -405,8 +409,9 @@ All coverage is no-DB unit tests.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
   - Cancellation racing a grant releases the granted cost, so the budget does not leak.
   - Idle identities are removed from the map.
-- **Config validation** (pure function over the parsed values): `budget == 0`, a reserve percent
-  of 100 or more, and `min_cost > identity_cap` are errors; `min_cost <= identity_cap` passes. Budget parsing: unset is `None`,
+- **Config validation** (pure function over the parsed values): `budget == 0`,
+  `reserve >= budget`, and `min_cost > identity_cap` are errors; an unset reserve defaults to
+  `budget / 5`; `min_cost <= identity_cap` passes. Budget parsing: unset is `None`,
   unparseable (`64MB`) is an error, and a value whose byte conversion overflows is an error.
 - **Cancel while queued** (no-DB gRPC harness `start_server` in
   `rust/public/tests/read_policy_threading_tests.rs`, which gains an
@@ -435,7 +440,7 @@ time anyone ran the steps below.
    are set through the `x-user-id` (and `x-user-email`) headers (`start_services.py` already
    sets `MICROMEGAS_TELEMETRY_URL`).
 3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 25" --begin 5m`.
-   Expected: the second identity's query fits in the 20% reserve and starts with a
+   Expected: the second identity's query fits in the default reserve (about 12 MB) and starts with a
    `queue_wait_ms` near 0, the first identity's waits grow down its queue, and every query has
    status `ok`.
 4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries complete (no leaked
