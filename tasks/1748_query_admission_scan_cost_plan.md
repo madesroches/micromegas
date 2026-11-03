@@ -36,11 +36,6 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
   `FileScanConfig::statistics()` therefore reports `num_rows`/`total_byte_size` as `Absent`.
   Parquet row-group pruning happens later, inside the opener at execution time; nothing reads
   footers during planning.
-- **DataFusion's projected byte size is useless for our schemas.** Even if we populated
-  `total_byte_size`, `Statistics::calculate_total_byte_size` / `project_statistics`
-  (datafusion-common 55.2 `stats.rs:433`) only rescale it when every projected column has a
-  primitive width. Every view has string/dictionary/binary columns, so the projected value would
-  just be the unprojected total, marked `Inexact`.
 - **What is available at plan time:** each `PartitionedFile`'s `file_size`. The parsed
   `ParquetMetaData` may also already be in the process-wide `MetadataCache`
   (`rust/analytics/src/lakehouse/metadata_cache.rs:56`, `get` does not load), reachable through
@@ -181,7 +176,7 @@ Rules:
 - **Cancellation:** tonic drops the `do_get` future when the client goes away, and the `Waiter`
   is then removed from its queue by a drop guard around the wait, which re-runs dispatch after every
   removal so a stale `head_blocked` cannot stall the queues behind it. If a grant raced the drop
-  (the sender fired but the permit was never taken), the guard also releases the granted cost. This guard is the one subtle piece of the scheduler and has its own tests.
+  (the sender fired but the permit was never taken), the guard also releases the granted cost.
   The wait's drop guard at the `execute_query` call site holds `&mut QueryAuditState` (or owns
   it across the await and hands it back on grant) and records the wait-start `Instant`. When the
   future is dropped before a permit is granted, it sets `queue_wait_ms` and then calls
@@ -238,8 +233,6 @@ row-group pruning saves, and on footer-precise queries it checks the `FileSizeSh
 All five are `Option<...>` with `skip_serializing_if`, absent when the estimate or gate did not
 run (denied, view-DDL, planning errors). The struct literals in `query_audit_tests.rs` need
 updating.
-Per-identity attribution of queuing lives here, because the audit record has no cardinality
-limit.
 
 Metrics (`imetric!`, with no per-identity tags, because identities are unbounded cardinality):
 `admission_queue_wait` (ticks, from the tick delta captured around `admit`), `admission_queued` (count, only for queries that missed the fast
@@ -266,7 +259,7 @@ converts to bytes as `(gb * 2^30).round()`, and a result above `u64::MAX` also f
 (`rust/public/src/settings.rs`) with their defaults; `MIN_COST_MB` and `OPAQUE_LEAF_COST_MB` convert
 to bytes by `* 2^20`, and a typo falls back to the default with a warning. The per-identity maximum is parsed the same way as
 the budget (unset falls back to `budget * 4 / 5`, unparseable fails startup), since its default
-depends on the budget. `build_and_serve` fails fast at startup with a clear error when
+depends on the budget. With `MICROMEGAS_ADMISSION_BUDGET_GB` unset, `MIN_COST_MB` and `MAX_PER_IDENTITY_GB` are not read and cannot fail startup, while `OPAQUE_LEAF_COST_MB` is still read for the estimator. `build_and_serve` fails fast at startup with a clear error when
 `budget == 0`, `identity_cap > budget`, or `min_cost > identity_cap`, because
 `clamp(estimate, min_cost, identity_cap)` panics when `min_cost > identity_cap`. The check is a pure function over the parsed values.
 
@@ -284,22 +277,22 @@ size. A pool-derived default is a possible follow-up once calibration data exist
    to `QueryAuditRecord`, and its initializer live in `flight_sql_service_impl.rs`; only
    `QueryAuditRecord` is in `query_audit.rs`.
 3. In `FlightSqlServerBuilder::build_and_serve` (`flight_sql_server.rs`, the only production
-   construction site, shared by flight-sql-srv and the monolith), read the env config and pass it to
-   `FlightSqlServiceImpl::new`. In `execute_query`, call the estimator after
-   `create_physical_plan`, store the result on `audit_state`, and use the opaque-leaf default
-   from that config.
+   construction site, shared by flight-sql-srv and the monolith), read `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (via `resolve_u64_env`, `* 2^20`) and pass it to
+   `FlightSqlServiceImpl::new` as `opaque_leaf_cost: u64`. In `execute_query`, call the estimator after
+   `create_physical_plan`, store the result on `audit_state`, and use `opaque_leaf_cost` as the opaque-leaf default.
 4. Tests (see Testing Strategy), docs, and a CHANGELOG entry under a newly added
    `## Unreleased` heading, with a **Minor breaking change** clause (new `QueryAuditRecord`
-   fields, new `FlightSqlServiceImpl::new` parameter).
+   fields, new `opaque_leaf_cost` parameter on `FlightSqlServiceImpl::new`).
 
 **Phase 2: scheduler**
 
 5. Add `rust/public/src/servers/query_admission.rs` (§2) and register it in `servers/mod.rs`.
 6. Build `AdmissionScheduler` from env in `build_and_serve` (`flight_sql_server.rs`). Hand it
-   to `FlightSqlServiceImpl` next to the other shared services.
+   to `FlightSqlServiceImpl` next to the other shared services, as a new `Option<Arc<AdmissionScheduler>>` parameter of `FlightSqlServiceImpl::new`.
 7. Gate `execute_query` (§3). Add `admission_cost`, `queue_wait_ms` and the permit to the audit
    state, and emit the metrics (§4).
-8. Tests, docs, and the CHANGELOG entry (with its **Minor breaking change** clause).
+8. Tests, docs, and the CHANGELOG entry (with its **Minor breaking change** clause naming the new
+   `Option<Arc<AdmissionScheduler>>` parameter of `FlightSqlServiceImpl::new`).
 
 Phase 1 can ship and run alone, which gives the measurement the issue asks for before Phase 2 is
 enabled anywhere.
@@ -361,6 +354,7 @@ enabled anywhere.
   others share `budget - identity_cap`, and waiting for it to fit can briefly drain the queue. No
   oversized lane or aging for now; revisit once `estimated_scan_bytes` shows how often it happens
   (user call).
+- Accepted risk: a query queued longer than the ~1-hour `temporary_files` cleanup expiry may fail at execution with object-not-found if its partitions were replaced while it waited (the physical plan captures file paths at planning time); a wait that long means severe overload.
 
 ## Documentation
 
@@ -452,12 +446,12 @@ time anyone ran the steps below.
 
 1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_GB=0.0625` (64 MB).
 2. From Python, fire 20 concurrent `SELECT * FROM log_entries` with one identity's attribution
-   headers, and 1 concurrent query with a second identity. Under `--disable-auth`, identities
+   headers, and 1 concurrent `SELECT count(*) FROM log_entries` with a second identity. Under `--disable-auth`, identities
    are set through the `x-user-id` (and `x-user-email`) headers, passed per identity through the Python client's `headers=`
    constructor argument since `make_call_headers` never sends `x-user-id` (`start_services.py` already
    sets `MICROMEGAS_TELEMETRY_URL`).
 3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 25" --begin 5m`.
-   Expected: the second identity's query fits in the room left by the default per-identity maximum (about 12 MB)
+   Expected: the second identity's query has an empty projection, so it is charged `min_cost` (8 MB), which fits in the room left by the default per-identity maximum (about 12 MB)
    and starts with a
    `queue_wait_ms` near 0, the first identity's waits grow down its queue, and every query has
    status `ok`.
