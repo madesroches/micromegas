@@ -76,6 +76,15 @@ Building from source or contributing code? See the [Build Guide](https://microme
 
 ## Recent Releases
 
+### v0.33.0 (November 2026)
+* **Access control, one step further** — a grant's audience can be `*` (every audience), and analytics API keys can be granted or grouped with a `key:<key_id>` selector
+* **Settings in the database** — deployment-wide settings are editable from a new Admin → Settings page, with no restart; per-stream-tag raw payload retention
+* **Spans from `tracing`** — `TracingCaptureLayer` records `tracing` spans as async spans, with a field hook and trimmed source paths; HTTP sink retries `429`
+* **SQL** — mergeable approximate distinct counts with `make_hll`, `merge_hll` and `hll_cardinality`; built-in view sets listed by `list_view_set_definitions()`
+* **Web app** — a Stop button on running notebook cells, single-select on chart cells, and Log cell repeats collapsed by message
+* **Blender** — the add-on no longer blocks Blender's autosave (Blender 5.2+)
+* **Operator note** — `reqwest` 0.13 now verifies server certificates against the OS trust store; minimal images need `ca-certificates`
+
 ### v0.32.0 (October 2026)
 * **Properties on spans and dynamic names** — thread and async spans record properties at span end, logs and metrics take dynamic properties, and span and metric names can be built at runtime, with a leak-free C API
 * **Cheaper instrumentation** — shorter critical sections, cheaper hashers, and no formatting for log messages that only repeat their properties; benchmarked against OpenTelemetry
@@ -96,21 +105,6 @@ Building from source or contributing code? See the [Build Guide](https://microme
 * **Admin-managed query deny list** — replica-cached rules evaluated as DataFusion expressions before a query is planned
 * **Ops and ergonomics** — a new `micromegas-redis-exporter` service, jemalloc tuning across all eight binaries, complete JSONB UDF coverage, and per-row bar charts for `Histogram` columns in the web app
 * **Operator action required** — the `MICROMEGAS_ADMINS*` environment variables are now refused at startup, the IdP `groups` claim is no longer read, and the six global-instance views need partition regeneration
-
-### v0.29.0 (August 2026)
-* **API keys moved into the database** — only a SHA-256 hash is stored, with a full mint/revoke audit trail and HTTP routes hosted on `analytics-web-srv`
-* **Query failures are diagnosable** — distinct gRPC status codes instead of a blanket `Internal`, plus peak memory, spill, client attribution, and originating notebook cell in the audit log
-* **Smaller, more correct blocks** — CBOR payload encoding cuts stored size 40-45%, `parse_block` decodes OTLP as well as native blocks, and JIT span partitions cut in event-time order, fixing call trees fragmented by late arrivals
-* **Python client** — AWS-CLI-style named connection profiles, `--version` on every console script, and the deprecated module-wrapper escape hatch removed
-* **Web app** — Pie Chart cell, `Utf8View`/`BinaryView` decode fix, and an execution-state favicon
-
-### v0.28.0 (August 2026)
-* **Mutating lakehouse functions are admin-gated** — all five now check the caller's admin status before touching partitions
-* **CloudWatch straight into the lakehouse** — Metric Streams and Logs arrive through Kinesis Firehose with no Lambda or collector in between
-* **One-pass ordered merges** for `SqlBatchView`s and `blocks_view`, collapsing sorted partitions instead of buffering a full sort
-* **Screens folders** — organize saved screens in a sidebar tree, with a folder picker in the Save dialog
-* **More self-observability** — per-query FlightSQL audit log, a `pg_stat_*` collector, RSS/jemalloc gauges on every service, and per-view failure isolation during materialization
-* Object-cache hardening (circuit breaker, race fix, shutdown drain); Python 3.11 minimum; DataFusion 54.1; Rust 1.97.1
 
 Every item of every release, including breaking-change notes and dependency bumps, is in [CHANGELOG.md](./CHANGELOG.md).
 

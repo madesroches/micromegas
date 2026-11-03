@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.33.0 (2026-11-02)
+
+Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence. Dependency bump: `github.com/go-chi/chi/v5` and `github.com/klauspost/compress`, resolving Dependabot alerts.
+
 ## 0.32.0 (2026-10-20)
 
 Version sync release. No plugin-specific changes this cycle; sync follows the workspace release cadence.

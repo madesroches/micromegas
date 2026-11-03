@@ -1,7 +1,7 @@
 [package]
 name = "micromegas-datafusion-extensions"
 description = "Apache DataFusion UDFs that also compile to wasm32: JSONB parsing and querying, histograms, HyperLogLog distinct-count sketches, colors, binning and math. From the Micromegas project."
-keywords = ["datafusion", "udf", "jsonb", "hyperloglog", "wasm", "sql"]
+keywords = ["datafusion", "udf", "jsonb", "hyperloglog", "wasm"]
 categories = ["development-tools::profiling", "development-tools::debugging", "database-implementations"]
 version.workspace = true
 edition.workspace = true
