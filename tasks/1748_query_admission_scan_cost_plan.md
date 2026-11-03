@@ -107,9 +107,9 @@ The estimator walks the plan tree:
     `SchemaDescriptor::get_column_root_idx`, and sum `compressed_size()` of those chunks over all
     row groups. This is an upper bound because row-group/page pruning only reduces it. An empty
     projection, as in `count(*)`, costs 0 here.
-  - *Not cached*: use `file_size × projected_leaf_columns / total_leaf_columns`, where the leaf
-    counts come from the arrow schema's leaf count (or the root count when no footer is
-    available). Precision is `FileSizeShare`. The plan **does not load footers** (see Trade-offs).
+  - *Not cached*: use `file_size × projected_leaf_columns / total_leaf_columns`, where both
+    counts are arrow leaf counts from the file schema: the leaves under the projected root fields
+    divided by all leaves. Precision is `FileSizeShare`. The plan **does not load footers** (see Trade-offs).
 - **`EmptyExec` / `PlaceholderRowExec`:** 0.
 - **Any other leaf, i.e. no children (opaque table functions, ...):** add
   `opaque_leaf_cost` and mark the precision `Opaque`. Letting these leaves report their own
@@ -172,13 +172,12 @@ Rules:
      `in_flight`. Break ties by the smallest head-of-queue `arrival`. If there is none, clear
      `head_blocked` and stop.
   2. If its head fits (`in_flight_total + cost <= budget`), grant it and repeat.
-  3. If it does not fit, set `head_blocked` and **stop**. Do not let a smaller query from another
-     identity jump past it. Without this rule, a large query could starve behind a steady stream
+  3. If it does not fit, set `head_blocked` and **stop**. Only an identity with strictly less in
+     flight can be granted ahead of it; the blocked identity's own in-flight only drains, so it
+     eventually ranks first (winning ties by arrival). Without this rule, a large query could starve behind a steady stream
      of small ones. Charged cost is at most `identity_cap`, so the head always fits once enough
      in-flight work drains.
 
-  Picking the identity with the least in-flight work is max-min fairness. Light users see almost
-  no wait, and a flood from one identity is served at the pace its own share allows.
 - **Cancellation:** tonic drops the `do_get` future when the client goes away, and the `Waiter`
   is then removed from its queue by a drop guard around the wait, which re-runs dispatch after every
   removal so a stale `head_blocked` cannot stall the queues behind it. If a grant raced the drop
@@ -259,9 +258,6 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
   the budget lets one identity use the whole budget.
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
-The budget and the per-identity maximum are in GB, because realistic values are several GB of scan in flight.
-The per-query knobs stay in MB, where their defaults are whole numbers.
-
 `MICROMEGAS_ADMISSION_BUDGET_GB` follows the shape of `parse_max_temp_directory_mb`
 (`rust/analytics/src/lakehouse/runtime.rs`, `Result<Option<…>>`), but parses an `f64`: unset is
 `None` (disabled), and a value that is unparseable, non-finite or negative is an error that fails
@@ -312,6 +308,9 @@ enabled anywhere.
 
 - `rust/analytics/src/lakehouse/scan_cost.rs` (new), `rust/analytics/src/lakehouse/mod.rs`
 - `rust/analytics/tests/scan_cost_tests.rs` (new)
+- `rust/analytics/tests/per_file_scan_ordering_tests.rs` (helpers moved out)
+- `rust/analytics/tests/common/mod.rs` (declare the new module)
+- `rust/analytics/tests/common/scan_fixtures.rs` (new, with `#![allow(dead_code)]` like `db_fixtures.rs`)
 - `rust/public/src/servers/query_admission.rs` (new), `rust/public/src/servers/mod.rs`
 - `rust/public/tests/query_admission_tests.rs` (new)
 - `rust/public/src/servers/flight_sql_service_impl.rs`: estimate, gate, permit
@@ -407,10 +406,12 @@ All coverage is no-DB unit tests.
   - Fairness: identity A queues 10, then B queues 1. B's query is admitted next, ahead of A's
     remaining queue.
   - Least-in-flight ordering across three identities.
-  - Head-of-line: a large head blocks smaller queries from other identities until it fits, so it
-    is not starved.
-  - Fast path with a blocked head: a fresh identity's small query arrives while a large head is
-    blocked, and it waits behind the head.
+  - Head-of-line: with the blocked identity holding nothing in flight (the budget is held by
+    another identity whose queue is empty), a large head blocks smaller queries from other
+    identities until it fits, so it is not starved.
+  - Fast path with a blocked head: with the blocked identity holding nothing in flight (the budget
+    is held by another identity whose queue is empty), a fresh identity's small query arrives
+    while a large head is blocked, and it waits behind the head.
   - Cost clamp: a query whose cost exceeds the budget is charged `identity_cap` and runs.
   - Lone identity: one identity's in-flight cost never exceeds `identity_cap`, even when it has
     more waiters.
@@ -460,5 +461,3 @@ time anyone ran the steps below.
    and starts with a
    `queue_wait_ms` near 0, the first identity's waits grow down its queue, and every query has
    status `ok`.
-4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries complete (no leaked
-   budget). The cancelled query emits one `incomplete` audit record with a non-zero `queue_wait_ms`.
