@@ -112,7 +112,8 @@ pub struct ScanCostEstimate {
     pub files: u64,
     pub footer_files: u64,          // files estimated from a cached footer
     pub opaque_nodes: u64,          // leaves we could not see into
-    pub precision: CostPrecision,   // worst precision among contributors
+    pub precision: CostPrecision,   // worst precision among contributors; the fold starts from
+                                    // `Footer` (the best), so no contributors reports `footer`
 }
 
 pub async fn estimate_scan_cost(
@@ -132,7 +133,7 @@ The estimator walks the plan tree:
   and take the projected columns from `file_source.projection().map(|p| p.column_indices())`,
   filtered to indices below the file schema's field count. `None` means all columns. A
   `FileScanConfig` whose source is not `ParquetSource` (static CSV/JSON tables) is costed at the
-  full `file_size`, with no footer or column-share path. For parquet, collect the
+  full `file_size`, with no footer or column-share path; its precision is `FileSizeShare`. For parquet, collect the
   `PartitionedFile`s of all `file_groups` and **dedupe by `object_meta.location`** before
   summing: with `repartition_file_scans` (the default in user sessions) the optimizer splits one
   file into several byte-range `PartitionedFile`s, and each file must be charged once. Then for
@@ -207,9 +208,10 @@ Rules:
   is then removed from its queue by a drop guard around the wait. If a grant raced the drop
   (the sender fired but the permit was never taken), the guard releases the granted cost and
   re-runs dispatch. This guard is the one subtle piece of the scheduler and has its own tests.
-  The wait's drop guard at the `execute_query` call site also emits an `"incomplete"` audit
-  record carrying `queue_wait_ms` when the future is dropped before a permit is granted, reusing
-  the existing incomplete status and record path.
+  The wait's drop guard at the `execute_query` call site holds `&mut QueryAuditState` (or owns
+  it across the await and hands it back on grant) and records the wait-start `Instant`. When the
+  future is dropped before a permit is granted, it sets `queue_wait_ms` and then calls
+  `emit("incomplete")`, the same path `CompletionTrackedStream::drop` uses.
 - **Permit lifetime:** the permit is held until the result stream completes, fails, or is
   dropped. That is the same lifetime the audit record already tracks.
 
@@ -244,9 +246,11 @@ create_physical_plan ─► estimate_scan_cost(plan, lakehouse.metadata_cache(),
 - **Timing:** `execution_begin`/`execution_begin_instant` are taken before
   `create_physical_plan`, and `execution_ms`, `setup_ms` and the
   `query_execution_duration`/`query_setup_duration` metrics are computed after `execute_stream`,
-  so a gate between them would fold the wait into all four. Measure `queue_wait_ms` around
-  `admit` and subtract it from `execution_ms`, `setup_ms` and those two metrics, so existing
-  latency dashboards keep their meaning. `total_ms` and `query_duration_total` include the wait.
+  so a gate between them would fold the wait into all four. The metrics are `"ticks"` from
+  `now()` differences, while `execution_ms`/`setup_ms` are milliseconds from `Instant`. Around
+  `admit`, capture both the `now()` tick delta and the `Instant` delta. Subtract the tick delta
+  from the two tick metrics and the ms delta from `execution_ms` and `setup_ms`; `queue_wait_ms`
+  is the ms delta. Existing latency dashboards keep their meaning. `total_ms` and `query_duration_total` include the wait.
 - **View DDL and deny-listed queries** never reach the gate.
 
 ### 4. Observability
@@ -273,6 +277,12 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 - `MICROMEGAS_ADMISSION_MIN_COST_MB` (default 8).
 - `MICROMEGAS_ADMISSION_OPAQUE_LEAF_COST_MB` (default 64).
 
+The vars are read with the existing `resolve_u64_env` helper (`rust/public/src/settings.rs`;
+`fn resolve_u64_env(var: &str, default: u64) -> u64`), after checking that the budget var is set
+(unset means disabled). `build_and_serve` fails fast at startup with a clear error when
+`budget == 0` or `min_cost > budget`, because `clamp(estimate, min_cost, budget)` panics when
+`min_cost > budget`. The check is a pure function over the parsed values.
+
 The budget is in **scan bytes**, not memory bytes. Operators size it from the calibration query
 in the docs, which compares `estimated_scan_bytes` with `peak_memory_bytes` and with the pool
 size. A pool-derived default is a possible follow-up once calibration data exists.
@@ -283,7 +293,9 @@ size. A pool-derived default is a possible follow-up once calibration data exist
 
 1. Add `rust/analytics/src/lakehouse/scan_cost.rs` (§1) and register it in `lakehouse/mod.rs`.
 2. Add the `estimated_scan_bytes` / `estimate_precision` fields to `QueryAuditState` and
-   `QueryAuditRecord` (`query_audit.rs`), appended last.
+   `QueryAuditRecord` (`query_audit.rs`), appended last. `QueryAuditState`, its `emit()` mapping
+   to `QueryAuditRecord`, and its initializer live in `flight_sql_service_impl.rs`; only
+   `QueryAuditRecord` is in `query_audit.rs`.
 3. In `FlightSqlServerBuilder::build_and_serve` (`flight_sql_server.rs`, the only construction
    site, shared by flight-sql-srv and the monolith), read the env config and pass it to
    `FlightSqlServiceImpl::new`. In `execute_query`, call the estimator after
@@ -312,7 +324,7 @@ enabled anywhere.
 - `rust/public/src/servers/query_admission.rs` (new), `rust/public/src/servers/mod.rs`
 - `rust/public/tests/query_admission_tests.rs` (new)
 - `rust/public/src/servers/flight_sql_service_impl.rs`: estimate, gate, permit
-- `rust/public/src/servers/query_audit.rs`: new fields
+- `rust/public/src/servers/query_audit.rs`: new `QueryAuditRecord` fields
 - `rust/public/tests/query_audit_tests.rs`: serialization of new fields
 - `rust/public/src/servers/flight_sql_server.rs`: config and scheduler construction from env
 - `mkdocs/docs/query-guide/query-audit-log.md`: the four fields in the `## Fields` table
@@ -372,7 +384,7 @@ All coverage is no-DB unit tests.
   - Empty projection (`count(*)`-shaped): 0.
   - Uncached file: `file_size × projected/total`, precision `FileSizeShare`.
   - Mix of cached and uncached files: sums correctly, and the worst precision wins.
-  - All-empty partitions (`EmptyExec`): 0.
+  - All-empty partitions (`EmptyExec`): 0, precision `Footer` (the fold's starting value).
   - Join of two scans: both are summed.
   - Opaque leaf (a stub `ExecutionPlan` with no children): adds `opaque_leaf_cost`, precision
     `Opaque`.
@@ -397,6 +409,13 @@ All coverage is no-DB unit tests.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
   - Cancellation racing a grant releases the granted cost, so the budget does not leak.
   - Idle identities are removed from the map.
+- **Config validation** (pure function over the parsed values): `budget == 0` and
+  `min_cost > budget` are errors; `min_cost <= budget` passes.
+- **Cancel while queued** (no-DB gRPC harness `start_server` in
+  `rust/public/tests/read_policy_threading_tests.rs`): budget = `min_cost`, one result stream
+  held undrained, a second queued `do_get` cancelled, then a third asserted admitted, so no
+  budget leaks. Also check that an incomplete audit record is emitted if the harness can observe
+  it; otherwise only the admission of the third.
 - **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`, asserted on byte
   offsets in the raw JSON string (offset of `"sql_hash"` < offset of `"estimated_scan_bytes"`),
   not on a parsed `serde_json::Value`; `admission_cost` is absent when admission is disabled.
