@@ -22,12 +22,12 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
   `CompletionTrackedStream` that owns `QueryAuditState` and emits the audit record when the
   stream drains, fails, or is dropped.
 - **JIT materialization runs during physical planning.** `MaterializedView::scan`
-  (`rust/analytics/src/lakehouse/materialized_view.rs:91`) calls `view.jit_update(...)` and only
+  (`rust/analytics/src/lakehouse/materialized_view.rs:92`) calls `view.jit_update(...)` (`:110`) and only
   then fetches partitions and calls `make_partitioned_execution_plan`. `TableProvider::scan` runs
   inside `create_physical_plan`, so any gate placed after the physical plan exists comes *after*
   JIT work.
 - **Scan nodes carry no size statistics.** `build_unordered_or_concatenated_plan` and
-  `build_per_file_plan` (`rust/analytics/src/lakehouse/partitioned_execution_plan.rs:366`, `:418`)
+  `build_per_file_plan` (`rust/analytics/src/lakehouse/partitioned_execution_plan.rs:374`, `:428`)
   build a `DataSourceExec` over a `FileScanConfig` whose `PartitionedFile`s have
   `object_meta.size = partition.file_size`. They attach no statistics, except the leading
   ordering column's min/max on `Concatenated` scans (`attach_ordering_statistics`, `:124`).
@@ -50,9 +50,11 @@ DataFusion's own statistics are `Absent` for our scans (see Current State).
   estimate below (compressed object-store bytes, footer reads excluded), so estimate vs. actual
   can be compared directly in the audit log. `peak_memory_bytes` comes from the per-query
   `ScopedMemoryPool`.
-- **Opaque leaf nodes:** `PerfettoTraceExecutionPlan`, `process_spans`, `TaskLogExecPlan`,
-  `parse_block` and the system-table UDTFs build their work inside `execute`. Their scan cost
-  cannot be seen at plan time.
+- **Opaque leaf nodes:** only `PerfettoTraceExecutionPlan`, the `process_spans` exec plan and
+  `TaskLogExecPlan` do their work inside `execute`, so their scan cost cannot be seen at plan
+  time. `parse_block` and the `list_*` system-table UDTFs do their work at plan time, in
+  `scan`/`call`, and return a `DataSourceExec(MemorySourceConfig)` that is already materialized.
+  Static CSV/JSON `ListingTable`s produce non-parquet `FileScanConfig`s.
 
 ## Design
 
@@ -93,7 +95,7 @@ no primitive width (`Statistics::calculate_total_byte_size`, datafusion-common `
 and it ignores per-column `byte_size` even when present. Every view has string or dictionary
 columns, so `SELECT time FROM log_entries` would still be costed as the whole file. The projected
 estimate needs the estimator's own walk (§1) in every case. S1 is still worth doing on its own
-merits (hash-join build side) as a separate small change, tracked as its own issue. It is
+merits (hash-join build side) as a separate small change, to be filed as its own follow-up issue. It is
 independent of this plan and can land before or after it.
 
 To keep #1234 cheap, the estimator does all its footer lookups through one helper
@@ -122,18 +124,32 @@ pub async fn estimate_scan_cost(
 
 The estimator walks the plan tree:
 
-- **`DataSourceExec` whose data source is a `FileScanConfig`:** take the projected file-column
-  indices from `FileScanConfig::file_column_projection_indices()`, where `None` means all
-  columns. Then for each `PartitionedFile` in `file_groups`:
-  - *Footer cached* (`metadata_cache.get(path)`): sum `compressed_size()` of the projected column
-    chunks over all row groups. This is an upper bound because row-group/page pruning only
-    reduces it. An empty projection, as in `count(*)`, costs 0 here.
-  - *Not cached*: use `file_size × projected_leaf_columns / total_leaf_columns`, where the column
-    counts come from the table schema. Precision is `FileSizeShare`. The plan **does not load
-    footers**: that would add object-store I/O before the gate, and a query waiting in the queue
-    should not have touched storage yet.
+- **`DataSourceExec` whose data source is a `MemorySourceConfig`:** 0, the data is already
+  materialized.
+- **`DataSourceExec` whose data source is a `FileScanConfig`:** `file_column_projection_indices()`
+  is deprecated and panics when an expression projection is pushed into the scan, so do not use
+  it. Get the parquet source with `DataSourceExec::downcast_to_file_source::<ParquetSource>()`
+  and take the projected columns from `file_source.projection().map(|p| p.column_indices())`,
+  filtered to indices below the file schema's field count. `None` means all columns. A
+  `FileScanConfig` whose source is not `ParquetSource` (static CSV/JSON tables) is costed at the
+  full `file_size`, with no footer or column-share path. For parquet, collect the
+  `PartitionedFile`s of all `file_groups` and **dedupe by `object_meta.location`** before
+  summing: with `repartition_file_scans` (the default in user sessions) the optimizer splits one
+  file into several byte-range `PartitionedFile`s, and each file must be charged once. Then for
+  each distinct file:
+  - *Footer cached* (`cached_footer(path)`, which looks up `pf.object_meta.location.as_ref()`,
+    the object_store `Path` string the cache is keyed by, not the raw `Partition::file_path`):
+    map the projected top-level roots to parquet leaf column chunks with
+    `SchemaDescriptor::get_column_root_idx`, and sum `compressed_size()` of those chunks over all
+    row groups. This is an upper bound because row-group/page pruning only reduces it. An empty
+    projection, as in `count(*)`, costs 0 here.
+  - *Not cached*: use `file_size × projected_leaf_columns / total_leaf_columns`, where the leaf
+    counts come from the arrow schema's leaf count (or the root count when no footer is
+    available). Precision is `FileSizeShare`. The plan **does not load footers**: that would add
+    object-store I/O before the gate, and a query waiting in the queue should not have touched
+    storage yet.
 - **`EmptyExec` / `PlaceholderRowExec`:** 0.
-- **Any other leaf, i.e. no children (opaque table functions, `MemorySourceConfig`, ...):** add
+- **Any other leaf, i.e. no children (opaque table functions, ...):** add
   `opaque_leaf_cost` and mark the precision `Opaque`. Letting these leaves report their own
   estimate is tracked in #1751.
 - **Inner nodes:** sum the children. Joins, aggregates and sorts add nothing to the cost. Their
@@ -157,9 +173,12 @@ pub struct AdmissionScheduler { state: Mutex<State>, config: AdmissionConfig }
 
 struct State {
     in_flight_total: u64,
+    queued_total: u64,       // waiters across all identities
+    next_arrival: u64,       // counter stamped on each Waiter
     per_identity: HashMap<Arc<str>, IdentityState>,  // removed when idle and empty
 }
 struct IdentityState { in_flight: u64, queue: VecDeque<Waiter> }
+struct Waiter { cost: u64, arrival: u64, grant: oneshot::Sender<()> }
 
 impl AdmissionScheduler {
     pub async fn admit(self: &Arc<Self>, identity: Arc<str>, cost: u64) -> AdmissionPermit;
@@ -172,12 +191,13 @@ Rules:
 - **Charged cost** = `clamp(estimate, min_cost, budget)`. Clamping to `budget` lets a query
   bigger than the whole budget still run, alone, instead of waiting forever. That is what
   "never reject" requires.
-- **Fast path:** if the identity's queue is empty and `in_flight_total + cost <= budget`, admit
-  at once with zero wait.
+- **Fast path:** if no identity has a waiter (`queued_total == 0`) and
+  `in_flight_total + cost <= budget`, admit at once with zero wait. Otherwise a small query
+  from an idle identity would pass a blocked head.
 - **Otherwise** enqueue a `Waiter` that holds a `oneshot::Sender`, then wait.
 - **Dispatch** runs on every enqueue and every permit release:
   1. Among identities with a non-empty queue, pick the one with the smallest `in_flight`. Break
-     ties by the oldest head-of-queue arrival.
+     ties by the smallest head-of-queue `arrival`.
   2. If its head fits (`in_flight_total + cost <= budget`), grant it and repeat.
   3. If it does not fit, **stop**. Do not let a smaller query from another identity jump past
      it. Without this rule, a large query could starve behind a steady stream of small ones.
@@ -211,14 +231,20 @@ create_physical_plan ─► estimate_scan_cost(plan, lakehouse.metadata_cache(),
   spawns one tokio task per input partition right away (datafusion-physical-plan 55.2
   `coalesce_partitions.rs:241`). Scanning therefore starts as soon as `execute_stream` returns,
   before the client pulls a single batch.
-- **Identity key:** `attr.service_account` when present, otherwise `attr.user_id`. This is the
-  same identity the deny list already matches on.
+- **Identity key:** `attr.service_account` when present, otherwise `attr.user_id`. An OIDC user
+  maps to `user_id`. A non-delegating key has `user_id` = the key's subject and no
+  `service_account`. A delegating key has `service_account` set, and all the users it acts for
+  share that account's queue (see the identity granularity open question).
 - **Permit ownership:** the permit is stored on `QueryAuditState` as an
   `Option<AdmissionPermit>`. The audit state already travels into `CompletionTrackedStream` and
   is dropped on every terminal path, including the early `audit_state.fail(...)` returns, so the
   permit is released on every path with no new plumbing.
-- **Timing:** time spent waiting is measured separately as `queue_wait_ms`. It is not folded into
-  `execution_ms`, so existing latency dashboards keep their meaning.
+- **Timing:** `execution_begin`/`execution_begin_instant` are taken before
+  `create_physical_plan`, and `execution_ms`, `setup_ms` and the
+  `query_execution_duration`/`query_setup_duration` metrics are computed after `execute_stream`,
+  so a gate between them would fold the wait into all four. Measure `queue_wait_ms` around
+  `admit` and subtract it from `execution_ms`, `setup_ms` and those two metrics, so existing
+  latency dashboards keep their meaning. `total_ms` and `query_duration_total` include the wait.
 - **View DDL and deny-listed queries** never reach the gate.
 
 ### 4. Observability
@@ -226,6 +252,9 @@ create_physical_plan ─► estimate_scan_cost(plan, lakehouse.metadata_cache(),
 Audit record (`QueryAuditRecord`): append these JSON fields **last**:
 `estimated_scan_bytes`, `estimate_precision` (`"footer" | "file_size_share" | "opaque"`),
 `admission_cost` (the charged cost, absent when admission is disabled), and `queue_wait_ms`.
+All four are `Option<...>` with `skip_serializing_if`, absent when the estimate or gate did not
+run (denied, view-DDL, planning errors). The struct literals in `query_audit_tests.rs` need
+updating.
 Per-identity attribution of queuing lives here, because the audit record has no cardinality
 limit.
 
@@ -244,8 +273,7 @@ The settings follow the existing env-var convention for `flight-sql-srv` and the
 
 The budget is in **scan bytes**, not memory bytes. Operators size it from the calibration query
 in the docs, which compares `estimated_scan_bytes` with `peak_memory_bytes` and with the pool
-size. The pool stays the hard limit, so a wrong estimate only changes queue order and pacing. It
-can never cause a rejection or an OOM that would not have happened anyway.
+size. A pool-derived default is a possible follow-up once calibration data exists.
 
 ## Implementation Steps
 
@@ -254,18 +282,23 @@ can never cause a rejection or an OOM that would not have happened anyway.
 1. Add `rust/analytics/src/lakehouse/scan_cost.rs` (§1) and register it in `lakehouse/mod.rs`.
 2. Add the `estimated_scan_bytes` / `estimate_precision` fields to `QueryAuditState` and
    `QueryAuditRecord` (`query_audit.rs`), appended last.
-3. In `execute_query`, call the estimator after `create_physical_plan`, store the result on
-   `audit_state`, and read the opaque-leaf default from config.
-4. Tests (see Testing Strategy), docs, and a CHANGELOG entry.
+3. In `FlightSqlServerBuilder::build_and_serve` (`flight_sql_server.rs`, the only construction
+   site, shared by flight-sql-srv and the monolith), read the env config and pass it to
+   `FlightSqlServiceImpl::new`. In `execute_query`, call the estimator after
+   `create_physical_plan`, store the result on `audit_state`, and use the opaque-leaf default
+   from that config.
+4. Tests (see Testing Strategy), docs, and a CHANGELOG entry under a newly added
+   `## Unreleased` heading, with a **Minor breaking change** clause (new `QueryAuditRecord`
+   fields, new `FlightSqlServiceImpl::new` parameter).
 
 **Phase 2: scheduler**
 
 5. Add `rust/public/src/servers/query_admission.rs` (§2) and register it in `servers/mod.rs`.
-6. Build `AdmissionScheduler` from env in `flight_sql_server.rs` / the monolith's analytics
-   role. Hand it to `FlightSqlServiceImpl` next to the other shared services.
+6. Build `AdmissionScheduler` from env in `build_and_serve` (`flight_sql_server.rs`). Hand it
+   to `FlightSqlServiceImpl` next to the other shared services.
 7. Gate `execute_query` (§3). Add `admission_cost`, `queue_wait_ms` and the permit to the audit
    state, and emit the metrics (§4).
-8. Tests, docs, and a CHANGELOG entry.
+8. Tests, docs, and the CHANGELOG entry (with its **Minor breaking change** clause).
 
 Phase 1 can ship and run alone, which gives the measurement the issue asks for before Phase 2 is
 enabled anywhere.
@@ -279,9 +312,10 @@ enabled anywhere.
 - `rust/public/src/servers/flight_sql_service_impl.rs`: estimate, gate, permit
 - `rust/public/src/servers/query_audit.rs`: new fields
 - `rust/public/tests/query_audit_tests.rs`: serialization of new fields
-- `rust/public/src/servers/flight_sql_server.rs`, monolith analytics-role setup: scheduler
-  construction from env
-- `mkdocs/docs/query-guide/query-audit-log.md`, admin/deployment docs for the env vars
+- `rust/public/src/servers/flight_sql_server.rs`: config and scheduler construction from env
+- `mkdocs/docs/query-guide/query-audit-log.md`: the four fields in the `## Fields` table
+- `mkdocs/docs/admin/flight-sql.md` (env table plus an Admission section),
+  `mkdocs/docs/admin/monolith.md` (env table)
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -303,10 +337,6 @@ enabled anywhere.
 - **Least-in-flight with no skipping vs. deficit round robin / skip-to-fit.** Skip-to-fit uses
   the budget better but starves large queries. DRR adds a quantum to tune. Least-in-flight plus
   head-of-line blocking is starvation-free, needs no tuning, and is easy to explain.
-- **Never reject.** This matches the requirement that callers only ever see latency. The
-  deny-list `ResourceExhausted` path (#1488) is unchanged and is still the operator's reactive
-  tool. Queue depth is unbounded, but each waiter is a small struct held by a live client
-  request, so memory grows with connected clients, not with data.
 - **Scan bytes as the cost unit.** Scans are what the pool under-counts (decode buffers are
   untracked), and the estimate is checkable against `bytes_scanned` per query. Aggregation and
   join memory is not predictable from the plan in any case.
@@ -320,12 +350,12 @@ enabled anywhere.
 
 ## Documentation
 
-- `mkdocs/docs/query-guide/query-audit-log.md`: the four new fields. Add a calibration query
+- `mkdocs/docs/query-guide/query-audit-log.md`: the four new fields in the `## Fields` table. Add a calibration query
   comparing `estimated_scan_bytes`, `bytes_scanned` and `peak_memory_bytes` grouped by
   `sql_hash`, and a "who is waiting" query on `queue_wait_ms` grouped by user/service account.
-- Admin/deployment docs: the three `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default
-  behavior, and guidance for sizing the budget from the calibration query.
-- `CHANGELOG.md` (Unreleased): estimate fields, and admission scheduler (off by default).
+- `mkdocs/docs/admin/flight-sql.md` and `mkdocs/docs/admin/monolith.md`: the three
+  `MICROMEGAS_ADMISSION_*` variables, the disabled-by-default behavior, and guidance for sizing the budget from the calibration query.
+- `CHANGELOG.md` (new `## Unreleased` heading): estimate fields, and admission scheduler (off by default), with a **Minor breaking change** clause.
 
 ## Testing Strategy
 
@@ -344,7 +374,11 @@ All coverage is no-DB unit tests.
   - Opaque leaf (a stub `ExecutionPlan` with no children): adds `opaque_leaf_cost`, precision
     `Opaque`.
   - `PerFile` and `Concatenated` scan shapes give the same estimate as `Unordered` over the same
-    files.
+    files. The fixtures must set `sort_order` (so `PerFile` certifies instead of degrading to
+    `Unordered`) and non-overlapping bounds (so `Concatenated` doesn't error), reusing the
+    helpers in `rust/analytics/tests/per_file_scan_ordering_tests.rs`.
+  - Run the plan through the physical optimizer with `target_partitions > 1` and a file at least
+    `repartition_file_min_size`: the file is split into byte ranges but counted once.
 - **`query_admission_tests.rs`** (tokio, paused time where useful):
   - Fast path: no wait while under budget.
   - Over budget: the waiter is admitted when a permit drops.
@@ -353,6 +387,8 @@ All coverage is no-DB unit tests.
   - Least-in-flight ordering across three identities.
   - Head-of-line: a large head blocks smaller queries from other identities until it fits, so it
     is not starved.
+  - Fast path with a blocked head: a fresh identity's small query arrives while a large head is
+    blocked, and it waits behind the head.
   - Cost clamp: a query whose cost exceeds the budget runs alone.
   - `min_cost` floor applied.
   - Cancellation while queued removes the waiter, and the queues behind it advance.
@@ -360,8 +396,9 @@ All coverage is no-DB unit tests.
     a concurrency path, so it gets an automated test rather than a manual check.
   - Disabled mode never waits.
   - Idle identities are removed from the map.
-- **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`; `admission_cost` is
-  absent when admission is disabled.
+- **`query_audit_tests.rs`:** the new fields serialize after `sql_hash`, asserted on byte
+  offsets in the raw JSON string (offset of `"sql_hash"` < offset of `"estimated_scan_bytes"`),
+  not on a parsed `serde_json::Value`; `admission_cost` is absent when admission is disabled.
 
 ## Manual Verification
 
@@ -371,12 +408,15 @@ time anyone ran the steps below.
 
 1. `python3 local_test_env/ai_scripts/start_services.py` with `MICROMEGAS_ADMISSION_BUDGET_MB=64`.
 2. From Python, fire 20 concurrent `SELECT * FROM log_entries` with one identity's attribution
-   headers, and 1 concurrent query with a second identity.
+   headers, and 1 concurrent query with a second identity. Under `--disable-auth`, identities
+   are set through the `x-user-id` (and `x-user-email`) headers (`start_services.py` already
+   sets `MICROMEGAS_TELEMETRY_URL`).
 3. `micromegas-query "SELECT msg FROM log_entries WHERE target = 'flightsql_query_audit' ORDER BY time DESC LIMIT 25" --begin 5m`.
-   Expected: the second identity's `queue_wait_ms` is near 0, the first identity's waits grow
-   down its queue, and every query has status `ok`.
-4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries still complete
-   (no leaked budget).
+   Expected: the second identity waits for at most about one release, far less than the first
+   identity's tail, the first identity's waits grow down its queue, and every query has status
+   `ok`.
+4. Cancel a client mid-wait (Ctrl-C). Expected: the remaining queued queries complete (no leaked
+   budget). The cancelled query emits no audit record.
 
 ## Open Questions
 
@@ -384,7 +424,3 @@ time anyone ran the steps below.
    that one person's notebook and the same person's dashboard don't share a queue?
 2. **Per-identity weights:** does a shared dashboard service account need a larger share (a
    weight in the least-in-flight comparison), or is equal share per identity the intended QoS?
-3. **Default budget:** keep it disabled by default (estimate-only), or derive it from the
-   DataFusion pool size × a factor once calibration data exists?
-4. **S1 scan statistics (§0):** open a separate issue for `Inexact` `num_rows`/`total_byte_size`
-   from partition metadata, so hash joins build on the smaller side?
