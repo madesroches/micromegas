@@ -365,6 +365,10 @@ enabled anywhere.
 - A single identity may hold at most a per-identity maximum in flight (in GB, like the budget;
   default 80% of it), so other callers can always start a query on an otherwise busy service
   (user call).
+- Accepted risk: an oversized scan is charged `identity_cap` for its whole run, so while it runs
+  others share `budget - identity_cap`, and waiting for it to fit can briefly drain the queue. No
+  oversized lane or aging for now; revisit once `estimated_scan_bytes` shows how often it happens
+  (user call).
 
 ## Documentation
 
