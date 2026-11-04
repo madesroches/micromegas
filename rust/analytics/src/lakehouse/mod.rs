@@ -132,6 +132,8 @@ pub mod retire_partition_by_metadata_udf;
 pub mod retire_partitions_table_function;
 /// Runtime resources
 pub mod runtime;
+/// Plan-time estimate of the parquet bytes a physical plan will scan
+pub mod scan_cost;
 /// Per-query `MemoryPool` wrapper that adds accounting on top of a shared pool
 pub mod scoped_memory_pool;
 /// SessionConfigurator trait for custom session context configuration

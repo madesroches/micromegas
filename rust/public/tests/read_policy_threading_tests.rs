@@ -24,6 +24,7 @@ use datafusion::arrow::datatypes::Schema;
 use futures::TryStreamExt;
 use micromegas::servers::connect_info_layer::ConnectedIncoming;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
+use micromegas::servers::query_admission::{AdmissionConfig, AdmissionScheduler};
 use micromegas::settings::{DbOverrides, EnvFallbacks, SelfServiceSettings, SettingsSource};
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
@@ -44,6 +45,12 @@ use micromegas_auth::types::{
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
+use micromegas_tracing::levels::{LevelFilter, set_max_level};
+use micromegas_tracing::logs::LogMsgQueueAny;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
+use micromegas_transit::HeterogeneousQueue;
+use serial_test::serial;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -133,6 +140,7 @@ async fn start_server(
     auth_provider: Option<Arc<dyn AuthProvider>>,
     read_policy: Arc<dyn ReadPolicy>,
     settings: SettingsSource,
+    admission: Option<Arc<AdmissionScheduler>>,
 ) -> SocketAddr {
     let lakehouse = make_offline_lakehouse_context().await;
     let part_provider = Arc::new(NullPartitionProvider {});
@@ -155,6 +163,8 @@ async fn start_server(
         session_configurator,
         read_policy,
         Arc::new(settings),
+        0,
+        admission,
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -217,6 +227,8 @@ async fn start_server_with_connect_info(
         session_configurator,
         read_policy,
         Arc::new(settings),
+        0,
+        None,
     ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -389,7 +401,7 @@ impl AuthProvider for GroupsAuthProvider {
 async fn provider_unavailable_maps_to_status_unavailable() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -423,7 +435,7 @@ async fn settings_store_outage_maps_to_status_unavailable() {
         retention_days: 90,
     };
     let settings = SettingsSource::new(env(), pool, Duration::from_secs(60));
-    let addr = start_server(Some(auth_provider), policy, settings).await;
+    let addr = start_server(Some(auth_provider), policy, settings, None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -467,6 +479,7 @@ async fn every_audience_resolution_stays_filtered() {
             Some(api_key_provider("test", "secret")),
             Arc::new(EveryReadPolicy),
             SettingsSource::with_overrides(empty_env, DbOverrides::default()),
+            None,
         )
         .await,
     )
@@ -493,6 +506,7 @@ async fn stored_isolation_config_is_applied_to_authenticated_requests() {
             Some(api_key_provider("test", "secret")),
             policy(),
             SettingsSource::with_overrides(empty_env(), DbOverrides::default()),
+            None,
         )
         .await,
     )
@@ -510,6 +524,7 @@ async fn stored_isolation_config_is_applied_to_authenticated_requests() {
                     ..DbOverrides::default()
                 },
             ),
+            None,
         )
         .await,
     )
@@ -524,7 +539,7 @@ async fn stored_isolation_config_is_applied_to_authenticated_requests() {
 async fn other_policy_error_maps_to_status_permission_denied() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: false });
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -548,7 +563,7 @@ async fn other_policy_error_maps_to_status_permission_denied() {
 async fn prepared_statement_path_also_fails_closed() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -564,7 +579,13 @@ async fn prepared_statement_path_also_fails_closed() {
 async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
     let auth_provider = api_key_provider("delegating-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
+    let addr = start_server(
+        Some(auth_provider),
+        policy.clone(),
+        default_settings(),
+        None,
+    )
+    .await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
     // A client-claimed attribution naming a different principal than the authenticated
@@ -649,7 +670,13 @@ async fn ip_allowlist_rejects_connection_from_an_out_of_range_peer_address() {
 async fn prepared_statement_resolves_the_same_scope_as_do_get() {
     let auth_provider = api_key_provider("same-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
+    let addr = start_server(
+        Some(auth_provider),
+        policy.clone(),
+        default_settings(),
+        None,
+    )
+    .await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -686,7 +713,13 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
         memberships: vec!["team-a".to_string(), "team-b".to_string()],
     });
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy.clone(), default_settings()).await;
+    let addr = start_server(
+        Some(auth_provider),
+        policy.clone(),
+        default_settings(),
+        None,
+    )
+    .await;
     let mut client = connect(addr).await;
     // GroupsAuthProvider ignores the bearer token's content, but AuthService still requires the
     // header to be present to invoke validate_request at all.
@@ -725,7 +758,7 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
 async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
     let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -761,7 +794,7 @@ async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaf
 async fn bulk_ingest_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -794,7 +827,7 @@ async fn bulk_ingest_denies_non_admin_caller() {
 async fn view_ddl_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
-    let addr = start_server(Some(auth_provider), policy, default_settings()).await;
+    let addr = start_server(Some(auth_provider), policy, default_settings(), None).await;
     let mut client = connect(addr).await;
     client.set_token("secret".to_string());
 
@@ -820,4 +853,121 @@ async fn view_ddl_denies_non_admin_caller() {
         Code::PermissionDenied,
         "a non-admin caller must be rejected by the view DDL admin gate"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Admission: a query cancelled while queued
+// ---------------------------------------------------------------------------
+
+fn collect_audit_records(sink: &InMemorySink) -> Vec<serde_json::Value> {
+    micromegas_tracing::dispatch::flush_log_buffer();
+    let state = sink.state.lock().expect("sink lock");
+    let mut records = vec![];
+    for block in &state.log_blocks {
+        for event in block.events.iter() {
+            if let LogMsgQueueAny::LogStringEvent(evt) = event
+                && evt.msg.0.starts_with("{\"query_id\"")
+                && let Ok(record) = serde_json::from_str(&evt.msg.0)
+            {
+                records.push(record);
+            }
+        }
+    }
+    records
+}
+
+/// The held query must outlast the test: a `SELECT 1` would finish sending inside the HTTP/2
+/// flow-control window and release its permit at once, so nothing would ever queue.
+#[tokio::test]
+#[serial]
+async fn query_cancelled_while_queued_is_audited_and_leaks_no_budget() {
+    let guard = init_in_memory_tracing();
+    set_max_level(LevelFilter::Trace);
+
+    let unit = 1 << 20;
+    let scheduler = Arc::new(AdmissionScheduler::new(AdmissionConfig {
+        budget: unit,
+        min_cost: unit,
+        identity_cap: unit,
+    }));
+    let addr = start_server(
+        Some(api_key_provider("test", "secret")),
+        Arc::new(EveryReadPolicy),
+        default_settings(),
+        Some(scheduler.clone()),
+    )
+    .await;
+
+    let mut holder = connect(addr).await;
+    holder.set_token("secret".to_string());
+    let info = holder
+        .execute(
+            "SELECT * FROM generate_series(1, 100000000)".to_string(),
+            None,
+        )
+        .await
+        .expect("planning the held query");
+    let mut held_stream = holder
+        .do_get(info.endpoint[0].ticket.clone().expect("ticket"))
+        .await
+        .expect("admitting the held query");
+    held_stream
+        .try_next()
+        .await
+        .expect("reading the first batch")
+        .expect("a first batch");
+
+    let waiter = tokio::spawn(async move {
+        let mut client = connect(addr).await;
+        client.set_token("secret".to_string());
+        let info = client
+            .execute("SELECT 1".to_string(), None)
+            .await
+            .expect("planning the queued query");
+        client
+            .do_get(info.endpoint[0].ticket.clone().expect("ticket"))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while scheduler.queued_count() != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second query should queue behind the held one");
+    waiter.abort();
+
+    let incomplete = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let records: Vec<_> = collect_audit_records(&guard.sink)
+                .into_iter()
+                .filter(|r| r["status"] == "incomplete")
+                .collect();
+            if !records.is_empty() {
+                return records;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the cancelled query should be audited");
+    assert_eq!(incomplete.len(), 1);
+    assert!(incomplete[0]["queue_wait_ms"].is_number());
+    assert_eq!(scheduler.queued_count(), 0);
+
+    drop(held_stream);
+    let mut client = connect(addr).await;
+    client.set_token("secret".to_string());
+    let info = client
+        .execute("SELECT 1".to_string(), None)
+        .await
+        .expect("planning the third query");
+    let mut stream = tokio::time::timeout(
+        Duration::from_secs(10),
+        client.do_get(info.endpoint[0].ticket.clone().expect("ticket")),
+    )
+    .await
+    .expect("the third query must be admitted once the held stream is dropped")
+    .expect("do_get");
+    stream.try_next().await.expect("reading the third query");
 }

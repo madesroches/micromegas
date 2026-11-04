@@ -136,6 +136,11 @@ path = "tests/pg_stats_test.rs"
 required-features = ["server"]
 
 [[test]]
+name = "query_admission_tests"
+path = "tests/query_admission_tests.rs"
+required-features = ["server"]
+
+[[test]]
 name = "query_audit_tests"
 path = "tests/query_audit_tests.rs"
 required-features = ["server"]

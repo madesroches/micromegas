@@ -96,6 +96,52 @@ ORDER BY peak_memory_bytes DESC
 LIMIT 20;
 ```
 
+### Estimate versus actual, grouped by fingerprint
+
+Use this to size the [admission budget](../admin/flight-sql.md#query-admission): it compares the
+estimate with the bytes actually read and with the memory the query used.
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '24 hours'
+)
+SELECT
+  jsonb_as_string(jsonb_get(j, 'sql_hash')) AS sql_hash,
+  count(*) AS queries,
+  avg(jsonb_as_i64(jsonb_get(j, 'partition_bytes')))      AS avg_partition_bytes,
+  avg(jsonb_as_i64(jsonb_get(j, 'estimated_scan_bytes'))) AS avg_estimated_scan_bytes,
+  avg(jsonb_as_i64(jsonb_get(j, 'bytes_scanned')))        AS avg_bytes_scanned,
+  max(jsonb_as_i64(jsonb_get(j, 'peak_memory_bytes')))    AS max_peak_memory_bytes
+FROM q
+GROUP BY sql_hash
+ORDER BY avg_estimated_scan_bytes DESC
+LIMIT 20;
+```
+
+### Who is waiting in the admission queue
+
+```sql
+WITH q AS (
+  SELECT time, jsonb_parse(msg) AS j
+  FROM log_entries
+  WHERE target = 'flightsql_query_audit'
+    AND time >= NOW() - INTERVAL '1 hour'
+)
+SELECT
+  coalesce(jsonb_as_string(jsonb_get(j, 'service_account_name')),
+           jsonb_as_string(jsonb_get(j, 'user'))) AS identity,
+  count(*) AS queries,
+  avg(jsonb_as_f64(jsonb_get(j, 'queue_wait_ms')))  AS avg_queue_wait_ms,
+  max(jsonb_as_f64(jsonb_get(j, 'queue_wait_ms')))  AS max_queue_wait_ms
+FROM q
+WHERE jsonb_get(j, 'queue_wait_ms') IS NOT NULL
+GROUP BY identity
+ORDER BY avg_queue_wait_ms DESC;
+```
+
 ### Top offenders by fingerprint, for the query deny list
 
 Groups by `sql_hash` (the normalized fingerprint, literals stripped) rather than raw `sql`, so a
@@ -173,9 +219,9 @@ ORDER BY failures DESC;
 | `limit` | integer | if the request specified a row limit | Requested row limit |
 | `context_init_ms` | float | always | Time spent creating the session context |
 | `planning_ms` | float | always | Time spent building the logical plan (`ctx.sql(...)`) |
-| `execution_ms` | float | always | Time spent constructing the physical plan and the response stream (not the full drain) |
-| `setup_ms` | float | always | Total setup time: parsing, attribution, context creation, planning, and stream construction |
-| `total_ms` | float | always | End-to-end duration, including draining the response stream to the client |
+| `execution_ms` | float | always | Time spent constructing the physical plan and the response stream (not the full drain). Excludes `queue_wait_ms` |
+| `setup_ms` | float | always | Total setup time: parsing, attribution, context creation, planning, and stream construction. Excludes `queue_wait_ms` |
+| `total_ms` | float | always | End-to-end duration, including `queue_wait_ms` and draining the response stream to the client |
 | `status` | string | always | `"ok"`, `"error"`, or `"incomplete"` (stream abandoned mid-drain, e.g. client disconnect or cancellation) |
 | `error` | string | on error | Error message, when `status` is `"error"` |
 | `error_class` | string | on error | `"user"` (bad SQL/input), `"resource"` (query exceeded a resource budget), `"denied"` (rejected by a [query deny list](../admin/functions-reference.md#query-deny-list) rule), or `"internal"` (a genuine server-side failure). The first three are derived from the gRPC status code the query failed with, except `"denied"`, which the deny-list check stamps directly (it also fails with `ResourceExhausted`, so it cannot be told apart from `"resource"` by status code alone) |
@@ -184,8 +230,13 @@ ORDER BY failures DESC;
 | `peak_memory_bytes` | integer | always | Peak tracked DataFusion reservation for this query alone |
 | `spilled_bytes` | integer | always | Total bytes spilled to disk by this query's plan; nonzero only once the query actually spills — the exceptional safety-valve path, not the common case |
 | `spill_count` | integer | always | Number of spill events for this query's plan; nonzero only once the query actually spills |
+| `estimated_scan_bytes` | integer | once the physical plan exists | Compressed parquet bytes the plan's scans were estimated to request, computed at plan time from the scanned columns. Same unit as `bytes_scanned`, so the two can be compared directly. Row-group pruning only lowers the actual figure |
+| `estimate_precision` | string | with `estimated_scan_bytes` | How the estimate was derived, worst case across the plan's scans: `"footer"` (every file sized from a cached parquet footer), `"file_size_share"` (at least one file sized as its share of the file size, because its footer was not cached), or `"opaque"` (at least one table function hides its work from the plan, so a flat cost was charged for it) |
+| `partition_bytes` | integer | with `estimated_scan_bytes` | Total size of the partition files the plan reads, unprojected. Exact whatever the footer cache holds. Compared with `estimated_scan_bytes` it shows what column projection saves, and compared with `bytes_scanned` what row-group pruning saves |
+| `admission_cost` | integer | when [query admission](../admin/flight-sql.md#query-admission) is enabled | The cost charged against the admission budget: the estimate, raised to the minimum cost and capped at the per-identity maximum |
+| `queue_wait_ms` | float | when query admission is enabled | Time spent waiting in the admission queue. Near zero when the query started at once |
 
-`context_init_ms` / `planning_ms` / `execution_ms` / `setup_ms` / `total_ms` are measured with
+`context_init_ms` / `planning_ms` / `execution_ms` / `setup_ms` / `queue_wait_ms` / `total_ms` are measured with
 `std::time::Instant`, independently of the raw-TSC-tick `imetric!` timings emitted elsewhere in
 `execute_query` — so they don't depend on the process's TSC-frequency calibration and are reliable
 on their own. On a record with `status = "error"` emitted during setup, stage fields for stages

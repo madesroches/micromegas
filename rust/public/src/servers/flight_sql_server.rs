@@ -34,6 +34,7 @@ use super::connect_info_layer::ConnectedIncoming;
 use super::flight_sql_service_impl::FlightSqlServiceImpl;
 use super::grpc_health_service::GrpcHealthService;
 use super::log_uri_service::LogUriService;
+use super::query_admission::{admission_scheduler_from_env, opaque_leaf_cost_from_env};
 
 type ViewFactoryFn = Box<
     dyn FnOnce(
@@ -250,6 +251,10 @@ impl FlightSqlServerBuilder {
         // Resolved first, ahead of the Postgres/object-store setup below, so a malformed
         // `MICROMEGAS_PUBLIC_VIEW_SETS` fails fast at no cost.
         let env_fallbacks = resolve_env_fallbacks(&self.isolation_config)?;
+        // Same fail-fast rationale: a typo in the admission budget must not silently leave the
+        // service running unqueued.
+        let admission = admission_scheduler_from_env()?;
+        let opaque_leaf_cost = opaque_leaf_cost_from_env();
 
         // Use injected lakehouse or build one from environment. The non-injected path is
         // standalone FlightSQL, the one role that prefers a writable primary but falls back to
@@ -425,6 +430,8 @@ impl FlightSqlServerBuilder {
             session_configurator,
             read_policy,
             settings,
+            opaque_leaf_cost,
+            admission,
         ))
         .max_decoding_message_size(self.max_decoding_message_size);
 

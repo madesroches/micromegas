@@ -142,4 +142,23 @@ pub struct QueryAuditRecord {
     /// active use, since it's what an operator pastes into `deny_queries` after finding an
     /// offender in the audit log. Appended last so existing JSON consumers are unaffected.
     pub sql_hash: String,
+    /// Compressed parquet bytes the physical plan's scans were estimated to request (see
+    /// `micromegas_analytics::lakehouse::scan_cost`). Comparable with `bytes_scanned`. Absent
+    /// when the query never reached the estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_scan_bytes: Option<u64>,
+    /// How the estimate was derived: "footer" | "file_size_share" | "opaque", the worst
+    /// precision among the scans.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimate_precision: Option<&'static str>,
+    /// Total size of the partition files the plan reads, unprojected and exact whatever the
+    /// footer cache holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_bytes: Option<u64>,
+    /// The cost charged against the admission budget. Absent when admission is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admission_cost: Option<u64>,
+    /// Milliseconds spent waiting in the admission queue. Absent when admission is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_wait_ms: Option<f64>,
 }
