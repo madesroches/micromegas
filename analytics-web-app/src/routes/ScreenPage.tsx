@@ -1,14 +1,16 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type ComponentType } from 'react'
-import { useParams, useNavigate, useSearchParams } from 'react-router'
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useRefreshInterval } from '@/hooks/useRefreshInterval'
 import { useTabExecutionState, computeTabState } from '@/hooks/useTabExecutionState'
-import { AlertCircle, Save, GitCompareArrows, ExternalLink } from 'lucide-react'
+import { AlertCircle, Save, GitCompareArrows, Undo2 } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
 import { ConfigDiffModal } from '@/components/ConfigDiffModal'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ManagedByIndicator } from '@/components/ManagedByIndicator'
 import { Button } from '@/components/ui/button'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { renderIcon } from '@/lib/screen-type-utils'
@@ -30,6 +32,7 @@ import {
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const isNew = !name
 
@@ -84,6 +87,9 @@ function ScreenPageContent() {
   // Dialog state
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [showDiffModal, setShowDiffModal] = useState(false)
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false)
+  const [pendingDiscard, setPendingDiscard] = useState(false)
+  const [discardNonce, setDiscardNonce] = useState(0)
 
   // Ref for the renderer's wrapped save handler (includes URL cleanup)
   const saveRef = useRef<(() => Promise<void>) | null>(null)
@@ -271,6 +277,31 @@ function ScreenPageContent() {
     }
   }, [handleSave])
 
+  // The renderer is unmounted while a discard is pending: its URL-sync effects re-run when the
+  // URL changes and would write the edited state back into the cleared query. The navigate is
+  // issued from an effect so the unmount commits first, and the state reset waits until the
+  // router (which applies navigation in a transition) has committed the empty query, so the
+  // remounted renderer seeds from it.
+  const handleDiscard = useCallback(() => {
+    setShowDiscardDialog(false)
+    setSaveError(null)
+    setPendingDiscard(true)
+  }, [])
+
+  useEffect(() => {
+    if (pendingDiscard && location.search !== '') {
+      navigate(location.pathname, { replace: true })
+    }
+  }, [pendingDiscard, location.search, location.pathname, navigate])
+
+  if (pendingDiscard && location.search === '') {
+    // baselineConfig, not screen.config: after a save the server response may order JSON keys
+    // differently, which the order-sensitive comparison in hasUnsavedChanges would flag.
+    setScreenConfig(baselineConfig)
+    setDiscardNonce((n) => n + 1)
+    setPendingDiscard(false)
+  }
+
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
     (newName: string) => {
@@ -413,6 +444,18 @@ function ScreenPageContent() {
                       Diff
                     </Button>
                   )}
+                  {hasUnsavedChanges && !isNew && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowDiscardDialog(true)}
+                      disabled={isSaving}
+                      className="gap-1 text-accent-error"
+                    >
+                      <Undo2 className="w-4 h-4" />
+                      Discard
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -422,6 +465,9 @@ function ScreenPageContent() {
                     <Save className="w-4 h-4" />
                     Save As
                   </Button>
+                  {screen?.managed_by && hasUnsavedChanges && (
+                    <ManagedByIndicator managedBy={screen.managed_by} />
+                  )}
                   {screen && (
                     <Button
                       size="sm"
@@ -440,20 +486,6 @@ function ScreenPageContent() {
                   {screenTypeInfo?.display_name ?? screenType}
                 </p>
               )}
-              {screen?.managed_by && hasUnsavedChanges && (
-                <div className="mt-2 ml-11 flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
-                  style={{ borderColor: 'var(--accent-warning)', backgroundColor: 'color-mix(in srgb, var(--accent-warning) 10%, transparent)' }}>
-                  <span style={{ color: 'var(--accent-warning)' }}>This screen is managed by source control. Edits made here may be overwritten on the next deployment.</span>
-                  <a
-                    href={screen.managed_by}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 whitespace-nowrap text-accent-link hover:underline"
-                  >
-                    View source <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              )}
               {saveError && (
                 <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>
               )}
@@ -465,23 +497,25 @@ function ScreenPageContent() {
 
           {/* Renderer - key forces remount when screen changes */}
           <div className="flex-1 min-h-0">
-            <Renderer
-              key={screen?.name ?? 'new'}
-              config={screenConfig}
-              onConfigChange={handleScreenConfigChange}
-              savedConfig={screen?.config ?? null}
-              rawTimeRange={rawTimeRange}
-              onTimeRangeChange={handleTimeRangeChange}
-              timeRangeLabel={parsedTimeRange.label}
-              currentValues={currentValues}
-              onSave={screen ? handleSave : null}
-              refreshTrigger={refreshTrigger}
-              onSaveRef={saveRef}
-              dataSource={dataSource}
-              onExecutingChange={setIsExecuting}
-              onErrorChange={setHasError}
-              screenName={screen?.name}
-            />
+            {!pendingDiscard && (
+              <Renderer
+                key={`${screen?.name ?? 'new'}:${discardNonce}`}
+                config={screenConfig}
+                onConfigChange={handleScreenConfigChange}
+                savedConfig={screen?.config ?? null}
+                rawTimeRange={rawTimeRange}
+                onTimeRangeChange={handleTimeRangeChange}
+                timeRangeLabel={parsedTimeRange.label}
+                currentValues={currentValues}
+                onSave={screen ? handleSave : null}
+                refreshTrigger={refreshTrigger}
+                onSaveRef={saveRef}
+                dataSource={dataSource}
+                onExecutingChange={setIsExecuting}
+                onErrorChange={setHasError}
+                screenName={screen?.name}
+              />
+            )}
           </div>
         </div>
       </PageLayout>
@@ -498,6 +532,16 @@ function ScreenPageContent() {
           sourceFolderPath={screen?.folder_path}
         />
       )}
+
+      <ConfirmDialog
+        isOpen={showDiscardDialog}
+        onClose={() => setShowDiscardDialog(false)}
+        onConfirm={handleDiscard}
+        title="Discard unsaved changes?"
+        message="Your unsaved changes to this screen, including time range and variable overrides, will be lost."
+        confirmLabel="Discard"
+        variant="danger"
+      />
 
       {/* Config Diff Modal */}
       {screenConfig && (
