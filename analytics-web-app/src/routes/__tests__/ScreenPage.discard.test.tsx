@@ -41,13 +41,16 @@ vi.mock('@/lib/screen-renderers/init', () => {
     useEffect(() => {
       mounts.count++
       mounts.seeds.push(seed)
+    }, [seed])
+    // Re-runs whenever setSearchParams changes identity (i.e. on every URL change), like the
+    // real renderers' URL-sync effects.
+    useEffect(() => {
       if (seed) {
         const next = new URLSearchParams(params)
         next.set('var', seed)
         setParams(next, { replace: true })
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [seed, params, setParams])
     return (
       <div>
         <div data-testid="seed">{seed}</div>

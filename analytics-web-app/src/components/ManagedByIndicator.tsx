@@ -1,34 +1,46 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ExternalLink } from 'lucide-react'
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 
 interface ManagedByIndicatorProps {
-  managedBy: string
+  managedBy: string;
 }
 
 export function ManagedByIndicator({ managedBy }: ManagedByIndicatorProps) {
-  const [open, setOpen] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return
+    if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
+      if (e.key === "Escape") setOpen(false);
+    };
     const onMouseDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
       }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    document.addEventListener('mousedown', onMouseDown)
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onMouseDown);
     return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.removeEventListener('mousedown', onMouseDown)
-    }
-  }, [open])
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onMouseDown);
+    };
+  }, [open]);
 
   return (
-    <div ref={containerRef} className="relative" onMouseEnter={() => setOpen(true)}>
+    <div
+      ref={containerRef}
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onBlur={(e) => {
+        if (!containerRef.current?.contains(e.relatedTarget as Node | null))
+          setOpen(false);
+      }}
+    >
       <button
         type="button"
         aria-label="Managed by source control"
@@ -36,7 +48,7 @@ export function ManagedByIndicator({ managedBy }: ManagedByIndicatorProps) {
         onClick={() => setOpen(true)}
         onFocus={() => setOpen(true)}
         className="p-1.5 rounded-md hover:bg-app-card"
-        style={{ color: 'var(--accent-warning)' }}
+        style={{ color: "var(--accent-warning)" }}
       >
         <AlertTriangle className="w-4 h-4" />
       </button>
@@ -44,11 +56,11 @@ export function ManagedByIndicator({ managedBy }: ManagedByIndicatorProps) {
         <div
           role="dialog"
           className="absolute right-0 top-full z-40 mt-1 w-72 rounded-md border bg-app-panel p-3 text-sm shadow-xl"
-          style={{ borderColor: 'var(--accent-warning)' }}
+          style={{ borderColor: "var(--accent-warning)" }}
         >
-          <p style={{ color: 'var(--accent-warning)' }}>
-            This screen is managed by source control. Edits made here may be overwritten on the
-            next deployment.
+          <p style={{ color: "var(--accent-warning)" }}>
+            This screen is managed by source control. Edits made here may be
+            overwritten on the next deployment.
           </p>
           <a
             href={managedBy}
@@ -61,5 +73,5 @@ export function ManagedByIndicator({ managedBy }: ManagedByIndicatorProps) {
         </div>
       )}
     </div>
-  )
+  );
 }
