@@ -1,5 +1,7 @@
 # Screen Page: Discard Changes + Less Invasive "Managed by Source Control" Notice
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/1755
+
 ## Overview
 Two changes to the screen title bar in `ScreenPage.tsx`: (1) add a **Discard** button that reverts
 unsaved edits to the saved screen (issue #1755), and (2) replace the full-width "managed by source
