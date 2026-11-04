@@ -398,6 +398,7 @@ impl AuthProvider for GroupsAuthProvider {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn provider_unavailable_maps_to_status_unavailable() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
@@ -422,6 +423,7 @@ async fn provider_unavailable_maps_to_status_unavailable() {
 /// A DB-backed settings source whose cold load cannot reach a database: the read policy resolves,
 /// so the `Unavailable` can only come from the settings load on the `Some(auth_ctx)` arm.
 #[tokio::test]
+#[serial]
 async fn settings_store_outage_maps_to_status_unavailable() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(AudienceReadPolicy::new(AudienceGrants::empty()));
@@ -468,6 +470,7 @@ async fn explain_processes(addr: SocketAddr) -> String {
 /// `ReadableAudiences::Every` maps to a filtered scope, never `ReadScope::All`: the `processes`
 /// plan carries an `audience IS NOT NULL` predicate.
 #[tokio::test]
+#[serial]
 async fn every_audience_resolution_stays_filtered() {
     let empty_env = EnvFallbacks {
         isolation: Arc::new(IsolationConfig::default()),
@@ -493,6 +496,7 @@ async fn every_audience_resolution_stays_filtered() {
 /// The `Some(auth_ctx)` arm must evaluate the request with the stored isolation config, not the
 /// env one: a stored `processes` public view set removes the ownership filter from the plan.
 #[tokio::test]
+#[serial]
 async fn stored_isolation_config_is_applied_to_authenticated_requests() {
     let empty_env = || EnvFallbacks {
         isolation: Arc::new(IsolationConfig::default()),
@@ -536,6 +540,7 @@ async fn stored_isolation_config_is_applied_to_authenticated_requests() {
 }
 
 #[tokio::test]
+#[serial]
 async fn other_policy_error_maps_to_status_permission_denied() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: false });
@@ -560,6 +565,7 @@ async fn other_policy_error_maps_to_status_permission_denied() {
 /// Same failing policy on the prepared-statement path (`do_action_create_prepared_statement`),
 /// closing hole #1 with the same fail-closed guarantee as `do_get`.
 #[tokio::test]
+#[serial]
 async fn prepared_statement_path_also_fails_closed() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(FailingReadPolicy { unavailable: true });
@@ -576,6 +582,7 @@ async fn prepared_statement_path_also_fails_closed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
     let auth_provider = api_key_provider("delegating-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
@@ -623,6 +630,7 @@ async fn read_scope_resolves_from_auth_context_not_claimed_attribution() {
 /// authenticates -- exercised through `ConnectedIncoming`, `AuthService`, and
 /// `resolve_client_ip`'s socket-address fallback, not a canned `RequestParts`.
 #[tokio::test]
+#[serial]
 async fn ip_allowlist_accepts_connection_from_an_in_range_peer_address() {
     let auth_provider = restricted_api_key_provider("test", "secret", &["127.0.0.0/8"]);
     let policy = Arc::new(RecordingReadPolicy::default());
@@ -644,6 +652,7 @@ async fn ip_allowlist_accepts_connection_from_an_in_range_peer_address() {
 /// A key restricted to a CIDR range that does not contain the test client's loopback peer
 /// address is rejected with `unauthenticated` -- the same status an outright wrong key gets.
 #[tokio::test]
+#[serial]
 async fn ip_allowlist_rejects_connection_from_an_out_of_range_peer_address() {
     let auth_provider = restricted_api_key_provider("test", "secret", &["203.0.113.0/24"]);
     let policy = Arc::new(RecordingReadPolicy::default());
@@ -667,6 +676,7 @@ async fn ip_allowlist_rejects_connection_from_an_out_of_range_peer_address() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn prepared_statement_resolves_the_same_scope_as_do_get() {
     let auth_provider = api_key_provider("same-key", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
@@ -708,6 +718,7 @@ async fn prepared_statement_resolves_the_same_scope_as_do_get() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
     let auth_provider: Arc<dyn AuthProvider> = Arc::new(GroupsAuthProvider {
         memberships: vec!["team-a".to_string(), "team-b".to_string()],
@@ -755,6 +766,7 @@ async fn auth_context_with_memberships_survives_the_real_tonic_stack() {
 /// `ReadScope::Audiences` caller; `do_get` must still succeed and return the same row it would
 /// without this seam at all.
 #[tokio::test]
+#[serial]
 async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaffected() {
     let auth_provider = api_key_provider("test", "secret");
     let policy: Arc<dyn ReadPolicy> = Arc::new(AudienceReadPolicy::default());
@@ -791,6 +803,7 @@ async fn policy_with_no_grant_source_resolves_a_scope_and_query_results_are_unaf
 /// all) never reaches the server: `FlightDataEncoderBuilder` only emits a message once it
 /// sees a schema or a first batch, so the command/descriptor would never be sent.
 #[tokio::test]
+#[serial]
 async fn bulk_ingest_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
@@ -824,6 +837,7 @@ async fn bulk_ingest_denies_non_admin_caller() {
 /// `authorize_view_ddl` must reject this before any DB or object-store access happens (the view
 /// definition is already parsed and validated by this point).
 #[tokio::test]
+#[serial]
 async fn view_ddl_denies_non_admin_caller() {
     let auth_provider = api_key_provider("test", "secret");
     let policy = Arc::new(RecordingReadPolicy::default());
