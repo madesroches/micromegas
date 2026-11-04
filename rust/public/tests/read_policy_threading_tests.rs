@@ -47,9 +47,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::levels::{LevelFilter, set_max_level};
-use micromegas_tracing::logs::LogMsgQueueAny;
-use micromegas_tracing::test_utils::init_in_memory_tracing;
-use micromegas_transit::HeterogeneousQueue;
+use micromegas_tracing::test_utils::{collect_logs, init_in_memory_tracing};
 use serial_test::serial;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -874,20 +872,11 @@ async fn view_ddl_denies_non_admin_caller() {
 // ---------------------------------------------------------------------------
 
 fn collect_audit_records(sink: &InMemorySink) -> Vec<serde_json::Value> {
-    micromegas_tracing::dispatch::flush_log_buffer();
-    let state = sink.state.lock().expect("sink lock");
-    let mut records = vec![];
-    for block in &state.log_blocks {
-        for event in block.events.iter() {
-            if let LogMsgQueueAny::LogStringEvent(evt) = event
-                && evt.msg.0.starts_with("{\"query_id\"")
-                && let Ok(record) = serde_json::from_str(&evt.msg.0)
-            {
-                records.push(record);
-            }
-        }
-    }
-    records
+    collect_logs(sink)
+        .into_iter()
+        .filter(|log| log.msg.starts_with("{\"query_id\""))
+        .filter_map(|log| serde_json::from_str(&log.msg).ok())
+        .collect()
 }
 
 /// The held query must outlast the test: a `SELECT 1` would finish sending inside the HTTP/2
