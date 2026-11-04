@@ -78,6 +78,15 @@ pub async fn check_merge_streaming(
   `make_partitioned_execution_plan` drops them or falls back from `PerFile` to `Unordered` / `EmptyExec`.
   Two non-empty certifying partitions reproduce the daemon's shape for any real merge with k >= 2;
   k = 1 would not.
+- The merge query is `def.merge_partitions_query.replace("{source}", "source")` (as `view_definition.rs`
+  validation does); ordering columns come from the public `get_scan_output_ordering()`
+  (`sql_batch_view.rs` ~401-408) and the file schema from `get_file_schema()`.
+- The check builds one synthetic `insert_range` covering the synthetic partitions and passes
+  `Arc::new(PartitionCache::empty(insert_range))` as `part_provider` (pattern in
+  `sql_batch_view_merge_ordering_tests.rs:124`), `Some(insert_range)` as `query_range` (the daemon
+  passes `Some(insert_range)`, `merge.rs:300`; this installs `TableScanRewrite`), and the same
+  `insert_range` to `plan_sorted_merge`. Other views referenced by the merge query plan as
+  `EmptyExec`, so the verdict is exact only for merge queries over `source`.
 - `sort_exec_line` is the first plan line containing `SortExec`, the same test `plan_sorted_merge` uses.
 - Hard assertion failures (`assert_single_partition` etc.) make `check_view_merge` return an error
   (the query fails), not a row with `streams = false`.
@@ -93,15 +102,16 @@ Non-DDL or `DROP` input is an error.
 To let the UDTF in `analytics` parse DDL, move `ViewDdl`, `parse_view_ddl`, `require_eof` and
 `view_definition_from_options` from `public/src/servers/view_ddl.rs` into
 `analytics/src/lakehouse/view_ddl.rs`, along with the `value_to_string` and `value_to_i32` helpers;
-`public` keeps `authorize_view_ddl` (it needs `tonic::Status`) and re-exports the moved items via
-`pub use` so `flight_sql_service_impl.rs` keeps compiling. `view_ddl_parse_tests.rs` is split: the
+`public` keeps `authorize_view_ddl` (it needs `tonic::Status`) and re-exports only `ViewDdl` and
+`parse_view_ddl` via `pub use` (the four helpers `require_eof`, `value_to_string`, `value_to_i32`,
+`view_definition_from_options` stay private in `analytics`) so `flight_sql_service_impl.rs` keeps compiling. `view_ddl_parse_tests.rs` is split: the
 parse tests move to `rust/analytics/tests/`; the `authorize_view_ddl` tests (and their caller
 helpers) stay in `rust/public/tests/`, keeping their `[[test]]` entry in `rust/public/Cargo.toml`.
 This is a Rust API move only (see CHANGELOG).
 
-The UDTF needs the session configurator, so `make_session_context`'s `configurator` is threaded
+The UDTF needs the session configurator; `make_session_context` already takes one, so it is threaded
 through `register_functions` -> `register_lakehouse_functions` to the new UDTF (all callers
-updated, including those in `query.rs`). Planning happens in an async `scan`, following
+updated). Planning happens in an async `scan`, following
 `list_view_set_definitions_table_function.rs`.
 
 ### 4. Client
@@ -113,8 +123,9 @@ In `views.py`:
   print a `warning:` line per view with `streams = false`, including `sort_exec_line` and the
   `merge_sort_order`. Unchanged views are not checked (they are already deployed).
 - `--strict` (on `plan` and `apply`): any warning makes the exit code non-zero.
-- `cmd_apply`: run the same check before executing any DDL; warn, and under `--strict` abort before
-  applying. Without `--strict`, apply proceeds after the warnings.
+- `cmd_apply`: run the same check right after printing the plan and before `confirm_apply`; warn,
+  and under `--strict` exit non-zero before the prompt. Without `--strict`, apply proceeds after the
+  warnings. The "No changes" early return and drop-only runs skip the check.
 - Any failure of the check query for a view (e.g. an extract query that does not plan yet because a
   dependency is created in the same apply) is reported as "check skipped: <reason>" for that view,
   not as a streaming warning; under `--strict` it also fails.
@@ -126,7 +137,7 @@ In `views.py`:
    `view_ddl_parse_tests.rs` (parse tests to `analytics/tests/`, `authorize_view_ddl` tests stay).
 3. Add `view_merge_check.rs` and `CheckViewMergeTableFunction`; register in the admin block of
    `query.rs`, threading `configurator` through `register_functions` / `register_lakehouse_functions`
-   and updating all callers; add module lines to `lakehouse/mod.rs`.
+   and updating all callers; add module lines to `lakehouse/mod.rs`, including `pub mod view_ddl;`.
 4. `views.py`: check helper, `plan`/`apply` integration, `--strict`.
 5. Docs and CHANGELOG.
 
@@ -137,11 +148,14 @@ In `views.py`:
   `check_view_merge_table_function.rs` (new), `mod.rs`, `query.rs`
 - `rust/public/src/servers/view_ddl.rs`, `flight_sql_service_impl.rs` (imports), `rust/public/Cargo.toml`
   (`[[test]]` entry for `view_ddl_parse_tests.rs`)
-- `query.rs` callers of `make_session_context` / `register_functions`
+- `rust/public/src/servers/view_ddl.rs` (admin-gated function list in the doc comment, l.43),
+  `rust/analytics/tests/lakehouse_admin_gate_test.rs` (header list)
+- `mkdocs/docs/admin/authorization.md` (~l.227-245), `mkdocs/docs/admin/authentication.md` (~l.586):
+  "nine admin-gated functions" becomes "ten", add `check_view_merge`
 - `rust/analytics/tests/` (moved DDL parse tests, new tests below); `rust/public/tests/view_ddl_parse_tests.rs`
   (keeps the `authorize_view_ddl` tests)
 - `python/micromegas/micromegas/cli/views.py`, `python/micromegas/tests/cli/test_views.py`
-- `mkdocs/docs/admin/views-as-code.md`, `functions-reference.md`, `materialized-views.md`
+- `mkdocs/docs/admin/views-as-code.md`, `mkdocs/docs/admin/functions-reference.md`, `materialized-views.md`
 - `CHANGELOG.md`
 
 ## Trade-offs
@@ -157,14 +171,17 @@ In `views.py`:
 
 ## Documentation
 
-- `views-as-code.md`: `plan` / `apply` warning output and `--strict`.
-- `functions-reference.md`: `check_view_merge(ddl)` entry (admin, output columns).
+- `views-as-code.md`: `plan` / `apply` warning output and `--strict`; update the `plan`/`apply`
+  synopsis (add `[--strict]`), the "plan always exits 0 for pending changes" sentence, and the
+  exit-code list.
+- `mkdocs/docs/admin/functions-reference.md`: `check_view_merge(ddl)` entry (admin, output columns).
+- `authorization.md`, `authentication.md`: admin-gated function count "nine" becomes "ten"; list
+  `check_view_merge`.
 - `materialized-views.md`: next to the `merge_sort_order` option, state the authoring rule (the merge
   query must not need an input order beyond `merge_sort_order`) and point to the check.
 - `CHANGELOG.md`: new function and CLI flag; **Minor breaking change**: DDL parser types moved from
   `micromegas::servers::view_ddl` to `micromegas_analytics::lakehouse::view_ddl`; widened signatures
-  of `make_session_context`, `register_functions` and `register_lakehouse_functions` (new
-  `configurator` parameter).
+  of `register_functions` and `register_lakehouse_functions` (new `configurator` parameter).
 
 ## Testing Strategy
 
@@ -178,7 +195,10 @@ and never reads objects):
 - UDTF output schema/rows via a canned DDL; non-admin rejection joins `lakehouse_admin_gate_test.rs`.
 - Existing `sql_batch_view_merge_ordering_tests.rs` must keep passing unchanged (guards the refactor).
 - Python (`test_views.py`): warning rendering, `--strict` exit codes for warn / skipped-check, and
-  SQL literal escaping, with a stubbed client.
+  SQL literal escaping, with a stubbed client. `FakeClient` routes SQL containing `check_view_merge(`
+  to a per-view `check_results` / `check_errors` mapping ahead of the generic SELECT branch (default:
+  empty report-shaped frame); `make_args` defaults gain `"strict": False`. Existing tests need these
+  updates.
 
 ## Manual Verification
 
