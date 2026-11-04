@@ -72,6 +72,10 @@ Variable values and time range are encoded in the URL as delta parameters — on
 
 Sharing this URL gives the recipient the same view. After saving, URL parameters that match the new saved defaults are automatically removed.
 
+### Discarding Changes
+
+When you have unsaved changes, **Discard** (next to **Diff**) reverts the screen to its saved version after a confirmation. It resets cell edits, the time range and every variable override, and clears the URL parameters.
+
 ## Source View
 
 Click **View Source** to switch to a JSON editor showing the raw notebook configuration. This is useful for:

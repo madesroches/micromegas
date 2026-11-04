@@ -152,13 +152,13 @@ Show screen inventory with sync status: `synced`, `local-only`, `server-only`, `
 
 ## Source Control Tracking
 
-When a screen is managed via git, the web UI shows a warning banner:
+When a screen is managed via git, once it has unsaved changes the web UI shows a warning-triangle icon next to the Save button. Hovering over it, focusing it, or clicking it opens a popover with this message:
 
 > This screen is managed by source control. Edits made here may be overwritten on the next deployment.
 
-The banner includes a "View source" link to the screen's JSON file in the repository.
+The popover includes a "View source" link to the screen's JSON file in the repository.
 
-Screens remain fully editable in the web UI — the banner is informational only.
+Screens remain fully editable in the web UI — the indicator is informational only.
 
 ## CI/CD Example
 
