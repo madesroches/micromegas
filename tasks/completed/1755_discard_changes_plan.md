@@ -31,8 +31,8 @@ Recommended: **Option A** — `AlertTriangle` icon button in warning color, left
 Extract a small `ManagedByIndicator` component (`components/ManagedByIndicator.tsx`) taking `managedBy: string`, so ScreenPage only gains one line and the popover is reusable.
 
 ## Mockups
-- `tasks/1755_discard_changes_mockups/option-a-triangle-popover.html` — triangle beside Save with popover (recommended). Quiet, no layout shift.
-- `tasks/1755_discard_changes_mockups/option-b-confirm-on-save.html` — clean header, confirmation dialog on Save. Strongest guard, extra click per save.
+- `tasks/completed/1755_discard_changes_mockups/option-a-triangle-popover.html` — triangle beside Save with popover (recommended). Quiet, no layout shift.
+- `tasks/completed/1755_discard_changes_mockups/option-b-confirm-on-save.html` — clean header, confirmation dialog on Save. Strongest guard, extra click per save.
 
 ## Implementation Steps
 1. Create `components/ManagedByIndicator.tsx` (triangle button + popover, accessible `aria-label`, Esc/outside-click close).
