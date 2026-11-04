@@ -39,9 +39,7 @@ fn schema() -> SchemaRef {
 }
 
 /// Builds the output batch: one row per report, none when the check was skipped.
-pub fn build_batch(
-    report: Option<&MergeStreamingReport>,
-) -> datafusion::error::Result<RecordBatch> {
+fn build_batch(report: Option<&MergeStreamingReport>) -> datafusion::error::Result<RecordBatch> {
     let reports: &[&MergeStreamingReport] = match &report {
         Some(r) => &[r],
         None => &[],
