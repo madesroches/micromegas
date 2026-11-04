@@ -1,41 +1,22 @@
-import {
-  Suspense,
-  useState,
-  useCallback,
-  useMemo,
-  useEffect,
-  useRef,
-  type ComponentType,
-} from "react";
-import {
-  useParams,
-  useNavigate,
-  useLocation,
-  useSearchParams,
-} from "react-router";
-import { usePageTitle } from "@/hooks/usePageTitle";
-import { useRefreshInterval } from "@/hooks/useRefreshInterval";
-import {
-  useTabExecutionState,
-  computeTabState,
-} from "@/hooks/useTabExecutionState";
-import { AlertCircle, Save, GitCompareArrows, Undo2 } from "lucide-react";
-import { PageLayout } from "@/components/layout";
-import { AuthGuard } from "@/components/AuthGuard";
-import { AppLink } from "@/components/AppLink";
-import { SaveScreenDialog } from "@/components/SaveScreenDialog";
-import { ConfigDiffModal } from "@/components/ConfigDiffModal";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { ManagedByIndicator } from "@/components/ManagedByIndicator";
-import { Button } from "@/components/ui/button";
-import { parseTimeRange, getTimeRangeForApi } from "@/lib/time-range";
-import { renderIcon } from "@/lib/screen-type-utils";
-import {
-  SCREEN_RENDERERS,
-  type ScreenRendererProps,
-} from "@/lib/screen-renderers/init";
-import { DEFAULT_TIME_RANGE } from "@/lib/screen-defaults";
-import { useDefaultDataSource } from "@/hooks/useDefaultDataSource";
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef, type ComponentType } from 'react'
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import { useRefreshInterval } from '@/hooks/useRefreshInterval'
+import { useTabExecutionState, computeTabState } from '@/hooks/useTabExecutionState'
+import { AlertCircle, Save, GitCompareArrows, Undo2 } from 'lucide-react'
+import { PageLayout } from '@/components/layout'
+import { AuthGuard } from '@/components/AuthGuard'
+import { AppLink } from '@/components/AppLink'
+import { SaveScreenDialog } from '@/components/SaveScreenDialog'
+import { ConfigDiffModal } from '@/components/ConfigDiffModal'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ManagedByIndicator } from '@/components/ManagedByIndicator'
+import { Button } from '@/components/ui/button'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { renderIcon } from '@/lib/screen-type-utils'
+import { SCREEN_RENDERERS, type ScreenRendererProps } from '@/lib/screen-renderers/init'
+import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
+import { useDefaultDataSource } from '@/hooks/useDefaultDataSource'
 import {
   getScreen,
   getScreenTypes,
@@ -46,235 +27,217 @@ import {
   ScreenTypeInfo,
   ScreenConfig,
   ScreenApiError,
-} from "@/lib/screens-api";
+} from '@/lib/screens-api'
 
 function ScreenPageContent() {
-  const { name } = useParams<{ name: string }>();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [searchParams] = useSearchParams();
-  const isNew = !name;
+  const { name } = useParams<{ name: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const isNew = !name
 
   // Screen state
-  const [screen, setScreen] = useState<Screen | null>(null);
+  const [screen, setScreen] = useState<Screen | null>(null)
 
   // Data source
-  const { name: dataSource, error: dataSourceError } = useDefaultDataSource();
+  const { name: dataSource, error: dataSourceError } = useDefaultDataSource()
 
   // Read type directly from URL (only used for new screens)
-  const typeParam = (searchParams.get("type") ?? null) as ScreenTypeName | null;
+  const typeParam = (searchParams.get('type') ?? null) as ScreenTypeName | null
 
   // Time range change handler - works directly with URL params to preserve variables
   // This avoids going through updateConfig which has stale variable state
   const handleTimeRangeChange = useCallback(
     (from: string, to: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("from", from);
-      params.set("to", to);
-      navigate(`?${params.toString()}`);
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('from', from)
+      params.set('to', to)
+      navigate(`?${params.toString()}`)
     },
-    [searchParams, navigate],
-  );
+    [searchParams, navigate]
+  )
 
   // Screen type info (fetched from API)
-  const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(
-    null,
-  );
+  const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
 
   // Page title - show screen name or "New [type] Screen"
   const pageTitle = isNew
-    ? screenTypeInfo
-      ? `New ${screenTypeInfo.display_name} Screen`
-      : null
-    : (screen?.name ?? null);
-  usePageTitle(pageTitle);
-  const [screenConfig, setScreenConfig] = useState<ScreenConfig | null>(null);
-  const [screenType, setScreenType] = useState<ScreenTypeName | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [baselineConfig, setBaselineConfig] = useState<ScreenConfig | null>(
-    null,
-  );
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+    ? (screenTypeInfo ? `New ${screenTypeInfo.display_name} Screen` : null)
+    : screen?.name ?? null
+  usePageTitle(pageTitle)
+  const [screenConfig, setScreenConfig] = useState<ScreenConfig | null>(null)
+  const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [baselineConfig, setBaselineConfig] = useState<ScreenConfig | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Warn when URL query string exceeds safe length (older browsers/proxies may truncate)
   useEffect(() => {
-    const qs = searchParams.toString();
+    const qs = searchParams.toString()
     if (qs.length > 2000) {
       console.warn(
         `URL query string length (${qs.length}) exceeds safe threshold (2000). ` +
-          `Some parameter values may be lost when sharing or bookmarking.`,
-      );
+          `Some parameter values may be lost when sharing or bookmarking.`
+      )
     }
-  }, [searchParams]);
+  }, [searchParams])
 
   // Dialog state
-  const [showSaveDialog, setShowSaveDialog] = useState(false);
-  const [showDiffModal, setShowDiffModal] = useState(false);
-  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
-  const [pendingDiscard, setPendingDiscard] = useState(false);
-  const [discardNonce, setDiscardNonce] = useState(0);
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [showDiffModal, setShowDiffModal] = useState(false)
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false)
+  const [pendingDiscard, setPendingDiscard] = useState(false)
+  const [discardNonce, setDiscardNonce] = useState(0)
 
   // Ref for the renderer's wrapped save handler (includes URL cleanup)
-  const saveRef = useRef<(() => Promise<void>) | null>(null);
+  const saveRef = useRef<(() => Promise<void>) | null>(null)
 
   // Refresh trigger - increment to tell renderer to re-execute query
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   // Execution state reported by renderer (for header spinner)
-  const [isExecuting, setIsExecuting] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false)
   // Error state reported by renderer (for tab favicon)
-  const [hasError, setHasError] = useState(false);
+  const [hasError, setHasError] = useState(false)
 
   // Tab favicon busy-error-idle indicator, page-global across all screen types
-  const tabState = computeTabState(isExecuting, hasError);
-  useTabExecutionState(tabState);
+  const tabState = computeTabState(isExecuting, hasError)
+  useTabExecutionState(tabState)
 
   // Compute raw time range values (for renderer)
   // Priority: URL (if present) → saved config → current config
-  const savedTimeFrom = screen?.config?.timeRangeFrom;
-  const savedTimeTo = screen?.config?.timeRangeTo;
-  const currentTimeFrom = screenConfig?.timeRangeFrom;
-  const currentTimeTo = screenConfig?.timeRangeTo;
+  const savedTimeFrom = screen?.config?.timeRangeFrom
+  const savedTimeTo = screen?.config?.timeRangeTo
+  const currentTimeFrom = screenConfig?.timeRangeFrom
+  const currentTimeTo = screenConfig?.timeRangeTo
   // Compute raw time range - source of truth for displayed time
   // Priority: URL params → saved config → current config (from API)
   // Extract individual param values so the memo doesn't depend on the whole
   // searchParams object — otherwise any URL change (e.g. variable params)
   // triggers a recomputation, which cascades into apiTimeRange calling
   // new Date() and spuriously re-executing the entire notebook.
-  const urlFrom = searchParams.get("from");
-  const urlTo = searchParams.get("to");
+  const urlFrom = searchParams.get('from')
+  const urlTo = searchParams.get('to')
   const rawTimeRange = useMemo(
     () => ({
-      from:
-        urlFrom ?? savedTimeFrom ?? currentTimeFrom ?? DEFAULT_TIME_RANGE.from,
+      from: urlFrom ?? savedTimeFrom ?? currentTimeFrom ?? DEFAULT_TIME_RANGE.from,
       to: urlTo ?? savedTimeTo ?? currentTimeTo ?? DEFAULT_TIME_RANGE.to,
     }),
-    [
-      urlFrom,
-      urlTo,
-      savedTimeFrom,
-      savedTimeTo,
-      currentTimeFrom,
-      currentTimeTo,
-    ],
-  );
+    [urlFrom, urlTo, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
+  )
 
   // Derive hasUnsavedChanges by comparing current config + time range against baseline
   const hasUnsavedChanges = useMemo(() => {
-    if (!baselineConfig || !screenConfig) return false;
+    if (!baselineConfig || !screenConfig) return false
     const current = {
       ...screenConfig,
       timeRangeFrom: rawTimeRange.from,
       timeRangeTo: rawTimeRange.to,
-    };
-    return JSON.stringify(current) !== JSON.stringify(baselineConfig);
-  }, [screenConfig, rawTimeRange, baselineConfig]);
+    }
+    return JSON.stringify(current) !== JSON.stringify(baselineConfig)
+  }, [screenConfig, rawTimeRange, baselineConfig])
 
   // Compute parsed time range (for label)
   const parsedTimeRange = useMemo(
     () => parseTimeRange(rawTimeRange.from, rawTimeRange.to),
-    [rawTimeRange],
-  );
+    [rawTimeRange]
+  )
 
   // Load screen or default config
   useEffect(() => {
     async function load() {
-      setIsLoading(true);
-      setLoadError(null);
-      setBaselineConfig(null);
-      setScreen(null);
-      setIsExecuting(false);
-      setHasError(false);
+      setIsLoading(true)
+      setLoadError(null)
+      setBaselineConfig(null)
+      setScreen(null)
+      setIsExecuting(false)
+      setHasError(false)
 
       try {
         // Fetch screen types for display info
-        const types = await getScreenTypes();
-        const typeMap = new Map(types.map((t) => [t.name, t]));
+        const types = await getScreenTypes()
+        const typeMap = new Map(types.map((t) => [t.name, t]))
 
         if (isNew) {
           // New screen - load default config for the type
           if (!typeParam) {
-            setLoadError("No screen type specified");
-            return;
+            setLoadError('No screen type specified')
+            return
           }
-          const defaultConfig = await getDefaultConfig(typeParam);
-          setScreenConfig(defaultConfig);
-          setScreenType(typeParam);
-          setScreenTypeInfo(typeMap.get(typeParam) ?? null);
+          const defaultConfig = await getDefaultConfig(typeParam)
+          setScreenConfig(defaultConfig)
+          setScreenType(typeParam)
+          setScreenTypeInfo(typeMap.get(typeParam) ?? null)
         } else {
           // Existing screen - load from API
-          const loadedScreen = await getScreen(name);
-          setScreen(loadedScreen);
-          setScreenConfig(loadedScreen.config);
-          setBaselineConfig(loadedScreen.config);
-          setScreenType(loadedScreen.screen_type as ScreenTypeName);
-          setScreenTypeInfo(
-            typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null,
-          );
+          const loadedScreen = await getScreen(name)
+          setScreen(loadedScreen)
+          setScreenConfig(loadedScreen.config)
+          setBaselineConfig(loadedScreen.config)
+          setScreenType(loadedScreen.screen_type as ScreenTypeName)
+          setScreenTypeInfo(typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null)
           // Note: We don't push saved time range to URL here.
           // rawTimeRange falls back to saved config, and buildUrl compares against saved config.
           // URL only contains time params that differ from saved config (delta-based).
         }
       } catch (err) {
         if (err instanceof ScreenApiError) {
-          if (err.code === "NOT_FOUND") {
-            setLoadError(`Screen "${name}" not found`);
+          if (err.code === 'NOT_FOUND') {
+            setLoadError(`Screen "${name}" not found`)
           } else {
-            setLoadError(err.message);
+            setLoadError(err.message)
           }
         } else {
-          setLoadError("Failed to load screen");
+          setLoadError('Failed to load screen')
         }
       } finally {
-        setIsLoading(false);
+        setIsLoading(false)
       }
     }
 
-    load();
-  }, [isNew, name, typeParam]);
+    load()
+  }, [isNew, name, typeParam])
 
   // Handle config changes from renderer - supports both direct config and updater function
   const handleScreenConfigChange = useCallback(
-    (
-      configOrUpdater: ScreenConfig | ((prev: ScreenConfig) => ScreenConfig),
-    ) => {
+    (configOrUpdater: ScreenConfig | ((prev: ScreenConfig) => ScreenConfig)) => {
       setScreenConfig((prev) => {
-        if (typeof configOrUpdater === "function") {
+        if (typeof configOrUpdater === 'function') {
           // Functional update - updater receives current state, returns new state
-          return configOrUpdater(prev ?? ({} as ScreenConfig));
+          return configOrUpdater(prev ?? ({} as ScreenConfig))
         }
         // Direct update - merge with previous (backwards compatible)
-        return prev ? { ...prev, ...configOrUpdater } : configOrUpdater;
-      });
+        return prev ? { ...prev, ...configOrUpdater } : configOrUpdater
+      })
     },
-    [],
-  );
+    []
+  )
 
   // Handle refresh button click
   const handleRefresh = useCallback(() => {
-    setRefreshTrigger((n) => n + 1);
-  }, []);
+    setRefreshTrigger((n) => n + 1)
+  }, [])
 
   // Auto-refresh interval (persisted in screenConfig)
-  const refreshIntervalMs = (screenConfig?.refreshIntervalMs as number) ?? 0;
+  const refreshIntervalMs = (screenConfig?.refreshIntervalMs as number) ?? 0
 
   const handleRefreshIntervalChange = useCallback(
     (ms: number) => {
-      handleScreenConfigChange((prev) => ({ ...prev, refreshIntervalMs: ms }));
+      handleScreenConfigChange((prev) => ({ ...prev, refreshIntervalMs: ms }))
     },
-    [handleScreenConfigChange],
-  );
+    [handleScreenConfigChange]
+  )
 
-  useRefreshInterval(refreshIntervalMs, isExecuting, handleRefresh);
+  useRefreshInterval(refreshIntervalMs, isExecuting, handleRefresh)
 
   // Save existing screen — API call + state update only; URL cleanup is the renderer's job
   const handleSave = useCallback(async (): Promise<ScreenConfig | null> => {
-    if (!screen || !screenConfig) throw new Error("No screen to save");
+    if (!screen || !screenConfig) throw new Error('No screen to save')
 
-    setIsSaving(true);
-    setSaveError(null);
+    setIsSaving(true)
+    setSaveError(null)
 
     // Save the displayed time range (rawTimeRange), not urlConfig which has defaults merged in
     // rawTimeRange correctly falls back: URL → saved → default
@@ -282,37 +245,37 @@ function ScreenPageContent() {
       ...screenConfig,
       timeRangeFrom: rawTimeRange.from,
       timeRangeTo: rawTimeRange.to,
-    };
+    }
 
     try {
       const updated = await updateScreen(screen.name, {
         config: configToSave,
         managed_by: screen.managed_by,
-      });
-      setScreen(updated);
-      setScreenConfig(configToSave); // Keep local state in sync
-      setBaselineConfig(configToSave);
-      return configToSave;
+      })
+      setScreen(updated)
+      setScreenConfig(configToSave) // Keep local state in sync
+      setBaselineConfig(configToSave)
+      return configToSave
     } catch (err) {
       if (err instanceof ScreenApiError) {
-        setSaveError(err.message);
+        setSaveError(err.message)
       } else {
-        setSaveError("Failed to save screen");
+        setSaveError('Failed to save screen')
       }
-      return null;
+      return null
     } finally {
-      setIsSaving(false);
+      setIsSaving(false)
     }
-  }, [screen, screenConfig, rawTimeRange]);
+  }, [screen, screenConfig, rawTimeRange])
 
   // Title bar save handler - calls renderer's wrapped handler if available, else raw handleSave
   const handleTitleBarSave = useCallback(async () => {
     if (saveRef.current) {
-      await saveRef.current();
+      await saveRef.current()
     } else {
-      await handleSave();
+      await handleSave()
     }
-  }, [handleSave]);
+  }, [handleSave])
 
   // The renderer is unmounted while a discard is pending: its URL-sync effects re-run when the
   // URL changes and would write the edited state back into the cleared query. The navigate is
@@ -320,61 +283,55 @@ function ScreenPageContent() {
   // router (which applies navigation in a transition) has committed the empty query, so the
   // remounted renderer seeds from it.
   const handleDiscard = useCallback(() => {
-    setShowDiscardDialog(false);
-    setSaveError(null);
-    setPendingDiscard(true);
-  }, []);
+    setShowDiscardDialog(false)
+    setSaveError(null)
+    setPendingDiscard(true)
+  }, [])
 
   useEffect(() => {
-    if (!pendingDiscard) return;
-    if (location.search !== "") {
-      navigate(location.pathname, { replace: true });
-      return;
+    if (pendingDiscard && location.search !== '') {
+      navigate(location.pathname, { replace: true })
     }
+  }, [pendingDiscard, location.search, location.pathname, navigate])
+
+  if (pendingDiscard && location.search === '') {
     // baselineConfig, not screen.config: after a save the server response may order JSON keys
     // differently, which the order-sensitive comparison in hasUnsavedChanges would flag.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- completes the discard once the router commits the cleared URL
-    setScreenConfig(baselineConfig);
-    setDiscardNonce((n) => n + 1);
-    setPendingDiscard(false);
-  }, [
-    pendingDiscard,
-    location.search,
-    location.pathname,
-    navigate,
-    baselineConfig,
-  ]);
+    setScreenConfig(baselineConfig)
+    setDiscardNonce((n) => n + 1)
+    setPendingDiscard(false)
+  }
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
     (newName: string) => {
-      setShowSaveDialog(false);
-      navigate(`/screen/${newName}`);
+      setShowSaveDialog(false)
+      navigate(`/screen/${newName}`)
     },
-    [navigate],
-  );
+    [navigate]
+  )
 
   const currentValues = useMemo(
     () => getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to),
-    [rawTimeRange],
-  );
+    [rawTimeRange]
+  )
 
   // Ctrl+S keyboard shortcut to save
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
         if (screen && hasUnsavedChanges && !isSaving) {
-          handleTitleBarSave();
+          handleTitleBarSave()
         }
       }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [screen, hasUnsavedChanges, isSaving, handleTitleBarSave]);
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [screen, hasUnsavedChanges, isSaving, handleTitleBarSave])
 
   // Loading state - also check if loaded screen matches URL
-  const isLoadingScreen = isLoading || (!isNew && screen?.name !== name);
+  const isLoadingScreen = isLoading || (!isNew && screen?.name !== name)
   if (isLoadingScreen) {
     return (
       <PageLayout>
@@ -382,14 +339,12 @@ function ScreenPageContent() {
           <div className="flex items-center justify-center h-64">
             <div className="flex items-center gap-3">
               <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />
-              <span className="text-theme-text-secondary">
-                Loading screen...
-              </span>
+              <span className="text-theme-text-secondary">Loading screen...</span>
             </div>
           </div>
         </div>
       </PageLayout>
-    );
+    )
   }
 
   // Error state
@@ -400,16 +355,13 @@ function ScreenPageContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">{loadError}</p>
-            <AppLink
-              href="/screens"
-              className="text-accent-link hover:underline mt-2"
-            >
+            <AppLink href="/screens" className="text-accent-link hover:underline mt-2">
               Back to Screens
             </AppLink>
           </div>
         </div>
       </PageLayout>
-    );
+    )
   }
 
   // Missing config
@@ -419,24 +371,18 @@ function ScreenPageContent() {
         <div className="p-6">
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
-            <p className="text-theme-text-secondary">
-              Failed to load screen configuration
-            </p>
-            <AppLink
-              href="/screens"
-              className="text-accent-link hover:underline mt-2"
-            >
+            <p className="text-theme-text-secondary">Failed to load screen configuration</p>
+            <AppLink href="/screens" className="text-accent-link hover:underline mt-2">
               Back to Screens
             </AppLink>
           </div>
         </div>
       </PageLayout>
-    );
+    )
   }
 
   // Get renderer for this screen type
-  const Renderer: ComponentType<ScreenRendererProps> | undefined =
-    SCREEN_RENDERERS[screenType];
+  const Renderer: ComponentType<ScreenRendererProps> | undefined = SCREEN_RENDERERS[screenType]
 
   if (!Renderer) {
     return (
@@ -444,19 +390,14 @@ function ScreenPageContent() {
         <div className="p-6">
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
-            <p className="text-theme-text-secondary">
-              Unknown screen type: {screenType}
-            </p>
-            <AppLink
-              href="/screens"
-              className="text-accent-link hover:underline mt-2"
-            >
+            <p className="text-theme-text-secondary">Unknown screen type: {screenType}</p>
+            <AppLink href="/screens" className="text-accent-link hover:underline mt-2">
               Back to Screens
             </AppLink>
           </div>
         </div>
       </PageLayout>
-    );
+    )
   }
 
   return (
@@ -478,19 +419,14 @@ function ScreenPageContent() {
             <div className="mb-5">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="p-2 rounded-md bg-app-card text-accent-link">
-                  {renderIcon(screenTypeInfo?.icon ?? "file-text")}
+                  {renderIcon(screenTypeInfo?.icon ?? 'file-text')}
                 </div>
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-semibold text-theme-text-primary">
-                    {isNew
-                      ? `New ${screenTypeInfo?.display_name ?? screenType} Screen`
-                      : screen?.name}
+                    {isNew ? `New ${screenTypeInfo?.display_name ?? screenType} Screen` : screen?.name}
                   </h1>
                   {hasUnsavedChanges && (
-                    <span
-                      className="text-sm"
-                      style={{ color: "var(--accent-warning)" }}
-                    >
+                    <span className="text-sm" style={{ color: 'var(--accent-warning)' }}>
                       (unsaved changes)
                     </span>
                   )}
@@ -540,7 +476,7 @@ function ScreenPageContent() {
                       className="gap-1"
                     >
                       <Save className="w-4 h-4" />
-                      {isSaving ? "Saving..." : "Save"}
+                      {isSaving ? 'Saving...' : 'Save'}
                     </Button>
                   )}
                 </div>
@@ -551,14 +487,10 @@ function ScreenPageContent() {
                 </p>
               )}
               {saveError && (
-                <p className="text-xs text-accent-error mt-2 ml-11">
-                  {saveError}
-                </p>
+                <p className="text-xs text-accent-error mt-2 ml-11">{saveError}</p>
               )}
               {dataSourceError && (
-                <p className="text-xs text-accent-error mt-2 ml-11">
-                  {dataSourceError}
-                </p>
+                <p className="text-xs text-accent-error mt-2 ml-11">{dataSourceError}</p>
               )}
             </div>
           </div>
@@ -567,7 +499,7 @@ function ScreenPageContent() {
           <div className="flex-1 min-h-0">
             {!pendingDiscard && (
               <Renderer
-                key={`${screen?.name ?? "new"}:${discardNonce}`}
+                key={`${screen?.name ?? 'new'}:${discardNonce}`}
                 config={screenConfig}
                 onConfigChange={handleScreenConfigChange}
                 savedConfig={screen?.config ?? null}
@@ -622,7 +554,7 @@ function ScreenPageContent() {
         />
       )}
     </>
-  );
+  )
 }
 
 export default function ScreenPage() {
@@ -642,5 +574,5 @@ export default function ScreenPage() {
         <ScreenPageContent />
       </Suspense>
     </AuthGuard>
-  );
+  )
 }
